@@ -48,8 +48,29 @@ class S3Storage:
         await self._run(self._c().put_object, Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
 
     async def list(self, prefix: str) -> list[str]:
-        resp = await self._run(self._c().list_objects_v2, Bucket=self._bucket, Prefix=prefix)
-        return sorted(o["Key"] for o in resp.get("Contents", []))
+        # S3 (and every S3-compatible backend) caps a single list_objects_v2 response at 1000 keys and
+        # signals more via IsTruncated + NextContinuationToken (#769). Loop to exhaustion — a single
+        # unpaginated call silently drops every chunk past the first page, so a >1000-chunk recording
+        # would assemble a master from only its first 1000 objects.
+        keys: list[str] = []
+        token: Optional[str] = None
+        while True:
+            kw = {"Bucket": self._bucket, "Prefix": prefix}
+            if token is not None:
+                kw["ContinuationToken"] = token
+            resp = await self._run(self._c().list_objects_v2, **kw)
+            keys.extend(o["Key"] for o in resp.get("Contents", []))
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+            if not token:
+                # Truncated but no continuation token — the backend contract is broken; stop rather
+                # than loop forever, but do NOT swallow it silently.
+                raise RuntimeError(
+                    f"list_objects_v2 reported IsTruncated with no NextContinuationToken "
+                    f"(prefix={prefix!r}); chunk listing may be incomplete"
+                )
+        return sorted(keys)
 
     async def get(self, key: str) -> bytes:
         obj = await self._run(self._c().get_object, Bucket=self._bucket, Key=key)

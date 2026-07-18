@@ -413,3 +413,130 @@ async def test_single_final_chunk_downloads_byte_complete():
     assert raw.status_code == 200, raw.text
     assert raw.content == build_recording_master([part], "wav")
     assert raw.content[44:] == bytes([9]) * 16
+
+
+# ── #768: a mid-recording read must NOT freeze the master (finalize is re-assemblable) ────────────
+
+
+async def test_finalize_after_midread_reassembles_all_chunks():
+    """#768 (the exact prod scenario): a GET /master while the meeting is STILL recording must not
+    permanently freeze the master. Two chunks land; a mid-recording finalize assembles a 2-chunk
+    partial master; three more chunks arrive and the recording completes; the next finalize must
+    REBUILD the master to contain ALL five chunks. RED on base: finalize short-circuits on
+    ``storage.exists(master_key)`` and never rebuilds → the served master stays the 2-chunk partial
+    (in prod: a 4h meeting frozen at 49s, 6.6% of the audio)."""
+    repo, storage = _seeded()
+    early = [_counting_wav(k) for k in range(2)]
+    rid = None
+    for k, part in enumerate(early):
+        r = await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+            data=part, media_type="audio", media_format="wav", chunk_seq=k, is_final=False,
+        )
+        rid = r["recording_id"]
+    # Mid-recording read: assemble a PARTIAL master (the prod "check on the recording" gesture).
+    mid_key = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    assert storage.blobs[mid_key] == build_recording_master(early, "wav"), "partial master = 2 chunks"
+
+    # More chunks arrive AFTER the read, then the meeting ends (empty is_final signal).
+    late = [_counting_wav(k) for k in range(2, 5)]
+    for k, part in enumerate(late, start=2):
+        await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+            data=part, media_type="audio", media_format="wav", chunk_seq=k, is_final=False,
+        )
+    await upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=b"", media_type="audio", media_format="wav", chunk_seq=5, is_final=True,
+    )
+
+    # The finalize on completion must REASSEMBLE all five chunks — not serve the frozen partial.
+    final_key = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    all_parts = early + late
+    assert storage.blobs[final_key] == build_recording_master(all_parts, "wav"), (
+        "the completed master must contain ALL chunks, not the mid-read partial"
+    )
+    # Independent arithmetic oracle: the PCM is each part's counting bytes, in order, none dropped.
+    assert storage.blobs[final_key][44:] == b"".join(bytes([k]) * _PART_PCM_LEN for k in range(5))
+
+
+async def test_master_route_reflects_late_chunks_after_midread():
+    """#768 at the route altitude: GET /master mid-recording, then more chunks + completion, then
+    GET .../raw serves the byte-complete master. RED on base: the first /master freezes it."""
+    repo, storage = _seeded()
+    early = [_counting_wav(k) for k in range(2)]
+    rid = None
+    for k, part in enumerate(early):
+        r = await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+            data=part, media_type="audio", media_format="wav", chunk_seq=k, is_final=False,
+        )
+        rid = r["recording_id"]
+    client = _client_for(repo, storage)
+    # Mid-recording read via the route (this is what froze prod).
+    assert client.get(f"/recordings/{rid}/master?type=audio", headers=_HDRS).status_code == 200
+    late = [_counting_wav(k) for k in range(2, 5)]
+    for k, part in enumerate(late, start=2):
+        await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+            data=part, media_type="audio", media_format="wav", chunk_seq=k, is_final=False,
+        )
+    await upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=b"", media_type="audio", media_format="wav", chunk_seq=5, is_final=True,
+    )
+    rec = client.get("/recordings", headers=_HDRS).json()["recordings"][0]
+    mf = _first_audio(rec)
+    raw = client.get(f"/recordings/{rid}/media/{mf['id']}/raw?type=audio", headers=_HDRS)
+    assert raw.status_code == 200, raw.text
+    assert raw.content == build_recording_master(early + late, "wav")
+
+
+# ── #769: chunk listing must paginate past the S3 1000-key cap ────────────────────────────────────
+
+
+class _PagedS3Client:
+    """A stub boto3 S3 client whose ``list_objects_v2`` paginates at ``PAGE`` keys — mirroring the
+    real S3/S3-compatible 1000-key response cap — signalling more via ``IsTruncated`` +
+    ``NextContinuationToken`` (an opaque offset here)."""
+
+    PAGE = 1000
+
+    def __init__(self, keys):
+        self._keys = sorted(keys)
+
+    def list_objects_v2(self, Bucket, Prefix, ContinuationToken=None, **kw):
+        matched = [k for k in self._keys if k.startswith(Prefix)]
+        start = int(ContinuationToken) if ContinuationToken else 0
+        page = matched[start : start + self.PAGE]
+        resp = {"Contents": [{"Key": k} for k in page]}
+        nxt = start + self.PAGE
+        if nxt < len(matched):
+            resp["IsTruncated"] = True
+            resp["NextContinuationToken"] = str(nxt)
+        else:
+            resp["IsTruncated"] = False
+        return resp
+
+
+async def test_s3_storage_list_paginates_past_1000_keys():
+    """#769: a single ``list_objects_v2`` caps at 1000 keys and signals more via IsTruncated /
+    NextContinuationToken. ``S3Storage.list`` must loop to exhaustion. RED on base: the single
+    unpaginated call returns only the first 1000 of 1500 keys, silently dropping 500 chunks."""
+    from meeting_api.recordings.adapters import S3Storage
+
+    prefix = "recordings/7/42/sess/audio/"
+    keys = [f"{prefix}{i:06d}.wav" for i in range(1500)]
+
+    class _Stub(S3Storage):
+        def __init__(self, client):
+            super().__init__(bucket="b")
+            self._stub = client
+
+        def _c(self):
+            return self._stub
+
+    storage = _Stub(_PagedS3Client(keys))
+    listed = await storage.list(prefix)
+    assert len(listed) == 1500, f"expected all 1500 keys across pages, got {len(listed)}"
+    assert listed == sorted(keys)
