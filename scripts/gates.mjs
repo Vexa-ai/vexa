@@ -904,6 +904,22 @@ function gateDbSchema() {
 // not-yet-added ones, never gitignored paths. The .venv/site-packages trees gate:python materializes
 // under core/ match both patterns (numpy fixtures set pool_size=; sqlalchemy defines
 // create_async_engine) and must not enter the budget. --untracked keeps a brand-new .py in scope.
+//
+// Both scans count a service's PRODUCTION source only. A test's engine is a throwaway no deployment
+// runs: it holds zero production connections, so a pool literal in a test cannot under-state a budget
+// whose unit is Σ(helm replicas × pool ceiling), and counting one could only invent a red against a
+// service whose deployed pool is whatever its production source says. Excluding tests is therefore
+// the contract gateDbBudget() already states in its own error text ("no non-test source constructs a
+// DB engine there") — the two scans share one path test so they can never disagree on the population.
+//
+// A file is a test when it sits under a tests/ dir or its BASENAME starts with test_ — not merely
+// when "test_" occurs somewhere in the path, which would drop production files (latest_pool.py) out
+// of a production budget: the one direction this gate must never fail. pytest's other convention,
+// the *_test.py suffix, is deliberately NOT a rule: core/agent/control_plane/config_test.py is
+// production source (it implements the Settings → Models "Test" buttons), and excluding it would
+// under-count for real. Filename heuristics have counterexamples in this tree; both are checked.
+const _isTestPath = (p) => /(^|\/)tests?\//.test(p) || /(^|\/)test_[^/]*$/.test(p);
+
 function _dbHoldingServices() {
   let out;
   try {
@@ -911,26 +927,36 @@ function _dbHoldingServices() {
   } catch { return new Set(); }  // grep exit 1 = no matches
   const svcs = new Set();
   for (const path of out.split("\n")) {
-    if (!path || /(^|\/)tests?\//.test(path) || path.includes("test_")) continue;
+    if (!path || _isTestPath(path)) continue;
     const m = path.match(/\/services\/([^/]+)\//);
     if (m) svcs.add(m[1]);
   }
   return svcs;
 }
 
-function _explicitPool(service) {
-  // the largest explicit pool_size= / max_overflow= a service's code sets, or {} when it relies on
-  // the framework default (the "silent default" the issue names). Used to reject an under-stated budget.
+function _explicitPool() {
+  // the largest explicit pool_size= / max_overflow= a service's production code sets and where, or {}
+  // when every service relies on the framework default (the "silent default" #529 names). Used to
+  // reject an under-stated budget. `-n -o`, never `-h`: the path has to survive the scan both to be
+  // filtered on and to name the file in the error — a bare number is a verdict nobody can trace back
+  // to a line. `-o` also splits two literals on one source line (pool_size=…, max_overflow=…) into
+  // two records, so neither hides behind the other.
   let out = "";
   try {
-    out = execSync(`git grep --untracked -hoE '(pool_size|max_overflow) *= *[0-9]+' -- 'core/*.py' 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
+    out = execSync(`git grep --untracked -noE '(pool_size|max_overflow) *= *[0-9]+' -- 'core/*.py' 2>/dev/null || true`, { cwd: ROOT }).toString();
   } catch { out = ""; }
   const found = {};
   for (const line of out.split("\n")) {
-    const m = line.match(/(pool_size|max_overflow)\s*=\s*(\d+)/);
-    if (m) found[m[1]] = Math.max(found[m[1]] || 0, parseInt(m[2], 10));
+    // anchored to git grep's whole `path:lineno:match` record: -o makes the match the entire final
+    // field, so a path that happens to spell "pool_size=5" can never be parsed as the literal.
+    const m = line.match(/^(.+?):(\d+):(pool_size|max_overflow) *= *(\d+)$/);
+    if (!m) continue;
+    const [, path, lineno, key, val] = m;
+    if (_isTestPath(path)) continue;
+    const value = parseInt(val, 10);
+    if (!found[key] || value > found[key].value) found[key] = { value, where: `${path}:${lineno}` };
   }
-  return found;  // note: repo-wide (explicit overrides are rare); a match anywhere raises the floor
+  return found;  // repo-wide (explicit overrides are rare); a match anywhere raises the floor
 }
 
 function _helmReplicas(key) {
@@ -966,10 +992,10 @@ function gateDbBudget() {
   for (const [svc, cfg] of Object.entries(budget.services || {})) {
     const replicas = _helmReplicas(cfg.helm_key);
     if (replicas === null) { errs.push(`${svc}: could not read replicaCount for helm key '${cfg.helm_key}' in values.yaml`); continue; }
-    if (explicit.pool_size && explicit.pool_size > cfg.pool_size)
-      errs.push(`${svc}: code sets pool_size=${explicit.pool_size} but db-budget declares ${cfg.pool_size} (under-count)`);
-    if (explicit.max_overflow && explicit.max_overflow > cfg.max_overflow)
-      errs.push(`${svc}: code sets max_overflow=${explicit.max_overflow} but db-budget declares ${cfg.max_overflow} (under-count)`);
+    if (explicit.pool_size && explicit.pool_size.value > cfg.pool_size)
+      errs.push(`${svc}: code sets pool_size=${explicit.pool_size.value} (${explicit.pool_size.where}) but db-budget declares ${cfg.pool_size} (under-count)`);
+    if (explicit.max_overflow && explicit.max_overflow.value > cfg.max_overflow)
+      errs.push(`${svc}: code sets max_overflow=${explicit.max_overflow.value} (${explicit.max_overflow.where}) but db-budget declares ${cfg.max_overflow} (under-count)`);
     const ceiling = Number(cfg.pool_size || 0) + Number(cfg.max_overflow || 0);
     const conns = replicas * ceiling;
     total += conns;
