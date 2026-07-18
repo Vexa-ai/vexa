@@ -270,8 +270,9 @@ async def _item_from_store(
     now: datetime,
 ) -> dict | None:
     parsed = _item_parts(item_id)
-    row_id = parsed[1] if parsed is not None else 0
-    transcript = await store.get_transcript_by_id(user_id, row_id)
+    if parsed is None:
+        return None
+    kind, row_id = parsed
     meetings = await store.list_meetings(user_id)
     meeting = next(
         (
@@ -281,9 +282,13 @@ async def _item_from_store(
         ),
         None,
     )
-    if parsed is None or transcript is None or meeting is None:
+    if meeting is None:
         return None
-    kind, _ = parsed
+    transcript = None
+    if kind != "transcript" or variant != "summary":
+        transcript = await store.get_transcript_by_id(user_id, row_id)
+        if transcript is None:
+            return None
     data = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
     notice = _capture_notice(data, now)
     occurred_at = meeting.get("start_time") or meeting.get("created_at")
@@ -329,13 +334,19 @@ async def _item_from_store(
         return {**base, "capture_notice": notice, "retention": retention, "content": content}
     if kind == "transcript":
         retention = _retention(data, "transcript", now)
-        turns = _turns(transcript)
-        if retention is None or turns is None:
+        if retention is None:
             return None
-        summary = _summary(data)
-        if variant == "summary" and summary is not None:
+        if variant == "summary":
+            summary = _summary(data)
+            if summary is None or _retention(data, "summary", now) is None:
+                return None
             content = {"format": "summary", "text": summary[0]}
         else:
+            if transcript is None:
+                return None
+            turns = _turns(transcript)
+            if turns is None:
+                return None
             languages = {
                 segment.get("language")
                 for segment in transcript.get("segments", [])
