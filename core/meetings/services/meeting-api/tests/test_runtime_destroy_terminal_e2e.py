@@ -158,7 +158,9 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
 def test_runtime_destroy_fails_pre_active_e2e():
     """PRE-ACTIVE → failed, end to end. A meeting stuck ``awaiting_admission`` (bot killed in the waiting
     room before it could report ``active``) whose workload the runtime confirms ``destroyed`` reaches
-    ``failed`` (attributed to the stage it died in), and still reaps the copilot."""
+    ``failed`` attributed to the stage it died in — ``failure_stage=awaiting_admission`` AND
+    ``completion_reason=awaiting_admission_timeout`` (the room never admitted the bot; NOT the generic
+    ``join_failure``) — and still reaps the copilot."""
     async def scenario():
         repo = _ReaperRepo()
         m = await _seed(repo)  # requested → callbacks walk it to awaiting_admission
@@ -174,7 +176,50 @@ def test_runtime_destroy_fails_pre_active_e2e():
     repo, redis, m = asyncio.run(scenario())
     assert repo._meetings[m["id"]]["status"] == "failed"
     assert repo._meetings[m["id"]]["data"].get("failure_stage") == "awaiting_admission"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "awaiting_admission_timeout"
     assert len(redis.streams.get(f"tc:meeting:{m['id']}", [])) == 1
+
+
+@pytest.mark.parametrize(
+    "callbacks,stage",
+    [
+        (("joining",), "joining"),   # bot reported joining, died before admission/active
+        ((), "requested"),           # workload destroyed before the bot reported anything
+    ],
+)
+def test_runtime_destroy_pre_active_before_admission_is_join_failure_e2e(callbacks, stage):
+    """DISCRIMINATOR: a pre-active bot destroyed BEFORE it reached the waiting room (``requested`` /
+    ``joining``) is a genuine join failure — ``completion_reason=join_failure``, never
+    ``awaiting_admission_timeout`` (only a bot that WAS awaiting admission earns that reason)."""
+    async def scenario():
+        repo = _ReaperRepo()
+        m = await _seed(repo)
+        redis = _StreamRedis()
+        app = create_app(meeting_repo=repo, redis=redis)
+        async with _asgi(app) as c:
+            for st in callbacks:
+                assert (await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": st})).status_code == 200
+            rc = await c.post(RUNTIME, json={"workloadId": "wl-1", "state": "destroyed"})
+            assert rc.status_code == 200, rc.text
+        return repo, redis, m
+
+    repo, redis, m = asyncio.run(scenario())
+    assert repo._meetings[m["id"]]["status"] == "failed"
+    assert repo._meetings[m["id"]]["data"].get("failure_stage") == stage
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "join_failure"
+
+
+def test_pre_active_attribution_is_retry_neutral():
+    """RETRY PARITY (the "no behavior change" guard): both pre-active teardown reasons are TRANSIENT,
+    so status-accurate attribution never flips a destroy-path bot's retry class."""
+    from meeting_api.lifecycle.machine import CompletionReason
+    from meeting_api.lifecycle.retry import RetryClass, classify_retry
+
+    assert (
+        classify_retry(CompletionReason.AWAITING_ADMISSION_TIMEOUT)
+        is classify_retry(CompletionReason.JOIN_FAILURE)
+        is RetryClass.TRANSIENT
+    )
 
 
 def test_runtime_destroy_noop_on_already_terminal_e2e():
