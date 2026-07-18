@@ -79,13 +79,18 @@ export function resolvePlatform(meetingUrl: string): Platform {
  * Drive a meeting join to its admission verdict on the page you hand in.
  * Returns once admitted, rejected, or timed out. Does NOT record or transcribe.
  */
+/** Default bot name, reads env at call time so tests and the server-side proxy observe it when set. */
+export function defaultBotName(): string {
+  return process.env.DEFAULT_BOT_NAME?.trim() || "Vexa Join Layer";
+}
+
 export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinResult> {
   if (opts.hooks) setHooks(opts.hooks);
 
   const platform = opts.platform ?? resolvePlatform(opts.meetingUrl);
   const botConfig: BotConfig = {
     platform,
-    botName: opts.botName ?? "Vexa Join Layer",
+    botName: opts.botName ?? defaultBotName(),
     passcode: opts.passcode,
     authenticated: opts.authenticated,
     uiInteractionMode: opts.uiInteractionMode,

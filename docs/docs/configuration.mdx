@@ -119,6 +119,7 @@ stack still boots.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `DEFAULT_BOT_NAME` | — | Bot participant name used when the caller omits `bot_name` in `POST /bots`. Falls back to `VexaBot-{random}` if unset. |
 | `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
 | `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
 | `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
