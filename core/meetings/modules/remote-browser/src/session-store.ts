@@ -12,7 +12,7 @@
  * session; these helpers just copy the auth-essential subset of it in/out of a
  * durable store. Cache/GPU/IndexedDB junk is excluded — ~200KB, not the full profile.
  */
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, unlinkSync, mkdirSync, cpSync, mkdtempSync, rmSync, readdirSync, readlinkSync, statSync } from 'fs';
 import { join, dirname, basename } from 'path';
 
@@ -112,7 +112,7 @@ const AUTH_ESSENTIAL_DIRS = [
 /**
  * A typed, attributed S3-session-sync failure. The restore half THROWS this (an authenticated
  * bot whose session cannot be restored must fail loud with the step named — never die on an
- * unattributed execSync, never silently join signed-out); the save half only WARNS (teardown
+ * unattributed exec, never silently join signed-out); the save half only WARNS (teardown
  * must never hang or fail the exit on a flaky upload — the durable copy simply stays at the
  * last restore).
  */
@@ -127,7 +127,7 @@ export class SessionSyncError extends Error {
   }
 }
 
-/** Attribute an `aws` execSync failure: a missing CLI (shell 127 / ENOENT) is named as such —
+/** Attribute an `aws` exec failure: a missing CLI (ENOENT / 127) is named as such —
  *  the deployment's image must ship the aws CLI — anything else carries the exit status. */
 function describeAwsFailure(err: any): string {
   const status = err?.status ?? err?.code;
@@ -148,18 +148,18 @@ function getS3Env(config: S3Config): Record<string, string> {
 export function s3Sync(localDir: string, s3Path: string, config: S3Config, direction: 'up' | 'down', excludes: string[] = []): void {
   if (!config.userdataS3Path || !config.s3Endpoint || !config.s3Bucket) return;
   const s3Uri = `s3://${config.s3Bucket}/${s3Path}`;
-  const excludeArgs = excludes.map(e => `--exclude "${e}"`).join(' ');
-  const deleteArg = '';
   const [src, dst] = direction === 'down' ? [s3Uri, `${localDir}/`] : [`${localDir}/`, s3Uri];
   console.log(`[s3-sync] S3 sync ${direction}: ${src} → ${dst}`);
   try {
-    execSync(
-      `aws s3 sync "${src}" "${dst}" --endpoint-url "${config.s3Endpoint}" ${deleteArg} ${excludeArgs}`,
+    // argv-exec, never a shell — config values are arguments, they cannot inject.
+    execFileSync(
+      'aws',
+      ['s3', 'sync', src, dst, '--endpoint-url', config.s3Endpoint, ...excludes.flatMap(e => ['--exclude', e])],
       { env: getS3Env(config), stdio: 'inherit', timeout: 300000 }
     );
   } catch (err: any) {
     // Attributed, typed failure naming the sync step + target (#724 C3). The pre-guard shape —
-    // an unguarded execSync — killed the process before Chromium launched with nothing on the
+    // an unguarded exec — killed the process before Chromium launched with nothing on the
     // log naming the step (the #461 signature).
     throw new SessionSyncError(
       direction === 'down' ? 'session-restore' : 'session-save',
@@ -186,7 +186,7 @@ export function syncBrowserDataToS3(config: S3Config, dataDir: string = BROWSER_
   if (!config.userdataS3Path || !config.s3Endpoint || !config.s3Bucket) return 0;
   const s3Base = `s3://${config.s3Bucket}/${config.userdataS3Path}/browser-data`;
   const env = getS3Env(config);
-  const endpoint = `--endpoint-url "${config.s3Endpoint}"`;
+  const endpointArgs = ['--endpoint-url', config.s3Endpoint];
   let uploaded = 0;
 
   console.log(`[s3-sync] S3 save (auth-essential files only) from ${dataDir}...`);
@@ -195,7 +195,7 @@ export function syncBrowserDataToS3(config: S3Config, dataDir: string = BROWSER_
     const local = join(dataDir, file);
     if (!existsSync(local)) continue;
     try {
-      execSync(`aws s3 cp "${local}" "${s3Base}/${file}" ${endpoint}`, { env, stdio: 'pipe', timeout: 10000 });
+      execFileSync('aws', ['s3', 'cp', local, `${s3Base}/${file}`, ...endpointArgs], { env, stdio: 'pipe', timeout: 10000 });
       uploaded++;
     } catch (err: any) {
       console.log(`[s3-sync] Warning: failed to upload ${file}: ${describeAwsFailure(err)}`);
@@ -206,7 +206,7 @@ export function syncBrowserDataToS3(config: S3Config, dataDir: string = BROWSER_
     const local = join(dataDir, dir);
     if (!existsSync(local)) continue;
     try {
-      execSync(`aws s3 sync "${local}/" "${s3Base}/${dir}/" ${endpoint}`, { env, stdio: 'pipe', timeout: 10000 });
+      execFileSync('aws', ['s3', 'sync', `${local}/`, `${s3Base}/${dir}/`, ...endpointArgs], { env, stdio: 'pipe', timeout: 10000 });
       uploaded++;
     } catch (err: any) {
       console.log(`[s3-sync] Warning: failed to sync ${dir}: ${describeAwsFailure(err)}`);

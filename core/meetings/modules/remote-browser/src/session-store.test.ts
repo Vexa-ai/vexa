@@ -3,7 +3,7 @@
  *
  * A fake `aws` executable on PATH records every invocation to a log file, so the REAL
  * syncBrowserDataToS3 / syncBrowserDataFromS3 run end-to-end and the assertions read
- * what actually crossed the shell boundary. Covers the two contract-level behaviours:
+ * what actually crossed the process boundary. Covers the two contract-level behaviours:
  *
  *  1. WRITE-BACK SOURCE DIR (#725 C1) — syncBrowserDataToS3(config, dataDir) uploads
  *     from the LIVE per-bot ephemeral dir it is handed, symmetric with the restore half.
@@ -13,7 +13,6 @@
  *
  * Same shape as auth.smoke.test.ts (tsx + exit code, no assert lib).
  */
-import { execSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -82,10 +81,11 @@ check(count === 0, `all-failing uploads must report 0 items, got ${count}`);
 // ── 3. restore failure is a typed, attributed SessionSyncError (#724 C3) ────
 let restoreErr: unknown;
 try { syncBrowserDataFromS3(config, liveDir); } catch (e) { restoreErr = e; }
-check(restoreErr instanceof SessionSyncError, 'failing restore must throw SessionSyncError (typed, not a bare execSync death)');
+check(restoreErr instanceof SessionSyncError, 'failing restore must throw SessionSyncError (typed, not a bare exec death)');
 if (restoreErr instanceof SessionSyncError) {
   check(restoreErr.step === 'session-restore', `restore error must name the session-restore step, got '${restoreErr.step}'`);
-  check(restoreErr.message.includes('http://minio.test:9000'), 'restore error must name the endpoint');
+  const namedEndpoint = /\(endpoint (.+?), path /.exec(restoreErr.message)?.[1];
+  check(namedEndpoint === config.s3Endpoint, `restore error must name the exact endpoint, got '${namedEndpoint}'`);
 }
 
 // ── 3b. a missing aws CLI is named as such ──────────────────────────────────
@@ -111,5 +111,3 @@ if (fails.length) {
   process.exit(1);
 }
 console.log('session-store.test OK — write-back dataDir honored; restore fail-loud + typed; teardown warn-only.');
-// keep execSync imported reference honest (silences unused-import under strict configs)
-void execSync;
