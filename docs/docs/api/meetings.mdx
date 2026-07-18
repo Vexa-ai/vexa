@@ -195,7 +195,13 @@ the secret address.
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
 <ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
-<ParamField body="language" type="string">ISO code (e.g. `en`); omit to auto-detect.</ParamField>
+<ParamField body="language" type="string">ISO code (e.g. `en`). **Omitted** = auto mode: each STT
+window's language is detected independently and stamped on its segments' `language` field. **Set** =
+forced mode: every STT call is pinned to this code and every segment carries it. Granularity is the
+transcription window (a few seconds of one speaker's audio), not word-level; in auto mode a
+low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the window rather than
+guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
+the 0.12 API.)</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
 
 ```bash POST /bots
