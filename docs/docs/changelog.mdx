@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.10 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.11 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.10`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.11`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -165,6 +165,89 @@ probe), not inferred from planning docs.
   transcription-model findings whose regression rows now live in #522/#525; @m-tauqueer — driving
   the leave-when-alone value (#270) whose spec is now #545. Superseded PRs are credited on their
   threads; findings are contributions.
+
+- **STT model id is now a deployment choice: `TRANSCRIPTION_MODEL` (#522).** The bot's whisper
+  client used to hardcode `model=whisper-1` on every live transcription request, so OpenAI-compatible
+  backends that validate model ids (Groq, vLLM, LiteLLM, gateways) rejected every request — the bot
+  joined and captured but produced no transcript. Set `TRANSCRIPTION_MODEL` (e.g.
+  `whisper-large-v3-turbo` for Groq) in the stack `.env` and every request — bot pipeline and the
+  terminal's composer-mic dictation — carries that id end-to-end; unset, the wire stays `whisper-1`
+  byte-for-byte. The bundled `deploy/transcription` unit still ignores the field (its model is its
+  own `MODEL_SIZE`). Credit: @waqaskhan137's #489 prototyped the client-side half. See
+  [Configuration](/configuration#transcription-stt).
+
+- **Google Meet segments now carry a real `language` (#523).** The Meet lane stamps the
+  STT-detected (or forced) language of each transcription window onto its segments, so
+  `GET /transcripts/...` labels Meet segments the same way Zoom/Teams always did — mixed-language
+  meetings read truthfully instead of `null`. The language contract (auto vs forced mode,
+  window-level granularity) is now documented in [Send a bot](/how-to/send-a-bot) and the
+  [Meetings API](/api/meetings#send-a-bot-to-a-meeting).
+
+- **Terminal errors now speak user truth (#533).** Every error a terminal surface shows states
+  what happened in the user's vocabulary ("Couldn't reach the Vexa server — check that the stack
+  is running.", "Your API key was rejected — sign in again.", or the backend's own reason
+  verbatim) instead of transport plumbing like `/api/... → 502: upstream unreachable:
+  ConnectError`. The full technical string is preserved on the browser console for operators. A
+  new presenter seam (`presentError` beside `ApiError`) plus a grep-guard test keep the 46 former
+  raw render sites — and any future one — honest.
+
+- **Google Meet leave: confirmation-dialog fallbacks work again, and the error spam is gone (#542).**
+  The browser-context leave click fed Playwright-only `:has-text()` selectors to
+  `document.querySelector`, so every dialog-confirmation fallback ("Leave meeting", "Just leave
+  the meeting", dialog-scoped Leave/End) was silently dead, and each leave attempt logged a burst
+  of `not a valid selector` errors that read like join failures (#432). Leave buttons are now
+  matched in-page with plain CSS plus real text matching, and the selector-validity gate
+  CSS-parses every array declared browser-context, so this class of dead selector fails CI
+  loudly instead of shipping green.
+
+- **Per-PR lite boot smoke: lite-only breakage now fails the PR, not the release (#581).** A new
+  `lite-smoke` job in `pr-value` builds `deploy/lite/Dockerfile.lite` from the PR's own tree, boots
+  it with `make -C deploy/lite up`, probes the front doors, and runs the concurrent-bots smoke —
+  scoped to PRs that touch `deploy/lite/**` or `core/**`, with no secrets (anonymous pulls). Three
+  v0.12.2 release blockers were lite-only bugs this leg would have caught per-PR. A companion
+  `gate:lite-makefile` statically rejects the exact footgun class (a comment line inside a
+  `\`-continued recipe block in `deploy/lite/Makefile`, which once shipped `docker run` with an
+  empty image).
+
+- **Pre-active teardown attribution: lobby waits are no longer filed as join errors (#598).** A bot
+  whose workload is torn down while it sits in `awaiting_admission` now terminates with
+  `completion_reason: awaiting_admission_timeout` ("the room never admitted the bot") instead of the
+  generic `join_failure`; bots destroyed at `requested`/`joining` keep `join_failure`. Both reasons
+  stay transient→retry, so only the label — what operators see on the meeting terminal — changes.
+
+- **Meeting-header bot controls follow the live WebSocket, never a stale snapshot (#674).** When
+  the `meeting.status` stream is disconnected the header shows "Reconnecting…" and Stop/Send bot
+  are disabled — a stale-live row can no longer offer an actionable "Stop bot" for a meeting the
+  backend no longer has. A stop that races reality (404/409) now shows a human message ("This
+  meeting is no longer active — refreshing the list.") and reconciles the control, instead of a
+  raw JSON toast.
+
+- **`make probe` — the standing full-journey smoke probe, per surface (#690).** One command per
+  install surface (`make probe`, `SURFACE=compose|lite|helm`) drives the whole journey through the
+  gateway front door — spawn → schedule → boot → join → transcribe → live-view → stop — then sweeps
+  every component's logs once. Each stage prints Expected / Actual / Verdict and a red stage names
+  where the journey broke, so an operator (or an agent mid-debug) gets a truthful install verdict
+  in minutes with zero humans. See [Kubernetes deployment](/deployment-kubernetes) and the
+  `deploy/*/probe.sh` wrappers.
+
+- **Merge card: acceptance row — `Closes` can no longer silently drop delivery legs (#712).** The
+  merge card grows a third row: every issue a PR would auto-close must have its whole Acceptance
+  section delivered (checkbox and legacy-bullet shapes both parsed); undelivered legs red-card the
+  PR until they ship, carry delivered evidence on the issue, or the link is re-filed as
+  `Part of #N`. A dropped acceptance leg is now a decision on record, never a GitHub-keyword
+  side-effect. See [Delivery](/governance/delivery#integration-—-the-merge-bar).
+
+- **Release witness receipts: full image digests or no pass (#713).** The witness gate now rejects
+  any `sha256:` in a receipt's deployment fields that is not followed by the full 64-hex digest
+  (prefixes and trailing ellipses fail, naming the field), and the generator's skeleton asks for the
+  full index + platform-image digests at fill time. The v0.12.10 receipt's deployment field is
+  completed to the full values in the same change — the record of which bytes were witnessed no
+  longer needs a registry lookup to be evidence.
+
+- **Release runbook: publish step named (#714).** `releases/README.md` §the-two-phase-flow gains
+  step 4 — after `:v012` moves, a human publishes the GitHub Release with `gh release create
+  vX.Y.Z --verify-tag --latest --notes-file <notes>`; the guard's retract-to-draft re-check now
+  lives under the act it guards. An operator ships a release end-to-end from the runbook alone.
 
 ## Versioning
 
