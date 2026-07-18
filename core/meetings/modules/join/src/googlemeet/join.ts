@@ -218,9 +218,9 @@ export async function joinGoogleMeeting(
     } catch (e) {
       // Re-throw auth-session errors without masking them as "button not found".
       if (e instanceof AuthSessionError) throw e;
-      // No button found — take diagnostic screenshot and fail
+      // No join button found — take diagnostic screenshot and fail
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-failed.png', fullPage: true });
-      log("📸 Screenshot: No join button found after 30s");
+      log("📸 Screenshot: No join button found after 30s (or join button vanished before click).");
       throw e;
     }
 
