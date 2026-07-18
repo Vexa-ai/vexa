@@ -72,6 +72,38 @@ export function makeTelemetryTap(lane: 'gmeet' | 'mixed', telemetry?: TelemetryS
   };
 }
 
+/**
+ * Build the mixed-lane speaker-hint sink — the EXACT closure the bridge exposes as
+ * `__vexaSpeakerHint`, factored out so it is offline-provable WITHOUT a Playwright page.
+ *
+ * CLOCK CONTRACT: hint tMs and audio tsMs entering the pipeline share ONE domain —
+ * epoch ms. The page-side watchers stamp Date.now() (epoch), so normally the value
+ * passes through untouched; a page that emits a non-epoch time (e.g. a relative
+ * performance.now()) would make every hint window miss every speech turn, so an
+ * implausible skew is re-stamped Node-side and warned LOUDLY, never silently bound
+ * to nothing. Also counts arrivals (C1 hop 2: page → Node).
+ */
+export const HINT_MAX_SKEW_MS = 10 * 60 * 1000;
+export function makeSpeakerHintSink(
+  pipeline: Pick<BotPipeline, 'recordHint'>,
+  warn: (m: string) => void = (m) => console.warn(m),
+): { sink: (name: string, tMs?: number, isEnd?: boolean) => void; crossed: () => number } {
+  let crossed = 0;
+  return {
+    crossed: () => crossed,
+    sink: (name: string, tMs?: number, isEnd?: boolean): void => {
+      crossed++;
+      let t = tMs ?? Date.now();
+      const skew = Math.abs(t - Date.now());
+      if (skew > HINT_MAX_SKEW_MS) {
+        warn(`[bot] hint-clock-skew: hint tMs=${t} is ${Math.round(skew / 1000)}s off the epoch audio clock — page emitted a non-epoch timestamp; re-stamping (name=${name})`);
+        t = Date.now();
+      }
+      pipeline.recordHint(name, t, isEnd);
+    },
+  };
+}
+
 /** Path (in the bot container image) to the prebuilt page-side capture bundle that defines
  *  window.VexaBrowserUtils (createGmeetCapture / createGmeetSpeakers / mixed taps). Mirrors
  *  production's browser-utils.global.js; injected via addInitScript so it is present on every
@@ -230,9 +262,16 @@ export async function startCaptureBridge(
     pipeline.feedAudio(channel, glowName, pcm, ts);
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
-  const onSpeakerHint = (name: string, tMs?: number, isEnd?: boolean): void => {
-    pipeline.recordHint(name, tMs ?? Date.now(), isEnd);
-  };
+  // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
+  const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline);
+  // C1: the four hint hops on one periodic, cumulative counter line —
+  // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
+  // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
+  const countersTimer = mixed ? setInterval(() => {
+    const c = pipeline.hintCounters;
+    console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+  }, 30_000) : null;
+  countersTimer?.unref?.();   // observability only — never holds the process open
 
   await page.exposeFunction('__vexaPerSpeakerAudioData', onPerSpeakerAudio).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
@@ -247,7 +286,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -281,6 +320,21 @@ export async function startCaptureBridge(
       };
       setupMix();
       w.__vexaMixRescan = (globalThis as any).setInterval(setupMix, 2000); // pick up late-arriving tracks
+      if (isTeams) {
+        // Teams contributes the WHO signal the mixed audio can't carry: the voice-level
+        // "blue-square" outline watcher (@vexa/teams-capture — the SAME module the desktop
+        // extension runs) emits debounced speaking start/stop per participant; each crosses
+        // to the Node side as a speaker hint (epoch tMs) and the pipeline stamps the
+        // platform's 'dom-outline' kind at its wiring seam.
+        if (w.VexaBrowserUtils?.createTeamsSpeakers && !w.__vexaTeamsSpeakers) {
+          w.__vexaTeamsSpeakers = w.VexaBrowserUtils.createTeamsSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
+            onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
+              w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          });
+        }
+      }
       if (isJitsi) {
         // Jitsi contributes the WHO + chat signals the mixed audio can't carry:
         // dominant-speaker changes name the pyannote clusters ('dom-active' hints),
@@ -319,15 +373,17 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
+    if (countersTimer) clearInterval(countersTimer);
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
