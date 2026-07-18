@@ -9,6 +9,15 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 
+/** Error thrown when authenticated mode detects a signed-out browser profile. */
+class AuthSessionError extends Error {
+  readonly outcome = "auth_session_missing" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthSessionError";
+  }
+}
+
 // Google Meet now blocks browser-synthetic input (Playwright/CDP clicks have
 // isTrusted=false and no real pointer movement). "humanized" mode routes join
 // interactions through real OS-level XTEST input along recorded-style mouse
@@ -165,7 +174,9 @@ export async function joinGoogleMeeting(
     // Authenticated users may see different buttons:
     // - "Join now" — standard authenticated join
     // - "Switch here" — same account already in the meeting
-    // - "Ask to join" — cookies didn't load (fallback to anonymous)
+    // - "Ask to join" — two cases:
+    //   a) Guest lobby (name input visible) → browser profile signed out → fail closed
+    //   b) Signed-in account not pre-admitted (no name input) → proceed
     const joinNowSelector = 'button:has-text("Join now")';
     const switchHereSelector = 'button:has-text("Switch here")';
     // Text-matched directly: googleJoinButtonSelectors[0] is :not([aria-label]) and the
@@ -187,27 +198,26 @@ export async function joinGoogleMeeting(
         await clickHandle(joinButton.el!, "switch_here");
         log("Bot joined Google Meet as authenticated user (Switch here — same account already in call).");
       } else {
-        // "Ask to join" in authenticated mode = the signed-in account isn't pre-admitted
-        // to THIS meeting (not host / same-org / invited), so it must knock — like an
-        // anonymous join but carrying the real account identity. (Also the path if cookies
-        // genuinely failed to load.) A signed-in account shows no name field; the fill
-        // below is a harmless safety for the cookies-failed case.
-        log("Authenticated account not pre-admitted — knocking via 'Ask to join'.");
-        try {
-          const nameFieldSelector = googleNameInputSelectors[0];
-          const nameField = await page.$(nameFieldSelector);
-          if (nameField) {
-            await fillField(nameField, nameFieldSelector, botName, "name");
-            log(`Filled bot name: ${botName}`);
-          }
-        } catch (e) {
-          // no name field for a signed-in account — expected
+        // "Ask to join" in authenticated mode — determine whether this is a signed-out guest lobby
+        // (name input visible) or a signed-in account not pre-admitted (no name input).
+        const nameField = await page.$(googleNameInputSelectors[0]).catch(() => null);
+        if (nameField && (await nameField.isVisible?.() ?? true)) {
+          // Guest lobby detected — browser profile is signed out, fail closed.
+          // Take a diagnostic screenshot before throwing so the operator can see the lobby state.
+          await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-signed-out.png', fullPage: true });
+          log("📸 Screenshot: authenticated mode but browser profile is signed out (guest lobby).");
+          throw new AuthSessionError(
+            "Browser profile signed out — cannot authenticate with Google. Re-authenticate the profile and retry."
+          );
         }
-
+        // Signed-in account not pre-admitted (host approval required) — proceed
+        log("Authenticated account not pre-admitted — knocking via 'Ask to join'.");
         await clickHandle(joinButton.el!, "ask_to_join");
         log("Bot requested to join Google Meet (Ask to join) as the signed-in account.");
       }
     } catch (e) {
+      // Re-throw auth-session errors without masking them as "button not found".
+      if (e instanceof AuthSessionError) throw e;
       // No button found — take diagnostic screenshot and fail
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-failed.png', fullPage: true });
       log("📸 Screenshot: No join button found after 30s");
