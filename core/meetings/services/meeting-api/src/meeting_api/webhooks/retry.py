@@ -51,6 +51,16 @@ DEFAULT_LEASE_SECONDS = 60.0
 # per-client queue's pinned drain would block them at connect. Same entry shape + schedule.
 SYSTEM_RETRY_QUEUE_KEY = "webhook:system_retry_queue"
 
+# The system queue needs its OWN processing list. drain_retry_queue defaults
+# processing_key=PROCESSING_KEY, and the system call site passes only `key=`, so
+# both queues would share webhook:retry_processing. That is cross-contamination,
+# not just untidiness: the reclaim pass returns an orphaned processing entry to
+# the queue currently being drained, so a system hook reclaimed during a MAIN
+# drain would be re-delivered over the IP-pinned client transport — the exact
+# transport the comment above says blocks these (often cluster-internal) targets
+# at connect. Introduced when upstream #520's reliable queue met our system queue.
+SYSTEM_PROCESSING_KEY = "webhook:system_retry_processing"
+
 # A dead-letter list for envelopes that exhaust the schedule or age out — so a
 # permanently-failed delivery (e.g. a meeting.completed) is observable, not silently dropped.
 DEAD_LETTER_KEY = "webhook:dead_letter"
