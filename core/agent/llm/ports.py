@@ -38,9 +38,28 @@ _GIT_REPO_DISCOVERY_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
 
 def scrubbed_git_env() -> dict[str, str]:
     """``os.environ`` minus every git repo-discovery redirect — cwd-based discovery, always.
-    Used for the local ``_git`` AND for launching harness CLIs (they shell out to git in the
-    workspace and would inherit the same poisoned discovery)."""
+    Used for the local ``_git`` (the worker's OWN commits) AND as the base for launching harness CLIs
+    (they shell out to git in the workspace and would inherit the same poisoned discovery)."""
     return {k: v for k, v in os.environ.items() if k not in _GIT_REPO_DISCOVERY_VARS}
+
+
+# Host DATA-PLANE secrets the worker PROCESS legitimately holds — it drives redis (the serve loop, the
+# meeting/processed streams) and carries the minted per-dispatch token — but that the UNTRUSTED model
+# subprocess must NEVER inherit. A harness CLI exposes a Bash tool to the model; with ``REDIS_URL`` in its
+# environment that Bash reaches the SHARED redis and can read/write ANOTHER tenant's ``tc:meeting:*`` /
+# ``unit:*:in`` keys — filesystem tenancy is mount-enforced, the data plane is not. The per-dispatch
+# identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
+# credentials (ANTHROPIC_*/VEXA_LLM_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
+# deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
+_HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN")
+
+
+def harness_subprocess_env() -> dict[str, str]:
+    """The env for launching an UNTRUSTED model-driven harness subprocess: ``scrubbed_git_env()`` further
+    stripped of the host data-plane secrets in ``_HARNESS_SUBPROCESS_DENY_VARS``. Use this — never a raw
+    ``os.environ`` / ``scrubbed_git_env`` — to spawn a harness CLI: its Bash tool would otherwise inherit
+    the worker's own ``REDIS_URL`` and cross the data-plane tenancy boundary the mounts enforce on disk."""
+    return {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
 
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI
