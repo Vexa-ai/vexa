@@ -525,12 +525,16 @@ def build_router(
             if decoded is None:
                 return _error(400, "bad_cursor", "cursor is invalid", x_request_id)
             offset, snapshot = decoded
-        items = [
-            item
-            for item in await _project_items(store, numeric_user_id, evaluated_at)
-            if _parse_time(item["updated_at"]) <= snapshot
-            and (since_at is None or _parse_time(item["updated_at"]) >= since_at)
-        ]
+        items = sorted(
+            (
+                item
+                for item in await _project_items(store, numeric_user_id, evaluated_at)
+                if _parse_time(item["updated_at"]) <= snapshot
+                and (since_at is None or _parse_time(item["updated_at"]) >= since_at)
+            ),
+            key=lambda item: (_parse_time(item["occurred_at"]), item["id"]),
+            reverse=True,
+        )
         page = items[offset:offset + bounded_limit]
         next_offset = offset + len(page)
         truncated = next_offset < len(items)
