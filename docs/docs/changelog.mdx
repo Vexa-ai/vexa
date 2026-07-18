@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.11 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.12 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.11`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.12`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -258,6 +258,37 @@ probe), not inferred from planning docs.
   operations — the headers the running gateway and admin-api already honor. `gate:schema`'s
   `validate.mjs` now pins referential integrity (every referenced scheme must be defined, first
   offenders named), so a re-capture can never re-import the bug.
+
+- **Recordings: opening a recording mid-meeting no longer freezes it (#768).** Master assembly is now
+  re-assemblable instead of write-once — a `GET /recordings/{id}/master` while the meeting is still
+  recording serves the audio captured so far without permanently freezing the file, and every later
+  read that finds new chunks rebuilds the master (repairing already-frozen recordings on their next
+  read). The assembled-chunk-count is recorded and compared so the freeze cannot silently return.
+
+- **Recordings: long recordings over ~1000 chunks are assembled in full (#769).** The chunk listing
+  now paginates `list_objects_v2` to exhaustion (looping on `IsTruncated`/`NextContinuationToken`)
+  instead of reading only the first 1000-key page, so a master built from a very long meeting no
+  longer silently drops everything past the first page. A chunk-count mismatch is logged loudly.
+
+- **Helm: spread replicas across nodes with `topologySpreadConstraints` (#770).** `replicaCount > 1`
+  no longer means "all on one node" — set `global.topologySpreadConstraints` (applied to every
+  component) or a per-component `<component>.topologySpreadConstraints` override, and the chart
+  injects that component's own pod selector when you omit `labelSelector`, so a single block spreads
+  each component's own replicas. Empty by default (single-node / k3s installs are unaffected). See
+  the chart README's "Spreading replicas across nodes".
+
+- **Speaker-stream tuning now reaches spawned bots (#771).** `runtime.speakerStream.*`
+  (`BOT_SPEAKER_MIN_AUDIO_SEC`, `BOT_SPEAKER_SUBMIT_INTERVAL_SEC`, `BOT_SPEAKER_CONFIRM_THRESHOLD`,
+  `BOT_SPEAKER_MAX_BUFFER_SEC`, `BOT_SPEAKER_IDLE_TIMEOUT_SEC`) rendered onto the runtime pod are
+  now merged into each spawned bot workload's environment, so the accuracy/latency knobs actually
+  take effect on k8s and docker-backed deployments instead of rendering as dead config. See
+  [Configuration](/configuration).
+
+- **Helm: agent-api no longer deadlocks on upgrade (#774).** agent-api mounts the single
+  `agent-workspaces` PVC, whose default access mode is `ReadWriteOnce`; the shared zero-downtime
+  RollingUpdate (`maxSurge:1`) made any pod-spec-changing `helm upgrade` stall on a Multi-Attach
+  error. agent-api now renders `strategy: Recreate` under an RWO workspace (the same opt-out redis
+  already carries), and keeps RollingUpdate when the workspace is `ReadWriteMany`.
 
 ## Versioning
 
