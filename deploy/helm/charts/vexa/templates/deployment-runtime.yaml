@@ -165,4 +165,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.runtime "runtime")) }}
+      {{- . | nindent 6 }}
+      {{- end }}
 {{- end }}

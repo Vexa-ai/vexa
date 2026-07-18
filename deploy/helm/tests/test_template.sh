@@ -91,4 +91,77 @@ else
   echo "  FAIL: runtime RUNTIME_K8S_NODE_SELECTOR missing the global.nodeSelector JSON"; fail=1
 fi
 
+# #770: pod topology spread. Empty default (values-test sets nothing) must render NOTHING — the
+# field is optional, so a no-spread chart is byte-identical to a chart without it (single-node /
+# k3s installs keep working). This is the red→green control direction: nothing here, everything
+# once a constraint is set.
+if grep -qE 'topologySpreadConstraints:' <<< "$RENDER"; then
+  echo "  FAIL: topologySpreadConstraints rendered with empty default (should render nothing)"; fail=1
+else
+  echo "  OK: no topologySpreadConstraints when unset (empty default renders nothing)"
+fi
+# A global constraint must land on EVERY component Deployment with THAT component's own selector
+# injected (labelSelector omitted by the user → chart fills it). 6 Deployments carry the field
+# (gateway, admin-api, meeting-api, runtime, agent-api, terminal), each with its own component
+# label under matchLabels.
+RENDER_TSC="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'global.topologySpreadConstraints=[{"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"ScheduleAnyway"}]')"
+tsc_count="$(grep -cE '^      topologySpreadConstraints:' <<< "$RENDER_TSC" || true)"
+if [ "$tsc_count" -ge 6 ]; then
+  echo "  OK: global topologySpreadConstraints on all 6 component Deployments ($tsc_count)"
+else
+  echo "  FAIL: global topologySpreadConstraints — want >=6 Deployments got $tsc_count"; fail=1
+fi
+# Each component's OWN selector injected — assert the gateway and meeting-api component labels both
+# appear inside an injected topology-spread matchLabels (they'd be absent if the selector weren't
+# component-specific).
+for comp in gateway meeting-api runtime; do
+  if grep -A6 'topologySpreadConstraints:' <<< "$RENDER_TSC" | grep -qE "app.kubernetes.io/component: ${comp}\$"; then
+    echo "  OK: topology spread injects ${comp}'s own selector"
+  else
+    echo "  FAIL: topology spread missing injected selector for ${comp}"; fail=1
+  fi
+done
+# Per-component override wins over the global default: gateway asks for a zone key, meeting-api
+# keeps the global hostname key.
+RENDER_TSC_OV="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'global.topologySpreadConstraints=[{"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"ScheduleAnyway"}]' \
+  --set-json 'gateway.topologySpreadConstraints=[{"maxSkew":2,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"DoNotSchedule"}]')"
+gw_block="$(awk '/deployment-gateway.yaml/{f=1} f&&/topologySpreadConstraints:/{p=1} p{print} /^---/{if(p)exit}' <<< "$RENDER_TSC_OV")"
+if grep -q 'topology.kubernetes.io/zone' <<< "$gw_block" && grep -q 'maxSkew: 2' <<< "$gw_block"; then
+  echo "  OK: per-component topologySpreadConstraints override wins on gateway"
+else
+  echo "  FAIL: gateway per-component topologySpreadConstraints override did not win"; fail=1
+fi
+
+# #774: agent-api mounts the single ReadWriteOnce agent-workspaces PVC, so it MUST opt out of the
+# shared zero-downtime RollingUpdate (maxSurge:1 deadlocks on Multi-Attach against an RWO volume)
+# and render Recreate — same deliberate opt-out redis already carries. Assert the agent-api block
+# specifically renders type: Recreate.
+agent_strategy="$(awk '/deployment-agent-api.yaml/{f=1} f&&/^spec:/{p=1} p{print} p&&/selector:/{exit}' <<< "$RENDER")"
+if grep -q 'type: Recreate' <<< "$agent_strategy"; then
+  echo "  OK: agent-api renders Recreate (RWO workspace PVC — no Multi-Attach deadlock)"
+else
+  echo "  FAIL: agent-api did not render type: Recreate under default RWO workspace"; fail=1
+fi
+# The other API/UI Deployments keep the shared zero-downtime RollingUpdate — redis + agent-api are
+# the only two single-PVC opt-outs, so exactly 5 RollingUpdate blocks remain (gateway, admin-api,
+# meeting-api, runtime, terminal).
+roll_count="$(grep -cE '^    type: RollingUpdate' <<< "$RENDER" || true)"
+if [ "$roll_count" -eq 5 ]; then
+  echo "  OK: 5 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
+else
+  echo "  FAIL: expected 5 RollingUpdate Deployments, got $roll_count"; fail=1
+fi
+# A ReadWriteMany workspace lifts the single-mount constraint → agent-api takes the shared rolling
+# strategy back (conditional is on accessMode, not hardcoded).
+RENDER_RWX="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set agentApi.workspaces.accessMode=ReadWriteMany)"
+agent_rwx="$(awk '/deployment-agent-api.yaml/{f=1} f&&/^spec:/{p=1} p{print} p&&/selector:/{exit}' <<< "$RENDER_RWX")"
+if grep -q 'type: RollingUpdate' <<< "$agent_rwx"; then
+  echo "  OK: agent-api takes RollingUpdate when workspace is ReadWriteMany"
+else
+  echo "  FAIL: agent-api did not take RollingUpdate under ReadWriteMany workspace"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
