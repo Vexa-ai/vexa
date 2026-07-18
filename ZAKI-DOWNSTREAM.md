@@ -13,7 +13,8 @@ read-only agent surface, retention/erasure, and hub-controlled metering.
 - Baseline commit: `034ad78b718b9338182fd80288547419b44337b3`
 - License: Apache-2.0; upstream notices and history remain intact.
 - Activation: off. No ZAKI chart, secret, DNS, database, object store, or cluster resource exists.
-- Current objective: establish a reproducible, gate-green fork before adding ZAKI contracts.
+- Current objective: finish the default-off Minutes read, retention, erasure and launch-acceptance
+  path without activating a ZAKI environment prematurely.
 
 The `v0.12.2` tag contains the first post-`v0.12.1` delivery batch, including an edge guard, fresh
 install fixes, Jitsi support, and release-pipeline work. Unlike
@@ -64,11 +65,11 @@ boundaries:
 6. Hub provisioning, wallet metering, webhook idempotency, and user-facing state remain hub-owned.
 7. Every feature is default-off until its contract, isolation, erasure, and live-meeting gates pass.
 
-The proposed `/api/zaki/read/v1` Minutes profile lives at
-[`core/meetings/contracts/zaki-read.v1`](core/meetings/contracts/zaki-read.v1/README.md). It is
-deliberately unsealed and has no runtime route. Four WP-15 decisions—common versus spoke-specific
-envelope fields, expired-item status, provenance sufficiency, and byte-cap scope—must be adjudicated
-before the contract is sealed or implemented.
+The sealed `/api/zaki/read/v1` Minutes profile lives at
+[`core/meetings/contracts/zaki-read.v1`](core/meetings/contracts/zaki-read.v1/README.md). Role 8
+approved its WP-15 envelope, expiry, provenance and byte-bound decisions. Meeting-api now implements
+the default-off, token-protected runtime route; deployment credentials, Hub activation and the
+witnessed launch gate remain separate work.
 
 ## Downstream discipline
 

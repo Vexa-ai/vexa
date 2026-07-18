@@ -54,6 +54,7 @@ No one else has all three:
 ## Table of contents
 
 - [Quickstart](#-quickstart)
+- [ZAKI Minutes retention and Agent-read limits](#zaki-minutes-retention-and-agent-read-limits)
 - [How it works](#-how-it-works)
 - [The agentic runtime](#-the-agentic-runtime)
 - [Agents & your workspace](#-agents--your-workspace)
@@ -67,6 +68,47 @@ No one else has all three:
 - [Status & roadmap](#-status--roadmap)
 - [Community & contributing](#-community--contributing)
 - [License](#-license)
+
+---
+
+## ZAKI Minutes retention and Agent-read limits
+
+ZAKI Minutes stores an explicit UTC expiry for each meeting-data scope. The service does not
+calculate a default at read time, and an Agent read never renews data.
+
+The launch proposal below is product policy, not a hard-coded engine default and not yet a
+product/legal ratification:
+
+| Scope | Proposed launch window | Change rules |
+|---|---:|---|
+| Audio | 7 days after finalization | Future policy may change; an existing expiry may stay or move earlier, never later. |
+| Transcript | 90 days | Tenant-reducible within an operator maximum; reads never extend it. |
+| Summary | No longer than its transcript | The summary and transcript scopes must both be live when a transcript summary fallback is served. |
+
+Policy can therefore change at any time for future meetings, and an authority may shorten an
+existing deadline. It cannot use the current engine to extend an already-materialized deadline.
+Once a scope is expired or erased, it is unavailable to reads and must not be resurrected from a
+backup. Meeting deletion and account erasure may remove data before its scheduled expiry.
+
+The read-only Agent boundary is deliberately bounded:
+
+| Read operation | Bound |
+|---|---:|
+| Index | 50 items by default; 200 maximum per page |
+| Search | 20 items by default; 50 maximum per page |
+| Item content | 262,144 serialized bytes |
+| Complete item response | 270,336 serialized bytes |
+
+An oversized full transcript returns `413`; a stored `variant=summary` may be read within the same
+item bounds without loading transcript segments. There is no special 8-call/1-MiB cross-spoke
+turn budget. Volume remains controlled by these per-page/per-item bounds, opaque authorized
+cursors, transport timeouts, and the Agent's ordinary iteration and billing controls.
+
+Operators own service URLs, tokens, maximum policy, health controls and activation. The intended
+user control is a shorter per-scope retention choice within that operator ceiling; the user never
+handles service credentials. Minutes remains default-off until the launch acceptance and erasure
+gates pass. See the [sealed read profile](core/meetings/contracts/zaki-read.v1/README.md) and the
+[runtime read adapter](core/meetings/services/meeting-api/src/meeting_api/zaki_read/README.md).
 
 ---
 
