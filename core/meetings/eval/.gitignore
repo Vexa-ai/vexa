@@ -4,6 +4,8 @@ secrets.env
 cache/
 truth*.jsonl
 noise*.jsonl
+# … except the committed L3.5 counting fixture: synthetic TTS counting, no real transcript in it.
+!counting-fixture/truth.jsonl
 *.log
 # O-TEL-3 flag.test.mjs writes a transient flag-out here; the committed fixtures stay.
 replay-fixture/.flag-out.tmp.json

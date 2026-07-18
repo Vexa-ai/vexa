@@ -1,0 +1,12 @@
+{
+  "scenario": "silence",
+  "n": 20,
+  "speakers": [
+    "A",
+    "B"
+  ],
+  "cadence": 5,
+  "turns": 4,
+  "platform": "google_meet",
+  "generator": "core/meetings/eval/src/counting_fixture.py turn_plan/tts (Deepgram Aura, linear16 16kHz)"
+}
