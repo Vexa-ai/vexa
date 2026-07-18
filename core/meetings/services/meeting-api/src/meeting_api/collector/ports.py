@@ -77,6 +77,16 @@ class TranscriptStore(Protocol):
         (the body of ``MeetingListResponse``)."""
         ...
 
+    async def list_owned_read_metadata(self, user_id: int) -> list[dict]:
+        """Owner-only meeting metadata for the ZAKI read index.
+
+        Each row contains only the meeting fields needed by ``zaki-read.v1`` plus meeting,
+        transcript and summary availability/update metadata. Implementations must not load or
+        return attendee, transcript, summary, notes, or recording bodies through this seam. Shared
+        meetings owned by another user are excluded.
+        """
+        ...
+
     async def authorize_subscribe(
         self, user_id: int, platform: str, native_meeting_id: str,
         member_workspaces: "Optional[set[str]]" = None,

@@ -148,9 +148,8 @@ def _capture_notice(data: dict, now: datetime) -> dict | None:
     }
 
 
-async def _read_scope_disabled(store: TranscriptStore, user_id: int) -> bool:
+def _read_scope_disabled_in(meetings: list[dict], user_id: int) -> bool:
     """Distinguish an explicit tenant opt-out from malformed or absent evidence."""
-    meetings = await store.list_meetings(user_id)
     states = {
         read_scope.get("enabled")
         for meeting in meetings
@@ -160,6 +159,10 @@ async def _read_scope_disabled(store: TranscriptStore, user_id: int) -> bool:
         and isinstance(read_scope.get("enabled"), bool)
     }
     return states == {False}
+
+
+async def _read_scope_disabled(store: TranscriptStore, user_id: int) -> bool:
+    return _read_scope_disabled_in(await store.list_meetings(user_id), user_id)
 
 
 def _retention(data: dict, scope: str, now: datetime) -> dict | None:
@@ -398,8 +401,11 @@ async def _project_items(
     now: datetime,
     *,
     query: str | None = None,
+    meetings: list[dict] | None = None,
+    metadata_only: bool = False,
 ) -> list[dict]:
-    meetings = await store.list_meetings(user_id)
+    if meetings is None:
+        meetings = await store.list_meetings(user_id)
     items: list[dict] = []
     for meeting in meetings:
         if meeting.get("user_id") != user_id:
@@ -425,8 +431,23 @@ async def _project_items(
             "sensitivity": "sensitive_pii",
         }
         meeting_id = f"meeting:{meeting['id']}"
+        attendees = data.get("attendees", [])
+        meeting_available = (
+            meeting.get("meeting_available") is True
+            if metadata_only
+            else (
+                isinstance(attendees, list)
+                and len(attendees) <= 1000
+                and all(
+                    isinstance(attendee, str) and attendee.strip()
+                    for attendee in attendees
+                )
+            )
+        )
         if (
-            _parse_time(meeting.get("end_time")) is not None
+            meeting_available
+            and meeting.get("platform") in SEALED_MEETING_PLATFORMS
+            and _parse_time(meeting.get("end_time")) is not None
             and _matches(query, base["title"], meeting.get("platform"), data.get("attendees", []))
         ):
             items.append({
@@ -435,11 +456,15 @@ async def _project_items(
                 "kind": "meeting",
                 "retention": transcript_retention,
             })
-        transcript = await store.get_transcript_by_id(user_id, meeting["id"])
-        turns = _turns(transcript) if isinstance(transcript, dict) else None
+        transcript_available = meeting.get("transcript_available") is True
+        turns = None
+        if not metadata_only:
+            transcript = await store.get_transcript_by_id(user_id, meeting["id"])
+            turns = _turns(transcript) if isinstance(transcript, dict) else None
+            transcript_available = turns is not None
         if (
-            turns is not None
-            and _matches(query, base["title"], turns)
+            transcript_available
+            and _matches(query, base["title"], turns or [])
         ):
             items.append({
                 **base,
@@ -449,16 +474,23 @@ async def _project_items(
                 "meeting_id": meeting_id,
                 "retention": transcript_retention,
             })
-        summary = _summary(data)
         summary_retention = _retention(data, "summary", now)
-        summary_updated_at = (
+        summary = None if metadata_only else _summary(data)
+        summary_available = (
+            meeting.get("summary_available") is True
+            if metadata_only
+            else summary is not None
+        )
+        summary_updated_at = _parse_time(
+            meeting.get("summary_updated_at") or updated_at
+        ) if metadata_only else (
             _parse_time(summary[1] or updated_at) if summary is not None else None
         )
         if (
-            summary is not None
+            summary_available
             and summary_retention is not None
             and summary_updated_at is not None
-            and _matches(query, base["title"], summary[0])
+            and _matches(query, base["title"], summary[0] if summary is not None else None)
         ):
             items.append({
                 **base,
@@ -505,7 +537,8 @@ def build_router(
             fallback=DEFAULT_INDEX_LIMIT,
         )
         numeric_user_id = int(user_id)
-        if await _read_scope_disabled(store, numeric_user_id):
+        index_meetings = await store.list_owned_read_metadata(numeric_user_id)
+        if _read_scope_disabled_in(index_meetings, numeric_user_id):
             return _error(403, "scope_disabled", "Minutes read access is disabled", x_request_id)
         since_at = _parse_time(since) if since is not None else None
         if since is not None and since_at is None:
@@ -528,7 +561,13 @@ def build_router(
         items = sorted(
             (
                 item
-                for item in await _project_items(store, numeric_user_id, evaluated_at)
+                for item in await _project_items(
+                    store,
+                    numeric_user_id,
+                    evaluated_at,
+                    meetings=index_meetings,
+                    metadata_only=True,
+                )
                 if _parse_time(item["updated_at"]) <= snapshot
                 and (since_at is None or _parse_time(item["updated_at"]) >= since_at)
             ),

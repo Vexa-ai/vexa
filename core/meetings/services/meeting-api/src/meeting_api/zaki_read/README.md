@@ -41,3 +41,18 @@ cursors bound to the user, route, query controls and evaluation snapshot.
 
 There is no special 8-call/1-MiB cross-spoke budget. Per-page/per-item limits, request timeouts,
 issued IDs/cursors, and ordinary Agent iteration and billing controls provide the volume boundary.
+
+## Index storage path
+
+The production index reads through `TranscriptStore.list_owned_read_metadata`. Its PostgreSQL
+query is owner-only and returns meeting time/title, capture/read/retention evidence, summary
+presence/update time, and a bounded transcript-validity aggregate. It does not select native
+meeting IDs, transcript or summary text, notes, recordings, or segment rows. Database timestamps
+without an explicit offset are interpreted as UTC at the adapter boundary before contract
+validation.
+
+The current opaque cursor remains an item offset over the complete authorized metadata snapshot.
+That keeps every retained old meeting reachable while avoiding transcript-body hydration, but it
+still materializes the owner's body-free metadata set in the service. Database keyset pagination is
+a separate follow-up because changing it safely also changes cursor semantics. Search keeps its
+existing content scan, and a full item read hydrates only the one authorized transcript requested.

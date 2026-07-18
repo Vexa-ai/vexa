@@ -37,6 +37,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _utc_iso(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _expired(iso: Optional[str]) -> bool:
     """True if the ISO-8601 timestamp is in the past (None = never expires)."""
     if not iso:
@@ -295,8 +308,8 @@ class SqlAlchemyTranscriptStore:
             for s in segments:
                 if not s.get("absolute_start_time") and s.get("start") is not None:
                     try:
-                        s["absolute_start_time"] = (base + timedelta(seconds=float(s["start"]))).isoformat()
-                        s["absolute_end_time"] = (base + timedelta(seconds=float(s.get("end") or s["start"]))).isoformat()
+                        s["absolute_start_time"] = _utc_iso(base + timedelta(seconds=float(s["start"])))
+                        s["absolute_end_time"] = _utc_iso(base + timedelta(seconds=float(s.get("end") or s["start"])))
                     except Exception:
                         pass
         return {
@@ -305,8 +318,8 @@ class SqlAlchemyTranscriptStore:
             "native_meeting_id": meeting.platform_specific_id,
             "constructed_meeting_url": (data.get("constructed_meeting_url")),
             "status": meeting.status,
-            "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
-            "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+            "start_time": _utc_iso(meeting.start_time),
+            "end_time": _utc_iso(meeting.end_time),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
             "data": data,
@@ -396,15 +409,155 @@ class SqlAlchemyTranscriptStore:
                     if isinstance(m.data, dict) else None,
                     "status": m.status,
                     "bot_container_id": m.bot_container_id,
-                    "start_time": m.start_time.isoformat() if m.start_time else None,
-                    "end_time": m.end_time.isoformat() if m.end_time else None,
+                    "start_time": _utc_iso(m.start_time),
+                    "end_time": _utc_iso(m.end_time),
                     "data": m.data if isinstance(m.data, dict) else {},
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    "created_at": _utc_iso(m.created_at),
+                    "updated_at": _utc_iso(m.updated_at),
                 }
                 for m in rows
             ]
+
+    async def list_owned_read_metadata(self, user_id: int) -> list[dict]:
+        """Return the owner-only, body-free projection consumed by ``zaki-read.v1`` index."""
+        statement = self._statement(
+            """
+            SELECT
+                m.id,
+                m.user_id,
+                m.platform,
+                m.status,
+                m.start_time,
+                m.end_time,
+                m.data->>'title' AS title,
+                m.data->>'name' AS name,
+                CASE
+                    WHEN jsonb_typeof(m.data->'zaki_capture') = 'object'
+                    THEN jsonb_build_object(
+                        'state', m.data->'zaki_capture'->'state',
+                        'bot_name', m.data->'zaki_capture'->'bot_name',
+                        'tenant_attested', m.data->'zaki_capture'->'tenant_attested',
+                        'tenant_attested_at', m.data->'zaki_capture'->'tenant_attested_at',
+                        'tenant_policy_version', m.data->'zaki_capture'->'tenant_policy_version'
+                    )
+                    ELSE m.data->'zaki_capture'
+                END AS zaki_capture,
+                CASE
+                    WHEN jsonb_typeof(m.data->'zaki_read') = 'object'
+                    THEN jsonb_build_object(
+                        'enabled', m.data->'zaki_read'->'enabled'
+                    )
+                    ELSE m.data->'zaki_read'
+                END AS zaki_read,
+                CASE
+                    WHEN jsonb_typeof(m.data->'zaki_retention') = 'object'
+                    THEN jsonb_build_object(
+                        'state', m.data->'zaki_retention'->'state',
+                        'expired_scopes', m.data->'zaki_retention'->'expired_scopes',
+                        'scope_expiries', m.data->'zaki_retention'->'scope_expiries'
+                    )
+                    ELSE m.data->'zaki_retention'
+                END AS zaki_retention,
+                m.created_at,
+                m.updated_at,
+                CASE
+                    WHEN NOT (m.data ? 'attendees') THEN TRUE
+                    WHEN jsonb_typeof(m.data->'attendees') <> 'array' THEN FALSE
+                    ELSE
+                        jsonb_array_length(m.data->'attendees') <= 1000
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(m.data->'attendees') AS attendee
+                            WHERE jsonb_typeof(attendee) <> 'string'
+                               OR btrim(attendee #>> '{}') = ''
+                        )
+                END AS meeting_available,
+                COALESCE((
+                    SELECT
+                        count(*) BETWEEN 1 AND 4096
+                        AND bool_and(char_length(btrim(t.text)) BETWEEN 1 AND 65536)
+                        AND bool_and(t.end_time >= t.start_time)
+                        AND bool_and(t.speaker IS NULL OR char_length(t.speaker) <= 200)
+                    FROM transcriptions t
+                    WHERE t.meeting_id = m.id
+                ), FALSE) AS transcript_available,
+                (
+                    (
+                        jsonb_typeof(m.data->'summary') = 'string'
+                        AND btrim(m.data->>'summary') <> ''
+                    )
+                    OR (
+                        jsonb_typeof(m.data->'summary') = 'object'
+                        AND jsonb_typeof(m.data->'summary'->'text') = 'string'
+                        AND btrim(m.data->'summary'->>'text') <> ''
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(
+                            CASE
+                                WHEN jsonb_typeof(m.data->'summaries') = 'array'
+                                THEN m.data->'summaries'
+                                ELSE '[]'::jsonb
+                            END
+                        ) AS candidate
+                        WHERE jsonb_typeof(candidate->'text') = 'string'
+                          AND btrim(candidate->>'text') <> ''
+                    )
+                ) AS summary_available,
+                CASE
+                    WHEN jsonb_typeof(m.data->'summary') = 'string'
+                         AND btrim(m.data->>'summary') <> ''
+                    THEN m.updated_at::text
+                    WHEN jsonb_typeof(m.data->'summary') = 'object'
+                         AND jsonb_typeof(m.data->'summary'->'text') = 'string'
+                         AND btrim(m.data->'summary'->>'text') <> ''
+                    THEN COALESCE(m.data->'summary'->>'updated_at', m.updated_at::text)
+                    ELSE COALESCE((
+                        SELECT candidate->>'updated_at'
+                        FROM jsonb_array_elements(
+                            CASE
+                                WHEN jsonb_typeof(m.data->'summaries') = 'array'
+                                THEN m.data->'summaries'
+                                ELSE '[]'::jsonb
+                            END
+                        ) AS candidate
+                        WHERE jsonb_typeof(candidate->'text') = 'string'
+                          AND btrim(candidate->>'text') <> ''
+                        LIMIT 1
+                    ), m.updated_at::text)
+                END AS summary_updated_at
+            FROM meetings m
+            WHERE m.user_id = :user_id
+            ORDER BY COALESCE(m.start_time, m.created_at) DESC, m.id DESC
+            """
+        )
+        async with self._session_factory() as db:
+            result = await db.execute(statement, {"user_id": user_id})
+            rows = result.mappings().all()
+
+        return [
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "platform": row["platform"],
+                "status": row["status"],
+                "start_time": _utc_iso(row.get("start_time")),
+                "end_time": _utc_iso(row.get("end_time")),
+                "data": {
+                    key: row.get(key)
+                    for key in ("title", "name", "zaki_capture", "zaki_read", "zaki_retention")
+                    if row.get(key) is not None
+                },
+                "created_at": _utc_iso(row.get("created_at")),
+                "updated_at": _utc_iso(row.get("updated_at")),
+                "meeting_available": row.get("meeting_available") is True,
+                "transcript_available": row.get("transcript_available") is True,
+                "summary_available": row.get("summary_available") is True,
+                "summary_updated_at": _utc_iso(row.get("summary_updated_at")),
+            }
+            for row in rows
+        ]
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
@@ -802,12 +955,12 @@ class SqlAlchemyTranscriptStore:
             if isinstance(m.data, dict) else None,
             "status": m.status,
             "bot_container_id": m.bot_container_id,
-            "start_time": m.start_time.isoformat() if m.start_time else None,
-            "end_time": m.end_time.isoformat() if m.end_time else None,
+            "start_time": _utc_iso(m.start_time),
+            "end_time": _utc_iso(m.end_time),
             "data": m.data if isinstance(m.data, dict) else {},
             "shared": False,
-            "created_at": m.created_at.isoformat() if m.created_at else None,
-            "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+            "created_at": _utc_iso(m.created_at),
+            "updated_at": _utc_iso(m.updated_at),
         }
 
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
