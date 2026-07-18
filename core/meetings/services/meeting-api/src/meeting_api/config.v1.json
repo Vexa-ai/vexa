@@ -90,6 +90,12 @@
    "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
   },
   {
+   "key": "DEFAULT_BOT_NAME",
+   "class": "defaulted",
+   "default": "(unset — request_bot falls back to VexaBot-{random})",
+   "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
+  },
+  {
    "key": "TRANSCRIPTION_SERVICE_URL",
    "class": "capability",
    "capability": "stt",

@@ -49,6 +49,12 @@ sets the port to the literal string `13000  # the UI`.
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
+## Bot participant name
+
+The terminal client uses `NEXT_PUBLIC_DEFAULT_BOT_NAME` at build time and falls back to
+`Vexa`. The meeting-api uses `DEFAULT_BOT_NAME` for raw `POST /bots` callers and falls back to
+`VexaBot-{random}`. An explicit `bot_name` in the request takes precedence over both defaults.
+
 ## Database & storage
 
 | Variable | Default | Purpose |
