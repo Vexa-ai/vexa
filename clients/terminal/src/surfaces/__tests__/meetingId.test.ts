@@ -22,10 +22,12 @@ describe("isValidMeetingId", () => {
     expect(isValidMeetingId("teams", "")).toBe(false);
   });
 
-  it("accepts a 10-digit Telemost id only", () => {
+  it("accepts 10-20 digit Telemost ids", () => {
     expect(isValidMeetingId("telemost", "1111111111")).toBe(true);
+    expect(isValidMeetingId("telemost", "11111111111111")).toBe(true);
+    expect(isValidMeetingId("telemost", "11111111111111111111")).toBe(true);
     expect(isValidMeetingId("telemost", "111111111")).toBe(false);
-    expect(isValidMeetingId("telemost", "11111111111")).toBe(false);
+    expect(isValidMeetingId("telemost", "111111111111111111111")).toBe(false);
     expect(isValidMeetingId("telemost", "abcdefghij")).toBe(false);
   });
 
@@ -78,6 +80,10 @@ describe("parseMeetingInput", () => {
     expect(parseMeetingInput("https://telemost.yandex.ru/j/1111111111")).toEqual({
       platform: "telemost",
       native_meeting_id: "1111111111",
+    });
+    expect(parseMeetingInput("https://telemost.yandex.ru/j/11111111111111")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "11111111111111",
     });
     expect(parseMeetingInput("https://telemost.yandex.ru/j/not-an-id")).toBeNull();
     expect(parseMeetingInput("https://evil.example/j/1111111111")).toBeNull();

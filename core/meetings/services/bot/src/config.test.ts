@@ -35,7 +35,7 @@ for (const g of goldens) {
 {
   const telemost = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.telemost.json'), 'utf8'));
   check('telemost: platform = telemost', telemost.platform === 'telemost', telemost.platform);
-  check('telemost: canonical URL preserved', telemost.meetingUrl === 'https://telemost.yandex.ru/j/1111111111', String(telemost.meetingUrl));
+  check('telemost: canonical URL preserved', telemost.meetingUrl === 'https://telemost.yandex.ru/j/11111111111111', String(telemost.meetingUrl));
 }
 
 // ── typed access on the full golden ──

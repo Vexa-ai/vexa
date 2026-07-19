@@ -12,9 +12,14 @@ const throws = (name: string, fn: () => unknown) => {
 };
 
 equal(
-  "canonical URL preserved",
+  "canonical 10-digit URL preserved",
   buildTelemostMeetingUrl("https://telemost.yandex.ru/j/1111111111"),
   "https://telemost.yandex.ru/j/1111111111",
+);
+equal(
+  "canonical 14-digit URL preserved",
+  buildTelemostMeetingUrl("https://telemost.yandex.ru/j/11111111111111"),
+  "https://telemost.yandex.ru/j/11111111111111",
 );
 equal(
   "query parameters preserved",

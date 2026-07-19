@@ -10,7 +10,7 @@ import {
   telemostNameInputSelectors,
 } from "./selectors";
 
-const TELEMOST_PATH = /^\/j\/\d{10}\/?$/;
+const TELEMOST_PATH = /^\/j\/\d{10,20}\/?$/;
 
 export function buildTelemostMeetingUrl(meetingUrl: string): string {
   let url: URL;
@@ -20,7 +20,7 @@ export function buildTelemostMeetingUrl(meetingUrl: string): string {
     throw new Error(`Invalid Telemost meeting URL: ${meetingUrl} — ${error.message}`);
   }
   if (url.protocol !== "https:" || url.hostname !== "telemost.yandex.ru" || !TELEMOST_PATH.test(url.pathname)) {
-    throw new Error(`Invalid Telemost meeting URL (expected https://telemost.yandex.ru/j/<10-digit-id>): ${meetingUrl}`);
+    throw new Error(`Invalid Telemost meeting URL (expected https://telemost.yandex.ru/j/<numeric-id>): ${meetingUrl}`);
   }
   return url.toString();
 }

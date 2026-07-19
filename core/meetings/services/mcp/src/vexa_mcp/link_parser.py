@@ -171,11 +171,11 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
 
     # Yandex Telemost — canonical public web link.
     if host == "telemost.yandex.ru":
-        match = re.fullmatch(r"/j/(\d{10})/?", path)
+        match = re.fullmatch(r"/j/(\d{10,20})/?", path)
         if not match:
             raise HTTPException(
                 status_code=422,
-                detail="Unsupported Telemost URL format. Expected https://telemost.yandex.ru/j/<10-digit id>.",
+                detail="Unsupported Telemost URL format. Expected https://telemost.yandex.ru/j/<numeric id>.",
             )
         return ParseMeetingLinkResponse(
             platform="telemost",

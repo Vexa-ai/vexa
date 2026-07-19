@@ -1,7 +1,7 @@
 {
   "platform": "telemost",
-  "meetingUrl": "https://telemost.yandex.ru/j/1111111111",
+  "meetingUrl": "https://telemost.yandex.ru/j/11111111111111",
   "botName": "Vexa",
-  "nativeMeetingId": "1111111111",
+  "nativeMeetingId": "11111111111111",
   "redisUrl": "redis://redis:6379"
 }

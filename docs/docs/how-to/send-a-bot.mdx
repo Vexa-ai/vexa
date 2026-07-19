@@ -51,7 +51,7 @@ The only thing that changes between platforms is the `platform` value.
 </Tabs>
 
 `native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for
-Jitsi, or the 10-digit number after `/j/` for Telemost), not the whole URL.
+Jitsi, or the numeric meeting ID after `/j/` for Telemost), not the whole URL.
 
 Have only the URL? Send `meeting_url` alone — the API parses it to extract `platform`,
 `native_meeting_id`, and (for Zoom/Teams links that embed one) the passcode:

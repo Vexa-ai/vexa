@@ -11,7 +11,7 @@ Id formats (mirrors the dashboard join-form):
   * google_meet → ``abc-defg-hij``
   * zoom        → 9–11 digits
   * teams       → the ``19:meeting_…@thread.v2`` thread id, or the ``/meet/<id>`` short-link segment
-  * telemost    → the 10-digit ``telemost.yandex.ru/j/<id>`` meeting number
+  * telemost    → the numeric ``telemost.yandex.ru/j/<id>`` meeting number
   * jitsi       → the room name (the URL's path segment). Hosts: meet.jit.si and
                   ``VEXA_JITSI_HOSTS``-declared deployments always; *jitsi* / meet-labelled
                   hosts on pasted links only. The room name is deployment-scoped, so the raw
@@ -28,7 +28,7 @@ _GMEET_ID = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
 _ZOOM_ID = re.compile(r"\d{9,11}")
 _TEAMS_THREAD = re.compile(r"19:meeting_[^@%\s/]+@thread\.v2", re.IGNORECASE)
 _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
-_TELEMOST_PATH = re.compile(r"^/j/(\d{10})/?$")
+_TELEMOST_PATH = re.compile(r"^/j/(\d{10,20})/?$")
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")

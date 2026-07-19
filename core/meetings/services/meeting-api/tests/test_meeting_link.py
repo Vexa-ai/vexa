@@ -77,6 +77,12 @@ class TestParseTelemost:
             "1111111111",
         )
 
+    def test_14_digit_link(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/11111111111111") == (
+            "telemost",
+            "11111111111111",
+        )
+
     def test_wrong_host_or_id_rejected(self):
         assert parse_meeting_url("https://example.org/j/1111111111") is None
         assert parse_meeting_url("https://telemost.yandex.ru/j/not-an-id") is None

@@ -83,7 +83,7 @@ class RequestMeetingBot(BaseModel):
             "- Google Meet: meeting code like 'abc-defg-hij'\n"
             "- Microsoft Teams: numeric meeting ID only (10-15 digits) from teams.live.com/meet/<id>\n"
             "- Zoom: numeric meeting ID only (10-11 digits)\n"
-            "- Telemost: 10-digit meeting ID from telemost.yandex.ru/j/<id>\n"
+            "- Telemost: numeric meeting ID from telemost.yandex.ru/j/<id>\n"
             "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"
             "  so a bare room name is rejected (422); the id is derived from the URL"
         ),

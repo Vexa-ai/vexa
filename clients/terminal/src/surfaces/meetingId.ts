@@ -1,7 +1,7 @@
 /** Meeting-link → {platform, native_meeting_id} parsing + validation for the "Add bot" flow.
  *  Id formats mirror the dashboard join-form (clients/dashboard/src/components/join/join-form.tsx):
  *    google_meet → abc-defg-hij   ·   zoom → 9–11 digits   ·   teams → non-empty (passcode handled elsewhere)
- *    telemost → the 10-digit code from telemost.yandex.ru/j/<id>
+ *    telemost → the numeric code from telemost.yandex.ru/j/<id>
  *    jitsi → the meet.jit.si room name, or room@host for a self-hosted deployment (a single
  *    URL-safe path segment; declared VEXA_JITSI_HOSTS arrive via the `jitsiHosts` parameter).
  *  Accepts either a raw id or a full meeting URL the user pasted. */
@@ -15,7 +15,7 @@ export interface ParsedMeeting {
 
 const GMEET_ID = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const ZOOM_ID = /\d{9,11}/;
-const TELEMOST_ID = /^\d{10}$/;
+const TELEMOST_ID = /^\d{10,20}$/;
 // A Jitsi room: one URL-safe path segment (no separators/whitespace) — the id is embedded
 // back into the construct-URL template, so the encoded form is the id.
 const JITSI_ROOM = /^[^/?#\s]+$/;
@@ -73,7 +73,7 @@ export function parseMeetingInput(raw: string, jitsiHosts: readonly string[] = [
       return null;
     }
     if (host === "telemost.yandex.ru") {
-      const match = url.pathname.match(/^\/j\/(\d{10})\/?$/);
+      const match = url.pathname.match(/^\/j\/(\d{10,20})\/?$/);
       return match ? { platform: "telemost", native_meeting_id: match[1] } : null;
     }
     // Jitsi: LAST, so every known platform above claims its hosts first (mirrors the server

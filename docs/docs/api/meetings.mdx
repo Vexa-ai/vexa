@@ -45,7 +45,7 @@ A password-protected room is joined by passing the optional `passcode` field. To
 message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
 names come from the conference's own dominant-speaker signal.
 
-For `telemost`, use the canonical `https://telemost.yandex.ru/j/<10-digit-id>` link. The API can
+For `telemost`, use the canonical `https://telemost.yandex.ru/j/<numeric-id>` link. The API can
 derive the platform and ID from that URL, or construct the canonical URL from an explicit
 `platform: "telemost"` plus `native_meeting_id`.
 

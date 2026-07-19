@@ -192,6 +192,11 @@ class TestTelemost:
     def test_trailing_slash(self):
         assert parse("https://telemost.yandex.ru/j/1111111111/").native_meeting_id == "1111111111"
 
+    def test_14_digit_link(self):
+        result = parse("https://telemost.yandex.ru/j/11111111111111")
+        assert result.platform == "telemost"
+        assert result.native_meeting_id == "11111111111111"
+
     def test_malformed_link_rejected(self):
         assert_422("https://telemost.yandex.ru/j/not-an-id", "telemost")
 
