@@ -18,6 +18,7 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | redis · minio | Deployments (+ minio init Job) |
 | DB migrations | Job |
 | pgbouncer | optional connection pooling |
+| dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
 
 Hardened defaults throughout: containers run non-root with all capabilities dropped,
@@ -200,6 +201,25 @@ cap for every scheduled-meeting spawn). With `ADMIN_API_URL` unset, calendar syn
 auto-join sweep cannot resolve the per-user cap. The meeting-api then **fails closed and refuses to
 spawn** rather than spawn uncapped; set `AUTO_JOIN_ALLOW_UNCAPPED=1` only if you deliberately want
 uncapped auto-join spawns on a self-host.
+
+## The deprecated dashboard (optional)
+
+The 0.10 dashboard — the multi-user web UI that predates the Terminal — ships as an
+**off-by-default** component while it is still load-bearing: hosted production runs it against
+the 0.12 core, and the authenticated-session flows are only walkable through it today. Enable it
+explicitly:
+
+```bash
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa \
+  --set dashboard.enabled=true \
+  --set dashboard.publicUrl=https://dashboard.example.com \
+  --set dashboard.publicApiUrl=https://api.example.com
+```
+
+It runs the pinned external image `vexaai/dashboard` on its own tag — `global.imageTag` does
+not apply to it — and talks to the gateway's hosted-compat surface. It is **deprecated**: when
+the Terminal covers its remaining flows, the component is deleted, not ported. On Compose the
+same option is `docker compose --profile dashboard up -d` (port 13001).
 
 ## Honest status
 

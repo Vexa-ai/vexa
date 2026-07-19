@@ -1,0 +1,117 @@
+{{- if .Values.dashboard.enabled }}
+# DEPRECATED — the 0.10 dashboard, OFF by default (#813). It is the multi-user web UI hosted
+# production still runs against the 0.12 core; some flows (authenticated-session lifecycle,
+# browser-session provisioning) are only walkable through it today, so it ships pinned as an
+# opt-in component until the Terminal covers them. Wiring mirrors the hosted-proven shape.
+# Deprecation exit: delete this template (and its service/values block), never port it forward.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "dashboard") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dashboard
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dashboard
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          # NB: deliberately NOT prefixed by global.imageTag — the dashboard is a deprecated
+          # external image on its own pinned tag, not part of the release image set.
+          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: VEXA_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            - name: VEXA_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            - name: VEXA_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: NEXTAUTH_SECRET
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: NEXTAUTH_SECRET
+            - name: ALLOW_REGISTRATIONS
+              value: {{ .Values.dashboard.allowRegistrations | quote }}
+            - name: NEXT_PUBLIC_HOSTED_MODE
+              value: "false"
+            {{- if .Values.dashboard.publicUrl }}
+            - name: NEXTAUTH_URL
+              value: {{ .Values.dashboard.publicUrl | quote }}
+            - name: NEXT_PUBLIC_APP_URL
+              value: {{ .Values.dashboard.publicUrl | quote }}
+            - name: NEXT_PUBLIC_BASE_URL
+              value: {{ .Values.dashboard.publicUrl | quote }}
+            {{- end }}
+            {{- if .Values.dashboard.publicApiUrl }}
+            - name: VEXA_PUBLIC_API_URL
+              value: {{ .Values.dashboard.publicApiUrl | quote }}
+            - name: NEXT_PUBLIC_VEXA_WS_URL
+              value: {{ .Values.dashboard.publicWsUrl | default (printf "%s/ws" (.Values.dashboard.publicApiUrl | replace "https://" "wss://" | replace "http://" "ws://")) | quote }}
+            {{- end }}
+            {{- with .Values.dashboard.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

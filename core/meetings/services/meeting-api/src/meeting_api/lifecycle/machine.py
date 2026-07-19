@@ -106,7 +106,10 @@ _TERMINAL = frozenset({BotStatus.COMPLETED, BotStatus.FAILED})
 #   * `requested` → None (the FSM's pre-`joining` entry — the bot's first event must still be
 #     `joining`, and None→JOINING is the only legal first edge).
 #   * `stopping` → ACTIVE: `stopping` is the user-stop in-flight state (not a BotStatus); treating it
-#     as ACTIVE keeps active/stopping → completed a LEGAL transition (the bot's terminal lands).
+#     as ACTIVE keeps active/stopping → completed a LEGAL transition (the bot's terminal lands). This
+#     is sound because the stop path writes `stopping` ONLY over a status in which the bot reached the
+#     meeting — stopping a PRE-ACTIVE bot preserves its real stage, so this mapping can never launder
+#     a never-admitted bot into ACTIVE (#807).
 # Anything unrecognized maps to None (safe: forces the genuine-illegality check after reconciliation).
 _PERSISTED_STATUS_TO_BOTSTATUS: Dict[str, Optional[BotStatus]] = {
     "requested": None,

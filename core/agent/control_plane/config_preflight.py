@@ -137,11 +137,35 @@ def _reset_probe_cache() -> None:
     _probe_cache.clear()
 
 
+def probe_url(base: str, path: str) -> str:
+    """Join a configured base URL to the probe's declared path, accepting BOTH accepted shapes:
+    a bare base (``https://api.openai.com``) and a full endpoint URL that already carries the path
+    (``https://api.openai.com/v1/audio/transcriptions``). Appending blindly would double-path the
+    latter into a 404 — the same URL that works in a meeting. This is the ONE rule, shared with the
+    bot's client (``whisper/src/transcription-client.ts``) and the terminal's dictation route."""
+    base = (base or "").strip().rstrip("/")
+    if not path:
+        return base
+    return base if base.endswith(path) else base + path
+
+
 def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
-    """One authenticated request. Unauthorized statuses / network failure ⇒ FAIL (the credential is
-    set but does not work); ANY other status (400/404/405/…) proves reachability + auth ⇒ ok."""
+    """One authenticated request against the configured endpoint.
+
+    The oracle, in order: network failure ⇒ ``unreachable`` · declared ``unauthorized_statuses``
+    (401/403) ⇒ ``unauthorized``, the token was rejected · declared ``invalid_statuses`` (404 for an
+    OpenAI-compatible transcriptions path) ⇒ ``invalid_endpoint``, the URL shape is wrong — a real
+    transcriptions endpoint answers 400/401 to an empty body, never 404, so 404 proves we are not
+    talking to one. Any OTHER status (400/405/…) proves reachability + accepted auth ⇒ ok.
+
+    A failure carries ``kind`` because the two classes are NOT interchangeable to a consumer:
+    ``unauthorized``/``invalid_endpoint`` are CONFIGURATION faults, true until an operator edits a
+    value, so a request path may refuse on them; ``unreachable`` is a LIVENESS fault that a restart
+    or a DNS blip produces, so refusing on it would couple this service's availability to the
+    endpoint's. Both demote the /health row identically — only actors that REFUSE need the
+    distinction."""
     base = (env.get(spec["url_key"]) or "").strip().rstrip("/")
-    url = base + (spec.get("path") or "")
+    url = probe_url(base, spec.get("path") or "")
     req = urllib.request.Request(url, data=b"", method=(spec.get("method") or "POST"))
     token = (env.get(spec["auth_key"]) or "").strip() if spec.get("auth_key") else ""
     if token:
@@ -152,11 +176,21 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     except urllib.error.HTTPError as e:
         status = int(e.code)
     except Exception as e:  # noqa: BLE001 — a probe must never throw past here
-        return {"ok": False, "reason": f"unreachable: {e.__class__.__name__}: {e}"}
+        return {"ok": False, "kind": "unreachable",
+                "reason": f"unreachable: {e.__class__.__name__}: {e}"}
     if status in (spec.get("unauthorized_statuses") or [401, 403]):
-        return {"ok": False, "status": status,
+        return {"ok": False, "status": status, "kind": "unauthorized",
                 "reason": "unauthorized — the configured token was REJECTED by the endpoint"}
+    if status in (spec.get("invalid_statuses") or []):
+        return {"ok": False, "status": status, "kind": "invalid_endpoint",
+                "reason": f"endpoint path not found ({url}) — check the URL shape; some gateways "
+                          f"also answer 404 for a rejected credential"}
     return {"ok": True, "status": status}
+
+
+#: Probe-failure kinds that mean the CONFIGURATION is wrong (true until an operator changes a
+#: value), as opposed to the endpoint merely being down. A request path may refuse on these.
+CONFIG_FAULT_KINDS = frozenset({"unauthorized", "invalid_endpoint"})
 
 
 def _file_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
@@ -205,6 +239,21 @@ def _cached_probe(name: str, spec: dict, env: Mapping[str, str], force: bool = F
     result = _run_probe(spec, env)
     _probe_cache[name] = {"at": now, "result": result}
     return result
+
+
+def cached_probe_verdict(name: str, max_age_s: Optional[float] = None) -> Optional[dict]:
+    """The last probe verdict for ``name``, or None when there is no opinion fresh enough to act on.
+
+    A pure cache READ — it never issues a request, so a REQUEST path may consult it (boot preflight
+    seeds the cache, ``/health`` refreshes it; probe I/O stays on those two paths). ``max_age_s``
+    bounds staleness: an older entry reads as None. None means "no verdict" and must never be
+    treated as a failure — an unprobed capability is not a broken one."""
+    hit = _probe_cache.get(name)
+    if hit is None:
+        return None
+    if max_age_s is not None and (time.monotonic() - hit["at"]) > max_age_s:
+        return None
+    return hit["result"]
 
 
 def capability_health(env: Optional[Mapping[str, str]] = None, force_probe: bool = False) -> dict:
