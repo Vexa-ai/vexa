@@ -1,0 +1,138 @@
+# Build the four ZAKI Minutes deployment images from this fork. This is intentionally manual:
+# publication produces immutable inputs for a reviewed chart release; it does not activate a cluster.
+name: zaki-minutes-images
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: zaki-minutes-images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish immutable ZAKI Minutes images
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_OWNER: projectnuggets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve immutable source revision
+        id: source
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::Expected a full lowercase Git SHA, got '$SOURCE_SHA'"
+            exit 1
+          }
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Free runner disk for the browser worker build
+        uses: jlumbroso/free-disk-space@v1.3.1
+
+      - name: Build and push the deployment image set
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          DIGESTS="$RUNNER_TEMP/zaki-minutes-image-digests.tsv"
+          : > "$DIGESTS"
+
+          publish_image() {
+            local name="$1"
+            local dockerfile="$2"
+            local context="$3"
+            local image="${REGISTRY}/${IMAGE_OWNER}/zaki-minutes-${name}:${SOURCE_TAG}"
+
+            DOCKER_BUILDKIT=1 docker build --pull \
+              --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+              --label "org.opencontainers.image.title=zaki-minutes-${name}" \
+              -f "$dockerfile" \
+              -t "$image" \
+              "$context"
+            docker push "$image"
+
+            local digest
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "::error::Could not resolve a registry digest for $image"
+              exit 1
+            }
+            printf '%s\t%s\t%s\n' "$name" "$image" "$digest" >> "$DIGESTS"
+          }
+
+          publish_image admin-api core/identity/services/admin-api/Dockerfile core/identity/services/admin-api
+          publish_image runtime core/runtime/Dockerfile core/runtime
+          publish_image meeting-api core/meetings/services/meeting-api/Dockerfile .
+
+          # The bot Dockerfile uses this local base. It is built from this source tree and is never
+          # pushed or substituted with a public Vexa image.
+          DOCKER_BUILDKIT=1 docker build --pull \
+            -f core/meetings/modules/join/Dockerfile.env \
+            -t vexa/meet-join-env:dev \
+            core/meetings/modules/join
+          publish_image bot core/meetings/services/bot/Dockerfile .
+
+      - name: Write chart-ready digest manifest
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs");
+
+          const sha = process.env.SOURCE_SHA;
+          const rows = readFileSync(`${process.env.RUNNER_TEMP}/zaki-minutes-image-digests.tsv`, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => line.split("\t"));
+          if (rows.length !== 4 || rows.some((row) => row.length !== 3)) {
+            throw new Error("expected digest rows for exactly four deployment images");
+          }
+          const images = Object.fromEntries(rows.map(([name, reference, digest]) => {
+            const repository = reference.slice(0, reference.lastIndexOf(":"));
+            return [name, {
+              repository,
+              tag: `sha-${sha}@${digest}`,
+              digest,
+              reference: `${reference}@${digest}`,
+            }];
+          }));
+          writeFileSync("zaki-minutes-images.json", `${JSON.stringify({ sourceSha: sha, images }, null, 2)}\n`);
+          NODE
+
+          {
+            echo "## ZAKI Minutes images"
+            echo
+            echo "Source SHA: \`${SOURCE_SHA}\`"
+            echo
+            while IFS=$'\t' read -r name reference digest; do
+              echo "- \`${name}\`: \`${reference}@${digest}\`"
+            done < "$RUNNER_TEMP/zaki-minutes-image-digests.tsv"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable image manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: zaki-minutes-images-${{ steps.source.outputs.sha }}
+          path: zaki-minutes-images.json
+          if-no-files-found: error
+          retention-days: 30

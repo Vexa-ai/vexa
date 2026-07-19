@@ -40,6 +40,7 @@ def test_capability_tri_states():
     assert cp.capability_states({})["scheduler"] == cp.NOT_CONFIGURED
     assert cp.capability_states({"REDIS_URL": "redis://r"})["scheduler"] == cp.CONFIGURED
     assert cp.capability_states({"BROWSER_IMAGE": "vexaai/vexa-bot:v012"})["bot_spawn"] == cp.CONFIGURED
+    assert cp.capability_states({"ZAKI_MINUTES_BOT_CONTRACT_JSON": "{...}"})["bot_spawn"] == cp.CONFIGURED
     assert cp.capability_states({})["agent_spawn"] == cp.NOT_CONFIGURED
     # mode=any: any ONE credential path configures model_inference; none ⇒ not_configured
     assert cp.capability_states({})["model_inference"] == cp.NOT_CONFIGURED
@@ -101,7 +102,7 @@ def test_file_probe_uses_the_mirror_mount_fallback(tmp_path):
 
 
 def test_health_carries_capability_rows_additively(monkeypatch):
-    for k in ("REDIS_URL", "BROWSER_IMAGE", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
+    for k in ("REDIS_URL", "BROWSER_IMAGE", "ZAKI_MINUTES_BOT_CONTRACT_JSON", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
               "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "VEXA_LLM_API_KEY"):
         monkeypatch.delenv(k, raising=False)
     app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))

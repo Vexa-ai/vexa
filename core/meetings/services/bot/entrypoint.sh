@@ -11,6 +11,9 @@
 set -u
 
 export DISPLAY="${DISPLAY:-:99}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime}"
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
 
 echo "[entrypoint] Starting Xvfb on ${DISPLAY}..."
 Xvfb "${DISPLAY}" -screen 0 1920x1080x24 >/tmp/xvfb.log 2>&1 &

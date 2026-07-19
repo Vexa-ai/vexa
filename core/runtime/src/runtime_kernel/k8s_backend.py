@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from typing import Optional
+from typing import Any, Optional
 
 from .backend import WorkloadHandle
 from .mounts import k8s_volume_mounts
@@ -35,23 +35,94 @@ def _stop_grace_sec() -> int:
         return 30
 
 
-def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
-    """The ``kubectl run --overrides`` spec that mounts the workspace store into the worker Pod — the k8s
-    twin of the docker backend's ``Binds``, from the SAME env. The store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE``
-    = the claim name on k8s) is bound at the store root (``VEXA_WORKSPACE_MOUNT_TARGET``), exposing the WHOLE
-    active mount set (WP-A1.1) — every in-store workspace lives under the root. Returns None when no store
-    is configured (no override needed). Pure/env-driven → unit-tested offline (no kubectl)."""
+def _merge_volumes(base: list[dict[str, Any]], additions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join Pod volumes without allowing workspace plumbing to replace a contracted volume."""
+    names = [volume.get("name") for volume in [*base, *additions]]
+    if len(names) != len(set(names)):
+        raise ValueError("k8s Pod volumes must have unique names")
+    return [*base, *additions]
+
+
+def _merge_volume_mounts(base: list[dict[str, Any]], additions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join mounts without allowing two volumes to claim the same destination path."""
+    paths = [mount.get("mountPath") for mount in [*base, *additions]]
+    if len(paths) != len(set(paths)):
+        raise ValueError("k8s Pod volume mounts must have unique mount paths")
+    return [*base, *additions]
+
+
+def pod_overrides(
+    env: dict[str, str],
+    *,
+    container_name: str,
+    runnable: Optional[Runnable] = None,
+    labels: Optional[dict[str, str]] = None,
+) -> Optional[dict]:
+    """Build the K8s Pod overrides for a workload.
+
+    Supplying a Runnable emits the complete generated container. ``kubectl run`` merges the Pod
+    but replaces its ``containers`` list, so image, environment, command, and mounts travel as one
+    object. The no-Runnable form remains the small workspace-only helper used by mount plumbing
+    checks.
+    """
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
-    volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
-    if not volumes:
-        return None
-    return {
-        "spec": {
-            "containers": [{"name": container_name, "volumeMounts": volume_mounts}],
-            "volumes": volumes,
+    workspace_volumes, workspace_mounts = k8s_volume_mounts(
+        env, pvc_name=pvc or "", store_target=root or ""
+    )
+    if runnable is None:
+        if not workspace_volumes:
+            return None
+        return {
+            "spec": {
+                "containers": [{"name": container_name, "volumeMounts": workspace_mounts}],
+                "volumes": workspace_volumes,
+            }
         }
+
+    if not runnable.image:
+        raise ValueError("k8s backend requires an image")
+    contract = runnable.bot_pod_contract
+    contract_volumes = contract.volumes if contract else []
+    contract_mounts = contract.volume_mounts if contract else []
+    volumes = _merge_volumes(contract_volumes, workspace_volumes)
+    volume_mounts = _merge_volume_mounts(contract_mounts, workspace_mounts)
+
+    container: dict[str, Any] = {
+        "name": container_name,
+        "image": runnable.image,
+        "env": [{"name": key, "value": value} for key, value in sorted(env.items())],
     }
+    if runnable.command:
+        container["command"] = runnable.command
+    if volume_mounts:
+        container["volumeMounts"] = volume_mounts
+    if contract:
+        container.update(
+            {
+                "imagePullPolicy": contract.image_pull_policy,
+                "securityContext": contract.container_security_context,
+                "resources": contract.resources,
+            }
+        )
+
+    spec: dict[str, Any] = {"restartPolicy": "Never", "containers": [container]}
+    if volumes:
+        spec["volumes"] = volumes
+    if contract:
+        spec.update(
+            {
+                "serviceAccountName": contract.service_account_name,
+                "automountServiceAccountToken": False,
+                "terminationGracePeriodSeconds": contract.termination_grace_period_seconds,
+                "securityContext": contract.security_context,
+                "imagePullSecrets": [{"name": contract.image_pull_secret}],
+            }
+        )
+    overrides: dict[str, Any] = {"spec": spec}
+    if labels:
+        overrides["metadata"] = {"labels": labels}
+    return overrides
 
 
 class K8sBackend:
@@ -71,23 +142,24 @@ class K8sBackend:
         if not runnable.image:
             raise ValueError("k8s backend requires an image")
         name = self._pname(workload_id)
+        runtime_labels = {
+            MANAGED_LABEL: "true",
+            WORKLOAD_ID_LABEL: workload_id,
+        }
+        labels = {**(runnable.bot_pod_contract.labels if runnable.bot_pod_contract else {}), **runtime_labels}
+        label_arg = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
         args = [
             "run", name, f"--image={runnable.image}", "--restart=Never",
-            # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
-            # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-            f"--labels={MANAGED_LABEL}=true,{WORKLOAD_ID_LABEL}={workload_id}",
+            f"--labels={label_arg}",
             *self._ns_args(),
         ]
-        for k, v in env.items():
-            args += [f"--env={k}={v}"]
-        # Workspace mount set (WP-A1.1): the store PVC is bound at the store root via --overrides,
-        # exposing every active workspace (they live under the root). The container name kubectl uses
-        # for a `run` Pod is the Pod name, so the volumeMount targets that container.
-        overrides = pod_overrides(env, container_name=name)
-        if overrides:
-            args += ["--overrides", json.dumps(overrides)]
-        if runnable.command:
-            args += ["--command", "--", *runnable.command]
+        overrides = pod_overrides(
+            env,
+            container_name=name,
+            runnable=runnable,
+            labels=labels,
+        )
+        args += ["--overrides", json.dumps(overrides, sort_keys=True)]
         _kubectl(*args)
         return WorkloadHandle(id=workload_id, impl=name)
 

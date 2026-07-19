@@ -47,6 +47,7 @@ def test_registry_resolves_meeting_bot_and_agent():
 
 
 def test_meeting_bot_uses_browser_image_from_env(monkeypatch):
+    monkeypatch.delenv("ZAKI_MINUTES_BOT_CONTRACT_JSON", raising=False)
     monkeypatch.setenv("BROWSER_IMAGE", "registry.example.com/vexa-bot:0.12")
     reg = default_registry()
     assert reg.resolve("meeting-bot").image == "registry.example.com/vexa-bot:0.12"

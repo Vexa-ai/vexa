@@ -5,8 +5,8 @@ override). The contract never sees this; it's kernel config (policy), per deploy
 This is the REAL registry (it replaces the old `test-sleep` stub). It resolves the two workload kinds
 the control plane spawns, derived from 0.11's `profiles.yaml`:
 
-  • meeting-bot — image `${BROWSER_IMAGE}`, the bot's constructor delivered as one env var
-                 `VEXA_BOT_CONFIG` (invocation.v1 / ADR-0002).
+  • meeting-bot — image `${BROWSER_IMAGE}` or the packaged ZAKI bot Pod contract, with the bot's
+                 constructor delivered as one env var `VEXA_BOT_CONFIG` (invocation.v1 / ADR-0002).
   • agent      — the Claude Code agent; env mirrors runtime.v1 golden `spec-agent.json`
                  (scoped identity token + workspace repo/ref/path).
 
@@ -20,11 +20,14 @@ import shlex
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
+from .bot_contract import BotPodContract
+
 
 @dataclass(frozen=True)
 class Runnable:
     image: Optional[str] = None
     command: Optional[list[str]] = None
+    bot_pod_contract: Optional[BotPodContract] = None
 
 
 @dataclass(frozen=True)
@@ -90,7 +93,8 @@ def worker_image_for(agent_image: str) -> str:
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
-    browser_image = os.environ.get("BROWSER_IMAGE", "")
+    bot_pod_contract = BotPodContract.from_env()
+    browser_image = bot_pod_contract.image if bot_pod_contract else os.environ.get("BROWSER_IMAGE", "")
     agent_image = os.environ.get("AGENT_IMAGE", "")
     # Workers run their OWN image (see worker_image_for — core/agent/worker/Dockerfile, not the
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
@@ -105,6 +109,7 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=browser_image,
                     command=["/app/vexa-bot/entrypoint.sh"],
+                    bot_pod_contract=bot_pod_contract,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env={},

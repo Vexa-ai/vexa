@@ -93,7 +93,14 @@
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",
-   "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
+   "description": "the meeting-bot image the `meeting-bot` profile spawns outside the packaged ZAKI Kubernetes contract"
+  },
+  {
+   "key": "ZAKI_MINUTES_BOT_CONTRACT_JSON",
+   "class": "capability",
+   "capability": "bot_spawn",
+   "description": "the injected ZAKI meeting-bot Pod contract: immutable GHCR image plus restricted Pod security, resource, service-account, and writable-volume settings",
+   "targets": []
   },
   {
    "key": "AGENT_IMAGE",
@@ -265,8 +272,8 @@
    "when_unconfigured": "/schedule answers a typed 503 (honest absence); one-shot workload spawns are unaffected"
   },
   "bot_spawn": {
-   "description": "the `meeting-bot` profile can spawn (the meetings plane's bot container)",
-   "mode": "all",
+   "description": "the `meeting-bot` profile can spawn from BROWSER_IMAGE or the packaged ZAKI bot Pod contract",
+   "mode": "any",
    "when_unconfigured": "a runtime.v1 create with profile=meeting-bot fails loud at spawn time (no image to run)"
   },
   "agent_spawn": {

@@ -82,4 +82,32 @@ witnessed launch gate remain separate work.
 - Published images will use immutable ZAKI tags and digests. Upstream `latest` is never deployable.
 - Upstream security advisories and dependency/license gates are reviewed before promotion.
 
+## Staging image publication
+
+The manual [`zaki-minutes-images`](.github/workflows/zaki-minutes-images.yml) workflow publishes
+only the four Minutes deployment images to GitHub Container Registry:
+
+- `ghcr.io/projectnuggets/zaki-minutes-admin-api`
+- `ghcr.io/projectnuggets/zaki-minutes-meeting-api`
+- `ghcr.io/projectnuggets/zaki-minutes-runtime`
+- `ghcr.io/projectnuggets/zaki-minutes-bot`
+
+Each image is built from the selected source revision and receives exactly one source tag,
+`sha-<full-source-sha>`. The workflow resolves each pushed digest and uploads
+`zaki-minutes-images.json`, whose `repository`, `tag`, and `digest` fields are the reviewed values
+for a chart release. It does not publish `latest`, change a chart, or activate an environment. The
+bot's `vexa/meet-join-env:dev` base is built locally from this fork during the workflow; it is not
+pulled as a public Vexa bot image.
+
+## Kubernetes bot Pod contract
+
+For a ZAKI Kubernetes deployment, the runtime accepts `ZAKI_MINUTES_BOT_CONTRACT_JSON` only for
+the `meeting-bot` profile. The contract pins the ProjectNuggets GHCR bot image by source SHA and
+digest and carries the restricted Pod settings: non-root UID/GID, RuntimeDefault seccomp, dropped
+Linux capabilities, read-only root filesystem, dedicated service account with token mounting off,
+bounded resources, and the `/tmp` and `/dev/shm` writable volumes. A supplied contract is validated
+at boot; a malformed or broadened document prevents the runtime from starting rather than creating
+a less restricted browser Pod. `BROWSER_IMAGE` remains the upstream-compatible path outside this
+ZAKI package.
+
 Architecture decision: [ADR-0029](docs/adr/0029-zaki-minutes-vexa-downstream.md).

@@ -112,7 +112,11 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DISPLAY=:99 \
-    NODE_ENV=production
+    NODE_ENV=production \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    XDG_CONFIG_HOME=/tmp/.config \
+    XDG_RUNTIME_DIR=/tmp/runtime
 
 WORKDIR /app
 
@@ -139,9 +143,13 @@ ENV VEXA_HF_CACHE=/opt/hf-cache
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.
 COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh \
+    && groupadd --gid 10001 vexa \
+    && useradd --uid 10001 --gid vexa --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa
 
 # noVNC (browser view) — present in the env base; harmless if unused.
 EXPOSE 6080
+
+USER 10001:10001
 
 ENTRYPOINT ["/app/entrypoint.sh"]
