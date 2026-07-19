@@ -33,6 +33,7 @@ import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -198,6 +199,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       ? createCaptureSignalRecorder(inv)
       : null;
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
+  // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
+  const sttFaults = createSttFaultReporter();
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
@@ -208,7 +212,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
       transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
       config: speakerStreamConfig,
-      onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`),
+      // Every STT fault is counted and carried out on the terminal lifecycle event (see
+      // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
+      onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
     });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
@@ -271,6 +277,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     acts,
     recording: recording as RecordingSink | undefined,
     reachability,
+    degraded: () => sttFaults.report(),
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
