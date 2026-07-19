@@ -104,6 +104,7 @@ def test_contract_rejects_a_public_or_mutable_bot_image():
     [
         (("resources", "requests", "cpu"), "bananas"),
         (("resources", "limits", "memory"), "-1Gi"),
+        (("resources", "limits", "cpu"), "0"),
         (("volumes", 0, "emptyDir", "sizeLimit"), "nonsense"),
         (("imagePullSecret",), "bad secret!"),
         (("imagePullSecret",), "a..b"),
@@ -119,6 +120,14 @@ def test_contract_rejects_values_kubernetes_would_refuse(path, value):
     target[path[-1]] = value
 
     with pytest.raises(BotPodContractError):
+        BotPodContract.from_document(document)
+
+
+def test_contract_rejects_a_request_above_its_limit():
+    document = _contract_document()
+    document["resources"]["requests"]["memory"] = "5Gi"
+
+    with pytest.raises(BotPodContractError, match="request must not exceed"):
         BotPodContract.from_document(document)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -23,7 +24,7 @@ _RESOURCE_KEYS = {"cpu", "memory", "ephemeral-storage"}
 _POD_VOLUME_NAMES = {"tmp", "dshm"}
 _POD_MOUNTS = {"tmp": "/tmp", "dshm": "/dev/shm"}
 _K8S_QUANTITY = re.compile(
-    r"^(?:0|[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(?:[eE][+-]?[0-9]+|(?:Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE]))?$"
+    r"^(?P<number>[+]?(?:0|[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?P<suffix>Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE])?$"
 )
 _K8S_DNS_LABEL = r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
 _K8S_SECRET_NAME = re.compile(rf"^{_K8S_DNS_LABEL}(?:\.{_K8S_DNS_LABEL})*$")
@@ -190,6 +191,9 @@ def _validate_resources(value: Any) -> dict[str, dict[str, str]]:
         typed[kind] = {
             key: _quantity(quantities.get(key), f"resources.{kind}.{key}") for key in _RESOURCE_KEYS
         }
+    for key in _RESOURCE_KEYS:
+        if _quantity_value(typed["requests"][key]) > _quantity_value(typed["limits"][key]):
+            _error(f"resources.{key}", "request must not exceed its limit")
     return typed
 
 
@@ -223,9 +227,30 @@ def _validate_volumes(value: Any) -> list[dict[str, Any]]:
 
 def _quantity(value: Any, field: str) -> str:
     quantity = _string(value, field)
-    if not _K8S_QUANTITY.fullmatch(quantity):
-        _error(field, "must be a non-negative Kubernetes quantity")
+    if not _K8S_QUANTITY.fullmatch(quantity) or _quantity_value(quantity) <= 0:
+        _error(field, "must be a positive Kubernetes quantity")
     return quantity
+
+
+def _quantity_value(quantity: str) -> Decimal:
+    """Canonical numeric value for the intentionally small Kubernetes Quantity grammar above."""
+    matched = _K8S_QUANTITY.fullmatch(quantity)
+    if matched is None:
+        return Decimal("-1")
+    try:
+        number = Decimal(matched.group("number"))
+    except InvalidOperation:
+        return Decimal("-1")
+    suffix = matched.group("suffix") or ""
+    decimal_multipliers = {
+        "": Decimal(1), "n": Decimal("1e-9"), "u": Decimal("1e-6"), "m": Decimal("1e-3"),
+        "k": Decimal("1e3"), "K": Decimal("1e3"), "M": Decimal("1e6"), "G": Decimal("1e9"),
+        "T": Decimal("1e12"), "P": Decimal("1e15"), "E": Decimal("1e18"),
+    }
+    if suffix in decimal_multipliers:
+        return number * decimal_multipliers[suffix]
+    binary_power = {"Ki": 1, "Mi": 2, "Gi": 3, "Ti": 4, "Pi": 5, "Ei": 6}.get(suffix)
+    return number * (Decimal(1024) ** binary_power) if binary_power is not None else Decimal("-1")
 
 
 def _validate_volume_mounts(value: Any) -> list[dict[str, Any]]:
