@@ -41,6 +41,7 @@ import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
 import { createTtsPlayback } from './tts-playback.js';
+import { createStreamingFrameSink, type StreamingFrameSink } from './adapters/streaming-frame-sink.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -211,6 +212,15 @@ export async function startCaptureBridge(
   // check), so the proven O6 capture path is byte-for-byte unchanged. captureFrame is fire-and-forget.
   const tee = makeTelemetryTap(lane, telemetry);
 
+  // ── Perceive8 streaming frame sink (bypasses the fake-STT WAV-batch path) ──
+  // When STREAM_FRAME_URL is set, captured audio is streamed in real-time to the
+  // perceive8 adapter as 100 ms Int16 PCM frames, rather than waiting for Vexa to
+  // build a VAD-turn WAV and POST it. The sink is created regardless of the lane
+  // (gmeet per-channel or mixed) and mixes multiple channels into one mono stream.
+  const frameSink: StreamingFrameSink | null = process.env.STREAM_FRAME_URL
+    ? createStreamingFrameSink(process.env.STREAM_FRAME_URL)
+    : null;
+
   // ── Node-side frame sink: one capture.v1 frame crossing the Playwright boundary. ──
   // The page serializes PCM as a plain number[] (Array.from(Float32Array)); we restore the
   // Float32Array and stamp the capture time if the page didn't supply one (production stamps
@@ -219,6 +229,7 @@ export async function startCaptureBridge(
     const pcm = new Float32Array(samples);
     const ts = tsMs ?? Date.now();
     tee(speakerIndex, pcm, ts);                                 // O-TEL-1: tap BEFORE the pipeline
+    frameSink?.feedAudio(pcm);                                   // real-time stream to perceive8
     if (mixed) pipeline.feedMixedAudio(pcm, ts);
     else pipeline.feedAudio(speakerIndex, undefined, pcm, ts); // glow name is bound page-side in the v1 producer; channel index here
   };
@@ -227,6 +238,7 @@ export async function startCaptureBridge(
     const pcm = new Float32Array(samples);
     const ts = tsMs ?? Date.now();
     tee(channel, pcm, ts, glowName);                            // O-TEL-1: tap BEFORE the pipeline
+    frameSink?.feedAudio(pcm);                                   // real-time stream to perceive8
     pipeline.feedAudio(channel, glowName, pcm, ts);
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
@@ -325,6 +337,7 @@ export async function startCaptureBridge(
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
+    await frameSink?.stop().catch(() => { /* best-effort */ });
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
@@ -423,30 +436,42 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
   // unmutes before speech + auto-mutes after — index.ts:1039–1059). The PulseAudio source
   // (tts_sink → virtual_mic) is the actual audio path and is provided by the VM image.
   const setMic = async (on: boolean): Promise<void> => {
+    const action = on ? 'unmute' : 'mute';
+    console.log(`[bot] mic ${action} requested`);
     // Runs IN THE BROWSER; reach the DOM via globalThis (no DOM types in this Node-typed file).
-    await page.evaluate(({ on, platform }) => {
+    const result = await page.evaluate(({ on, platform }) => {
       const doc = (globalThis as any).document;
       const click = (sel: string) => doc?.querySelector(sel)?.click();
-      if (platform === 'teams') click('#microphone-button');
-      else if (platform === 'zoom') click('.join-audio-container__btn');
-      else {
-        // Google Meet / Jitsi: the mic toggle is identified by its aria-label —
-        // "microphone" on Meet, "Toggle mute audio" on stock jitsi builds.
-        const btn = Array.from(doc?.querySelectorAll('[role="button"],button') ?? [])
-          .find((b: any) => /microphone|mute audio/i.test(b.getAttribute('aria-label') ?? '')) as any;
-        btn?.click();
+      if (platform === 'teams') {
+        click('#microphone-button'); // best-effort toggle
+        return 'toggled';
       }
-      void on; // toggle is a click; on/off intent is logged by the caller
-    }, { on, platform }).catch(() => { /* L4: best-effort UI drive */ });
+      if (platform === 'zoom') {
+        click('.join-audio-container__btn'); // best-effort toggle
+        return 'toggled';
+      }
+      // Google Meet / Jitsi: directed mic state — click only if the current
+      // aria-label says we need to change state.
+      const offBtn = doc?.querySelector('button[aria-label*="Turn off microphone"]') as any;
+      const onBtn = doc?.querySelector('button[aria-label*="Turn on microphone"]') as any;
+      if (on && onBtn) { onBtn.click(); return 'unmuted'; }
+      if (!on && offBtn) { offBtn.click(); return 'muted'; }
+      return 'noop';
+    }, { on, platform }).catch((e) => { console.error(`[bot] mic ${action} failed: ${String(e)}`); return 'error'; });
+    console.log(`[bot] mic ${action}: ${result}`);
   };
+
+  const MIC_SETTLE_MS = 250;
 
   return {
     async speak(text: string, voice?: string): Promise<void> {
       if (!enabled) { console.error('[bot] speak ignored: voiceAgentEnabled is false'); return; }
       console.log(`[bot] speak: "${text.slice(0, 60)}"`);
       await setMic(true);                                     // (a) unmute the meeting-UI mic button
+      await new Promise((r) => setTimeout(r, MIC_SETTLE_MS)); // give Meet UI time to apply
       // (b) synthesize via the TTS service + stream PCM to tts_sink → virtual_mic (the bot's mic).
       await tts.speak(text, voice).catch((e) => console.error(`[bot] speak: tts failed: ${String(e)}`));
+      await new Promise((r) => setTimeout(r, MIC_SETTLE_MS)); // let the audio tail leave the browser
       await setMic(false);                                    // (c) re-mute after the tail
     },
     async stop(): Promise<void> {
