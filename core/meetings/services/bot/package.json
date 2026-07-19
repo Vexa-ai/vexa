@@ -9,7 +9,7 @@
     "build": "tsc && node build-browser-utils.mjs",
     "build:browser-utils": "node build-browser-utils.mjs",
     "start": "tsx src/index.ts",
-    "test": "tsx src/config.test.ts && tsx src/orchestrator.test.ts && tsx src/signals.test.ts && tsx src/entrypoint.test.ts && tsx src/join-driver.test.ts && tsx src/stress.test.ts && tsx src/adapters/lifecycle-http.test.ts && tsx src/adapters/transcript-redis.test.ts && tsx src/adapters/acts-redis.test.ts && tsx src/pipeline.test.ts && tsx src/speaker-hints.test.ts && tsx src/capture-bridge.boundary.test.ts && tsx src/live-pipeline.test.ts && tsx src/recording.test.ts && tsx src/telemetry.test.ts && tsx src/telemetry-recorder.test.ts && tsx src/replay.test.ts && tsx src/replay-mixed.test.ts && tsx src/zoom-speaker-wiring.test.ts && tsx mock/mock.test.ts",
+    "test": "tsx src/config.test.ts && tsx src/orchestrator.test.ts && tsx src/signals.test.ts && tsx src/entrypoint.test.ts && tsx src/join-driver.test.ts && tsx src/stress.test.ts && tsx src/adapters/lifecycle-http.test.ts && tsx src/adapters/transcript-redis.test.ts && tsx src/adapters/acts-redis.test.ts && tsx src/pipeline.test.ts && tsx src/speaker-hints.test.ts && tsx src/capture-bridge.boundary.test.ts && tsx src/live-pipeline.test.ts && tsx src/recording.test.ts && tsx src/telemetry.test.ts && tsx src/telemetry-recorder.test.ts && tsx src/stt-faults.test.ts && tsx src/replay.test.ts && tsx src/replay-mixed.test.ts && tsx src/zoom-speaker-wiring.test.ts && tsx mock/mock.test.ts",
     "replay": "tsx src/replay.test.ts && tsx src/replay-mixed.test.ts",
     "check:isolation": "node scripts/check-isolation.js",
     "replay:paced": "tsx src/replay-paced.test.ts"
