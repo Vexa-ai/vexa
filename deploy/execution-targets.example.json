@@ -38,8 +38,8 @@
       "endpoint": "https://transcription.vexa.ai",
       "secret_ref": "vexa-secrets:prod/transcription.enc.env#TRANSCRIPTION_SERVICE_TOKEN",
       "env": ["TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"],
-      "validate": "GET https://transcription.vexa.ai/balance with the token → require HTTP 200 AND balance_minutes > 0. STT tokens are PER-USER (the response carries the account email + balance). Preflight EVERY live run; it caught the 0-balance + the 403 wrong-key-type before any audio.",
-      "notes": "the bot's STT at transcription.vexa.ai (OpenAI-compatible /v1/audio/transcriptions; /balance·/purchase·/admin/user-tokens). prod/transcription.enc.env#TRANSCRIPTION_SERVICE_TOKEN = internal@vexa.ai's reusable token. CURRENT BALANCE = 0 min → /purchase (or auto-topup) before a live transcript (Learning #28)."
+      "validate": "POST a ~1s WAV to /v1/audio/transcriptions with the token (the config.v1 audio probe / the wizard Test do exactly this) → require HTTP 200. NEVER grade by /balance: balance_minutes is 0.0 BOTH for an exhausted token (every request 402s) and for a billing-exempt service account (transcribes fine) — the 2026-07-19 recurrence was a green balance-style check over a token that 402'd every segment. /balance only NAMES the account.",
+      "notes": "the bot's STT at transcription.vexa.ai (OpenAI-compatible /v1/audio/transcriptions; /balance·/purchase·/admin/user-tokens). The deployment token comes from the secret_ref above — per-account; which account (and whether it is billing-exempt) is the secret store's knowledge, never this file's."
     },
     {
       "name": "minio",

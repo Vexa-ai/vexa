@@ -120,7 +120,7 @@
           "type": "object",
           "required": ["url_key"],
           "additionalProperties": false,
-          "description": "One authenticated request to the capability's endpoint. Verdict, in order: a network failure/timeout ⇒ probe FAILS (unreachable); an `unauthorized_statuses` answer ⇒ FAILS (the credential was REJECTED); an `invalid_statuses` answer ⇒ FAILS (we are not talking to the declared endpoint at all — the URL shape is wrong); ANY other status (400/405/…) proves the endpoint is reachable and the credential accepted ⇒ probe passes.",
+          "description": "One authenticated request to the capability's endpoint. Verdict, in order: a network failure/timeout ⇒ probe FAILS (unreachable); an `unauthorized_statuses` answer ⇒ FAILS (the credential was REJECTED); an `exhausted_statuses` answer ⇒ FAILS (the credential is authentic but cannot buy the work); an `invalid_statuses` answer ⇒ FAILS (we are not talking to the declared endpoint at all — the URL shape is wrong); ANY other status (400/405/…) proves the endpoint is reachable and the credential accepted ⇒ probe passes.",
           "properties": {
             "method": { "type": "string", "default": "POST" },
             "url_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the endpoint URL — accepted as a bare base (https://host) OR as the full endpoint already carrying `path`; the probe appends `path` only when absent, the same rule the bot's client and the terminal dictation route apply" },
@@ -135,6 +135,19 @@
               "type": "array",
               "items": { "type": "integer" },
               "description": "statuses that mean the URL does not name this capability's endpoint — proof of the WRONG address, not of a working one (default []; the stt transcriptions probe declares [404], since a real OpenAI-compatible transcriptions path answers 400/401 to an empty body and never 404)"
+            },
+            "exhausted_statuses": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "statuses that mean the credential AUTHENTICATED but cannot pay for the work — a metered backend's 402 (default []; the stt probe declares [402]). Distinct from unauthorized: nothing is wrong with the token, it simply buys nothing, so every request fails while every reachability check passes. Only meaningful with `payload: \"audio\"` — an endpoint cannot price a body it never received."
+            },
+            "payload": {
+              "enum": ["audio"],
+              "description": "send a REAL request body instead of an empty POST. `audio` posts a ~1s WAV as multipart/form-data — the same shape a bot's first chunk makes — because an empty body cannot distinguish a funded credential from a worthless one: a metered backend answers both alike. It also makes the verdict independent of WHOSE token it is (a billing-exempt account and a funded one both answer 200), so no account identity is encoded anywhere. The request is METERED — declare a long `ttl_s`."
+            },
+            "payload_model": {
+              "type": "string",
+              "description": "the `model` form field sent with `payload: \"audio\"` (default whisper-1); backends that validate model ids need their served name"
             }
           }
         },

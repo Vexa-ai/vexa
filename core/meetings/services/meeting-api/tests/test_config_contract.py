@@ -418,4 +418,59 @@ def test_probe_failure_kinds_are_classified():
     down = cp._http_probe(spec, env, timeout=2)
     assert down["kind"] == "unreachable"
     assert down["kind"] not in cp.CONFIG_FAULT_KINDS
-    assert {"unauthorized", "invalid_endpoint"} == set(cp.CONFIG_FAULT_KINDS)
+    assert {"unauthorized", "invalid_endpoint", "exhausted"} == set(cp.CONFIG_FAULT_KINDS)
+
+
+def test_probe_402_is_exhausted_config_fault():
+    """The 2026-07-19 recurrence: a token that AUTHENTICATES but 402s every transcription probed
+    green (the old empty-body probe could never even elicit the 402). The declared
+    exhausted_statuses turn it into a refusable CONFIG fault with the consequence in the reason."""
+    spec = _stt_probe_spec()["http"]
+    with _ProbeServer(routes={_STT_PATH: 402}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "t"}
+        result = cp._http_probe(spec, env, timeout=5)
+    assert result["ok"] is False and result["kind"] == "exhausted"
+    assert result["kind"] in cp.CONFIG_FAULT_KINDS, "spawn must refuse on an exhausted token"
+    assert "no transcript" in result["reason"].lower()
+
+
+def test_probe_sends_real_audio_so_a_metered_backend_can_price_it():
+    """The declaration says payload: audio — assert the request BODY actually carries a WAV in
+    multipart form-data. An empty POST is answered 400/422 for funded and worthless credentials
+    alike, which is exactly how the exhausted token used to probe green."""
+    spec = _stt_probe_spec()["http"]
+    assert spec.get("payload") == "audio", "stt must declare the audio round-trip"
+    assert 402 in (spec.get("exhausted_statuses") or []), "stt must declare 402 as exhausted"
+    bodies: list = []
+
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            bodies.append(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = {"TRANSCRIPTION_SERVICE_URL": f"http://127.0.0.1:{server.server_address[1]}",
+               "TRANSCRIPTION_SERVICE_TOKEN": "t"}
+        assert cp._http_probe(spec, env, timeout=10)["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert len(bodies) == 1 and b"RIFF" in bodies[0] and b"probe.wav" in bodies[0]
+
+
+def test_probe_declares_a_long_ttl_because_the_round_trip_is_metered():
+    probe = _stt_probe_spec()
+    assert float(probe.get("ttl_s") or 0) >= 600, (
+        "the audio probe COSTS a fraction of a minute per run — /health must not re-bill it "
+        "every 60s")

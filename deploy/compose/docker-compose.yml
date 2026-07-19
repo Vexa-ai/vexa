@@ -305,7 +305,8 @@ services:
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
       - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
       # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
-      # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
+      # `stt` resource; a token that can actually transcribe — the boot probe + wizard Test verify
+      # it with real audio). Unset → bot joins+captures but no transcript.
       # MODEL is the id validating backends require (Groq/vLLM); unset → whisper-1.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
