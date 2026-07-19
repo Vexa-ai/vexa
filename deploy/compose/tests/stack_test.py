@@ -503,3 +503,67 @@ def test_06a_start_then_stop(stack):
     )
     assert out.strip().endswith("bot_commands:meeting:123"), f"leave-command channel wiring: {out!r}"
     print(f"\n[6a/stop] leave-command channel wiring present: {out.strip()}")
+
+# ── 7. webhook delivery outcome is REPORTED (#815) ───────────────────────────────────────────────
+# The gap this closes: `WebhookSink.deliver` returns delivered|suppressed|blocked|failed|queued and
+# the outcome used to be discarded, so a webhook a subscriber never received was indistinguishable
+# from one that arrived — "my webhooks stopped" could not be diagnosed from production at all.
+#
+# What this leg proves through the REAL stack: per-user webhook config reaches meeting.data, the
+# lifecycle advance drives the sink, and EVERY outcome surfaces as a `webhook_delivery` logevent
+# carrying the event type and the outcome. It asserts the two silent killers by name:
+#   • blocked   — SSRF guard refused the target (a private receiver, asserted here)
+#   • suppressed — the event type is not in the subscriber's filter
+# It deliberately does NOT assert an HTTP arrival: the SSRF guard (correctly) refuses every address
+# reachable from a hermetic CI network, so a real-socket leg would need an explicit host allowlist —
+# a security surface that is its own decision, not a test's to smuggle in.
+
+def test_07_webhook_delivery_outcome_reported(stack):
+    user_id = STATE["user_id"]
+    platform, native_id = "google_meet", f"wh-{uuid.uuid4().hex[:8]}"
+    meeting_id, session_uid = _insert_meeting(stack, user_id, platform, native_id)
+
+    # Per-user webhook config rides on meeting.data (identity → gateway → bot_spawn); write it the
+    # way bot_spawn does, then advance the FSM through the bot's own lifecycle callback.
+    stack.psql(
+        "UPDATE meetings SET data = data || "
+        """'{"webhook_url": "http://receiver.internal:9000/hook", """
+        """"webhook_events": {"meeting.status_change": true}}'::jsonb """
+        f"WHERE id = {meeting_id};"
+    )
+    code, body = post_json(
+        f"{stack.meeting_api}/bots/internal/callback/lifecycle",
+        {"connection_id": session_uid, "status": "completed", "completion_reason": "stopped"},
+        timeout=20,
+    )
+    assert code == 200, f"lifecycle callback: {code} {body!r}"
+
+    deadline = time.time() + 30
+    events = []
+    while time.time() < deadline and not events:
+        for line in stack.logs("meeting-api", tail=800).splitlines():
+            # `compose logs` prefixes every line with its service name ("meeting-api-1  | {...}").
+            payload = line.split("| ", 1)[-1].strip()
+            try:
+                rec = json.loads(payload)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("event") == "webhook_delivery" and rec.get("meeting_id") in (meeting_id, str(meeting_id)):
+                events.append(rec)
+        if not events:
+            time.sleep(2)
+
+    assert events, (
+        "no webhook_delivery logevent for a meeting with webhook_url configured — "
+        "a non-delivery would be silent in production (#815)"
+    )
+    outcomes = {e["fields"]["outcome"] for e in events}
+    # The private receiver must be REFUSED by the SSRF guard, and that refusal must be visible.
+    assert "blocked" in outcomes, f"private webhook target was not reported as blocked: {outcomes}"
+    blocked = next(e for e in events if e["fields"]["outcome"] == "blocked")
+    assert blocked["level"] == "warning", "a non-delivery must not be logged as a success"
+    assert blocked["fields"]["target_host"] == "receiver.internal"
+    assert blocked["fields"]["event_type"] in ("meeting.status_change", "meeting.completed")
+    print(f"\n[7/webhook] outcomes reported for meeting {meeting_id}: {sorted(outcomes)}")

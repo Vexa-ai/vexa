@@ -43,3 +43,12 @@ separately so `gate:docs-version` stays green. See [`releases/README.md`](../../
 
 Migrate nothing retroactively — the convention starts now; existing `changelog.mdx` sections stay
 as they are.
+
+## The fragment states what the WITNESS can see — not what the wiring promises
+
+A fragment's bullet is release-notes truth. If your PR `Refs` its issue (instead of `Closes`)
+because a live acceptance leg remains open, the fragment must claim the **mechanism you proved**
+("hints now reach the transcriber"), never the **end value still awaiting its human bar**
+("segments carry who spoke"). The v0.12.14 witness pass caught exactly this: two fragments
+advertised live speaker attribution, the walk showed `seg_N` — and the release notes on `main`
+had to be corrected after the fact. The bundle was honest; the headline wasn't. Match them.
