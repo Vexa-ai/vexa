@@ -122,6 +122,7 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
@@ -129,12 +130,14 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 3
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 45
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.meetingApi.resources | nindent 12 }}
       {{- with .Values.global.nodeSelector }}
