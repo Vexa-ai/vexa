@@ -142,7 +142,7 @@ function DropBotInline() {
     const u = url.trim();
     if (!u || sent === "sending") return;
     const parsed = parseMeetingInput(u, await getJitsiHosts());
-    if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); return; }
+    if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi / Telemost link."); return; }
     setSent("sending"); setMsg(null);
     try {
       const r = await fetch("/api/bots", {
@@ -167,7 +167,7 @@ function DropBotInline() {
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", gap: 6 }}>
         <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void send(); }}
-          placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi)…" style={fieldStyle} />
+          placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi / Telemost)…" style={fieldStyle} />
         <button onClick={() => void send()} disabled={!url.trim() || sent === "sending"}
           style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
           {sent === "sending" ? "…" : "Send bot"}

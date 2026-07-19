@@ -8,7 +8,7 @@
  * Run: tsx src/join-driver.test.ts
  */
 import { AdmissionError, AuthSessionError } from '@vexa/join';
-import { admissionOutcomeToJoinOutcome } from './join-driver.js';
+import { admissionOutcomeToJoinOutcome, joinPlatform } from './join-driver.js';
 import type { JoinOutcome } from './ports.js';
 
 let passed = 0, failed = 0;
@@ -27,6 +27,8 @@ console.log('\n=== join-driver: AdmissionError outcome → JoinOutcome (G1) ==='
 check('denial → rejected (permanent, not retried)', admissionOutcomeToJoinOutcome('denial') === 'rejected');
 check('lobby_timeout → timeout (transient retry)', admissionOutcomeToJoinOutcome('lobby_timeout') === 'timeout');
 check('join_failure → error', admissionOutcomeToJoinOutcome('join_failure') === 'error');
+check('telemost is routed to its own join adapter', joinPlatform('telemost') === 'telemost');
+check('unknown platform still falls back to google_meet', joinPlatform('unknown') === 'google_meet');
 
 // The bug, end to end at the boundary: a real AdmissionError('denial') must NOT surface transient.
 const denial = new AdmissionError('denial', 'Bot admission was rejected by meeting admin');

@@ -58,6 +58,7 @@ _TERMINAL_STATUSES = ("completed", "failed")
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
     "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
+    "telemost": "https://telemost.yandex.ru/j/{native_meeting_id}",
 }
 
 

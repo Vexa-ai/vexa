@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'telemost';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
@@ -34,7 +34,7 @@ export type TranscriptionTier = 'realtime' | 'deferred';
  *  The ONE predicate the browser hook, the capture bridge, and the pipeline pick
  *  must all agree on — never restate it inline. */
 export function isMixedLanePlatform(p: Platform | string): boolean {
-  return p === 'zoom' || p === 'teams' || p === 'jitsi';
+  return p === 'zoom' || p === 'teams' || p === 'jitsi' || p === 'telemost';
 }
 
 export interface AutomaticLeave {

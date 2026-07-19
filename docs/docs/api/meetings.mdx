@@ -30,6 +30,7 @@ Pass one of these as `platform`:
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
 | Jitsi Meet | `jitsi` |
+| Yandex Telemost | `telemost` |
 
 The bot joins like any participant — no plugins, no host configuration.
 
@@ -43,6 +44,10 @@ A password-protected room is joined by passing the optional `passcode` field. To
 `VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
 message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
 names come from the conference's own dominant-speaker signal.
+
+For `telemost`, use the canonical `https://telemost.yandex.ru/j/<numeric-id>` link. The API can
+derive the platform and ID from that URL, or construct the canonical URL from an explicit
+`platform: "telemost"` plus `native_meeting_id`.
 
 ## Meeting statuses
 
@@ -65,7 +70,7 @@ just a title, and the link can be attached later.
 
 <ParamField body="title" type="string">What the meeting is about — shown in the Meetings list.</ParamField>
 <ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
-<ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
+<ParamField body="meeting_url" type="string">A Meet/Zoom/Teams/Jitsi/Telemost link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
 <ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript.</ParamField>
 <ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
 
@@ -192,7 +197,7 @@ the secret address.
 
 ## Send a bot to a meeting
 
-<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
+<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams` · `jitsi` · `telemost`</ParamField>
 <ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
 <ParamField body="language" type="string">ISO code (e.g. `en`). **Omitted** = auto mode: each STT

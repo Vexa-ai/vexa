@@ -37,7 +37,7 @@ still planned (the FSM is never fought).
 ### Plan
 
 Create a meeting before it happens with [`POST /meetings`](/api/meetings#plan-a-meeting): a title,
-an optional start time, an optional meeting link (Meet/Zoom/Teams/Jitsi — parsed server-side), an
+an optional start time, an optional meeting link (Meet/Zoom/Teams/Jitsi/Telemost — parsed server-side), an
 optional [workspace](/concepts#workspace) binding. A plan without a link is fine — attach the link
 later; a plan without a time sits in `idle` until you schedule it.
 
@@ -75,7 +75,8 @@ guarantees:
 ### Capture
 
 The bot joins natively, in real time, with no plugins or host configuration — it attends like any
-participant, on [**Google Meet**, **Zoom**, **Microsoft Teams**, and **Jitsi Meet**](/api/meetings#platforms).
+participant, on [**Google Meet**, **Zoom**, **Microsoft Teams**, **Jitsi Meet**, and
+**Yandex Telemost**](/api/meetings#platforms).
 Mechanically it is a **browser [container](/concepts#container) spawned by the
 [runtime](/core/runtime)** — the same runtime an agent runs in. The speaker-attributed (diarized)
 transcript streams live over the [API](/api/meetings) and WebSocket.

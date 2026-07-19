@@ -64,6 +64,39 @@ class TestParseExistingPlatformsUnchanged:
         assert parse_meeting_url("https://teams.live.com/meet/9361792952021?p=abc") == ("teams", "9361792952021")
 
 
+class TestParseTelemost:
+    def test_canonical_link(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/1111111111") == (
+            "telemost",
+            "1111111111",
+        )
+
+    def test_trailing_slash(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/1111111111/") == (
+            "telemost",
+            "1111111111",
+        )
+
+    def test_14_digit_link(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/11111111111111") == (
+            "telemost",
+            "11111111111111",
+        )
+
+    def test_wrong_host_or_id_rejected(self):
+        assert parse_meeting_url("https://example.org/j/1111111111") is None
+        assert parse_meeting_url("https://telemost.yandex.ru/j/not-an-id") is None
+
+    def test_calendar_link(self):
+        assert find_meeting_link(
+            "Join: https://telemost.yandex.ru/j/1111111111 today"
+        ) == (
+            "telemost",
+            "1111111111",
+            "https://telemost.yandex.ru/j/1111111111",
+        )
+
+
 class TestFindMeetingLinkJitsi:
     def test_found_in_free_text(self):
         got = find_meeting_link("Join us: https://meet.jit.si/VexaStandup today")
@@ -99,6 +132,11 @@ class TestConfiguredJitsiHosts:
 
 
 class TestConstructMeetingUrl:
+    def test_telemost_canonical_url(self):
+        assert construct_meeting_url("telemost", "1111111111") == (
+            "https://telemost.yandex.ru/j/1111111111"
+        )
+
     def test_jitsi_requires_explicit_url(self):
         # A jitsi room name is deployment-scoped — constructing a URL from the bare id
         # would join the PUBLIC meet.jit.si room of that name (the wrong meeting), so

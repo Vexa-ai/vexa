@@ -22,6 +22,15 @@ describe("isValidMeetingId", () => {
     expect(isValidMeetingId("teams", "")).toBe(false);
   });
 
+  it("accepts 10-20 digit Telemost ids", () => {
+    expect(isValidMeetingId("telemost", "1111111111")).toBe(true);
+    expect(isValidMeetingId("telemost", "11111111111111")).toBe(true);
+    expect(isValidMeetingId("telemost", "11111111111111111111")).toBe(true);
+    expect(isValidMeetingId("telemost", "111111111")).toBe(false);
+    expect(isValidMeetingId("telemost", "111111111111111111111")).toBe(false);
+    expect(isValidMeetingId("telemost", "abcdefghij")).toBe(false);
+  });
+
   it("accepts a single URL-safe Jitsi room, rejects separators/whitespace", () => {
     expect(isValidMeetingId("jitsi", "VexaStandup")).toBe(true);
     expect(isValidMeetingId("jitsi", "Team%20Sync")).toBe(true); // encoded form IS the id
@@ -65,6 +74,19 @@ describe("parseMeetingInput", () => {
       platform: "teams",
       native_meeting_id: "33832851446746",
     });
+  });
+
+  it("parses a canonical Telemost link", () => {
+    expect(parseMeetingInput("https://telemost.yandex.ru/j/1111111111")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "1111111111",
+    });
+    expect(parseMeetingInput("https://telemost.yandex.ru/j/11111111111111")).toEqual({
+      platform: "telemost",
+      native_meeting_id: "11111111111111",
+    });
+    expect(parseMeetingInput("https://telemost.yandex.ru/j/not-an-id")).toBeNull();
+    expect(parseMeetingInput("https://evil.example/j/1111111111")).toBeNull();
   });
 
   it("parses a meet.jit.si room URL (case + encoding preserved)", () => {

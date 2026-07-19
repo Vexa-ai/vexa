@@ -522,7 +522,10 @@ def test_delete_bots_invalid_platform_should_be_422():
     _assert_error_envelope(r)
 
 
-@pytest.mark.parametrize("platform", ["google_meet", "zoom", "teams", "jitsi", "browser_session"])
+@pytest.mark.parametrize(
+    "platform",
+    ["google_meet", "zoom", "teams", "jitsi", "telemost", "browser_session"],
+)
 def test_delete_bots_valid_platform_nonexistent_is_404(platform):
     """Idempotent-delete preserved: a VALID platform with no active meeting still → 404
     (the 422 guard only rejects platforms outside the sealed enum, not unknown meetings)."""

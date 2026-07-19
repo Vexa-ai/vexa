@@ -1,7 +1,7 @@
 /**
  * L1/L2 — invocation.v1 boot config (ARCHITECTURE.md §5). Drives the real ajv-backed
  * parser against the PUBLISHED goldens (P8: the goldens are the spec) and asserts:
- *   • every committed golden (minimal + full + jitsi) parses;
+ *   • every committed golden (minimal + full + jitsi + telemost) parses;
  *   • the env helper round-trips VEXA_BOT_CONFIG;
  *   • off-contract input (missing required, unknown action, bad enum, non-JSON, absent)
  *     fails fast with an InvocationError (P14).
@@ -24,11 +24,18 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 3, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 4, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
   check(`golden ${g} parses`, err === null, err?.message ?? '');
+}
+
+// ── typed access on the Telemost golden ──
+{
+  const telemost = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.telemost.json'), 'utf8'));
+  check('telemost: platform = telemost', telemost.platform === 'telemost', telemost.platform);
+  check('telemost: canonical URL preserved', telemost.meetingUrl === 'https://telemost.yandex.ru/j/11111111111111', String(telemost.meetingUrl));
 }
 
 // ── typed access on the full golden ──

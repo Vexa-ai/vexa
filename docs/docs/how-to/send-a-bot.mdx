@@ -1,6 +1,6 @@
 ---
 title: "Send a bot and get a transcript"
-description: "Capture a Google Meet, Zoom, Teams, or Jitsi call in real time."
+description: "Capture a Google Meet, Zoom, Teams, Jitsi, or Yandex Telemost call in real time."
 ---
 
 A Vexa bot joins a call like any participant and streams back a **speaker-attributed** transcript. No
@@ -41,10 +41,17 @@ The only thing that changes between platforms is the `platform` value.
       -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://meet.jit.si/MyRoom","bot_name":"Vexa"}'
     ```
   </Tab>
+  <Tab title="Yandex Telemost">
+    ```bash
+    curl -X POST "$API_BASE/bots" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d '{"platform":"telemost","native_meeting_id":"1111111111","meeting_url":"https://telemost.yandex.ru/j/1111111111","bot_name":"Vexa"}'
+    ```
+  </Tab>
 </Tabs>
 
 `native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for
-Jitsi), not the whole URL.
+Jitsi, or the numeric meeting ID after `/j/` for Telemost), not the whole URL.
 
 Have only the URL? Send `meeting_url` alone — the API parses it to extract `platform`,
 `native_meeting_id`, and (for Zoom/Teams links that embed one) the passcode:
@@ -70,8 +77,8 @@ Detection is **per window** (one STT call, a few seconds of one speaker's audio)
 code-switching *within* a window takes the window's language; switching between utterances lands on
 the segment boundary. A window whose language could not be determined has `language: null`.
 
-On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
-lobby enabled behaves the same way.
+On Meet, Teams, and Telemost the bot may wait in the lobby until a host admits it; a Jitsi room
+with the lobby enabled behaves the same way.
 
 <Note>
 You often don't need this call at all: a [**planned** meeting](/how-to/plan-a-meeting) with a time

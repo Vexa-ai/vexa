@@ -181,6 +181,26 @@ class TestZoom:
         assert_422("https://events.zoom.us/ev/abc123", "zoom events")
 
 
+class TestTelemost:
+    def test_canonical_link(self):
+        r = parse("https://telemost.yandex.ru/j/1111111111")
+        assert r.platform == "telemost"
+        assert r.native_meeting_id == "1111111111"
+        assert r.meeting_url == "https://telemost.yandex.ru/j/1111111111"
+        assert r.passcode is None
+
+    def test_trailing_slash(self):
+        assert parse("https://telemost.yandex.ru/j/1111111111/").native_meeting_id == "1111111111"
+
+    def test_14_digit_link(self):
+        result = parse("https://telemost.yandex.ru/j/11111111111111")
+        assert result.platform == "telemost"
+        assert result.native_meeting_id == "11111111111111"
+
+    def test_malformed_link_rejected(self):
+        assert_422("https://telemost.yandex.ru/j/not-an-id", "telemost")
+
+
 class TestJitsi:
     def test_canonical_room(self):
         r = parse("https://meet.jit.si/VexaStandup")

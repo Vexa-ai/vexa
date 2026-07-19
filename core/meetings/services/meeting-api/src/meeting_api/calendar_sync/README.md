@@ -10,7 +10,8 @@ domain).
 - `parse_ics(text, now, horizon_days=14)` → `{"events": [PlannedEvent], "cancelled_uids": […]}`
   (pure). **One event per UID — the next upcoming occurrence only** (a recurring meeting reuses one
   link; two active rows on one native id would violate `uq_meeting_active_user_platform_native`).
-  Only events with a recognizable Meet/Zoom/Teams link import (`collector/meeting_link.py`).
+  Only events with a recognizable Meet/Zoom/Teams/Jitsi/Telemost link import
+  (`collector/meeting_link.py`).
 - `sync_user(store, user_id, parsed, auto_join_default)` → upserts through the SAME planned-meeting
   store primitives `POST /meetings` uses (advisory-locked). Intent rows follow the feed; FSM rows
   are never touched; a manual plan on the same link is ADOPTED (uid stamped), not duplicated;

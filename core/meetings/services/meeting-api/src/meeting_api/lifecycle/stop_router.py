@@ -66,7 +66,9 @@ _BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
 # unsupported platform is a VALIDATION error (422), not a missing-resource (404). Mirrors the POST /bots
 # platform guard (A1/A3): reject a non-enum platform up front, BEFORE the find_active lookup (which would
 # otherwise miss and 404 — drifting from the contract a client must code against).
-_SUPPORTED_PLATFORMS = frozenset({"google_meet", "zoom", "teams", "jitsi", "browser_session"})
+_SUPPORTED_PLATFORMS = frozenset(
+    {"google_meet", "zoom", "teams", "jitsi", "telemost", "browser_session"}
+)
 
 
 def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=None) -> APIRouter:
