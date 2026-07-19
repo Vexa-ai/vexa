@@ -11,3 +11,10 @@
   so a replay reproduces who spoke, not just what was heard. Off by default; when off, the
   capture path is unchanged (a single branch). This is the diagnostic layer for zero-transcript
   and misattribution reports: the failing meeting's input becomes a deterministic red test.
+- **The mixed lane (Zoom/Teams/Jitsi) now has a deterministic attribution oracle.** A recorded
+  session replays through the real `@vexa/mixed-pipeline` to hint-derived speaker names, offline
+  and with no model — `gate:replay` runs it alongside the gmeet harness. The committed golden is
+  harvested from a real meeting (two scripted speakers, ground-truth WAVs) and distilled to the
+  window spanning one turn change, so "the audio survived but who-spoke collapsed to `seg_N`" —
+  the shape reported in the Teams/Zoom attribution bugs — is now a red test rather than a live
+  observation.
