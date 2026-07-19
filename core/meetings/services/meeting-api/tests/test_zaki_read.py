@@ -133,6 +133,43 @@ def test_index_maps_real_store_records_to_metadata_only_contract_items():
     assert "private-native-id" not in response.text
 
 
+def test_index_orders_by_meeting_occurrence_not_later_reprocessing():
+    store = _store()
+    store._meetings[41]["start_time"] = "2026-07-16T11:00:00+00:00"
+    store._meetings[41]["end_time"] = "2026-07-16T12:00:00+00:00"
+    older_data = deepcopy(_meeting_data())
+    older_data["title"] = "Older meeting reprocessed later"
+    older_data["summary"]["updated_at"] = "2026-07-17T11:30:00+00:00"
+    store.seed_meeting(
+        meeting_id=42,
+        user_id=USER_ID,
+        platform="google_meet",
+        native_meeting_id="older-private-id",
+        status="completed",
+        start_time="2026-07-16T12:00:00+02:00",
+        end_time="2026-07-16T13:00:00+02:00",
+        created_at="2026-07-16T09:59:00+00:00",
+        updated_at="2026-07-17T11:30:00+00:00",
+        data=older_data,
+        segments=_segments(),
+    )
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/index?limit=200",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    occurred = [datetime.fromisoformat(item["occurred_at"]) for item in items]
+    assert occurred == sorted(occurred, reverse=True)
+    assert {item["id"] for item in items[:3]} == {
+        "meeting:41",
+        "transcript:41",
+        "summary:41",
+    }
+
+
 def test_read_plane_is_default_off_token_authenticated_user_scoped_and_read_only():
     path = f"/api/zaki/read/v1/{USER_ID}/index"
 
