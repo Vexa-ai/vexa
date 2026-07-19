@@ -1,0 +1,9 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A5AXG93S2QVC8K1MB7FR4T",
+  "idempotency_key": "idem_01K0A5AXG93S2QVC8K1MB7FR4T",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  }
+}

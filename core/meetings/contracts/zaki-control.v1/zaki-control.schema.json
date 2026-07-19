@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zaki.ai/contracts/minutes/zaki-control.v1",
+  "title": "zaki-control.v1",
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "UserId": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "Subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "user_id"],
+      "properties": {
+        "tenant_id": { "$ref": "#/$defs/Identifier" },
+        "user_id": { "$ref": "#/$defs/UserId" }
+      }
+    },
+    "RetentionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio_days", "transcript_days", "summary_days"],
+      "properties": {
+        "audio_days": { "type": "integer", "minimum": 0, "maximum": 365 },
+        "transcript_days": { "type": "integer", "minimum": 1, "maximum": 3650 },
+        "summary_days": { "type": "integer", "minimum": 1, "maximum": 3650 }
+      }
+    },
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_enabled", "agent_read_enabled", "capture_notice_policy_version", "retention"],
+      "properties": {
+        "capture_enabled": { "type": "boolean" },
+        "agent_read_enabled": { "type": "boolean" },
+        "capture_notice_policy_version": { "$ref": "#/$defs/Identifier" },
+        "retention": { "$ref": "#/$defs/RetentionPolicy" }
+      }
+    },
+    "CaptureAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bot_visible", "bot_display_name", "policy_version", "attested_at", "attested_by_user_id"],
+      "properties": {
+        "bot_visible": { "const": true },
+        "bot_display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "policy_version": { "$ref": "#/$defs/Identifier" },
+        "attested_at": { "type": "string", "format": "date-time" },
+        "attested_by_user_id": { "$ref": "#/$defs/UserId" }
+      }
+    },
+    "MeterReservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservation_id", "unit", "reserved_units"],
+      "properties": {
+        "reservation_id": { "$ref": "#/$defs/Identifier" },
+        "unit": { "const": "bot_minute" },
+        "reserved_units": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "UsageMetering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservation_id", "sequence", "captured_seconds_total", "terminal"],
+      "properties": {
+        "reservation_id": { "$ref": "#/$defs/Identifier" },
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "captured_seconds_total": { "type": "integer", "minimum": 0, "maximum": 31536000 },
+        "terminal": { "type": "boolean" }
+      }
+    },
+    "UsageCallbackData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "operation_id", "capture_id", "meeting_id", "metering"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/Subject" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "capture_id": { "$ref": "#/$defs/Identifier" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "metering": { "$ref": "#/$defs/UsageMetering" }
+      }
+    },
+    "StatusCallbackData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "operation_id", "capture_id", "state"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/Subject" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "capture_id": { "$ref": "#/$defs/Identifier" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "state": { "$ref": "#/$defs/LifecycleState" },
+        "failure_code": { "$ref": "#/$defs/FailureCode" }
+      },
+      "if": {
+        "properties": { "state": { "const": "failed" } },
+        "required": ["state"]
+      },
+      "then": { "required": ["failure_code"] },
+      "else": { "not": { "required": ["failure_code"] } }
+    },
+    "CallbackEnvelope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_id", "event_type", "api_version", "created_at", "data"],
+          "properties": {
+            "event_id": { "$ref": "#/$defs/Identifier" },
+            "event_type": { "const": "minutes.capture.usage" },
+            "api_version": { "const": "zaki-control.v1" },
+            "created_at": { "type": "string", "format": "date-time" },
+            "data": { "$ref": "#/$defs/UsageCallbackData" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_id", "event_type", "api_version", "created_at", "data"],
+          "properties": {
+            "event_id": { "$ref": "#/$defs/Identifier" },
+            "event_type": { "const": "minutes.capture.status" },
+            "api_version": { "const": "zaki-control.v1" },
+            "created_at": { "type": "string", "format": "date-time" },
+            "data": { "$ref": "#/$defs/StatusCallbackData" }
+          }
+        }
+      ]
+    },
+    "CallbackAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "event_id", "status"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "event_id": { "$ref": "#/$defs/Identifier" },
+        "status": { "enum": ["accepted", "duplicate"] }
+      }
+    },
+    "SignatureHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Content-Type", "X-Webhook-Signature", "X-Webhook-Timestamp"],
+      "properties": {
+        "Content-Type": { "const": "application/json" },
+        "X-Webhook-Signature": {
+          "type": "string",
+          "pattern": "^sha256=[0-9a-f]{64}$"
+        },
+        "X-Webhook-Timestamp": {
+          "type": "string",
+          "pattern": "^[0-9]{10}$"
+        }
+      }
+    },
+    "CallbackVerificationVector": {
+      "description": "Conformance-only harness vector. received_at_unix is verifier context, not a wire field.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["headers", "raw_body", "received_at_unix"],
+      "properties": {
+        "headers": { "$ref": "#/$defs/SignatureHeaders" },
+        "raw_body": { "type": "string", "minLength": 2, "maxLength": 65536 },
+        "received_at_unix": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "LifecycleState": {
+      "enum": ["requested", "joining", "awaiting_admission", "active", "stopping", "completed", "failed"]
+    },
+    "FailureCode": {
+      "enum": [
+        "join_denied", "kicked", "meeting_ended_early", "quota_exhausted",
+        "invalid_meeting", "capture_timeout", "upstream_unavailable", "internal_failure"
+      ]
+    },
+    "ResponseMetering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservation_id"],
+      "properties": {
+        "reservation_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "StatusMetering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservation_id", "captured_seconds_total", "terminal"],
+      "properties": {
+        "reservation_id": { "$ref": "#/$defs/Identifier" },
+        "captured_seconds_total": { "type": "integer", "minimum": 0, "maximum": 31536000 },
+        "terminal": { "type": "boolean" }
+      }
+    },
+    "EnsureResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "operation_id", "subject", "state", "policy_version"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "state": { "enum": ["ready", "disabled"] },
+        "policy_version": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "CaptureResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "operation_id", "subject", "capture_id", "state", "metering"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "capture_id": { "$ref": "#/$defs/Identifier" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "state": { "$ref": "#/$defs/LifecycleState" },
+        "metering": { "$ref": "#/$defs/ResponseMetering" }
+      }
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "subject", "capture_id", "state", "metering"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "capture_id": { "$ref": "#/$defs/Identifier" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "state": { "$ref": "#/$defs/LifecycleState" },
+        "failure_code": { "$ref": "#/$defs/FailureCode" },
+        "metering": { "$ref": "#/$defs/StatusMetering" }
+      },
+      "if": {
+        "properties": { "state": { "const": "failed" } },
+        "required": ["state"]
+      },
+      "then": { "required": ["failure_code"] },
+      "else": { "not": { "required": ["failure_code"] } }
+    },
+    "StopCaptureRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "idempotency_key", "subject", "capture_id"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "capture_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "EraseMeetingRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "idempotency_key", "subject", "meeting_id"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "EraseAccountRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "idempotency_key", "subject"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" }
+      }
+    },
+    "ErasureCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_rows", "transcript_rows", "summary_rows", "recording_objects"],
+      "properties": {
+        "meeting_rows": { "type": "integer", "minimum": 0 },
+        "transcript_rows": { "type": "integer", "minimum": 0 },
+        "summary_rows": { "type": "integer", "minimum": 0 },
+        "recording_objects": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ErasureReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_id", "erased_at", "counts"],
+      "properties": {
+        "receipt_id": { "$ref": "#/$defs/Identifier" },
+        "erased_at": { "type": "string", "format": "date-time" },
+        "counts": { "$ref": "#/$defs/ErasureCounts" }
+      }
+    },
+    "ErasureResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "operation_id", "subject", "scope", "status", "receipt"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "scope": { "enum": ["meeting", "account"] },
+        "target_id": { "$ref": "#/$defs/Identifier" },
+        "status": { "enum": ["completed", "already_absent"] },
+        "receipt": { "$ref": "#/$defs/ErasureReceipt" }
+      },
+      "if": {
+        "properties": { "scope": { "const": "meeting" } },
+        "required": ["scope"]
+      },
+      "then": { "required": ["target_id"] },
+      "else": { "not": { "required": ["target_id"] } }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "code", "retryable"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "operation_id": { "$ref": "#/$defs/Identifier" },
+        "code": {
+          "enum": [
+            "auth_failed", "subject_mismatch", "minutes_disabled", "quota_exhausted",
+            "idempotency_conflict", "invalid_state", "invalid_request",
+            "upstream_unavailable", "internal_error"
+          ]
+        },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "CaptureRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version", "request_id", "idempotency_key", "subject", "platform",
+        "meeting_url", "capture_attestation", "metering"
+      ],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "platform": { "enum": ["google_meet", "zoom", "teams", "jitsi"] },
+        "meeting_url": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "capture_attestation": { "$ref": "#/$defs/CaptureAttestation" },
+        "metering": { "$ref": "#/$defs/MeterReservation" }
+      }
+    },
+    "EnsureRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "request_id", "idempotency_key", "subject", "policy"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "policy": { "$ref": "#/$defs/Policy" }
+      }
+    }
+  }
+}

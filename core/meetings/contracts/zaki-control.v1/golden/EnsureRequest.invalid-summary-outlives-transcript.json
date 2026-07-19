@@ -1,0 +1,19 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A5K8W7B2Y4D9R1TM6QCFHZ",
+  "idempotency_key": "idem_01K0A5K8W7B2Y4D9R1TM6QCFHZ",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "policy": {
+    "capture_enabled": true,
+    "agent_read_enabled": true,
+    "capture_notice_policy_version": "minutes-notice-2026-07-19",
+    "retention": {
+      "audio_days": 7,
+      "transcript_days": 30,
+      "summary_days": 90
+    }
+  }
+}

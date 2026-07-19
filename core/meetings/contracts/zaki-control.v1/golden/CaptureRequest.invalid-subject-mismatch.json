@@ -1,0 +1,23 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A4Q9J1Y35S6G8W7C2B0NXT",
+  "idempotency_key": "idem_01K0A4Q9J1Y35S6G8W7C2B0NXT",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "platform": "google_meet",
+  "meeting_url": "https://meet.google.com/abc-defg-hij",
+  "capture_attestation": {
+    "bot_visible": true,
+    "bot_display_name": "ZAKI Notetaker",
+    "policy_version": "minutes-notice-2026-07-19",
+    "attested_at": "2026-07-19T09:55:00Z",
+    "attested_by_user_id": "7"
+  },
+  "metering": {
+    "reservation_id": "reserve_01K0A4Q9J1Y35S6G8W7C2B0NXT",
+    "unit": "bot_minute",
+    "reserved_units": 60
+  }
+}

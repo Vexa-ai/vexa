@@ -1,0 +1,112 @@
+# zaki-control.v1 — Minutes control plane and callback profile
+
+The versioned service boundary between the ZAKI Hub BFF and the Minutes engine. It covers
+owner-scoped policy provisioning, capture lifecycle, idempotent metering, signed callbacks and
+content-free Minutes erasure receipts. It does not grant the browser direct engine access and does
+not activate Minutes.
+
+> **SEALED PROFILE.** `zaki-control.schema.json`, the positive/negative vectors under `golden/`,
+> this HTTP profile and the contract seal move together. A breaking change adds `zaki-control.v2`;
+> a backward-compatible change requires a new `lane:contract` review and re-seal.
+
+## Trust boundary
+
+The authenticated Hub BFF is the sole caller and credential holder. Browser routes may adapt these
+shapes, but the browser receives no engine base URL, service token, webhook key, provider/admin
+credential, storage key, database setting or native meeting-engine credential.
+
+Every control request is authorized by the service token and repeats one canonical identity in all
+four places: token scope, `{userId}` path, `X-Zaki-User-Id` and `subject.user_id`. The tenant scope in
+the token must also match `X-Zaki-Tenant-Id` and `subject.tenant_id`. Any mismatch fails closed as
+`subject_mismatch`; a caller must not learn whether the foreign resource exists. Redirects are
+forbidden and responses use `Cache-Control: no-store`.
+
+## HTTP profile
+
+```text
+POST /api/zaki/control/v1/{userId}/ensure
+POST /api/zaki/control/v1/{userId}/captures
+GET  /api/zaki/control/v1/{userId}/captures/{captureId}
+POST /api/zaki/control/v1/{userId}/captures/{captureId}/stop
+POST /api/zaki/control/v1/{userId}/meetings/{meetingId}/erase
+POST /api/zaki/control/v1/{userId}/erase
+
+POST /api/minutes/callback/v1                 # engine → Hub BFF
+```
+
+Mutations require `X-Request-Id` and `Idempotency-Key`; their values must equal `request_id` and
+`idempotency_key` in the body. Replaying the same key with the same canonical request returns the
+same operation/result without repeating a side effect. Reusing a key for a different request returns
+`409 idempotency_conflict`. GET status is bounded, credential-free JSON.
+
+| Route | Request `$def` | Success `$def` |
+|---|---|---|
+| `ensure` | `EnsureRequest` | `EnsureResponse` |
+| `captures` | `CaptureRequest` | `CaptureResponse` |
+| capture status | — | `StatusResponse` |
+| capture stop | `StopCaptureRequest` | `StatusResponse` |
+| meeting erase | `EraseMeetingRequest` | `ErasureResponse` |
+| account erase | `EraseAccountRequest` | `ErasureResponse` |
+| callback | `CallbackEnvelope` + `SignatureHeaders` | `CallbackAck` |
+
+Every non-success response is `ErrorResponse`. Its closed code vocabulary separates authentication,
+binding, disabled, quota, idempotency conflict, illegal state, invalid input, retryable upstream and
+internal failures. It deliberately carries no free-form detail field.
+
+## Capture and consent
+
+`CaptureRequest` requires one visible-bot attestation: `bot_visible=true`, a bounded display name,
+the exact notice policy version, the attestation timestamp and the same numeric owner as the bound
+subject. The server independently enforces policy and lifecycle; the attestation is evidence, not an
+authorization bypass. States are limited to `requested → joining → awaiting_admission → active →
+stopping → completed|failed`. A failed state always carries one named `failure_code`; other states
+must not.
+
+Retention is explicit and policy-owned. This schema admits operator-selected bounded windows but
+does not choose defaults. Summary retention cannot outlive transcript retention. A read never extends
+any window; `zaki-read.v1` remains the separate read boundary.
+
+## Metering and idempotency
+
+The Hub reserves wallet units before capture and sends the stable `reservation_id` in
+`CaptureRequest`. Usage callbacks identify the event, operation, capture, meeting and reservation;
+they report a monotonic sequence plus cumulative `captured_seconds_total`. Consumers settle deltas
+idempotently and finalize/refund exactly once when `terminal=true`. The engine never decides money,
+plan prices or allowances, and the contract never exposes wallet balances to the engine.
+
+## Callback authentication
+
+Callbacks narrow the existing `webhook.v1` scheme to mandatory HMAC only:
+
+```text
+X-Webhook-Signature = sha256=<hex(HMAC-SHA256(key, X-Webhook-Timestamp + "." + raw_body))>
+```
+
+The receiver verifies the signature against the exact bytes received **before JSON parsing**, uses a
+constant-time comparison, rejects timestamps more than 300 seconds from receipt, and records
+`event_id` before applying state or wallet effects. A repeated event returns
+`CallbackAck.status = duplicate` with a 2xx response and performs no second transition or
+settlement. The legacy
+`Authorization: Bearer <secret>` field allowed by generic `webhook.v1` is forbidden in this profile.
+`CallbackVerificationVector` is conformance harness context, not an additional wire shape.
+
+## Erasure boundary
+
+Meeting and account erasure are owner-scoped, idempotent mutations. `ErasureResponse` contains only
+a receipt ID, timestamp and non-negative counts for meeting rows, transcript rows, summary rows and
+recording objects. It cannot contain transcript text, attendee data, native storage keys or service
+credentials. This receipt proves the Minutes raw-store leg only: Hub account-erasure success still
+requires a separate governed Brain receipt and fails loudly if either receipt is missing.
+
+## Privacy and activation invariants
+
+- Operator, tenant and user gates all remain required; no shape implies that a gate is enabled.
+- Unknown, expired, erased and foreign resources share the same non-enumerating failure surface.
+- Logs, errors, callbacks and receipts contain no transcript/summary body, meeting passcode, storage
+  key, service token or HMAC key.
+- Callbacks are lifecycle/usage notifications, not a transcript transport.
+- This contract adds no runtime route, Secret, migration, deployment, tenant flag or product-state
+  change. Minutes remains `coming_soon`, operator-disabled and undeployed until later launch gates.
+
+Run `node validate.mjs` for the focused contract lane and `node scripts/gates.mjs schema` for all
+published contract goldens.
