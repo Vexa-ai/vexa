@@ -624,16 +624,21 @@ export class ChunkedTranscriber {
     const name = this.resolveName(turn);
     if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
 
+    const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
+      text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
+      segmentId: `turn:${turn.turnId}:${turn.seq++}`,
+    }));
+
+    // The forming tail carries the ids it will CONFIRM under (turn.seq is already past this
+    // pass's confirmations). A segment_id is an identity — the store upserts on it — so a draft
+    // published under an id of its own would never be replaced by its confirmation, and every
+    // sentence would end up stored twice.
     const tail: ChunkSegment[] = mapped.slice(confirmCount).map((s, i) => ({
       text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-      segmentId: `turn:${turn.turnId}:p${i}`,
+      segmentId: `turn:${turn.turnId}:${turn.seq + i}`,
     }));
 
     if (confirmCount > 0) {
-      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
-        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
-      }));
       // ONE bundle: confirmed + surviving tail. Splitting them deletes the
       // client's pending block for seconds (the "vanishing transcript" bug).
       this.cb.publish(name, confirmed, closing ? [] : tail);
