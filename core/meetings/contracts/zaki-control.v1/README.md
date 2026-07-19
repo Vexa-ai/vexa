@@ -19,7 +19,8 @@ Every control request is authorized by the service token and repeats one canonic
 four places: token scope, `{userId}` path, `X-Zaki-User-Id` and `subject.user_id`. The tenant scope in
 the token must also match `X-Zaki-Tenant-Id` and `subject.tenant_id`. Any mismatch fails closed as
 `subject_mismatch`; a caller must not learn whether the foreign resource exists. Redirects are
-forbidden and responses use `Cache-Control: no-store`.
+forbidden and responses use `Cache-Control: no-store`. `ControlRequestBindingVector` makes the
+token/path/header/body equality rules executable without carrying a service-token secret in fixtures.
 
 ## HTTP profile
 
@@ -45,7 +46,8 @@ Replaying the same namespace with the same canonical SHA-256 returns the origina
 without a side effect; the response echoes the current attempt's `request_id`. A different canonical
 hash in the same namespace returns `409 idempotency_conflict`. `IdempotencyReplayVector` supplies real
 mutation request bodies; the validator infers the operation from the closed request shape and computes
-the canonical SHA-256 itself. GET status is bounded, credential-free JSON.
+the canonical SHA-256 itself. Capture, stop, meeting-erasure and account-erasure replay paths are all
+covered explicitly. GET status is bounded, credential-free JSON.
 
 | Route | Request `$def` | Success `$def` | Failure `$def` |
 |---|---|---|---|
@@ -69,13 +71,27 @@ carries free-form detail.
 the exact notice policy version, the attestation timestamp and the same numeric owner as the bound
 subject. The server independently enforces policy and lifecycle; the attestation is evidence, not an
 authorization bypass. `meeting_url` must be HTTPS, contain no URL credentials and match the declared
-platform's recognized provider host/path. Runtime adapters may supply operator-declared Jitsi hosts
-through validated configuration; `CaptureRequestValidationVector` carries that host list explicitly,
-so ambient process environment never changes sealed conformance. A successful capture creation returns
-only `state=requested`. Later states are observed through status and callbacks, limited to `requested
-→ joining → awaiting_admission → active → stopping → completed|failed`. A failed state always carries
-one named `failure_code`; other states must not. `StatusResponse.metering.terminal` is true exactly for
-`completed|failed` and false for all non-terminal lifecycle states.
+platform's recognized provider host/path. Jitsi accepts only `meet.jit.si` or an exact
+operator-configured hostname; name fragments such as `meet.*` or `*jitsi*` confer no trust. Runtime
+adapters may supply operator-declared Jitsi hosts through validated configuration;
+`CaptureRequestValidationVector` carries that host list explicitly, so ambient process environment
+never changes sealed conformance. A successful capture creation returns only `state=requested`.
+
+`LifecycleTransitionVector` executes the allowed state graph:
+
+```text
+requested          → joining | failed
+joining            → awaiting_admission | active | failed
+awaiting_admission → active | failed
+active             → stopping | completed | failed
+stopping           → completed | failed
+completed | failed → (terminal; no successor)
+```
+
+No-lobby platforms may move directly from `joining` to `active`; natural meeting completion may move
+from `active` to `completed`. A failed state always carries one named `failure_code`; other states must
+not. `StatusResponse.metering.terminal` is true exactly for `completed|failed` and false for all
+non-terminal lifecycle states.
 
 Retention is explicit and policy-owned. This schema admits operator-selected bounded windows but
 does not choose defaults. Summary retention cannot outlive transcript retention. A read never extends
@@ -98,9 +114,10 @@ idempotently and finalize/refund exactly once when `terminal=true`:
    acknowledged but have no state or financial effect.
 
 All events in one settlement stream must share subject, operation, capture, meeting and reservation
-identity. `UsageSettlementVector` executes reordered delivery, duplicate, conflict, decreasing-total
-and post-terminal cases. The engine never decides money, plan prices or allowances, and the contract
-never exposes wallet balances to the engine.
+identity by value; JSON object member order is irrelevant. `UsageSettlementVector` executes reordered
+delivery, reordered identity keys, duplicate, conflict, decreasing-total and post-terminal cases. The
+engine never decides money, plan prices or allowances, and the contract never exposes wallet balances
+to the engine.
 
 ## Callback authentication
 

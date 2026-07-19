@@ -24,6 +24,15 @@ const mutationOperations = [
   ajv.compile({ $ref: `${schema.$id}#/$defs/${shape}` })
 ]);
 const CALLBACK_TEST_KEY = "zaki-control-v1-contract-test-key";
+const lifecycleTransitions = {
+  requested: new Set(["joining", "failed"]),
+  joining: new Set(["awaiting_admission", "active", "failed"]),
+  awaiting_admission: new Set(["active", "failed"]),
+  active: new Set(["stopping", "completed", "failed"]),
+  stopping: new Set(["completed", "failed"]),
+  completed: new Set(),
+  failed: new Set()
+};
 
 function meetingUrlMatchesPlatform(platform, rawUrl, configuredJitsiHosts = []) {
   let url;
@@ -64,7 +73,7 @@ function meetingUrlMatchesPlatform(platform, rawUrl, configuredJitsiHosts = []) 
   }
   if (platform === "jitsi") {
     const configuredHosts = new Set(configuredJitsiHosts.map((value) => value.toLowerCase()));
-    const knownHost = host === "meet.jit.si" || configuredHosts.has(host) || host.includes("jitsi") || host.split(".").includes("meet");
+    const knownHost = host === "meet.jit.si" || configuredHosts.has(host);
     const room = url.pathname.replace(/^\/+|\/+$/g, "");
     return knownHost && room.length > 0 && !/[/?#\s]/.test(room);
   }
@@ -111,13 +120,13 @@ function usageSettlementErrors(data) {
       errors.push("usage settlement vectors may contain only minutes.capture.usage events");
       continue;
     }
-    const currentIdentity = JSON.stringify({
+    const currentIdentity = JSON.stringify(sortJson({
       subject: event.data.subject,
       operation_id: event.data.operation_id,
       capture_id: event.data.capture_id,
       meeting_id: event.data.meeting_id,
       reservation_id: event.data.metering.reservation_id
-    });
+    }));
     if (identity === undefined) identity = currentIdentity;
     else if (identity !== currentIdentity) errors.push("usage settlement events must share one subject and metering identity");
 
@@ -211,6 +220,33 @@ function captureRequestErrors(request, configuredJitsiHosts = []) {
   return errors;
 }
 
+function controlRequestBindingErrors(data) {
+  const errors = [];
+  const request = data.request;
+  const tenantId = request.subject.tenant_id;
+  const userId = request.subject.user_id;
+  if (data.token_scope.tenant_id !== tenantId) errors.push("token tenant must match the body subject");
+  if (data.token_scope.user_id !== userId) errors.push("token user must match the body subject");
+  if (data.path_user_id !== userId) errors.push("path user must match the body subject");
+  if (data.headers["X-Zaki-Tenant-Id"] !== tenantId) errors.push("tenant header must match the body subject");
+  if (data.headers["X-Zaki-User-Id"] !== userId) errors.push("user header must match the body subject");
+  if (data.headers["X-Request-Id"] !== request.request_id) errors.push("request header must match the body request ID");
+  if (data.headers["Idempotency-Key"] !== request.idempotency_key) errors.push("idempotency header must match the body key");
+  return errors;
+}
+
+function lifecycleTransitionErrors(data) {
+  const errors = [];
+  for (const sequence of data.sequences) {
+    for (let index = 1; index < sequence.length; index += 1) {
+      const from = sequence[index - 1];
+      const to = sequence[index];
+      if (!lifecycleTransitions[from].has(to)) errors.push(`illegal lifecycle transition ${from} -> ${to}`);
+    }
+  }
+  return errors;
+}
+
 function semanticErrors(shape, data) {
   const errors = [];
   if (shape === "EnsureRequest" && data?.policy?.retention?.summary_days > data?.policy?.retention?.transcript_days) {
@@ -220,6 +256,8 @@ function semanticErrors(shape, data) {
   if (shape === "CaptureRequestValidationVector") {
     errors.push(...captureRequestErrors(data?.request, data?.configured_jitsi_hosts));
   }
+  if (shape === "ControlRequestBindingVector") errors.push(...controlRequestBindingErrors(data));
+  if (shape === "LifecycleTransitionVector") errors.push(...lifecycleTransitionErrors(data));
   if (shape === "CallbackVerificationVector") {
     const signedAt = Number(data?.headers?.["X-Webhook-Timestamp"]);
     if (!Number.isSafeInteger(signedAt) || Math.abs(data.received_at_unix - signedAt) > 300) {

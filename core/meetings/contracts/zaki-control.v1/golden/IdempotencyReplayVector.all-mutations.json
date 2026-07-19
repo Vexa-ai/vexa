@@ -1,0 +1,106 @@
+{
+  "attempts": [
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_capture_1",
+        "idempotency_key": "idem_capture_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "platform": "google_meet",
+        "meeting_url": "https://meet.google.com/abc-defg-hij",
+        "capture_attestation": {
+          "bot_visible": true,
+          "bot_display_name": "ZAKI Notetaker",
+          "policy_version": "minutes-notice-2026-07-19",
+          "attested_at": "2026-07-19T09:55:00Z",
+          "attested_by_user_id": "42"
+        },
+        "metering": {
+          "reservation_id": "reserve_capture_replay",
+          "unit": "bot_minute",
+          "reserved_units": 60
+        }
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_capture_2",
+        "idempotency_key": "idem_capture_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "platform": "google_meet",
+        "meeting_url": "https://meet.google.com/abc-defg-hij",
+        "capture_attestation": {
+          "bot_visible": true,
+          "bot_display_name": "ZAKI Notetaker",
+          "policy_version": "minutes-notice-2026-07-19",
+          "attested_at": "2026-07-19T09:55:00Z",
+          "attested_by_user_id": "42"
+        },
+        "metering": {
+          "reservation_id": "reserve_capture_replay",
+          "unit": "bot_minute",
+          "reserved_units": 60
+        }
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_stop_1",
+        "idempotency_key": "idem_stop_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "capture_id": "capture_replay_1"
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_stop_2",
+        "idempotency_key": "idem_stop_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "capture_id": "capture_replay_1"
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_erase_meeting_1",
+        "idempotency_key": "idem_erase_meeting_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "meeting_id": "meeting_replay_1"
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_erase_meeting_2",
+        "idempotency_key": "idem_erase_meeting_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "meeting_id": "meeting_replay_1"
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_erase_account_1",
+        "idempotency_key": "idem_erase_account_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_erase_account_2",
+        "idempotency_key": "idem_erase_account_replay",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
+      }
+    }
+  ],
+  "expected_outcomes": [
+    "applied", "replayed",
+    "applied", "replayed",
+    "applied", "replayed",
+    "applied", "replayed"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "api_version": "zaki-control.v1",
+  "event_id": "attacker_supplied_event",
+  "code": "auth_failed",
+  "retryable": false
+}

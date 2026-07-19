@@ -163,7 +163,12 @@
           ]
         },
         "retryable": { "type": "boolean" }
-      }
+      },
+      "if": {
+        "properties": { "code": { "const": "auth_failed" } },
+        "required": ["code"]
+      },
+      "then": { "not": { "required": ["event_id"] } }
     },
     "SignatureHeaders": {
       "type": "object",
@@ -207,6 +212,29 @@
         "request": { "$ref": "#/$defs/CaptureRequest" }
       }
     },
+    "ControlRequestHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["X-Request-Id", "Idempotency-Key", "X-Zaki-Tenant-Id", "X-Zaki-User-Id"],
+      "properties": {
+        "X-Request-Id": { "$ref": "#/$defs/Identifier" },
+        "Idempotency-Key": { "$ref": "#/$defs/Identifier" },
+        "X-Zaki-Tenant-Id": { "$ref": "#/$defs/Identifier" },
+        "X-Zaki-User-Id": { "$ref": "#/$defs/UserId" }
+      }
+    },
+    "ControlRequestBindingVector": {
+      "description": "Conformance-only authenticated control-request context; token_scope and path_user_id are not wire-body fields.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token_scope", "path_user_id", "headers", "request"],
+      "properties": {
+        "token_scope": { "$ref": "#/$defs/Subject" },
+        "path_user_id": { "$ref": "#/$defs/UserId" },
+        "headers": { "$ref": "#/$defs/ControlRequestHeaders" },
+        "request": { "$ref": "#/$defs/MutationRequest" }
+      }
+    },
     "UsageSettlementExpected": {
       "type": "object",
       "additionalProperties": false,
@@ -245,20 +273,21 @@
         "expected": { "$ref": "#/$defs/UsageSettlementExpected" }
       }
     },
+    "MutationRequest": {
+      "oneOf": [
+        { "$ref": "#/$defs/EnsureRequest" },
+        { "$ref": "#/$defs/CaptureRequest" },
+        { "$ref": "#/$defs/StopCaptureRequest" },
+        { "$ref": "#/$defs/EraseMeetingRequest" },
+        { "$ref": "#/$defs/EraseAccountRequest" }
+      ]
+    },
     "IdempotencyAttempt": {
       "type": "object",
       "additionalProperties": false,
       "required": ["request"],
       "properties": {
-        "request": {
-          "oneOf": [
-            { "$ref": "#/$defs/EnsureRequest" },
-            { "$ref": "#/$defs/CaptureRequest" },
-            { "$ref": "#/$defs/StopCaptureRequest" },
-            { "$ref": "#/$defs/EraseMeetingRequest" },
-            { "$ref": "#/$defs/EraseAccountRequest" }
-          ]
-        }
+        "request": { "$ref": "#/$defs/MutationRequest" }
       }
     },
     "IdempotencyReplayVector": {
@@ -283,6 +312,25 @@
     },
     "LifecycleState": {
       "enum": ["requested", "joining", "awaiting_admission", "active", "stopping", "completed", "failed"]
+    },
+    "LifecycleTransitionVector": {
+      "description": "Conformance-only lifecycle sequences; not a wire shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequences"],
+      "properties": {
+        "sequences": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 16,
+            "items": { "$ref": "#/$defs/LifecycleState" }
+          }
+        }
+      }
     },
     "FailureCode": {
       "enum": [
