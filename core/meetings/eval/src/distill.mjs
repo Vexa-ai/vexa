@@ -19,6 +19,7 @@
 // clock is the capture ts). Prints a summary (frames kept/dropped, speakers, span) so the
 // distilled fixture is a checkable claim, not a silent slice.
 import fs from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 
 const args = process.argv.slice(2);
 const input = args.find((a) => !a.startsWith('--'));
@@ -44,7 +45,8 @@ const pad = Number(opt('pad', '2000'));
 const speaker = opt('speaker', undefined);
 const out = opt('out', input.replace(/\.jsonl$/, '') + '.distilled.jsonl');
 
-const lines = fs.readFileSync(input, 'utf8').split('\n').filter(Boolean);
+const raw = input.endsWith('.gz') ? gunzipSync(fs.readFileSync(input)).toString('utf8') : fs.readFileSync(input, 'utf8');
+const lines = raw.split('\n').filter(Boolean);
 const header = JSON.parse(lines[0]);
 if (header.type !== 'captured_signal_header') {
   console.error('distill: not a captured-signal.v1 session (bad header)');
@@ -55,7 +57,10 @@ if (header.type !== 'captured_signal_header') {
 // fixture reproduces sound without speakers.
 const records = lines.slice(1).map((l) => JSON.parse(l));
 const isHint = (r) => r.type === 'hint';
-const timeOf = (r) => (isHint(r) ? r.t : r.ts);
+const isBoundary = (r) => r.type === 'boundary';
+const isAudio = (r) => !isHint(r) && !isBoundary(r);
+// Hints carry `t`, cuts carry `tMs`, audio carries `ts` — one clock, three field names.
+const timeOf = (r) => (isHint(r) ? r.t : isBoundary(r) ? r.tMs : r.ts);
 
 const from = (parseT(opt('from', undefined)) ?? -Infinity) - pad;
 const to = (parseT(opt('to', undefined)) ?? Infinity) + pad;
@@ -65,9 +70,9 @@ if (speaker) {
   // gmeet names each frame (glow-bound), so a name filter selects frames directly. The mixed
   // lane carries ONE stream nobody's name is on — there the speaker lives only in the hints, so
   // select the TIME WINDOWS that speaker is hinted over and keep the audio inside them.
-  const named = kept.filter((r) => !isHint(r) && (r.speakerName === speaker || r.hint === speaker));
+  const named = kept.filter((r) => isAudio(r) && (r.speakerName === speaker || r.hint === speaker));
   if (named.length) {
-    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : named.includes(r)));
+    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : isBoundary(r) ? true : named.includes(r)));
   } else {
     const windows = [];
     let open = null;
@@ -83,15 +88,15 @@ if (speaker) {
       process.exit(1);
     }
     const inWin = (t) => windows.some(([a, b]) => t >= a - pad && t <= b + pad);
-    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : inWin(r.ts)));
+    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : inWin(timeOf(r))));
     console.log(`  (mixed lane: "${speaker}" derived from ${windows.length} hint window(s))`);
   }
 }
 // Re-seq the audio frames from 0; hints keep their own clock (they are matched by time, not order).
 let n = 0;
-kept = kept.map((r) => (isHint(r) ? r : { ...r, seq: n++ }));
+kept = kept.map((r) => (isAudio(r) ? { ...r, seq: n++ } : r));
 
-const keptFrames = kept.filter((r) => !isHint(r));
+const keptFrames = kept.filter(isAudio);
 const keptHints = kept.filter(isHint);
 if (keptFrames.length === 0) {
   console.error('distill: window/filter matched ZERO audio frames — nothing written');
@@ -104,11 +109,16 @@ const names = [...new Set(kept.flatMap((r) => (isHint(r) ? [r.name] : [r.speaker
 const t0 = timeOf(kept[0]);
 const t1 = timeOf(kept[kept.length - 1]);
 const span = ((t1 - t0) / 1000).toFixed(1);
-const totalFrames = records.filter((r) => !isHint(r)).length;
+const totalFrames = records.filter(isAudio).length;
 const totalHints = records.filter(isHint).length;
-console.log(`distilled ${keptFrames.length}/${totalFrames} frames + ${keptHints.length}/${totalHints} hints → ${out}`);
+const keptCuts = kept.filter(isBoundary).length;
+const totalCuts = records.filter(isBoundary).length;
+console.log(`distilled ${keptFrames.length}/${totalFrames} frames + ${keptHints.length}/${totalHints} hints + ${keptCuts}/${totalCuts} cuts → ${out}`);
 console.log(`  span ${span}s (${new Date(t0).toISOString()} → ${new Date(t1).toISOString()})`);
 console.log(`  speakers/hints: ${names.join(', ') || '(none)'}   lane=${header.lane ?? '?'} platform=${header.platform}`);
+if (header.lane === 'mixed' && totalCuts > 0 && keptCuts === 0) {
+  console.log('  ⚠ mixed lane with recorded cuts, but NONE in window — the replay will have to invent its chunking');
+}
 if (header.lane === 'mixed' && keptHints.length === 0) {
   console.log('  ⚠ mixed lane with NO hints in window — a replay of this fixture cannot attribute speakers');
 }

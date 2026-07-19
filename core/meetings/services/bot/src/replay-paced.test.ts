@@ -54,8 +54,15 @@ const SPEED = Math.max(1, Number(process.env.SPEED ?? 1));
 // Default budget for the golden at the default mock-STT cost: a REGRESSION guard with headroom
 // (observed p95 856ms), not an aspiration. Set explicitly when changing MOCK_STT_MS or SPEED,
 // since the budget only means anything against the run's own STT cost.
-const DEFAULT_BUDGET_MS = 1500;
-const BUDGET_P95 = Number(process.env.LATENCY_BUDGET_P95_MS ?? DEFAULT_BUDGET_MS);
+// Per-lane REGRESSION guards, each with headroom over what that lane measures today — not
+// targets, and explicitly not equal: the two lanes chunk differently and the gap is a product
+// question (see below), not something a shared budget should paper over.
+//   gmeet: per-speaker streams, 0.1s submit interval        → observed p95 856ms
+//   mixed: chunked on pyannote cuts, which need a PAUSE     → observed p95 2780ms, max 4406ms
+// Both measured at MOCK_STT_MS=250; a different STT cost moves both (~2xSTT, see above).
+const DEFAULT_BUDGET_GMEET_MS = 1500;
+const DEFAULT_BUDGET_MIXED_MS = 6000;
+const BUDGET_OVERRIDE = Number(process.env.LATENCY_BUDGET_P95_MS ?? 0);
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -68,14 +75,15 @@ interface CapFrame { seq: number; ts: number; speakerIndex: number; speakerName?
 
 interface Hint { type: 'hint'; t: number; name: string; isEnd?: boolean }
 
-function loadAll(path: string): { header: any; frames: CapFrame[]; hints: Hint[] } {
+function loadAll(path: string): { header: any; frames: CapFrame[]; hints: Hint[]; cuts: Cut[] } {
   const raw = path.endsWith('.gz') ? gunzipSync(readFileSync(path)).toString('utf8') : readFileSync(path, 'utf8');
   const lines = raw.split('\n').filter(Boolean);
   const recs = lines.slice(1).map((l) => JSON.parse(l));
   return {
     header: JSON.parse(lines[0]),
-    frames: recs.filter((r: any) => r.type !== 'hint') as CapFrame[],
+    frames: recs.filter((r: any) => r.type !== 'hint' && r.type !== 'boundary') as CapFrame[],
     hints: recs.filter((r: any) => r.type === 'hint') as Hint[],
+    cuts: recs.filter((r: any) => r.type === 'boundary') as Cut[],
   };
 }
 function load(path: string): CapFrame[] { return loadAll(path).frames; }
@@ -85,7 +93,9 @@ const framePcm = (f: CapFrame): Float32Array => {
 };
 
 /** The mixed lane's paced run: one stream named from recorded hints, its own real pipeline. */
-async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number)
+interface Cut { type: 'boundary'; tMs: number; kind: string; confidence?: number }
+
+async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number, cuts: Cut[] = [])
   : Promise<{ confirmed: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }>;
               firstDraft: Map<string, number> }> {
   const out: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
@@ -116,9 +126,11 @@ async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number)
   });
 
   const base = frames[0].ts;
+  const useRecordedCuts = cuts.length > 0;
   const timeline = [
-    ...frames.map((f) => ({ t: f.ts + (f.pcm_len / 16000) * 1000, frame: f as CapFrame | undefined, hint: undefined as Hint | undefined })),
-    ...hints.map((h) => ({ t: h.t, frame: undefined, hint: h as Hint | undefined })),
+    ...frames.map((f) => ({ t: f.ts + (f.pcm_len / 16000) * 1000, frame: f as CapFrame | undefined, hint: undefined as Hint | undefined, cut: undefined as Cut | undefined })),
+    ...hints.map((h) => ({ t: h.t, frame: undefined, hint: h as Hint | undefined, cut: undefined as Cut | undefined })),
+    ...cuts.map((c) => ({ t: c.tMs, frame: undefined, hint: undefined, cut: c as Cut | undefined })),
   ].sort((a, b) => a.t - b.t);
 
   let current = '';
@@ -126,9 +138,11 @@ async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number)
   for (const ev of timeline) {
     const behind = (ev.t - base) / SPEED - (Date.now() - t0);
     if (behind > 0) await sleep(behind);
-    if (ev.hint) {
+    if (ev.cut) {
+      emitBoundary({ kind: ev.cut.kind as BoundaryEvent['kind'], tMs: ev.cut.tMs, confidence: ev.cut.confidence ?? 0.9 });
+    } else if (ev.hint) {
       const h = ev.hint;
-      if (!h.isEnd && h.name !== current) {
+      if (!useRecordedCuts && !h.isEnd && h.name !== current) {
         if (current) emitBoundary({ kind: 'speaker→speaker', tMs: h.t, confidence: 0.9 });
         current = h.name;
       }
@@ -161,7 +175,10 @@ async function main(): Promise<void> {
   // MIXED lane (zoom/teams/jitsi): its own pipeline, hints and all — same paced clock.
   if (session.header.lane === 'mixed') {
     const base = frames[0].ts;
-    const { confirmed: out, firstDraft } = await pacedMixed(frames, session.hints, STT_MS);
+    console.log(session.cuts.length
+      ? `  chunking: production's OWN ${session.cuts.length} recorded cuts`
+      : '  chunking: SUBSTITUTE cut source — numbers are an UPPER BOUND, not this lane\'s latency');
+    const { confirmed: out, firstDraft } = await pacedMixed(frames, session.hints, STT_MS, session.cuts);
     const s2 = out.map((c) => ({ ...c, latencyMs: Math.round(c.atMs - (c.startMs - base) / SPEED) }));
     // Time-to-text for THIS lane = turn start → first visible draft.
     const turnStart = new Map<string, number>();
@@ -191,8 +208,19 @@ async function main(): Promise<void> {
     // produced by an unrepresentative double would be exactly the kind of green that proves
     // nothing. A real mixed-lane budget needs a boundary source with production's cut density
     // (recorded pyannote boundaries would do it, and captured-signal.v1 could carry them).
-    console.log('  (mixed budget NOT gated — the injected cut source is sparser than production\'s'
-      + ' pyannote, so these are an upper bound; see the note in this file)');
+    if (session.cuts.length > 0) {
+      // The session carries production's OWN cuts, so the chunking is faithful and the number is
+      // this lane's latency rather than an artifact of a substitute — gate it.
+      const budget = BUDGET_OVERRIDE || DEFAULT_BUDGET_MIXED_MS;
+      check(`mixed: p95 time-to-first-text within budget (${budget}ms)`, dq(0.95) <= budget, `p95=${dq(0.95)}ms`);
+      console.log(`  NOTE: this lane is ~3x slower to first text than gmeet (${dq(0.5)}ms vs ~856ms).`
+        + ' It waits for a pyannote cut, which needs a PAUSE, where gmeet submits per speaker every'
+        + ' 100ms. That gap is a product decision, not a test threshold — the budget here only'
+        + ' guards against getting WORSE.');
+    } else {
+      console.log('  (mixed budget NOT gated — no recorded cuts in this session, so the substitute'
+        + ' cut source makes these an upper bound; re-record with a cut-capturing bot to gate)');
+    }
     if (failed) { console.error(`\n❌ replay-paced (mixed): ${failed} check(s) FAILED.`); process.exit(1); }
     console.log('\n✅ replay-paced (mixed): a recorded Zoom/Teams/Jitsi session replayed at speaking rate yields a real time-to-text profile.');
     return;
@@ -260,11 +288,8 @@ async function main(): Promise<void> {
   check('time-to-text exceeds the STT round-trip it must pay (coherence)',
     lat.length > 0 && p50 >= STT_MS,
     `p50=${p50}ms < mock STT ${STT_MS}ms — the metric is measuring a moving target, not latency`);
-  if (BUDGET_P95 > 0) {
-    check(`p95 time-to-text within budget (${BUDGET_P95}ms)`, p95 <= BUDGET_P95, `p95=${p95}ms`);
-  } else {
-    console.log('  (LATENCY_BUDGET_P95_MS=0 — measuring only, gating nothing)');
-  }
+  const gmeetBudget = BUDGET_OVERRIDE || DEFAULT_BUDGET_GMEET_MS;
+  check(`p95 time-to-text within budget (${gmeetBudget}ms)`, p95 <= gmeetBudget, `p95=${p95}ms`);
 
   if (failed) { console.error(`\n❌ replay-paced: ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ replay-paced: a recorded session replayed at speaking rate yields a real speech→transcript latency profile.');

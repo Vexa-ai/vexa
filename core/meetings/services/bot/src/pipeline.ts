@@ -26,6 +26,8 @@ import {
 } from '@vexa/gmeet-pipeline';
 import {
   ChunkedTranscriber,
+  PyannoteSegmenter,
+  type BoundaryEvent,
   type ChunkSegment,
   type ChunkedTranscriberCallbacks,
   type HintKind,
@@ -188,6 +190,10 @@ function createMixedBotPipeline(
   language?: string,
   onError?: (e: unknown) => void,
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
+  /** O-TEL-1: tee each segmenter CUT into the recorded session. The mixed lane's chunking is
+   *  decided entirely by these, so a session without them cannot be replayed faithfully — an
+   *  offline harness has to substitute its own cut source and then measures the substitute. */
+  onBoundary?: (ev: { kind: string; tMs: number; confidence?: number }) => void,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -216,6 +222,19 @@ function createMixedBotPipeline(
         // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
         // overlapping turn increments `missed` (loudly, on the periodic counter line).
         onHintOutcome: (o) => { if (o.outcome === 'matched') hintCounters.matched++; else hintCounters.missed++; },
+        // Wrap the REAL segmenter (the default when this is absent) so production keeps its own
+        // cut source and the recorder merely observes it.
+        ...(onBoundary ? {
+          makeSegmenter: (sink: (ev: BoundaryEvent) => void) =>
+            PyannoteSegmenter.create({
+              inferIntervalMs: 500,
+              onBoundary: (ev: BoundaryEvent) => {
+                try { onBoundary({ kind: String(ev.kind), tMs: ev.tMs, confidence: ev.confidence }); }
+                catch { /* telemetry must never break the cut path */ }
+                sink(ev);
+              },
+            }),
+        } : {}),
       }).then((t) => { transcriber = t; return t; })
         // #593: DON'T cache a rejected create promise. The mixed lane's create() loads the pyannote
         // model (from_pretrained) — if that rejects (empty HF cache, no egress), leaving `creating`
@@ -267,13 +286,16 @@ export function createBotPipeline(
     /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
      *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
     createMixedTranscriber?: MixedTranscriberFactory;
+    /** O-TEL-1: observe each segmenter cut (the recorder stores them so a mixed session replays
+     *  with production's own chunking instead of a substitute). */
+    onBoundary?: (ev: { kind: string; tMs: number; confidence?: number }) => void;
   } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
   if (isMixedLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
-      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,
+      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onBoundary,
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
