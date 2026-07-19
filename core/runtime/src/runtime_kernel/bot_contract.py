@@ -24,7 +24,7 @@ _RESOURCE_KEYS = {"cpu", "memory", "ephemeral-storage"}
 _POD_VOLUME_NAMES = {"tmp", "dshm"}
 _POD_MOUNTS = {"tmp": "/tmp", "dshm": "/dev/shm"}
 _K8S_QUANTITY = re.compile(
-    r"^(?P<number>[+]?(?:0|[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?P<suffix>Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE])?$"
+    r"^(?P<number>[+]?(?:0|[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(?:(?P<exponent>[eE][+-]?[0-9]+)|(?P<suffix>Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE]))?$"
 )
 _K8S_DNS_LABEL = r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
 _K8S_SECRET_NAME = re.compile(rf"^{_K8S_DNS_LABEL}(?:\.{_K8S_DNS_LABEL})*$")
@@ -238,7 +238,7 @@ def _quantity_value(quantity: str) -> Decimal:
     if matched is None:
         return Decimal("-1")
     try:
-        number = Decimal(matched.group("number"))
+        number = Decimal(matched.group("number") + (matched.group("exponent") or ""))
     except InvalidOperation:
         return Decimal("-1")
     suffix = matched.group("suffix") or ""

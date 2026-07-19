@@ -105,6 +105,8 @@ def test_contract_rejects_a_public_or_mutable_bot_image():
         (("resources", "requests", "cpu"), "bananas"),
         (("resources", "limits", "memory"), "-1Gi"),
         (("resources", "limits", "cpu"), "0"),
+        (("resources", "limits", "cpu"), "1e3Gi"),
+        (("resources", "limits", "memory"), "1E+3Mi"),
         (("volumes", 0, "emptyDir", "sizeLimit"), "nonsense"),
         (("imagePullSecret",), "bad secret!"),
         (("imagePullSecret",), "a..b"),
