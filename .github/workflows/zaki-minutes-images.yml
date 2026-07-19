@@ -36,14 +36,16 @@ jobs:
           echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "tag=sha-$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Free runner disk for the browser worker build
+        # Third-party action pinned to its reviewed commit. Run it before registry login so it
+        # cannot read the packages-write credential Docker stores in the runner configuration.
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Free runner disk for the browser worker build
-        uses: jlumbroso/free-disk-space@v1.3.1
 
       - name: Build and push the deployment image set
         env:
