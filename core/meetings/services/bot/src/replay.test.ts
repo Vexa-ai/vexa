@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipeline';
+import { createLatencyOracle } from './latency.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,7 +83,7 @@ function framePcm(f: CapFrame): Float32Array {
  * transcribe, returning the CONFIRMED segments. No wall-clock pacing — each frame carries its own
  * capture ts, which drives the lane's segmentation, so replaying instantly stays deterministic.
  */
-async function replayThroughPipeline(frames: CapFrame[]): Promise<TranscriptSegment[]> {
+async function replayThroughPipeline(frames: CapFrame[], lag = createLatencyOracle()): Promise<TranscriptSegment[]> {
   const confirmed: TranscriptSegment[] = [];
   // Deterministic mock STT: text keyed off the frame energy so two speakers get distinct lines
   // (the pipeline's job here is segmentation/attribution, not STT quality).
@@ -94,9 +95,20 @@ async function replayThroughPipeline(frames: CapFrame[]): Promise<TranscriptSegm
     transcribe,
     // Fast lane config so a turn confirms within the fixture's own ts timeline (deterministic).
     config: { minAudioDuration: 0.15, submitInterval: 0.1, confirmThreshold: 2, maxBufferDuration: 5, idleTimeoutSec: 2, sampleRate: 16000 },
-    sink: { segment: (s) => { if (s.completed) confirmed.push(s); }, draft: () => { /* */ }, finalize: () => { /* */ } },
+    sink: {
+      segment: (s) => {
+        if (!s.completed) return;
+        confirmed.push(s);
+        // `end` is transcript.v1 absolute seconds; the oracle works in audio-time ms.
+        lag.confirmed(s.speaker ?? '?', Math.round(s.end * 1000));
+      },
+      draft: () => { /* */ }, finalize: () => { /* */ },
+    },
   });
-  for (const f of frames) pipe.feedAudio(f.speakerIndex, f.speakerName, framePcm(f), f.ts);
+  for (const f of frames) {
+    lag.ingested(f.ts + (f.pcm_len / 16000) * 1000);   // audio-time END of this frame
+    pipe.feedAudio(f.speakerIndex, f.speakerName, framePcm(f), f.ts);
+  }
   await pipe.dispose();   // flush every turn → finalize
   // Stable order for the determinism comparison (the lane may flush turns out of feed order).
   return confirmed.slice().sort((a, b) => (a.start - b.start) || (a.speaker_key ?? '').localeCompare(b.speaker_key ?? ''));
@@ -108,7 +120,8 @@ async function main(): Promise<void> {
     session.header.v === 1 && session.frames.length > 0, `frames=${session.frames.length}`);
 
   // ── Replay #1 + #2 — same input MUST yield the same output (determinism). ──
-  const run1 = await replayThroughPipeline(session.frames);
+  const lag = createLatencyOracle();
+  const run1 = await replayThroughPipeline(session.frames, lag);
   const run2 = await replayThroughPipeline(session.frames);
 
   check('replay produced confirmed segments', run1.length > 0, `n=${run1.length}`);
@@ -120,6 +133,16 @@ async function main(): Promise<void> {
     JSON.stringify(segs.map((s) => ({ speaker: s.speaker, speaker_key: s.speaker_key, text: s.text, start: s.start, end: s.end })));
   check('same input ⇒ same output (replay is deterministic)', norm(run1) === norm(run2),
     `\n      run1=${norm(run1)}\n      run2=${norm(run2)}`);
+
+  // ── LATENCY (causality only — see latency.ts) ──────────────────────────────────────────────
+  // This harness feeds every frame in a tight loop, so by the time anything confirms, ALL the
+  // audio is ingested and the "lag" degenerates to (session end − segment end). That number is an
+  // artifact of batch feeding, NOT a latency measurement, so it is deliberately not reported or
+  // gated here; `npm run replay:paced` measures the real thing. What IS meaningful in a batch
+  // replay is the invariant below: nothing may be confirmed before its own audio exists.
+  const lagReport = lag.report();
+  check('no segment is confirmed before its own audio finished (causality)', !lagReport.impossible,
+    JSON.stringify(lagReport.samples.filter((x) => x.lagMs < 0)));
 
   if (!IS_GOLDEN) {
     if (failed) { console.error(`\n❌ replay (O-TEL-2, custom fixture): ${failed} check(s) FAILED.`); process.exit(1); }
