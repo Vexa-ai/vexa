@@ -370,21 +370,29 @@ TERMINAL_WORKLOAD_STATES = frozenset({"destroyed", "failed", "exited", "crashed"
 # unambiguously.
 _PRE_ACTIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
 # Meeting statuses where a bot WAS (or is being) live in the meeting — a `stopping` row is a user-stop
-# in flight (the bot was active before the stop), and `active`/`needs_help` mean the bot reported live.
+# in flight, and `active`/`needs_help` mean the bot reported live. `stopping` belongs here because the
+# stop path writes it ONLY over a status the bot reached the meeting in; a stop against a pre-active
+# bot leaves that stage in place instead (``stop_router``), so this set never has to guess.
 # A runtime-confirmed TERMINAL workload for one of these is real terminal evidence the run is over → the
 # meeting completes (it reached active, so `completed`, not `failed`). See
 # ``synthesize_terminal_for_dead_workload``.
 _WAS_ACTIVE_STATUSES = frozenset({"stopping", "active", "needs_help"})
 
 
-def _pre_active_completion_reason(status: Optional[str]) -> str:
+def _pre_active_completion_reason(status: Optional[str], stop_requested: bool = False) -> str:
     """Attribute a pre-active teardown to the stage the bot died in: a bot whose workload is torn
     down while it sits in the waiting room (``awaiting_admission``) was never admitted →
     ``awaiting_admission_timeout``; any earlier pre-active stage (``requested``/``joining``) died
     before it could join → ``join_failure``. Keyed on ``awaiting_admission`` EXPLICITLY: an
     escalation state like ``needs_help`` is not an admission wait and must never earn the
-    admission-timeout reason. Both values are TRANSIENT (see ``retry.py``), so attribution never
-    changes the retry class."""
+    admission-timeout reason. Both values are TRANSIENT (see ``retry.py``).
+
+    ``stop_requested`` overrides both: the workload died because the USER stopped it, so the run
+    ended for a reason no re-spawn can improve on. ``stopped`` is the sealed user-terminal reason
+    and is PERMANENT, which is what keeps a deliberate cancellation from being re-spawned three
+    times (#807 — the stage still lands in ``failure_stage``, so no attribution is lost)."""
+    if stop_requested:
+        return "stopped"
     return "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure"
 
 
@@ -430,18 +438,23 @@ async def synthesize_terminal_for_dead_workload(
     if not info or not info.get("session_uid"):
         return False
     status = info.get("status")
+    stop_requested = bool(info.get("stop_requested"))
     if status in _PRE_ACTIVE_STATUSES:
         body = {
             "connection_id": info["session_uid"],
             "status": "failed",
             "failure_stage": status,                    # the stage the bot died IN (requested/joining/…)
-            "completion_reason": _pre_active_completion_reason(status),
+            "completion_reason": _pre_active_completion_reason(status, stop_requested),
             "reason": (
-                f"workload {state} while awaiting admission (never admitted)"
+                f"stopped by the user at {status} (never admitted)"
+                if stop_requested
+                else f"workload {state} while awaiting admission (never admitted)"
                 if status == "awaiting_admission"
                 else f"workload {state} before the bot reported (never started)"
             ),
         }
+        if stop_requested:
+            body["data"] = {"stop_requested": True}
     elif status in _WAS_ACTIVE_STATUSES:
         # It reached the meeting and its workload is now runtime-confirmed gone with no terminal callback
         # of its own — complete it (it WAS active). `completion_reason=stopped` when the stop was in

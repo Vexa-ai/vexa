@@ -54,8 +54,11 @@ export function createHttpLifecycleSink(opts: HttpLifecycleSinkOptions): Lifecyc
     callbackUrl,
     internalSecret,
     fetchImpl = globalThis.fetch as unknown as FetchLike,
-    retries = 3,
-    backoffMs = 200,
+    // 5 × 500ms exponential ≈ 7.5s horizon. The old 3×200ms (~0.6s) horizon lost events across
+    // any >1s meeting-api blip; the reaper then attributed a failure to a bot that was seated and
+    // healthy (hosted 07-14→07-17: callback losses were the dominant "joining" failure class).
+    retries = 5,
+    backoffMs = 500,
     sleep = realSleep,
     reachRetries = 6,
     reachBackoffMs = 300,

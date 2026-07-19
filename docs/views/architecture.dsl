@@ -123,6 +123,8 @@ edges:
   admin-api -write-> postgres
   terminal -req-> gateway  # all REST via gateway
   terminal -req-> gateway  # live WS via gateway
+  dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
+  dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime

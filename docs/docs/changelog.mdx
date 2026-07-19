@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.13 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.14 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.13`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.14`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -290,7 +290,11 @@ probe), not inferred from planning docs.
   error. agent-api now renders `strategy: Recreate` under an RWO workspace (the same opt-out redis
   already carries), and keeps RollingUpdate when the workspace is `ReadWriteMany`.
 
-- **Teams bot speaker attribution: segments carry who spoke, not `seg_N` (#498).** The bot now
+- **Teams bot speaker attribution: the hint pipeline now reaches the transcriber (#498 — wiring
+  only; live attribution NOT yet delivered).** ⚠ The v0.12.14 witness pass (2026-07-19) observed a
+  live 2-speaker Teams meeting still publishing every segment as `seg_N` — the hints cross, the
+  name resolution does not complete. #498 remains open; the end-to-end value lands in a later
+  release. What this change DID deliver: the bot now
   bundles the Teams voice-level-outline speaker watcher (`@vexa/teams-capture` — the same module
   the desktop extension runs) into its browser bundle and wires it to the transcriber: hints cross
   the page→Node boundary under Teams' true `dom-outline` kind (previously erased to Zoom's
@@ -308,7 +312,10 @@ probe), not inferred from planning docs.
   secondary channel is never probed). Operators can now tell "broken node" from "broken join" in one
   `kubectl describe`. See [Kubernetes deployment](/deployment-kubernetes) and [Troubleshooting](/troubleshooting).
 
-- **Zoom transcripts now name who spoke (#538).** The Zoom active-speaker watcher
+- **Zoom speaker hints: watcher wired into the capture bundle (#538 — wiring only; live
+  attribution NOT yet delivered).** ⚠ The v0.12.14 witness pass observed live Zoom segments still
+  publishing as `seg_N`; #538 remains open. What this change DID deliver: the Zoom active-speaker
+  watcher
   (`createZoomSpeakers`) is wired into the bot's page-side capture bundle: active-speaker
   transitions cross to the name binder as `dom-active` hints, so Zoom bot segments carry the
   real participant's name instead of `seg_N` placeholders — the same attribution Google Meet
@@ -362,6 +369,46 @@ probe), not inferred from planning docs.
   for Teams too.
 
 - **Governance: four D-book amendments from the v0.12.12 retro (#785).** TAKE verdicts now name the head sha they examined (a later push makes the endorsement historical); one rule governs sealed-contract re-stamps (a back-compatible re-seal may ride a `lane:contract` PR whose merge is the ruling, breaking changes get an issue-recorded ruling first); the closure mechanism gains mechanism-vs-tree verification over open prepared issues (catching deliveries no link sweep sees); and the incoming-report template now requires the deployed version / verified tag. See [Delivery](/governance/delivery).
+
+- **Security floor: adm-zip bumped to 0.6.0 via pnpm override (#773).** Closes Dependabot high
+  GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation in adm-zip <0.6.0), which rode in through
+  onnxruntime-node's install-time unpack under `@vexa/mixed-pipeline`. Exposure was
+  postinstall-only, but the resolution layer now excludes the vulnerable range entirely.
+
+- **`POST /bots` with only a `meeting_url` now derives the meeting id — no more orphan meetings
+  (#792).** A url-only body used to return 201 while persisting `native_meeting_id=''`, creating a
+  meeting (and a live bot) no `DELETE /bots/...` or `GET /transcripts/...` could ever address. The
+  API now honors what api.v1 always promised: the URL is parsed to extract `platform`,
+  `native_meeting_id`, and the passcode (Zoom `?pwd=` / Teams `?p=`); an unrecognizable URL is a
+  typed `422` naming the missing `native_meeting_id`, and a `platform` that disagrees with the URL
+  is a `422` too. Explicit `native_meeting_id` is never overridden. See
+  [Send a bot](/how-to/send-a-bot).
+
+- merge-card: concurrency group scoped per trigger event — near-simultaneous approval + label events no longer cancel each other's runs, leaving a stale red required check on the final mile (#798)
+
+- **meeting-api: shared-meetings list no longer melts the database under load (#800).** The
+  meetings list combined owner, transcript-share, and workspace access in one `OR`, which planned
+  as a backward walk of the whole `created_at` index — 100s+ per call for users with few or old
+  meetings, enough concurrent calls to saturate the connection pool (this rolled back a hosted
+  0.12.12 production cutover). The three access branches now run as an indexed `UNION` (each with
+  its own top-N scan) plus supporting indexes; worst-case calls drop from hundreds of seconds to
+  sub-millisecond with identical results. Deployers: build the three new `meetings` indexes
+  `CONCURRENTLY` before rolling the image on a large live table.
+
+- **helm chart: probe timeouts raised to 5s across app services (#802).** Liveness/readiness/startup
+  probes previously inherited Kubernetes' 1-second default `timeoutSeconds`; on a busy single-event-loop
+  service a healthy pod can hold `/health` past 1s, and the liveness kill turned load into a restart
+  storm (observed in hosted production on meeting-api: pods serving 200s probe-killed every ~10 min).
+  All HTTP-probed app deployments (meeting-api, gateway, admin-api, runtime, agent-api, terminal) now
+  declare `timeoutSeconds: 5`.
+
+- **Bot lifecycle callbacks survive meeting-api blips; completions carry a delivery marker (#806, #807).**
+  The bot's status-callback retry horizon grows from ~0.6s (3×200ms) to ~7.5s (5×500ms exponential) —
+  in hosted production a brief meeting-api disruption made seated, healthy bots unable to report
+  `joining`, and the reaper then failed their meetings; a longer horizon rides out such blips.
+  Separately, every terminal transition now stamps `meeting.data.segments_captured`, so a meeting
+  that "completed" without capturing any transcript is queryable and alertable instead of being
+  indistinguishable from a success.
 
 ## Versioning
 

@@ -148,33 +148,63 @@ def run_models_test(config: dict, env: Optional[dict] = None,
 
 # ── transcription ─────────────────────────────────────────────────────────────────────────────
 
-def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get) -> dict:
+# The OpenAI-compatible transcriptions path every consumer agrees on. Appended only when the
+# configured URL does not already carry it — the one rule shared with the config.v1 probe
+# (deploy/contracts/config.v1/preflight.py:probe_url), the bot's client, and the dictation route.
+_STT_PATH = "/v1/audio/transcriptions"
+
+def _verify_openai_compatible(base: str, token: str, source: str, post: HttpPost) -> dict:
+    """The non-Vexa fallback: verify the token the way the bot's FIRST CHUNK will — POST the
+    transcriptions endpoint with a Bearer header and an empty body. The endpoint's own answer
+    grades it: 401/403 the token is rejected · 404 the URL is not a transcriptions endpoint ·
+    anything else (400 for the empty body, 405, 200) means auth was accepted and a bot will
+    transcribe. "Reachable" was never the question — the operator is asking whether it WORKS."""
+    endpoint = base if base.endswith(_STT_PATH) else base + _STT_PATH
+    try:
+        status, _ = post(endpoint, {}, {"Authorization": f"Bearer {token}"})
+    except Exception as exc:
+        return _result(False, f"Backend unreachable: {exc}", source=source)
+    if status in (401, 403):
+        return _result(False, f"Token REJECTED by {endpoint} (HTTP {status}).", source=source,
+                       status=status)
+    if status == 404:
+        return _result(False, f"No transcriptions endpoint at {endpoint} (HTTP 404) — check the "
+                              "URL shape; some gateways also answer 404 for a rejected key.",
+                       source=source, status=status)
+    return _result(True, f"OK — endpoint verified at {endpoint} (HTTP {status}); the token was "
+                         "accepted by the same request a bot makes.", source=source, status=status)
+
+
+def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get,
+                           post: HttpPost = _post) -> dict:
     """A real authenticated probe of the effective STT backend: GET ``{base}/balance`` with the
-    token. Grades the answers the 2026-07-09 402 saga taught us to distinguish."""
+    token. Grades the answers the 2026-07-09 402 saga taught us to distinguish. A backend with no
+    ``/balance`` is not a Vexa gateway — it is graded by the transcriptions endpoint itself
+    (:func:`_verify_openai_compatible`), because a green that verified nothing is the failure this
+    test exists to prevent."""
     base = (url or "").strip().rstrip("/")
     if not base:
         return _result(False, "No transcription backend configured at any level "
                               "(user, global, or deployment env).", source=source)
     # Bots post to {url}/v1/audio/transcriptions — strip the path for the account probe.
+    probe_base = base
     for suffix in ("/v1/audio/transcriptions", "/v1/audio", "/v1"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
+        if probe_base.endswith(suffix):
+            probe_base = probe_base[: -len(suffix)]
             break
     if not token:
-        return _result(False, f"Backend {base} configured but NO token set ({source}).",
+        return _result(False, f"Backend {probe_base} configured but NO token set ({source}).",
                        source=source)
     try:
-        status, body = get(f"{base}/balance", {"X-API-Key": token})
+        status, body = get(f"{probe_base}/balance", {"X-API-Key": token})
     except Exception as exc:
         return _result(False, f"Backend unreachable: {exc}", source=source)
     if status in (401, 403):
-        return _result(False, f"Token REJECTED by {base} (HTTP {status}).", source=source,
+        return _result(False, f"Token REJECTED by {probe_base} (HTTP {status}).", source=source,
                        status=status)
     if status == 404:
-        # Not a vexa transcription gateway (no /balance) — reachable is all we can attest.
-        return _result(True, f"Backend {base} reachable; no /balance endpoint, so the token "
-                             "was not verified (non-Vexa gateway?).", source=source,
-                       status=status, unverified=True)
+        # Not a Vexa transcription gateway (no /balance) — verify against the endpoint bots use.
+        return _verify_openai_compatible(base, token, source, post)
     if status != 200:
         return _result(False, f"Backend answered HTTP {status}.", source=source, status=status)
     try:

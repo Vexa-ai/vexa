@@ -145,7 +145,11 @@ class SqlAlchemyMeetingRepo:
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         """The meeting + latest session for a workload id — used by the runtime callback (CC5) to drive a
         synthetic ``failed`` for a workload that died before the bot reported. ``{meeting_id, status,
-        session_uid}`` or ``None``."""
+        session_uid, stop_requested}`` or ``None``.
+
+        ``stop_requested`` carries the user's intent so the synthetic terminal can tell a bot the USER
+        abandoned from one that timed out on its own — the two earn different completion reasons, and
+        only the latter may be retried."""
         from sqlalchemy import select
 
         from ..sessions.models import Meeting, MeetingSession
@@ -153,12 +157,14 @@ class SqlAlchemyMeetingRepo:
         async with self._session_factory() as db:
             row = (
                 await db.execute(
-                    select(Meeting.id, Meeting.status).where(Meeting.bot_container_id == bot_container_id)
+                    select(Meeting.id, Meeting.status, Meeting.data).where(
+                        Meeting.bot_container_id == bot_container_id
+                    )
                 )
             ).first()
             if row is None:
                 return None
-            mid, status = row
+            mid, status, data = row
             sid = (
                 await db.execute(
                     select(MeetingSession.session_uid)
@@ -166,7 +172,12 @@ class SqlAlchemyMeetingRepo:
                     .order_by(MeetingSession.id.desc())
                 )
             ).scalars().first()
-            return {"meeting_id": mid, "status": status, "session_uid": sid}
+            return {
+                "meeting_id": mid,
+                "status": status,
+                "session_uid": sid,
+                "stop_requested": bool((data or {}).get("stop_requested")),
+            }
 
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
@@ -197,6 +208,20 @@ class SqlAlchemyMeetingRepo:
                 merged["failure_stage"] = failure_stage
             for k, v in (data or {}).items():
                 merged[k] = v
+            if status in ("completed", "failed"):
+                # Delivery marker (#807): `completed` alone means "the bot exited cleanly" — it says
+                # nothing about whether a transcript exists. Persisting the segment count at the
+                # terminal transition makes completed-but-empty meetings (roughly half of hosted
+                # completions) queryable and alertable instead of indistinguishable from successes.
+                from sqlalchemy import func as _func
+
+                from ..sessions.models import Transcription
+
+                merged["segments_captured"] = (
+                    await db.execute(
+                        select(_func.count()).select_from(Transcription).where(Transcription.meeting_id == m.id)
+                    )
+                ).scalar() or 0
             m.data = merged
             flag_modified(m, "data")
             # Naive UTC into the naive time columns (tz-aware → asyncpg DataError, per set_bot_container).
