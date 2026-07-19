@@ -2,57 +2,172 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/schemas/captured-signal.v1",
   "title": "captured-signal.v1",
-  "description": "The VERBATIM raw capture signal teed at the bot's capture bridge BEFORE the pipeline — the exact stream a live bug rides on, stored so it replays through the same pipeline OFFLINE (O-TEL-2). One session = a SessionHeader followed by N records (JSONL-on-disk); a record is a CapturedFrame (audio) or a HintEvent (a `type`-tagged out-of-band speaker hint). Each frame mirrors the @vexa/capture-codec binary frame shape: pcm is base64 of the Float32 PCM bytes (little-endian), so a frame round-trips through the codec encode→decode→same.",
+  "description": "The VERBATIM raw capture signal teed at the bot's capture bridge BEFORE the pipeline — the exact stream a live bug rides on, stored so it replays through the same pipeline OFFLINE (O-TEL-2). One session = a SessionHeader followed by N records (JSONL-on-disk); a record is a CapturedFrame (audio), a HintEvent (a `type`-tagged out-of-band speaker hint), or a BoundaryEvent (a `type`-tagged segmenter cut). Each frame mirrors the @vexa/capture-codec binary frame shape: pcm is base64 of the Float32 PCM bytes (little-endian), so a frame round-trips through the codec encode→decode→same.",
   "$defs": {
     "Lane": {
       "description": "Which pipeline lane the frame feeds — gmeet (per-channel, glow-named) or mixed (one stream, named from hints).",
-      "enum": ["gmeet", "mixed"]
+      "enum": [
+        "gmeet",
+        "mixed"
+      ]
     },
     "HintEvent": {
       "description": "One OUT-OF-BAND speaker hint as it crossed the capture bridge. The mixed lane (zoom/teams/jitsi) carries a single audio stream and names it from active-speaker hints that arrive on their OWN channel, independent of the audio frames — so a session that stored only CapturedFrames could never reproduce attribution offline. gmeet binds its glow name onto the frame itself and emits no HintEvent. `t` shares the audio frames' epoch-ms clock (the bridge's clock contract), which is what lets a replay re-window the hints against the same audio.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "t", "name"],
+      "required": [
+        "type",
+        "t",
+        "name"
+      ],
       "properties": {
-        "type": { "const": "hint" },
-        "t": { "type": "number", "description": "hint epoch ms — the SAME clock domain as CapturedFrame.ts" },
-        "name": { "type": "string", "description": "the speaker the platform reports as active" },
-        "isEnd": { "type": "boolean", "description": "true when the hint marks the END of that speaker's turn" },
-        "lane": { "$ref": "#/$defs/Lane" }
+        "type": {
+          "const": "hint"
+        },
+        "t": {
+          "type": "number",
+          "description": "hint epoch ms — the SAME clock domain as CapturedFrame.ts"
+        },
+        "name": {
+          "type": "string",
+          "description": "the speaker the platform reports as active"
+        },
+        "isEnd": {
+          "type": "boolean",
+          "description": "true when the hint marks the END of that speaker's turn"
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane"
+        }
       }
     },
     "CapturedFrame": {
       "description": "One raw capture frame as it crossed the capture-bridge tap. ts is CAPTURE epoch ms (never restamped). speakerIndex is the channel id (999 = mixed, 1000 = the local mic). pcm carries the Float32 PCM bytes base64-encoded; pcm_len is the sample count.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["seq", "ts", "speakerIndex", "pcm", "pcm_len", "lane"],
+      "required": [
+        "seq",
+        "ts",
+        "speakerIndex",
+        "pcm",
+        "pcm_len",
+        "lane"
+      ],
       "properties": {
-        "seq": { "type": "integer", "minimum": 0, "description": "monotone per-session frame ordinal" },
-        "ts": { "type": "number", "description": "CAPTURE epoch ms — carried from the frame, never restamped" },
-        "speakerIndex": { "type": "integer", "description": "CHANNEL id (raw track; 999 = mixed, 1000 = local mic)" },
-        "speakerName": { "type": "string", "description": "glow name bound AT CAPTURE (gmeet), when known" },
-        "hint": { "type": "string", "description": "mixed-lane active-speaker hint name, when present" },
-        "pcm": { "type": "string", "contentEncoding": "base64", "description": "base64 of the Float32 PCM bytes (little-endian) — the codec wire payload" },
-        "pcm_len": { "type": "integer", "minimum": 0, "description": "PCM sample count (Float32 elements)" },
-        "rms": { "type": "number", "minimum": 0, "description": "root-mean-square level of the PCM" },
-        "lane": { "$ref": "#/$defs/Lane" }
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "monotone per-session frame ordinal"
+        },
+        "ts": {
+          "type": "number",
+          "description": "CAPTURE epoch ms — carried from the frame, never restamped"
+        },
+        "speakerIndex": {
+          "type": "integer",
+          "description": "CHANNEL id (raw track; 999 = mixed, 1000 = local mic)"
+        },
+        "speakerName": {
+          "type": "string",
+          "description": "glow name bound AT CAPTURE (gmeet), when known"
+        },
+        "hint": {
+          "type": "string",
+          "description": "mixed-lane active-speaker hint name, when present"
+        },
+        "pcm": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "base64 of the Float32 PCM bytes (little-endian) — the codec wire payload"
+        },
+        "pcm_len": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "PCM sample count (Float32 elements)"
+        },
+        "rms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "root-mean-square level of the PCM"
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane"
+        }
       }
     },
     "SessionHeader": {
       "description": "Opens a captured-signal.v1 session — the topology needed to replay it through the right lane. Mirrors the legacy tape header (platform/native/language/startedAt) plus the contract version + sampleRate.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "v", "platform", "native_meeting_id", "started_at"],
+      "required": [
+        "type",
+        "v",
+        "platform",
+        "native_meeting_id",
+        "started_at"
+      ],
       "properties": {
-        "type": { "const": "captured_signal_header" },
-        "v": { "const": 1 },
-        "platform": { "type": "string", "description": "google_meet | zoom | teams | youtube | …" },
-        "native_meeting_id": { "type": "string" },
-        "trace_id": { "type": "string", "description": "the distributed trace_id (logevent.v1) of the meeting session this signal was captured under — links the raw signal back to every structured log across gateway→meeting-api→runtime→bot for the same meeting, so a replay-and-fix starts from the exact trace the bug rode on" },
-        "language": { "type": ["string", "null"] },
-        "lane": { "$ref": "#/$defs/Lane" },
-        "sample_rate": { "type": "integer", "description": "PCM sample rate (Hz), default 16000" },
-        "started_at": { "type": "string", "format": "date-time" }
+        "type": {
+          "const": "captured_signal_header"
+        },
+        "v": {
+          "const": 1
+        },
+        "platform": {
+          "type": "string",
+          "description": "google_meet | zoom | teams | youtube | …"
+        },
+        "native_meeting_id": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string",
+          "description": "the distributed trace_id (logevent.v1) of the meeting session this signal was captured under — links the raw signal back to every structured log across gateway→meeting-api→runtime→bot for the same meeting, so a replay-and-fix starts from the exact trace the bug rode on"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "description": "PCM sample rate (Hz), default 16000"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "BoundaryEvent": {
+      "description": "One CUT the segmenter emitted — production's PyannoteSegmenter deciding that speech started, stopped, or changed speaker. The mixed lane's chunking is driven ENTIRELY by these, so a session that stores only audio and hints cannot reproduce its chunking offline: a replay must either download the model or substitute a cut source that fires differently, and a latency or attribution number measured against a substitute is a number about the substitute. Recording the real cuts makes a mixed-lane replay faithful without the model. `tMs` shares the audio frames' epoch-ms clock.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "tMs",
+        "kind"
+      ],
+      "properties": {
+        "type": {
+          "const": "boundary"
+        },
+        "tMs": {
+          "type": "number",
+          "description": "cut epoch ms — the SAME clock domain as CapturedFrame.ts"
+        },
+        "kind": {
+          "type": "string",
+          "description": "the segmenter's own verdict (silence→speaker · speaker→silence · speaker→speaker)"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "the segmenter's confidence in the cut, when it reports one"
+        }
       }
     }
   }
