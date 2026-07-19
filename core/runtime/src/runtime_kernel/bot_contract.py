@@ -25,7 +25,8 @@ _POD_MOUNTS = {"tmp": "/tmp", "dshm": "/dev/shm"}
 _K8S_QUANTITY = re.compile(
     r"^(?:0|[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(?:[eE][+-]?[0-9]+|(?:Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE]))?$"
 )
-_K8S_SECRET_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+_K8S_DNS_LABEL = r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
+_K8S_SECRET_NAME = re.compile(rf"^{_K8S_DNS_LABEL}(?:\.{_K8S_DNS_LABEL})*$")
 
 
 class BotPodContractError(ValueError):

@@ -106,6 +106,9 @@ def test_contract_rejects_a_public_or_mutable_bot_image():
         (("resources", "limits", "memory"), "-1Gi"),
         (("volumes", 0, "emptyDir", "sizeLimit"), "nonsense"),
         (("imagePullSecret",), "bad secret!"),
+        (("imagePullSecret",), "a..b"),
+        (("imagePullSecret",), "a.-b"),
+        (("imagePullSecret",), "a" * 64 + ".b"),
     ],
 )
 def test_contract_rejects_values_kubernetes_would_refuse(path, value):
