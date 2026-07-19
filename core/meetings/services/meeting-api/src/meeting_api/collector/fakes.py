@@ -172,7 +172,8 @@ class InMemoryTranscriptStore:
         )
         return await self._transcript_doc(mid) if authorized else None
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
         from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
 
@@ -184,7 +185,10 @@ class InMemoryTranscriptStore:
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)
-            and (status is None or m["status"] == status)
+            and (status is None or (m["status"] in status
+                                    if isinstance(status, (list, tuple, set, frozenset))
+                                    else m["status"] == status))
+            and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
         ]
         # newest first (by created_at desc, then id desc as a stable tiebreak)
@@ -215,8 +219,9 @@ class InMemoryTranscriptStore:
                 "shared": m["user_id"] != user_id,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
-                # #584: LIST drops heavy detail keys, keeps light metadata; internal callers get full data.
-                "data": project_list_data(m["data"]) if list_view else m["data"],
+                # #584 list_view / #803 slim: both drop the heavy detail keys and keep the light
+                # metadata. Only a caller that genuinely renders full `data` leaves both off.
+                "data": project_list_data(m["data"]) if (list_view or slim) else m["data"],
             }
             return row
 
