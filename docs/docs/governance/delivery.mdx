@@ -404,8 +404,11 @@ make-illegal-states-unrepresentable (Wlaschin). · *Gate:* a label bot enforces 
 `ready` is the maintainer stamp. **[TO BUILD: label bot]**
 
 **D14b — A claim is a heartbeat lease, not ownership.** Anyone claims a `ready` item — no
-permission needed. A checkout is a **4-hour lease**; a **heartbeat** (a short "here's what's going
-on" update) renews it for another 4 hours. No heartbeat → the lease expires and the item returns
+permission needed. A checkout is a **4-hour lease** on a *worktree of your own*, created before
+your first edit — never `main`, never another session's checkout; building on someone else's
+branch means branching from the ref into a fresh worktree, not editing their tree (the actor
+contract's worktree rule, AGENTS.md). A **heartbeat** (a short "here's what's going
+on" update) renews the lease for another 4 hours. No heartbeat → the lease expires and the item returns
 to `ready`, claimable by anyone; the prior holder may reclaim with a fresh heartbeat. Work is
 never hoarded and flow never stalls on an absent contributor — and the heartbeats become the front
 of the PR's observation bundle, the loop's narration written as it happens. · *Source:* TTL leases
