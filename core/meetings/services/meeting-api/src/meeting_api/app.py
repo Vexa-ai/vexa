@@ -224,6 +224,17 @@ def create_app(
 # ── lifecycle mount (the receiver's callback route, on the shared app) ───────────────────────────
 
 
+def _webhook_target_host(url: str) -> str:
+    """Host of a webhook URL, for the delivery log. Never the full URL: a subscriber's endpoint can
+    carry a token in its path or query, and an operator reading delivery outcomes does not need it."""
+    from urllib.parse import urlsplit
+
+    try:
+        return urlsplit(url).hostname or "?"
+    except Exception:  # noqa: BLE001 — a log field must never break delivery
+        return "?"
+
+
 def _mount_lifecycle(
     app: FastAPI,
     sink: LifecycleSink,
@@ -428,10 +439,31 @@ def _mount_lifecycle(
                     if env is None:
                         continue
                     try:
-                        await webhook_sink.deliver(
+                        result = await webhook_sink.deliver(
                             url, env, data.get("webhook_secret"),
                             events_config=data.get("webhook_events"),
                             label=f"meeting:{meeting_row.get('id')}",
+                        )
+                        # EVERY outcome is reported (#815). `deliver` never raises — it returns
+                        # delivered | suppressed | blocked | failed | queued — and the outcome used
+                        # to be discarded, so a webhook the subscriber never received (unsubscribed
+                        # event type, SSRF-blocked target, 4xx endpoint) was indistinguishable from
+                        # one that arrived: "my webhooks stopped" was undiagnosable in production.
+                        # The target is reported as host only — a webhook URL can carry a secret in
+                        # its path or query, and logs are not a place to put one.
+                        log_event(
+                            "webhook_delivery",
+                            audience="system",
+                            level="info" if result.status == "delivered" else "warning",
+                            span="lifecycle.callback",
+                            meeting_id=meeting_row.get("id"),
+                            fields={
+                                "outcome": result.status,
+                                "event_type": env.get("event_type"),
+                                "target_host": _webhook_target_host(url),
+                                "status_code": result.status_code,
+                                "error": result.error,
+                            },
                         )
                     except Exception as e:  # noqa: BLE001 — delivery is best-effort
                         log_event("webhook_deliver_failed", audience="system", level="warning",
