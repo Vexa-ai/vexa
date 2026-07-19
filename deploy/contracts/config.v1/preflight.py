@@ -149,24 +149,85 @@ def probe_url(base: str, path: str) -> str:
     return base if base.endswith(path) else base + path
 
 
+#: A ~1s 16 kHz mono WAV of a quiet tone — the smallest body that is unambiguously *audio*, so a
+#: metered backend must price it and answer 200 or 402 rather than rejecting it unparsed.
+_PROBE_WAV_SECONDS = 1
+_PROBE_WAV_RATE = 16000
+
+
+def _probe_wav() -> bytes:
+    """Build the probe's WAV in memory (stdlib only — this file is vendored into every service and
+    takes no dependencies)."""
+    import math
+    import struct
+
+    frames = b"".join(
+        struct.pack("<h", int(6000 * math.sin(i * 0.06)))
+        for i in range(_PROBE_WAV_RATE * _PROBE_WAV_SECONDS)
+    )
+    data_len = len(frames)
+    byte_rate = _PROBE_WAV_RATE * 2
+    return (
+        b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, _PROBE_WAV_RATE, byte_rate, 2, 16)
+        + b"data" + struct.pack("<I", data_len) + frames
+    )
+
+
+def audio_probe_body(model: str = "whisper-1") -> tuple:
+    """The audio round-trip's (content_type, body) — the ONE definition of "ask the STT backend the
+    real question", shared with the terminal's Test button (``core/agent/control_plane/config_test``)
+    exactly as ``probe_url`` shares the URL rule. Both must ask identically, or the wizard greens
+    what the boot refuses."""
+    return _multipart({"model": model, "response_format": "json"}, "probe.wav", _probe_wav())
+
+
+def _multipart(fields: Mapping[str, str], filename: str, payload: bytes) -> tuple:
+    """Encode one file + simple fields as multipart/form-data (urllib has no encoder, and this file
+    takes no dependencies). Returns (content_type, body)."""
+    boundary = "----ConfigV1Probe0dcb1f7a"
+    out = bytearray()
+    for k, v in fields.items():
+        out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+    out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{filename}\"\r\nContent-Type: audio/wav\r\n\r\n").encode()
+    out += payload + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
+    return f"multipart/form-data; boundary={boundary}", bytes(out)
+
+
 def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     """One authenticated request against the configured endpoint.
 
     The oracle, in order: network failure ⇒ ``unreachable`` · declared ``unauthorized_statuses``
-    (401/403) ⇒ ``unauthorized``, the token was rejected · declared ``invalid_statuses`` (404 for an
-    OpenAI-compatible transcriptions path) ⇒ ``invalid_endpoint``, the URL shape is wrong — a real
-    transcriptions endpoint answers 400/401 to an empty body, never 404, so 404 proves we are not
-    talking to one. Any OTHER status (400/405/…) proves reachability + accepted auth ⇒ ok.
+    (401/403) ⇒ ``unauthorized``, the token was rejected · declared ``exhausted_statuses`` (402) ⇒
+    ``exhausted``, the token is authentic but cannot buy the work · declared ``invalid_statuses``
+    (404 for an OpenAI-compatible transcriptions path) ⇒ ``invalid_endpoint``, the URL shape is
+    wrong. Any OTHER status proves reachability + accepted auth ⇒ ok.
 
-    A failure carries ``kind`` because the two classes are NOT interchangeable to a consumer:
-    ``unauthorized``/``invalid_endpoint`` are CONFIGURATION faults, true until an operator edits a
-    value, so a request path may refuse on them; ``unreachable`` is a LIVENESS fault that a restart
-    or a DNS blip produces, so refusing on it would couple this service's availability to the
-    endpoint's. Both demote the /health row identically — only actors that REFUSE need the
-    distinction."""
+    ``payload: "audio"`` makes the probe send the REAL thing — a ~1s WAV, the same request shape a
+    bot's first chunk makes — because an empty body cannot answer the question. A metered backend
+    answers an empty POST 400/422 whether the credential is funded or worthless, so the probe that
+    never sends audio greens a token that will 402 on every segment of every meeting. Sending audio
+    also makes the verdict independent of WHO the token belongs to: a billing-exempt account and a
+    funded one both answer 200, and neither has to be named anywhere. It costs a fraction of a
+    minute, so declare a long ``ttl_s`` — usability changes when an operator acts, not by the second.
+
+    A failure carries ``kind`` because the classes are NOT interchangeable to a consumer:
+    ``unauthorized``/``invalid_endpoint``/``exhausted`` are CONFIGURATION faults, true until an
+    operator edits a value or tops up, so a request path may refuse on them; ``unreachable`` is a
+    LIVENESS fault that a restart or a DNS blip produces, so refusing on it would couple this
+    service's availability to the endpoint's. All demote the /health row identically — only actors
+    that REFUSE need the distinction."""
     base = (env.get(spec["url_key"]) or "").strip().rstrip("/")
     url = probe_url(base, spec.get("path") or "")
-    req = urllib.request.Request(url, data=b"", method=(spec.get("method") or "POST"))
+    body = b""
+    content_type = None
+    if (spec.get("payload") or "") == "audio":
+        content_type, body = audio_probe_body(spec.get("payload_model") or "whisper-1")
+    req = urllib.request.Request(url, data=body, method=(spec.get("method") or "POST"))
+    if content_type:
+        req.add_header("Content-Type", content_type)
     token = (env.get(spec["auth_key"]) or "").strip() if spec.get("auth_key") else ""
     if token:
         req.add_header("Authorization", f"Bearer {token}")
@@ -181,6 +242,11 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     if status in (spec.get("unauthorized_statuses") or [401, 403]):
         return {"ok": False, "status": status, "kind": "unauthorized",
                 "reason": "unauthorized — the configured token was REJECTED by the endpoint"}
+    if status in (spec.get("exhausted_statuses") or []):
+        return {"ok": False, "status": status, "kind": "exhausted",
+                "reason": f"the token is VALID but cannot pay for the work (HTTP {status}) — every "
+                          f"transcription will fail and meetings will complete with no transcript; "
+                          f"top up the account or configure a token that can transcribe"}
     if status in (spec.get("invalid_statuses") or []):
         return {"ok": False, "status": status, "kind": "invalid_endpoint",
                 "reason": f"endpoint path not found ({url}) — check the URL shape; some gateways "
@@ -190,7 +256,7 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
 
 #: Probe-failure kinds that mean the CONFIGURATION is wrong (true until an operator changes a
 #: value), as opposed to the endpoint merely being down. A request path may refuse on these.
-CONFIG_FAULT_KINDS = frozenset({"unauthorized", "invalid_endpoint"})
+CONFIG_FAULT_KINDS = frozenset({"unauthorized", "invalid_endpoint", "exhausted"})
 
 
 def _file_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
