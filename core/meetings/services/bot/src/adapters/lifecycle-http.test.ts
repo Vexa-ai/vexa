@@ -94,6 +94,20 @@ async function main(): Promise<void> {
     check('permanent-5xx: bounded to `retries` attempts', calls.length === 2, String(calls.length));
   }
 
+  // ── default horizon: 5 attempts × 500ms exponential base (≈7.5s) — a >1s meeting-api blip
+  //    must not lose the event (hosted 07-14→07-17: the old ~0.6s horizon dropped callbacks and
+  //    the reaper failed seated bots) ──
+  {
+    const calls: Recorded[] = [];
+    const sleeps: number[] = [];
+    const fetchImpl: FetchLike = async (url, init) => { calls.push({ url, ...init }); return { ok: false, status: 503 }; };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, sleep: async (ms) => { sleeps.push(ms); } });
+    await sink.emit(EVENT);
+    check('default horizon: 5 attempts', calls.length === 5, String(calls.length));
+    check('default horizon: exponential from 500ms (500,1000,2000,4000)',
+      JSON.stringify(sleeps) === JSON.stringify([500, 1000, 2000, 4000]), JSON.stringify(sleeps));
+  }
+
   // ── #530 reachability gate: emitReachable reports channel reachability of the first emit ──
   const JOINING: LifecycleEvent = { connection_id: 'sess-uid', status: 'joining' };
 

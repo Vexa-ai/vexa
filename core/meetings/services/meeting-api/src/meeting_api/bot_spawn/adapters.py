@@ -197,6 +197,20 @@ class SqlAlchemyMeetingRepo:
                 merged["failure_stage"] = failure_stage
             for k, v in (data or {}).items():
                 merged[k] = v
+            if status in ("completed", "failed"):
+                # Delivery marker (#807): `completed` alone means "the bot exited cleanly" — it says
+                # nothing about whether a transcript exists. Persisting the segment count at the
+                # terminal transition makes completed-but-empty meetings (roughly half of hosted
+                # completions) queryable and alertable instead of indistinguishable from successes.
+                from sqlalchemy import func as _func
+
+                from ..sessions.models import Transcription
+
+                merged["segments_captured"] = (
+                    await db.execute(
+                        select(_func.count()).select_from(Transcription).where(Transcription.meeting_id == m.id)
+                    )
+                ).scalar() or 0
             m.data = merged
             flag_modified(m, "data")
             # Naive UTC into the naive time columns (tz-aware → asyncpg DataError, per set_bot_container).
