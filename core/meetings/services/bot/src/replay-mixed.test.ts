@@ -40,7 +40,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface Frame { seq: number; ts: number; pcm: string; pcm_len: number; lane: string; }
 interface Hint { type: 'hint'; t: number; name: string; isEnd?: boolean; }
 
-function load(path: string): { header: any; frames: Frame[]; hints: Hint[] } {
+function load(path: string): { header: any; frames: Frame[]; hints: Hint[]; cuts: Cut[] } {
   // Sessions are PCM-heavy; the committed fixture is stored gzipped (27 KB vs 1.2 MB).
   const raw = path.endsWith('.gz') ? gunzipSync(readFileSync(path)).toString('utf8') : readFileSync(path, 'utf8');
   const lines = raw.split('\n').filter(Boolean);
@@ -49,8 +49,9 @@ function load(path: string): { header: any; frames: Frame[]; hints: Hint[] } {
   const recs = lines.slice(1).map((l) => JSON.parse(l));
   return {
     header,
-    frames: recs.filter((r) => r.type !== 'hint') as Frame[],
-    hints: recs.filter((r) => r.type === 'hint') as Hint[],
+    frames: recs.filter((r: any) => r.type !== 'hint' && r.type !== 'boundary') as Frame[],
+    hints: recs.filter((r: any) => r.type === 'hint') as Hint[],
+    cuts: recs.filter((r: any) => r.type === 'boundary') as Cut[],
   };
 }
 
@@ -61,7 +62,7 @@ const framePcm = (f: Frame): Float32Array => {
 
 /** Replay one recorded mixed session: audio + hints in their recorded ORDER and clock, cutting a
  *  turn wherever the recording says the active speaker changed. Returns [speaker, text] pairs. */
-async function replay(frames: Frame[], hints: Hint[]): Promise<Array<[string, string]>> {
+async function replay(frames: Frame[], hints: Hint[], cuts: Cut[] = []): Promise<Array<[string, string]>> {
   const published: Array<[string, string]> = [];
   let emitBoundary!: (ev: BoundaryEvent) => void;
 
@@ -88,12 +89,17 @@ async function replay(frames: Frame[], hints: Hint[]): Promise<Array<[string, st
     log: () => { /* quiet */ },
   });
 
-  // Interleave audio and hints on ONE timeline, exactly as recorded.
-  type Ev = { t: number; frame?: Frame; hint?: Hint };
+  // Interleave audio, hints and cuts on ONE timeline, exactly as recorded.
+  type Ev = { t: number; frame?: Frame; hint?: Hint; cut?: Cut };
   const timeline: Ev[] = [
     ...frames.map((f) => ({ t: f.ts, frame: f })),
     ...hints.map((h) => ({ t: h.t, hint: h })),
+    ...cuts.map((c) => ({ t: c.tMs, cut: c })),
   ].sort((a, b) => a.t - b.t);
+  // A session recorded with production's own cuts replays with THOSE; only a session that
+  // predates cut-recording falls back to the substitute below (speaker-change only), which
+  // chunks differently from production and must not be mistaken for it.
+  const useRecordedCuts = cuts.length > 0;
 
   // ONE clock for audio, hints and cuts — the capture bridge's contract is that hint tMs and
   // audio tsMs share the epoch-ms domain (capture-bridge.ts: HINT_MAX_SKEW_MS guards exactly
@@ -102,10 +108,12 @@ async function replay(frames: Frame[], hints: Hint[]): Promise<Array<[string, st
   let current = '';
   emitBoundary({ kind: 'silence→speaker', tMs: timeline[0].t, confidence: 0.9 });
   for (const ev of timeline) {
-    if (ev.hint) {
+    if (ev.cut) {
+      emitBoundary({ kind: ev.cut.kind as BoundaryEvent['kind'], tMs: ev.cut.tMs, confidence: ev.cut.confidence ?? 0.9 });
+    } else if (ev.hint) {
       const h = ev.hint;
-      // A change of active speaker is a turn boundary — the recording's own cut signal.
-      if (!h.isEnd && h.name !== current) {
+      // Substitute cut source: only when the session carries no recorded ones.
+      if (!useRecordedCuts && !h.isEnd && h.name !== current) {
         if (current) emitBoundary({ kind: 'speaker→speaker', tMs: h.t, confidence: 0.9 });
         current = h.name;
       }
@@ -121,15 +129,18 @@ async function replay(frames: Frame[], hints: Hint[]): Promise<Array<[string, st
 }
 
 async function main(): Promise<void> {
-  const { header, frames, hints } = load(FIXTURE);
-  console.log(`  fixture: ${frames.length} frames + ${hints.length} hints (${header.platform}/${header.lane})`);
+  const { header, frames, hints, cuts } = load(FIXTURE);
+  console.log(`  fixture: ${frames.length} frames + ${hints.length} hints + ${cuts.length} recorded cuts (${header.platform}/${header.lane})`);
+  console.log(cuts.length
+    ? '  chunking: production\'s OWN recorded cuts'
+    : '  chunking: SUBSTITUTE cut source (speaker-change only) — this session predates cut recording');
 
   check('fixture is a MIXED-lane captured-signal.v1 session', header.lane === 'mixed', header.lane);
   check('the session carries the out-of-band hints attribution needs', hints.length > 0,
     'no hint records — a mixed session without hints can only ever replay as anonymous audio');
 
-  const run1 = await replay(frames, hints);
-  const run2 = await replay(frames, hints);
+  const run1 = await replay(frames, hints, cuts);
+  const run2 = await replay(frames, hints, cuts);
 
   const norm = (r: Array<[string, string]>) => JSON.stringify(r);
   check('replay produced attributed segments', run1.length > 0, `n=${run1.length}`);

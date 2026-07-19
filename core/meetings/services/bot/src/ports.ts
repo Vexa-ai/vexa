@@ -139,6 +139,17 @@ export interface HintEvent {
   lane?: 'gmeet' | 'mixed';
 }
 
+/** One captured-signal.v1 segmenter CUT. The mixed lane's chunking is driven entirely by these,
+ *  so a recorded session needs them to replay faithfully — otherwise an offline harness must
+ *  substitute a cut source that fires differently, and every latency or attribution number it
+ *  produces describes the substitute rather than the pipeline. `tMs` shares the frames' clock. */
+export interface BoundaryRecord {
+  type: 'boundary';
+  tMs: number;
+  kind: string;
+  confidence?: number;
+}
+
 /** TelemetrySink port — the OPTIONAL dual-sink the capture bridge tees raw frames into, BEFORE
  *  the pipeline. The real adapter persists captured-signal.v1 (file/store); when unset the tap is
  *  a single undefined-check (zero overhead — the proven O6 capture path is never altered). The
@@ -151,4 +162,7 @@ export interface TelemetrySink {
    *  omits it stores a mixed-lane session that can never reproduce attribution. Same
    *  fire-and-forget contract as captureFrame. */
   captureHint?(hint: HintEvent): void;
+  /** Tee one segmenter cut. OPTIONAL, same fire-and-forget contract: a recorder that omits it
+   *  stores a mixed-lane session whose chunking cannot be reproduced. */
+  captureBoundary?(boundary: BoundaryRecord): void;
 }
