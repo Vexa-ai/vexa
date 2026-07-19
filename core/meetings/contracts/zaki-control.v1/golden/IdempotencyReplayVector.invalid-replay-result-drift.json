@@ -1,0 +1,25 @@
+{
+  "attempts": [
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_result_drift_1",
+        "idempotency_key": "idem_result_drift",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
+      },
+      "response_request_id": "req_result_drift_1",
+      "result_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_result_drift_2",
+        "idempotency_key": "idem_result_drift",
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
+      },
+      "response_request_id": "req_result_drift_2",
+      "result_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "expected_outcomes": ["applied", "replayed"]
+}

@@ -108,7 +108,7 @@ function usageSettlementErrors(data) {
   const errors = [];
   const applied = [];
   const ignored = [];
-  const seenEventIds = new Set();
+  const seenEvents = new Map();
   const appliedSequences = new Map();
   let identity;
   let finalSequence = 0;
@@ -130,11 +130,16 @@ function usageSettlementErrors(data) {
     if (identity === undefined) identity = currentIdentity;
     else if (identity !== currentIdentity) errors.push("usage settlement events must share one subject and metering identity");
 
-    if (seenEventIds.has(event.event_id) || terminal) {
+    const eventFingerprint = JSON.stringify(sortJson(event));
+    const priorEventFingerprint = seenEvents.get(event.event_id);
+    if (priorEventFingerprint !== undefined) {
+      if (priorEventFingerprint !== eventFingerprint) {
+        errors.push(`usage event ${event.event_id} conflicts with an already recorded payload`);
+      }
       ignored.push(event.event_id);
       continue;
     }
-    seenEventIds.add(event.event_id);
+    seenEvents.set(event.event_id, eventFingerprint);
 
     const { sequence, captured_seconds_total: total, terminal: eventTerminal } = event.data.metering;
     const priorAtSequence = appliedSequences.get(sequence);
@@ -142,6 +147,10 @@ function usageSettlementErrors(data) {
       if (priorAtSequence.total !== total || priorAtSequence.terminal !== eventTerminal) {
         errors.push(`usage sequence ${sequence} conflicts with an already applied cumulative value`);
       }
+      ignored.push(event.event_id);
+      continue;
+    }
+    if (terminal) {
       ignored.push(event.event_id);
       continue;
     }
@@ -177,6 +186,9 @@ function idempotencyReplayErrors(data) {
   const records = new Map();
   const outcomes = data.attempts.map((attempt) => {
     const request = attempt.request;
+    if (attempt.response_request_id !== request.request_id) {
+      errors.push("idempotency response must echo the current attempt request ID");
+    }
     const mutation = mutationOperation(request);
     if (!mutation) {
       errors.push("idempotency attempt must contain exactly one recognized mutation request");
@@ -196,12 +208,26 @@ function idempotencyReplayErrors(data) {
       request.idempotency_key
     ].join("\u0000");
     const requestHash = canonicalRequestSha256(request);
-    const previousHash = records.get(namespace);
-    if (previousHash === undefined) {
-      records.set(namespace, requestHash);
+    const previous = records.get(namespace);
+    if (previous === undefined) {
+      if (attempt.result_sha256 === undefined) {
+        errors.push("an applied idempotency attempt must carry a successful result fingerprint");
+      }
+      records.set(namespace, { requestHash, resultSha256: attempt.result_sha256 });
       return "applied";
     }
-    return previousHash === requestHash ? "replayed" : "conflict";
+    if (previous.requestHash !== requestHash) {
+      if (attempt.result_sha256 !== undefined) {
+        errors.push("an idempotency conflict must not carry a successful result fingerprint");
+      }
+      return "conflict";
+    }
+    if (attempt.result_sha256 === undefined) {
+      errors.push("a replayed idempotency attempt must carry the original result fingerprint");
+    } else if (attempt.result_sha256 !== previous.resultSha256) {
+      errors.push("an idempotency replay must return the original operation result");
+    }
+    return "replayed";
   });
   if (!sameArray(outcomes, data.expected_outcomes)) {
     errors.push("idempotency outcomes do not match canonical owner/operation-scoped replay semantics");

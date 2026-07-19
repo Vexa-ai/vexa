@@ -46,8 +46,11 @@ Replaying the same namespace with the same canonical SHA-256 returns the origina
 without a side effect; the response echoes the current attempt's `request_id`. A different canonical
 hash in the same namespace returns `409 idempotency_conflict`. `IdempotencyReplayVector` supplies real
 mutation request bodies; the validator infers the operation from the closed request shape and computes
-the canonical SHA-256 itself. Capture, stop, meeting-erasure and account-erasure replay paths are all
-covered explicitly. GET status is bounded, credential-free JSON.
+the canonical request SHA-256 itself. Each attempt also carries the observed response request ID and
+the canonical SHA-256 of a successful response after removing `request_id`; replay must preserve that
+result fingerprint while echoing the current attempt ID, and conflicts carry no successful result.
+Capture, stop, meeting-erasure and account-erasure replay paths are all covered explicitly. GET status
+is bounded, credential-free JSON.
 
 | Route | Request `$def` | Success `$def` | Failure `$def` |
 |---|---|---|---|
@@ -104,14 +107,17 @@ The Hub reserves wallet units before capture and sends the stable `reservation_i
 they report a monotonic sequence plus cumulative `captured_seconds_total`. Consumers settle deltas
 idempotently and finalize/refund exactly once when `terminal=true`:
 
-1. A repeated `event_id` returns the duplicate acknowledgement and has no second effect.
+1. A repeated `event_id` with the same canonical event payload returns the duplicate acknowledgement
+   and has no second effect; reusing an event ID for a different payload fails closed as
+   `409 invalid_state`.
 2. A sequence lower than the last applied sequence is stale and has no financial effect.
 3. The same sequence and cumulative/terminal values have no second financial effect; conflicting
    values for an applied sequence fail closed as `409 invalid_state`.
 4. A higher sequence applies only when its cumulative total is not lower than the last applied total;
    settlement is the non-negative delta between those totals.
 5. The first applied `terminal=true` finalizes/refunds once. Later events are recorded and
-   acknowledged but have no state or financial effect.
+   acknowledged but have no state or financial effect; reuse of an applied sequence is still checked
+   for conflicting cumulative or terminal values before that no-effect rule is applied.
 
 All events in one settlement stream must share subject, operation, capture, meeting and reservation
 identity by value; JSON object member order is irrelevant. `UsageSettlementVector` executes reordered

@@ -20,7 +20,9 @@
           "unit": "bot_minute",
           "reserved_units": 60
         }
-      }
+      },
+      "response_request_id": "req_capture_1",
+      "result_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
     },
     {
       "request": {
@@ -42,7 +44,9 @@
           "unit": "bot_minute",
           "reserved_units": 60
         }
-      }
+      },
+      "response_request_id": "req_capture_2",
+      "result_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
     },
     {
       "request": {
@@ -51,7 +55,9 @@
         "idempotency_key": "idem_stop_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
         "capture_id": "capture_replay_1"
-      }
+      },
+      "response_request_id": "req_stop_1",
+      "result_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
     },
     {
       "request": {
@@ -60,7 +66,9 @@
         "idempotency_key": "idem_stop_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
         "capture_id": "capture_replay_1"
-      }
+      },
+      "response_request_id": "req_stop_2",
+      "result_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
     },
     {
       "request": {
@@ -69,7 +77,9 @@
         "idempotency_key": "idem_erase_meeting_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
         "meeting_id": "meeting_replay_1"
-      }
+      },
+      "response_request_id": "req_erase_meeting_1",
+      "result_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
     },
     {
       "request": {
@@ -78,7 +88,9 @@
         "idempotency_key": "idem_erase_meeting_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
         "meeting_id": "meeting_replay_1"
-      }
+      },
+      "response_request_id": "req_erase_meeting_2",
+      "result_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
     },
     {
       "request": {
@@ -86,7 +98,9 @@
         "request_id": "req_erase_account_1",
         "idempotency_key": "idem_erase_account_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
-      }
+      },
+      "response_request_id": "req_erase_account_1",
+      "result_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
     },
     {
       "request": {
@@ -94,7 +108,9 @@
         "request_id": "req_erase_account_2",
         "idempotency_key": "idem_erase_account_replay",
         "subject": { "tenant_id": "tenant_nova", "user_id": "42" }
-      }
+      },
+      "response_request_id": "req_erase_account_2",
+      "result_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
     }
   ],
   "expected_outcomes": [
