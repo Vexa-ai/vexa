@@ -170,6 +170,101 @@ def test_index_orders_by_meeting_occurrence_not_later_reprocessing():
     }
 
 
+def test_index_uses_owner_metadata_projection_without_transcript_hydration():
+    store = _store()
+    foreign_data = deepcopy(_meeting_data())
+    foreign_data["transcript_viewers"] = [USER_ID]
+    store.seed_meeting(
+        meeting_id=99,
+        user_id=99,
+        platform="google_meet",
+        native_meeting_id="foreign-private-id",
+        status="completed",
+        start_time="2026-07-16T10:00:00+00:00",
+        end_time="2026-07-16T11:00:00+00:00",
+        data=foreign_data,
+        segments=_segments(),
+    )
+    original_list = store.list_meetings
+    projection_calls: list[int] = []
+
+    async def owner_metadata_projection(user_id: int):
+        projection_calls.append(user_id)
+        projected = []
+        for meeting in await original_list(user_id):
+            if meeting["user_id"] != user_id:
+                continue
+            data = meeting["data"]
+            projected.append({
+                **meeting,
+                "data": {
+                    "title": data["title"],
+                    "zaki_capture": data["zaki_capture"],
+                    "zaki_read": data["zaki_read"],
+                    "zaki_retention": data["zaki_retention"],
+                },
+                "meeting_available": True,
+                "transcript_available": True,
+                "summary_available": True,
+                "summary_updated_at": data["summary"]["updated_at"],
+            })
+        return projected
+
+    async def reject_generic_meeting_list(*_args, **_kwargs):
+        raise AssertionError("index must use the owner-only metadata projection")
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("index metadata must not hydrate transcript segments")
+
+    store.list_owned_read_metadata = owner_metadata_projection
+    store.list_meetings = reject_generic_meeting_list
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/index?limit=200",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert projection_calls == [USER_ID]
+    assert {item["id"] for item in response.json()["items"]} == {
+        "meeting:41",
+        "transcript:41",
+        "summary:41",
+    }
+
+
+async def test_inmemory_read_metadata_projection_is_owner_only_and_body_free():
+    store = _store()
+    store._meetings[41]["data"]["notes"] = "private notes outside the read index"
+    store._meetings[41]["data"]["zaki_capture"]["grant_id_sha256"] = "private-grant-hash"
+    store._meetings[41]["data"]["zaki_retention"]["internal_policy"] = "private-policy-state"
+    foreign_data = deepcopy(_meeting_data())
+    foreign_data["transcript_viewers"] = [USER_ID]
+    store.seed_meeting(
+        meeting_id=99,
+        user_id=99,
+        platform="google_meet",
+        native_meeting_id="foreign-private-id",
+        status="completed",
+        data=foreign_data,
+        segments=_segments(),
+    )
+
+    rows = await store.list_owned_read_metadata(USER_ID)
+
+    assert [row["id"] for row in rows] == [41]
+    assert rows[0]["transcript_available"] is True
+    assert "segments" not in rows[0]
+    assert "native_meeting_id" not in rows[0]
+    serialized = json.dumps(rows)
+    assert "private-native-id" not in serialized
+    assert "team kept Minutes" not in serialized
+    assert "private notes outside the read index" not in serialized
+    assert "private-grant-hash" not in serialized
+    assert "private-policy-state" not in serialized
+
+
 def test_read_plane_is_default_off_token_authenticated_user_scoped_and_read_only():
     path = f"/api/zaki/read/v1/{USER_ID}/index"
 
@@ -336,6 +431,29 @@ def test_meeting_item_hides_platforms_outside_the_sealed_contract():
 
     assert unsupported.status_code == unknown.status_code == 404
     assert unsupported.json() == unknown.json()
+    index = client.get(
+        f"/api/zaki/read/v1/{USER_ID}/index",
+        headers=HEADERS,
+    )
+    assert all(item["id"] != "meeting:41" for item in index.json()["items"])
+
+
+def test_meeting_index_hides_metadata_whose_detail_shape_is_invalid():
+    store = _store()
+    store._meetings[41]["data"]["attendees"] = ["Amina", 42]
+    client = _client(store)
+
+    item = client.get(
+        f"/api/zaki/read/v1/{USER_ID}/item/meeting:41",
+        headers=HEADERS,
+    )
+    index = client.get(
+        f"/api/zaki/read/v1/{USER_ID}/index",
+        headers=HEADERS,
+    )
+
+    assert item.status_code == 404
+    assert all(entry["id"] != "meeting:41" for entry in index.json()["items"])
 
 
 def test_runtime_responses_validate_against_the_sealed_contract_schema():

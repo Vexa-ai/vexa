@@ -16,6 +16,7 @@ run OFFLINE (no docker), exactly like the gateway lane's port-fakes.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Optional
 
@@ -32,6 +33,101 @@ def _segment_to_api(seg: dict) -> dict:
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
+
+
+def _read_index_transcript_available(meeting: dict) -> bool:
+    segments = list(meeting["segments"].values())
+    if not 1 <= len(segments) <= 4096:
+        return False
+
+    def parse_time(value) -> Optional[datetime]:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+
+    meeting_start = parse_time(meeting.get("start_time"))
+    previous_start = None
+    for segment in segments:
+        text = segment.get("text")
+        speaker = segment.get("speaker")
+        if not isinstance(text, str) or not text.strip() or len(text) > 65_536:
+            return False
+        if isinstance(speaker, str) and len(speaker) > 200:
+            return False
+        started_at = parse_time(segment.get("absolute_start_time"))
+        ended_at = parse_time(segment.get("absolute_end_time"))
+        if started_at is None and meeting_start is not None:
+            try:
+                started_at = meeting_start + timedelta(seconds=float(segment.get("start")))
+            except (TypeError, ValueError):
+                return False
+        if ended_at is None and meeting_start is not None:
+            try:
+                ended_at = meeting_start + timedelta(seconds=float(segment.get("end")))
+            except (TypeError, ValueError):
+                ended_at = started_at
+        if (
+            started_at is None
+            or (ended_at is not None and ended_at < started_at)
+            or (previous_start is not None and started_at < previous_start)
+        ):
+            return False
+        previous_start = started_at
+    return True
+
+
+def _read_index_summary_metadata(data: dict, fallback_updated_at: str) -> tuple[bool, str]:
+    summary = data.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return True, fallback_updated_at
+    if isinstance(summary, dict):
+        text = summary.get("text")
+        if isinstance(text, str) and text.strip():
+            updated_at = summary.get("updated_at")
+            return True, updated_at if isinstance(updated_at, str) else fallback_updated_at
+    summaries = data.get("summaries")
+    if isinstance(summaries, list):
+        for candidate in summaries:
+            if not isinstance(candidate, dict):
+                continue
+            text = candidate.get("text")
+            if isinstance(text, str) and text.strip():
+                updated_at = candidate.get("updated_at")
+                return True, updated_at if isinstance(updated_at, str) else fallback_updated_at
+    return False, fallback_updated_at
+
+
+def _read_index_control_metadata(data: dict) -> dict:
+    projected = {key: data[key] for key in ("title", "name") if key in data}
+    field_sets = {
+        "zaki_capture": (
+            "state", "bot_name", "tenant_attested", "tenant_attested_at",
+            "tenant_policy_version",
+        ),
+        "zaki_read": ("enabled",),
+        "zaki_retention": ("state", "expired_scopes", "scope_expiries"),
+    }
+    for field, allowed in field_sets.items():
+        value = data.get(field)
+        projected[field] = (
+            {key: value[key] for key in allowed if key in value}
+            if isinstance(value, dict)
+            else value
+        )
+    return projected
+
+
+def _read_index_meeting_available(data: dict) -> bool:
+    attendees = data.get("attendees", [])
+    return (
+        isinstance(attendees, list)
+        and len(attendees) <= 1000
+        and all(isinstance(attendee, str) and attendee.strip() for attendee in attendees)
+    )
 
 
 class _InMemoryTranscriptBatchWriter:
@@ -220,6 +316,39 @@ class InMemoryTranscriptStore:
             }
             for mid, m in rows
         ]
+
+    async def list_owned_read_metadata(self, user_id: int) -> list[dict]:
+        rows = [
+            (mid, meeting)
+            for mid, meeting in self._meetings.items()
+            if meeting["user_id"] == user_id
+        ]
+        rows.sort(
+            key=lambda row: (row[1].get("start_time") or row[1]["created_at"], row[0]),
+            reverse=True,
+        )
+        projected = []
+        for mid, meeting in rows:
+            data = meeting["data"] if isinstance(meeting.get("data"), dict) else {}
+            summary_available, summary_updated_at = _read_index_summary_metadata(
+                data, meeting["updated_at"]
+            )
+            projected.append({
+                "id": mid,
+                "user_id": meeting["user_id"],
+                "platform": meeting["platform"],
+                "status": meeting["status"],
+                "start_time": meeting["start_time"],
+                "end_time": meeting["end_time"],
+                "data": _read_index_control_metadata(data),
+                "created_at": meeting["created_at"],
+                "updated_at": meeting["updated_at"],
+                "meeting_available": _read_index_meeting_available(data),
+                "transcript_available": _read_index_transcript_available(meeting),
+                "summary_available": summary_available,
+                "summary_updated_at": summary_updated_at,
+            })
+        return projected
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         mid = self._find(user_id, platform, native_meeting_id)
