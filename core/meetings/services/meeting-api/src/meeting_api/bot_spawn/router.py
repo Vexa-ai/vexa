@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import uuid
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -242,6 +243,14 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             platform = derived_platform
             if not passcode:
                 passcode = _passcode_from_url(meeting_url)
+        # A browser session has no external meeting to address: it IS the session. api.v1 says so —
+        # `browser_session` is in the sealed Platform enum while `native_meeting_id`/`meeting_url`
+        # are both optional — so `{platform: "browser_session"}` is a valid request and the server
+        # mints the address the caller could not supply. Every downstream hop already models this
+        # platform (stop_router's supported set, the concurrency cap that excludes infra sessions);
+        # intake was the one seam that refused it, making the core stricter than its own contract.
+        if platform == "browser_session" and not native_meeting_id and not meeting_url:
+            native_meeting_id = f"bs-{uuid.uuid4().hex[:8]}"
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,
@@ -252,7 +261,11 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
         # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
         # only the full URL says WHICH deployment to join).
-        if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
+        if (
+            platform != "browser_session"  # no URL to construct — the session has no external address
+            and not meeting_url
+            and construct_meeting_url(platform, native_meeting_id) is None
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=(

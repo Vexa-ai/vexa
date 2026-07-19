@@ -467,3 +467,65 @@ def test_post_bots_explicit_native_id_unchanged_by_url(monkeypatch):
                                  "meeting_url": "https://meet.google.com/abc-defg-hij"})
     assert r.status_code == 201, r.text
     assert repo._meetings[1]["native_meeting_id"] == "xyz-explicit-id"
+
+
+# ── route: a browser session addresses itself (#816) ─────────────────────────────────────────────
+#
+# api.v1 seals `browser_session` INTO the Platform enum while leaving `native_meeting_id` and
+# `meeting_url` optional — so `{platform: "browser_session"}` is a contractually valid body. A
+# browser session has no external meeting to point at: it IS the session, so the server mints the
+# address the caller cannot supply (0.10 minted `bs-<hex>`; the same shape is kept so existing
+# sessions stay addressable). Intake used to refuse this body, making the core stricter than its
+# own contract and leaving the capability unreachable even though stop_router and the concurrency
+# cap both already model the platform.
+
+def test_post_bots_browser_session_mints_its_own_address(monkeypatch):
+    """201 with a server-minted `bs-…` native id — no meeting_url, no native_meeting_id supplied."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    assert r.status_code == 201, r.text
+    native = r.json()["native_meeting_id"]
+    assert native and native.startswith("bs-"), f"expected a minted bs-… address, got {native!r}"
+    assert repo._meetings[1]["native_meeting_id"] == native
+    assert repo._meetings[1]["platform"] == "browser_session"
+
+
+def test_post_bots_browser_session_is_stop_addressable(monkeypatch):
+    """The minted address is a REAL address: the session can be stopped through it."""
+    from fastapi import FastAPI
+
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
+
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    app = FastAPI()
+    app.include_router(build_router(repo, runtime))
+    app.include_router(build_stop_router(repo, InMemoryCommandPublisher(), runtime))
+    client = TestClient(app)
+    created = client.post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    assert created.status_code == 201, created.text
+    native = created.json()["native_meeting_id"]
+    r = client.delete(f"/bots/browser_session/{native}", headers=HEADERS)
+    assert r.status_code == 200, r.text
+
+
+def test_post_bots_browser_session_mints_unique_addresses(monkeypatch):
+    """Two sessions are two addresses — the mint must not collide (they are separate meetings)."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    client = _client(repo)
+    a = client.post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    b = client.post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    assert a.status_code == 201 and b.status_code == 201, (a.text, b.text)
+    assert a.json()["native_meeting_id"] != b.json()["native_meeting_id"]
+
+
+def test_post_bots_meeting_platform_without_address_still_422(monkeypatch):
+    """Negative control: #794's guarantee is intact — a REAL meeting platform with no address is
+    still a typed 422, never a minted orphan."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={"platform": "google_meet"})
+    assert r.status_code == 422, r.text
+    assert not repo._meetings
