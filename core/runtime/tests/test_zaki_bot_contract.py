@@ -104,9 +104,6 @@ def test_k8s_start_materializes_restricted_contract_as_a_complete_container(monk
     contract = BotPodContract.from_document(copy.deepcopy(document))
     env = {
         "VEXA_BOT_CONFIG": "{\"platform\":\"google_meet\"}",
-        "VEXA_WORKSPACE_MOUNT_SOURCE": "agent-workspaces",
-        "VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces",
-        "VEXA_WORKSPACE_PATH": "/workspaces/tenant-a",
     }
     args, override = _captured_pod(
         monkeypatch,
@@ -132,10 +129,8 @@ def test_k8s_start_materializes_restricted_contract_as_a_complete_container(monk
     assert container["imagePullPolicy"] == "IfNotPresent"
     assert container["securityContext"] == document["containerSecurityContext"]
     assert container["resources"] == document["resources"]
-    assert {mount["mountPath"] for mount in container["volumeMounts"]} == {
-        "/tmp", "/dev/shm", "/workspaces/tenant-a"
-    }
-    assert {volume["name"] for volume in spec["volumes"]} == {"tmp", "dshm", "workspace-store"}
+    assert {mount["mountPath"] for mount in container["volumeMounts"]} == {"/tmp", "/dev/shm"}
+    assert {volume["name"] for volume in spec["volumes"]} == {"tmp", "dshm"}
     assert spec["restartPolicy"] == "Never"
     assert spec["serviceAccountName"] == "zaki-minutes-bot"
     assert spec["automountServiceAccountToken"] is False
@@ -147,6 +142,25 @@ def test_k8s_start_materializes_restricted_contract_as_a_complete_container(monk
         "runtime.managed": "true",
         "runtime.workload_id": "rt-123",
     }
+
+
+def test_contracted_bot_rejects_workload_controlled_workspace_mounts(monkeypatch):
+    contract = BotPodContract.from_document(_contract_document())
+    with pytest.raises(ValueError, match="cannot mount a workspace"):
+        _captured_pod(
+            monkeypatch,
+            Runnable(
+                image=BOT_IMAGE,
+                command=["/app/entrypoint.sh"],
+                bot_pod_contract=contract,
+            ),
+            {
+                "VEXA_BOT_CONFIG": "{}",
+                "VEXA_WORKSPACE_MOUNT_SOURCE": "agent-workspaces",
+                "VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces",
+                "VEXA_WORKSPACE_PATH": "/workspaces/tenant-a",
+            },
+        )
 
 
 def test_k8s_start_without_contract_still_emits_a_complete_generated_container(monkeypatch):

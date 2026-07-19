@@ -58,9 +58,14 @@ jobs:
             local name="$1"
             local dockerfile="$2"
             local context="$3"
+            local pull_base="${4:-true}"
             local image="${REGISTRY}/${IMAGE_OWNER}/zaki-minutes-${name}:${SOURCE_TAG}"
 
-            DOCKER_BUILDKIT=1 docker build --pull \
+            local build_args=()
+            if [[ "$pull_base" == "true" ]]; then
+              build_args+=(--pull)
+            fi
+            DOCKER_BUILDKIT=1 docker build "${build_args[@]}" \
               --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
               --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
               --label "org.opencontainers.image.title=zaki-minutes-${name}" \
@@ -88,7 +93,10 @@ jobs:
             -f core/meetings/modules/join/Dockerfile.env \
             -t vexa/meet-join-env:dev \
             core/meetings/modules/join
-          publish_image bot core/meetings/services/bot/Dockerfile .
+          # `vexa/meet-join-env:dev` is deliberately the locally built, source-controlled base
+          # immediately above. `--pull` would ignore it and try (and fail) to fetch that private
+          # local tag from Docker Hub, so bot alone opts out of the helper's base refresh.
+          publish_image bot core/meetings/services/bot/Dockerfile . false
 
       - name: Write chart-ready digest manifest
         env:

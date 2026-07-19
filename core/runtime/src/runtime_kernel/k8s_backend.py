@@ -83,6 +83,11 @@ def pod_overrides(
     if not runnable.image:
         raise ValueError("k8s backend requires an image")
     contract = runnable.bot_pod_contract
+    # A packaged ZAKI bot contract deliberately has an exact writable-volume allowlist.  The
+    # generic runtime.v1 environment is caller-controlled, so a contracted bot must never turn
+    # VEXA_WORKSPACE_* values into an additional PVC/subPath mount.
+    if contract and (workspace_volumes or workspace_mounts):
+        raise ValueError("contracted ZAKI meeting bots cannot mount a workspace volume")
     contract_volumes = contract.volumes if contract else []
     contract_mounts = contract.volume_mounts if contract else []
     volumes = _merge_volumes(contract_volumes, workspace_volumes)
