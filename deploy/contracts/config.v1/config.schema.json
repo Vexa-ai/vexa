@@ -120,16 +120,21 @@
           "type": "object",
           "required": ["url_key"],
           "additionalProperties": false,
-          "description": "One authenticated request to the capability's endpoint. Verdict: an `unauthorized_statuses` answer or a network failure/timeout ⇒ probe FAILS (misconfigured); ANY other status (400/404/405/…) proves the endpoint is reachable and the credential accepted ⇒ probe passes.",
+          "description": "One authenticated request to the capability's endpoint. Verdict, in order: a network failure/timeout ⇒ probe FAILS (unreachable); an `unauthorized_statuses` answer ⇒ FAILS (the credential was REJECTED); an `invalid_statuses` answer ⇒ FAILS (we are not talking to the declared endpoint at all — the URL shape is wrong); ANY other status (400/405/…) proves the endpoint is reachable and the credential accepted ⇒ probe passes.",
           "properties": {
             "method": { "type": "string", "default": "POST" },
-            "url_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the base URL" },
-            "path": { "type": "string", "description": "appended to the base URL (e.g. /v1/audio/transcriptions)" },
+            "url_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the endpoint URL — accepted as a bare base (https://host) OR as the full endpoint already carrying `path`; the probe appends `path` only when absent, the same rule the bot's client and the terminal dictation route apply" },
+            "path": { "type": "string", "description": "the capability's endpoint path (e.g. /v1/audio/transcriptions), appended to the configured URL only when it does not already end with it" },
             "auth_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the bearer token sent as Authorization" },
             "unauthorized_statuses": {
               "type": "array",
               "items": { "type": "integer" },
               "description": "statuses that mean the credential was REJECTED (default [401, 403])"
+            },
+            "invalid_statuses": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "statuses that mean the URL does not name this capability's endpoint — proof of the WRONG address, not of a working one (default []; the stt transcriptions probe declares [404], since a real OpenAI-compatible transcriptions path answers 400/401 to an empty body and never 404)"
             }
           }
         },

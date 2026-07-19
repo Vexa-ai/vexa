@@ -1,3 +1,4 @@
+import { AdmissionError } from "../shared/admission";
 import { Page } from "playwright";
 import { log, callAwaitingAdmissionCallback } from "../_host";
 import { BotConfig } from "../_host";
@@ -208,7 +209,7 @@ export async function waitForTeamsMeetingAdmission(
           const isRejected = await checkForTeamsRejection(page);
           if (isRejected) {
             log("🚨 Bot was rejected from the Teams meeting by admin");
-            throw new Error("Bot admission was rejected by meeting admin");
+            throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
           }
 
           // Check for admission indicators since waiting room disappeared and no rejection found
@@ -254,7 +255,7 @@ export async function waitForTeamsMeetingAdmission(
       const finalWaitingCheck = finalLobbyTextVisible || finalJoinNowButtonVisible;
 
       if (finalWaitingCheck) {
-        throw new Error("Bot is still in the Teams waiting room after timeout - not admitted to the meeting");
+        throw new AdmissionError("lobby_timeout", "Bot is still in the Teams waiting room after timeout - not admitted to the meeting");
       }
     }
 
@@ -301,7 +302,7 @@ export async function waitForTeamsMeetingAdmission(
         const isRejected = await checkForTeamsRejection(page);
         if (isRejected) {
           log("🚨 Bot was rejected from the Teams meeting by admin");
-          throw new Error("Bot admission was rejected by meeting admin");
+          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
         }
 
         // Check for admission
@@ -339,13 +340,13 @@ export async function waitForTeamsMeetingAdmission(
               }
               const rejectedNow = await checkForTeamsRejection(page);
               if (rejectedNow) {
-                throw new Error("Bot admission was rejected by meeting admin");
+                throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
               }
             }
             await page.waitForTimeout(2000);
             log(`Still in Teams waiting room... ${Math.round((Date.now() - lobbyStart) / 1000)}s elapsed`);
           }
-          throw new Error("Bot is still in the Teams waiting room after timeout");
+          throw new AdmissionError("lobby_timeout", "Bot is still in the Teams waiting room after timeout");
         }
 
         log(`Polling for admission... ${Math.round((Date.now() - pollStart) / 1000)}s elapsed`);
@@ -371,6 +372,10 @@ export async function waitForTeamsMeetingAdmission(
     }
 
   } catch (error: any) {
+    // Re-throw typed admission verdicts unchanged (same idiom as googlemeet/admission.ts): the
+    // driver inspects `outcome` with `instanceof`, and wrapping here is exactly what used to
+    // flatten a Teams denial into a transient, retried `join_failure`.
+    if (error instanceof AdmissionError) throw error;
     throw new Error(
       `Bot was not admitted into the Teams meeting within the timeout period: ${error.message}`
     );

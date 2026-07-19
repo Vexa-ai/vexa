@@ -193,3 +193,229 @@ def test_spawn_503_when_stt_fully_unset(monkeypatch):
     r2 = _client(repo).post("/bots", headers=HEADERS,
                             json={"platform": "google_meet", "native_meeting_id": "no-stt"})
     assert r2.status_code == 201, f"retry after configuring must not 409/503: {r2.status_code} {r2.text}"
+
+
+# ── C1/C4 (#511): the probe's ORACLE — a wrong URL must not prove a working backend ──────────────
+# These exercise the REAL _http_probe against a local HTTP server (not the _run_probe monkeypatch
+# seam above), because the defect under test IS the status→verdict mapping and the URL it builds.
+
+
+class _ProbeServer:
+    """A local HTTP server that answers a scripted status per request path, and records the paths
+    it was asked for (so a double-pathed URL is visible, not merely inferred from a 404)."""
+
+    def __init__(self, routes: dict, default_status: int = 404):
+        self.routes = routes
+        self.default_status = default_status
+        self.paths: list = []
+        self._server = None
+        self._thread = None
+
+    def __enter__(self):
+        import http.server
+        import threading
+
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's interface
+                outer.paths.append(self.path)
+                self.send_response(outer.routes.get(self.path, outer.default_status))
+                self.end_headers()
+
+            def log_message(self, *a):  # keep the test output clean
+                pass
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}"
+
+    def __exit__(self, *exc):
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
+_STT_PATH = "/v1/audio/transcriptions"
+
+
+def _stt_probe_spec():
+    return cp.load_declaration()["capabilities"]["stt"]["probe"]
+
+
+def test_probe_url_accepts_both_declared_url_shapes():
+    """C4: the ONE rule — append the path only when the configured URL does not already carry it.
+    Same rule as the bot's client (whisper/src/transcription-client.ts) and the dictation route."""
+    assert cp.probe_url("https://api.openai.com", _STT_PATH) == f"https://api.openai.com{_STT_PATH}"
+    assert cp.probe_url("https://api.openai.com/", _STT_PATH) == f"https://api.openai.com{_STT_PATH}"
+    # the full endpoint URL — appending blindly here is the double-path 404 this closes
+    full = f"https://api.openai.com{_STT_PATH}"
+    assert cp.probe_url(full, _STT_PATH) == full
+    assert cp.probe_url(full + "/", _STT_PATH) == full
+
+
+def test_probe_404_is_misconfigured_not_ok():
+    """C1 (A1): a URL whose transcriptions path answers 404 is the WRONG address — it must not
+    probe green. A real OpenAI-compatible endpoint answers 400/401 to an empty body, never 404."""
+    with _ProbeServer(routes={}, default_status=404) as srv:  # every path 404s
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert result["ok"] is False, "404 must NOT count as proof of a reachable transcriptions endpoint"
+    assert result["status"] == 404
+    assert "URL shape" in result["reason"]
+
+
+def test_probe_404_demotes_the_health_row():
+    """C1 (A1), at the surface an operator actually reads: /health's stt row goes misconfigured."""
+    with _ProbeServer(routes={}, default_status=404) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        rows = cp.capability_health(env)
+    assert rows["stt"]["state"] == cp.MISCONFIGURED
+    assert rows["stt"]["probe"]["status"] == 404
+
+
+def test_probe_400_and_401_verdicts_unchanged():
+    """C1 no-regression: 400 stays proof-of-life (green); 401 stays a rejected credential (red)."""
+    with _ProbeServer(routes={_STT_PATH: 400}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        ok = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert ok["ok"] is True and ok["status"] == 400, "an empty-body 400 proves a live endpoint"
+
+    with _ProbeServer(routes={_STT_PATH: 401}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "bad"}
+        rejected = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert rejected["ok"] is False and rejected["status"] == 401
+    assert "REJECTED" in rejected["reason"]
+
+
+def test_probe_accepts_a_full_path_url_without_double_pathing():
+    """C4 (A5): the SAME URL that works in a meeting must probe green. Configured as the full
+    endpoint, the probe must request that path once — not append a second copy into a 404."""
+    with _ProbeServer(routes={_STT_PATH: 400}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base + _STT_PATH,
+               "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+        requested = list(srv.paths)
+    assert result["ok"] is True, f"full-path URL must not double-path: requested {requested}"
+    assert requested == [_STT_PATH], f"expected exactly one un-doubled request, got {requested}"
+
+
+# ── C3 (#511): a spawn against a SET-but-BROKEN backend refuses with the probe's reason ─────────
+
+
+def _seed_stt_verdict(result: dict):
+    """Put a verdict in the probe cache the way boot preflight / a /health poll would."""
+    import time as _t
+    cp._probe_cache["stt"] = {"at": _t.monotonic(), "result": result}
+
+
+def test_spawn_503_when_the_probe_says_the_backend_is_broken(monkeypatch):
+    """A3: set env + a cached FAILING verdict ⇒ typed 503 carrying the probe's reason, and NO
+    meeting row (the refusal precedes the write, so the retry after a fix cannot 409)."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "bad-token")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)  # no Settings backend → env is the resolved one
+    _seed_stt_verdict({"ok": False, "status": 401, "kind": "unauthorized",
+                       "reason": "unauthorized — the configured token was REJECTED by the endpoint"})
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "google_meet", "native_meeting_id": "broken-stt"})
+    assert r.status_code == 503, f"{r.status_code} {r.text}"
+    detail = r.json()["detail"]
+    assert "REJECTED" in detail, f"the 503 must carry the probe's own reason: {detail}"
+    assert "/health?force=1" in detail, "the refusal must tell the operator how to re-test now"
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_spawn_proceeds_when_the_probe_says_the_backend_works(monkeypatch):
+    """A3 no-regression: a passing verdict must not interfere with the spawn."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "good-token")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    _seed_stt_verdict({"ok": True, "status": 400})
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet", "native_meeting_id": "working-stt"})
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
+
+
+def test_spawn_proceeds_when_no_verdict_has_been_cached(monkeypatch):
+    """An UNPROBED capability is not a broken one — absence of a verdict must never refuse."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    assert cp._probe_cache == {}
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet", "native_meeting_id": "unprobed-stt"})
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
+
+
+def test_stale_verdict_does_not_block_a_fixed_backend(monkeypatch):
+    """The stale-red fork the issue names: past the probe's ttl the cache holds no actionable
+    opinion, so an operator who just fixed the endpoint is not locked out by the old red."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "now-fixed")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    import time as _t
+    cp._probe_cache["stt"] = {"at": _t.monotonic() - 3600,
+                              "result": {"ok": False, "kind": "unauthorized",
+                                         "reason": "unauthorized — ...", "status": 401}}
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet", "native_meeting_id": "stale-red"})
+    assert r.status_code == 201, f"a verdict older than the ttl must not refuse: {r.text}"
+
+
+def test_settings_backend_is_not_blocked_by_the_env_backends_verdict(monkeypatch):
+    """The claim-together fork (#502 C1): the cached verdict describes the ENV endpoint. When the
+    user's Settings backend is what we resolved, the env backend's health is irrelevant — blocking
+    on it would refuse a spawn against a perfectly good endpoint."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://env-stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "env-token")
+    _seed_stt_verdict({"ok": False, "status": 401, "kind": "unauthorized",
+                       "reason": "unauthorized — env backend is broken"})
+
+    async def _settings_backend(user_id):
+        return {"url": "http://user-stt.test", "token": "user-token"}
+
+    from meeting_api.bot_spawn import service as svc
+    monkeypatch.setattr(svc, "_resolve_transcription_backend", _settings_backend)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet", "native_meeting_id": "settings-stt"})
+    assert r.status_code == 201, f"the env verdict must not gate a Settings backend: {r.text}"
+
+
+def test_unreachable_backend_does_not_refuse_spawns(monkeypatch):
+    """A DOWN endpoint is not a MISCONFIGURED one. Refusing on `unreachable` would couple every
+    spawn to STT liveness — an STT restart or a DNS blip would 503 the whole deployment for a
+    minute, while the bot's own transcription client already retries. Only a fault an operator
+    must FIX (rejected token / wrong path) may refuse."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    _seed_stt_verdict({"ok": False, "kind": "unreachable",
+                       "reason": "unreachable: URLError: <urlopen error [Errno -2] Name or "
+                                 "service not known>"})
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet", "native_meeting_id": "stt-down"})
+    assert r.status_code == 201, f"a down backend must not refuse the spawn: {r.text}"
+
+
+def test_probe_failure_kinds_are_classified():
+    """The kind is what lets a consumer tell 'fix your config' from 'the endpoint is down'."""
+    spec = _stt_probe_spec()["http"]
+    with _ProbeServer(routes={}, default_status=404) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "t"}
+        assert cp._http_probe(spec, env, timeout=5)["kind"] == "invalid_endpoint"
+    with _ProbeServer(routes={_STT_PATH: 401}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "t"}
+        assert cp._http_probe(spec, env, timeout=5)["kind"] == "unauthorized"
+    # nothing listening on a closed port — a liveness fault, never a config fault
+    env = {"TRANSCRIPTION_SERVICE_URL": "http://127.0.0.1:1", "TRANSCRIPTION_SERVICE_TOKEN": "t"}
+    down = cp._http_probe(spec, env, timeout=2)
+    assert down["kind"] == "unreachable"
+    assert down["kind"] not in cp.CONFIG_FAULT_KINDS
+    assert {"unauthorized", "invalid_endpoint"} == set(cp.CONFIG_FAULT_KINDS)
