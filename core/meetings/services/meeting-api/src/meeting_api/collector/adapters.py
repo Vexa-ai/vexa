@@ -409,7 +409,8 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
         from sqlalchemy import cast, func, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
@@ -441,7 +442,20 @@ class SqlAlchemyTranscriptStore:
             def _branch(cond):
                 s = select(Meeting.id).where(cond)
                 if status:
-                    s = s.where(Meeting.status == status)
+                    # A sequence selects a SET of statuses in SQL (`/bots/status` wants the five
+                    # non-terminal ones). Filtering here instead of in Python is the difference
+                    # between reading a caller's handful of live meetings and reading their entire
+                    # history — see the `slim=` note below (#803).
+                    s = s.where(
+                        Meeting.status.in_(tuple(status))
+                        if isinstance(status, (list, tuple, set, frozenset))
+                        else Meeting.status == status
+                    )
+                if meeting_id is not None:
+                    # Detail-by-id: constrain in SQL rather than enumerating the account and
+                    # filtering in Python. The access union still decides WHETHER the caller may
+                    # see it, so ownership/share semantics are unchanged.
+                    s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
                 if fetch_bound is not None:
@@ -495,9 +509,15 @@ class SqlAlchemyTranscriptStore:
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None,
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
                     # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
-                    # (title/docs/flags). Internal callers (get-by-id, /bots/status, calendar sync) get
-                    # full `data`, so the detail view and reconciliation are unchanged.
-                    "data": project_list_data(m.data) if list_view else (m.data if isinstance(m.data, dict) else {}),
+                    # (title/docs/flags).
+                    # #803: `slim` extends the SAME projection to a non-list caller that renders none
+                    # of the heavy keys either. `/bots/status` powers a running-bots badge, yet it
+                    # materialized every byte of `data` — 180 MB for one production account, 144 MB of
+                    # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
+                    # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
+                    # (the detail view, calendar sync, reconciliation) leave both flags off.
+                    "data": project_list_data(m.data) if (list_view or slim)
+                    else (m.data if isinstance(m.data, dict) else {}),
                 }
                 return row
 
