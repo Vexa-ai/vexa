@@ -128,10 +128,54 @@ def test_transcription_no_backend_and_no_token():
     assert not out["ok"] and "NO token" in out["summary"]
 
 
-def test_transcription_unreachable_and_non_gateway():
+def test_transcription_unreachable():
     def boom(url, headers):
         raise OSError("timeout")
     out = ct.run_transcription_test("https://t", "tok", "env", get=boom)
     assert not out["ok"] and "unreachable" in out["summary"]
-    out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""))
-    assert out["ok"] and out.get("unverified") is True  # reachable, token unproven — says so
+
+
+# ── C2 (#511): a non-Vexa backend is graded by the endpoint BOTS use, never "reachable" ──────────
+# No /balance means "not a Vexa gateway", which is not a verdict on the operator's question. The
+# fallback runs the bot's own first-chunk request, so the wizard's green means "a bot will
+# transcribe" on ANY OpenAI-compatible endpoint.
+
+_NO_BALANCE = lambda u, h: (404, "")  # noqa: E731 — the non-Vexa signature, reused by every row
+
+
+def test_transcription_openai_wrong_key_is_red():
+    """A1/A2: a rejected key on an OpenAI-compatible endpoint is RED at the click — it used to
+    return green-unverified and fail mid-meeting."""
+    out = ct.run_transcription_test("https://api.openai.com", "sk-wrong", "settings",
+                                    get=_NO_BALANCE, post=lambda u, p, h: (401, ""))
+    assert not out["ok"], "a rejected key must never test green"
+    assert "REJECTED" in out["summary"] and out["status"] == 401
+    assert out.get("unverified") is None, "there is no longer an unverified green"
+
+
+def test_transcription_openai_good_key_is_green_and_names_the_endpoint():
+    out = ct.run_transcription_test("https://api.openai.com", "sk-good", "settings",
+                                    get=_NO_BALANCE, post=lambda u, p, h: (400, ""))
+    assert out["ok"], "auth accepted (400 = our empty body rejected, not our key)"
+    assert "/v1/audio/transcriptions" in out["summary"]
+
+
+def test_transcription_openai_wrong_url_is_red():
+    out = ct.run_transcription_test("https://api.openai.com/wrong", "sk-good", "env",
+                                    get=_NO_BALANCE, post=lambda u, p, h: (404, ""))
+    assert not out["ok"] and "URL shape" in out["summary"]
+
+
+def test_transcription_fallback_sends_bearer_to_the_transcriptions_path():
+    """C4 (A5) at this consumer: base URL and full-path URL must hit the SAME endpoint once, with
+    the Bearer header the bot sends (the /balance probe's X-API-Key is Vexa-gateway-only)."""
+    for configured in ("https://api.openai.com", "https://api.openai.com/v1/audio/transcriptions"):
+        seen = []
+        def post(url, payload, headers):
+            seen.append((url, headers.get("Authorization")))
+            return 400, ""
+        out = ct.run_transcription_test(configured, "sk-good", "env", get=_NO_BALANCE, post=post)
+        assert out["ok"], f"{configured} must verify green"
+        assert seen == [("https://api.openai.com/v1/audio/transcriptions", "Bearer sk-good")], (
+            f"{configured} → {seen}"
+        )

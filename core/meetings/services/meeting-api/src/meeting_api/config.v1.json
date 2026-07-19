@@ -516,6 +516,9 @@
      "unauthorized_statuses": [
       401,
       403
+     ],
+     "invalid_statuses": [
+      404
      ]
     }
    }
