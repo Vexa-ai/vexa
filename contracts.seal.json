@@ -13,7 +13,7 @@
   "core/gateway/contracts/ws.v1": "77ce41cb384600acaf34402f4daf8d04b32063c662831238ba7a2e4195e80287",
   "core/identity/contracts/identity.v1": "36902fe610115088c855e7af607c1d778dbd3ab75512d8c71c8bf78cf1767dc7",
   "core/meetings/contracts/acts.v1": "1eaa34d27c52b0eb987a278115a1966c058f615ca16e3391b00107a6779dec4f",
-  "core/meetings/contracts/captured-signal.v1": "78db9e8188a27ca88d3a07ad5a8d0ef458e63fa207538ae19429f86d59857332",
+  "core/meetings/contracts/captured-signal.v1": "6ab2c63f5164827d9735f51b0add4d30890972069f18b63d52255df33c36907d",
   "core/meetings/contracts/flagged-issue.v1": "4b868f57298131f8eec8246d86d57251f259927d8bfd7df5a0f6016a10f16211",
   "core/meetings/contracts/invocation.v1": "c7d7f6b95f11da595d0a9e27a429774cdefcc997831cbedff061ebcc2aafbbb8",
   "core/meetings/contracts/lifecycle.v1": "95392746da49c7c61ec81863e6b836af5acb879f979918753fc8fcf92583b820",

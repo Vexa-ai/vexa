@@ -50,26 +50,67 @@ if (header.type !== 'captured_signal_header') {
   console.error('distill: not a captured-signal.v1 session (bad header)');
   process.exit(2);
 }
-const frames = lines.slice(1).map((l) => JSON.parse(l));
+// A session is a header + records: audio CapturedFrames and `type:"hint"` HintEvents. The mixed
+// lane's attribution lives ENTIRELY in the hints, so a window must carry both or the distilled
+// fixture reproduces sound without speakers.
+const records = lines.slice(1).map((l) => JSON.parse(l));
+const isHint = (r) => r.type === 'hint';
+const timeOf = (r) => (isHint(r) ? r.t : r.ts);
 
 const from = (parseT(opt('from', undefined)) ?? -Infinity) - pad;
 const to = (parseT(opt('to', undefined)) ?? Infinity) + pad;
 
-let kept = frames.filter((f) => f.ts >= from && f.ts <= to);
-if (speaker) kept = kept.filter((f) => f.speakerName === speaker || f.hint === speaker);
-kept = kept.map((f, i) => ({ ...f, seq: i }));
+let kept = records.filter((r) => timeOf(r) >= from && timeOf(r) <= to);
+if (speaker) {
+  // gmeet names each frame (glow-bound), so a name filter selects frames directly. The mixed
+  // lane carries ONE stream nobody's name is on — there the speaker lives only in the hints, so
+  // select the TIME WINDOWS that speaker is hinted over and keep the audio inside them.
+  const named = kept.filter((r) => !isHint(r) && (r.speakerName === speaker || r.hint === speaker));
+  if (named.length) {
+    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : named.includes(r)));
+  } else {
+    const windows = [];
+    let open = null;
+    for (const r of kept.filter(isHint).sort((a, b) => a.t - b.t)) {
+      if (r.name === speaker && !r.isEnd) { open = open ?? r.t; continue; }
+      if (open !== null && (r.isEnd ? r.name === speaker : r.name !== speaker)) {
+        windows.push([open, r.t]); open = null;
+      }
+    }
+    if (open !== null) windows.push([open, Infinity]);
+    if (!windows.length) {
+      console.error(`distill: no hint names "${speaker}" — cannot derive a window in the mixed lane`);
+      process.exit(1);
+    }
+    const inWin = (t) => windows.some(([a, b]) => t >= a - pad && t <= b + pad);
+    kept = kept.filter((r) => (isHint(r) ? r.name === speaker : inWin(r.ts)));
+    console.log(`  (mixed lane: "${speaker}" derived from ${windows.length} hint window(s))`);
+  }
+}
+// Re-seq the audio frames from 0; hints keep their own clock (they are matched by time, not order).
+let n = 0;
+kept = kept.map((r) => (isHint(r) ? r : { ...r, seq: n++ }));
 
-if (kept.length === 0) {
-  console.error('distill: window/filter matched ZERO frames — nothing written');
+const keptFrames = kept.filter((r) => !isHint(r));
+const keptHints = kept.filter(isHint);
+if (keptFrames.length === 0) {
+  console.error('distill: window/filter matched ZERO audio frames — nothing written');
   process.exit(1);
 }
 
-fs.writeFileSync(out, [JSON.stringify(header), ...kept.map((f) => JSON.stringify(f))].join('\n') + '\n', 'utf8');
+fs.writeFileSync(out, [JSON.stringify(header), ...kept.map((r) => JSON.stringify(r))].join('\n') + '\n', 'utf8');
 
-const names = [...new Set(kept.flatMap((f) => [f.speakerName, f.hint].filter(Boolean)))];
-const span = ((kept[kept.length - 1].ts - kept[0].ts) / 1000).toFixed(1);
-console.log(`distilled ${kept.length}/${frames.length} frames → ${out}`);
-console.log(`  span ${span}s (${new Date(kept[0].ts).toISOString()} → ${new Date(kept[kept.length - 1].ts).toISOString()})`);
+const names = [...new Set(kept.flatMap((r) => (isHint(r) ? [r.name] : [r.speakerName, r.hint])).filter(Boolean))];
+const t0 = timeOf(kept[0]);
+const t1 = timeOf(kept[kept.length - 1]);
+const span = ((t1 - t0) / 1000).toFixed(1);
+const totalFrames = records.filter((r) => !isHint(r)).length;
+const totalHints = records.filter(isHint).length;
+console.log(`distilled ${keptFrames.length}/${totalFrames} frames + ${keptHints.length}/${totalHints} hints → ${out}`);
+console.log(`  span ${span}s (${new Date(t0).toISOString()} → ${new Date(t1).toISOString()})`);
 console.log(`  speakers/hints: ${names.join(', ') || '(none)'}   lane=${header.lane ?? '?'} platform=${header.platform}`);
+if (header.lane === 'mixed' && keptHints.length === 0) {
+  console.log('  ⚠ mixed lane with NO hints in window — a replay of this fixture cannot attribute speakers');
+}
 console.log(`  replay offline:  (from meetings/services/bot)  REPLAY_FIXTURE=${out} npx tsx src/replay.test.ts`);
 console.log(`  replay live:     node eval/src/replay.mjs ${out}`);

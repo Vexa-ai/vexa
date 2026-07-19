@@ -61,7 +61,13 @@ function loadCapturedSignal(path: string): { header: CapHeader; frames: CapFrame
   const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean);
   const header = JSON.parse(lines[0]) as CapHeader;
   if (header.type !== 'captured_signal_header') throw new Error('not a captured-signal.v1 fixture (bad header)');
-  const frames = lines.slice(1).map((l) => JSON.parse(l) as CapFrame);
+  // A session interleaves audio frames with `type:"hint"` records (the mixed lane's attribution
+  // channel). This gmeet harness drives audio only; hints are surfaced so a mixed-lane session
+  // is never silently replayed as if it had no speakers.
+  const records = lines.slice(1).map((l) => JSON.parse(l) as CapFrame & { type?: string });
+  const frames = records.filter((r) => r.type !== 'hint');
+  const hints = records.length - frames.length;
+  if (hints) console.log(`  (session carries ${hints} out-of-band speaker hint(s))`);
   return { header, frames };
 }
 
