@@ -483,14 +483,11 @@ export class SpeakerStreamManager {
     // speaker's buffer start, which makes the speaker-mapper unable to attribute
     // carried words correctly. Direct submission preserves correct timing.
 
-    // Have transcript — emit and reset
-    if (buffer.lastTranscript) {
-      this.emitSegment(buffer, buffer.lastTranscript);
-      this.fullReset(buffer);
-      return;
-    }
-
-    // Have audio but no transcript — final Whisper submit
+    // Audio the draft does not cover — transcribe it. The draft is the FALLBACK for when this
+    // final submission yields nothing (handleTranscriptionResult re-emits it on an empty or
+    // hallucinated response), never the first choice: emitting it here publishes the draft's few
+    // words stamped with the buffer's FULL extent, so the turn's remaining audio disappears
+    // behind a segment that looks complete to every consumer downstream.
     if (this.unconfirmedSamples(buffer) > 0) {
       if (buffer.inFlight) {
         // A draft request is in flight for the PRE-TRIM window. Discarding
@@ -502,8 +499,15 @@ export class SpeakerStreamManager {
         return;
       }
       buffer.idleSubmitted = true;
-      log(`[SpeakerStreams] Flush-submit for "${buffer.speakerName}" (${unconfirmedSec.toFixed(1)}s audio, no transcript yet)`);
+      log(`[SpeakerStreams] Flush-submit for "${buffer.speakerName}" (${unconfirmedSec.toFixed(1)}s audio owed)`);
       await this.submitBuffer(buffer);
+      return;
+    }
+
+    // Nothing owed — the draft IS the whole turn.
+    if (buffer.lastTranscript) {
+      this.emitSegment(buffer, buffer.lastTranscript);
+      this.fullReset(buffer);
       return;
     }
 
