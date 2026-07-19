@@ -467,3 +467,41 @@ def test_post_bots_explicit_native_id_unchanged_by_url(monkeypatch):
                                  "meeting_url": "https://meet.google.com/abc-defg-hij"})
     assert r.status_code == 201, r.text
     assert repo._meetings[1]["native_meeting_id"] == "xyz-explicit-id"
+
+
+# ── #816 hardening: a non-spawnable platform is refused typed, BEFORE any DB write ──────────────
+# api.v1 seals MORE platforms than invocation.v1 (`browser_session` — a provisioning workload, not
+# a meeting bot). With a meeting_url attached, such a request used to pass the constructibility
+# guard, WRITE its `requested` row, then die inside build_invocation's sealed-schema validation:
+# a 500 plus an orphaned active row that 409'd the user's retry on the dedup guard.
+
+
+def test_browser_session_with_url_is_422_and_writes_no_row(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "browser_session",
+        "native_meeting_id": "bs-deadbeef",
+        "meeting_url": "https://internal.example/browser-session",
+    })
+    assert r.status_code == 422, f"{r.status_code} {r.text}"
+    detail = r.json()["detail"]
+    assert "browser_session" in detail and "816" in detail, (
+        f"the refusal must name the tracked restoration, got: {detail}"
+    )
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+    # And the retry is NOT poisoned: an ordinary meeting on the same repo still spawns.
+    ok = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "after-refusal",
+    })
+    assert ok.status_code == 201, ok.text
+
+
+def test_spawnable_platforms_is_the_sealed_invocation_enum():
+    """SSOT: the router's refusal set is READ from the sealed invocation.v1 schema, so it can
+    never drift from what build_invocation will actually accept."""
+    from meeting_api.bot_spawn.invocation import SPAWNABLE_PLATFORMS, _INVOCATION_SCHEMA
+
+    assert SPAWNABLE_PLATFORMS == frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
+    assert "browser_session" not in SPAWNABLE_PLATFORMS

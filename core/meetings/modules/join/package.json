@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/session.test.ts && tsx src/googlemeet/leave.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/msteams/leave.test.ts && tsx src/zoom/join.test.ts && tsx src/jitsi/join.test.ts && tsx src/jitsi/password.test.ts && tsx src/jitsi/admission.test.ts && tsx src/__tests__/defaultBotName.test.ts",
+    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/session.test.ts && tsx src/googlemeet/leave.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/msteams/leave.test.ts && tsx src/zoom/join.test.ts && tsx src/jitsi/join.test.ts && tsx src/jitsi/password.test.ts && tsx src/jitsi/admission.test.ts && tsx src/__tests__/defaultBotName.test.ts && tsx src/__tests__/unknownPlatform.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {

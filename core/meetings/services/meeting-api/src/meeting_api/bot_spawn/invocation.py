@@ -50,6 +50,14 @@ _RUNTIME_SCHEMA = _load_schema(
 _INV_REGISTRY = Registry().with_resource(
     _INVOCATION_SCHEMA["$id"], Resource.from_contents(_INVOCATION_SCHEMA)
 )
+
+#: The platforms the MEETING-BOT spawn flow can actually invoke — the sealed invocation.v1
+#: Platform enum, read from the schema itself so this set can never drift from what
+#: ``build_invocation`` will accept. NB: api.v1's Platform enum is WIDER (it also seals
+#: ``browser_session``, whose runtime path is a distinct non-meeting workload — #816); the
+#: router refuses the difference with a typed 422 BEFORE any DB write, instead of writing a
+#: meeting row and then dying inside the schema validation with a 500 that orphans the row.
+SPAWNABLE_PLATFORMS = frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
 _RT_REGISTRY = Registry().with_resource(
     _RUNTIME_SCHEMA["$id"], Resource.from_contents(_RUNTIME_SCHEMA)
 )
