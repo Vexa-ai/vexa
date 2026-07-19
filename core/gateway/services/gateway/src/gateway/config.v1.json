@@ -25,7 +25,10 @@
    "class": "defaulted",
    "default": "http://agent-api:8100",
    "description": "agent control-plane base URL fronted under /api/*",
-   "targets": ["helm", "lite"]
+   "targets": [
+    "helm",
+    "lite"
+   ]
   },
   {
    "key": "REDIS_URL",
@@ -44,14 +47,18 @@
    "class": "defaulted",
    "default": "0.0.0.0",
    "description": "uvicorn bind host",
-   "targets": ["lite"]
+   "targets": [
+    "lite"
+   ]
   },
   {
    "key": "PORT",
    "class": "defaulted",
    "default": "8056",
    "description": "uvicorn bind port",
-   "targets": ["lite"]
+   "targets": [
+    "lite"
+   ]
   },
   {
    "key": "GUARD_ENABLED",
@@ -70,83 +77,121 @@
    "class": "defaulted",
    "default": "true",
    "description": "back the guard's rate-limit/ban buckets with Redis (shared across replicas)",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_RATE_LIMIT_RPM",
    "class": "defaulted",
    "default": "600",
    "description": "per-IP request budget per window",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_RATE_LIMIT_WINDOW",
    "class": "defaulted",
    "default": "60",
    "description": "rate-limit window (seconds)",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_AUTO_BAN_THRESHOLD",
    "class": "defaulted",
    "default": "10",
    "description": "violations before an IP is auto-banned",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_AUTO_BAN_DURATION",
    "class": "defaulted",
    "default": "3600",
    "description": "auto-ban duration (seconds)",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_IP_WHITELIST",
    "class": "defaulted",
    "default": "",
    "description": "comma-separated IPs never rate-limited/banned",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_IP_BLACKLIST",
    "class": "defaulted",
    "default": "",
    "description": "comma-separated IPs always blocked",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_TRUSTED_PROXIES",
    "class": "defaulted",
    "default": "",
    "description": "comma-separated proxy IPs whose X-Forwarded-For is trusted for client-IP resolution",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_TRUST_X_FORWARDED_PROTO",
    "class": "defaulted",
    "default": "false",
    "description": "trust X-Forwarded-Proto from the proxy for scheme resolution",
-   "targets": ["compose", "helm"]
+   "targets": [
+    "compose",
+    "helm"
+   ]
   },
   {
    "key": "GUARD_BLOCKED_COUNTRIES",
    "class": "defaulted",
    "default": "",
    "description": "comma-separated country codes to block (geo-IP)",
-   "targets": ["compose"]
+   "targets": [
+    "compose"
+   ]
   },
   {
    "key": "GUARD_BLOCK_CLOUD_PROVIDERS",
    "class": "defaulted",
    "default": "",
    "description": "block known cloud/hosting provider ranges",
-   "targets": ["compose"]
+   "targets": [
+    "compose"
+   ]
   },
   {
    "key": "GUARD_REDIS_PREFIX",
    "class": "defaulted",
    "default": "vexa:guard:",
    "description": "Redis key prefix for the guard's rate-limit/ban buckets",
+   "targets": []
+  },
+  {
+   "key": "CORS_ORIGINS",
+   "class": "defaulted",
+   "default": "(unset — no CORS headers are emitted)",
+   "description": "Comma-separated browser-origin allowlist for the CORS middleware (0.10 parity — the hosted dashboard runs on its own origin). Unset means no CORS headers at all; server-to-server callers are unaffected either way. x-api-key must remain an allowed request header. Hosted-only: set by the platform chart, not by the OSS deploy surfaces.",
    "targets": []
   }
  ]
