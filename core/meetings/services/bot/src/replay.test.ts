@@ -32,7 +32,12 @@ import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipelin
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = join(HERE, '..', '..', '..', 'eval', 'replay-fixture', 'session.captured-signal.jsonl');
+// REPLAY_FIXTURE points the harness at ANY recorded/distilled session (eval/src/distill.mjs) —
+// the universal checks (loads · deterministic · transcript.v1-valid) run on it; the golden's
+// Alice→Bob→Alice structure checks run only on the default fixture, whose shape they pin.
+const GOLDEN = join(HERE, '..', '..', '..', 'eval', 'replay-fixture', 'session.captured-signal.jsonl');
+const FIXTURE = process.env.REPLAY_FIXTURE ?? GOLDEN;
+const IS_GOLDEN = FIXTURE === GOLDEN;
 const TX_SCHEMA = join(HERE, '..', '..', '..', 'contracts', 'transcript.v1', 'transcript.schema.json');
 
 let failed = 0;
@@ -109,6 +114,13 @@ async function main(): Promise<void> {
     JSON.stringify(segs.map((s) => ({ speaker: s.speaker, speaker_key: s.speaker_key, text: s.text, start: s.start, end: s.end })));
   check('same input ⇒ same output (replay is deterministic)', norm(run1) === norm(run2),
     `\n      run1=${norm(run1)}\n      run2=${norm(run2)}`);
+
+  if (!IS_GOLDEN) {
+    if (failed) { console.error(`\n❌ replay (O-TEL-2, custom fixture): ${failed} check(s) FAILED.`); process.exit(1); }
+    console.log(`\n✅ replay (O-TEL-2): custom fixture ${FIXTURE} replays deterministically; every segment transcript.v1-valid.`);
+    console.log(run1.map((s) => `  ${s.speaker}  [${s.start.toFixed(2)}–${s.end.toFixed(2)}]  ${s.text}`).join('\n'));
+    return;
+  }
 
   // STRUCTURE: the captured signal alone drives the expected three-turn Alice → Bob → Alice shape.
   const speakers = run1.map((s) => s.speaker);
