@@ -410,7 +410,7 @@ class SqlAlchemyTranscriptStore:
         return await self._merge_live_segments(pg)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
-        from sqlalchemy import cast, func, or_, select
+        from sqlalchemy import cast, func, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
@@ -419,18 +419,44 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
             # (owned by someone else) surface in the caller's list so a share recipient can find + open them.
+            #
+            # #800: the branches are UNIONed, never OR-ed. A single `WHERE a OR b` plans as a backward
+            # walk of the created_at index with the OR as a Filter — for a caller with few/old meetings
+            # that scans most of the table (100s+ per call under production load). Each branch below is
+            # independently index-scannable (owner → ix_meeting_user_created_at, viewer →
+            # ix_meeting_transcript_viewers_gin, workspace → ix_meeting_workspace_created_at) with its
+            # own top-N ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
             access = [
                 Meeting.user_id == user_id,
                 cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
             ]
             if member_workspaces:
                 access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
-            stmt = select(Meeting).where(or_(*access))
-            if status:
-                stmt = stmt.where(Meeting.status == status)
-            if platform:
-                stmt = stmt.where(Meeting.platform == platform)
-            stmt = stmt.order_by(Meeting.created_at.desc())
+
+            if list_view:
+                fetch_bound = (offset or 0) + (limit if limit is not None else DEFAULT_LIST_LIMIT) + 1
+            else:
+                fetch_bound = ((offset or 0) + limit) if limit else None
+
+            def _branch(cond):
+                s = select(Meeting.id).where(cond)
+                if status:
+                    s = s.where(Meeting.status == status)
+                if platform:
+                    s = s.where(Meeting.platform == platform)
+                if fetch_bound is not None:
+                    # ORDER BY inside a compound member is only meaningful (and only kept by
+                    # the compiler) together with LIMIT; an unbounded branch returns its full
+                    # set, so the outer ORDER BY alone decides.
+                    s = s.order_by(Meeting.created_at.desc()).limit(fetch_bound)
+                return s
+
+            ids = union_all(*[_branch(c) for c in access]).subquery()
+            stmt = (
+                select(Meeting)
+                .where(Meeting.id.in_(select(ids.c.id)))
+                .order_by(Meeting.created_at.desc())
+            )
             if list_view:
                 # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
                 # with a default page size (an explicit `limit` still wins) and over-fetch one row past

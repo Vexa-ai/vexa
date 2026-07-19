@@ -73,6 +73,17 @@ class Meeting(Base):
             "user_id", "platform", "platform_specific_id", "created_at",
         ),
         Index("ix_meeting_data_gin", "data", postgresql_using="gin"),
+        # #800: the collector's list_meetings UNIONs three access branches, one scan path each —
+        # owner top-N, transcript-share containment, workspace top-N. The whole-column GIN above
+        # cannot serve a containment probe on the `transcript_viewers` key alone, and the
+        # single-column created_at index invites the catastrophic backward-walk plan the UNION
+        # exists to avoid.
+        # ⚠ PROD ROLLOUT: build these CONCURRENTLY out-of-band before deploying (vexa-platform
+        # O-book O4); in-band CREATE INDEX locks `meetings` under live traffic.
+        Index("ix_meeting_user_created_at", "user_id", "created_at"),
+        Index("ix_meeting_transcript_viewers_gin",
+              text("(data -> 'transcript_viewers') jsonb_path_ops"), postgresql_using="gin"),
+        Index("ix_meeting_workspace_created_at", text("(data ->> 'workspace_id')"), "created_at"),
         # ROB1/ROB2 DB-level backstop: at most ONE ACTIVE (non-terminal) meeting per
         # (user, platform, native_meeting_id). A unique PARTIAL index — terminal rows
         # (completed/failed) are NOT covered, so continue_meeting can reopen a prior terminal row and
