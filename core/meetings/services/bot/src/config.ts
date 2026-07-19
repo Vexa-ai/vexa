@@ -70,6 +70,7 @@ export interface Invocation {
   transcriptionModel?: string | null;
   // ── recording ──
   recordingEnabled?: boolean;
+  captureSignalEnabled?: boolean;
   captureModes?: string[];
   recordingUploadUrl?: string;
   // ── lifecycle timeouts ──

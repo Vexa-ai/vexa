@@ -88,6 +88,11 @@ export const HINT_MAX_SKEW_MS = 10 * 60 * 1000;
 export function makeSpeakerHintSink(
   pipeline: Pick<BotPipeline, 'recordHint'>,
   warn: (m: string) => void = (m) => console.warn(m),
+  /** O-TEL-1: the same sink the audio tap feeds. Mixed-lane hints arrive HERE, not on the audio
+   *  frames, so a session recorded without this tee stores audio that can never reproduce
+   *  attribution offline. Teed with the post-guard `t`, so the stored hint carries the clock the
+   *  pipeline actually saw. */
+  telemetry?: TelemetrySink,
 ): { sink: (name: string, tMs?: number, isEnd?: boolean) => void; crossed: () => number } {
   let crossed = 0;
   return {
@@ -99,6 +104,10 @@ export function makeSpeakerHintSink(
       if (skew > HINT_MAX_SKEW_MS) {
         warn(`[bot] hint-clock-skew: hint tMs=${t} is ${Math.round(skew / 1000)}s off the epoch audio clock — page emitted a non-epoch timestamp; re-stamping (name=${name})`);
         t = Date.now();
+      }
+      if (telemetry?.captureHint) {
+        try { telemetry.captureHint({ type: 'hint', t, name, isEnd, lane: 'mixed' }); }
+        catch { /* telemetry must not break capture */ }
       }
       pipeline.recordHint(name, t, isEnd);
     },
@@ -280,7 +289,7 @@ export async function startCaptureBridge(
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
   // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
-  const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline);
+  const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.

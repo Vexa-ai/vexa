@@ -108,6 +108,19 @@ export interface CapturedFrame {
   lane: 'gmeet' | 'mixed';          // which pipeline lane this frame feeds
 }
 
+/** One captured-signal.v1 OUT-OF-BAND speaker hint as it crosses the capture bridge. The mixed
+ *  lane carries ONE audio stream and names it from active-speaker hints delivered on their own
+ *  channel — so the hints are not on any CapturedFrame, and a session without them cannot
+ *  reproduce attribution offline. `t` shares the audio frames' epoch-ms clock. (gmeet binds its
+ *  glow name onto the frame itself and emits none.) */
+export interface HintEvent {
+  type: 'hint';
+  t: number;                        // hint epoch ms — SAME clock domain as CapturedFrame.ts
+  name: string;                     // who the platform reports as active
+  isEnd?: boolean;                  // marks the END of that speaker's turn
+  lane?: 'gmeet' | 'mixed';
+}
+
 /** TelemetrySink port — the OPTIONAL dual-sink the capture bridge tees raw frames into, BEFORE
  *  the pipeline. The real adapter persists captured-signal.v1 (file/store); when unset the tap is
  *  a single undefined-check (zero overhead — the proven O6 capture path is never altered). The
@@ -116,4 +129,8 @@ export interface TelemetrySink {
   /** Tee one raw capture frame. MUST NOT throw into the capture path (the bridge calls it
    *  fire-and-forget); the adapter swallows + logs its own faults. */
   captureFrame(frame: CapturedFrame): void;
+  /** Tee one out-of-band speaker hint. OPTIONAL so older sinks keep compiling; a recorder that
+   *  omits it stores a mixed-lane session that can never reproduce attribution. Same
+   *  fire-and-forget contract as captureFrame. */
+  captureHint?(hint: HintEvent): void;
 }

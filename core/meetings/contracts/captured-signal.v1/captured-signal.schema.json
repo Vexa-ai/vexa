@@ -2,11 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/schemas/captured-signal.v1",
   "title": "captured-signal.v1",
-  "description": "The VERBATIM raw capture signal teed at the bot's capture bridge BEFORE the pipeline — the exact stream a live bug rides on, stored so it replays through the same pipeline OFFLINE (O-TEL-2). One session = a SessionHeader followed by N CapturedFrame records (JSONL-on-disk). Each frame mirrors the @vexa/capture-codec binary frame shape: pcm is base64 of the Float32 PCM bytes (little-endian), so a frame round-trips through the codec encode→decode→same.",
+  "description": "The VERBATIM raw capture signal teed at the bot's capture bridge BEFORE the pipeline — the exact stream a live bug rides on, stored so it replays through the same pipeline OFFLINE (O-TEL-2). One session = a SessionHeader followed by N records (JSONL-on-disk); a record is a CapturedFrame (audio) or a HintEvent (a `type`-tagged out-of-band speaker hint). Each frame mirrors the @vexa/capture-codec binary frame shape: pcm is base64 of the Float32 PCM bytes (little-endian), so a frame round-trips through the codec encode→decode→same.",
   "$defs": {
     "Lane": {
       "description": "Which pipeline lane the frame feeds — gmeet (per-channel, glow-named) or mixed (one stream, named from hints).",
       "enum": ["gmeet", "mixed"]
+    },
+    "HintEvent": {
+      "description": "One OUT-OF-BAND speaker hint as it crossed the capture bridge. The mixed lane (zoom/teams/jitsi) carries a single audio stream and names it from active-speaker hints that arrive on their OWN channel, independent of the audio frames — so a session that stored only CapturedFrames could never reproduce attribution offline. gmeet binds its glow name onto the frame itself and emits no HintEvent. `t` shares the audio frames' epoch-ms clock (the bridge's clock contract), which is what lets a replay re-window the hints against the same audio.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "t", "name"],
+      "properties": {
+        "type": { "const": "hint" },
+        "t": { "type": "number", "description": "hint epoch ms — the SAME clock domain as CapturedFrame.ts" },
+        "name": { "type": "string", "description": "the speaker the platform reports as active" },
+        "isEnd": { "type": "boolean", "description": "true when the hint marks the END of that speaker's turn" },
+        "lane": { "$ref": "#/$defs/Lane" }
+      }
     },
     "CapturedFrame": {
       "description": "One raw capture frame as it crossed the capture-bridge tap. ts is CAPTURE epoch ms (never restamped). speakerIndex is the channel id (999 = mixed, 1000 = the local mic). pcm carries the Float32 PCM bytes base64-encoded; pcm_len is the sample count.",
