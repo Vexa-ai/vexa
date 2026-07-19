@@ -1208,3 +1208,87 @@ def test_idempotent_terminal_replay_does_not_double_reap():
     stream = f"tc:meeting:{m['id']}"
     markers = [p for p in redis.streams.get(stream, []) if p.get("type") == "session_end"]
     assert len(markers) == 1, f"double reap on idempotent replay: {markers}"
+
+
+# ── #807: the FULL user-stop chain for a bot that never reached the meeting ──────────────────────
+# The unit rows above seed a pre-active status DIRECTLY, so they always passed — the defect lived in
+# the hop they skip. Going through DELETE /bots is what exposed it: the stop wrote `stopping` over
+# `awaiting_admission`, `_WAS_ACTIVE_STATUSES` then read that as "the bot was live", and the meeting
+# was persisted `completed` with zero transcript — over an `awaiting_admission → completed` edge
+# LEGAL_TRANSITIONS does not contain. In prod this was 49% of all zero-segment `completed` meetings.
+
+
+def _stop_then_destroy(status: str):
+    """Seed a meeting AT `status`, stop it through the real DELETE route, then post the runtime's
+    destroy callback to the REAL ``POST /runtime/callback`` route. Returns the final row.
+
+    Driving the shipped route matters here: it applies the terminal in-process with
+    ``force_terminal_on_destroy=True``, which is what lets the edge land from a stale/entry FSM
+    state. The lower-level ``_consume_runtime_terminal`` helper above posts the plain lifecycle
+    callback instead, so it cannot advance a `requested` row — a property of the harness, not of
+    the product."""
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
+
+    repo, pub = _ReconcileRepo(), InMemoryCommandPublisher()
+    m = _seed(repo, status=status)
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-stopped"
+    client = TestClient(create_app(meeting_repo=repo, command_publisher=pub))
+
+    r = client.delete("/bots/google_meet/m1", headers={"x-user-id": "1"})
+    assert r.status_code == 200, r.text
+    rc = client.post("/runtime/callback", json={"workloadId": "wl-stopped", "state": "destroyed"})
+    assert rc.status_code == 200, rc.text
+    return repo._meetings[m["id"]]
+
+
+def test_user_stop_of_a_never_admitted_bot_is_failed_not_completed():
+    """A bot the user abandoned in the waiting room produced NOTHING. Reporting it `completed` is a
+    silent value failure — the system claiming success for a run with no transcript."""
+    row = _stop_then_destroy("awaiting_admission")
+    assert row["status"] == "failed", (
+        "a bot that was never admitted must not be reported as a completed meeting"
+    )
+    assert row["data"].get("failure_stage") == "awaiting_admission", (
+        "the stage the bot actually died in must survive the stop"
+    )
+
+
+def test_user_stop_before_admission_is_never_retried():
+    """The reason must be the USER-terminal one. `awaiting_admission_timeout` is TRANSIENT
+    (retry.py), so attributing a deliberate cancellation to it would re-spawn the bot three times
+    against a meeting the user already walked away from — spending their quota to do it."""
+    from meeting_api.lifecycle.retry import RetryClass, classify_retry
+    from meeting_api.lifecycle.machine import CompletionReason
+
+    for stage in ("requested", "joining", "awaiting_admission"):
+        row = _stop_then_destroy(stage)
+        reason = row["data"].get("completion_reason")
+        assert reason == "stopped", f"{stage}: expected the user-terminal reason, got {reason!r}"
+        assert classify_retry(CompletionReason(reason)) is RetryClass.PERMANENT
+        assert row["data"].get("stop_requested") is True
+
+
+def test_a_timed_out_admission_is_still_transient_and_still_retried():
+    """No-regression: without a user stop, an admission wait that dies on its own keeps the
+    TRANSIENT reason — the retry behaviour this fix must not disturb."""
+    from meeting_api.lifecycle.retry import RetryClass, classify_retry
+    from meeting_api.lifecycle.machine import CompletionReason
+
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="awaiting_admission")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-timeout"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "wl-timeout", "destroyed") is True
+    row = repo._meetings[m["id"]]
+    assert row["status"] == "failed"
+    assert row["data"].get("completion_reason") == "awaiting_admission_timeout"
+    assert classify_retry(CompletionReason("awaiting_admission_timeout")) is RetryClass.TRANSIENT
+
+
+def test_user_stop_of_a_live_bot_still_completes():
+    """No-regression, the other side of the same fork: a bot that DID reach the meeting and is then
+    stopped completes with `stopped` — it delivered a real (possibly partial) meeting."""
+    row = _stop_then_destroy("active")
+    assert row["status"] == "completed"
+    assert row["data"].get("completion_reason") == "stopped"

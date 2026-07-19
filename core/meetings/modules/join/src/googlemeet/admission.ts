@@ -366,7 +366,7 @@ export async function waitForGoogleMeetingAdmission(
       const finalWaitingCheck = await checkForWaitingRoomIndicators(page);
       
       if (finalWaitingCheck) {
-        throw new Error("Bot is still in the Google Meet waiting room after timeout - not admitted to the meeting");
+        throw new AdmissionError("lobby_timeout", "Bot is still in the Google Meet waiting room after timeout - not admitted to the meeting");
       }
     } else {
       // Not in waiting room and not admitted yet: actively poll during the timeout
