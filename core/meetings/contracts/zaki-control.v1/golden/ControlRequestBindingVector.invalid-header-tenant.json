@@ -1,0 +1,22 @@
+{
+  "token_scope": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "path_user_id": "42",
+  "headers": {
+    "X-Request-Id": "req_binding_1",
+    "Idempotency-Key": "idem_binding_1",
+    "X-Zaki-Tenant-Id": "tenant_other",
+    "X-Zaki-User-Id": "42"
+  },
+  "request": {
+    "api_version": "zaki-control.v1",
+    "request_id": "req_binding_1",
+    "idempotency_key": "idem_binding_1",
+    "subject": {
+      "tenant_id": "tenant_nova",
+      "user_id": "42"
+    }
+  }
+}

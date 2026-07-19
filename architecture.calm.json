@@ -637,6 +637,18 @@
       ]
     },
     {
+      "unique-id": "zaki-control.v1",
+      "node-type": "contract",
+      "name": "zaki-control.v1",
+      "description": "zaki-control.v1 — sealed owner-scoped Minutes control-plane and signed-callback profile",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/zaki-control.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
       "unique-id": "runtime.v1",
       "node-type": "contract",
       "name": "runtime.v1",
@@ -1264,6 +1276,7 @@
             "transcript.v1",
             "webhook.v1",
             "zaki-read.v1",
+            "zaki-control.v1",
             "transcription",
             "segments-stream",
             "tc-stream",

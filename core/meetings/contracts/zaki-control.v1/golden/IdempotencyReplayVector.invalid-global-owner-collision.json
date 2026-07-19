@@ -1,0 +1,30 @@
+{
+  "attempts": [
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_global_1",
+        "idempotency_key": "idem_global_1",
+        "subject": {
+          "tenant_id": "tenant_nova",
+          "user_id": "42"
+        }
+      }
+    },
+    {
+      "request": {
+        "api_version": "zaki-control.v1",
+        "request_id": "req_global_2",
+        "idempotency_key": "idem_global_1",
+        "subject": {
+          "tenant_id": "tenant_nova",
+          "user_id": "7"
+        }
+      }
+    }
+  ],
+  "expected_outcomes": [
+    "applied",
+    "conflict"
+  ]
+}

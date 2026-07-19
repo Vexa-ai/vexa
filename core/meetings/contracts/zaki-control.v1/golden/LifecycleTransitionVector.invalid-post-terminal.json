@@ -1,0 +1,6 @@
+{
+  "sequences": [
+    ["requested", "joining", "active", "completed", "active"],
+    ["requested", "failed", "stopping"]
+  ]
+}

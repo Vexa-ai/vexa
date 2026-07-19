@@ -1,0 +1,26 @@
+{
+  "configured_jitsi_hosts": [],
+  "request": {
+    "api_version": "zaki-control.v1",
+    "request_id": "req_hostile_jitsi_1",
+    "idempotency_key": "idem_hostile_jitsi_1",
+    "subject": {
+      "tenant_id": "tenant_nova",
+      "user_id": "42"
+    },
+    "platform": "jitsi",
+    "meeting_url": "https://meet.attacker.example/Room42",
+    "capture_attestation": {
+      "bot_visible": true,
+      "bot_display_name": "ZAKI Notetaker",
+      "policy_version": "minutes-notice-2026-07-19",
+      "attested_at": "2026-07-19T09:55:00Z",
+      "attested_by_user_id": "42"
+    },
+    "metering": {
+      "reservation_id": "reserve_hostile_jitsi_1",
+      "unit": "bot_minute",
+      "reserved_units": 60
+    }
+  }
+}

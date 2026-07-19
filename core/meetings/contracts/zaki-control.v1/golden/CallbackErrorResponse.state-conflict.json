@@ -1,0 +1,6 @@
+{
+  "api_version": "zaki-control.v1",
+  "event_id": "evt_usage_01K0A5C3VJ8M1Q7R2T9X4Z6YBP",
+  "code": "invalid_state",
+  "retryable": false
+}

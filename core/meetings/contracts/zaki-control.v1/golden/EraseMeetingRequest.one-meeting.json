@@ -1,0 +1,10 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A59XM2YQZV4R7F6J8B3CHN",
+  "idempotency_key": "idem_01K0A59XM2YQZV4R7F6J8B3CHN",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "meeting_id": "meeting_1842"
+}

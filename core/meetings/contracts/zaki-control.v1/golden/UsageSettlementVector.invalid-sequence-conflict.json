@@ -1,0 +1,47 @@
+{
+  "events": [
+    {
+      "event_id": "evt_conflict_a",
+      "event_type": "minutes.capture.usage",
+      "api_version": "zaki-control.v1",
+      "created_at": "2026-07-19T10:03:00Z",
+      "data": {
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "operation_id": "op_conflict_1",
+        "capture_id": "capture_conflict_1",
+        "meeting_id": "meeting_conflict_1",
+        "metering": {
+          "reservation_id": "reserve_conflict_1",
+          "sequence": 3,
+          "captured_seconds_total": 125,
+          "terminal": false
+        }
+      }
+    },
+    {
+      "event_id": "evt_conflict_b",
+      "event_type": "minutes.capture.usage",
+      "api_version": "zaki-control.v1",
+      "created_at": "2026-07-19T10:03:01Z",
+      "data": {
+        "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+        "operation_id": "op_conflict_1",
+        "capture_id": "capture_conflict_1",
+        "meeting_id": "meeting_conflict_1",
+        "metering": {
+          "reservation_id": "reserve_conflict_1",
+          "sequence": 3,
+          "captured_seconds_total": 180,
+          "terminal": true
+        }
+      }
+    }
+  ],
+  "expected": {
+    "applied_event_ids": ["evt_conflict_a"],
+    "ignored_event_ids": ["evt_conflict_b"],
+    "final_sequence": 3,
+    "final_captured_seconds_total": 125,
+    "terminal": false
+  }
+}

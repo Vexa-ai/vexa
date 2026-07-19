@@ -1,0 +1,15 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A56S4WYRJ83CQ1H7TNM9FV",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "capture_id": "capture_01K0A4P8RC32XJ9K6HY5AVM1QE",
+  "state": "failed",
+  "metering": {
+    "reservation_id": "reserve_01K0A4P8RC32XJ9K6HY5AVM1QE",
+    "captured_seconds_total": 0,
+    "terminal": true
+  }
+}

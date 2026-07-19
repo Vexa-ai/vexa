@@ -1,0 +1,22 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A59XM2YQZV4R7F6J8B3CHN",
+  "operation_id": "op_01K0A5C1V8D3F7N2MW6RQ9XKTH",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "scope": "meeting",
+  "target_id": "meeting_1842",
+  "status": "completed",
+  "receipt": {
+    "receipt_id": "receipt_01K0A5C1V8D3F7N2MW6RQ9XKTH",
+    "erased_at": "2026-07-19T10:08:00Z",
+    "counts": {
+      "meeting_rows": 1,
+      "transcript_rows": 128,
+      "summary_rows": 1,
+      "recording_objects": 7
+    }
+  }
+}
