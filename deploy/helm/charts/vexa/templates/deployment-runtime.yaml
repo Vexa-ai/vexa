@@ -132,18 +132,21 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
       {{- if eq .Values.runtime.backend "docker" }}
