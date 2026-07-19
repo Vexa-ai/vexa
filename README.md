@@ -6,7 +6,7 @@
 
 **Open-source, self-hosted meeting bot & transcription API.**
 
-A bot joins your Google Meet, Microsoft Teams, Zoom, and Jitsi calls and streams speaker-attributed
+A bot joins your Google Meet, Microsoft Teams, Zoom, Jitsi, and Yandex Telemost calls and streams speaker-attributed
 transcripts in real time through an API *you* host — then feeds sandboxed agents that build a
 Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 
@@ -123,7 +123,7 @@ curl -N -X POST "$API_BASE/agent/chat" \
   -d '{"prompt":"What did we decide in my last meeting?"}'
 ```
 
-`platform` is `google_meet` · `teams` · `zoom` · `jitsi`; `native_meeting_id` is the code from the join URL. The
+`platform` is `google_meet` · `teams` · `zoom` · `jitsi` · `telemost`; `native_meeting_id` is the code from the join URL. The
 agent reply streams as Server-Sent Events — `message-delta` frames carry the text, `commit` frames mark
 anything it recorded into your workspace.
 
@@ -422,7 +422,7 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 | `POST` | `/agent/events` | Fire an integration event that dispatches an agent (e.g. email triage) |
 | `GET` | `/agent/workspace/tree` · `/agent/workspace/file` | Browse and read your Markdown workspace |
 
-`platform` ∈ `google_meet` · `teams` · `zoom` · `jitsi`. Full reference: **[docs.vexa.ai](https://docs.vexa.ai)**.
+`platform` ∈ `google_meet` · `teams` · `zoom` · `jitsi` · `telemost`. Full reference: **[docs.vexa.ai](https://docs.vexa.ai)**.
 
 > **v0.12 note:** live bot-control — `PUT /bots/{…}/config` (change language/task mid-call) and
 > `POST /bots/{…}/speak` (TTS into the call) — plus the live-meeting copilot (`/agent/meeting/*`) and

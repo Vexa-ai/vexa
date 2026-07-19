@@ -10,7 +10,8 @@ violate the active-row unique index. Importing only the next occurrence sidestep
 (the following occurrence imports on a later sweep, after the current one completes).
 
 Import rule (fail loud, design-spec meeting-lifecycle-v2 §v4 BUG-2): EVERY upcoming event
-imports. Events with a RECOGNIZABLE meeting link (Meet/Zoom/Teams via ``collector.meeting_link``)
+imports. Events with a RECOGNIZABLE meeting link
+(Meet/Zoom/Teams/Jitsi/Telemost via ``collector.meeting_link``)
 import armed; events WITHOUT one import as LINK-LESS planned rows (``platform='unknown'``,
 no native id) so the terminal can render the honest "bot not armed — no link" state instead of
 the event silently vanishing. A link appearing in a later feed sweep arms the existing row.

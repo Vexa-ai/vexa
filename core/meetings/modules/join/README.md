@@ -1,6 +1,6 @@
 # @vexa/join — the isolated meeting-joining layer
 
-_meetings/ · module (brick) · Google Meet + MS Teams + Zoom **web client** + Jitsi Meet._
+_meetings/ · module (brick) · Google Meet + MS Teams + Zoom **web client** + Jitsi Meet + Yandex Telemost._
 
 **One concern:** drive a browser into a meeting and report its **admission verdict** —
 nothing else. The embedder hands in a logged-in (or guest) Playwright `Page`; the brick

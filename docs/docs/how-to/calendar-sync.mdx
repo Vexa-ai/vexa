@@ -4,7 +4,7 @@ description: "Connect your calendar with its secret ICS address — upcoming mee
 ---
 
 Connect a calendar once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
-with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
+with a Meet/Zoom/Teams/Jitsi/Telemost link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
 and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
 time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
 already provides.
@@ -69,7 +69,7 @@ silence:
 
 - `✓ Synced just now — imported 3` — done; the meetings are under **Upcoming**.
 - `✓ Synced just now — no meetings with joinable links found` — the feed is fine, but no upcoming
-  event carries a Meet/Zoom/Teams link (see [what imports](#what-imports-and-what-doesnt)).
+  event carries a Meet/Zoom/Teams/Jitsi/Telemost link (see [what imports](#what-imports-and-what-doesnt)).
 - `⚠ Last sync failed: …` — the actual reason, named (see the
   [error reference](#reading-the-sync-status) below).
 

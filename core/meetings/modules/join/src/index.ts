@@ -1,5 +1,6 @@
 /**
- * @vexa/join — the isolated meeting joining layer (Google Meet + MS Teams + Zoom web client + Jitsi Meet).
+ * @vexa/join — the isolated meeting joining layer
+ * (Google Meet + MS Teams + Zoom web client + Jitsi Meet + Yandex Telemost).
  *
  * Public surface. Everything below imports only from within this package
  * (verify with `npm run check:isolation`). The embedder supplies a Page and
@@ -23,6 +24,10 @@ import { joinJitsiMeeting, buildJitsiMeetingUrl } from "./jitsi/join";
 import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./jitsi/admission";
 import { leaveJitsiMeeting } from "./jitsi/leave";
 import { startJitsiRemovalMonitor } from "./jitsi/removal";
+import { joinTelemostMeeting, buildTelemostMeetingUrl } from "./telemost/join";
+import { waitForTelemostMeetingAdmission, checkForTelemostAdmissionSilent } from "./telemost/admission";
+import { leaveTelemostMeeting } from "./telemost/leave";
+import { startTelemostRemovalMonitor } from "./telemost/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
@@ -33,7 +38,7 @@ export { startDebugView, setHooks };
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
 export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
 
-export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "telemost";
 
 export interface JoinResult {
   admitted: boolean;
@@ -71,6 +76,7 @@ export function resolvePlatform(meetingUrl: string): Platform {
     const host = new URL(meetingUrl).hostname;
     if (host === "zoom.us" || host.endsWith(".zoom.us")) return "zoom";
     if (host === "meet.jit.si" || host === "8x8.vc" || host.endsWith(".8x8.vc")) return "jitsi";
+    if (host === "telemost.yandex.ru") return "telemost";
   } catch { /* fall through to throw below */ }
   throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
 }
@@ -119,6 +125,11 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForJitsiMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
+  } else if (platform === "telemost") {
+    await joinTelemostMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+    admitted = await waitForTelemostMeetingAdmission(
+      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
   } else {
     await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
     admitted = await waitForGoogleMeetingAdmission(
@@ -141,3 +152,4 @@ export { AuthSessionError } from "./googlemeet/join";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
+export { joinTelemostMeeting, buildTelemostMeetingUrl, waitForTelemostMeetingAdmission, checkForTelemostAdmissionSilent, leaveTelemostMeeting, startTelemostRemovalMonitor };

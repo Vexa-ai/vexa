@@ -12,7 +12,7 @@
 
 // ── Config: only the fields the join layer actually reads ──────────────
 export interface BotConfig {
-  platform?: "google_meet" | "teams" | "zoom" | "jitsi" | string;
+  platform?: "google_meet" | "teams" | "zoom" | "jitsi" | "telemost" | string;
   botName?: string;
   /** meeting passcode (zoom passcode screen / jitsi room password) */
   passcode?: string;
@@ -90,5 +90,8 @@ export async function stopZoomRecording(page?: any, botConfig?: BotConfig): Prom
   await hooks.onStopRecording(page, botConfig as BotConfig);
 }
 export async function stopJitsiRecording(page?: any, botConfig?: BotConfig): Promise<void> {
+  await hooks.onStopRecording(page, botConfig as BotConfig);
+}
+export async function stopTelemostRecording(page?: any, botConfig?: BotConfig): Promise<void> {
   await hooks.onStopRecording(page, botConfig as BotConfig);
 }

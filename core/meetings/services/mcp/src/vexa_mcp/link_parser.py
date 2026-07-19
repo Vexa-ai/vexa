@@ -169,6 +169,22 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         passcode = (query.get("pwd") or [None])[0]
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
 
+    # Yandex Telemost — canonical public web link.
+    if host == "telemost.yandex.ru":
+        match = re.fullmatch(r"/j/(\d{10})/?", path)
+        if not match:
+            raise HTTPException(
+                status_code=422,
+                detail="Unsupported Telemost URL format. Expected https://telemost.yandex.ru/j/<10-digit id>.",
+            )
+        return ParseMeetingLinkResponse(
+            platform="telemost",
+            native_meeting_id=match.group(1),
+            passcode=None,
+            meeting_url=url,
+            warnings=warnings,
+        )
+
     # Jitsi Meet — the canonical public deployment, VEXA_JITSI_HOSTS-declared deployments
     # (the SAME setting meeting-api's parser honours), and the self-hosted naming conventions:
     # a host containing "jitsi" (jitsi.example.org) or a "meet" hostname label anywhere

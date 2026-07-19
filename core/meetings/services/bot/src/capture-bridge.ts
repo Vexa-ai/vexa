@@ -235,7 +235,8 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
  * Wire the page-side capture to pipeline.feedAudio. Exposes the Node bridge binding
  * `__vexaPerSpeakerAudioData(speakerIndex, samples[], tsMs?)` and starts the in-page capture
  * (preferring the shared VexaBrowserUtils module, with production's inline fallback). For the
- * mixed lane (Zoom/Teams) it instead pumps the single mixed stream + active-speaker hints.
+ * mixed lane (Zoom/Teams/Jitsi/Telemost) it instead pumps the single mixed stream
+ * plus platform-provided active-speaker hints when available.
  * Returns a stop fn that tears the page-side capture down.
  *   // L4 (O6/VM): live-validated against a real meeting.
  *   Ported from services/vexa-bot/core/src/index.ts:1930, 1947–1957, 1598–1605.
@@ -306,7 +307,7 @@ export async function startCaptureBridge(
   await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
-      // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
+      // Mixed platforms: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
       // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
       // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
