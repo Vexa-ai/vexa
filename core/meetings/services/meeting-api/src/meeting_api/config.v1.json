@@ -507,6 +507,13 @@
    "default": "100",
    "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this — a stuck/orphaned batch is a reportable state (P18)",
    "targets": []
+  },
+  {
+   "key": "POST_MEETING_HOOKS",
+   "class": "defaulted",
+   "default": "(unset — no system post-meeting hooks are called)",
+   "description": "SYSTEM post-meeting hook targets: comma-separated operator URLs that receive the typed meeting.completed envelope signed with INTERNAL_API_SECRET. Deployment config for cluster-internal consumers (the hosted billing hook), so the sink uses a plain transport with NO SSRF IP-pinning — pinning guards USER-supplied webhook URLs, and these are operator-supplied. Failures drain on their own retry queue. Hosted-only: set by the platform chart, not by the OSS deploy surfaces.",
+   "targets": []
   }
  ],
  "capabilities": {
