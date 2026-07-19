@@ -289,6 +289,33 @@ terminal:
   #     value: "..."
   extraEnv: []
 
+# DEPRECATED, OFF BY DEFAULT — the 0.10 dashboard as an opt-in component (#813). Hosted production
+# still runs this UI against the 0.12 core, and the authenticated-session / browser-session flows
+# are only walkable through it today; shipping it pinned here puts the UI users actually see back
+# on a release cadence. NOT covered by global.imageTag — it versions on its own pinned tag.
+# Deprecation exit: when the Terminal covers those flows, this block and its templates are deleted.
+dashboard:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: vexaai/dashboard
+    tag: 0.10.6.3.14
+  service:
+    type: ClusterIP
+    port: 3000
+    nodePort: ""
+  # External origin once an ingress/LB fronts the dashboard (NEXTAUTH_URL + public app URLs).
+  publicUrl: ""
+  # Public gateway origin as the BROWSER reaches it (NEXT_PUBLIC_* + websocket URL); empty for
+  # cluster-internal / port-forward access. publicWsUrl overrides the derived wss:// value.
+  publicApiUrl: ""
+  publicWsUrl: ""
+  allowRegistrations: true
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 1Gi }
+  extraEnv: []
+
 # Optional idempotent schema-sync Job (meeting-api owns init_db). Off by default; the services
 # create their schema on boot. Enable for an explicit pre-upgrade migration gate.
 migrations:
