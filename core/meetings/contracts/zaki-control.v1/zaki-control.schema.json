@@ -172,6 +172,85 @@
         "received_at_unix": { "type": "integer", "minimum": 1 }
       }
     },
+    "UsageSettlementExpected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applied_event_ids", "ignored_event_ids", "final_sequence",
+        "final_captured_seconds_total", "terminal"
+      ],
+      "properties": {
+        "applied_event_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Identifier" },
+          "maxItems": 32
+        },
+        "ignored_event_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Identifier" },
+          "maxItems": 32
+        },
+        "final_sequence": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "final_captured_seconds_total": { "type": "integer", "minimum": 0, "maximum": 31536000 },
+        "terminal": { "type": "boolean" }
+      }
+    },
+    "UsageSettlementVector": {
+      "description": "Conformance-only delivery-order vector for cumulative wallet settlement; not a wire shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "expected"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/CallbackEnvelope" }
+        },
+        "expected": { "$ref": "#/$defs/UsageSettlementExpected" }
+      }
+    },
+    "IdempotencyAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version", "request_id", "idempotency_key", "subject",
+        "operation", "canonical_request_sha256"
+      ],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "idempotency_key": { "$ref": "#/$defs/Identifier" },
+        "subject": { "$ref": "#/$defs/Subject" },
+        "operation": {
+          "enum": ["ensure", "capture", "stop_capture", "erase_meeting", "erase_account"]
+        },
+        "canonical_request_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "IdempotencyReplayVector": {
+      "description": "Conformance-only vector for owner/operation-scoped mutation replay; not a wire shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "expected_outcomes"],
+      "properties": {
+        "attempts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/IdempotencyAttempt" }
+        },
+        "expected_outcomes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "items": { "enum": ["applied", "replayed", "conflict"] }
+        }
+      }
+    },
     "LifecycleState": {
       "enum": ["requested", "joining", "awaiting_admission", "active", "stopping", "completed", "failed"]
     },
@@ -223,7 +302,7 @@
         "subject": { "$ref": "#/$defs/Subject" },
         "capture_id": { "$ref": "#/$defs/Identifier" },
         "meeting_id": { "$ref": "#/$defs/Identifier" },
-        "state": { "$ref": "#/$defs/LifecycleState" },
+        "state": { "const": "requested" },
         "metering": { "$ref": "#/$defs/ResponseMetering" }
       }
     },
@@ -246,7 +325,31 @@
         "required": ["state"]
       },
       "then": { "required": ["failure_code"] },
-      "else": { "not": { "required": ["failure_code"] } }
+      "else": { "not": { "required": ["failure_code"] } },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "enum": ["completed", "failed"] } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "metering": {
+                "properties": { "terminal": { "const": true } },
+                "required": ["terminal"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "metering": {
+                "properties": { "terminal": { "const": false } },
+                "required": ["terminal"]
+              }
+            }
+          }
+        }
+      ]
     },
     "StopCaptureRequest": {
       "type": "object",
@@ -356,7 +459,12 @@
         "idempotency_key": { "$ref": "#/$defs/Identifier" },
         "subject": { "$ref": "#/$defs/Subject" },
         "platform": { "enum": ["google_meet", "zoom", "teams", "jitsi"] },
-        "meeting_url": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "meeting_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
         "capture_attestation": { "$ref": "#/$defs/CaptureAttestation" },
         "metering": { "$ref": "#/$defs/MeterReservation" }
       }

@@ -1,0 +1,23 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_01K0A6GAVDYE8A5T9D6J2BOVUL",
+  "idempotency_key": "idem_01K0A6GAVDYE8A5T9D6J2BOVUL",
+  "subject": {
+    "tenant_id": "tenant_nova",
+    "user_id": "42"
+  },
+  "platform": "teams",
+  "meeting_url": "https://teams.microsoft.com/meet/123456789012?p=fixture",
+  "capture_attestation": {
+    "bot_visible": true,
+    "bot_display_name": "ZAKI Notetaker",
+    "policy_version": "minutes-notice-2026-07-19",
+    "attested_at": "2026-07-19T09:55:00Z",
+    "attested_by_user_id": "42"
+  },
+  "metering": {
+    "reservation_id": "reserve_01K0A6GAVDYE8A5T9D6J2BOVUL",
+    "unit": "bot_minute",
+    "reserved_units": 60
+  }
+}

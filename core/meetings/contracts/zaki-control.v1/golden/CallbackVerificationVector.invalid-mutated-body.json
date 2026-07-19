@@ -1,0 +1,9 @@
+{
+  "headers": {
+    "Content-Type": "application/json",
+    "X-Webhook-Signature": "sha256=ea64cf83dec5b7e4256a38f9e6937d61dab2b2a8fa7f9d12243509278cae3a91",
+    "X-Webhook-Timestamp": "1784455320"
+  },
+  "raw_body": "{\"event_id\":\"evt_01K0A4W3J8YQZFB2R7H9MC6NXT\",\"event_type\":\"minutes.capture.usage\",\"api_version\":\"zaki-control.v1\",\"created_at\":\"2026-07-19T10:02:00Z\",\"data\":{\"subject\":{\"tenant_id\":\"tenant_nova\",\"user_id\":\"42\"},\"operation_id\":\"op_01K0A4P8RC32XJ9K6HY5AVM1QE\",\"capture_id\":\"capture_01K0A4P8RC32XJ9K6HY5AVM1QE\",\"meeting_id\":\"meeting_1842\",\"metering\":{\"reservation_id\":\"reserve_01K0A4P8RC32XJ9K6HY5AVM1QE\",\"sequence\":3,\"captured_seconds_total\":126,\"terminal\":false}}}",
+  "received_at_unix": 1784455500
+}

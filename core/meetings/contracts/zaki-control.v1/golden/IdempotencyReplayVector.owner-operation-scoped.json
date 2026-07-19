@@ -1,0 +1,45 @@
+{
+  "attempts": [
+    {
+      "api_version": "zaki-control.v1",
+      "request_id": "req_idem_1",
+      "idempotency_key": "idem_shared_1",
+      "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+      "operation": "ensure",
+      "canonical_request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "api_version": "zaki-control.v1",
+      "request_id": "req_idem_2",
+      "idempotency_key": "idem_shared_1",
+      "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+      "operation": "ensure",
+      "canonical_request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "api_version": "zaki-control.v1",
+      "request_id": "req_idem_3",
+      "idempotency_key": "idem_shared_1",
+      "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+      "operation": "ensure",
+      "canonical_request_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "api_version": "zaki-control.v1",
+      "request_id": "req_idem_4",
+      "idempotency_key": "idem_shared_1",
+      "subject": { "tenant_id": "tenant_nova", "user_id": "7" },
+      "operation": "ensure",
+      "canonical_request_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "api_version": "zaki-control.v1",
+      "request_id": "req_idem_5",
+      "idempotency_key": "idem_shared_1",
+      "subject": { "tenant_id": "tenant_nova", "user_id": "42" },
+      "operation": "capture",
+      "canonical_request_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "expected_outcomes": ["applied", "replayed", "conflict", "applied", "applied"]
+}

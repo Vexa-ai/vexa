@@ -35,9 +35,16 @@ POST /api/minutes/callback/v1                 # engine → Hub BFF
 ```
 
 Mutations require `X-Request-Id` and `Idempotency-Key`; their values must equal `request_id` and
-`idempotency_key` in the body. Replaying the same key with the same canonical request returns the
-same operation/result without repeating a side effect. Reusing a key for a different request returns
-`409 idempotency_conflict`. GET status is bounded, credential-free JSON.
+`idempotency_key` in the body. The idempotency namespace is `(api_version, tenant_id, user_id,
+operation, idempotency_key)`, where `operation` is one of `ensure`, `capture`, `stop_capture`,
+`erase_meeting` or `erase_account`; another owner or operation has an independent namespace.
+
+The canonical request is UTF-8 JSON after removing `request_id` and `idempotency_key`, recursively
+sorting object keys, preserving array order and emitting no insignificant whitespace. Replaying the
+same namespace with the same canonical SHA-256 returns the original operation/result without a side
+effect; the response echoes the current attempt's `request_id`. A different canonical hash in the
+same namespace returns `409 idempotency_conflict`. `IdempotencyReplayVector` is the executable
+conformance context for these rules. GET status is bounded, credential-free JSON.
 
 | Route | Request `$def` | Success `$def` |
 |---|---|---|
@@ -58,9 +65,13 @@ internal failures. It deliberately carries no free-form detail field.
 `CaptureRequest` requires one visible-bot attestation: `bot_visible=true`, a bounded display name,
 the exact notice policy version, the attestation timestamp and the same numeric owner as the bound
 subject. The server independently enforces policy and lifecycle; the attestation is evidence, not an
-authorization bypass. States are limited to `requested → joining → awaiting_admission → active →
-stopping → completed|failed`. A failed state always carries one named `failure_code`; other states
-must not.
+authorization bypass. `meeting_url` must be HTTPS, contain no URL credentials and match the declared
+platform's recognized provider host/path; Jitsi additionally permits operator-declared
+`VEXA_JITSI_HOSTS`. A successful capture creation returns only `state=requested`. Later states are
+observed through status and callbacks, limited to `requested → joining → awaiting_admission → active
+→ stopping → completed|failed`. A failed state always carries one named `failure_code`; other states
+must not. `StatusResponse.metering.terminal` is true exactly for `completed|failed` and false for all
+non-terminal lifecycle states.
 
 Retention is explicit and policy-owned. This schema admits operator-selected bounded windows but
 does not choose defaults. Summary retention cannot outlive transcript retention. A read never extends
@@ -71,8 +82,21 @@ any window; `zaki-read.v1` remains the separate read boundary.
 The Hub reserves wallet units before capture and sends the stable `reservation_id` in
 `CaptureRequest`. Usage callbacks identify the event, operation, capture, meeting and reservation;
 they report a monotonic sequence plus cumulative `captured_seconds_total`. Consumers settle deltas
-idempotently and finalize/refund exactly once when `terminal=true`. The engine never decides money,
-plan prices or allowances, and the contract never exposes wallet balances to the engine.
+idempotently and finalize/refund exactly once when `terminal=true`:
+
+1. A repeated `event_id` returns the duplicate acknowledgement and has no second effect.
+2. A sequence lower than the last applied sequence is stale and has no financial effect.
+3. The same sequence and cumulative/terminal values have no second financial effect; conflicting
+   values for an applied sequence fail closed as `409 invalid_state`.
+4. A higher sequence applies only when its cumulative total is not lower than the last applied total;
+   settlement is the non-negative delta between those totals.
+5. The first applied `terminal=true` finalizes/refunds once. Later events are recorded and
+   acknowledged but have no state or financial effect.
+
+All events in one settlement stream must share subject, operation, capture, meeting and reservation
+identity. `UsageSettlementVector` executes reordered delivery, duplicate, conflict, decreasing-total
+and post-terminal cases. The engine never decides money, plan prices or allowances, and the contract
+never exposes wallet balances to the engine.
 
 ## Callback authentication
 
@@ -88,7 +112,9 @@ constant-time comparison, rejects timestamps more than 300 seconds from receipt,
 `CallbackAck.status = duplicate` with a 2xx response and performs no second transition or
 settlement. The legacy
 `Authorization: Bearer <secret>` field allowed by generic `webhook.v1` is forbidden in this profile.
-`CallbackVerificationVector` is conformance harness context, not an additional wire shape.
+`CallbackVerificationVector` covers the exact signed bytes, a syntactically valid wrong signature,
+raw-body mutation and stale delivery. It is conformance harness context, not an additional wire
+shape.
 
 ## Erasure boundary
 

@@ -19,7 +19,7 @@
   "core/meetings/contracts/lifecycle.v1": "5d36907c06e8157958845f09ae888c0dde1bbf1e4fce3ed98d29aeb62e5f6a49",
   "core/meetings/contracts/transcript.v1": "7d07d0fbac77f6562af64ae6c6286051e0e07763f427347d4e7b7735eaa0f9c8",
   "core/meetings/contracts/webhook.v1": "d043f0f5c51b08532b04ff00a5f6b62f99d0cccc79c58c82bd28a55b17755deb",
-  "core/meetings/contracts/zaki-control.v1": "0a933940606ff10c60cd5a63682db34b483cd79a3c3a88b2a058601491dc7cf2",
+  "core/meetings/contracts/zaki-control.v1": "7f23a44b4371382305a08e63eb77112b57e9c54e271b6ef3fe43dadeb0f216a6",
   "core/meetings/contracts/zaki-read.v1": "5145eee88cba8d63f34d8fe6e919b75244fdf9f68180d33a77525bdd1291ce35",
   "core/runtime/contracts/runtime.v1": "9d67b9379e0d34c4d715764a467e7f6e6543a5db8177fc284fb4a7418067bc18",
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
