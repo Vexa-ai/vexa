@@ -285,13 +285,19 @@
     "IdempotencyAttempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["request"],
+      "required": ["request", "response_request_id"],
       "properties": {
-        "request": { "$ref": "#/$defs/MutationRequest" }
+        "request": { "$ref": "#/$defs/MutationRequest" },
+        "response_request_id": { "$ref": "#/$defs/Identifier" },
+        "result_sha256": {
+          "description": "Canonical SHA-256 of a successful response after removing request_id; omitted for idempotency conflicts.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "IdempotencyReplayVector": {
-      "description": "Conformance-only vector that derives operation and canonical SHA-256 from real mutation requests; not a wire shape.",
+      "description": "Conformance-only vector that derives operation and canonical request SHA-256 from real mutations and observes response correlation/result stability; not a wire shape.",
       "type": "object",
       "additionalProperties": false,
       "required": ["attempts", "expected_outcomes"],

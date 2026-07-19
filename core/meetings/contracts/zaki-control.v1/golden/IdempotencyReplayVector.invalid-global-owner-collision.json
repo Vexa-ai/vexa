@@ -9,7 +9,9 @@
           "tenant_id": "tenant_nova",
           "user_id": "42"
         }
-      }
+      },
+      "response_request_id": "req_global_1",
+      "result_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
     },
     {
       "request": {
@@ -20,7 +22,9 @@
           "tenant_id": "tenant_nova",
           "user_id": "7"
         }
-      }
+      },
+      "response_request_id": "req_global_2",
+      "result_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
     }
   ],
   "expected_outcomes": [
