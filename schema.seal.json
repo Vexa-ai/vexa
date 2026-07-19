@@ -35,7 +35,7 @@
       "value": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})"
     },
     "transcriptions": {
-      "created_at": "Column(DateTime, default=datetime.utcnow)",
+      "created_at": "Column(DateTime, default=datetime.now(timezone.utc))",
       "end_time": "Column(Float, nullable=False)",
       "id": "Column(Integer, primary_key=True, index=True)",
       "language": "Column(String(10), nullable=True)",
@@ -77,7 +77,7 @@
       "user_id": "Column(Integer, nullable=False, index=True)"
     },
     "transcriptions": {
-      "created_at": "Column(DateTime, default=datetime.utcnow)",
+      "created_at": "Column(DateTime, default=datetime.now(timezone.utc))",
       "end_time": "Column(Float, nullable=False)",
       "id": "Column(Integer, primary_key=True, index=True)",
       "language": "Column(String(10), nullable=True)",
