@@ -5,6 +5,9 @@
   STT round-trip beside it (`<session>.stt.jsonl`). A recorded session replays byte-for-byte
   through the exact transcription pipeline with no live meeting (`REPLAY_FIXTURE=<file> tsx
   src/replay.test.ts`), and `eval/src/distill.mjs` cuts a session down to a minimal fixture
-  around a reported symptom (time window / speaker). Off by default; when off, the capture
-  path is unchanged (a single branch). This is the diagnostic layer for zero-transcript and
-  misattribution reports: the failing meeting's input becomes a deterministic red test.
+  around a reported symptom (time window / speaker). A session stores both halves of the
+  signal: the audio frames and — for Zoom/Teams/Jitsi, whose single mixed stream is named from
+  active-speaker hints arriving on their own channel — those hints as `type: "hint"` records,
+  so a replay reproduces who spoke, not just what was heard. Off by default; when off, the
+  capture path is unchanged (a single branch). This is the diagnostic layer for zero-transcript
+  and misattribution reports: the failing meeting's input becomes a deterministic red test.
