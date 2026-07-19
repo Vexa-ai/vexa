@@ -37,9 +37,11 @@ snapshot, and continue without overlap.
 3. Brain distillates use `write_origin=meeting_ingest`, `source_spoke=minutes`, `source_item_id` and
    `meeting_id`. This is sufficient for scoped forget without a Brain schema change; raw transcript
    content is never a distillate.
-4. Serialized `item.content` is limited to 262,144 bytes. The complete HTTP response is separately
-   limited to 270,336 bytes, and the agent retains its 8-call/1-MiB per-turn budget. A full transcript
-   over the content cap returns `413`; `variant=summary` remains available within the same bounds.
+4. Serialized `item.content` is limited to 262,144 bytes. The complete item response is separately
+   limited to 270,336 bytes. A full transcript over the content cap returns `413`;
+   `variant=summary` remains available within the same bounds. The former shared 8-call/1-MiB
+   cross-spoke turn budget is superseded: volume is governed by per-page/per-item bounds, authorized
+   opaque cursors, transport timeouts, and ordinary Agent iteration and billing controls.
 
 ## Binding conditions
 

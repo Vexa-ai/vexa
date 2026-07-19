@@ -496,6 +496,111 @@ def test_index_limit_is_bounded_without_leaking_framework_validation(limit: str)
     assert len(response.json()["items"]) <= 200
 
 
+def test_summary_variant_does_not_materialize_oversized_transcript():
+    store = _store()
+    store._meetings[41]["segments"]["turn-1"]["text"] = "x" * 65_537
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("summary fallback must not load transcript segments")
+
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41?variant=summary",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _contract_validator("ItemResponse").validate(body)
+    assert body["item"]["content"] == {
+        "format": "summary",
+        "text": "The team kept Minutes gated and assigned the privacy follow-up.",
+    }
+
+
+def test_summary_variant_fails_closed_when_no_stored_summary_exists():
+    store = _store()
+    del store._meetings[41]["data"]["summary"]
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41?variant=summary",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "unknown_item"
+
+
+def test_summary_variant_respects_the_stored_summary_retention_scope():
+    store = _store()
+    store._meetings[41]["data"]["zaki_retention"]["scope_expiries"]["summary"] = (
+        "2026-07-17T11:59:59+00:00"
+    )
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41?variant=summary",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "unknown_item"
+
+
+def test_denied_full_transcript_does_not_materialize_sensitive_segments():
+    store = _store()
+    store._meetings[41]["data"]["zaki_retention"]["scope_expiries"]["transcript"] = (
+        "2026-07-17T11:59:59+00:00"
+    )
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("retention must be authorized before transcript segments are loaded")
+
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "unknown_item"
+
+
+@pytest.mark.parametrize("item_id", ["meeting:41", "summary:41"])
+def test_metadata_backed_items_do_not_materialize_transcript_segments(item_id: str):
+    store = _store()
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("metadata-backed items must not load transcript segments")
+
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/{item_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    _contract_validator("ItemResponse").validate(response.json())
+
+
+@pytest.mark.parametrize("language", ["", "x", "x" * 36])
+def test_transcript_omits_language_outside_the_sealed_bounds(language: str):
+    store = _store()
+    store._meetings[41]["segments"]["turn-1"]["language"] = language
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _contract_validator("ItemResponse").validate(body)
+    assert "language" not in body["item"]["content"]
+
+
 def test_turn_schema_bound_is_distinct_from_aggregate_content_cap():
     invalid_store = _store()
     invalid_store._meetings[41]["segments"]["turn-1"]["text"] = "x" * 65_537
