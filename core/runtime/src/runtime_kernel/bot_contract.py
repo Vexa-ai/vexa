@@ -22,6 +22,10 @@ _BOT_IMAGE = re.compile(
 _RESOURCE_KEYS = {"cpu", "memory", "ephemeral-storage"}
 _POD_VOLUME_NAMES = {"tmp", "dshm"}
 _POD_MOUNTS = {"tmp": "/tmp", "dshm": "/dev/shm"}
+_K8S_QUANTITY = re.compile(
+    r"^(?:0|[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(?:[eE][+-]?[0-9]+|(?:Ki|Mi|Gi|Ti|Pi|Ei|[numkKMGTPE]))?$"
+)
+_K8S_SECRET_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 
 
 class BotPodContractError(ValueError):
@@ -103,6 +107,8 @@ class BotPodContract:
         if image_pull_policy not in {"Always", "IfNotPresent", "Never"}:
             _error("imagePullPolicy", "must be Always, IfNotPresent, or Never")
         image_pull_secret = _string(doc.get("imagePullSecret"), "imagePullSecret")
+        if len(image_pull_secret) > 253 or not _K8S_SECRET_NAME.fullmatch(image_pull_secret):
+            _error("imagePullSecret", "must be a Kubernetes DNS-subdomain secret name")
 
         service_account_name = _string(doc.get("serviceAccountName"), "serviceAccountName")
         if service_account_name != "zaki-minutes-bot":
@@ -181,7 +187,7 @@ def _validate_resources(value: Any) -> dict[str, dict[str, str]]:
         if set(quantities) != _RESOURCE_KEYS:
             _error(f"resources.{kind}", "must define cpu, memory, and ephemeral-storage")
         typed[kind] = {
-            key: _string(quantities.get(key), f"resources.{kind}.{key}") for key in _RESOURCE_KEYS
+            key: _quantity(quantities.get(key), f"resources.{kind}.{key}") for key in _RESOURCE_KEYS
         }
     return typed
 
@@ -206,12 +212,19 @@ def _validate_volumes(value: Any) -> list[dict[str, Any]]:
                 _error("volumes.dshm.emptyDir", "must contain medium=Memory and sizeLimit")
         else:
             _error(f"volumes[{index}].name", "must be tmp or dshm")
-        _string(empty_dir.get("sizeLimit"), f"volumes.{name}.emptyDir.sizeLimit")
+        _quantity(empty_dir.get("sizeLimit"), f"volumes.{name}.emptyDir.sizeLimit")
         names.add(name)
         typed.append(volume)
     if names != _POD_VOLUME_NAMES:
         _error("volumes", "must define one tmp and one dshm volume")
     return typed
+
+
+def _quantity(value: Any, field: str) -> str:
+    quantity = _string(value, field)
+    if not _K8S_QUANTITY.fullmatch(quantity):
+        _error(field, "must be a non-negative Kubernetes quantity")
+    return quantity
 
 
 def _validate_volume_mounts(value: Any) -> list[dict[str, Any]]:

@@ -99,6 +99,26 @@ def test_contract_rejects_a_public_or_mutable_bot_image():
         BotPodContract.from_document(document)
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("resources", "requests", "cpu"), "bananas"),
+        (("resources", "limits", "memory"), "-1Gi"),
+        (("volumes", 0, "emptyDir", "sizeLimit"), "nonsense"),
+        (("imagePullSecret",), "bad secret!"),
+    ],
+)
+def test_contract_rejects_values_kubernetes_would_refuse(path, value):
+    document = _contract_document()
+    target = document
+    for segment in path[:-1]:
+        target = target[segment]
+    target[path[-1]] = value
+
+    with pytest.raises(BotPodContractError):
+        BotPodContract.from_document(document)
+
+
 def test_k8s_start_materializes_restricted_contract_as_a_complete_container(monkeypatch):
     document = _contract_document()
     contract = BotPodContract.from_document(copy.deepcopy(document))
