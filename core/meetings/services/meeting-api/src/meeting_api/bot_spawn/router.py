@@ -32,6 +32,7 @@ from .ports import (
     SpawnFailed,
     TranscriptionNotConfigured,
 )
+from .invocation import SPAWNABLE_PLATFORMS
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
 
@@ -246,6 +247,27 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             raise HTTPException(
                 status_code=422,
                 detail="'platform' and 'native_meeting_id' (or 'meeting_url') are required",
+            )
+        # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
+        # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
+        # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
+        # sailed past the constructibility guard below, wrote its `requested` meeting row, and then
+        # died inside build_invocation's schema validation: a 500, plus an ORPHANED active row that
+        # 409s the user's retry on the dedup guard. The refusal names the real state of the world.
+        if platform not in SPAWNABLE_PLATFORMS:
+            supported = ", ".join(sorted(SPAWNABLE_PLATFORMS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"platform '{platform}' cannot be spawned as a meeting bot — supported: "
+                    f"{supported}"
+                    + (
+                        ". browser_session is a provisioning workload, not a meeting bot; its "
+                        "0.12 runtime path is not yet restored (tracked in "
+                        "https://github.com/Vexa-ai/vexa/issues/816)"
+                        if platform == "browser_session" else ""
+                    )
+                ),
             )
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
