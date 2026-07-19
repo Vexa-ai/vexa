@@ -1,0 +1,28 @@
+{
+  "configured_jitsi_hosts": [
+    "video.corp"
+  ],
+  "request": {
+    "api_version": "zaki-control.v1",
+    "request_id": "req_01K0CUSTOMJITSI000000000001",
+    "idempotency_key": "idem_01K0CUSTOMJITSI00000000001",
+    "subject": {
+      "tenant_id": "tenant_nova",
+      "user_id": "42"
+    },
+    "platform": "jitsi",
+    "meeting_url": "https://video.corp/ZakiRoom",
+    "capture_attestation": {
+      "bot_visible": true,
+      "bot_display_name": "ZAKI Notetaker",
+      "policy_version": "minutes-notice-2026-07-19",
+      "attested_at": "2026-07-19T09:55:00Z",
+      "attested_by_user_id": "42"
+    },
+    "metering": {
+      "reservation_id": "reserve_01K0CUSTOMJITSI00000001",
+      "unit": "bot_minute",
+      "reserved_units": 60
+    }
+  }
+}

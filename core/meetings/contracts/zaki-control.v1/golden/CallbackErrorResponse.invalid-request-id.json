@@ -1,0 +1,6 @@
+{
+  "api_version": "zaki-control.v1",
+  "request_id": "req_callback_failure_has_no_request",
+  "code": "auth_failed",
+  "retryable": false
+}

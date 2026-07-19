@@ -1,0 +1,5 @@
+{
+  "api_version": "zaki-control.v1",
+  "code": "auth_failed",
+  "retryable": false
+}

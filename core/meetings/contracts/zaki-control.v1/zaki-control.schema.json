@@ -145,6 +145,26 @@
         "status": { "enum": ["accepted", "duplicate"] }
       }
     },
+    "CallbackErrorResponse": {
+      "description": "Closed callback failure shape. event_id is omitted until authentication and envelope parsing establish a trusted event identity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "code", "retryable"],
+      "properties": {
+        "api_version": { "const": "zaki-control.v1" },
+        "event_id": {
+          "description": "Trusted callback event identity; absent for authentication or untrusted-body failures.",
+          "$ref": "#/$defs/Identifier"
+        },
+        "code": {
+          "enum": [
+            "auth_failed", "invalid_request", "invalid_state",
+            "upstream_unavailable", "internal_error"
+          ]
+        },
+        "retryable": { "type": "boolean" }
+      }
+    },
     "SignatureHeaders": {
       "type": "object",
       "additionalProperties": false,
@@ -170,6 +190,21 @@
         "headers": { "$ref": "#/$defs/SignatureHeaders" },
         "raw_body": { "type": "string", "minLength": 2, "maxLength": 65536 },
         "received_at_unix": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "CaptureRequestValidationVector": {
+      "description": "Conformance-only capture URL validation context; configured_jitsi_hosts is not a wire field.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configured_jitsi_hosts", "request"],
+      "properties": {
+        "configured_jitsi_hosts": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "hostname", "maxLength": 253 }
+        },
+        "request": { "$ref": "#/$defs/CaptureRequest" }
       }
     },
     "UsageSettlementExpected": {
@@ -213,26 +248,21 @@
     "IdempotencyAttempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "api_version", "request_id", "idempotency_key", "subject",
-        "operation", "canonical_request_sha256"
-      ],
+      "required": ["request"],
       "properties": {
-        "api_version": { "const": "zaki-control.v1" },
-        "request_id": { "$ref": "#/$defs/Identifier" },
-        "idempotency_key": { "$ref": "#/$defs/Identifier" },
-        "subject": { "$ref": "#/$defs/Subject" },
-        "operation": {
-          "enum": ["ensure", "capture", "stop_capture", "erase_meeting", "erase_account"]
-        },
-        "canonical_request_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
+        "request": {
+          "oneOf": [
+            { "$ref": "#/$defs/EnsureRequest" },
+            { "$ref": "#/$defs/CaptureRequest" },
+            { "$ref": "#/$defs/StopCaptureRequest" },
+            { "$ref": "#/$defs/EraseMeetingRequest" },
+            { "$ref": "#/$defs/EraseAccountRequest" }
+          ]
         }
       }
     },
     "IdempotencyReplayVector": {
-      "description": "Conformance-only vector for owner/operation-scoped mutation replay; not a wire shape.",
+      "description": "Conformance-only vector that derives operation and canonical SHA-256 from real mutation requests; not a wire shape.",
       "type": "object",
       "additionalProperties": false,
       "required": ["attempts", "expected_outcomes"],

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,9 +12,20 @@ const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema(schema);
 const validateCallbackEnvelope = ajv.compile({ $ref: `${schema.$id}#/$defs/CallbackEnvelope` });
+const mutationOperations = [
+  ["ensure", "EnsureRequest"],
+  ["capture", "CaptureRequest"],
+  ["stop_capture", "StopCaptureRequest"],
+  ["erase_meeting", "EraseMeetingRequest"],
+  ["erase_account", "EraseAccountRequest"]
+].map(([operation, shape]) => [
+  operation,
+  shape,
+  ajv.compile({ $ref: `${schema.$id}#/$defs/${shape}` })
+]);
 const CALLBACK_TEST_KEY = "zaki-control-v1-contract-test-key";
 
-function meetingUrlMatchesPlatform(platform, rawUrl) {
+function meetingUrlMatchesPlatform(platform, rawUrl, configuredJitsiHosts = []) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -52,7 +63,7 @@ function meetingUrlMatchesPlatform(platform, rawUrl) {
       (url.pathname.replace(/\/$/, "") === "/v2" && /^\/meet\/\d{10,15}\/?$/.test(fragmentPath));
   }
   if (platform === "jitsi") {
-    const configuredHosts = new Set((process.env.VEXA_JITSI_HOSTS ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
+    const configuredHosts = new Set(configuredJitsiHosts.map((value) => value.toLowerCase()));
     const knownHost = host === "meet.jit.si" || configuredHosts.has(host) || host.includes("jitsi") || host.split(".").includes("meet");
     const room = url.pathname.replace(/^\/+|\/+$/g, "");
     return knownHost && room.length > 0 && !/[/?#\s]/.test(room);
@@ -62,6 +73,26 @@ function meetingUrlMatchesPlatform(platform, rawUrl) {
 
 function sameArray(actual, expected) {
   return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+}
+
+function sortJson(value) {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJson(value[key])]));
+  }
+  return value;
+}
+
+function canonicalRequestSha256(request) {
+  const { request_id: _requestId, idempotency_key: _idempotencyKey, ...semanticRequest } = request;
+  return createHash("sha256")
+    .update(JSON.stringify(sortJson(semanticRequest)), "utf8")
+    .digest("hex");
+}
+
+function mutationOperation(request) {
+  const matches = mutationOperations.filter(([, , validate]) => validate(request));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function usageSettlementErrors(data) {
@@ -133,25 +164,51 @@ function usageSettlementErrors(data) {
 }
 
 function idempotencyReplayErrors(data) {
+  const errors = [];
   const records = new Map();
   const outcomes = data.attempts.map((attempt) => {
+    const request = attempt.request;
+    const mutation = mutationOperation(request);
+    if (!mutation) {
+      errors.push("idempotency attempt must contain exactly one recognized mutation request");
+      return "invalid";
+    }
+    const [operation, shape] = mutation;
+    const requestErrors = semanticErrors(shape, request);
+    if (requestErrors.length) {
+      errors.push(...requestErrors.map((error) => `idempotency attempt: ${error}`));
+      return "invalid";
+    }
     const namespace = [
-      attempt.api_version,
-      attempt.subject.tenant_id,
-      attempt.subject.user_id,
-      attempt.operation,
-      attempt.idempotency_key
+      request.api_version,
+      request.subject.tenant_id,
+      request.subject.user_id,
+      operation,
+      request.idempotency_key
     ].join("\u0000");
+    const requestHash = canonicalRequestSha256(request);
     const previousHash = records.get(namespace);
     if (previousHash === undefined) {
-      records.set(namespace, attempt.canonical_request_sha256);
+      records.set(namespace, requestHash);
       return "applied";
     }
-    return previousHash === attempt.canonical_request_sha256 ? "replayed" : "conflict";
+    return previousHash === requestHash ? "replayed" : "conflict";
   });
-  return sameArray(outcomes, data.expected_outcomes)
-    ? []
-    : ["idempotency outcomes do not match owner/operation-scoped replay semantics"];
+  if (!sameArray(outcomes, data.expected_outcomes)) {
+    errors.push("idempotency outcomes do not match canonical owner/operation-scoped replay semantics");
+  }
+  return errors;
+}
+
+function captureRequestErrors(request, configuredJitsiHosts = []) {
+  const errors = [];
+  if (request?.capture_attestation?.attested_by_user_id !== request?.subject?.user_id) {
+    errors.push("capture attestation user must match the bound subject");
+  }
+  if (!meetingUrlMatchesPlatform(request?.platform, request?.meeting_url, configuredJitsiHosts)) {
+    errors.push("meeting URL must be a supported HTTPS URL matching the declared platform and validation context");
+  }
+  return errors;
 }
 
 function semanticErrors(shape, data) {
@@ -159,11 +216,9 @@ function semanticErrors(shape, data) {
   if (shape === "EnsureRequest" && data?.policy?.retention?.summary_days > data?.policy?.retention?.transcript_days) {
     errors.push("summary retention cannot outlive transcript retention");
   }
-  if (shape === "CaptureRequest" && data?.capture_attestation?.attested_by_user_id !== data?.subject?.user_id) {
-    errors.push("capture attestation user must match the bound subject");
-  }
-  if (shape === "CaptureRequest" && !meetingUrlMatchesPlatform(data?.platform, data?.meeting_url)) {
-    errors.push("meeting URL must be a supported HTTPS URL matching the declared platform");
+  if (shape === "CaptureRequest") errors.push(...captureRequestErrors(data));
+  if (shape === "CaptureRequestValidationVector") {
+    errors.push(...captureRequestErrors(data?.request, data?.configured_jitsi_hosts));
   }
   if (shape === "CallbackVerificationVector") {
     const signedAt = Number(data?.headers?.["X-Webhook-Timestamp"]);

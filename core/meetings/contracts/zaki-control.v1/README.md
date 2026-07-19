@@ -39,26 +39,29 @@ Mutations require `X-Request-Id` and `Idempotency-Key`; their values must equal 
 operation, idempotency_key)`, where `operation` is one of `ensure`, `capture`, `stop_capture`,
 `erase_meeting` or `erase_account`; another owner or operation has an independent namespace.
 
-The canonical request is UTF-8 JSON after removing `request_id` and `idempotency_key`, recursively
-sorting object keys, preserving array order and emitting no insignificant whitespace. Replaying the
-same namespace with the same canonical SHA-256 returns the original operation/result without a side
-effect; the response echoes the current attempt's `request_id`. A different canonical hash in the
-same namespace returns `409 idempotency_conflict`. `IdempotencyReplayVector` is the executable
-conformance context for these rules. GET status is bounded, credential-free JSON.
+The canonical request is UTF-8 JSON after removing top-level `request_id` and `idempotency_key`,
+recursively sorting object keys, preserving array order and emitting no insignificant whitespace.
+Replaying the same namespace with the same canonical SHA-256 returns the original operation/result
+without a side effect; the response echoes the current attempt's `request_id`. A different canonical
+hash in the same namespace returns `409 idempotency_conflict`. `IdempotencyReplayVector` supplies real
+mutation request bodies; the validator infers the operation from the closed request shape and computes
+the canonical SHA-256 itself. GET status is bounded, credential-free JSON.
 
-| Route | Request `$def` | Success `$def` |
-|---|---|---|
-| `ensure` | `EnsureRequest` | `EnsureResponse` |
-| `captures` | `CaptureRequest` | `CaptureResponse` |
-| capture status | — | `StatusResponse` |
-| capture stop | `StopCaptureRequest` | `StatusResponse` |
-| meeting erase | `EraseMeetingRequest` | `ErasureResponse` |
-| account erase | `EraseAccountRequest` | `ErasureResponse` |
-| callback | `CallbackEnvelope` + `SignatureHeaders` | `CallbackAck` |
+| Route | Request `$def` | Success `$def` | Failure `$def` |
+|---|---|---|---|
+| `ensure` | `EnsureRequest` | `EnsureResponse` | `ErrorResponse` |
+| `captures` | `CaptureRequest` | `CaptureResponse` | `ErrorResponse` |
+| capture status | — | `StatusResponse` | `ErrorResponse` |
+| capture stop | `StopCaptureRequest` | `StatusResponse` | `ErrorResponse` |
+| meeting erase | `EraseMeetingRequest` | `ErasureResponse` | `ErrorResponse` |
+| account erase | `EraseAccountRequest` | `ErasureResponse` | `ErrorResponse` |
+| callback | `CallbackEnvelope` + `SignatureHeaders` | `CallbackAck` | `CallbackErrorResponse` |
 
-Every non-success response is `ErrorResponse`. Its closed code vocabulary separates authentication,
+Control-route failures use `ErrorResponse`. Its closed code vocabulary separates authentication,
 binding, disabled, quota, idempotency conflict, illegal state, invalid input, retryable upstream and
-internal failures. It deliberately carries no free-form detail field.
+internal failures. Callback failures use `CallbackErrorResponse`, whose closed vocabulary is limited
+to authentication, invalid input/state, retryable upstream and internal failures. Neither error shape
+carries free-form detail.
 
 ## Capture and consent
 
@@ -66,12 +69,13 @@ internal failures. It deliberately carries no free-form detail field.
 the exact notice policy version, the attestation timestamp and the same numeric owner as the bound
 subject. The server independently enforces policy and lifecycle; the attestation is evidence, not an
 authorization bypass. `meeting_url` must be HTTPS, contain no URL credentials and match the declared
-platform's recognized provider host/path; Jitsi additionally permits operator-declared
-`VEXA_JITSI_HOSTS`. A successful capture creation returns only `state=requested`. Later states are
-observed through status and callbacks, limited to `requested → joining → awaiting_admission → active
-→ stopping → completed|failed`. A failed state always carries one named `failure_code`; other states
-must not. `StatusResponse.metering.terminal` is true exactly for `completed|failed` and false for all
-non-terminal lifecycle states.
+platform's recognized provider host/path. Runtime adapters may supply operator-declared Jitsi hosts
+through validated configuration; `CaptureRequestValidationVector` carries that host list explicitly,
+so ambient process environment never changes sealed conformance. A successful capture creation returns
+only `state=requested`. Later states are observed through status and callbacks, limited to `requested
+→ joining → awaiting_admission → active → stopping → completed|failed`. A failed state always carries
+one named `failure_code`; other states must not. `StatusResponse.metering.terminal` is true exactly for
+`completed|failed` and false for all non-terminal lifecycle states.
 
 Retention is explicit and policy-owned. This schema admits operator-selected bounded windows but
 does not choose defaults. Summary retention cannot outlive transcript retention. A read never extends
@@ -108,9 +112,10 @@ X-Webhook-Signature = sha256=<hex(HMAC-SHA256(key, X-Webhook-Timestamp + "." + r
 
 The receiver verifies the signature against the exact bytes received **before JSON parsing**, uses a
 constant-time comparison, rejects timestamps more than 300 seconds from receipt, and records
-`event_id` before applying state or wallet effects. A repeated event returns
-`CallbackAck.status = duplicate` with a 2xx response and performs no second transition or
-settlement. The legacy
+`event_id` before applying state or wallet effects. Authentication failures return
+`CallbackErrorResponse` without `event_id`; the receiver may include `event_id` only after both the
+signature and parsed envelope are trusted. A repeated event returns `CallbackAck.status = duplicate`
+with a 2xx response and performs no second transition or settlement. The legacy
 `Authorization: Bearer <secret>` field allowed by generic `webhook.v1` is forbidden in this profile.
 `CallbackVerificationVector` covers the exact signed bytes, a syntactically valid wrong signature,
 raw-body mutation and stale delivery. It is conformance harness context, not an additional wire
