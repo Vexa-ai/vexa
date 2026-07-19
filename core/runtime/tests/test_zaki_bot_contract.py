@@ -74,6 +74,9 @@ def test_registry_uses_the_contract_image_without_browser_image(monkeypatch):
 
     assert bot is not None
     assert bot.image == BOT_IMAGE
+    # The contract image owns `/app/entrypoint.sh`; Kubernetes `command` replaces image
+    # ENTRYPOINT, so retaining the vendored `/app/vexa-bot/…` command would crash the bot.
+    assert bot.command == ["/app/entrypoint.sh"]
     assert bot.bot_pod_contract is not None
     assert bot.bot_pod_contract.service_account_name == "zaki-minutes-bot"
 

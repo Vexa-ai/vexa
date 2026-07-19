@@ -100,6 +100,15 @@ def default_registry() -> ProfileRegistry:
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
     # (build_production_app → DockerBackend.ensure_worker_image).
     agent_worker_image = worker_image_for(agent_image)
+    # The legacy/vendored browser image exposes the historical compatibility launcher, while the
+    # ZAKI-owned image declares the real `/app/entrypoint.sh` as its image entrypoint.  Kubernetes
+    # `command` replaces an image ENTRYPOINT, so the contracted image must receive its own stable
+    # path rather than the legacy one.
+    meeting_bot_command = (
+        ["/app/entrypoint.sh"]
+        if bot_pod_contract is not None
+        else ["/app/vexa-bot/entrypoint.sh"]
+    )
     return ProfileRegistry(
         {
             # Meeting bot — Playwright browser; lifetime managed by meeting-api, so no idle timeout.
@@ -108,7 +117,7 @@ def default_registry() -> ProfileRegistry:
                 name="meeting-bot",
                 runnable=Runnable(
                     image=browser_image,
-                    command=["/app/vexa-bot/entrypoint.sh"],
+                    command=meeting_bot_command,
                     bot_pod_contract=bot_pod_contract,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
