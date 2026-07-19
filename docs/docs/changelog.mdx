@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.14 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.15 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.14`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.15`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -409,6 +409,144 @@ probe), not inferred from planning docs.
   Separately, every terminal transition now stamps `meeting.data.segments_captured`, so a meeting
   that "completed" without capturing any transcript is queryable and alertable instead of being
   indistinguishable from a success.
+
+- **Record-always at the capture boundary: bots can now persist their raw
+  `captured-signal.v1` stream for offline replay.** With `captureSignalEnabled` in the
+  invocation (or `VEXA_CAPTURE_SIGNAL=1`), the bot tees every raw capture frame — per-channel
+  PCM audio plus the speaker events it was captured with — into a session JSONL, and logs each
+  STT round-trip beside it (`<session>.stt.jsonl`). A recorded session replays byte-for-byte
+  through the exact transcription pipeline with no live meeting (`REPLAY_FIXTURE=<file> tsx
+  src/replay.test.ts`), and `eval/src/distill.mjs` cuts a session down to a minimal fixture
+  around a reported symptom (time window / speaker). A session stores both halves of the
+  signal: the audio frames and — for Zoom/Teams/Jitsi, whose single mixed stream is named from
+  active-speaker hints arriving on their own channel — those hints as `type: "hint"` records,
+  so a replay reproduces who spoke, not just what was heard. Off by default; when off, the
+  capture path is unchanged (a single branch). This is the diagnostic layer for zero-transcript
+  and misattribution reports: the failing meeting's input becomes a deterministic red test.
+
+- **Governance: a session's own worktree comes before its first edit.** The actor contract
+  (AGENTS.md) now spells out the two trespass tells — `git worktree add` answering "already
+  used by worktree" and uncommitted files you didn't write — and the remedy for each: branch
+  from the ref into a fresh worktree of your own, never edit `main`, the primary checkout, or
+  another session's tree. D14b ties the claim lease to that own-worktree rule.
+
+- **An exhausted STT token is now caught where you set it — by transcribing real audio, not by
+  guessing from balances or account names.** The config preflight's STT probe posts a ~1s WAV
+  (the same request a bot's first chunk makes); a metered backend that answers 402 becomes a
+  typed `exhausted` configuration fault that demotes `/health`, refuses bot spawns, and names
+  the consequence ("meetings will complete with no transcript"). The old empty-body probe
+  could never elicit the 402 and greened the dead token. The wizard's Test button now runs the
+  same round-trip and no longer consults `balance_minutes` — which reads 0.0 both for an
+  exhausted token and for a billing-exempt service account that transcribes perfectly — and no
+  account identity is hardcoded anywhere. The probe is metered, so it caches for 15 minutes.
+
+- **Cold first-run no longer dies on `invalid reference format` (#812).** Stock `.env.example` ships
+  `BROWSER_IMAGE=vexaai/vexa-bot:${IMAGE_TAG}` — docker-compose expands it, but `make all`'s
+  spawn-image pull read the literal string and handed `docker pull` an invalid reference, breaking
+  every fresh install at the last step. The pull now resolves `${IMAGE_TAG}` (and hardens the tag
+  read against duplicate lines); a genuinely custom literal `BROWSER_IMAGE` still pulls verbatim.
+
+- **Webhook deliveries now report every outcome (#815).** `WebhookSink.deliver` returns
+  `delivered | suppressed | blocked | failed | queued`, and that outcome used to be discarded — so a
+  webhook a subscriber never received (an event type outside their filter, an SSRF-refused target, an
+  endpoint returning 4xx) was indistinguishable from one that arrived, and even successful deliveries
+  logged nothing. Each delivery now emits one `webhook_delivery` logevent carrying the outcome, the
+  event type, the target **host** (never the full URL — it can carry a token in its path or query),
+  the HTTP status and the error, at `warning` for anything that did not arrive. "My webhooks stopped"
+  is now a one-query answer instead of a silent failure. A compose-stack test asserts the outcome is
+  reported end-to-end.
+
+### Fixed
+
+- **A wrong STT URL or token is now caught where you set it, not by an empty transcript.** The
+  config probe treated *any* answer except 401/403 as proof of a working backend, so a URL whose
+  transcriptions path 404s — the most common misconfiguration — passed every check. It is now
+  reported as `misconfigured` with the reason, on the boot log and the `stt` row of `GET /health`.
+  ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **The setup wizard's green now means "a bot will transcribe".** On any non-Vexa
+  OpenAI-compatible endpoint the test previously reported "reachable; token was not verified" as a
+  PASS, so a rejected key tested green and failed mid-meeting. It now verifies with the same
+  request a bot's first audio chunk makes, and grades the endpoint's own answer.
+  ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **`POST /bots` refuses a set-but-broken backend** with a typed 503 carrying the probe's reason,
+  before the meeting row is written — instead of spawning a bot that joins and captures nothing.
+  The refusal names how to re-test immediately. ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **`TRANSCRIPTION_SERVICE_URL` accepts both documented shapes everywhere.** A full
+  `…/v1/audio/transcriptions` URL worked in meetings but double-pathed into a 404 in the boot probe
+  and the terminal's dictation route. All four consumers now share one rule: append the path only
+  when it is absent. ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+
+### Fixed
+
+- **A bot that never got into the meeting is no longer reported as a completed meeting.** Stopping
+  a bot still sitting in the waiting room overwrote the stage it had reached, so the terminal
+  classifier concluded the bot had been live and persisted the run as `completed` with zero
+  transcript — a failure the system reported as success. The stage now survives the stop, and such
+  a run ends `failed` with `failure_stage` naming where it actually died. Reproduced on the deployed 0.12.14 build
+  (meeting 24336's own transition log records the illegal edge); the prior-era share of this
+  shape was ~49% of zero-segment completions.
+  ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+- **Cancelling a bot before it is admitted no longer re-spawns it three times.** The terminal
+  reason for a user stop is now the user-terminal `stopped` (permanent) rather than
+  `awaiting_admission_timeout` (transient), so a meeting the user deliberately walked away from is
+  not retried on their quota. An admission wait that times out on its own is unchanged and still
+  retried. ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+- **A redelivered `DELETE /bots/…` no longer publishes a second leave command.** The stop trigger
+  is one-shot, guarded on the recorded user intent instead of a status side-effect — the previous
+  guard held only against the in-memory test double, never against the real database.
+  ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+
+### Fixed
+
+- **`GET /bots/status` no longer reads a caller's entire meeting history to answer a running-bots
+  badge.** It fetched every meeting the account ever had, with the full `data` JSONB, and filtered
+  in Python — 4,896 meetings / 180 MB on one production account, 144 MB of that `bot_logs` no
+  endpoint renders. Four concurrent polls demanded roughly 740 MB transiently and OOM-killed the
+  pod at the default 1 GiB limit. The status filter and the heavy-key projection now both happen in
+  the query. ([#803](https://github.com/Vexa-ai/vexa/issues/803))
+- **`GET /meetings/{id}` fetches the row instead of enumerating the account and filtering by id.**
+  Access rules are unchanged — the same ownership/share union decides visibility — and the detail
+  view still returns full `data`. ([#803](https://github.com/Vexa-ai/vexa/issues/803))
+
+### Fixed
+
+- **Zoom and Teams admission verdicts are now typed, so permanent failures are no longer
+  retried on your quota.** Both platforms threw plain errors for every admission failure, which
+  the control plane classified as transient `join_failure` and re-spawned up to 3× — a Zoom host
+  denial re-knocked on the same host, the Zoom RTMS anti-bot wall was retried into the same wall,
+  and a meeting restricted to signed-in users was rejoined just as signed-out. They now throw the
+  same typed `AdmissionError` Google Meet and Jitsi already use: denials and auth walls are
+  permanent (no retry), lobby timeouts stay transient (still retried). Teams additionally had an
+  outer catch that re-wrapped *any* error — including a typed one — into a plain string; typed
+  verdicts now pass through it. Failure reasons land in `completion_reason`
+  (`awaiting_admission_rejected` / `awaiting_admission_timeout` / `auth_session_missing`), making
+  these modes measurable per platform for the first time.
+  ([#806](https://github.com/Vexa-ai/vexa/issues/806))
+
+### Added
+
+- **The deprecated 0.10 dashboard is back in the stack as an off-by-default option** — a
+  `dashboard` compose profile (`docker compose --profile dashboard up -d`, port 13001) and a
+  `dashboard.enabled` helm value, both wiring the pinned external image
+  `vexaai/dashboard:0.10.6.3.14` to the gateway's hosted-compat surface exactly as hosted
+  production runs it. It stays deprecated and versions on its own pinned tag (never
+  `global.imageTag`); it ships because it is still load-bearing — the authenticated-session
+  flows are only walkable through it today — and the UI users actually see should belong to a
+  release. Deletion, not porting, is the deprecation exit.
+  ([#813](https://github.com/Vexa-ai/vexa/issues/813))
+
+### Fixed
+
+- **Requesting a `browser_session` bot answers a typed 422 instead of a 500 that poisons the
+  retry.** api.v1 seals more platforms than the meeting-bot invocation contract carries; with a
+  `meeting_url` attached, such a request wrote its meeting row and then died inside schema
+  validation — a 500 plus an orphaned active row that made the user's retry 409. The refusal now
+  happens before any write, names the supported platforms, and points at the tracked
+  restoration ([#816](https://github.com/Vexa-ai/vexa/issues/816)).
+- **The join layer refuses an unknown platform instead of silently running the Google Meet
+  flow.** The dispatch's fallback branch WAS the Google Meet branch, so an unrecognized platform
+  drove Meet selectors against an arbitrary URL and failed minutes later with misattributed
+  selector errors. ([#816](https://github.com/Vexa-ai/vexa/issues/816))
 
 ## Versioning
 
