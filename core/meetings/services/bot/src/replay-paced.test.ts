@@ -16,13 +16,20 @@
  * to get a number, and a regression check only when a budget is set explicitly
  * (LATENCY_BUDGET_P95_MS).
  *
- * READ THE NUMBER CAREFULLY. It is (confirmation wall-clock) − (the segment's own reported `end`,
- * placed on the paced timeline). On the golden it currently reads ~55ms even with a 250ms mock STT
- * round-trip, which is NOT physically coherent for audio that must be transcribed before it can be
- * confirmed — so `end` evidently tracks the confirmed prefix's audio timeline rather than the last
- * chunk actually sent to STT. Until that semantic is pinned down this is an INSTRUMENT and a
- * regression comparator, NOT a validated latency budget, and it gates nothing unless a budget is
- * passed explicitly. Do not quote it as "our latency" in anything user-facing yet.
+ * WHAT IT MEASURES: turn start → confirmed text ("time to text") — the delay a user experiences
+ * between starting to speak and seeing their words. Measured against the segment's `start`,
+ * deliberately NOT its `end`: speaker-streams computes end as
+ * `windowStartMs + totalSamples/sampleRate`, the buffer's FULL extent at confirm time, so it
+ * tracks the newest audio fed rather than the span the text covers. Latency measured against
+ * `end` collapses to a constant (~55ms) no matter how slow STT is — the first version of this
+ * harness did exactly that, which is why a coherence check now fails the run if time-to-text ever
+ * drops below the STT round-trip it must pay.
+ *
+ * VALIDATED SENSITIVITY (golden, this harness): mock STT 100ms → p50 503ms · 250ms → 856ms ·
+ * 600ms → 1509ms. That is ≈ 2×STT + ~300ms, because LocalAgreement `confirmThreshold: 2` requires
+ * TWO submissions — and two STT round-trips — before a prefix confirms. So the confirm threshold,
+ * not buffering, is the dominant latency lever: halving STT time saves ~2× that much end to end,
+ * and dropping the threshold to 1 would roughly halve time-to-text at a cost in stability.
  *
  *   npm run replay:paced                       # real time (~10s for the golden)
  *   SPEED=4 npm run replay:paced               # 4× faster (cadence no longer faithful — see below)
@@ -36,13 +43,19 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGmeetPipeline } from '@vexa/gmeet-pipeline';
+import { ChunkedTranscriber, type BoundaryEvent, type BoundarySource } from '@vexa/mixed-pipeline';
+import { gunzipSync } from 'node:zlib';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = process.env.REPLAY_FIXTURE
   ?? join(HERE, '..', '..', '..', 'eval', 'replay-fixture', 'session.captured-signal.jsonl');
 const SPEED = Math.max(1, Number(process.env.SPEED ?? 1));
-const BUDGET_P95 = Number(process.env.LATENCY_BUDGET_P95_MS ?? 0);
+// Default budget for the golden at the default mock-STT cost: a REGRESSION guard with headroom
+// (observed p95 856ms), not an aspiration. Set explicitly when changing MOCK_STT_MS or SPEED,
+// since the budget only means anything against the run's own STT cost.
+const DEFAULT_BUDGET_MS = 1500;
+const BUDGET_P95 = Number(process.env.LATENCY_BUDGET_P95_MS ?? DEFAULT_BUDGET_MS);
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -53,17 +66,86 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface CapFrame { seq: number; ts: number; speakerIndex: number; speakerName?: string; pcm: string; pcm_len: number; type?: string; }
 
-function load(path: string): CapFrame[] {
-  const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean);
-  return lines.slice(1).map((l) => JSON.parse(l) as CapFrame).filter((r) => r.type !== 'hint');
+interface Hint { type: 'hint'; t: number; name: string; isEnd?: boolean }
+
+function loadAll(path: string): { header: any; frames: CapFrame[]; hints: Hint[] } {
+  const raw = path.endsWith('.gz') ? gunzipSync(readFileSync(path)).toString('utf8') : readFileSync(path, 'utf8');
+  const lines = raw.split('\n').filter(Boolean);
+  const recs = lines.slice(1).map((l) => JSON.parse(l));
+  return {
+    header: JSON.parse(lines[0]),
+    frames: recs.filter((r: any) => r.type !== 'hint') as CapFrame[],
+    hints: recs.filter((r: any) => r.type === 'hint') as Hint[],
+  };
 }
+function load(path: string): CapFrame[] { return loadAll(path).frames; }
 const framePcm = (f: CapFrame): Float32Array => {
   const b = Buffer.from(f.pcm, 'base64');
   return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
 };
 
+/** The mixed lane's paced run: one stream named from recorded hints, its own real pipeline. */
+async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number)
+  : Promise<{ confirmed: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }>;
+              firstDraft: Map<string, number> }> {
+  const out: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
+  const firstDraft = new Map<string, number>();
+  let emitBoundary!: (ev: BoundaryEvent) => void;
+  const t0 = Date.now();
+  const tc = await ChunkedTranscriber.create({
+    language: 'en',
+    transcribe: async (pcm: Float32Array) => {
+      await sleep(sttMs / SPEED);
+      const d = pcm.length / 16000;
+      return { text: `speech(${d.toFixed(1)}s)`, language: 'en', duration: d, segments: [{ start: 0, end: d, text: `speech(${d.toFixed(1)}s)` }] } as TranscriptionResult;
+    },
+    publish: (speaker, confirmed) => {
+      if (confirmed.length && !firstDraft.has(speaker)) firstDraft.set(speaker, Date.now() - t0);
+      for (const c of confirmed) out.push({ speaker, startMs: c.startMs, endMs: c.endMs, atMs: Date.now() - t0 });
+    },
+    publishPending: (speaker, segs) => {
+      // The mixed lane confirms a turn only when the speaker YIELDS, so confirmed-text timing
+      // measures turn LENGTH, not latency. What the user actually sees first is the draft — that
+      // is this lane's comparable time-to-text.
+      if (segs.length && !firstDraft.has(speaker)) firstDraft.set(speaker, Date.now() - t0);
+    },
+    clearPending: () => { /* */ },
+    rename: (oldS, newS) => { for (const o of out) if (o.speaker === oldS) o.speaker = newS; },
+    makeSegmenter: (onB) => { emitBoundary = onB; return Promise.resolve<BoundarySource>({ appendFrame: async () => { /* */ }, reset() { /* */ } }); },
+    log: () => { /* quiet */ },
+  });
+
+  const base = frames[0].ts;
+  const timeline = [
+    ...frames.map((f) => ({ t: f.ts + (f.pcm_len / 16000) * 1000, frame: f as CapFrame | undefined, hint: undefined as Hint | undefined })),
+    ...hints.map((h) => ({ t: h.t, frame: undefined, hint: h as Hint | undefined })),
+  ].sort((a, b) => a.t - b.t);
+
+  let current = '';
+  emitBoundary({ kind: 'silence→speaker', tMs: timeline[0].t, confidence: 0.9 });
+  for (const ev of timeline) {
+    const behind = (ev.t - base) / SPEED - (Date.now() - t0);
+    if (behind > 0) await sleep(behind);
+    if (ev.hint) {
+      const h = ev.hint;
+      if (!h.isEnd && h.name !== current) {
+        if (current) emitBoundary({ kind: 'speaker→speaker', tMs: h.t, confidence: 0.9 });
+        current = h.name;
+      }
+      tc.recordHint(h.name, 'dom-active', h.t, h.isEnd);
+    } else if (ev.frame) {
+      tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
+    }
+  }
+  emitBoundary({ kind: 'speaker→silence', tMs: timeline[timeline.length - 1].t, confidence: 0.9 });
+  await sleep(1500 / SPEED);
+  await tc.dispose();
+  return { confirmed: out, firstDraft };
+}
+
 async function main(): Promise<void> {
-  const frames = load(FIXTURE);
+  const session = loadAll(FIXTURE);
+  const frames = session.frames;
   const audioMs = frames.reduce((n, f) => n + (f.pcm_len / 16000) * 1000, 0);
   console.log(`  fixture: ${frames.length} frames, ${(audioMs / 1000).toFixed(1)}s of audio, SPEED=${SPEED}`);
 
@@ -76,15 +158,60 @@ async function main(): Promise<void> {
     return { text, language: 'en', duration: pcm.length / 16000, segments: [{ start: 0, end: pcm.length / 16000, text }] };
   };
 
+  // MIXED lane (zoom/teams/jitsi): its own pipeline, hints and all — same paced clock.
+  if (session.header.lane === 'mixed') {
+    const base = frames[0].ts;
+    const { confirmed: out, firstDraft } = await pacedMixed(frames, session.hints, STT_MS);
+    const s2 = out.map((c) => ({ ...c, latencyMs: Math.round(c.atMs - (c.startMs - base) / SPEED) }));
+    // Time-to-text for THIS lane = turn start → first visible draft.
+    const turnStart = new Map<string, number>();
+    for (const c of out) if (!turnStart.has(c.speaker)) turnStart.set(c.speaker, (c.startMs - base) / SPEED);
+    const draftLat = [...firstDraft.entries()]
+      .filter(([sp]) => turnStart.has(sp))
+      .map(([sp, at]) => ({ speaker: sp, latencyMs: Math.round(at - (turnStart.get(sp) as number)) }));
+    const dl = draftLat.map((d) => d.latencyMs).sort((a, b) => a - b);
+    const dq = (p: number) => (dl.length ? dl[Math.min(dl.length - 1, Math.floor((dl.length - 1) * p))] : 0);
+    const l2 = s2.map((x) => x.latencyMs).sort((a, b) => a - b);
+    const q = (p: number) => (l2.length ? l2[Math.min(l2.length - 1, Math.floor((l2.length - 1) * p))] : 0);
+    for (const x of s2) console.log(`    ${x.speaker}: turn began @${((x.startMs - base) / 1000).toFixed(1)}s → text confirmed +${x.latencyMs}ms`);
+    for (const d of draftLat) console.log(`    ${d.speaker}: first visible text +${d.latencyMs}ms after their turn began`);
+    console.log(`  TIME-TO-TEXT (mixed, turn start → FIRST DRAFT): n=${dl.length} p50=${dq(0.5)}ms p95=${dq(0.95)}ms max=${dl[dl.length - 1] ?? 0}ms`);
+    console.log(`  turn-start → CONFIRMED (bounded by turn LENGTH, not latency): p50=${q(0.5)}ms max=${l2[l2.length - 1] ?? 0}ms`);
+    check('mixed: every turn produced confirmed text', s2.length > 0, String(s2.length));
+    check('mixed: no text confirmed before its turn began (causality)',
+      s2.every((x) => x.latencyMs >= 0), JSON.stringify(s2.filter((x) => x.latencyMs < 0)));
+    check('mixed: time-to-text exceeds the STT round-trip it must pay (coherence)',
+      dl.length > 0 && dq(0.5) >= STT_MS, `p50=${dq(0.5)}ms < mock STT ${STT_MS}ms`);
+    // NOT GATED, and the reason matters. Production cuts this lane with PyannoteSegmenter, which
+    // emits boundaries continuously on speech/silence; this harness injects a deterministic cut
+    // source that fires only on a SPEAKER CHANGE (a model download cannot live in a unit test), so
+    // the pipeline is starved of the cuts that trigger early drafts. The numbers above are
+    // therefore an UPPER BOUND on this lane's latency, not a measurement of it — Anna's first
+    // turn shows the signature: no draft at all until the turn ended. Gating on an upper bound
+    // produced by an unrepresentative double would be exactly the kind of green that proves
+    // nothing. A real mixed-lane budget needs a boundary source with production's cut density
+    // (recorded pyannote boundaries would do it, and captured-signal.v1 could carry them).
+    console.log('  (mixed budget NOT gated — the injected cut source is sparser than production\'s'
+      + ' pyannote, so these are an upper bound; see the note in this file)');
+    if (failed) { console.error(`\n❌ replay-paced (mixed): ${failed} check(s) FAILED.`); process.exit(1); }
+    console.log('\n✅ replay-paced (mixed): a recorded Zoom/Teams/Jitsi session replayed at speaking rate yields a real time-to-text profile.');
+    return;
+  }
+
   const t0 = Date.now();
-  const confirmedAt: Array<{ speaker: string; endMs: number; atMs: number }> = [];
+  const confirmedAt: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
   const pipe = createGmeetPipeline({
     transcribe,
     config: { minAudioDuration: 0.15, submitInterval: 0.1, confirmThreshold: 2, maxBufferDuration: 5, idleTimeoutSec: 2, sampleRate: 16000 },
     sink: {
       segment: (s) => {
         if (!s.completed) return;
-        confirmedAt.push({ speaker: s.speaker ?? '?', endMs: Math.round(s.end * 1000), atMs: Date.now() - t0 });
+        confirmedAt.push({
+          speaker: s.speaker ?? '?',
+          startMs: Math.round(s.start * 1000),
+          endMs: Math.round(s.end * 1000),
+          atMs: Date.now() - t0,
+        });
       },
       draft: () => { /* */ }, finalize: () => { /* */ },
     },
@@ -108,26 +235,35 @@ async function main(): Promise<void> {
   const fedAt = Date.now() - t0;
   await pipe.dispose();
 
-  // Wall-clock latency per segment: when its speech ENDED (in the paced timeline) → confirmation.
+  // TIME-TO-TEXT: from the moment a speaker STARTS a turn to the moment their words are
+  // confirmed. Measured against `start`, deliberately NOT against `end`: speaker-streams computes
+  // end as windowStartMs + totalSamples/sampleRate — the buffer's FULL extent at confirm time,
+  // which includes audio that arrived after the text being confirmed. So `end` tracks the newest
+  // audio fed rather than the span the text covers, and any latency measured against it collapses
+  // to a constant (~55ms here) no matter how slow STT is. `start` is stable and is the instant a
+  // user began speaking, so this is the delay a user actually experiences before seeing their words.
   const samples = confirmedAt.map((c) => {
-    const spokeEndAt = (c.endMs - base) / SPEED;         // when that speech finished, on our clock
-    return { ...c, latencyMs: Math.round(c.atMs - spokeEndAt) };
+    const spokeStartAt = (c.startMs - base) / SPEED;     // when that turn began, on our clock
+    return { ...c, latencyMs: Math.round(c.atMs - spokeStartAt), spanMs: c.endMs - c.startMs };
   });
   const lat = samples.map((s) => s.latencyMs).sort((a, b) => a - b);
   const pct = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor((lat.length - 1) * p))] : 0);
   const p50 = pct(0.5), p95 = pct(0.95), max = lat.length ? lat[lat.length - 1] : 0;
 
   console.log(`  fed ${frames.length} frames over ${(fedAt / 1000).toFixed(1)}s wall (mock STT ${STT_MS}ms/call)`);
-  for (const s of samples) console.log(`    ${s.speaker}: speech ended @${(s.endMs - base) / 1000}s → confirmed +${s.latencyMs}ms`);
-  console.log(`  SPEECH→TRANSCRIPT latency: n=${lat.length} p50=${p50}ms p95=${p95}ms max=${max}ms`);
+  for (const s of samples) console.log(`    ${s.speaker}: turn began @${((s.startMs - base) / 1000).toFixed(1)}s (span ${(s.spanMs / 1000).toFixed(1)}s) → text confirmed +${s.latencyMs}ms`);
+  console.log(`  TIME-TO-TEXT (turn start → confirmed): n=${lat.length} p50=${p50}ms p95=${p95}ms max=${max}ms`);
 
   check('every segment was confirmed', samples.length > 0, String(samples.length));
-  check('no segment confirmed before its speech finished (causality)',
+  check('no text confirmed before its turn began (causality)',
     samples.every((s) => s.latencyMs >= 0), JSON.stringify(samples.filter((s) => s.latencyMs < 0)));
+  check('time-to-text exceeds the STT round-trip it must pay (coherence)',
+    lat.length > 0 && p50 >= STT_MS,
+    `p50=${p50}ms < mock STT ${STT_MS}ms — the metric is measuring a moving target, not latency`);
   if (BUDGET_P95 > 0) {
-    check(`p95 within the declared budget (${BUDGET_P95}ms)`, p95 <= BUDGET_P95, `p95=${p95}ms`);
+    check(`p95 time-to-text within budget (${BUDGET_P95}ms)`, p95 <= BUDGET_P95, `p95=${p95}ms`);
   } else {
-    console.log('  (no LATENCY_BUDGET_P95_MS set — measuring only, gating nothing)');
+    console.log('  (LATENCY_BUDGET_P95_MS=0 — measuring only, gating nothing)');
   }
 
   if (failed) { console.error(`\n❌ replay-paced: ${failed} check(s) FAILED.`); process.exit(1); }
