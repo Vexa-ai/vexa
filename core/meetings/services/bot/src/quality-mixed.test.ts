@@ -348,6 +348,20 @@ async function main(): Promise<void> {
     console.log(`  metrics written: ${process.env.METRICS_JSON}`);
   }
 
+  // The replay's own transcript, in the shape `single_pass_truth.py --realtime` reads. Without this
+  // a lane change can only be judged on structure: the stored transcript in a corpus entry came from
+  // the ORIGINAL live session, so it cannot score a replay, and every content question about a diff
+  // ("did that fix lose words?") was unanswerable. Written in seconds to match the reference's clock.
+  if (process.env.TRANSCRIPT_OUT) {
+    writeFileSync(process.env.TRANSCRIPT_OUT, JSON.stringify({
+      segments: [...store.entries()].map(([id, r]) => {
+        const p = published.find((q) => q.id === id);
+        return { segment_id: id, speaker: r.speaker, text: r.text, start: (p?.startMs ?? 0) / 1000, end: (p?.endMs ?? 0) / 1000 };
+      }).sort((a, b) => a.start - b.start),
+    }, null, 2) + '\n');
+    console.log(`  transcript written: ${process.env.TRANSCRIPT_OUT}`);
+  }
+
   console.log('\n--- transcript ---');
   for (const p of published) console.log(`  [${((p.startMs - t0) / 1000).toFixed(2)}-${((p.endMs - t0) / 1000).toFixed(2)}] ${p.speaker}: ${p.text.slice(0, 80)}`);
 }
