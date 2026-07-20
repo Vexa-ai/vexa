@@ -8,5 +8,5 @@
  * concern — see `@vexa/record-chunker` (createRecordingTap), not here.
  */
 export { createMixedAudioCapture } from './mixed-audio.js';
-export type { MixedAudioCapture, MixedAudioOptions } from './mixed-audio.js';
+export type { MixedAudioCapture, MixedAudioOptions, MixedAudioStats } from './mixed-audio.js';
 export { installRemoteAudioHook } from './webrtc-audio-hook.js';
