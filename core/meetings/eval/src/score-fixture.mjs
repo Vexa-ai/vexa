@@ -124,6 +124,8 @@ for (const { id, dir } of entries()) {
   const baseline = JSON.parse(readFileSync(path.join(dir, 'baseline.json'), 'utf8'));
   const sessionPath = path.join(dir, manifest.files.session);
 
+  // `~` marks a harness-relative figure: comparable to this fixture's own baseline, not to a live
+  // session. The replay does not reproduce submission cadence, and coverage sits downstream of it.
   console.log(`\n${id}   ${manifest.note ? manifest.note.split('.')[0] + '.' : ''}`);
 
   // The fixture itself first. Every number below is a claim about THESE bytes; if they are not the
@@ -148,7 +150,7 @@ for (const { id, dir } of entries()) {
     } else {
       lane = laneMetrics(sessionPath);
       console.log(`  lane      ${lane.storeRows} store rows (${lane.storeDupes} dup texts) · ${lane.publishedWords} words · ` +
-        `coverage ${lane.coverage} · ${lane.holesOver2s} holes >2s` +
+        `coverage ${lane.coverage}~ · ${lane.holesOver2s} holes >2s` +
         (lane.retention === undefined ? '' : ` · retention ${lane.retention}`));
       // With no hint stream there is no name source, so everything is provisional BY DESIGN — a
       // shared tab has nobody to name. Saying so keeps a 100% that means "not applicable" from
