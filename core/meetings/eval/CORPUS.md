@@ -90,11 +90,13 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 | content | recall 0.872² · **precision 0.723²** (whisper-1, single pass) |
 | lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467¹ · 5 holes >2s |
 
-This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
-discrimination: same source material, same lane, same STT — 65.0% vs 94.9% delivered, and precision
-0.723 vs 0.941. The invention the low duty cycle buys (27.7% of live words absent from a single pass
-over the same audio) is the sub-second-window hallucination measured as a number rather than
-described.
+This is the red evidence for **#850**, on its DELIVERY figure: 65.0% against the control's 94.9% on
+the same source material, same lane, same STT. That comparison is computed from bytes and holds.
+
+Its content columns do not. Scored against a second reference cut 25s differently, precision reads
+0.853 rather than 0.723 — the first reference was missing 48 live words at its own seams. An earlier
+version of this entry described the gap as sub-second-window hallucination "measured as a number";
+that was measuring the instrument. At duty 0.650 this entry cannot carry a content claim.
 
 ### `youtube/2026-07-20-continuous-speech` — the control, 69 MB
 One continuous speaker from a shared YouTube tab through the extension into the desktop, so every
