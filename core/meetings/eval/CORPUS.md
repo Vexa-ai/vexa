@@ -1,0 +1,94 @@
+# The fixture corpus — witnessed sessions that stay witnessed
+
+_The regression half of [FRAMEWORK.md](FRAMEWORK.md). A recorded session proves nothing on its own;
+what makes it a regression test is the numbers it produced at the time, stored beside it. This file
+is the index — the audio is not in the repo (real speech is sensitive, sessions run to tens of MB),
+so a fresh checkout finds the corpus through here._
+
+## Where it lives
+
+```
+$VEXA_CORPUS/<platform>/<slug>/          # default ~/vexa-test-rig/fixtures
+  session.captured-signal.jsonl.gz       the signal exactly as captured
+  baseline.json                          every metric at promotion time — the regression contract
+  manifest.json                          provenance: source file, window, commit, STT, sha256
+  reference.txt                          single-pass ground truth (optional; costs STT once)
+  transcript.json                        the live transcript that reference was scored against
+```
+
+## The two commands
+
+```bash
+# a witnessed session becomes an entry (a desktop tape or a bot's captured-signal session)
+node src/promote-fixture.mjs <tape|session> --slug 2026-07-20-my-session --platform zoom \
+  [--head-sec 600] [--reference ref.txt] [--transcript <file|url>] [--note "why this exists"]
+
+# measure every entry now and diff against its baseline; exit 1 if anything moved
+node src/score-fixture.mjs [<platform>/<slug> …] [--lane] [--update]
+```
+
+`--head-sec` cuts a tape to its first N seconds. A tape grows for as long as the desktop runs, so
+the session someone actually measured is a prefix of it; the cut makes that exact window
+re-derivable instead of a loose side-artifact (the youtube entry below reproduces byte-identically
+from a tape twice its length).
+
+`--update` re-baselines deliberately. Never reach for it to make a red go away — a red is the
+corpus doing its job; re-baseline only when the new numbers are the ones you meant to produce.
+
+## What the three metric blocks mean — and what they do not
+
+| block | recomputed from | drift means |
+|---|---|---|
+| **delivery/shape** | the stored bytes | the fixture or a scorer changed — never the pipeline |
+| **content** (recall/precision) | stored reference + stored transcript | same; both sides are pinned |
+| **lane** (`--lane`) | the REAL `@vexa/mixed-pipeline` re-run over the fixture, mock STT | **our code moved** — everything else is held fixed |
+
+Only the lane block is a code regression detector, and it detects **structure**: retention, store
+rows, duplicate identity, holes. Replay is unpaced, so its submission-window sizes and any latency
+derived from them are the harness's, not production's — cadence is `replay-paced.test.ts`. Mock STT
+says nothing about ASR quality and must never be reported as content evidence.
+
+The lane's cut source follows the fixture: a bot session replays production's own recorded
+boundaries, a desktop tape has none and gets the REAL PyannoteSegmenter (~70s for a 20-minute
+session, deterministic run to run).
+
+## Entries
+
+### `jitsi/2026-07-20-capture-gaps` — the capture defect, 8.0 MB
+A bot in `meet.jit.si` with a YouTube tab shared into it: the same continuous source as the youtube
+control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b13eff2`.
+
+| | |
+|---|---|
+| delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
+| shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
+| content | recall 0.858 · **precision 0.723** (whisper-1, single pass) |
+| lane | 54 store rows · 0 dup texts · retention 1.000 · coverage 0.422 · 6 holes >2s |
+
+This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
+discrimination: same source material, same lane, same STT — 65.0% vs 94.9% delivered, and precision
+0.723 vs 0.941. The invention the low duty cycle buys (27.7% of live words absent from a single pass
+over the same audio) is the sub-second-window hallucination measured as a number rather than
+described.
+
+### `youtube/2026-07-20-continuous-speech` — the control, 69 MB
+One continuous speaker from a shared YouTube tab through the extension into the desktop, so every
+hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. Recorded at `5b13eff2`.
+
+| | |
+|---|---|
+| delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
+| shape | no recorded cuts (tape) — the lane run segments it live |
+| content | **recall 0.905 · precision 0.941** (whisper-1, single pass) |
+| lane | 11 store rows · 0 dup texts · **retention 0.944** · coverage 0.990 · 1 hole >2s |
+
+The red evidence for **#854**: 9.5% of what this same model extracts from this same audio in one
+pass never reaches the transcript, and 5.9% of the transcript is not in that pass.
+
+## The contract
+
+1. A defect is only worked against an entry in this corpus — no fixture, no fix.
+2. An entry is added the day its session is witnessed, not the day someone needs it.
+3. An entry that once caught a defect keeps catching it: `4c030cd8` (mixed draft identity) reverted
+   takes `youtube/2026-07-20-continuous-speech` from 11 store rows / 0 duplicates to **22 rows / 11
+   duplicates** — every sentence stored twice — and `score-fixture --lane` fails on it.
