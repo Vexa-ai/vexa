@@ -80,7 +80,7 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 |---|---|
 | delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
 | shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
-| content | recall 0.858 · **precision 0.723** (whisper-1, single pass) |
+| content | recall 0.872 · **precision 0.723** (whisper-1, single pass) |
 | lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467¹ · 5 holes >2s |
 
 This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
@@ -97,10 +97,10 @@ hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. 
 |---|---|
 | delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
 | shape | no recorded cuts (tape) — the lane run segments it live |
-| content | **recall 0.905 · precision 0.941** (whisper-1, single pass) |
+| content | **recall 0.920 · precision 0.941** (whisper-1, single pass) |
 | lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905¹ · 6 holes >2s |
 
-The red evidence for **#854**: 9.5% of what this same model extracts from this same audio in one
+The red evidence for **#854**: **8.0%** of what this same model extracts from this same audio in one
 pass never reaches the transcript, and 5.9% of the transcript is not in that pass. That comparison
 is built from the session's DELIVERED PCM, so it measures streaming loss relative to what capture
 handed over — it is structurally blind to capture loss, and cannot be read as a total.
