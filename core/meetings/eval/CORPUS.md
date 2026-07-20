@@ -98,6 +98,21 @@ pass never reaches the transcript, and 5.9% of the transcript is not in that pas
 is built from the session's DELIVERED PCM, so it measures streaming loss relative to what capture
 handed over — it is structurally blind to capture loss, and cannot be read as a total.
 
+### `youtube/2026-07-20-witnessed-panel` — the human-witnessed reference point, 35 MB
+Continuous multi-voice panel audio through the extension into the desktop at production lane config.
+The maintainer watched this session live and judged **time-to-text ~6s and quality good** — the only
+entry carrying a human verdict, which is what the other numbers are calibrated against.
+
+| | |
+|---|---|
+| delivery | **duty cycle 1.000** · **zero** gaps over 100ms in 557s |
+| content | not scorable — the desktop store had restarted, so no live transcript survived to compare |
+| lane | 81 store rows · 0 dup texts · 1307 words · coverage 0.909 · 9 holes >2s |
+
+Its value is the far end of the delivery curve: **100.0%** here against the jitsi bot's **65.0%** on
+the same capture code. Whatever removes 35% there does not touch this source at all, which is what
+makes the silence gate — not the chain — the thing to change.
+
 ## The contract
 
 1. A defect is only worked against an entry in this corpus — no fixture, no fix.
