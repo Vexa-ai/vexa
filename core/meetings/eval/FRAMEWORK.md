@@ -83,7 +83,7 @@ capture 65% duty cycle, window-size-driven hallucination, publish identity.)
 |---|---|---|---|
 | delivery | **capture duty cycle** = audio-sec ÷ wall-sec | the recorded session itself | capture |
 | content | recall/precision vs **single-pass same-model reference** | same audio, same STT, one pass | streaming loss (ours) vs model ceiling (not ours) |
-| attribution | provisional rate · hint miss rate · rename churn · cardinality (truth-free) + self-ID match (truth-bearing) — **NOT implemented yet, see G2** | channel names / hints / self-identifying fixtures | capture naming + binder |
+| attribution | provisional rate · hint miss rate · rename churn · cardinality — live on the mixed lane (#849); self-ID match (truth-bearing) still to build | channel names / hints / self-identifying fixtures | capture naming + binder |
 | integrity | duplicates; one row per sentence | segment_id identity | publish/store |
 | shape | segs/turn · dur p50 · %<1s · mid-sentence ends | continuous-speech source | segmentation |
 | latency | time-to-first-draft · time-to-confirm · cadence regularity | wall clock at PRODUCTION config | assembly cadence |
@@ -155,8 +155,8 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 
 | platform | lane | delivery | content | attribution | integrity | shape | latency |
 |---|---|---|---|---|---|---|---|
-| youtube (extension) | mixed | ✅ 94.9% | ✅ recall .905 / prec .941 | n/a (no hints by design) | ✅ 11 rows / 0 dupes | ✅ p50 3.0s | ❌ |
-| jitsi (bot) | mixed | ✅ 65.0% | ✅ recall .858 / prec .723 | ❌ (`seg_N` seen, unscored) | ✅ 54 rows / 0 dupes | ✅ p50 0.30s | ❌ |
+| youtube (extension) | mixed | ✅ 94.9% | ✅ recall .905 / prec .941 | n/a — no hint source | ✅ 282 rows / 0 dupes | ✅ p50 3.0s | ❌ |
+| jitsi (bot) | mixed | ✅ 65.0% | ✅ recall .858 / prec .723 | ✅ 16.7% provisional · 91.9% hint miss | ✅ 57 rows / 0 dupes | ✅ p50 0.30s | ❌ |
 | zoom | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | teams | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | gmeet | gmeet | ❌ (own capture path, NOT #850's chain) | ❌ (TTS fixture only — never vs a single-pass reference on real audio) | ❌ (golden only; 0.12.15 attested good, unrecorded) | ❌ | ❌ | ✅ ~8.15s projected |
@@ -171,9 +171,11 @@ flat word sequence. A transcript with perfect words and completely scrambled spe
 1.000/1.000. This is mock-blindness repeating on a different axis. Until the self-ID scorer exists,
 content green must never be reported as attribution evidence.
 
-**G2 — the attribution row is aspirational.** The four truth-free signals are all *available*
-(`source`, `onHintOutcome`, rename stream) and none are *implemented* in the scorers. The metric
-table lists them as if live; they are not.
+**G2 — CLOSED (#849).** The four truth-free signals are implemented in the mixed lane's harness and
+ride in every corpus entry's lane block: `provisionalRate`, `hintMissRate`, `renames`/`churnedTurns`,
+and published-vs-hinted cardinality. Still open and tracked separately: the gmeet lane binds at
+capture from the glow and needs its own reading (#851/#853), and no self-ID oracle exists yet — these
+score WHETHER a name was assigned, never whether it was RIGHT.
 
 **G3 — the reference is uncalibrated.** Nothing verifies the single-pass reference is better than
 the live transcript; recall may be measuring agreement, not truth. Needs: a second-pass stability
