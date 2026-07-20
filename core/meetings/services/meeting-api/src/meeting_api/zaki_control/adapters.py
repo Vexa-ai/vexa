@@ -394,11 +394,15 @@ class SqlAlchemyControlStore:
         numeric user id.  A two-key transaction advisory lock prevents a capture from slipping past
         the durable erasure barrier between separate table writes.
         """
+        # The compound key is joined in Python: sqlalchemy text() mis-lexes the
+        # quoted colon literal next to a cast and leaves the second bind
+        # unconverted, which reached Postgres as a bare ':' (broke every
+        # consent save on staging). One bind, no literals, no inline casts.
         await db.execute(
             self._statement(
-                "SELECT pg_advisory_xact_lock(hashtextextended(:tenant_id || ':' || :user_id::text, 0))"
+                "SELECT pg_advisory_xact_lock(hashtextextended(:subject_key, 0))"
             ),
-            {"tenant_id": subject.tenant_id, "user_id": int(subject.user_id)},
+            {"subject_key": f"{subject.tenant_id}:{int(subject.user_id)}"},
         )
 
     async def put_policy(self, subject: Subject, policy: Policy) -> bool:
