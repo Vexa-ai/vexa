@@ -34,7 +34,19 @@ const named = argv.filter((a) => !a.startsWith('--'));
 // Tolerances are per-metric because the metrics are not the same KIND of number: a duty cycle
 // recomputed from the same bytes is exact, a word count is exact, but a wall-clock-derived p50 can
 // wobble by a rounding step. Nothing here is loose enough to hide a real regression.
-const TOL = { dutyCycle: 0.001, recall: 0.001, precision: 0.001, retention: 0.001, coverage: 0.02, segP50Sec: 0.05 };
+// A lane run over a tape fixture drives the REAL segmenter alongside an async pump, so the
+// interleaving — and with it the number of resubmissions — varies run to run. Measured over five
+// consecutive runs of identical code on youtube/2026-07-20-continuous-speech: coverage 0.905-0.906,
+// holes 6/6/6/6/6, published words 2746-2750, but STT call count 429-440. Structure is stable;
+// call-count-derived figures are not, so they are toleranced from that spread rather than pretended
+// exact. Anything the corpus is meant to CATCH — a duplicate identity, a lost turn — moves far
+// further than this (reverting 4c030cd8 moves storeDupes 0 → 11).
+const TOL = {
+  dutyCycle: 0.001, recall: 0.001, precision: 0.001,       // recomputed from stored bytes — exact
+  retention: 0.001, coverage: 0.01, segP50Sec: 0.25,
+  sttCalls: 15, sttWords: 250, publishCalls: 5, uniqueSegmentIds: 5,
+  storeRows: 5, segments: 5, segUnder1s: 8, publishedWords: 25,
+};
 const DEFAULT_TOL = 0;
 // Where a metric has a direction, say so — it turns "changed" into "better" or "worse" in the
 // report. Metrics with no entry are directionless: any movement is reported as a difference.
@@ -129,7 +141,9 @@ for (const { id, dir } of entries()) {
       console.log(`  lane      skipped — ${manifest.lane} lane has its own harness (quality.test.ts)`);
     } else {
       lane = laneMetrics(sessionPath);
-      console.log(`  lane      ${lane.storeRows} store rows (${lane.storeDupes} dup texts) · retention ${lane.retention} · coverage ${lane.coverage} · ${lane.holesOver2s} holes >2s`);
+      console.log(`  lane      ${lane.storeRows} store rows (${lane.storeDupes} dup texts) · ${lane.publishedWords} words · ` +
+        `coverage ${lane.coverage} · ${lane.holesOver2s} holes >2s` +
+        (lane.retention === undefined ? '' : ` · retention ${lane.retention}`));
     }
   }
 
