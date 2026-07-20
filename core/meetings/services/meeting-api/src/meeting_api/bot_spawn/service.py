@@ -241,6 +241,15 @@ async def request_bot(
     #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
     #     ride the invocation env into the bot container, so their blast radius must stay the
     #     userdata prefix).
+    # 1d. Capture-signal recording (deployment-scoped knob). The bot can tee the RAW capture
+    #     stream (audio frames + speaker hints + segmenter cuts) as captured-signal.v1 so a
+    #     failure replays offline instead of being irreproducible. Without this the recorder
+    #     shipped in 0.12.15 is unreachable: nothing sets the invocation field, so no operator
+    #     can turn it on. Deployment-scoped and OFF by default on purpose — it stores raw
+    #     meeting audio, which is a stronger retention claim than a transcript, so enabling it
+    #     is an explicit operator decision (see the retention note in the configuration docs).
+    capture_signal_enabled = env_flag("CAPTURE_SIGNAL_ENABLED", False)
+
     authenticated = env_flag("BOT_AUTHENTICATED", False)
     auth_userdata_path: Optional[str] = None
     auth_s3: dict[str, Optional[str]] = {}
@@ -384,6 +393,7 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
+        capture_signal_enabled=capture_signal_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
