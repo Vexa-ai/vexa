@@ -190,6 +190,10 @@ def main():
     ap.add_argument("--out", help="write the reference text here")
     ap.add_argument("--reference", help="reuse a previously written reference instead of re-running STT")
     ap.add_argument("--json", help="also write the score block here (for baseline.json)")
+    ap.add_argument("--chunk-offset-sec", type=float, default=0.0,
+                    help="shift every chunk boundary by this much. A word DROPPED at a cut is invisible "
+                         "in one reference; building a second with different cuts makes it visible as a "
+                         "word present there and absent here (G3's remaining half).")
     args = ap.parse_args()
 
     url = os.environ.get("TRANSCRIPTION_SERVICE_URL")
@@ -221,7 +225,13 @@ def main():
     step = int((CHUNK_SEC - OVERLAP_SEC) * SR) * 4
     size = int(CHUNK_SEC * SR) * 4
     parts = []
-    for off in range(0, len(pcm), step):
+    start = int(args.chunk_offset_sec * SR) * 4
+    if start:
+        head = pcm[:start]
+        if len(head) >= SR * 4:
+            parts.append(transcribe(wav_bytes(head), url, token, args.model, args.lang))
+            print(f"  [   0.0s] offset head, {len(words(parts[-1])):4d} words")
+    for off in range(start, len(pcm), step):
         chunk = pcm[off:off + size]
         if len(chunk) < SR * 4:      # < 1s tail, nothing to transcribe
             break
