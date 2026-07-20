@@ -41,6 +41,9 @@ async def _tick(repo, runtime, **kw):
     kw.setdefault("now", NOW)
     kw.setdefault("token_secret", "s")
     kw.setdefault("redis_url", "redis://r")
+    # Legacy spawn-mechanics tests don't wire an admin edge; opt them into uncapped spawns so they
+    # exercise the spawn path. The #656 fail-closed tests pass allow_uncapped=False explicitly.
+    kw.setdefault("allow_uncapped", True)
     return await auto_join_tick(repo, runtime, **kw)
 
 
@@ -50,7 +53,7 @@ async def test_due_row_spawns_and_claims_in_place():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo, at=NOW + timedelta(seconds=30))  # inside the 60s lead window
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0}
+    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0, "skipped_uncapped": 0}
     row = repo._meetings[mid]
     assert row["status"] == "requested"          # the SAME row was claimed
     assert row["data"]["title"] == "t"           # planned keys survive
@@ -100,7 +103,7 @@ async def test_second_tick_is_a_noop():
     _seed(repo)
     await _tick(repo, runtime)
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0}
+    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
     assert len(runtime.specs) == 1  # exactly one spawn ever
 
 
@@ -193,7 +196,7 @@ async def test_unsafe_stored_url_is_stamped_without_aborting_sweep():
 
     counters = await _tick(repo, runtime)
 
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 1}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 1, "skipped_uncapped": 0}
     assert repo._meetings[mid]["status"] == "scheduled"
     assert "auto_join_error" in repo._meetings[mid]["data"]
     assert runtime.specs == []
@@ -209,15 +212,27 @@ async def test_unreachable_identity_skips_fail_closed():
         return None  # configured but unreachable
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx)
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
     assert runtime.specs == []  # never spawns past a cap it could not read
 
 
-async def test_no_identity_configured_spawns_uncapped():
+async def test_no_admin_edge_fails_closed_refuses_uncapped_spawn():
+    # #656 C2: no admin edge configured → the per-user cap is UNRESOLVABLE. Fail closed:
+    # refuse to spawn rather than spawn uncapped (default, no opt-in).
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo)
-    counters = await _tick(repo, runtime, fetch_bot_context=None)
+    counters = await _tick(repo, runtime, fetch_bot_context=None, allow_uncapped=False)
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 1}
+    assert runtime.specs == []  # never spawns uncapped past a cap we cannot resolve
+
+
+async def test_no_admin_edge_with_explicit_opt_in_spawns_uncapped():
+    # AUTO_JOIN_ALLOW_UNCAPPED=1 → the deliberate self-host uncapped mode is chosen, not defaulted.
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo)
+    counters = await _tick(repo, runtime, fetch_bot_context=None, allow_uncapped=True)
     assert counters["spawned"] == 1
+    assert len(runtime.specs) == 1
 
 
 # ---- pure filter unit ----------------------------------------------------------------

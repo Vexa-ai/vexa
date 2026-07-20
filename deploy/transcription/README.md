@@ -42,5 +42,11 @@ If `API_TOKEN` is set here, set the **same** value as `TRANSCRIPTION_SERVICE_TOK
 stack's `.env`. Then bots transcribe end-to-end: bot → this service → segments → meeting-api
 `collector` → `transcription_segments` → live fan-out.
 
+**This unit ignores the request's `model` form part** (OpenAI-compat: the field is required, the
+server decides): the model that actually runs is this unit's own `MODEL_SIZE`. So the main stack's
+`TRANSCRIPTION_MODEL` has no effect here — it exists for backends that *validate* the model id
+(Groq, vLLM, OpenAI-compatible gateways); leave it empty when pointing at this unit and pick the
+model with `MODEL_SIZE` instead.
+
 Downloaded model weights live in the `transcription-models` **named volume** (not the working
 tree), persisted across restarts. Wipe with `docker volume rm transcription_transcription-models`.

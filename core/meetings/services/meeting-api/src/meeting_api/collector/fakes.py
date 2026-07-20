@@ -278,7 +278,9 @@ class InMemoryTranscriptStore:
         )
         return await self._transcript_doc(mid) if authorized else None
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+        from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
 
         def accessible(m):
@@ -289,17 +291,28 @@ class InMemoryTranscriptStore:
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)
-            and (status is None or m["status"] == status)
+            and (status is None or (m["status"] in status
+                                    if isinstance(status, (list, tuple, set, frozenset))
+                                    else m["status"] == status))
+            and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
         ]
         # newest first (by created_at desc, then id desc as a stable tiebreak)
         rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
         if offset:
             rows = rows[offset:]
-        if limit:
-            rows = rows[:limit]
-        return [
-            {
+        if list_view:
+            # #584: mirror the real store — default page size + over-fetch-by-1 for honest has_more.
+            effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
+            has_more = len(rows) > effective_limit
+            rows = rows[:effective_limit]
+        else:
+            if limit:
+                rows = rows[:limit]
+            has_more = False
+
+        def _row(mid, m):
+            row = {
                 "id": mid,
                 "user_id": m["user_id"],
                 "platform": m["platform"],
@@ -309,13 +322,17 @@ class InMemoryTranscriptStore:
                 "bot_container_id": m.get("bot_container_id"),
                 "start_time": m["start_time"],
                 "end_time": m["end_time"],
-                "data": m["data"],
                 "shared": m["user_id"] != user_id,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
+                # #584 list_view / #803 slim: both drop the heavy detail keys and keep the light
+                # metadata. Only a caller that genuinely renders full `data` leaves both off.
+                "data": project_list_data(m["data"]) if (list_view or slim) else m["data"],
             }
-            for mid, m in rows
-        ]
+            return row
+
+        result = [_row(mid, m) for mid, m in rows]
+        return (result, has_more) if list_view else result
 
     async def list_owned_read_metadata(self, user_id: int) -> list[dict]:
         rows = [
@@ -703,6 +720,45 @@ class FakeRedisBus:
                 }
                 out.append((mid, decoded))
         return out
+
+    async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
+        """#636: mirror of ``RedisStreamBus.reclaim_orphans`` over ``fakeredis.aioredis`` (which
+        supports XAUTOCLAIM ≥ 2.21). Reclaims idle delivered-but-un-acked entries into ``consumer``."""
+        from .adapters import _decode_claimed
+        try:
+            await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+        except Exception:
+            pass
+        resp = await self._client.xautoclaim(
+            name=stream, groupname=group, consumername=consumer,
+            min_idle_time=min_idle_ms, start_id="0-0", count=count,
+        )
+        return _decode_claimed(resp)
+
+    async def list_consumers(self, *, group, stream):
+        """#660: mirror of ``RedisStreamBus.list_consumers`` over ``fakeredis.aioredis`` (which
+        supports XINFO CONSUMERS and advances ``idle`` with wall-clock). Degrades to ``[]`` when the
+        group does not exist yet (NOGROUP), like the real adapter."""
+        from redis.exceptions import ResponseError
+
+        try:
+            resp = await self._client.xinfo_consumers(stream, group)
+        except ResponseError as e:
+            if "nogroup" in str(e).lower():
+                return []
+            raise
+        out: list[dict] = []
+        for entry in resp or []:
+            name = entry.get("name")
+            out.append({
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "pending": int(entry.get("pending") or 0),
+                "idle": int(entry.get("idle") or 0),
+            })
+        return out
+
+    async def delete_consumer(self, *, group, stream, consumer):
+        return await self._client.xgroup_delconsumer(stream, group, consumer)
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:

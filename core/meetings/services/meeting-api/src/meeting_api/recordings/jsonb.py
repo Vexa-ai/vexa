@@ -115,7 +115,14 @@ def apply_chunk_to_recording(
         or prior_sp.endswith("/audio/master.wav")
         or prior_is_final
     )
-    new_storage_path = prior_sp if master_finalized else storage_path
+    # #491 — the empty is_final "signal" chunk (file_size == 0) is a zero-byte COMPLETED marker, NOT
+    # playable bytes. It must NEVER become media_files.storage_path: when a prior data chunk of this
+    # type exists, keep pointing at THAT (the master is assembled from all chunks on read). Before this
+    # guard an empty-final fold set storage_path to the zero-byte signal object, and GET .../raw
+    # (which trusted is_final as "storage_path is playable") served 0 bytes for a confirmed upload.
+    empty_signal = file_size == 0 and prior_same_type is not None
+    keep_prior_path = master_finalized or empty_signal
+    new_storage_path = prior_sp if keep_prior_path else storage_path
     new_is_final = True if master_finalized else is_final
 
     media_files.append({

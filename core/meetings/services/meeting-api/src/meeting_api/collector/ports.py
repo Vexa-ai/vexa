@@ -249,6 +249,31 @@ class RedisBus(Protocol):
     ) -> list[tuple[str, dict]]:
         ...
 
+    async def reclaim_orphans(
+        self, *, group: str, stream: str, consumer: str, min_idle_ms: int, count: int = 10
+    ) -> list[tuple[str, dict]]:
+        """#636: reclaim DELIVERED-but-un-acked entries idle longer than ``min_idle_ms`` from ANY
+        consumer's PEL into ``consumer`` (XAUTOCLAIM) → ``[(message_id, fields), ...]``. A crashed
+        replica's orphaned batch is otherwise never re-delivered; this is the seam a surviving
+        replica uses to pick it up. One bounded call per tick (XAUTOCLAIM returns a continuation
+        cursor; the next tick continues) — never loops-to-exhaustion inside one call."""
+        ...
+
+    async def list_consumers(
+        self, *, group: str, stream: str
+    ) -> list[dict]:
+        """#660: enumerate the group's consumers (XINFO CONSUMERS) → ``[{"name", "pending", "idle"},
+        ...]`` (idle in ms). The seam the reclaim sweep uses to find ABANDONED per-recreate ghosts.
+        Degrades to ``[]`` on a Redis that lacks the command (same no-op-on-unsupported contract as
+        ``reclaim_orphans``) so the consume path is never broken."""
+        ...
+
+    async def delete_consumer(self, *, group: str, stream: str, consumer: str) -> int:
+        """#660: XGROUP DELCONSUMER — remove ``consumer`` from ``group``. Returns the number of
+        pending entries the consumer held (0 for a safely-pruned ghost). The caller only ever deletes
+        a consumer it has already confirmed holds ``pending == 0``."""
+        ...
+
     async def ack(self, *, group: str, stream: str, message_ids: list[str]) -> None: ...
 
     async def publish(self, channel: str, data: str) -> Any: ...

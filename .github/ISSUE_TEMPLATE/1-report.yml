@@ -22,8 +22,11 @@ body:
   - type: input
     id: deploy
     attributes:
-      label: Deployment
-      placeholder: hosted / self-hosted compose / lite / helm — and the image tag if you know it
+      label: Deployment — observed on which version / verified against which tag?
+      description: Which deployment, and the image tag or version you observed it on (or last verified against). A report anchored to an old tree gets re-anchored before we act — so this saves a round-trip.
+      placeholder: hosted / self-hosted compose / lite / helm — and the image tag, e.g. v0.12.11
+    validations:
+      required: true
   - type: textarea
     id: evidence
     attributes:

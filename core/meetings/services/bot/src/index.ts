@@ -12,7 +12,7 @@
  * ├─ INCREMENT 2b wires the browser join + capture + recording (THIS file):
  * │    • JoinDriver     → @vexa/join.joinMeeting over a @vexa/remote-browser page               ✅ WIRED (L4)
  * │    • Pipeline       → capture bridge → @vexa/{gmeet,mixed}-pipeline → @vexa/transcribe-whisper ✅ WIRED (L4 capture · L2/L3 lane)
- * │    • RecordingSink  → @vexa/recording assembler → upload to inv.recordingUploadUrl          ✅ WIRED (L4 upload · L2/L3 assembler)
+ * │    • RecordingSink  → per-chunk upload to inv.recordingUploadUrl (master assembled server-side) ✅ WIRED (L4 upload · L3 sink)
  * │    • Speak          → acts.v1 `speak`/`speak_stop` → meeting-UI mic + VM TTS chain          ✅ WIRED (L4)
  * └─ The browser/capture/recording-upload/speak legs are BROWSER- or VM-resident → L4-gated
  *    (proven by the O6 VM run, not unit tests). The lane + assembler cores are L2/L3-proven.
@@ -22,15 +22,17 @@
  * terminal `failed` (join_failure) rather than crashing the root — same disposability as the
  * lazy redis connect.
  */
-import { loadInvocation, InvocationError, type Invocation } from './config.js';
+import { createClient } from 'redis';
+import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
-import { createBotPipeline, type BotPipeline } from './pipeline.js';
+import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
+import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -123,6 +125,26 @@ function voiceHandler(speak: SpeakController): (act: Act) => Promise<void> {
   };
 }
 
+/**
+ * Probe the SECONDARY control-plane channel (redis) for the reachability gate (#530). A fresh,
+ * short-lived connection with a bounded connect timeout and NO reconnection — a single yes/no on
+ * whether redis answers a PING. Never throws: any fault resolves to `false` (unreachable). Uses a
+ * throwaway client (not the lazy transcript/acts clients) so the probe can't disturb their state.
+ */
+async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
+  const client = createClient({ url: redisUrl, socket: { connectTimeout: timeoutMs, reconnectStrategy: false } });
+  client.on('error', () => { /* swallow — the probe's verdict is the return value, not a throw */ });
+  try {
+    await client.connect();
+    const pong = await client.ping();
+    return pong === 'PONG';
+  } catch {
+    return false;
+  } finally {
+    await client.disconnect().catch(() => { /* best-effort */ });
+  }
+}
+
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number> {
   // ── validate config (P14: fail fast) ──
   let inv: Invocation;
@@ -166,15 +188,28 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let join: JoinDriver;
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
-  let stopCapture: () => Promise<void> = async () => { /* no-op until pipeline.start() wires capture */ };
-  let stopRecording: () => Promise<void> = async () => { /* no-op until pipeline.start() wires recording */ };
   let acts: ActsSource = liveActs;
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
+  // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
+  // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
+  // enables it without a control plane (the local hot-loop path).
+  const signalRecorder: CaptureSignalRecorder | null =
+    (inv.captureSignalEnabled ?? env.VEXA_CAPTURE_SIGNAL === '1')
+      ? createCaptureSignalRecorder(inv)
+      : null;
+  if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  const speakerStreamConfig = speakerStreamConfigFromEnv(env);
+  if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
-    botPipeline = createBotPipeline(inv, transcript, { onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
+    botPipeline = createBotPipeline(inv, transcript, {
+      // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
+      config: speakerStreamConfig,
+      onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`),
+    });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran
@@ -200,20 +235,18 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
         absolute_end_time: new Date(nowMs).toISOString(),
       }).catch((e) => console.error(`[bot] chat publish rejected: ${String(e)}`));
     };
-    pipeline = {
-      async start() {
-        stopCapture = await startCaptureBridge(sess.page, inv, bp, undefined, publishChat);   // on the live meeting page
-        if (rec) stopRecording = await startRecording(sess.page, inv, rec);   // MediaRecorder → recording.v1
-        await bp.start();
+    // #593: a post-admission subsystem failure must NEVER self-evict. createLivePipeline wraps the
+    // page-side capture + recording attach + the engine start so pipeline.start() ALWAYS RESOLVES;
+    // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
+    // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
+    pipeline = createLivePipeline({
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat),   // on the live meeting page
+      startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
+      engine: bp,
+      onFault: (stage, e) => {
+        console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
       },
-      async stop() {
-        const sc = stopCapture; stopCapture = async () => {};
-        await sc().catch(() => { /* best-effort */ });
-        const sr = stopRecording; stopRecording = async () => {};
-        await sr().catch(() => { /* best-effort */ });   // flush the final chunk → master assembly
-        await bp.stop();
-      },
-    };
+    });
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
     const speak = createSpeakController(session.page, inv);
     acts = teeActs(liveActs, voiceHandler(speak));
@@ -224,12 +257,20 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     acts = liveActs;
   }
 
+  // Reachability gate (#530): only meaningful under a control plane (a callback URL is set). When
+  // present, the orchestrator makes the first `joining` emit load-bearing and, if the callback is
+  // unreachable, probes redis before refusing to join. Self-host (no callback) has no gate.
+  const reachability = inv.meetingApiCallbackUrl
+    ? { probeSecondary: () => pingRedis(inv.redisUrl) }
+    : undefined;
+
   const orchestrator = createOrchestrator(inv, {
     lifecycle,
     join,
     pipeline,
     acts,
     recording: recording as RecordingSink | undefined,
+    reachability,
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
@@ -243,10 +284,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     return result.exitCode;
   } finally {
     releaseSignals();
-    // Tear down the capture bridge + browser (best-effort — a teardown failure must not change
-    // the exit code). The orchestrator already stopped the pipeline + left the meeting.
-    await stopCapture().catch(() => { /* best-effort */ });
-    await stopRecording().catch(() => { /* best-effort */ });
+    // Tear down the pipeline (capture bridge + recording + engine) + browser (best-effort — a
+    // teardown failure must not change the exit code). The orchestrator already stopped the pipeline
+    // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
+    // path that skipped the orchestrator's teardown. (#593)
+    await pipeline.stop().catch(() => { /* best-effort */ });
+    await signalRecorder?.close().catch(() => { /* best-effort */ });
     if (session) await session.close().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the
     // exit code; they may never have connected if redis was unreachable).

@@ -27,6 +27,7 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
+  syncBrowserDataToS3,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
@@ -72,6 +73,47 @@ export function makeTelemetryTap(lane: 'gmeet' | 'mixed', telemetry?: TelemetryS
   };
 }
 
+/**
+ * Build the mixed-lane speaker-hint sink — the EXACT closure the bridge exposes as
+ * `__vexaSpeakerHint`, factored out so it is offline-provable WITHOUT a Playwright page.
+ *
+ * CLOCK CONTRACT: hint tMs and audio tsMs entering the pipeline share ONE domain —
+ * epoch ms. The page-side watchers stamp Date.now() (epoch), so normally the value
+ * passes through untouched; a page that emits a non-epoch time (e.g. a relative
+ * performance.now()) would make every hint window miss every speech turn, so an
+ * implausible skew is re-stamped Node-side and warned LOUDLY, never silently bound
+ * to nothing. Also counts arrivals (C1 hop 2: page → Node).
+ */
+export const HINT_MAX_SKEW_MS = 10 * 60 * 1000;
+export function makeSpeakerHintSink(
+  pipeline: Pick<BotPipeline, 'recordHint'>,
+  warn: (m: string) => void = (m) => console.warn(m),
+  /** O-TEL-1: the same sink the audio tap feeds. Mixed-lane hints arrive HERE, not on the audio
+   *  frames, so a session recorded without this tee stores audio that can never reproduce
+   *  attribution offline. Teed with the post-guard `t`, so the stored hint carries the clock the
+   *  pipeline actually saw. */
+  telemetry?: TelemetrySink,
+): { sink: (name: string, tMs?: number, isEnd?: boolean) => void; crossed: () => number } {
+  let crossed = 0;
+  return {
+    crossed: () => crossed,
+    sink: (name: string, tMs?: number, isEnd?: boolean): void => {
+      crossed++;
+      let t = tMs ?? Date.now();
+      const skew = Math.abs(t - Date.now());
+      if (skew > HINT_MAX_SKEW_MS) {
+        warn(`[bot] hint-clock-skew: hint tMs=${t} is ${Math.round(skew / 1000)}s off the epoch audio clock — page emitted a non-epoch timestamp; re-stamping (name=${name})`);
+        t = Date.now();
+      }
+      if (telemetry?.captureHint) {
+        try { telemetry.captureHint({ type: 'hint', t, name, isEnd, lane: 'mixed' }); }
+        catch { /* telemetry must not break capture */ }
+      }
+      pipeline.recordHint(name, t, isEnd);
+    },
+  };
+}
+
 /** Path (in the bot container image) to the prebuilt page-side capture bundle that defines
  *  window.VexaBrowserUtils (createGmeetCapture / createGmeetSpeakers / mixed taps). Mirrors
  *  production's browser-utils.global.js; injected via addInitScript so it is present on every
@@ -97,14 +139,18 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
   // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
   const dataDir = makeEphemeralProfileDir();
+  const s3Config = {
+    userdataS3Path: inv.userdataS3Path,
+    s3Endpoint: inv.s3Endpoint,
+    s3Bucket: inv.s3Bucket,
+    s3AccessKey: inv.s3AccessKey,
+    s3SecretKey: inv.s3SecretKey,
+  };
   if (inv.authenticated && inv.userdataS3Path) {
-    syncBrowserDataFromS3({
-      userdataS3Path: inv.userdataS3Path,
-      s3Endpoint: inv.s3Endpoint,
-      s3Bucket: inv.s3Bucket,
-      s3AccessKey: inv.s3AccessKey,
-      s3SecretKey: inv.s3SecretKey,
-    }, dataDir);
+    // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
+    // naming the session-restore step (the composition root drives it to a clean terminal failed)
+    // — an authenticated bot never silently proceeds to join signed-out on a failed restore.
+    syncBrowserDataFromS3(s3Config, dataDir);
     cleanStaleLocks(dataDir);
   }
 
@@ -121,6 +167,34 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     // The bundle may be loaded by other means in some images; capture wiring degrades to the
     // inline fallback below. Never fatal at launch.
   });
+
+  // #593 A1: a page-context global fault logger, installed at document-start on EVERY frame/nav so
+  // gmeet + teams + zoom all inherit it. Before this, the only error-shaped line on the bot's stdout
+  // for a Teams join was the platform's OWN `Unhandled rejection {isTrusted:true}` — a bare DOM Event
+  // that misdirected #593 (it's Teams' VQE worklet, unrelated to our Node throw). This handler names
+  // the actual reason (message + stack) AND, for a bare Event, its type/target — so the {isTrusted}
+  // line is finally identified rather than mistaken for the cause. Non-fatal at launch (like neighbors).
+  await context.addInitScript(`(() => {
+    var report = function (m) { try { (window.logBot || console.error)('[page-fault] ' + m); } catch (e) {} };
+    window.addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      var msg = (r && (r.message || r.name)) ? ((r.name || 'Error') + ': ' + (r.message || '')) : String(r);
+      var stack = (r && r.stack) ? r.stack : '(no stack)';
+      report('unhandledrejection: ' + msg + ' :: ' + stack);
+    });
+    window.addEventListener('error', function (ev) {
+      var msg;
+      if (ev && ev.error && (ev.error.message || ev.error.stack)) {
+        msg = (ev.error.name || 'Error') + ': ' + (ev.error.message || '') + ' :: ' + (ev.error.stack || '(no stack)');
+      } else {
+        var t = ev && ev.target;
+        var tag = t && (t.tagName || t.nodeName);
+        var src = t && (t.src || t.href || t.currentSrc);
+        msg = 'event type=' + (ev && ev.type) + (tag ? ' target=' + tag : '') + (src ? ' src=' + src : '') + ' isTrusted=' + (ev && ev.isTrusted);
+      }
+      report('error: ' + msg);
+    });
+  })();`).catch(() => { /* never fatal at launch */ });
 
   // Zoom/Teams expose NO per-participant <audio> in the DOM — install the WebRTC hook so each
   // remote audio track is mirrored into a hidden <audio> element (→ __vexaCapturedRemoteAudioStreams)
@@ -149,6 +223,18 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     page,
     async close() {
       await context.close().catch(() => { /* best-effort */ });
+      // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
+      // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
+      // spawn restores the freshest state instead of a decaying snapshot. Clean teardown only:
+      // a SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
+      // Failures are attributed warnings, bounded per upload — teardown never hangs on S3.
+      if (inv.authenticated && inv.userdataS3Path) {
+        try {
+          syncBrowserDataToS3(s3Config, dataDir);
+        } catch (e) {
+          console.error(`[bot] session write-back failed (durable copy stays at last restore): ${String(e)}`);
+        }
+      }
       removeProfileDir(dataDir);   // per-bot dir — leaking one per bot fills the disk in vexa-lite
     },
   };
@@ -202,9 +288,16 @@ export async function startCaptureBridge(
     pipeline.feedAudio(channel, glowName, pcm, ts);
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
-  const onSpeakerHint = (name: string, tMs?: number, isEnd?: boolean): void => {
-    pipeline.recordHint(name, tMs ?? Date.now(), isEnd);
-  };
+  // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
+  const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
+  // C1: the four hint hops on one periodic, cumulative counter line —
+  // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
+  // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
+  const countersTimer = mixed ? setInterval(() => {
+    const c = pipeline.hintCounters;
+    console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+  }, 30_000) : null;
+  countersTimer?.unref?.();   // observability only — never holds the process open
 
   await page.exposeFunction('__vexaPerSpeakerAudioData', onPerSpeakerAudio).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
@@ -219,7 +312,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -253,6 +346,21 @@ export async function startCaptureBridge(
       };
       setupMix();
       w.__vexaMixRescan = (globalThis as any).setInterval(setupMix, 2000); // pick up late-arriving tracks
+      if (isTeams) {
+        // Teams contributes the WHO signal the mixed audio can't carry: the voice-level
+        // "blue-square" outline watcher (@vexa/teams-capture — the SAME module the desktop
+        // extension runs) emits debounced speaking start/stop per participant; each crosses
+        // to the Node side as a speaker hint (epoch tMs) and the pipeline stamps the
+        // platform's 'dom-outline' kind at its wiring seam.
+        if (w.VexaBrowserUtils?.createTeamsSpeakers && !w.__vexaTeamsSpeakers) {
+          w.__vexaTeamsSpeakers = w.VexaBrowserUtils.createTeamsSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
+            onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
+              w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          });
+        }
+      }
       if (isJitsi) {
         // Jitsi contributes the WHO + chat signals the mixed audio can't carry:
         // dominant-speaker changes name the pyannote clusters ('dom-active' hints),
@@ -269,6 +377,26 @@ export async function startCaptureBridge(
           w.__vexaJitsiChat = w.VexaBrowserUtils.createJitsiChat({
             log: (m: string) => w.logBot?.('[JitsiChat] ' + m),
             onMessage: (m: { sender: string; text: string }) => w.__vexaChatMessage?.(m.sender, m.text),
+          });
+        }
+      }
+      if (isZoom) {
+        // Zoom contributes the WHO signal the mixed audio can't carry: the active-speaker
+        // DOM watcher (poll + flicker debounce lives in @vexa/zoom-capture) emits name
+        // transitions → __vexaSpeakerHint → pipeline.recordHint, which labels them
+        // 'dom-active' (Zoom's true kind — the mixed lane's DOM-active lag model).
+        // Timestamps are page Date.now() = epoch ms, the same clock Node stamps with.
+        if (w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
+          let lastActive: string | null = null;
+          w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
+            onSpeakerChange: (name: string | null) => {
+              const tMs = Date.now();
+              if (name) w.__vexaSpeakerHint?.(name, tMs, false);           // start / heartbeat re-assert
+              else if (lastActive) w.__vexaSpeakerHint?.(lastActive, tMs, true); // nobody lit → close the turn
+              lastActive = name;
+            },
           });
         }
       }
@@ -291,17 +419,20 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
+    if (countersTimer) clearInterval(countersTimer);
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
+      try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
@@ -316,13 +447,25 @@ export async function startCaptureBridge(
  * The MediaRecorder loop lives in @vexa/record-chunker (bundled into window.VexaBrowserUtils, like
  * the capture bricks). It records the meeting's combined audio mix, base64-encodes each timeslice,
  * and hands it to `onChunk`. We bridge those chunks over the Playwright boundary to `recording.chunk`
- * using the SAME key the orchestrator closes with (`platform/native`), so the assembler groups them
- * and the final chunk (on stop) assembles the master. Started post-admission (on the live meeting
- * page, where the participant <audio> elements exist), exactly like the capture bridge.
+ * using the SAME key the orchestrator closes with (`platform/native`); the sink uploads each chunk to
+ * meeting-api the moment it arrives (#491/#412 — every finished part is durable before the meeting
+ * ends), and the master is assembled server-side on read. The trailing empty is_final chunk (on
+ * stop) is the COMPLETED signal. Started post-admission (on the live meeting page, where the
+ * participant <audio> elements exist), exactly like the capture bridge.
  */
 export async function startRecording(page: Page, inv: Invocation, recording: BotRecordingSink): Promise<() => Promise<void>> {
   const key = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
-  // Node-side: decode one base64 recording.v1 chunk → the assembler. mimeType→master format.
+  // Recording part interval (ms): the MediaRecorder timeslice = the durable-upload granularity.
+  // Env-overridable (VEXA_RECORDING_TIMESLICE_MS) so a live multi-part run can shrink it to land
+  // ≥2 parts in a short meeting (#509 A5); default 15000 (production parity). Each timeslice is a
+  // chunk uploaded the moment it is produced (recording.ts sink), so a SIGKILL leaves every
+  // finished part durable (#412). Invalid / non-positive values fall back to the default.
+  const timesliceMs = ((): number => {
+    const raw = process.env.VEXA_RECORDING_TIMESLICE_MS;
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 15000;
+  })();
+  // Node-side: decode one base64 recording.v1 chunk → the per-chunk upload sink. mimeType→format.
   await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string): void => {
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, 'base64')) : new Uint8Array(0);
     const format: RecordingMasterFormat = /wav/i.test(mimeType) ? 'wav' : 'webm';
@@ -330,11 +473,11 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
-  await page.evaluate(async () => {
+  await page.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
-        timesliceMs: 15000,
+        timesliceMs,
         onChunk: async (c: { base64: string; chunkSeq: number; isFinal: boolean; mimeType: string }) => {
           try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType); return true; }
           catch { return false; }
@@ -342,7 +485,7 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
       });
       await w.__vexaRecordingTap.start();
     }
-  }).catch((e) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
+  }, timesliceMs).catch((e) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {

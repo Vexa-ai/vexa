@@ -309,9 +309,11 @@
       "key": "VEXA_MEETING_API_URL",
       "class": "defaulted",
       "default": "http://meeting-api:8080",
-      "description": "meeting-api base URL \u2014 agent-api owner-scopes the live SSE feed (GET /api/meeting/stream) by hitting GET /meetings/{id} on it before opening the redis transcript stream (P0 cross-tenant leak fix, SSE sibling of the by-id ownership check)",
+      "description": "meeting-api base URL \u2014 agent-api owner-scopes the live SSE feed (GET /api/meeting/stream) by hitting GET /meetings/{id} on it before opening the redis transcript stream (P0 cross-tenant leak fix, SSE sibling of the by-id ownership check). compose relies on the default service DNS name, helm sets it explicitly to the release-qualified Service DNS (unset it fails closed \u2192 403 for the owner, #677), lite overrides to localhost",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {

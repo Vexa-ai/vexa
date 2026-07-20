@@ -132,11 +132,18 @@ services:
       - path: .env
         required: false
     environment:
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
       - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
+      # Optional low-latency tuning for the Google Meet speaker-stream pipeline. Empty values keep
+      # the bot defaults; runtime forwards configured values to spawned bot containers.
+      - BOT_SPEAKER_MIN_AUDIO_SEC=${BOT_SPEAKER_MIN_AUDIO_SEC:-}
+      - BOT_SPEAKER_SUBMIT_INTERVAL_SEC=${BOT_SPEAKER_SUBMIT_INTERVAL_SEC:-}
+      - BOT_SPEAKER_CONFIRM_THRESHOLD=${BOT_SPEAKER_CONFIRM_THRESHOLD:-}
+      - BOT_SPEAKER_MAX_BUFFER_SEC=${BOT_SPEAKER_MAX_BUFFER_SEC:-}
+      - BOT_SPEAKER_IDLE_TIMEOUT_SEC=${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
@@ -288,6 +295,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-}
       # The background sweeps' internal lookups: auto-join fetches per-user spawn context
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
@@ -297,14 +305,27 @@ services:
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
       - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
       # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
-      # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
+      # `stt` resource; a token that can actually transcribe — the boot probe + wizard Test verify
+      # it with real audio). Unset → bot joins+captures but no transcript.
+      # MODEL is the id validating backends require (Groq/vLLM); unset → whisper-1.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.
       - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
+      # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
+      # provisioned browser session (make login) from the userdata store and joins signed-in.
+      # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
+      # Docs: /authenticated-bots.
+      - BOT_AUTHENTICATED=${BOT_AUTHENTICATED:-false}
+      - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
+      - BOT_S3_ENDPOINT=${BOT_S3_ENDPOINT:-}
+      - BOT_S3_BUCKET=${BOT_S3_BUCKET:-}
+      - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
+      - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -455,8 +476,10 @@ services:
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
       # server-side. Empty → the mic button reports "not configured" instead of failing silently.
+      # MODEL rides along so dictation hits a validating backend with the same id as the bots.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
       # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
@@ -483,6 +506,49 @@ services:
       gateway:
         condition: service_healthy
       agent-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # DEPRECATED — the 0.10 dashboard, kept as an OFF-BY-DEFAULT profile while it is still
+  # load-bearing (#813). It is the multi-user web UI hosted production runs against the 0.12 core
+  # (the wiring below is the hosted-proven one), and some flows (authenticated-session lifecycle,
+  # browser-session provisioning) are only walkable through it today. The Terminal is the
+  # first-class UI; this ships pinned so the UI users see belongs to a release again instead of
+  # floating outside all of them. Start it explicitly:
+  #     docker compose --profile dashboard up -d
+  # Deprecation exit: when the Terminal covers the flows above, this block is deleted, not ported.
+  dashboard:
+    profiles: ["dashboard"]
+    image: ${DASHBOARD_IMAGE:-vexaai/dashboard:0.10.6.3.14}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-13001}:3000"
+    environment:
+      # Core wiring — identical shape to hosted production (vexa-platform chart), pointed at the
+      # compose service DNS. The dashboard talks to the gateway's hosted-compat surface.
+      - VEXA_API_URL=http://gateway:8000
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
+      - VEXA_PUBLIC_API_URL=${DASHBOARD_PUBLIC_API_URL:-http://localhost:18056}
+      - NEXT_PUBLIC_VEXA_WS_URL=${DASHBOARD_PUBLIC_WS_URL:-ws://localhost:18056/ws}
+      # Auth/session — self-hosted defaults: local registration on, no hosted-mode redirects.
+      - NEXTAUTH_URL=${DASHBOARD_URL:-http://localhost:13001}
+      - NEXT_PUBLIC_APP_URL=${DASHBOARD_URL:-http://localhost:13001}
+      - NEXT_PUBLIC_BASE_URL=${DASHBOARD_URL:-http://localhost:13001}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      - JWT_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      - ALLOW_REGISTRATIONS=${DASHBOARD_ALLOW_REGISTRATIONS:-true}
+      - NEXT_PUBLIC_HOSTED_MODE=false
+      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    init: true
+    depends_on:
+      gateway:
         condition: service_healthy
     networks: [vexa]
     restart: unless-stopped

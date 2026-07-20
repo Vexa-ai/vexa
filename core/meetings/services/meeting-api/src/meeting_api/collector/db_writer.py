@@ -67,6 +67,72 @@ log = logging.getLogger("meeting_api.collector.db_writer")
 ACTIVE_MEETINGS_KEY = "active_meetings"
 IMMUTABILITY_THRESHOLD = float(os.environ.get("IMMUTABILITY_THRESHOLD", "30"))
 
+# #527 C2: how long an ACKED transcription_segments entry is retained before it is eligible to be
+# trimmed. Retention NEVER trims an entry the collector group has not read (the 2026-04-26 data loss,
+# where a MAXLEN trim aged out entries a hung consumer never got to) — a behind/hung group keeps its
+# full backlog, and the hang is surfaced by /health (C1) rather than papered over by trimming it.
+STREAM_RETENTION_S = float(os.environ.get("STREAM_RETENTION_S", "3600"))
+
+
+def _parse_stream_id(v) -> "Optional[tuple[int, int]]":
+    """A redis stream id ``"<ms>-<seq>"`` → ``(ms, seq)`` for ordering; None if unparseable."""
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode()
+    try:
+        ms, seq = str(v).split("-")
+        return (int(ms), int(seq))
+    except Exception:
+        return None
+
+
+def _pending_min_id(pending) -> "Optional[tuple[int, int]]":
+    """Oldest DELIVERED-but-un-acked id for the group, from an XPENDING summary, as (ms, seq)."""
+    if not isinstance(pending, dict):
+        return None
+    return _parse_stream_id(pending.get("min"))
+
+
+async def _group_last_delivered_id(redis_c, stream: str, group: str) -> "Optional[tuple[int, int]]":
+    """The group's last-delivered-id — entries AFTER it are UNDELIVERED (the lag) and must survive."""
+    for g in (await redis_c.xinfo_groups(stream)) or []:
+        name = g.get("name") if isinstance(g, dict) else None
+        if isinstance(name, (bytes, bytearray)):
+            name = name.decode()
+        if name == group:
+            return _parse_stream_id(g.get("last-delivered-id"))
+    return None
+
+
+async def _trim_segments_stream(redis_c, retention_s: float, now_ms: int) -> None:
+    """Trim ``transcription_segments`` to entries newer than the retention floor — but NEVER past an
+    entry the collector group has not fully consumed. "Unread" is two things: DELIVERED-but-un-acked
+    (pending) and UNDELIVERED (past the group's last-delivered-id, i.e. the lag). The trim floor is
+    the OLDER of {retention time, oldest pending, last-delivered-id}, so an acked-and-aged entry is
+    trimmed while any un-consumed entry survives (the 2026-04-26 data-loss guard)."""
+    from .ingest import CONSUMER_GROUP, STREAM_NAME
+
+    floor = (max(0, now_ms - int(retention_s * 1000)), 0)  # time-based minid we would keep from
+    try:
+        oldest_pending = _pending_min_id(await redis_c.xpending(STREAM_NAME, CONSUMER_GROUP))
+        if oldest_pending is not None:
+            floor = min(floor, oldest_pending)
+        last_delivered = await _group_last_delivered_id(redis_c, STREAM_NAME, CONSUMER_GROUP)
+        if last_delivered is not None:
+            # keep everything STRICTLY AFTER last-delivered (the UNDELIVERED lag); the last-delivered
+            # entry itself is consumed, so the exclusive floor is (ms, seq+1).
+            floor = min(floor, (last_delivered[0], last_delivered[1] + 1))
+    except Exception:
+        return  # no group/stream yet, or XINFO/XPENDING unsupported — do not risk a blind trim
+    minid = f"{floor[0]}-{floor[1]}"
+    try:
+        await redis_c.xtrim(STREAM_NAME, minid=minid, approximate=True)
+    except TypeError:
+        await redis_c.xtrim(STREAM_NAME, minid=minid)  # older redis-py signature
+    except Exception:
+        pass
+
 # ── the end-of-processing protocol (ADR 0027 / processed-notes.v1) ────────────────────────────────
 # The copilot worker runs one final LLM beat AFTER session_end (~10s), then XADDs a `view_end`
 # marker: the proc stream is COMPLETE at that entry. finalize_meeting's inline drain used to be the
@@ -331,6 +397,14 @@ async def db_writer_tick(
                 await redis_c.zrem(PROC_PENDING_KEY, raw_id)
         except Exception:  # noqa: BLE001 — isolate per meeting; the next tick retries
             log.exception("pending processed re-drain failed for meeting %s", raw_id)
+
+    # #527 C2: bound the ingest stream in steady state (trims only acked entries past the retention
+    # window; never an unread one). Isolated — a trim failure never blocks the durable flush above.
+    try:
+        now_ms = int((now.timestamp() if now is not None else datetime.now(timezone.utc).timestamp()) * 1000)
+        await _trim_segments_stream(redis_c, STREAM_RETENTION_S, now_ms)
+    except Exception:  # noqa: BLE001
+        log.exception("segment stream retention trim failed")
     return total
 
 

@@ -59,23 +59,30 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   // Emit the SEALED transcript.v1 shape (snake_case, segment_id + completed, source
   // in the contract's enum) — the pipeline IS the transcript.v1 producer, so its
   // output conforms to meetings/contracts/transcript.v1 (pinned by the replay golden).
-  const segOf = (speakerName: string, key: string, text: string, startMs: number, endMs: number, completed: boolean): TranscriptSegment => {
+  const segOf = (speakerName: string, key: string, text: string, startMs: number, endMs: number, completed: boolean, lang?: string): TranscriptSegment => {
     const named = speakerName !== UNKNOWN;
     return {
       segment_id: `${key}:${Math.round(startMs)}`,
       speaker: speakerName, speaker_key: key, text,
       start: startMs / 1000, end: endMs / 1000, completed, words: [],
+      language: lang ?? null,
       source: named ? 'glow-bound' : 'provisional-cluster-id',
       confidence: named ? 1 : 0,
     };
   };
+
+  // The window's language off the stt.v1 result: the per-call detection in auto mode, or the
+  // invocation-forced code (baked into the transcribe closure, echoed back by the service).
+  // 'unknown' is the client's no-detection sentinel, not an ISO code — NULL stays honest.
+  const langOf = (l: string | undefined): string | undefined =>
+    l && l !== 'unknown' ? l : undefined;
 
   mgr.onSegmentReady = (speakerId, _name, audio) => {
     const p = (async () => {
       try {
         const r = await opts.transcribe(audio, mgr.getLastConfirmedText(speakerId) || undefined);
         const segs = r?.segments;
-        mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs);
+        mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
       } catch (e) {
         opts.onError?.(e);                          // P18: report the fault, don't swallow it…
         mgr.handleTranscriptionResult(speakerId, '');   // …but still free the turn (graceful degrade)
@@ -85,12 +92,12 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     void p.finally(() => inflight.delete(p));
   };
 
-  mgr.onSegmentConfirmed = (speakerId, speakerName, text, startMs, endMs) => {
+  mgr.onSegmentConfirmed = (speakerId, speakerName, text, startMs, endMs, _segmentId, lang) => {
     if (!text.trim()) return;
-    opts.sink.segment(segOf(speakerName, speakerId, text, startMs, endMs, true));
+    opts.sink.segment(segOf(speakerName, speakerId, text, startMs, endMs, true, lang));
   };
-  mgr.onSegmentPending = (speakerId, speakerName, text, startMs) => {
-    opts.sink.draft?.({ ...segOf(speakerName, speakerId, text, startMs, startMs, false), confidence: 0 });
+  mgr.onSegmentPending = (speakerId, speakerName, text, startMs, lang) => {
+    opts.sink.draft?.({ ...segOf(speakerName, speakerId, text, startMs, startMs, false, lang), confidence: 0 });
   };
 
   const settle = async () => { while (inflight.size) await Promise.all([...inflight]); };

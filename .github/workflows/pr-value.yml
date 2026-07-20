@@ -99,3 +99,92 @@ jobs:
         run: |
           docker ps -a
           docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
+
+  # The LITE boot leg (#581). Lite builds and boots ONLY at release time, so three lite-only
+  # bugs (the Dockerfile.lite stale brick filter #576, the Makefile $IMG-orphaned-by-comment,
+  # the #585 stream-authz misconfig) each cost a full failed release pipeline (~35 min) to
+  # surface. This job closes that gap per PR: build deploy/lite/Dockerfile.lite from the PR's
+  # own tree, `make -C deploy/lite up` from that exact image, probe the front doors, then the
+  # concurrent-bots smoke (the #478 class + the #585 stream-authz guard).
+  #
+  # Scope: only when the lite bundle's inputs change — deploy/lite/** (Dockerfile + Makefile +
+  # launchers + supervisor conf) or core/** (the bot/service source the image bakes) or the
+  # workspace manifests. clients/terminal is deliberately OUT: the terminal has its own image
+  # leg, and a terminal-only PR should not pay a lite build. Job-level path scoping is a git
+  # diff against the merge ref's first parent (main) — no extra action, works identically for
+  # the dispatch backfill mode. Fail-open: if the diff cannot be computed, the leg runs.
+  #
+  # NO secrets (like value-fsm): base images and the vexaai/vexa-lite:buildcache registry cache
+  # are pulled anonymously — warm-cache runs land in single-digit minutes; a cold cache is the
+  # 45-min ceiling, never a wrong verdict.
+  lite-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || '' }}
+          fetch-depth: 2   # merge commit + both parents → HEAD^1 (main) is diffable
+      - name: Scope — does this PR touch the lite bundle?
+        id: scope
+        run: |
+          if files=$(git diff --name-only HEAD^1 HEAD 2>/dev/null); then
+            if echo "$files" | grep -qE '^(deploy/lite/|core/|package\.json$|pnpm-lock\.yaml$)'; then
+              echo "hit=1" >> "$GITHUB_OUTPUT"; echo "lite bundle inputs changed — running the leg"
+            else
+              echo "hit=0" >> "$GITHUB_OUTPUT"; echo "no lite bundle inputs changed — skipping"
+            fi
+          else
+            echo "hit=1" >> "$GITHUB_OUTPUT"; echo "could not diff — failing open, running the leg"
+          fi
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        if: steps.scope.outputs.hit == '1'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.scope.outputs.hit == '1'
+      # Build the PR's OWN lite image (A3: the PR tree, anonymous pulls, no cache-to — read-only
+      # cache use). The tag is the Makefile's LOCAL_TAG: `make up` prefers a local vexa-lite:dev
+      # over the Hub image, so the stack below boots exactly what this PR would ship.
+      - name: Build deploy/lite/Dockerfile.lite from the PR tree
+        if: steps.scope.outputs.hit == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/lite/Dockerfile.lite
+          load: true
+          tags: vexa-lite:dev
+          cache-from: type=registry,ref=vexaai/vexa-lite:buildcache
+      - name: Seed the lite .env
+        if: steps.scope.outputs.hit == '1'
+        run: printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\n' > .env
+      - name: Bring lite up from the PR-built image
+        if: steps.scope.outputs.hit == '1'
+        run: make -C deploy/lite up init-db
+      - name: Probe the front doors (make test exits non-zero on failure)
+        if: steps.scope.outputs.hit == '1'
+        run: |
+          for i in $(seq 1 10); do
+            make -C deploy/lite test && exit 0
+            echo "…front doors not all up yet (attempt $i/10)"; sleep 15
+          done
+          echo "::error ::lite front-door probes failed after 10 attempts"
+          exit 1
+      - name: Concurrent-bots smoke (the #478 class + the #585 stream-authz guard)
+        if: steps.scope.outputs.hit == '1'
+        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+      - name: Present the lite-leg row (job summary)
+        if: always() && steps.scope.outputs.hit == '1'
+        run: |
+          {
+            echo "## pr-value/lite-smoke — the lite boot leg (#581)"
+            echo
+            echo "Built \`deploy/lite/Dockerfile.lite\` from this PR's tree, booted it via"
+            echo "\`make -C deploy/lite up\`, probed the front doors, ran the concurrent-bots smoke."
+            echo
+            echo "Verdict: **${{ job.status }}** — green means the lite image assembles and boots"
+            echo "from THIS tree. Real-Meet admission and audio→words remain release-bar legs."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Lite state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs vexa-lite --tail 300 || true

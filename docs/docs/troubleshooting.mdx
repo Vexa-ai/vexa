@@ -23,6 +23,25 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
+## Authenticated bot fails or joins signed-out
+
+Applies only to deployments with `BOT_AUTHENTICATED=true` (see
+[Authenticated bots](/authenticated-bots)).
+
+- **`session-restore` failure at spawn** — the bot could not download the stored session (wrong
+  `BOT_S3_ENDPOINT`, bad scoped credentials, or the `aws` CLI missing from a custom image). The bot
+  log names the step and endpoint; the meeting fails rather than joining signed-out. Fix the config
+  and respawn.
+- **503 on `POST /bots`** — `BOT_AUTHENTICATED` is set but `BOT_USERDATA_S3_PATH` /
+  `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete. The error names what is missing.
+- **409 "authenticated session in use"** — one stored session runs one bot at a time; the message
+  names the meeting holding it. Wait for it to finish, stop it, or provision another identity.
+- **The session decayed (signed-out on join)** — re-provision with `make login`; the next spawn
+  picks the fresh session up automatically. If this fires soon after provisioning rather than
+  after weeks of use, check write-back and the
+  [session-lifetime levers](/authenticated-bots#3-session-lifetime--the-session-stays-alive-because-it-is-used)
+  instead of re-provisioning in a loop.
+
 ## A scheduled meeting didn't auto-join
 
 Auto-join sends the bot ~60 s before the scheduled time (see
@@ -70,14 +89,52 @@ usual causes:
 
 ## Bot joins but there's no transcript
 
-The bot is capturing audio, but transcription isn't configured.
+The bot is capturing audio, but transcription isn't configured — or the bot was spawned
+**capture-only**, which looks identical from the outside.
 
+- **First, check whether the bot was spawned capture-only.** `GET /bots` (or `GET /meetings/{id}`)
+  reports the resolved flag: `data.transcribe_enabled: false` means the bot was never asked to
+  transcribe, so no STT request was ever made and no error will appear anywhere. If it is `false`
+  and you did not intend that, an explicit `{"transcribe_enabled": true}` on `POST /bots` overrides
+  the deployment default and confirms the diagnosis in one call.
+- Confirm `TRANSCRIBE_ENABLED` is not set to a false value in your `.env`. An **empty**
+  `TRANSCRIBE_ENABLED=` means `true` (the default) — but a trailing comment on that line does not:
+  `docker run --env-file` keeps the comment as part of the value. Keep comments on their own line.
 - Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
   [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
   normal, not a failure.
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
+
+## What terminal errors look like — and where the technical details live
+
+Terminal error surfaces speak user vocabulary ("Couldn't reach the Vexa server — check that the
+stack is running.", "Your API key was rejected — sign in again.", or the backend's own reason when
+it sent one). The full technical string — proxied URL, HTTP status, backend exception detail, e.g.
+`/api/vexa/user/calendar → 502: upstream unreachable: ConnectError` — is never lost: it is written
+verbatim to the **browser console** (`api failure …` / `meeting action failed …` warnings) on every
+presented error. Support and self-hosters debug from the console line; the on-screen headline tells
+the user which layer to suspect.
+
+## A bot on a fresh k8s node fails instantly with exit code 3 (`control_plane_unreachable`)
+
+On Kubernetes each bot is a bare Pod, and a freshly autoscaled node's network can take up to a few
+minutes to converge *after* the node reports `Ready`. A bot scheduled into that window may find its
+control plane (the meeting-api callback **and** redis) unreachable. Rather than crashloop opaquely or
+report a misleading `join_failure`, the bot now **fails fast**: it refuses to join and exits with a
+dedicated code.
+
+| Signal | Where to read it | Meaning |
+|---|---|---|
+| Pod exit code `3` | `kubectl describe pod <bot>` → `Last State: Terminated, Exit Code: 3` | control plane unreachable at boot — the bot never navigated to the meeting |
+| `infra_fault: control_plane_unreachable`, `failure_stage: requested` | meeting API / dashboard (if any callback channel recovered) or the pod logs | distinguishes a **broken node** from a **broken join** (a real join failure is exit `1`, `failure_stage: joining`/`awaiting_admission`/`active`) |
+
+**What to check on the node:** is the CNI fully programmed? can a canary pod on that node reach the
+meeting-api Service and redis? Deleting the pod to force a reschedule (onto a warmed node, or the same
+node after its window passes) is the manual remedy. The bot's exit is fast (< a few seconds) and the
+retry budget on the first emit (≤ ~15s) already rides out brief transient programming lag. See
+[Kubernetes deployment → autoscaling and bot bursts](/deployment-kubernetes).
 
 ## Authentication failures
 
@@ -117,6 +174,21 @@ The [runtime](/core/runtime) spawns bot and agent containers via the Docker sock
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
   `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
 
+## Leftover chrome/node processes after a bot ends (Lite)
+
+On **Lite** every bot and agent runs as a child process inside one shared container (the
+[process backend](/core/runtime)). If a meeting ends and you still see stray `chrome`/`node`
+processes, check inside the container:
+
+```bash
+ps -eo pid,ppid,etime,comm   # PPID 1 = orphaned (reparented to init)
+```
+
+As of this release the backend reaps each workload's whole process group when it exits or is
+stopped, so no strays should remain — a descendant that detached into its own process group
+(the debug-view x11vnc/websockify) is the one declared exception. On older Lite images the
+workaround is a container restart.
+
 ## Agent write was rejected
 
 A streamed turn can end with a `rejected` frame carrying `violations`. This is governance, not a bug:
@@ -132,6 +204,18 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
 - Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
 - Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
   postgres + minio volumes too), then `make all`.
+
+## Scaling meeting-api to more than one replica
+
+Running `meetingApi.replicaCount > 1` (the Helm chart default is `2`) is **safe**. Every replica
+starts the same background sweeps, but each sweep's real work is **single-flighted** by a Postgres
+session-level advisory lock (one per loop): the replica that acquires the lock runs the tick, the
+others skip it that interval. So a sweep's real work — notably the `calendar-sync` external ICS
+fetch — runs **once per interval across the cluster, not once per replica**. Sweep intervals
+(`CALENDAR_SYNC_INTERVAL_S`, etc.) are therefore per-cluster, not per-replica. A replica that dies
+mid-tick drops its lock on disconnect, so the next interval is picked up by another replica — no
+leader-election setup required. On a single replica the lock is always free, so behaviour is
+unchanged. Note that `scheduler-tick` is not a production loop and is no longer started.
 
 ## Still stuck?
 

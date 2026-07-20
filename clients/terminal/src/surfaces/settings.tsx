@@ -8,6 +8,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
+import { presentError } from "./apiClient";
 import { getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
 import { getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting, testModels, testTranscription, type ConfigTestResult } from "./settingsApi";
 
@@ -34,7 +35,7 @@ function CalendarSection() {
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = () => {
-    getCalendarConfig().then((c) => { setCfg(c); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    getCalendarConfig().then((c) => { setCfg(c); setErr(null); }).catch((e: unknown) => setErr(presentError(e).headline));
     getCalendarSyncStatus().then(setStamp).catch(() => undefined);
   };
   useEffect(refresh, []);
@@ -42,13 +43,13 @@ function CalendarSection() {
   const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
     setBusy(true); setErr(null);
     try { setCfg(await setCalendarConfig(body)); setUrl(""); refresh(); }
-    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   const syncNow = async () => {
     setSyncing(true); setErr(null);
     try { setStamp(await syncCalendarNow()); }
-    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setErr(presentError(e).headline); }
     finally { setSyncing(false); }
   };
 
@@ -110,7 +111,7 @@ function ConfigForm({ fields, load, save, note }: {
   useEffect(() => {
     let on = true;
     load().then((v) => { if (on) { setValues(v); setInitial(v); } })
-      .catch((e: unknown) => on && setErr(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => on && setErr(presentError(e).headline));
     return () => { on = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -124,7 +125,7 @@ function ConfigForm({ fields, load, save, note }: {
       if ((values[f.key] ?? "") !== (initial[f.key] ?? "")) update[f.key] = values[f.key] ?? "";
     }
     try { const v = await save(update); setValues(v); setInitial(v); setSaved(true); }
-    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -170,7 +171,7 @@ function TestRow({ label, run }: { label: string; run: () => Promise<ConfigTestR
   const doTest = async () => {
     setBusy(true); setErr(null); setRes(null);
     try { setRes(await run()); }
-    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   const provenance = res ? [res.mode, res.source && `via ${res.source}`].filter(Boolean).join(" · ") : "";

@@ -93,6 +93,7 @@
           "deployment",
           "deployment-kubernetes",
           "configuration",
+          "authenticated-bots",
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",

@@ -1,3 +1,4 @@
+import { AdmissionError } from '../shared/admission';
 import { Page } from "playwright";
 import { log, callAwaitingAdmissionCallback, callBlockedCallback } from "../_host";
 import { BotConfig } from "../_host";
@@ -177,7 +178,10 @@ export async function waitForZoomMeetingAdmission(
     if (wall) {
       log(`[Zoom Web] 🚫 Anti-bot wall detected (matched: "${wall}") — this meeting requires Zoom RTMS; bots cannot join via the web client. Failing fast.`);
       await callBlockedCallback(botConfig, 'zoom_requires_rtms', { matched: wall, phase: 'pre_admission_poll' });
-      throw new Error('[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
+      // PERMANENT platform verdict: Zoom itself refuses browser bots here — a re-spawn hits the
+      // same wall. `denial` is the closest sealed outcome (a distinct `blocked` CompletionReason
+      // needs lane:contract — see join-driver.ts).
+      throw new AdmissionError('denial', '[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
     }
   }
 
@@ -203,7 +207,7 @@ export async function waitForZoomMeetingAdmission(
 
     if (await isRejectedOrEnded(page)) {
       log('[Zoom Web] Bot was rejected or meeting ended during admission wait');
-      throw new Error('Bot was rejected from the Zoom meeting or meeting ended');
+      throw new AdmissionError('denial', 'Bot was rejected from the Zoom meeting or meeting ended');
     }
 
     // Anti-bot wall can also appear a beat after Join (the reCAPTCHA frame and
@@ -213,7 +217,7 @@ export async function waitForZoomMeetingAdmission(
     if (wall) {
       log(`[Zoom Web] 🚫 Anti-bot wall detected during poll (matched: "${wall}") — requires Zoom RTMS. Failing fast.`);
       await callBlockedCallback(botConfig, 'zoom_requires_rtms', { matched: wall, phase: 'admission_poll' });
-      throw new Error('[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
+      throw new AdmissionError('denial', '[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
     }
 
     if (await isAdmitted(page)) {
@@ -240,7 +244,7 @@ export async function waitForZoomMeetingAdmission(
     log(`[Zoom Web] Still waiting for admission... ${elapsed}s elapsed`);
   }
 
-  throw new Error(`[Zoom Web] Bot not admitted within ${effectiveTimeout()}ms timeout`);
+  throw new AdmissionError('lobby_timeout', `[Zoom Web] Bot not admitted within ${effectiveTimeout()}ms timeout`);
 }
 
 export async function checkForZoomAdmissionSilent(page: Page): Promise<boolean> {

@@ -214,9 +214,16 @@ async def finalize_master(
     recording_id: int,
     media_type: str = "audio",
 ) -> Optional[str]:
-    """Build + upload the master for a recording media-file and stamp the JSONB. Idempotent: if the
-    master already exists in storage it is reused. Returns the master storage key, or ``None`` when
-    there is nothing to finalize.
+    """Build + upload the master for a recording media-file and stamp the JSONB. Returns the master
+    storage key, or ``None`` when there is nothing to finalize.
+
+    RE-ASSEMBLABLE, not write-once (#768). Existence is the WRONG freshness signal: a read while the
+    meeting is still recording must not permanently freeze the master. The master is (re)built when
+    it is absent OR when the number of chunk objects under the recording's prefix differs from the
+    count the current master already represents (``assembled_chunk_count``). So a mid-recording read
+    assembles a partial, and every later read that finds new chunks rebuilds — which also repairs a
+    master frozen by a pre-fix stack on its next read. The freeze is impossible to reintroduce
+    silently: the assembled-chunk-count is recorded and compared, and a rebuild-on-growth is logged.
     """
     # Finalization reads chunks, writes a master, and stamps JSONB; all three belong to one recording
     # write and must drain before erasure takes its exclusive barrier.
@@ -249,13 +256,56 @@ async def _finalize_master_under_lease(
     media_format = mf.get("format", "wav")
     master_key = master_storage_key(mf["storage_path"], media_format)
 
-    if not await storage.exists(master_key):
-        # Gather the chunk objects under the recording's prefix (excluding any prior master).
-        prefix = mf["storage_path"].rsplit("/", 1)[0]
-        keys = [k for k in await storage.list(prefix) if not k.rsplit("/", 1)[-1].startswith("master.")]
-        chunks = [await storage.get(k) for k in sorted(keys)]
+    # Gather the chunk objects under the recording's prefix (excluding any prior master).
+    prefix = mf["storage_path"].rsplit("/", 1)[0]
+    keys = sorted(
+        k for k in await storage.list(prefix) if not k.rsplit("/", 1)[-1].startswith("master.")
+    )
+    listed_count = len(keys)
+    assembled_count = mf.get("assembled_chunk_count")
+
+    # Loud guard (#769): the number of chunks we're about to assemble vs what the JSONB fold counted.
+    # A mismatch means chunks were dropped from the listing (truncation) or the fold — surface it.
+    jsonb_count = mf.get("chunk_count")
+    if jsonb_count is not None and listed_count != jsonb_count:
+        log_event(
+            "recording_chunk_count_mismatch", audience="operator", span="recordings.finalize",
+            meeting_id=str(meeting_id),
+            fields={"recording_id": recording_id, "media_type": media_type,
+                    "listed_count": listed_count, "jsonb_chunk_count": jsonb_count},
+        )
+
+    master_exists = await storage.exists(master_key)
+    # Rebuild only when there ARE chunks to assemble (listed_count > 0) and either no master exists yet
+    # or the chunk count changed since the master was last assembled. With zero chunk objects we never
+    # rebuild — an existing master is served as-is rather than assembled from nothing.
+    rebuild = listed_count > 0 and ((not master_exists) or assembled_count != listed_count)
+    if rebuild:
+        if master_exists and assembled_count is not None and listed_count > assembled_count:
+            # A prior (partial) master is being superseded by chunks that arrived after it — the exact
+            # #768 unfreeze. Log it so a re-freeze regression is noisy rather than silent.
+            log_event(
+                "recording_master_reassembled", audience="operator", span="recordings.finalize",
+                meeting_id=str(meeting_id),
+                fields={"recording_id": recording_id, "media_type": media_type,
+                        "prior_assembled_count": assembled_count, "new_count": listed_count},
+            )
+        chunks = [await storage.get(k) for k in keys]
         master_bytes = build_recording_master(chunks, media_format)
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
+
+    # Steady-state read of an already-finalized master (nothing rebuilt AND the media-file row already
+    # reflects the assembled state): skip the row-locking mutate + finalized_at churn. `finalize_master`
+    # is called on EVERY byte-range playback read, so writing on each one serializes concurrent seeks
+    # behind a `SELECT ... FOR UPDATE` on the meeting row. Any real change — a rebuild above, or a
+    # not-yet-stamped media file — still falls through to the atomic stamp below.
+    if (
+        not rebuild
+        and mf.get("is_final")
+        and mf.get("storage_path") == master_key
+        and mf.get("assembled_chunk_count") == listed_count
+    ):
+        return master_key
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
@@ -269,6 +319,7 @@ async def _finalize_master_under_lease(
             return recs, None
         m["storage_path"] = master_key
         m["is_final"] = True
+        m["assembled_chunk_count"] = listed_count
         m["finalized_at"] = _now_iso()
         m["finalized_by"] = "recording_finalizer.master"
         existing_pb = r.get("playback_url") or {}

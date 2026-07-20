@@ -1,0 +1,2 @@
+Witness receipts are release DATA (per-version witness.json), not code modules — opted out
+of the per-dir gates (readme/isolation/etc). See releases/README.md and ADR-0031.

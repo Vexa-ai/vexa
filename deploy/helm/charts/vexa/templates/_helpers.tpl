@@ -134,6 +134,40 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
+{{/*
+vexa.topologySpreadConstraints — render pod topology spread constraints for a component.
+
+Call:  include "vexa.topologySpreadConstraints" (list $root $componentValues "component-name")
+  - $root           = the template root context (.)
+  - $componentValues = that component's values map (e.g. .Values.gateway)
+  - "component-name" = the value of its app.kubernetes.io/component label (e.g. "gateway")
+
+Per-component `.topologySpreadConstraints` wins over `global.topologySpreadConstraints`
+(same override shape as replicaCount/resources). Each constraint that omits `labelSelector`
+gets the component's OWN pod selector injected — name + instance + component — so the default
+meaning is "spread THIS component's replicas across the topology", which is the part users get
+wrong when they hand-write it. A constraint that carries its own labelSelector is rendered
+verbatim. Renders NOTHING when neither global nor per-component constraints are set (empty
+default is byte-identical to a chart without the field).
+*/}}
+{{- define "vexa.topologySpreadConstraints" -}}
+{{- $root := index . 0 -}}
+{{- $componentValues := index . 1 -}}
+{{- $component := index . 2 -}}
+{{- $constraints := $componentValues.topologySpreadConstraints | default $root.Values.global.topologySpreadConstraints -}}
+{{- if $constraints -}}
+{{- $selector := dict "matchLabels" (dict "app.kubernetes.io/name" (include "vexa.name" $root) "app.kubernetes.io/instance" $root.Release.Name "app.kubernetes.io/component" $component) -}}
+topologySpreadConstraints:
+{{- range $constraints }}
+{{- if hasKey . "labelSelector" }}
+  -{{ toYaml . | nindent 4 }}
+{{- else }}
+  -{{ toYaml (merge (deepCopy .) (dict "labelSelector" $selector)) | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.deploymentStrategy" -}}
 {{/*
 v0.10.5.3 Pack H — zero-downtime rolling update.

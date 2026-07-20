@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBotPipeline } from './pipeline.js';
+import { createBotPipeline, createTranscribe } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
@@ -126,6 +126,25 @@ async function main(): Promise<void> {
     for (let i = 0; i < 6; i++) { pipe.feedAudio(0, 'Alice', FRAME, ts); ts += FRAME_MS; await sleep(60); }
     await pipe.stop();
     check('transcribe disabled: pipeline runs without throwing, emits no text', sink.published.every((s) => s.text === ''), JSON.stringify(sink.published));
+  }
+
+  // ── 4) createTranscribe threads invocation.transcriptionModel → the STT wire (#522) ──
+  // The one hop the bot owns: invocation.v1 → TranscriptionClient config. Observed at the wire
+  // (stubbed fetch, real client), so the whole bot-side thread is closed, not just the client.
+  {
+    const realFetch = globalThis.fetch;
+    const modelParts: Array<string | null> = [];
+    (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
+      const m = Buffer.from(init.body).toString('latin1').match(/name="model"\r\n\r\n([^\r]*)\r\n/);
+      modelParts.push(m ? m[1] : null);
+      return new Response(JSON.stringify({ text: '', language: 'en', duration: 0.1, segments: [] }), { status: 200 });
+    };
+    const pcm = new Float32Array(1600).fill(0.05);
+    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test', transcriptionModel: 'whisper-large-v3-turbo' }))(pcm);
+    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
+    (globalThis as any).fetch = realFetch;
+    check('invocation.transcriptionModel rides the model form part', modelParts[0] === 'whisper-large-v3-turbo', JSON.stringify(modelParts[0]));
+    check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

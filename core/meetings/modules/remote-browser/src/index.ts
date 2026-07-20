@@ -27,6 +27,7 @@ export {
   ensureBrowserDataDir,
   makeEphemeralProfileDir,
   removeProfileDir,
+  SessionSyncError,
 } from './session-store';
 export type { S3Config } from './session-store';
 

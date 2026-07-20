@@ -79,3 +79,36 @@ def test_lifecycle_callback_on_unified_app():
     client = TestClient(create_app())
     r = client.post("/bots/internal/callback/lifecycle", json=event)
     assert r.status_code in (200, 409), r.text  # accepted, or a legal-transition rejection
+
+
+async def test_boot_loop_set_excludes_dead_scheduler_tick(caplog):
+    """#637 A2 (offline): the boot loop-name set does NOT contain the dead ``scheduler-tick`` loop.
+
+    Drive the real ``_attach_background_loops`` lifespan (over fakes) and read the boot line
+    (``meeting-api background loops started: [...]``, ``__main__``) — the started set must list the six
+    live loops and no longer name ``scheduler-tick`` (V2: the dead loop is gone).
+    """
+    import logging
+
+    import fakeredis.aioredis
+
+    from meeting_api.__main__ import _attach_background_loops
+    from meeting_api.collector.adapters import RedisStreamBus
+    from meeting_api.collector.fakes import InMemoryTranscriptStore
+
+    app = create_app()
+    store = InMemoryTranscriptStore()
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    bus = RedisStreamBus(redis)
+    # meeting_repo/runtime/session_factory left None → guarded loops degrade cleanly (Lite shape).
+    _attach_background_loops(app, store, bus, redis, meeting_repo=None, runtime=None)
+
+    with caplog.at_level(logging.INFO, logger="meeting_api.entrypoint"):
+        async with app.router.lifespan_context(app):
+            pass  # the boot line is logged at lifespan enter, before the loops do any work
+
+    line = next(m for m in caplog.messages if "background loops started" in m)
+    assert "scheduler-tick" not in line, "the dead scheduler-tick loop must be gone from the boot set"
+    for live in ("segment-consumer", "db-writer", "webhook-drain",
+                 "stop-reconcile", "auto-join", "calendar-sync"):
+        assert live in line, f"{live} must still be a started loop"

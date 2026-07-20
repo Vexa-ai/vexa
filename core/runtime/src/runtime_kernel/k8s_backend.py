@@ -16,6 +16,43 @@ from .profiles import Runnable
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
 
+# The runtime's OWN scheduling constraints, serialized as JSON by the chart from
+# global.tolerations / global.nodeSelector (see deployment-runtime.yaml). A spawned workload is a bare
+# `kubectl run` Pod — NOT a Deployment child — so it inherits none of the runtime Deployment's
+# scheduling directives; on an all-tainted pool it sits Pending forever and the meeting silently fails.
+# These knobs let the spawn override carry the runtime's own constraints so the Pod schedules wherever
+# the runtime itself is allowed to run.
+TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
+NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
+
+
+def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
+    """Parse one scheduling knob (``key``) from ``env`` as JSON of ``expected`` shape. Unset or empty
+    (the chart's default ``[]`` / ``{}`` serialize to ``"[]"`` / ``"{}"``) ⇒ None (no constraint,
+    today's behaviour). Malformed JSON or a wrong shape is FATAL (raise) — a scheduling constraint
+    silently dropped is exactly the bug this fixes (a stranded Pending Pod, a silent meeting failure),
+    so it must fail loud at spawn, never fail open like the workspace mount set."""
+    raw = env.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"{key} is not valid JSON: {exc}") from exc
+    if not isinstance(value, expected):
+        raise ValueError(
+            f"{key} must be a JSON {expected.__name__}, got {type(value).__name__}: {raw!r}"
+        )
+    return value or None                                 # empty [] / {} ⇒ treat as unset
+
+
+def _runtime_scheduling_env() -> dict[str, str]:
+    """The runtime's own scheduling knobs from its PROCESS env (set by the chart on the runtime
+    Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
+    carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
+    an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
+
 
 def _kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     r = subprocess.run(["kubectl", *args], capture_output=True, text=True)
@@ -70,15 +107,25 @@ def pod_overrides(
     workspace_volumes, workspace_mounts = k8s_volume_mounts(
         env, pvc_name=pvc or "", store_target=root or ""
     )
+    # Runtime scheduling (upstream): the spawned `kubectl run` Pod inherits none of the runtime
+    # Deployment's scheduling, so overlay the runtime's own tolerations/nodeSelector (carried in via
+    # env) onto the Pod spec — a plain meeting bot with no workspace PVC would otherwise strand Pending
+    # on a tainted pool. These are pod-level fields, never container env (excluded below).
+    tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
+    node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
     if runnable is None:
-        if not workspace_volumes:
+        if not workspace_volumes and not tolerations and not node_selector:
             return None
-        return {
-            "spec": {
-                "containers": [{"name": container_name, "volumeMounts": workspace_mounts}],
-                "volumes": workspace_volumes,
-            }
-        }
+        spec: dict[str, Any] = {}
+        if workspace_mounts:
+            spec["containers"] = [{"name": container_name, "volumeMounts": workspace_mounts}]
+        if workspace_volumes:
+            spec["volumes"] = workspace_volumes
+        if tolerations:
+            spec["tolerations"] = tolerations
+        if node_selector:
+            spec["nodeSelector"] = node_selector
+        return {"spec": spec}
 
     if not runnable.image:
         raise ValueError("k8s backend requires an image")
@@ -96,8 +143,17 @@ def pod_overrides(
     container: dict[str, Any] = {
         "name": container_name,
         "image": runnable.image,
-        "env": [{"name": key, "value": value} for key, value in sorted(env.items())],
+        # Scheduling keys are pod-level (applied to spec below); never leak them into container env.
+        "env": [
+            {"name": key, "value": value}
+            for key, value in sorted(env.items())
+            if key not in (TOLERATIONS_ENV, NODE_SELECTOR_ENV)
+        ],
     }
+    # This backend spawns via a complete --overrides container (the only way to set the #15
+    # securityContext hardening), so a runnable's command is materialized in the container here — NOT
+    # via a `kubectl run --command` flag. A command=None profile (meeting-bot, #675) emits no command
+    # key and boots the bot image's own ENTRYPOINT.
     if runnable.command:
         container["command"] = runnable.command
     if volume_mounts:
@@ -124,6 +180,10 @@ def pod_overrides(
                 "imagePullSecrets": [{"name": contract.image_pull_secret}],
             }
         )
+    if tolerations:
+        spec["tolerations"] = tolerations
+    if node_selector:
+        spec["nodeSelector"] = node_selector
     overrides: dict[str, Any] = {"spec": spec}
     if labels:
         overrides["metadata"] = {"labels": labels}
@@ -158,13 +218,21 @@ class K8sBackend:
             f"--labels={label_arg}",
             *self._ns_args(),
         ]
+        # Overlay the runtime's own scheduling env (tolerations/nodeSelector live in the runtime's
+        # PROCESS env, set by the chart on the runtime Deployment) so pod_overrides can place the
+        # spawned Pod; pod_overrides excludes these keys from the container's own env.
         overrides = pod_overrides(
-            env,
+            {**env, **_runtime_scheduling_env()},
             container_name=name,
             runnable=runnable,
             labels=labels,
         )
         args += ["--overrides", json.dumps(overrides, sort_keys=True)]
+        # ZAKI spawns via a complete --overrides container (the #15 hardening requires securityContext,
+        # which only --overrides can set), so image/env/command all ship in that one object — NOT via
+        # kubectl run's --image/--env/--command flags. #675's goal (a command-less meeting-bot boots the
+        # bot image's own ENTRYPOINT) is met by the profile carrying command=None, so no container
+        # "command" key is emitted and the image ENTRYPOINT runs.
         _kubectl(*args)
         return WorkloadHandle(id=workload_id, impl=name)
 

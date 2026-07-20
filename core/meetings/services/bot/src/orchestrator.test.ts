@@ -16,9 +16,10 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator } from './orchestrator.js';
+import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
+import { createLivePipeline } from './pipeline.js';
 import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink } from './ports.js';
+import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
 
 let failed = 0;
@@ -280,6 +281,120 @@ async function main(): Promise<void> {
     const res = await runP;
     check('active-stop: completed(stopped) via the active-leave path (unchanged)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped');
     check('active-stop: withdraw NOT invoked (active leave, not a waiting-room withdraw)', withdrew === 0, `withdrew=${withdrew}`);
+  }
+
+  // ── #593 A4: a post-admission subsystem failure does NOT self-evict (the createLivePipeline seam) ──
+  // Wire a REAL createLivePipeline whose page-side capture AND engine start both throw, into the
+  // orchestrator. Before the fix (inline pipeline, three bare awaits) the first throw rejected
+  // pipeline.start() → orchestrator catch → leave('pipeline_start_failed') + failed(active/join_failure)
+  // ~immediately (the ~120 ms self-evict). After: start() resolves (faults surfaced loud), the bot
+  // reaches active and STAYS until a normal end. NB this deliberately COEXISTS with the earlier
+  // "pipeline.start genuinely throws ⇒ leave (no ghost)" test — that invariant is preserved; what
+  // changed is that createLivePipeline no longer lets a recoverable subsystem failure BECOME a throw.
+  {
+    const lc = recordingSink();
+    const leaveReasons: string[] = [];
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; },
+      async leave(reason) { leaveReasons.push(String(reason)); },
+      async withdraw() { /* */ },
+    };
+    const faults: string[] = [];
+    const engine: Pipeline = { async start() { throw new Error('from_pretrained rejected (empty HF cache)'); }, async stop() { /* */ } };
+    const pipeline = createLivePipeline({
+      startCapture: async () => { throw { isTrusted: true, type: 'error' }; },   // the misdirecting page event
+      engine,
+      onFault: (stage) => faults.push(stage),
+      retry: { attempts: 1, delayMs: 0 },
+    });
+    const o = createOrchestrator(inv({ platform: 'teams' }), { lifecycle: lc, join, pipeline, acts: noopActs((f) => { fireLeave = f; }) });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 10);
+    const res = await runP;
+    check('#593: reached active (post-admission capture handoff did not evict)', seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
+    check('#593: never emitted failed (no self-evict)', !seq(lc.events).includes('failed'), JSON.stringify(seq(lc.events)));
+    check('#593: leave NEVER called with pipeline_start_failed', !leaveReasons.includes('pipeline_start_failed'), leaveReasons.join(','));
+    check('#593: ended cleanly via the leave act → completed(stopped)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
+    check('#593: both subsystem faults surfaced loud (capture + engine)', faults.includes('capture-start') && faults.includes('engine-start'), faults.join(','));
+  }
+
+  // ── #530 reachability gate: BOTH channels down → refuse to join, exit 3, typed terminal ──
+  // The FIRST `joining` emit is load-bearing. A sink whose emitReachable reports `unreachable` +
+  // a secondary probe that reports redis down ⇒ the bot must NOT navigate to the meeting; it
+  // terminates failed(requested) with the control_plane_unreachable attribution and exit 3.
+  // RED AT BASE: before the gate, run() ignores reachability and proceeds to join.join().
+  {
+    const events: LifecycleEvent[] = [];
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'unreachable' as PrimaryReachability; },
+    };
+    let joinCalls = 0;
+    const spyJoin: JoinDriver = {
+      async join(report) { joinCalls++; await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
+    };
+    const res = await createOrchestrator(inv(), {
+      lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs(),
+      reachability: { async probeSecondary() { return false; } },
+    }).run();
+    check('gate both-down: NO join attempted (refused before meeting navigation)', joinCalls === 0, `joinCalls=${joinCalls}`);
+    check('gate both-down: exit code 3 (dedicated infra signal)', res.exitCode === CONTROL_PLANE_UNREACHABLE_EXIT, String(res.exitCode));
+    check('gate both-down: terminal failed', res.status === 'failed');
+    check('gate both-down: failure_stage=requested (distinct from a real join failure)', last(events).failure_stage === 'requested', JSON.stringify(last(events)));
+    check('gate both-down: infra_fault=control_plane_unreachable', last(events).infra_fault === CONTROL_PLANE_UNREACHABLE, JSON.stringify(last(events)));
+    check('gate both-down: unreachable_channels names both deps', JSON.stringify(last(events).unreachable_channels) === JSON.stringify(['meeting_api_callback', 'redis']), JSON.stringify(last(events).unreachable_channels));
+    check('gate both-down: reason text carries the discriminator', (last(events).reason ?? '').startsWith(CONTROL_PLANE_UNREACHABLE), last(events).reason);
+    check('gate both-down: exit_code on the event = 3', last(events).exit_code === CONTROL_PLANE_UNREACHABLE_EXIT, String(last(events).exit_code));
+    check('gate both-down: terminal event still conforms to lifecycle.v1', allConform(events), ajv.errorsText(validateLifecycle.errors));
+    check('gate both-down: never reached active', !seq(events).includes('active'), JSON.stringify(seq(events)));
+  }
+
+  // ── #530 gate: primary DOWN but SECONDARY up → proceed (either-channel rule) ──
+  {
+    const events: LifecycleEvent[] = [];
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'unreachable' as PrimaryReachability; },
+    };
+    let joinCalls = 0;
+    const spyJoin: JoinDriver = {
+      async join(report) { joinCalls++; await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
+    };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
+      reachability: { async probeSecondary() { return true; } },   // redis up
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('gate either-channel: join PROCEEDED (secondary up ⇒ can still report)', joinCalls === 1, `joinCalls=${joinCalls}`);
+    check('gate either-channel: completed(stopped), not an infra abort', res.status === 'completed' && res.exitCode === 0, JSON.stringify(res));
+    check('gate either-channel: no infra_fault emitted', !events.some((e) => e.infra_fault), JSON.stringify(seq(events)));
+  }
+
+  // ── #530 gate: primary REACHABLE (e.g. a 503 mapped to reachable) → proceed, ZERO extra probe ──
+  {
+    const events: LifecycleEvent[] = [];
+    let secondaryProbed = 0;
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'reachable' as PrimaryReachability; },
+    };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: gateSink, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
+      reachability: { async probeSecondary() { secondaryProbed++; return false; } },
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('gate reachable: proceeded to completed', res.status === 'completed', JSON.stringify(res));
+    check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }

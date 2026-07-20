@@ -94,8 +94,70 @@ async function main(): Promise<void> {
     check('permanent-5xx: bounded to `retries` attempts', calls.length === 2, String(calls.length));
   }
 
+  // ── default horizon: 5 attempts × 500ms exponential base (≈7.5s) — a >1s meeting-api blip
+  //    must not lose the event (hosted 07-14→07-17: the old ~0.6s horizon dropped callbacks and
+  //    the reaper failed seated bots) ──
+  {
+    const calls: Recorded[] = [];
+    const sleeps: number[] = [];
+    const fetchImpl: FetchLike = async (url, init) => { calls.push({ url, ...init }); return { ok: false, status: 503 }; };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, sleep: async (ms) => { sleeps.push(ms); } });
+    await sink.emit(EVENT);
+    check('default horizon: 5 attempts', calls.length === 5, String(calls.length));
+    check('default horizon: exponential from 500ms (500,1000,2000,4000)',
+      JSON.stringify(sleeps) === JSON.stringify([500, 1000, 2000, 4000]), JSON.stringify(sleeps));
+  }
+
+  // ── #530 reachability gate: emitReachable reports channel reachability of the first emit ──
+  const JOINING: LifecycleEvent = { connection_id: 'sess-uid', status: 'joining' };
+
+  // healthy 200 → reachable on the FIRST attempt (fast path: near-zero added latency)
+  {
+    const calls: Recorded[] = [];
+    const fetchImpl: FetchLike = async (url, init) => { calls.push({ url, ...init }); return { ok: true, status: 200 }; };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, sleep: noSleep });
+    const verdict = await sink.emitReachable!(JOINING);
+    check('reach-healthy: verdict=reachable', verdict === 'reachable', verdict);
+    check('reach-healthy: single attempt (fast path, no retries)', calls.length === 1, String(calls.length));
+    check('reach-healthy: posted the joining event verbatim', calls[0]?.body === JSON.stringify(JOINING), calls[0]?.body);
+  }
+
+  // 503 (control plane UP-but-broken) → reachable (either-channel rule guards over-blocking)
+  {
+    const calls: Recorded[] = [];
+    const fetchImpl: FetchLike = async (url, init) => { calls.push({ url, ...init }); return { ok: false, status: 503 }; };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, sleep: noSleep });
+    const verdict = await sink.emitReachable!(JOINING);
+    check('reach-503: verdict=reachable (host answered → channel is up)', verdict === 'reachable', verdict);
+    check('reach-503: returns on the first response (no needless retries)', calls.length === 1, String(calls.length));
+  }
+
+  // all-attempts network error (CNI-lag signature) → unreachable, bounded to reachRetries
+  {
+    const calls: Recorded[] = [];
+    const sleeps: number[] = [];
+    const fetchImpl: FetchLike = async (url, init) => { calls.push({ url, ...init }); throw new Error('ECONNREFUSED'); };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, reachRetries: 4, reachBackoffMs: 100, sleep: async (ms) => { sleeps.push(ms); } });
+    let threw = false;
+    let verdict: string | undefined;
+    try { verdict = await sink.emitReachable!(JOINING); } catch { threw = true; }
+    check('reach-down: did NOT throw (never crashes the bot)', threw === false);
+    check('reach-down: verdict=unreachable', verdict === 'unreachable', String(verdict));
+    check('reach-down: bounded to reachRetries attempts', calls.length === 4, String(calls.length));
+    check('reach-down: bounded exponential backoff (100,200,400)', JSON.stringify(sleeps) === JSON.stringify([100, 200, 400]), JSON.stringify(sleeps));
+  }
+
+  // transient: network error then 200 → reachable (rides out a brief programming window)
+  {
+    let n = 0;
+    const fetchImpl: FetchLike = async () => { n++; if (n === 1) throw new Error('EAI_AGAIN'); return { ok: true, status: 200 }; };
+    const sink = createHttpLifecycleSink({ callbackUrl: 'http://cb', fetchImpl, reachRetries: 4, reachBackoffMs: 10, sleep: noSleep });
+    const verdict = await sink.emitReachable!(JOINING);
+    check('reach-transient: verdict=reachable after one retry', verdict === 'reachable' && n === 2, `${verdict}/${n}`);
+  }
+
   if (failed) { console.error(`\n❌ lifecycle-http (L3): ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log('\n✅ lifecycle-http (L3): POSTs the lifecycle.v1 event verbatim with x-internal-secret, retries with bounded backoff, and never throws out of emit.');
+  console.log('\n✅ lifecycle-http (L3): POSTs the lifecycle.v1 event verbatim with x-internal-secret, retries with bounded backoff, never throws out of emit, and emitReachable reports primary-channel reachability for the #530 gate.');
 }
 
 void main();

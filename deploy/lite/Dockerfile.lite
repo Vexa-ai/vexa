@@ -37,7 +37,7 @@ COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-lite,target=/pnpm/store \
     pnpm install --frozen-lockfile=false
 # Build the page-side capture bricks first (browser bundles, not bot deps), then @vexa/bot + deps.
-RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" run build
+RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" --filter "@vexa/teams-capture" --filter "@vexa/zoom-capture" run build
 RUN pnpm --filter "@vexa/bot..." run build
 RUN test -f /build/core/meetings/services/bot/dist/index.js \
  && test -s /build/core/meetings/services/bot/dist/browser-utils.global.js
@@ -132,6 +132,7 @@ COPY core/meetings/services/meeting-api/src /app/meeting-api/src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
 COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-api/meetings/contracts/lifecycle.v1/lifecycle.schema.json
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json       /app/meeting-api/meetings/contracts/webhook.v1/webhook.schema.json
+COPY core/meetings/contracts/zaki-control.v1/zaki-control.schema.json /app/meeting-api/meetings/contracts/zaki-control.v1/zaki-control.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json        /app/meeting-api/runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json      /app/meeting-api/runtime/contracts/schedule.v1/schedule.schema.json
 # agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent).
@@ -166,6 +167,11 @@ COPY --from=bot-builder /build/package.json /build/pnpm-workspace.yaml /build/pn
 COPY --from=bot-builder /build/core/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
 COPY --from=bot-builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
+# License hygiene: the baked weights are onnx-community/pyannote-segmentation-3.0
+# (MIT). Ship the copyright + permission notice next to the cache so it travels
+# with the software. Recorded in repo THIRD_PARTY_LICENSES.md + the per-release
+# SPDX SBOM (scripts/sbom.mjs); model weights sit outside gate:licenses.
+COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache/LICENSE.pyannote-segmentation-3.0
 
 
 # ── Terminal (Next.js + custom server.mjs) → /app/terminal (supervisord runs `node server.mjs`). ──

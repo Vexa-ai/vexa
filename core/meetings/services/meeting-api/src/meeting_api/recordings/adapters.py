@@ -69,21 +69,29 @@ class S3Storage:
         await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
 
     async def list(self, prefix: str) -> list[str]:
+        # S3 (and every S3-compatible backend) caps a single list_objects_v2 response at 1000 keys and
+        # signals more via IsTruncated + NextContinuationToken (#769). Loop to exhaustion — a single
+        # unpaginated call silently drops every chunk past the first page, so a >1000-chunk recording
+        # would assemble a master from only its first 1000 objects.
         keys: list[str] = []
         token: Optional[str] = None
         while True:
-            kwargs = {"Bucket": self._bucket, "Prefix": prefix}
+            kw = {"Bucket": self._bucket, "Prefix": prefix}
             if token is not None:
-                kwargs["ContinuationToken"] = token
-            response = await self._run(self._c().list_objects_v2, **kwargs)
-            keys.extend(obj["Key"] for obj in response.get("Contents", []))
-            if not response.get("IsTruncated"):
-                return sorted(keys)
-            token = response.get("NextContinuationToken")
+                kw["ContinuationToken"] = token
+            resp = await self._run(self._c().list_objects_v2, **kw)
+            keys.extend(o["Key"] for o in resp.get("Contents", []))
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
             if not token:
+                # Truncated but no continuation token — the backend contract is broken; stop rather
+                # than loop forever, but do NOT swallow it silently.
                 raise RuntimeError(
-                    "recording object listing returned a truncated page without a cursor"
+                    f"list_objects_v2 reported IsTruncated with no NextContinuationToken "
+                    f"(prefix={prefix!r}); chunk listing may be incomplete"
                 )
+        return sorted(keys)
 
     async def get(self, key: str) -> bytes:
         obj = await self._run(self._c().get_object, Bucket=self._bucket, Key=key)
@@ -314,14 +322,15 @@ class SqlAlchemyRecordingRepo:
 
 def build_production_router(*, database_url: Optional[str] = None):
     """Construct the recordings router with real MinIO/S3 + SQLAlchemy adapters from env."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .router import build_router
 
     database_url = database_url or os.getenv(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@postgres:5432/vexa"
     )
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     storage = S3Storage(
         bucket=os.getenv("RECORDING_BUCKET", "recordings"),

@@ -59,6 +59,13 @@ spec:
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: RUNTIME_API_URL
               value: "http://{{ include "vexa.componentName" (list . "runtime") }}:{{ .Values.runtime.service.port }}"
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            # Required for calendar sync + capped auto-join: the sweep fetches the per-user
+            # spawn context (max-bots cap + webhook config) from admin-api's internal edge.
+            # Mirrors compose (docker-compose.yml ADMIN_API_URL=http://admin-api:8001).
+            - name: ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:
@@ -70,6 +77,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+            - name: DEFAULT_BOT_NAME
+              value: {{ .Values.meetingApi.defaultBotName | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_URL
               value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_TOKEN
@@ -91,6 +100,19 @@ spec:
               value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
+            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
+            - name: BOT_AUTHENTICATED
+              value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}
+            - name: BOT_USERDATA_S3_PATH
+              value: {{ .Values.meetingApi.botUserdataS3Path | default "" | quote }}
+            - name: BOT_S3_ENDPOINT
+              value: {{ .Values.meetingApi.botS3Endpoint | default "" | quote }}
+            - name: BOT_S3_BUCKET
+              value: {{ .Values.meetingApi.botS3Bucket | default "" | quote }}
+            - name: BOT_S3_ACCESS_KEY
+              value: {{ .Values.meetingApi.botS3AccessKey | default "" | quote }}
+            - name: BOT_S3_SECRET_KEY
+              value: {{ .Values.meetingApi.botS3SecretKey | default "" | quote }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -100,6 +122,7 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
@@ -107,12 +130,14 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 3
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 45
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.meetingApi.resources | nindent 12 }}
       {{- with .Values.global.nodeSelector }}
@@ -126,5 +151,8 @@ spec:
       {{- with .Values.global.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.meetingApi "meeting-api")) }}
+      {{- . | nindent 6 }}
       {{- end }}
 {{- end }}

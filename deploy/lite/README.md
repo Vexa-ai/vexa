@@ -27,6 +27,25 @@ host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
 
+### Transcripts with no token and no GPU — `LOCAL_STT=1`
+
+```bash
+make -C deploy/lite up LOCAL_STT=1
+```
+
+Runs a bundled **faster-whisper CPU server on the tiny model** (`vexa-lite-whisper`) on the same
+network and **auto-wires `TRANSCRIPTION_SERVICE_URL`** to it — real transcripts out of the box,
+slower than a GPU but zero setup. This is also how a **witness / human-eval box** always comes up
+with transcription ready. Verify it end-to-end (synthesize speech → transcribe):
+
+```bash
+make -C deploy/lite stt-smoke        # ✓ local STT transcribes (model=whisper-1 → words)
+```
+
+Override the model or image for more accuracy: `WHISPER_MODEL=Systran/faster-whisper-small.en`, or
+a GPU image via `WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
+faster-whisper-server accepts it and serves `WHISPER_MODEL`.)
+
 After it finishes:
 
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
@@ -85,9 +104,14 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 | Variable | Default | Description |
 |---|---|---|
-| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key. Unset → bots capture, no transcript |
+| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
+| `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
 | `ADMIN_TOKEN` | `changeme` | admin API token (the stack's shared admin secret) |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
+
+`make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
+`WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
+`LOCAL_STT=1`, the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
 in `.env`; the runtime brokers credentials into spawned workers (nothing leaves the network).
@@ -119,3 +143,14 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
 | Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+
+## Smoke probe — "is this install actually working?"
+
+```bash
+make probe SURFACE=lite          # from the repo root, against a running `make lite`
+```
+
+The full-journey smoke (spawn → schedule → boot → join → transcribe → live-view → stop + a
+one-shot log sweep of the container and every bot workload log), driven through the published
+gateway. Lite runs the real bot, so the dead-URL journey's truthful terminal is a NAMED
+failure — never a fake green. See `deploy/lite/probe.sh`.

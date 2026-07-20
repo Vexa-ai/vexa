@@ -302,17 +302,25 @@ def build_router(
         )
         if mf is None:
             raise HTTPException(status_code=404, detail="No such media file")
-        if not mf.get("is_final"):
-            await _finalize_master_or_conflict(
-                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
-                media_type=mf.get("type", type),
-            )
-            recs = await repo.list_meeting_recordings(user_id)
-            rec = next((r for r in recs if r.get("id") == recording_id), rec)
-            mf = next(
-                (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),
-                mf,
-            )
+        # Finalize-on-read, ALWAYS: serve the ASSEMBLED master, never a raw part or the empty
+        # final-signal chunk. The ONLY playable object is master.<fmt>. finalize_master is
+        # re-assemblable and idempotent (#768) — it rebuilds only when new chunks arrived since the
+        # master was last assembled — so calling it unconditionally reflects late chunks and makes a
+        # mid-recording read impossible to freeze at the retrieval boundary too. (A prior guard that
+        # skipped finalize once storage_path already named the master key was the second freeze door:
+        # after a mid-meeting /master it never re-assembled, serving the stale partial forever.)
+        # ZAKI: keep the erasure-aware wrapper so a finalize attempted while the meeting is being
+        # erased is refused with 409 (RecordingWriteRefused), never a late master write past erasure.
+        await _finalize_master_or_conflict(
+            repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
+            media_type=mf.get("type", type),
+        )
+        recs = await repo.list_meeting_recordings(user_id)
+        rec = next((r for r in recs if r.get("id") == recording_id), rec)
+        mf = next(
+            (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),
+            mf,
+        )
         storage_path = mf.get("storage_path")
         if not storage_path:
             raise HTTPException(status_code=404, detail="Media file has no storage path")

@@ -11,6 +11,7 @@ import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { listTokens, createToken, revokeToken, TOKEN_SCOPES, type TokenInfo, type TokenScope, type MintedToken } from "./tokensApi";
 import { getGitToken, setGitToken, type SavedGitToken } from "./workspaceApi";
+import { presentError } from "./apiClient";
 
 const EXPIRIES: Array<{ label: string; seconds?: number }> = [
   { label: "never expires" },
@@ -94,7 +95,7 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
       setName("");
       onCreated(minted);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));  // fail-loud (P18)
+      setError(presentError(e).headline);  // fail-loud (P18)
     } finally {
       setBusy(false);
     }
@@ -134,7 +135,7 @@ export function GitHubTokenCard() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    void getGitToken().then((s) => { setState(s); setError(null); }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    void getGitToken().then((s) => { setState(s); setError(null); }).catch((e: unknown) => setError(presentError(e).headline));
   }, []);
   useEffect(() => refresh(), [refresh]);
 
@@ -142,13 +143,13 @@ export function GitHubTokenCard() {
     if (!value.trim() || busy) return;
     setBusy(true); setError(null);
     try { const s = await setGitToken(value.trim()); setState(s); setValue(""); setEditing(false); }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setError(presentError(e).headline); }
     finally { setBusy(false); }
   };
   const clear = async () => {
     setBusy(true); setError(null);
     try { const s = await setGitToken(null); setState(s); setValue(""); setEditing(false); }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setError(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -192,13 +193,13 @@ export function TokensPanel() {
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18)
 
   const refresh = useCallback(() => {
-    void listTokens().then((t) => { setTokens(t); setError(null); }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    void listTokens().then((t) => { setTokens(t); setError(null); }).catch((e: unknown) => setError(presentError(e).headline));
   }, []);
   useEffect(() => refresh(), [refresh]);
 
   const onCreated = (t: MintedToken) => { setMinted(t); refresh(); };
   const onRevoke = (id: number) => {
-    void revokeToken(id).then(refresh).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    void revokeToken(id).then(refresh).catch((e: unknown) => setError(presentError(e).headline));
   };
 
   return (
