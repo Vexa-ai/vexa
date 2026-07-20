@@ -353,7 +353,15 @@ export async function startCaptureBridge(
         }
         if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
+          // `log` is not decoration here: capture reports how much audio the graph rendered against
+          // how much reached the callback and how much the silence gate refused. Without that split
+          // a missing 256 ms is unattributable — which is how a 35% capture deficit ran unnoticed.
+          // The gmeet lane has always logged its seen/emitted counters; this lane never did.
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(
+            w.__vexaMixDest.stream,
+            (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm)),
+            { log: (m: string) => w.logBot?.('[mixed] ' + m) },
+          ))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
