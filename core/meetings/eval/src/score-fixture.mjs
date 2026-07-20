@@ -59,8 +59,13 @@ const HIGHER_IS_BETTER = new Set(['dutyCycle', 'recall', 'precision', 'retention
 // `storeRows` and `segments` are deliberately absent: for a fixed fixture more rows can mean a
 // duplication defect OR a session that was previously scored as one useless turn, and only the
 // content tells them apart. Naming a direction there would assert a verdict the number cannot carry.
+// `hintMissRate`/`hintMissed` are deliberately absent: they are the hint-hop instrument — did a hint
+// find an open turn AT THE INSTANT IT ARRIVED — not a measure of whether attribution worked. A hint
+// that arrives before its turn has any transcribed audio reports "missed" and is then used correctly
+// by the binder; the synthetic zoom-lane fixture scores 100% "miss" with 0.947 accuracy and zero
+// wrong names. Calling a rise there WORSE would flag correct behaviour as a regression.
 const LOWER_IS_BETTER = new Set(['storeDupes', 'holesOver2s', 'segUnder1s', 'gapCount', 'gapTotalSec', 'sttFails',
-  'provisionalRate', 'hintMissRate', 'hintMissed', 'churnedTurns']);
+  'provisionalRate', 'churnedTurns']);
 
 function entries() {
   if (named.length) return named.map((n) => ({ id: n, dir: path.join(CORPUS, n) }));
@@ -159,7 +164,7 @@ for (const { id, dir } of entries()) {
         console.log(`  attribution n/a — no hints in this fixture (nothing to name from); ${lane.provisionalRate * 100}% provisional is the expected floor`);
       } else if (lane.provisionalRate !== undefined) {
         console.log(`  attribution ${(lane.provisionalRate * 100).toFixed(1)}% of words provisional · ` +
-          `hint miss ${(lane.hintMissRate * 100).toFixed(1)}% (${lane.hintMissed}/${lane.hintMatched + lane.hintMissed}) · ` +
+          `hint-hop ${lane.hintMatched}/${lane.hintMatched + lane.hintMissed} bound on arrival (timing, not accuracy) · ` +
           `${lane.renames} renames, ${lane.churnedTurns} churned · ${lane.publishedSpeakers} named vs ${lane.hintNames} hinted`);
       }
     }

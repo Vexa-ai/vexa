@@ -176,6 +176,52 @@ more than the 12.8% loss it reports. The delivery figure above is unaffected.
 ¹ harness-relative — comparable only against the same fixture's own baseline, never read as the
 share of a meeting the lane covers. See the note above the entries.
 
+## The synthetic entry that needs no session at all
+
+Every entry above is a recording, so every one of them cost a meeting. One does not:
+`speech_fixture.py` builds the mixed lane's whole input — PCM frames plus DOM hints — out of the
+cached TTS clips, whose text is known before any audio exists. There is no reference to calibrate
+and no clock to get wrong; the truth is absolute, and the fixture regenerates byte-identically from
+its seed instead of living on disk.
+
+That makes it the one place where "is the quality good?" is answerable with no person, no platform
+and no live room — and the mixed lane it exercises is the same one Zoom and Teams both ride.
+
+```bash
+python3 src/speech_fixture.py --speakers A,B --turns 8 --lane mixed --platform zoom --out /tmp/zoomlane
+# → 450 frames · 16 hints · 8 turns · 95.5s · 315 known words · Anna,Boris · hint lag 250ms
+
+cd ../services/bot && QUALITY_MIXED_FIXTURE=/tmp/zoomlane.captured-signal.jsonl REAL_SEGMENTER=1 \
+  TRUTH_JSON=/tmp/zoomlane.truth.json TRANSCRIPT_OUT=/tmp/zoomlane.replay.json \
+  TX_URL=$TRANSCRIPTION_SERVICE_URL TX_TOKEN=$TRANSCRIPTION_SERVICE_TOKEN TX_MODEL=whisper-1 \
+  npx tsx src/quality-mixed.test.ts
+
+python3 src/score_replay.py /tmp/zoomlane.replay.json --truth /tmp/zoomlane.truth.json
+```
+
+Measured 2026-07-20 at `9d9a1cee` — real STT (`whisper-1`), real pyannote segmenter, production lane
+config. **Three consecutive runs returned identical figures to three decimals**, down to the STT call
+count (18) and the words it returned (350): fixed audio through fixed cut points is deterministic
+even across a remote model. The tape entries are not — theirs swing 429-440 calls — so this is the
+only entry whose tolerances are zero:
+
+| | |
+|---|---|
+| content recall | **0.924** — 291 of 315 known words kept, in order |
+| content precision | **0.936** — 20 published words that were never said |
+| attribution accuracy | **0.947**, 0 wrong, 1.0% of words provisional |
+| coverage · retention | 0.825 · 0.869 |
+| structure | 19 segments · 0 duplicate texts · 1 hole >2s · 18 STT calls, 0 failed |
+
+Read it for exactly what it is. It starts at `captured-signal.v1`, so it says nothing about whether
+capture delivered the audio (that is the delivery block, and the live legs) or whether the platform's
+DOM lit the right names (that is #852, and the bot leg). It says that GIVEN the signal, the lane
+keeps 92% of the words and names them right 95% of the time — any hour of any day, nobody in the room.
+
+Unlike the recorded entries, precision here charges STT error as invention: `Boris` came back as
+`Doris`, and one phrase arrived that nobody said. That is the model's ceiling rather than the lane's
+loss, and the two are only separable because the truth is known.
+
 ## The contract
 
 1. A defect is only worked against an entry in this corpus — no fixture, no fix.
