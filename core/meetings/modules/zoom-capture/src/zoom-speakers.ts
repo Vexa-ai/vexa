@@ -71,9 +71,25 @@ export interface ZoomSpeakersState {
 
 // Active-speaker containers (normal view + screen-share view), and the avatar
 // footer that holds the name. Verbatim from vexa-bot zoom/web/selectors.ts.
+// Zoom does not serve one layout. A browser with hardware acceleration and a camera gets the
+// gallery — a speaker bar plus a large active tile, the first two selectors. A browser without
+// them (the bot: --disable-gpu, --in-process-gpu, no fake capture device) is served a SINGLE-TILE
+// client instead, whose active-speaker frame is `single-main-container__video-frame` and whose
+// name footer is the same `.video-avatar__avatar-footer`. Zoom even says so in a banner: "For a
+// better meeting experience, enable the option 'Use graphics/hardware acceleration'".
+//
+// This is #852. The watcher, the module and the selectors were all correct — for the layout the
+// EXTENSION sees, running in a human's ordinary Chrome. The bot was watching for chrome its own
+// client never renders, and the DOM query that proved it also hid it: every count came back zero,
+// which reads like a dead page. A screenshot of the same instant showed the speaker's name on
+// screen with a live level meter beside it.
+//
+// Observed live in a 26-person room, four consecutive polls, single-tile layout:
+//   Tracy → Captain crunch WoOdiefrOmdahoodie bkallday → Lenny Bo → derrick austin
 const ACTIVE_CONTAINER_SELECTORS = [
   '.speaker-active-container__video-frame',
   '.speaker-bar-container__video-frame--active',
+  '.single-main-container__video-frame',
 ];
 const NAME_FOOTER_SELECTOR = '.video-avatar__avatar-footer';
 
@@ -200,6 +216,13 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
       const speakerish = document.querySelectorAll('[class*="speaker"]').length;
       const frames = document.querySelectorAll('[class*="video-frame"]').length;
       const footers = document.querySelectorAll(NAME_FOOTER_SELECTOR).length;
+      // A screenshot of a blind bot showed the active speaker's NAME on screen, beside a live
+      // audio-level meter, while every selector above counted zero — Zoom serves a cameraless,
+      // GPU-less client a single-tile layout whose class names are nothing like the gallery's.
+      // So when blind, describe whatever carries a level meter: that is where the name lives.
+      for (const el of Array.from(document.querySelectorAll(`${NAME_FOOTER_SELECTOR}, [class*="video-frame"]`)).slice(0, 6)) {
+        log(`  name-bearing node: <${el.tagName.toLowerCase()} class="${el.className}"> text="${(el.textContent || '').trim().slice(0, 50)}"`);
+      }
       log(
         `NO ACTIVE SPEAKER seen in ${Math.round((polls * pollMs) / 1000)}s — ` +
         (anchors.length
