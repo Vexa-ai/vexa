@@ -48,7 +48,8 @@ def load_session(path):
     frames.sort(key=lambda x: x[0])
     pcm = b"".join(b for _, b in frames)
     span = (frames[-1][0] - frames[0][0]) / 1000 if frames else 0.0
-    return pcm, span, len(frames)
+    window = (frames[0][0] / 1000, frames[-1][0] / 1000) if frames else (0.0, 0.0)
+    return pcm, span, len(frames), window
 
 
 def wav_bytes(f32_le: bytes) -> bytes:
@@ -96,14 +97,31 @@ def lcs(a, b):
     return prev[len(b)]
 
 
-def realtime_words(src):
+def realtime_words(src, window):
+    """The live transcript CLIPPED to the session's own time window.
+
+    A live store keeps growing while a recorded session is a snapshot; scoring the whole store
+    against a reference built from part of it counts later speech as invention and understates
+    precision. Clip first — the same class of error as scoring a store mid-flush."""
     if src.startswith("http"):
         with urllib.request.urlopen(src, timeout=30) as r:
             d = json.loads(r.read())
     else:
         d = json.load(open(src))
     segs = d.get("segments") if isinstance(d, dict) else d
-    return " ".join((s.get("text") or "").strip() for s in segs if (s.get("text") or "").strip())
+    lo, hi = window
+    kept, dropped = [], 0
+    for s in segs:
+        t = (s.get("text") or "").strip()
+        if not t:
+            continue
+        if lo and (s.get("start", 0) < lo - 1 or s.get("start", 0) > hi + 1):
+            dropped += 1
+            continue
+        kept.append(t)
+    if dropped:
+        print(f"  (clipped {dropped} live segment(s) outside the session window)")
+    return " ".join(kept)
 
 
 def main():
@@ -113,6 +131,7 @@ def main():
     ap.add_argument("--lang", default=os.environ.get("TX_LANG", "en"))
     ap.add_argument("--model", default=os.environ.get("TRANSCRIPTION_MODEL", "whisper-1"))
     ap.add_argument("--out", help="write the reference text here")
+    ap.add_argument("--reference", help="reuse a previously written reference instead of re-running STT")
     args = ap.parse_args()
 
     url = os.environ.get("TRANSCRIPTION_SERVICE_URL")
@@ -120,10 +139,23 @@ def main():
     if not url or not token:
         sys.exit("TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN are required")
 
-    pcm, span, nframes = load_session(args.session)
+    pcm, span, nframes, window = load_session(args.session)
     audio_sec = len(pcm) / 4 / SR
     print(f"session: {nframes} frames · {audio_sec:.1f}s audio over {span:.1f}s wall "
           f"· capture duty cycle {audio_sec / span * 100:.1f}%" if span else "")
+
+    if args.reference:
+        ref = open(args.reference).read()
+        ref_w = words(ref)
+        print(f"REFERENCE (reused): {len(ref_w)} words")
+        if args.realtime:
+            rt_w = words(realtime_words(args.realtime, window))
+            m = lcs(ref_w, rt_w)
+            print(f"REAL-TIME         : {len(rt_w)} words")
+            print(f"\n  recall    {m / max(1, len(ref_w)):.3f}   ({m}/{len(ref_w)})")
+            print(f"  precision {m / max(1, len(rt_w)):.3f}   ({len(rt_w) - m} live words not in the reference)")
+            print(f"  => streaming loses {1 - m / max(1, len(ref_w)):.1%}; invents/duplicates {1 - m / max(1, len(rt_w)):.1%}")
+        return
 
     step = int((CHUNK_SEC - OVERLAP_SEC) * SR) * 4
     size = int(CHUNK_SEC * SR) * 4
@@ -144,7 +176,7 @@ def main():
 
     if not args.realtime:
         return
-    rt_w = words(realtime_words(args.realtime))
+    rt_w = words(realtime_words(args.realtime, window))
     m = lcs(ref_w, rt_w)
     print(f"REAL-TIME              : {len(rt_w)} words · {len(rt_w) / audio_sec * 60:.0f} wpm")
     print(f"\n  recall    {m / max(1, len(ref_w)):.3f}   ({m}/{len(ref_w)} reference words the live transcript kept, in order)")
