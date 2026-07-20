@@ -35,6 +35,12 @@ from .ports import (
 from .invocation import SPAWNABLE_PLATFORMS
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
+#: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
+#: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
+#: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
+NATIVE_MEETING_ID_MAX_LEN = 255
+
+
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
     """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
@@ -248,6 +254,29 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 status_code=422,
                 detail="'platform' and 'native_meeting_id' (or 'meeting_url') are required",
             )
+        # Bound the id to what the column can hold, HERE — not at the INSERT. `meetings
+        # .platform_specific_id` is varchar(255); an over-long or NUL-bearing id used to travel the
+        # whole spawn path and die on asyncpg's StringDataRightTruncationError — a 500 roughly 5.6s
+        # in, while every other malformed field is refused at this boundary with a typed 422 (#843).
+        # Applied after URL-derivation so a derived id is bounded too.
+        #
+        # Length and control bytes ONLY. The id's SHAPE is deliberately not validated: ids that look
+        # wrong do join (a bare-numeric Teams id transcribed a real meeting in production), so a
+        # format rule would refuse working meetings while fixing nothing.
+        if native_meeting_id:
+            if len(native_meeting_id) > NATIVE_MEETING_ID_MAX_LEN:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"'native_meeting_id' is {len(native_meeting_id)} characters; "
+                        f"the maximum is {NATIVE_MEETING_ID_MAX_LEN}"
+                    ),
+                )
+            if any(ch == "\x7f" or ch < " " for ch in native_meeting_id):
+                raise HTTPException(
+                    status_code=422,
+                    detail="'native_meeting_id' contains control characters",
+                )
         # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
         # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
         # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
