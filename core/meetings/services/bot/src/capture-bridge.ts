@@ -199,9 +199,16 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);
   // Inject the page-side capture bundle on every navigation (defines window.VexaBrowserUtils).
-  await context.addInitScript({ path: BROWSER_UTILS_PATH }).catch(() => {
-    // The bundle may be loaded by other means in some images; capture wiring degrades to the
-    // inline fallback below. Never fatal at launch.
+  await context.addInitScript({ path: BROWSER_UTILS_PATH }).catch((e: Error) => {
+    // The bundle may be loaded by other means in some images, so this stays non-fatal — but it is
+    // never quiet. window.VexaBrowserUtils is the whole page side: mixed capture, the gmeet
+    // per-channel capture, and every platform's speaker watcher. Without it a bot joins, sits
+    // there, and emits nothing at all — no audio, no hints, no page logs — which reads exactly
+    // like a silent room or a dead hint stream. Swallowing this cost a live Zoom run that was
+    // misread as bridge-crossed=0 evidence before the missing path was noticed.
+    console.log(`[bot] ⚠ page-side bundle NOT injected from ${BROWSER_UTILS_PATH} (${e.message}) — ` +
+      `if window.VexaBrowserUtils is not provided some other way, this bot will capture NOTHING. ` +
+      `Set VEXA_BROWSER_UTILS_PATH when running outside the container image.`);
   });
 
   // #593 A1: a page-context global fault logger, installed at document-start on EVERY frame/nav so
@@ -251,7 +258,12 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   await context.exposeFunction('logBot', (m: string) => console.log(`[page] ${m}`)).catch(() => { /* already registered */ });
   page.on('console', (msg) => {
     const t = msg.text();
-    if (/perspeaker|capture|stream|vexabrowser|audiocontext|error|fail/i.test(t)) console.log(`[page-console:${msg.type()}] ${t}`);
+    // `speaker` and `hint` are load-bearing, not decoration: attribution lives entirely in the
+    // page-side speaker watchers, so a filter that drops their diagnostics makes an empty hint
+    // stream indistinguishable from a silent room from outside the browser. The blindness reporter
+    // ("NO ACTIVE SPEAKER seen in Ns …") exists precisely to tell those two apart and matched none
+    // of the other words, so it was invisible in every bot log ever collected.
+    if (/perspeaker|speaker|hint|capture|stream|vexabrowser|audiocontext|error|fail/i.test(t)) console.log(`[page-console:${msg.type()}] ${t}`);
   });
 
   return {
