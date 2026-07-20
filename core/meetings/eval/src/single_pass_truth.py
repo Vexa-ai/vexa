@@ -34,10 +34,18 @@ CHUNK_SEC = 60.0      # one submission per minute of audio — well inside the s
 OVERLAP_SEC = 3.0     # carried across chunk edges so a word split by the cut still appears
 
 
+def open_session(path):
+    """Corpus entries are stored gzipped (sessions run to hundreds of MB); loose ones are not."""
+    if path.endswith(".gz"):
+        import gzip
+        return gzip.open(path, "rt")
+    return open(path)
+
+
 def load_session(path):
     """The audio the pipeline actually received, in capture order, plus its wall span."""
     frames = []
-    with open(path) as f:
+    with open_session(path) as f:
         for i, line in enumerate(f):
             if not line.strip():
                 continue
@@ -65,7 +73,15 @@ def wav_bytes(f32_le: bytes) -> bytes:
     return buf.getvalue()
 
 
+ROUTE = "/v1/audio/transcriptions"
+
+
 def transcribe(wav: bytes, url: str, token: str, model: str, lang: str) -> str:
+    # Deployments publish the service URL both ways — as an origin and with the route already on
+    # it. Take the origin either way rather than posting to …/v1/audio/transcriptions twice over.
+    url = url.rstrip("/")
+    if url.endswith(ROUTE):
+        url = url[: -len(ROUTE)]
     b = "----singlepass"
     body = (
         f'--{b}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
@@ -75,7 +91,7 @@ def transcribe(wav: bytes, url: str, token: str, model: str, lang: str) -> str:
         f"Content-Type: audio/wav\r\n\r\n"
     ).encode() + wav + f"\r\n--{b}--\r\n".encode()
     req = urllib.request.Request(
-        f"{url.rstrip('/')}/v1/audio/transcriptions", data=body, method="POST",
+        f"{url}{ROUTE}", data=body, method="POST",
         headers={"Content-Type": f"multipart/form-data; boundary={b}",
                  "Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=300) as r:
@@ -124,6 +140,22 @@ def realtime_words(src, window):
     return " ".join(kept)
 
 
+def emit_json(path, ref_w, rt_w, m):
+    """The score as data — what a corpus baseline records, so a later run can be diffed against it."""
+    if not path:
+        return
+    block = {
+        "referenceWords": len(ref_w),
+        "realtimeWords": len(rt_w),
+        "matched": m,
+        "recall": round(m / max(1, len(ref_w)), 3),
+        "precision": round(m / max(1, len(rt_w)), 3),
+    }
+    with open(path, "w") as f:
+        json.dump(block, f, indent=2)
+    print(f"  score written: {path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("session")
@@ -132,12 +164,15 @@ def main():
     ap.add_argument("--model", default=os.environ.get("TRANSCRIPTION_MODEL", "whisper-1"))
     ap.add_argument("--out", help="write the reference text here")
     ap.add_argument("--reference", help="reuse a previously written reference instead of re-running STT")
+    ap.add_argument("--json", help="also write the score block here (for baseline.json)")
     args = ap.parse_args()
 
     url = os.environ.get("TRANSCRIPTION_SERVICE_URL")
     token = os.environ.get("TRANSCRIPTION_SERVICE_TOKEN")
-    if not url or not token:
-        sys.exit("TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN are required")
+    # Credentials buy a reference. Scoring against one already written is pure text work, so
+    # re-scoring a corpus entry costs nothing and needs no STT account.
+    if not args.reference and (not url or not token):
+        sys.exit("TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN are required to build a reference")
 
     pcm, span, nframes, window = load_session(args.session)
     audio_sec = len(pcm) / 4 / SR
@@ -155,6 +190,7 @@ def main():
             print(f"\n  recall    {m / max(1, len(ref_w)):.3f}   ({m}/{len(ref_w)})")
             print(f"  precision {m / max(1, len(rt_w)):.3f}   ({len(rt_w) - m} live words not in the reference)")
             print(f"  => streaming loses {1 - m / max(1, len(ref_w)):.1%}; invents/duplicates {1 - m / max(1, len(rt_w)):.1%}")
+            emit_json(args.json, ref_w, rt_w, m)
         return
 
     step = int((CHUNK_SEC - OVERLAP_SEC) * SR) * 4
@@ -183,6 +219,7 @@ def main():
     print(f"  precision {m / max(1, len(rt_w)):.3f}   ({len(rt_w) - m} live words not in the reference — invention/duplication)")
     print(f"  => the streaming design loses {1 - m / max(1, len(ref_w)):.1%} of what this same model "
           f"extracts from this same audio in one pass")
+    emit_json(args.json, ref_w, rt_w, m)
 
 
 if __name__ == "__main__":

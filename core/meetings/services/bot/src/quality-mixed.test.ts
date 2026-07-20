@@ -19,16 +19,23 @@
  *   QUALITY_MIXED_FIXTURE=<session.captured-signal.jsonl> TX_URL=http://localhost:18500 \
  *     npx tsx src/quality-mixed.test.ts
  *
- * Env: TX_URL · TX_TOKEN · TX_MODEL · TX_LANG · MIN_TURN_MS (see below).
+ * Env: TX_URL · TX_TOKEN · TX_MODEL · TX_LANG · MIN_TURN_MS (see below) · REAL_SEGMENTER ·
+ * METRICS_JSON (write the score block for a corpus baseline).
+ *
+ * WHAT THIS DOES NOT MEASURE: replay is unpaced — audio is fed as fast as it reads while the
+ * lane's submission timers run on the wall clock, so the submitted-window sizes and every latency
+ * derived from them are the harness's, not production's. Cadence is `replay-paced.test.ts`. What
+ * survives that distortion is STRUCTURE — retention, store rows, duplicate identity, holes — and
+ * structure is what this run is a baseline for.
  *
  * MIN_TURN_MS is the knob under test: the recorded session carries 183 cuts in 190s (p50 gap
  * 0.41s, 142/182 under 1s, every confidence 0.35-0.47), so the lane opens a turn per wobble and
  * LocalAgreement — which needs a turn to survive several submissions — never gets to confirm one.
  * Setting it coalesces boundaries that arrive sooner than a plausible speech unit.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { ChunkedTranscriber, type BoundaryEvent, type BoundarySource } from '@vexa/mixed-pipeline';
+import { ChunkedTranscriber, PyannoteSegmenter, type BoundaryEvent, type BoundarySource } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
 
 const FIXTURE = process.env.QUALITY_MIXED_FIXTURE;
@@ -67,11 +74,21 @@ const framePcm = (f: Frame): Float32Array => {
 
 async function main(): Promise<void> {
   const { frames, hints, cuts } = load(FIXTURE!);
+  // No recorded cuts means the fixture came from upstream of the pipeline (a desktop tape), so the
+  // segmenter has to be real or there is nothing to segment with. REAL_SEGMENTER forces it either
+  // way, for comparing the model's cuts against production's on a fixture that has both.
+  const REAL_SEG = process.env.REAL_SEGMENTER === '1' || cuts.length === 0;
+  if (REAL_SEG) console.log('cuts: none recorded — running the REAL PyannoteSegmenter');
   const client = new TranscriptionClient({ serviceUrl: TX_URL, apiToken: process.env.TX_TOKEN, model: TX_MODEL, sampleRate: SR });
 
   let sttCalls = 0, sttWords = 0, sttFails = 0;
   const submitSecs: number[] = [];
   const published: Array<{ speaker: string; text: string; startMs: number; endMs: number; id: string; via: string }> = [];
+  // The CONSUMER, modelled: the collector upserts on segment_id and keeps the last write, so what a
+  // user reads is this map — not the publish call sequence. Publish-side metrics exonerated the
+  // assembly stage once already while the store still held a doubled sentence; only a store model
+  // shows that, and it is the framework's `integrity` axis (FRAMEWORK.md G6).
+  const store = new Map<string, { speaker: string; text: string }>();
 
   let emitBoundary!: (ev: BoundaryEvent) => void;
   const tc = await ChunkedTranscriber.create({
@@ -97,15 +114,34 @@ async function main(): Promise<void> {
         return r;
       } catch (e) { sttFails++; throw e; }
     },
-    publish: (speaker, confirmed) => {
-      for (const c of confirmed) published.push({ speaker, text: c.text, startMs: c.startMs, endMs: c.endMs, id: c.segmentId, via: 'publish' });
+    // ONE atomic bundle — newly-confirmed AND the surviving pending tail — is what production ships
+    // (services/bot/src/pipeline.ts). Dropping `pending` here is what a store model must not do:
+    // the tail is a row like any other, and an identity defect lives entirely in its id.
+    publish: (speaker, confirmed, pending) => {
+      for (const c of confirmed) {
+        published.push({ speaker, text: c.text, startMs: c.startMs, endMs: c.endMs, id: c.segmentId, via: 'publish' });
+        store.set(c.segmentId, { speaker, text: c.text });
+      }
+      for (const p of pending) store.set(p.segmentId, { speaker, text: p.text });
     },
-    publishPending: () => { /* drafts are not the oracle */ },
-    clearPending: () => { /* */ },
+    // A draft is not the CONTENT oracle, but it IS a row in the store. That is what makes an
+    // identity defect visible: a draft that later confirms under a different id leaves its own row
+    // behind forever, and the reader sees the sentence twice however correct `publish` was.
+    publishPending: (speaker, segments) => {
+      for (const s of segments) store.set(s.segmentId, { speaker, text: s.text });
+    },
+    clearPending: () => { /* a client-side clear is not a delete; the store keeps what it was told */ },
     rename: (oldS, newS) => { for (const p of published) if (p.speaker === oldS) p.speaker = newS; },
+    // Two cut sources, and which one is right depends on where the fixture came from. A BOT records
+    // production's own boundary events, so replaying them chunks the session exactly as the meeting
+    // chunked — the faithful choice, and the one that lets MIN_TURN_MS be swept against real cuts.
+    // A DESKTOP TAPE is recorded upstream of the pipeline and carries none; stubbing the segmenter
+    // there would score one 20-minute turn and call it the lane. So run the REAL PyannoteSegmenter
+    // (the model loads locally) — strictly more faithful than pretending the cuts were the stub's.
     makeSegmenter: (onBoundary) => {
       emitBoundary = onBoundary;
-      return Promise.resolve<BoundarySource>({ appendFrame: async () => { /* */ }, reset() { /* */ } });
+      if (!REAL_SEG) return Promise.resolve<BoundarySource>({ appendFrame: async () => { /* */ }, reset() { /* */ } });
+      return PyannoteSegmenter.create({ inferIntervalMs: 500, onBoundary }) as unknown as Promise<BoundarySource>;
     },
     log: () => { /* quiet */ },
   });
@@ -121,8 +157,10 @@ async function main(): Promise<void> {
   // the exact boundaries production emitted.
   let lastCutMs = -Infinity, cutsEmitted = 0, cutsSuppressed = 0;
   const t0 = timeline[0].t;
-  emitBoundary({ kind: 'silence→speaker', tMs: t0, confidence: 0.9 });
-  lastCutMs = t0;
+  // The synthetic opening cut exists so a recorded-cut replay has a turn to accumulate into. With
+  // the real segmenter the first cut is the segmenter's own job, and injecting one ahead of it
+  // would open a turn the model never opened.
+  if (!REAL_SEG) { emitBoundary({ kind: 'silence→speaker', tMs: t0, confidence: 0.9 }); lastCutMs = t0; }
 
   for (const ev of timeline) {
     if (ev.cut) {
@@ -140,6 +178,8 @@ async function main(): Promise<void> {
       tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
     }
   }
+  // Closing the last turn is the harness standing in for the meeting ending — true for either cut
+  // source, since a segmenter only ever sees audio that arrived.
   emitBoundary({ kind: 'speaker→silence', tMs: timeline[timeline.length - 1].t, confidence: 0.9 });
   await sleep(2000);
   await tc.dispose();
@@ -175,6 +215,30 @@ async function main(): Promise<void> {
   console.log(`  holes >2s     ${holes.length}${holes.length ? ' → ' + holes.map(([a, b]) => `${a.toFixed(1)}-${b.toFixed(1)}`).join(', ') : ''}`);
   console.log(`  duplicates    ${dupes}`);
   console.log(`\nSWEEP mock=${MOCK ? 1 : 0} closeOnly=${CLOSE_ONLY ? 1 : 0} min_turn_ms=${MIN_TURN_MS} coverage=${(covered / wallSec).toFixed(3)} retention=${(txWords / Math.max(1, sttWords)).toFixed(3)} segs=${published.length} words=${txWords} sttWords=${sttWords} holes=${holes.length} calls=${sttCalls}`);
+
+  // The store as a reader sees it: rows, and how many of them are the same sentence twice.
+  const storeRows = [...store.values()];
+  const storeTexts = storeRows.map((r) => r.text.trim()).filter(Boolean);
+  const storeDupes = storeTexts.length - new Set(storeTexts).size;
+  console.log(`  store         ${storeRows.length} rows · ${storeDupes} duplicate texts (upsert-by-segment_id, drafts included)`);
+
+  // A corpus baseline is this block, not the prose above it: a later run diffs against it, so a
+  // regression is a failing comparison rather than something someone has to notice in a log.
+  if (process.env.METRICS_JSON) {
+    writeFileSync(process.env.METRICS_JSON, JSON.stringify({
+      mock: MOCK, minTurnMs: MIN_TURN_MS, closeOnly: CLOSE_ONLY,
+      sttCalls, sttWords, sttFails,
+      publishCalls: published.length, uniqueSegmentIds: byId.size,
+      storeRows: storeRows.length, storeDupes,
+      retention: Number((txWords / Math.max(1, sttWords)).toFixed(3)),
+      coverage: Number((covered / wallSec).toFixed(3)),
+      segments: published.length,
+      segP50Sec: Number((durs[Math.floor(durs.length / 2)] ?? 0).toFixed(2)),
+      segUnder1s: durs.filter((d) => d < 1).length,
+      holesOver2s: holes.length,
+    }, null, 2) + '\n');
+    console.log(`  metrics written: ${process.env.METRICS_JSON}`);
+  }
 
   console.log('\n--- transcript ---');
   for (const p of published) console.log(`  [${((p.startMs - t0) / 1000).toFixed(2)}-${((p.endMs - t0) / 1000).toFixed(2)}] ${p.speaker}: ${p.text.slice(0, 80)}`);

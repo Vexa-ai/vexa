@@ -127,10 +127,15 @@ known-text) · `services/bot/src/quality-mixed.test.ts` (mixed, recorded session
 
 ## Current baselines (2026-07-20, the calibration sessions)
 
-| session | duty cycle | coverage | p50 seg | filler | note |
-|---|---|---|---|---|---|
-| jitsi bot (youtube shared into meet.jit.si) | **65.0%** | 0.225 | 0.30s | 31% on <1s windows | capture defect; segmenter innocent |
-| youtube direct (extension→desktop) | ~97% | 0.671 | 3.00s | 0% | control; 42.4s of gaps = open mixed-core question |
+Both are corpus entries now — the numbers below are `baseline.json`, not prose ([CORPUS.md](CORPUS.md)).
+
+| entry | duty cycle | recall | precision | note |
+|---|---|---|---|---|
+| `jitsi/2026-07-20-capture-gaps` | **0.650** | 0.858 | **0.723** | capture defect (#850); the invention is the sub-second-window hallucination, measured |
+| `youtube/2026-07-20-continuous-speech` | 0.949 | **0.905** | **0.941** | control; the 9.5% streaming loss is #854 |
+
+Same source material, same lane, same STT on both — so the gap between the rows is the bot's capture
+chain and nothing else.
 
 Fixed on this branch already: mixed draft-identity (`4c030cd8`) · gmeet close-tail (`3894680d`) ·
 recorder reachability (`2053c156`). Open: mixed-core streaming loss · jitsi capture duty cycle ·
@@ -140,8 +145,8 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 
 | platform | lane | delivery | content | attribution | integrity | shape | latency |
 |---|---|---|---|---|---|---|---|
-| youtube (extension) | mixed | ✅ 94.9% | ✅ recall .905 / prec .941 | n/a (no hints by design) | ✅ 0 dupes | ✅ p50 3.0s | ❌ |
-| jitsi (bot) | mixed | ✅ 65.0% | ❌ | ❌ (`seg_N` seen, unscored) | ✅ fixed 4c030cd8 | ✅ p50 0.30s | ❌ |
+| youtube (extension) | mixed | ✅ 94.9% | ✅ recall .905 / prec .941 | n/a (no hints by design) | ✅ 11 rows / 0 dupes | ✅ p50 3.0s | ❌ |
+| jitsi (bot) | mixed | ✅ 65.0% | ✅ recall .858 / prec .723 | ❌ (`seg_N` seen, unscored) | ✅ 54 rows / 0 dupes | ✅ p50 0.30s | ❌ |
 | zoom | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | teams | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | gmeet | gmeet | ❌ (own capture path, NOT #850's chain) | ❌ (TTS fixture only — never vs a single-pass reference on real audio) | ❌ (golden only; 0.12.15 attested good, unrecorded) | ❌ | ❌ | ✅ ~8.15s projected |
@@ -166,17 +171,21 @@ check, and one run against a known-text fixture where absolute truth exists. Chu
 unvalidated — 60s windows with 3s overlap can both duplicate at seams (inflating the reference) and
 drop words at them.
 
-**G4 — no fixture corpus.** Today's jitsi and youtube fixtures live in a session scratchpad and will
-be lost. The framework claims "every witnessed session joins the regression corpus" and there is no
-corpus: no location, no naming, no index, no per-fixture baseline file. A fixture without recorded
-expected values cannot be a regression test.
+**G4 — CLOSED (#848).** The corpus exists: `$VEXA_CORPUS/<platform>/<slug>/` with a session, a
+`baseline.json` recording every metric at promotion time, a `manifest.json` pinning provenance, and
+an index in [CORPUS.md](CORPUS.md). `src/promote-fixture.mjs` makes an entry, `src/score-fixture.mjs`
+re-measures one and fails on drift. Both calibration sessions are entries.
 
 **G5 — nothing runs in CI.** None of the instruments are in `scripts/gates.mjs`. Every metric here
 is a thing a human remembers to run, so regressions are caught only by luck.
 
-**G6 — the store stage has no fidelity metric.** Integrity is measured at publish; the store adds
-its own (db-writer flush thresholds). The false "64.9% dropped" came from exactly this stage, and the
-response was a *rule* ("never score mid-flush") rather than a *metric* (published vs stored).
+**G6 — partly closed (#848).** `quality-mixed.test.ts` now models the consumer: every published
+segment AND every pending tail upserted by `segment_id`, last write wins, reported as `storeRows` /
+`storeDupes`. That is the metric publish-side numbers could not give — and building it caught the
+instrument's own blindness, because the first version dropped the `pending` argument production
+actually ships and therefore could not see a draft-identity defect at all. Still open: the db-writer's
+own flush thresholds (the stage the false "64.9% dropped" came from) are modelled by a *rule*
+("never score mid-flush"), not measured.
 
 **G11 — no per-lane loss parity.** Content loss was measured on the MIXED lane (recall .905) and
 never on gmeet against a real-audio reference. The lanes have different confirm economies
