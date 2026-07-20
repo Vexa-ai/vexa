@@ -535,3 +535,56 @@ async def test_status_guard_allows_an_idempotent_reassert():
 
     assert store.captures["cap-1"].state == "completed"
     assert len(await store.pending_callbacks(limit=50, capture_id="cap-1")) > 0
+
+
+async def test_terminal_settlement_carries_true_captured_seconds():
+    """WP-M8/H15 regression: `captured_seconds_total` was only ever computed on
+    the ERASURE path, so every normal terminal usage event carried the default 0
+    and the Hub settled a full refund — real bot compute given away, and a
+    lifetime-reaped one-hour capture would refund the whole hour. The REAL
+    dispatcher must stamp wall-clock seconds (bounded by the cap) at the
+    terminal transition."""
+    from datetime import datetime, timedelta, timezone
+
+    fixed_now = datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc)
+    store = InMemoryControlStore()
+    capture = replace(
+        _CAPTURE,
+        state="active",
+        started_at=fixed_now - timedelta(seconds=90),
+        max_capture_seconds=3600,
+    )
+    store.captures[capture.capture_id] = capture
+    dispatcher = ControlCallbackDispatcher(
+        store,
+        callback_url="https://hub.example/api/minutes/callback/v1",
+        hmac_key="hub-callback-hmac-key-0123456789abcdef",
+        now=lambda: fixed_now,
+    )
+
+    await dispatcher.record_capture_timeline(capture, state="stopping")
+    await dispatcher.record_capture_timeline(store.captures["cap-1"], state="completed")
+
+    usage = [
+        event for event in await store.pending_callbacks(limit=50, capture_id="cap-1")
+        if event.body.get("event_type") == "minutes.capture.usage"
+    ]
+    assert usage, "terminal settlement event missing"
+    totals = [event.body["data"]["metering"]["captured_seconds_total"] for event in usage]
+    assert totals[-1] == 90, totals
+
+    capped = replace(
+        _CAPTURE,
+        capture_id="cap-2",
+        state="active",
+        started_at=fixed_now - timedelta(seconds=99999),
+        max_capture_seconds=3600,
+    )
+    store.captures[capped.capture_id] = capped
+    await dispatcher.record_capture_timeline(capped, state="stopping")
+    await dispatcher.record_capture_timeline(store.captures["cap-2"], state="failed")
+    capped_usage = [
+        event for event in await store.pending_callbacks(limit=50, capture_id="cap-2")
+        if event.body.get("event_type") == "minutes.capture.usage"
+    ]
+    assert capped_usage and capped_usage[-1].body["data"]["metering"]["captured_seconds_total"] == 3600

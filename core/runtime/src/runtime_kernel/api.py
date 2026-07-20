@@ -60,6 +60,7 @@ def create_app(
     callback_queue: Optional[CallbackQueue] = None,
     health_checks: Optional[dict[str, HealthCheck]] = None,
     scheduler: Optional[Scheduler] = None,
+    enforcer=None,
 ) -> FastAPI:
     rt = runtime or Runtime()
     queue = callback_queue or CallbackQueue()
@@ -106,6 +107,10 @@ def create_app(
     def create(spec: WorkloadSpec):
         try:
             status = rt.create(spec)
+            if enforcer is not None:
+                # WP-M8: a workload only gets lifetime/idle enforcement if the
+                # reaper knows it exists — register at the single spawn seam.
+                enforcer.track(spec.workloadId)
             # SYSTEM event: a workload was spawned for the calling control-plane request.
             log_event(
                 "workload_spawned",
@@ -140,14 +145,20 @@ def create_app(
     @app.post("/workloads/{workload_id}/stop")
     def stop(workload_id: str, body: StopBody = StopBody()):
         try:
-            return dump(rt.stop(workload_id, body.reason or StopReason.stopped))
+            result = dump(rt.stop(workload_id, body.reason or StopReason.stopped))
+            if enforcer is not None:
+                enforcer.forget(workload_id)
+            return result
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workload")
 
     @app.delete("/workloads/{workload_id}")
     def destroy(workload_id: str):
         try:
-            return dump(rt.destroy(workload_id))
+            result = dump(rt.destroy(workload_id))
+            if enforcer is not None:
+                enforcer.forget(workload_id)
+            return result
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workload")
 

@@ -1,7 +1,8 @@
 """Durable, signed engine-to-Hub lifecycle and metering callbacks."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -76,6 +77,19 @@ def _callback_url(value: str) -> str:
     return value
 
 
+def capture_seconds_at(capture, current: datetime) -> int:
+    """True captured seconds for a terminal settlement: wall time since start,
+    floored by any already-recorded total, capped by the enforced capture cap.
+    WP-M8/H15: this was only ever applied on the erasure path, so every normal
+    terminal usage event carried 0 and settled as a full refund."""
+    seconds = max(0, capture.captured_seconds_total)
+    if capture.started_at is not None:
+        seconds = max(seconds, int(max(timedelta(0), current - capture.started_at).total_seconds()))
+    if capture.max_capture_seconds:
+        seconds = min(seconds, capture.max_capture_seconds)
+    return seconds
+
+
 class ControlCallbackDispatcher:
     """Outbox-backed callback dispatcher; duplicate delivery is safe by contract event ID."""
 
@@ -146,6 +160,12 @@ class ControlCallbackDispatcher:
         failure_code: str | None = None,
     ) -> None:
         """Write one transition whose legality the caller has already established."""
+        if state in _TERMINAL:
+            # H15: settle TRUE seconds at the single terminal choke point —
+            # every caller (advance, walk, stop, erasure) passes through here.
+            # Without this the terminal usage event carried the default 0 and
+            # the Hub settled a full refund of real bot compute.
+            capture = replace(capture, captured_seconds_total=capture_seconds_at(capture, self._now()))
         if state == "failed":
             failure_code = failure_code if failure_code in _FAILURE_CODES else "internal_failure"
         else:
