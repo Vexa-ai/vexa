@@ -54,14 +54,21 @@ const SPEED = Math.max(1, Number(process.env.SPEED ?? 1));
 // Default budget for the golden at the default mock-STT cost: a REGRESSION guard with headroom
 // (observed p95 856ms), not an aspiration. Set explicitly when changing MOCK_STT_MS or SPEED,
 // since the budget only means anything against the run's own STT cost.
-// Per-lane REGRESSION guards, each with headroom over what that lane measures today — not
-// targets, and explicitly not equal: the two lanes chunk differently and the gap is a product
-// question (see below), not something a shared budget should paper over.
-//   gmeet: per-speaker streams, 0.1s submit interval        → observed p95 856ms
-//   mixed: chunked on pyannote cuts, which need a PAUSE     → observed p95 2780ms, max 4406ms
-// Both measured at MOCK_STT_MS=250; a different STT cost moves both (~2xSTT, see above).
-const DEFAULT_BUDGET_GMEET_MS = 1500;
-const DEFAULT_BUDGET_MIXED_MS = 6000;
+// The budget is on PIPELINE OVERHEAD, not on total time-to-text — because total is dominated by
+// something this repo does not control. Measured against the production transcription gateway
+// (2026-07-19, real speech, internal token): a 4s chunk costs p50 ~2.1s server time, tail past
+// 6s, with only ~370ms of that network. So real time-to-text is ~2xSTT + overhead ≈ 4.5s, and an
+// earlier version of this harness "passed" a 1500ms budget purely because the mock STT was 250ms
+// — a green that proved nothing about the product.
+//
+// Overhead = total − (submissions × STT). It is what the pipeline adds: buffering, the confirm
+// loop, publication. That is the number a code change can regress and a reviewer can act on.
+// gmeet needs TWO submissions before confirming (LocalAgreement confirmThreshold=2), so the STT
+// term is doubled — which is also why confirmThreshold is the highest-leverage latency knob we
+// own: it multiplies whatever STT costs.
+const GMEET_STT_SUBMISSIONS = 2;
+const DEFAULT_OVERHEAD_BUDGET_MS = 900;
+const OVERHEAD_BUDGET = Number(process.env.LATENCY_OVERHEAD_BUDGET_MS ?? DEFAULT_OVERHEAD_BUDGET_MS);
 const BUDGET_OVERRIDE = Number(process.env.LATENCY_BUDGET_P95_MS ?? 0);
 
 let failed = 0;
@@ -230,7 +237,19 @@ async function main(): Promise<void> {
   const confirmedAt: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
   const pipe = createGmeetPipeline({
     transcribe,
-    config: { minAudioDuration: 0.15, submitInterval: 0.1, confirmThreshold: 2, maxBufferDuration: 5, idleTimeoutSec: 2, sampleRate: 16000 },
+    // PRODUCTION defaults, deliberately. An earlier version of this harness passed an aggressive
+    // test config (minAudioDuration 0.15, submitInterval 0.1 — 13x/20x faster than production's
+    // 2s/2s) inherited from the batch replay test, so every latency number it produced described
+    // a configuration no deployment runs. Latency must be measured on the config that ships;
+    // override via BOT_SPEAKER_* only to compare tunings deliberately.
+    config: {
+      minAudioDuration: Number(process.env.BOT_SPEAKER_MIN_AUDIO_SEC ?? 2),
+      submitInterval: Number(process.env.BOT_SPEAKER_SUBMIT_INTERVAL_SEC ?? 2),
+      confirmThreshold: Number(process.env.BOT_SPEAKER_CONFIRM_THRESHOLD ?? 2),
+      maxBufferDuration: Number(process.env.BOT_SPEAKER_MAX_BUFFER_SEC ?? 30),
+      idleTimeoutSec: Number(process.env.BOT_SPEAKER_IDLE_TIMEOUT_SEC ?? 2),
+      sampleRate: 16000,
+    },
     sink: {
       segment: (s) => {
         if (!s.completed) return;
@@ -288,8 +307,17 @@ async function main(): Promise<void> {
   check('time-to-text exceeds the STT round-trip it must pay (coherence)',
     lat.length > 0 && p50 >= STT_MS,
     `p50=${p50}ms < mock STT ${STT_MS}ms — the metric is measuring a moving target, not latency`);
-  const gmeetBudget = BUDGET_OVERRIDE || DEFAULT_BUDGET_GMEET_MS;
-  check(`p95 time-to-text within budget (${gmeetBudget}ms)`, p95 <= gmeetBudget, `p95=${p95}ms`);
+  // What the PIPELINE added, with the STT cost of this run subtracted out.
+  const overheadP95 = p95 - GMEET_STT_SUBMISSIONS * STT_MS;
+  console.log(`  pipeline overhead (p95 − ${GMEET_STT_SUBMISSIONS}×${STT_MS}ms STT): ${overheadP95}ms`);
+  console.log(`  ⇒ at production STT (~2100ms/4s chunk, measured 2026-07-19) this lane's`
+    + ` time-to-text would be ~${(GMEET_STT_SUBMISSIONS * 2100 + overheadP95) / 1000}s`);
+  check(`p95 PIPELINE OVERHEAD within budget (${OVERHEAD_BUDGET}ms)`,
+    overheadP95 <= OVERHEAD_BUDGET, `overhead=${overheadP95}ms (total p95 ${p95}ms)`);
+  if (BUDGET_OVERRIDE > 0) {
+    check(`p95 total time-to-text within the explicit budget (${BUDGET_OVERRIDE}ms)`,
+      p95 <= BUDGET_OVERRIDE, `p95=${p95}ms`);
+  }
 
   if (failed) { console.error(`\n❌ replay-paced: ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ replay-paced: a recorded session replayed at speaking rate yields a real speech→transcript latency profile.');
