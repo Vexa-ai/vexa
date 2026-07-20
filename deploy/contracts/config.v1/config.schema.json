@@ -148,6 +148,11 @@
             "payload_model": {
               "type": "string",
               "description": "the `model` form field sent with `payload: \"audio\"` (default whisper-1); backends that validate model ids need their served name"
+            },
+            "payload_model_key": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "description": "an env key (e.g. TRANSCRIPTION_MODEL) whose value, when set, OVERRIDES `payload_model` — the probe must speak the model id the runtime client will speak, or a backend that validates the form's model answers 404 for the probe while serving the real traffic fine (verdict `invalid_endpoint`, a config fault that wrongly refuses spawns)"
             }
           }
         },

@@ -606,6 +606,7 @@
      "method": "POST",
      "url_key": "TRANSCRIPTION_SERVICE_URL",
      "path": "/v1/audio/transcriptions",
+     "payload_model_key": "TRANSCRIPTION_MODEL",
      "auth_key": "TRANSCRIPTION_SERVICE_TOKEN",
      "unauthorized_statuses": [
       401,

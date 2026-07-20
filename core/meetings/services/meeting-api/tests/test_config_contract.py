@@ -208,6 +208,8 @@ class _ProbeServer:
         self.routes = routes
         self.default_status = default_status
         self.paths: list = []
+        self.headers_seen: dict = {}
+        self.last_body: bytes = b""
         self._server = None
         self._thread = None
 
@@ -220,6 +222,8 @@ class _ProbeServer:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's interface
                 outer.paths.append(self.path)
+                outer.headers_seen = dict(self.headers)
+                outer.last_body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 self.send_response(outer.routes.get(self.path, outer.default_status))
                 self.end_headers()
 
@@ -474,3 +478,31 @@ def test_probe_declares_a_long_ttl_because_the_round_trip_is_metered():
     assert float(probe.get("ttl_s") or 0) >= 600, (
         "the audio probe COSTS a fraction of a minute per run — /health must not re-bill it "
         "every 60s")
+
+
+def test_probe_sends_a_named_user_agent():
+    """Cloudflare-fronted backends (Groq, Together) 1010-ban the default Python-urllib
+    signature BEFORE auth runs; the 403 then reads `unauthorized` and the spawn gate
+    refuses every capture against a working backend (first real staging capture)."""
+    with _ProbeServer(routes={_STT_PATH: 200}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert result["ok"] is True
+    ua = srv.headers_seen.get("User-Agent", "")
+    assert ua and "python-urllib" not in ua.lower(), ua
+
+
+def test_probe_model_follows_the_configured_backend_model():
+    """The probe must speak the model id the runtime client speaks: Together answers 404
+    for `whisper-1` (a name it does not serve), and 404 reads `invalid_endpoint` — a
+    config fault that refuses spawns against a perfectly working backend."""
+    with _ProbeServer(routes={_STT_PATH: 200}) as srv:
+        env = {
+            "TRANSCRIPTION_SERVICE_URL": srv.base,
+            "TRANSCRIPTION_SERVICE_TOKEN": "tok",
+            "TRANSCRIPTION_MODEL": "openai/whisper-large-v3",
+        }
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert result["ok"] is True
+    assert b"openai/whisper-large-v3" in srv.last_body
+    assert b"whisper-1" not in srv.last_body

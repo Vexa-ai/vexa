@@ -23,6 +23,6 @@
   "core/meetings/contracts/zaki-read.v1": "5145eee88cba8d63f34d8fe6e919b75244fdf9f68180d33a77525bdd1291ce35",
   "core/runtime/contracts/runtime.v1": "9d67b9379e0d34c4d715764a467e7f6e6543a5db8177fc284fb4a7418067bc18",
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
-  "deploy/contracts/config.v1": "b8c5c1f6344858eddd6509dcbf0a459a3df73866b467011a774245fb3c9ecb17",
+  "deploy/contracts/config.v1": "abd5a87a7692729352d95c7ddc8660a29fd26ca14ba4e231e45e1830c8f8b2f9",
   "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375"
 }

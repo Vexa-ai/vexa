@@ -224,8 +224,22 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     body = b""
     content_type = None
     if (spec.get("payload") or "") == "audio":
-        content_type, body = audio_probe_body(spec.get("payload_model") or "whisper-1")
+        # The probe must speak the model id the RUNTIME client will speak (declared via
+        # `payload_model_key`, an env key like TRANSCRIPTION_MODEL): backends that validate
+        # the form's model (Together, vLLM, gateways) answer 404 for a name they do not
+        # serve, and that verdict reads `invalid_endpoint` — a config fault that refuses
+        # spawns against a perfectly working backend.
+        model_key = spec.get("payload_model_key") or ""
+        configured_model = (env.get(model_key) or "").strip() if model_key else ""
+        content_type, body = audio_probe_body(
+            configured_model or spec.get("payload_model") or "whisper-1"
+        )
     req = urllib.request.Request(url, data=body, method=(spec.get("method") or "POST"))
+    # Cloudflare-fronted backends (Groq, Together) 1010-ban the default Python-urllib
+    # signature BEFORE auth ever runs, and that 403 is indistinguishable from a rejected
+    # token — the cached verdict then reads `unauthorized` and the spawn gate refuses
+    # every capture against a working backend. A named UA passes the filter.
+    req.add_header("User-Agent", "zaki-minutes-preflight/1")
     if content_type:
         req.add_header("Content-Type", content_type)
     token = (env.get(spec["auth_key"]) or "").strip() if spec.get("auth_key") else ""
