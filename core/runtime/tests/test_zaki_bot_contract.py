@@ -178,6 +178,38 @@ def test_k8s_start_materializes_restricted_contract_as_a_complete_container(monk
     }
 
 
+def test_scheduling_env_is_pod_level_never_leaked_into_container_env(monkeypatch):
+    """RUNTIME_K8S_TOLERATIONS/NODE_SELECTOR shape the Pod (spec.tolerations/nodeSelector) so a bare
+    `kubectl run` Pod lands where the runtime is allowed to run — but they must NEVER appear as
+    container env, or the spawned bot would carry the runtime's scheduling config as environment.
+    Regression guard for the container-env exclusion in pod_overrides."""
+    contract = BotPodContract.from_document(copy.deepcopy(_contract_document()))
+    monkeypatch.setenv(
+        "RUNTIME_K8S_TOLERATIONS",
+        '[{"key":"dedicated","operator":"Equal","value":"minutes","effect":"NoSchedule"}]',
+    )
+    monkeypatch.setenv("RUNTIME_K8S_NODE_SELECTOR", '{"pool":"minutes-bots"}')
+    env = {"VEXA_BOT_CONFIG": "{}"}
+
+    _, override = _captured_pod(
+        monkeypatch,
+        Runnable(image=BOT_IMAGE, command=None, bot_pod_contract=contract),
+        env,
+    )
+
+    spec = override["spec"]
+    # Applied as POD-level scheduling.
+    assert spec["tolerations"] == [
+        {"key": "dedicated", "operator": "Equal", "value": "minutes", "effect": "NoSchedule"}
+    ]
+    assert spec["nodeSelector"] == {"pool": "minutes-bots"}
+    # NEVER leaked into the container env — only the workload's own env survives.
+    container_env = {e["name"]: e["value"] for e in spec["containers"][0]["env"]}
+    assert "RUNTIME_K8S_TOLERATIONS" not in container_env
+    assert "RUNTIME_K8S_NODE_SELECTOR" not in container_env
+    assert container_env == env
+
+
 def test_contracted_bot_rejects_workload_controlled_workspace_mounts(monkeypatch):
     contract = BotPodContract.from_document(_contract_document())
     with pytest.raises(ValueError, match="cannot mount a workspace"):

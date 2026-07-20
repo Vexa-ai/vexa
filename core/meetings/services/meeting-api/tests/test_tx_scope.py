@@ -28,12 +28,16 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "meeting_api"
 
 # Reviewed exceptions: "<relpath>:<lineno>" → one-line justification. Empty by design at ship.
 ALLOWLIST: dict[str, str] = {
-    # ZAKI Minutes audio-TTL erasure (dark / operator-disabled). The S3 delete_prefix / count_prefix
-    # run inside the retention DB transaction ON PURPOSE: the row's mark-expired and the object
-    # deletion must commit-or-fail together (atomic erasure — a residue count > 0 raises before commit).
-    # Revisit if the audio-TTL sweep is reworked into a two-phase (delete-then-mark) flow.
-    "src/meeting_api/retention/ttl_adapters.py:209": "ZAKI audio-TTL: S3 delete inside the retention tx for atomic mark-expired+delete (dark)",
-    "src/meeting_api/retention/ttl_adapters.py:212": "ZAKI audio-TTL: S3 residue-count inside the retention tx for atomic verification (dark)",
+    # ZAKI Minutes audio-TTL erasure — a DELIBERATE, reviewed exception, not an oversight. The S3
+    # delete_prefix/count_prefix run INSIDE the retention DB transaction so the object deletion and the
+    # `expired_scopes` mark commit-or-fail together (atomic erasure: a residue count > 0, or any failure,
+    # rolls back BEFORE the scope is marked, so the next sweep re-runs it — no half-erased state is ever
+    # observable). `test_ttl_store_expires_only_owned_audio_under_the_meeting_write_barrier` enforces this
+    # single-lock atomic shape; a naive two-phase (delete-then-mark) split trades the atomicity away and is
+    # unsafe. The correct evolution is the issue-#26 erasing-state pattern (mark-erasing → drain → delete →
+    # finalize), a dedicated WP. Batch is bounded (≤500) and Minutes is dark, so the held-lock cost is fine.
+    "src/meeting_api/retention/ttl_adapters.py:209": "audio-TTL: S3 delete under the retention tx — atomic mark-expired+delete (barrier test enforces it; #26 erasing-state is the proper evolution)",
+    "src/meeting_api/retention/ttl_adapters.py:212": "audio-TTL: S3 residue-count under the retention tx — atomic verification before the expired mark",
 }
 
 # Param is a live DB session if named one of these OR annotated with a name ending in "Session".
