@@ -176,6 +176,11 @@ async function main(): Promise<void> {
       tc.recordHint(ev.hint.name, 'dom-active', ev.hint.t, ev.hint.isEnd);
     } else if (ev.frame) {
       tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
+      // Yield between frames. feedAudio is synchronous, so a tight loop feeds the WHOLE session
+      // before the lane's async pump runs once — audio is evicted from the 120s ring before anything
+      // reads it, and the run scores the leftovers rather than the session. Yielding lets the pump
+      // interleave; the replay is still far faster than real time.
+      await sleep(0);
     }
   }
   // Closing the last turn is the harness standing in for the meeting ending — true for either cut
@@ -230,7 +235,12 @@ async function main(): Promise<void> {
       sttCalls, sttWords, sttFails,
       publishCalls: published.length, uniqueSegmentIds: byId.size,
       storeRows: storeRows.length, storeDupes,
-      retention: Number((txWords / Math.max(1, sttWords)).toFixed(3)),
+      publishedWords: txWords,
+      // Retention is only a LOSS metric against real STT. The mock invents fresh tokens per call,
+      // so every LocalAgreement resubmission of the same audio inflates the denominator with words
+      // that were never new — retention then measures resubmission overlap and calls it loss. It is
+      // recorded only when the words on both sides came from the same answer to the same audio.
+      ...(MOCK ? {} : { retention: Number((txWords / Math.max(1, sttWords)).toFixed(3)) }),
       coverage: Number((covered / wallSec).toFixed(3)),
       segments: published.length,
       segP50Sec: Number((durs[Math.floor(durs.length / 2)] ?? 0).toFixed(2)),
