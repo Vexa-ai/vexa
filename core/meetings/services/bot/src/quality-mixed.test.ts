@@ -261,7 +261,26 @@ async function main(): Promise<void> {
   // renamed A→B→A is defective whichever name is right, so distinctness is the measure, not length.
   const churned = [...names.values()].filter((h) => new Set(h).size > 1).length;
   const publishedSpeakers = new Set(storeRows.map((r) => r.speaker).filter((s) => !isProvisional(s)));
-  const hintNames = new Set(hints.map((h) => h.name));
+  // Cardinality must weight by how long each name was LIT, not just count distinct names. A hint
+  // stream is a poll: a cough, a "yeah", or a poll landing on the wrong tile makes someone a
+  // "participant" the transcript then appears to lose. On a real Zoom call three people were lit
+  // for 6s, 4s and 2s of 269s — twelve seconds between them — and counting them as missing
+  // speakers produced a confident finding that was simply wrong.
+  const LIT_POLL_MS = 2000;          // the hint stream's own resolution
+  const SUBSTANTIVE_LIT_MS = 8000;   // below this, nobody could own a turn worth naming
+  const litMs = new Map<string, number>();
+  {
+    const ordered = hints.slice().sort((a, b) => a.t - b.t);
+    let cur: string | null = null, start = 0, prev = 0;
+    const flush = (): void => { if (cur !== null) litMs.set(cur, (litMs.get(cur) ?? 0) + (prev - start) + LIT_POLL_MS); };
+    for (const h of ordered) {
+      if (h.name !== cur) { flush(); cur = h.name; start = h.t; }
+      prev = h.t;
+    }
+    flush();
+  }
+  const hintNames = new Set([...litMs.entries()].filter(([, ms]) => ms >= SUBSTANTIVE_LIT_MS).map(([n]) => n));
+  const briefNames = litMs.size - hintNames.size;
   const attribution = {
     provisionalRate: Number((provisionalWords / Math.max(1, totalWords)).toFixed(3)),
     hintMatched, hintMissed,
@@ -270,10 +289,12 @@ async function main(): Promise<void> {
     churnedTurns: churned,
     publishedSpeakers: publishedSpeakers.size,
     hintNames: hintNames.size,
+    briefNames,
   };
   console.log(`  attribution   provisional ${(attribution.provisionalRate * 100).toFixed(1)}% of words · ` +
     `hints ${hintMatched} matched / ${hintMissed} missed (${(attribution.hintMissRate * 100).toFixed(1)}% miss) · ` +
-    `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} hinted`);
+    `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} substantively hinted` +
+    (briefNames ? ` (+${briefNames} lit under ${SUBSTANTIVE_LIT_MS / 1000}s, not counted)` : ''));
 
   // ── Attribution ACCURACY — the truth-bearing oracle ─────────────────────────────────────────
   // The four signals above say whether a name was assigned. They cannot say whether it was RIGHT,
