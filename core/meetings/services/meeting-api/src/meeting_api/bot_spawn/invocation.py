@@ -181,6 +181,7 @@ def build_workload_spec(
     invocation: dict,
     callback_url: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
+    max_lifetime_sec: Optional[int] = None,
 ) -> dict:
     """Wrap ``invocation`` as the bot's ONE config env var (``VEXA_BOT_CONFIG``) inside a ``runtime.v1``
     ``WorkloadSpec`` (``profile="meeting-bot"``). The bot image resolves from the kernel's profile
@@ -201,5 +202,7 @@ def build_workload_spec(
     }
     if callback_url:
         spec["callbackUrl"] = callback_url
+    if max_lifetime_sec is not None:
+        spec["maxLifetimeSec"] = max_lifetime_sec
     conforms_workload_spec(spec)
     return spec

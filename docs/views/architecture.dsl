@@ -37,6 +37,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset bot-commands [writers: meeting-api]
   database segments-table [writers: meeting-api]
   data-asset recording-blob [writers: bot, meeting-api]
+  service zaki-hub
 
 system agent  # copilot; owns the processed (cleaned) transcript + signals
   service agent-api
@@ -124,6 +125,8 @@ edges:
   terminal -req-> gateway  # live WS via gateway
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  zaki-hub -write-> meeting-api
+  meeting-api -write-> zaki-hub
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 

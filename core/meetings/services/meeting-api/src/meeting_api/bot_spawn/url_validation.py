@@ -121,3 +121,24 @@ def validate_meeting_url(url: object, *, platform: object) -> str:
             f"meeting_url hostname is not approved for platform {platform!r}"
         )
     return raw
+
+
+def canonical_meeting_identity(url: object, *, platform: object) -> tuple[str, str]:
+    """Return the navigation URL and a stable provider identity for capture deduplication.
+
+    Navigation keeps the approved, whitespace-trimmed URL intact so provider query parameters still
+    reach the bot. The opaque identity deliberately normalizes host casing/trailing dots/default
+    HTTPS ports and ignores fragments/query decorations that do not identify a meeting. Callers
+    scope the returned identity to their own tenant boundary before persisting it.
+    """
+    raw = validate_meeting_url(url, platform=platform)
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise UnsafeMeetingUrl("meeting_url has an invalid port") from None
+    if port not in (None, 443):
+        raise UnsafeMeetingUrl("meeting_url must use the default HTTPS port")
+    path = parsed.path.rstrip("/") or "/"
+    return raw, f"https://{host}{path}"

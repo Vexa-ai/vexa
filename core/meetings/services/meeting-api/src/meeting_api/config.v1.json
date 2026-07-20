@@ -353,6 +353,85 @@
    "default": "300",
    "description": "calendar-sync sweep cadence (s) — how often connected ICS feeds are re-fetched and upserted into planned meetings",
    "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_CONTROL_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "explicit default-off gate for the private Hub-to-Minutes control router; when false the control route, schema and callback worker are absent",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_OPERATOR_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "operator capture gate evaluated inside an otherwise mounted Minutes control router; false permits no capture",
+   "targets": []
+  },
+  {
+   "key": "MINUTES_CONTROL_MAX_CAPTURE_SECONDS",
+   "class": "defaulted",
+   "default": "3600",
+   "description": "hard per-capture runtime lifetime (60-14400 seconds); it may not exceed the Hub-held bot-minute reservation, so a capture cannot outlive its settlement hold",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_JITSI_HOSTS",
+   "class": "defaulted",
+   "default": "(unset — only meet.jit.si is recognized, and the control plane admits google_meet only)",
+   "description": "optional comma-separated operator-declared Jitsi hostnames; the sealed control URL predicate receives this as validated configuration so ambient process environment never changes conformance",
+   "targets": []
+  },
+  {
+   "key": "MINUTES_ENGINE_CONTROL_TOKEN",
+   "class": "defaulted",
+   "default": "(unset — required only when ZAKI_MINUTES_CONTROL_ENABLED=true)",
+   "secret": true,
+   "description": "shared server-only HMAC signing secret for the Hub's short-lived tenant/user-bound X-Zaki-Control-Token; never a browser bearer token",
+   "targets": []
+  },
+  {
+   "key": "MINUTES_ENGINE_CALLBACK_URL",
+   "class": "defaulted",
+   "default": "(unset — required only when ZAKI_MINUTES_CONTROL_ENABLED=true)",
+   "description": "exact Hub callback endpoint (/api/minutes/callback/v1) for engine lifecycle and metering outbox delivery",
+   "targets": []
+  },
+  {
+   "key": "MINUTES_ENGINE_CALLBACK_HMAC_KEY",
+   "class": "defaulted",
+   "default": "(unset — required only when ZAKI_MINUTES_CONTROL_ENABLED=true)",
+   "secret": true,
+   "description": "server-only HMAC key for exact timestamp.raw-body engine-to-Hub callback signatures",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_CONTROL_CALLBACK_INTERVAL_S",
+   "class": "defaulted",
+   "default": "5",
+   "description": "Minutes callback-outbox retry cadence in seconds once control is enabled",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_TTL_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "must be true with active ZAKI Minutes control; runs bounded durable retention-expiry batches",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_TTL_INTERVAL_S",
+   "class": "defaulted",
+   "default": "60",
+   "description": "Minutes retention-expiry sweep cadence in seconds (1-3600)",
+   "targets": []
+  },
+  {
+   "key": "ZAKI_MINUTES_TTL_BATCH_LIMIT",
+   "class": "defaulted",
+   "default": "100",
+   "description": "maximum due retention scopes processed per Minutes expiry sweep (1-500)",
+   "targets": []
   }
  ],
  "capabilities": {

@@ -69,6 +69,12 @@ def create_app(
     # Internal ZAKI Minutes read plane. No token means default-off/fail-closed.
     zaki_read_token: Optional[str] = None,
     zaki_read_now: Optional["object"] = None,
+    # Sealed Hub-BFF Minutes control plane. ``None`` means no control routes are mounted.
+    zaki_control_store: Optional["object"] = None,
+    zaki_control_config: Optional["object"] = None,
+    zaki_control_retention_repo: Optional["object"] = None,
+    zaki_control_retention_storage: Optional["object"] = None,
+    zaki_control_callback: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -104,7 +110,10 @@ def create_app(
     app.state.webhook_sink = webhook_sink
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer)
+    _mount_lifecycle(
+        app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
+        zaki_control_callback,
+    )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
@@ -138,6 +147,55 @@ def create_app(
         storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
+    # The private control router is a deliberate activation seam.  It is not mounted in default
+    # deployments, and it requires all real collaborators once composition enables it.
+    if zaki_control_config is not None:
+        if any(value is None for value in (
+            zaki_control_store, zaki_control_retention_repo, zaki_control_retention_storage,
+            zaki_control_callback,
+        )):
+            raise ValueError("ZAKI Minutes control requires durable policy, retention, and callback collaborators")
+        from .zaki_control import build_router as _build_zaki_control_router
+
+        app.include_router(_build_zaki_control_router(
+            store=zaki_control_store,
+            config=zaki_control_config,
+            meeting_repo=meeting_repo,
+            runtime=runtime,
+            command_publisher=command_publisher,
+            retention_repo=zaki_control_retention_repo,
+            retention_storage=zaki_control_retention_storage,
+            callback_dispatcher=zaki_control_callback,
+        ))
+        app.state.zaki_control_store = zaki_control_store
+        app.state.zaki_control_callback = zaki_control_callback
+        # Production flips this false while the lifespan creates/verifies the durable control
+        # tables.  The Hub startup gate uses this deliberately narrow, private endpoint instead of
+        # treating generic `/health` as evidence that the control plane is actually mounted.
+        app.state.zaki_control_ready = True
+
+        @app.get("/api/zaki/control/v1/ready")
+        async def zaki_control_ready():
+            if not getattr(app.state, "zaki_control_ready", False):
+                return JSONResponse(
+                    status_code=503,
+                    content={"api_version": "zaki-control.v1", "state": "starting"},
+                    headers={"Cache-Control": "no-store"},
+                )
+            # `operator_enabled` reports the operator gate truthfully rather than asserting it.
+            # The infra startup gate greps for `"operator_enabled":true`, so an operator-disabled
+            # engine correctly fails to satisfy the Hub rollout contract instead of faking it.
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "api_version": "zaki-control.v1",
+                    "state": "ready",
+                    "operator_enabled": bool(zaki_control_config.operator_enabled),
+                    "max_capture_seconds": int(zaki_control_config.max_capture_seconds),
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+
     return app
 
 
@@ -151,6 +209,7 @@ def _mount_lifecycle(
     webhook_sink: "object" = None,
     redis: "object" = None,
     transcript_finalizer: "object" = None,
+    zaki_control_callback: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -379,6 +438,27 @@ def _mount_lifecycle(
                     except Exception as e:  # noqa: BLE001 — delivery is best-effort
                         log_event("webhook_deliver_failed", audience="system", level="warning",
                                   span="lifecycle.callback", fields={"error": str(e)})
+        # Queue the sealed Hub callback only after the durable meeting update.  Best-effort, like
+        # every other side effect in this function: failing the lifecycle callback here would skip
+        # the WS status publish and the copilot reap below, both of which are documented as never
+        # failing this callback — and it would not even buy a retry. The FSM record and the meeting
+        # row are already advanced by this point, so a redelivery of the same event returns
+        # `no_op=True` from `apply_change`, `visible_change` is False, and this block is skipped
+        # entirely. The real backstop for a missed transition is the `reconcile_once` sweep, which
+        # rebuilds the outbox from the durable meeting rows.
+        if (
+            zaki_control_callback is not None
+            and visible_change
+            and isinstance(meeting_row, dict)
+            and rec.status is not None
+        ):
+            try:
+                await zaki_control_callback.record_lifecycle(
+                    meeting_row, state=rec.status.value
+                )
+            except Exception as e:  # noqa: BLE001 — reconciliation owns recovery, not the bot ACK
+                log_event("zaki_control_callback_queue_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": str(e)})
         # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
         # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
         #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}

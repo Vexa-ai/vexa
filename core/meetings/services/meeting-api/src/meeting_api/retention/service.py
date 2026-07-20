@@ -4,8 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
+from typing import Awaitable, Callable
 
-from .ports import RetentionRepo, RetentionStorage
+from .ports import ErasurePlan, RetentionRepo, RetentionStorage
 
 
 class ErasureFailed(RuntimeError):
@@ -61,6 +62,7 @@ async def erase_meeting(
     meeting_id: str,
     erased_at: datetime,
     policy_version: str,
+    before_delete: Callable[[ErasurePlan], Awaitable[None]] | None = None,
 ) -> ErasureReceipt | None:
     """Erase one owned meeting without exposing whether an absent meeting belongs to another user."""
 
@@ -89,6 +91,15 @@ async def erase_meeting(
         or (not prefixes and plan.recording_objects != 0)
     ):
         raise ErasureFailed("meeting erasure plan is invalid")
+
+    # Persist an operation-owned receipt plan before the first irreversible object deletion.
+    # A process crash after this hook can return the same counts on retry even if the raw meeting
+    # row is already gone, without retaining any content identifiers in the receipt ledger.
+    if before_delete is not None:
+        try:
+            await before_delete(plan)
+        except Exception:
+            raise ErasureFailed("meeting erasure receipt preparation requires retry") from None
 
     try:
         for prefix in plan.recording_prefixes:

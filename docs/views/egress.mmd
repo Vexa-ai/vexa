@@ -18,6 +18,7 @@ flowchart LR
     redis["redis"]
     postgres["postgres"]
     minio["minio"]
+    zaki_hub["zaki-hub (external)"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription

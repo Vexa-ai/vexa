@@ -7,6 +7,7 @@ flowchart LR
     mcp["mcp"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
+    zaki_hub["zaki-hub (external)"]
   end
   subgraph agent["agent"]
     agent_api["agent-api"]
@@ -45,3 +46,5 @@ flowchart LR
   terminal -->|"WebSocket"| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
+  zaki_hub -->|"write"| meeting_api
+  meeting_api -->|"write"| zaki_hub
