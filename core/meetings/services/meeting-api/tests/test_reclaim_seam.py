@@ -97,13 +97,16 @@ async def test_reclaim_respects_min_idle():
     client, bus, store, _ = await _crashed_consumer_pel(3)
 
     calls = {"n": 0}
-    orig_append = store.append_segment
+    orig_lease = store.transcript_write_lease
 
-    async def _counting_append(meeting_id, segment):
+    def _counting_lease(meeting_id):
+        # ZAKI's ingest persists reclaimed segments through the write-lease (writer.append_segments,
+        # which carries the erasure write-gate), NOT store.append_segment — so count lease acquisitions
+        # to prove the batch is (gate off) or is not (gate on) re-drained through the sink.
         calls["n"] += 1
-        return await orig_append(meeting_id, segment)
+        return orig_lease(meeting_id)
 
-    store.append_segment = _counting_append  # type: ignore[assignment]
+    store.transcript_write_lease = _counting_lease  # type: ignore[assignment]
 
     # GREEN: the 60s gate leaves a 0ms-idle (live in-flight) batch untouched — no reclaim, no sink call.
     reclaimed = await reclaim_segments(

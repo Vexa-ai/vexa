@@ -513,8 +513,13 @@ def test_post_bots_platform_url_mismatch_422(monkeypatch):
 
 
 def test_post_bots_url_only_jitsi_derives_room(monkeypatch):
-    """F2: jitsi derivation accepted — the room (+host scope) becomes the native id, URL rides along."""
+    """F2: jitsi derivation accepted — the room (+host scope) becomes the native id, URL rides along.
+
+    ZAKI adaptation: the fork's SSRF guard binds jitsi to an operator allowlist (VEXA_JITSI_HOSTS +
+    meet.jit.si), so a self-hosted jitsi host must be configured — an unconfigured host is refused
+    (test_post_bots_rejects_unconfigured_hostname). This proves derivation for an ALLOWED host."""
     _spawn_env(monkeypatch)
+    monkeypatch.setenv("VEXA_JITSI_HOSTS", "meet.example.org")
     repo = InMemoryMeetingRepo()
     r = _client(repo).post("/bots", headers=HEADERS,
                            json={"meeting_url": "https://meet.example.org/daily"})

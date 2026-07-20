@@ -7,6 +7,11 @@ flowchart LR
     mcp["mcp"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
+    zaki_hub["zaki-hub (external)"]
+  end
+  subgraph agent["agent"]
+    agent_api["agent-api"]
+    agent_worker["agent-worker"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -26,7 +31,6 @@ flowchart LR
   slim["slim"]
   extension["extension"]
   terminal["terminal"]
-  dashboard["dashboard (deprecated)"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
@@ -40,7 +44,7 @@ flowchart LR
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
-  dashboard -->|""| gateway
-  dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
+  zaki_hub -->|"write"| meeting_api
+  meeting_api -->|"write"| zaki_hub

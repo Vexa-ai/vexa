@@ -196,7 +196,7 @@ async def test_unsafe_stored_url_is_stamped_without_aborting_sweep():
 
     counters = await _tick(repo, runtime)
 
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 1}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 1, "skipped_uncapped": 0}
     assert repo._meetings[mid]["status"] == "scheduled"
     assert "auto_join_error" in repo._meetings[mid]["data"]
     assert runtime.specs == []

@@ -240,6 +240,12 @@ def _fill_absolute_times(segments: list, base) -> None:
             s["absolute_start_time"] = datetime.fromtimestamp(st, timezone.utc).isoformat()
             s["absolute_end_time"] = datetime.fromtimestamp(en, timezone.utc).isoformat()
         elif base is not None:
+            # ZAKI: `base` is meeting.start_time/created_at, stored as TIMESTAMP WITHOUT TIME ZONE →
+            # a NAIVE (UTC) datetime. Stamp UTC so the derived absolute times carry the +00:00 offset
+            # the sealed api.v1 format uses (matching _utc_iso and the epoch branch above); a naive
+            # isoformat() would drift and the dashboard's `new Date()` would read it as viewer-local.
+            if base.tzinfo is None:
+                base = base.replace(tzinfo=timezone.utc)
             s["absolute_start_time"] = (base + timedelta(seconds=st)).isoformat()
             s["absolute_end_time"] = (base + timedelta(seconds=en)).isoformat()
 

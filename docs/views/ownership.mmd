@@ -9,8 +9,6 @@ flowchart LR
   segments_table[("transcription_segments (table)")]
   recording_blob[("recordings bucket (blob)")]
   style recording_blob stroke-dasharray: 5 5,stroke-width:3px
-  userdata_blob[("userdata bucket (blob)")]
-  style userdata_blob stroke-dasharray: 5 5,stroke-width:3px
   bm_status[("bm:meeting:{id}:status (pubsub)")]
   u_meetings[("u:{user}:meetings (pubsub)")]
   bot_commands[("bot_commands:meeting:{id} (pubsub)")]
@@ -29,8 +27,6 @@ flowchart LR
   terminal -.->|read| proc_stream
   terminal -.->|read| out_stream
   bot -->|write| recording_blob
-  bot -.->|read-write| userdata_blob
-  remote_browser -->|write| userdata_blob
   gateway -.->|read| recording_blob
   bot -.->|read| bot_commands
   meeting_api -->|write| bm_status

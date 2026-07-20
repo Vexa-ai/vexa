@@ -100,15 +100,11 @@ def default_registry() -> ProfileRegistry:
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
     # (build_production_app → DockerBackend.ensure_worker_image).
     agent_worker_image = worker_image_for(agent_image)
-    # The legacy/vendored browser image exposes the historical compatibility launcher, while the
-    # ZAKI-owned image declares the real `/app/entrypoint.sh` as its image entrypoint.  Kubernetes
-    # `command` replaces an image ENTRYPOINT, so the contracted image must receive its own stable
-    # path rather than the legacy one.
-    meeting_bot_command = (
-        ["/app/entrypoint.sh"]
-        if bot_pod_contract is not None
-        else ["/app/vexa-bot/entrypoint.sh"]
-    )
+    # Contracted (ZAKI) image declares ENTRYPOINT /app/entrypoint.sh and is spawned via --overrides, so
+    # its command is materialized in the container. The generic browser image is spawned via kubectl
+    # run and boots its OWN ENTRYPOINT (also /app/entrypoint.sh, #675), so it carries NO command — a
+    # stray /app/vexa-bot/entrypoint.sh here StartErrors under k8s.
+    meeting_bot_command = ["/app/entrypoint.sh"] if bot_pod_contract is not None else None
     speaker_stream_env = {
         key: os.environ[key]
         for key in (

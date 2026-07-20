@@ -27,7 +27,14 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent / "src" / "meeting_api"
 
 # Reviewed exceptions: "<relpath>:<lineno>" → one-line justification. Empty by design at ship.
-ALLOWLIST: dict[str, str] = {}
+ALLOWLIST: dict[str, str] = {
+    # ZAKI Minutes audio-TTL erasure (dark / operator-disabled). The S3 delete_prefix / count_prefix
+    # run inside the retention DB transaction ON PURPOSE: the row's mark-expired and the object
+    # deletion must commit-or-fail together (atomic erasure — a residue count > 0 raises before commit).
+    # Revisit if the audio-TTL sweep is reworked into a two-phase (delete-then-mark) flow.
+    "src/meeting_api/retention/ttl_adapters.py:209": "ZAKI audio-TTL: S3 delete inside the retention tx for atomic mark-expired+delete (dark)",
+    "src/meeting_api/retention/ttl_adapters.py:212": "ZAKI audio-TTL: S3 residue-count inside the retention tx for atomic verification (dark)",
+}
 
 # Param is a live DB session if named one of these OR annotated with a name ending in "Session".
 _SESSION_PARAM_NAMES = {"db", "session", "conn", "connection"}

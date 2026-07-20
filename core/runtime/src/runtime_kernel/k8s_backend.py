@@ -150,6 +150,8 @@ def pod_overrides(
             if key not in (TOLERATIONS_ENV, NODE_SELECTOR_ENV)
         ],
     }
+    # A contracted bot ships as one --overrides object, so its command is materialized in the container
+    # here; a non-contracted runnable ALSO gets `kubectl run --command` at the call site (upstream #675).
     if runnable.command:
         container["command"] = runnable.command
     if volume_mounts:
@@ -224,6 +226,11 @@ class K8sBackend:
             labels=labels,
         )
         args += ["--overrides", json.dumps(overrides, sort_keys=True)]
+        # ZAKI spawns via a complete --overrides container (the #15 hardening requires securityContext,
+        # which only --overrides can set), so image/env/command all ship in that one object — NOT via
+        # kubectl run's --image/--env/--command flags. #675's goal (a command-less meeting-bot boots the
+        # bot image's own ENTRYPOINT) is met by the profile carrying command=None, so no container
+        # "command" key is emitted and the image ENTRYPOINT runs.
         _kubectl(*args)
         return WorkloadHandle(id=workload_id, impl=name)
 

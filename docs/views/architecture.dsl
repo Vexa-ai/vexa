@@ -26,6 +26,8 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract lifecycle.v1
   contract transcript.v1
   contract webhook.v1
+  contract zaki-read.v1
+  contract zaki-control.v1
   service transcription
   data-asset segments-stream [writers: bot]
   data-asset tc-stream [writers: meeting-api]
@@ -35,7 +37,24 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset bot-commands [writers: meeting-api]
   database segments-table [writers: meeting-api]
   data-asset recording-blob [writers: bot, meeting-api]
-  data-asset userdata-blob [writers: remote-browser, bot]
+  service zaki-hub
+
+system agent  # copilot; owns the processed (cleaned) transcript + signals
+  service agent-api
+  contract event.v1
+  contract invoke.v1
+  contract proactive-card.v1
+  contract routine.v1
+  contract task.v1
+  contract tool.v1
+  contract unit.v1
+  contract processed-notes.v1
+  contract workspace.v1
+  service agent-worker
+  data-asset out-stream [writers: agent-worker]
+  data-asset unit-in
+  data-asset proc-stream [writers: agent-worker]
+  data-asset va-chat
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -76,8 +95,6 @@ edges:
   terminal -read-> proc-stream
   terminal -read-> out-stream
   bot -write-> recording-blob
-  bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
-  remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
@@ -106,10 +123,10 @@ edges:
   admin-api -write-> postgres
   terminal -req-> gateway  # all REST via gateway
   terminal -req-> gateway  # live WS via gateway
-  dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
-  dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  zaki-hub -write-> meeting-api
+  meeting-api -write-> zaki-hub
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 

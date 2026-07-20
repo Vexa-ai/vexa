@@ -58,13 +58,20 @@ def test_meeting_bot_k8s_run_omits_command_uses_image_entrypoint(monkeypatch):
 
 
 def test_k8s_run_still_replaces_entrypoint_for_a_profile_that_has_a_command(monkeypatch):
-    """The append/replace machinery is intact: a profile that DOES carry a command (e.g. agent) still
-    gets `--command -- <argv>` — the fix is scoped to dropping the bogus meeting-bot command, not to
-    removing entrypoint replacement wholesale."""
+    """The entrypoint-replacement machinery is intact: a profile that DOES carry a command (e.g. agent)
+    still replaces the image ENTRYPOINT — the #675 fix is scoped to dropping the bogus meeting-bot
+    command, not to removing entrypoint replacement wholesale.
+
+    ZAKI adaptation: this backend spawns via a COMPLETE `--overrides` container (the only way to set the
+    #15 pod-hardening securityContext), so the command travels in that container's `command` field, not
+    a `kubectl run --command` flag. The behavioural guarantee is identical — a command-carrying profile's
+    argv still overrides the entrypoint — but it is asserted on the pod spec rather than the run flag."""
+    import json
+
     calls = _capture_run_argv(monkeypatch)
     K8sBackend(namespace="ns").start(
         "agent-1", Runnable(image="img", command=["python", "-m", "worker"]), env={}
     )
     run_argv = calls[0]
-    i = run_argv.index("--command")
-    assert run_argv[i:] == ["--command", "--", "python", "-m", "worker"]
+    override = json.loads(run_argv[run_argv.index("--overrides") + 1])
+    assert override["spec"]["containers"][0]["command"] == ["python", "-m", "worker"]

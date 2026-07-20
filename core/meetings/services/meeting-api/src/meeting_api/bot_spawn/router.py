@@ -212,13 +212,6 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             platform = derived_platform
             if not passcode:
                 passcode = _passcode_from_url(meeting_url)
-        # SSRF hygiene (ZAKI): validate the passthrough meeting_url against the now-resolved
-        # platform's approved hosts before the bot browser navigates to it. Because host approval
-        # is platform-bound (an empty platform approves no host), this MUST run after derivation so
-        # a url-only body is checked against its real platform rather than rejected outright — the
-        # guard still gates every navigation, so derivation cannot bypass it.
-        if meeting_url is not None:
-            meeting_url = _validate_meeting_url(meeting_url, platform=platform)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,
@@ -245,6 +238,13 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                     )
                 ),
             )
+        # SSRF hygiene (ZAKI): validate the passthrough meeting_url against the resolved platform's
+        # approved hosts before the bot navigates. Runs AFTER the #816 spawnable-platform refusal so an
+        # unspawnable platform (browser_session) gets its typed refusal, not a host-approval 422 — and
+        # AFTER derivation so a url-only body is checked against its real platform. It is the last guard
+        # before request_bot, so it still gates every bot navigation and nothing can bypass it.
+        if meeting_url is not None:
+            meeting_url = _validate_meeting_url(meeting_url, platform=platform)
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
