@@ -118,6 +118,16 @@ known-text) · `services/bot/src/quality-mixed.test.ts` (mixed, recorded session
 ## Anti-patterns, now rules
 
 - A mock-STT green proves structure only; it must never be reported as content quality.
+- **A ratio whose denominator the instrument controls is not a measurement.** `retention` under a
+  mock that invents fresh tokens per call counts every LocalAgreement resubmission as new words
+  lost. The numerator was stable across five runs (2746–2750) while the denominator moved
+  (3935–4138) — that spread is the tell, and it is only visible if runs are repeated.
+- **Repeat a run before recording it as a baseline.** Nothing above was detectable from a single
+  run; every one of them looked like a clean number.
+- **A replay must not outrun the code it replays.** Feeding a synchronous ring in a tight loop fed a
+  whole session before the async pump ran once, so the audio was evicted before anything read it and
+  the run scored the leftovers. The tell was a submission p50 of 0.25s against production's ~2s:
+  when an instrument's cadence does not resemble production's, the instrument is the thing to doubt.
 - Rebuild artifacts before taking a "before" measurement; a stale `dist/` is a moving baseline.
 - Pin confounds when comparing arms (e.g. `TX_EXTRA_MS` to fix STT latency).
 - Never score a store that is still flushing (db-writer immutability threshold).
