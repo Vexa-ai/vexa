@@ -150,8 +150,10 @@ def pod_overrides(
             if key not in (TOLERATIONS_ENV, NODE_SELECTOR_ENV)
         ],
     }
-    # A contracted bot ships as one --overrides object, so its command is materialized in the container
-    # here; a non-contracted runnable ALSO gets `kubectl run --command` at the call site (upstream #675).
+    # This backend spawns via a complete --overrides container (the only way to set the #15
+    # securityContext hardening), so a runnable's command is materialized in the container here — NOT
+    # via a `kubectl run --command` flag. A command=None profile (meeting-bot, #675) emits no command
+    # key and boots the bot image's own ENTRYPOINT.
     if runnable.command:
         container["command"] = runnable.command
     if volume_mounts:
