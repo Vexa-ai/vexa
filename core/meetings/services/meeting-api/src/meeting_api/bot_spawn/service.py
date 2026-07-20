@@ -145,6 +145,7 @@ async def request_bot(
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
     transcribe_enabled: bool = True,
+    automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
@@ -383,9 +384,10 @@ async def request_bot(
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
-        # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
-        # fail the meeting; everyoneLeftTimeout matches the O6 config.
-        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
+        # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
+        # silence-window module default applies (the lobby window stays forgiving for
+        # human-in-the-loop dashboard joins).
+        automatic_leave=automatic_leave or {"waitingRoomTimeout": 600_000},
     )
 
     # 5. Spawn over runtime.v1.

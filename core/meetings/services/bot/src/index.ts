@@ -34,6 +34,7 @@ import { createBotPipeline, createLivePipeline, createTranscribe, serr, type Bot
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
@@ -80,19 +81,16 @@ function meetingChannelId(inv: Invocation): string | number {
  *
  *  `orchestrator.run({ maxActiveMs })` is a HARD ceiling on the active phase that resolves to
  *  `completed(max_bot_time_exceeded)` — a backstop so a bot can never live forever (the granular
- *  empty-room / waiting-room timeouts that map to left_alone/startup_alone are driven by the
- *  Pipeline/JoinDriver in 2b). This is a GENEROUS backstop (default 4h, override with
- *  BOT_MAX_ACTIVE_MS in ms) — the granular empty-room / waiting-room timeouts drive every NORMAL exit
- *  well before this fires. We floor it at max(everyoneLeft, noOneJoined, waitingRoom) + 60s margin so
- *  the backstop can never undercut those granular timeouts. */
+ *  silence timeout that maps to left_alone is driven by the injected AlonenessSource). This is a
+ *  GENEROUS backstop (default 4h, override with BOT_MAX_ACTIVE_MS in ms). We floor it at the largest
+ *  configured lifecycle timeout + 60s so it cannot undercut a more specific lifecycle verdict. */
 const DEFAULT_MAX_ACTIVE_MS = 4 * 60 * 60 * 1000; // 4 hours
-function deriveMaxActiveMs(inv: Invocation, env: NodeJS.ProcessEnv = process.env): number {
+function deriveMaxActiveMs(inv: Invocation, everyoneLeftMs: number, env: NodeJS.ProcessEnv = process.env): number {
   const al = inv.automaticLeave ?? {};
-  const everyoneLeft = al.everyoneLeftTimeout ?? 120_000;
   const noOneJoined = al.noOneJoinedTimeout ?? 600_000;
   const waitingRoom = al.waitingRoomTimeout ?? 300_000;
   const MARGIN_MS = 60_000; // give the granular timeouts room to fire first
-  const floor = Math.max(everyoneLeft, noOneJoined, waitingRoom) + MARGIN_MS;
+  const floor = Math.max(everyoneLeftMs, noOneJoined, waitingRoom) + MARGIN_MS;
   const override = Number(env.BOT_MAX_ACTIVE_MS);
   const cap = Number.isFinite(override) && override > 0 ? override : DEFAULT_MAX_ACTIVE_MS;
   return Math.max(cap, floor);
@@ -199,6 +197,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       : null;
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
+  const remoteAudioActivity = createRemoteAudioActivityTap();
+  const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
+  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs });
+  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
@@ -240,7 +242,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat),   // on the live meeting page
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {
@@ -269,6 +271,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     join,
     pipeline,
     acts,
+    aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
   });
@@ -280,7 +283,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // exit code on BOTH orphaned bots). Wire before run(); release the listeners after.
   const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
   try {
-    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv) });
+    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv, aloneSilenceWindowMs, env) });
     return result.exitCode;
   } finally {
     releaseSignals();

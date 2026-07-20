@@ -10,7 +10,7 @@
  */
 import { createOrchestrator } from './orchestrator.js';
 import { canTransition, type BotStatus, type LifecycleEvent } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource } from './ports.js';
+import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, AlonenessSource } from './ports.js';
 import type { Invocation } from './config.js';
 
 let failed = 0;
@@ -36,6 +36,7 @@ const leavesOnSubscribe = (n: number): ActsSource => ({
   subscribe(handler) { for (let i = 0; i < n; i++) void handler({ action: 'leave' }); return () => { /* */ }; },
 });
 const noActs: ActsSource = { subscribe() { return () => { /* */ }; } };
+const noAloneness: AlonenessSource = { onAlone() { return () => { /* */ }; } };
 
 const terminals = (e: LifecycleEvent[]) => e.filter((x) => x.status === 'completed' || x.status === 'failed');
 const allLegal = (e: LifecycleEvent[]) =>
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
   {
     const lc = sink();
     const o = createOrchestrator(inv(), {
-      lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: leavesOnSubscribe(200),
+      lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: leavesOnSubscribe(200), aloneness: noAloneness,
     });
     const res = await o.run();  // 200 leave acts flood in on subscribe (during active)
     check('act-flood: completed(stopped)', res.status === 'completed' && res.completionReason === 'stopped');
@@ -71,7 +72,7 @@ async function main(): Promise<void> {
       async withdraw() { /* */ },
     };
     const o = createOrchestrator(inv(), {
-      lifecycle: lc, join: floodJoin, pipeline: noopPipeline(), acts: leavesOnSubscribe(1),
+      lifecycle: lc, join: floodJoin, pipeline: noopPipeline(), acts: leavesOnSubscribe(1), aloneness: noAloneness,
     });
     const res = await o.run();
     check('report-flood: reached a clean completed', res.status === 'completed');
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
       async leave() { left = true; },
       async withdraw() { /* */ },
     };
-    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: failingPipeline, acts: noActs });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: failingPipeline, acts: noActs, aloneness: noAloneness });
     const res = await o.run();
     check('fail-under-load: terminal failed', res.status === 'failed');
     check('fail-under-load: LEFT the meeting (no ghost participant)', left);

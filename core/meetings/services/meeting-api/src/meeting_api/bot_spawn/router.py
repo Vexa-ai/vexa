@@ -83,6 +83,46 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
 
 
+def _resolve_automatic_leave(value: Optional[object]) -> dict:
+    """Translate the public snake_case timeout names into invocation.v1's camelCase shape.
+
+    Admission keeps its deployment default. The active-phase silence timeout is omitted when the
+    caller does not set it, allowing the bot module's configurable ten-minute default to apply.
+    """
+    if value is None:
+        return {"waitingRoomTimeout": 600_000}
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail="automatic_leave must be an object")
+
+    allowed = {
+        "max_bot_time", "max_wait_for_admission", "max_time_left_alone",
+        "no_one_joined_timeout", "waiting_room_timeout", "everyone_left_timeout",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"automatic_leave has unknown field(s): {', '.join(unknown)}")
+
+    def timeout(primary: str, legacy: Optional[str] = None) -> Optional[int]:
+        raw = value.get(primary)
+        if raw is None and legacy is not None:
+            raw = value.get(legacy)
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise HTTPException(status_code=422, detail=f"automatic_leave.{primary} must be a positive integer")
+        return raw
+
+    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or 600_000
+    resolved = {"waitingRoomTimeout": waiting_room}
+    no_one_joined = timeout("no_one_joined_timeout")
+    everyone_left = timeout("max_time_left_alone", "everyone_left_timeout")
+    if no_one_joined is not None:
+        resolved["noOneJoinedTimeout"] = no_one_joined
+    if everyone_left is not None:
+        resolved["everyoneLeftTimeout"] = everyone_left
+    return resolved
+
+
 def _validate_meeting_url(url: object) -> str:
     """SSRF hygiene for the caller-supplied ``meeting_url`` passthrough (zoom AND jitsi — the
     bot's browser navigates wherever this points, so an authenticated caller must not be able to
@@ -329,6 +369,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
                 transcribe_enabled=transcribe_enabled,
+                automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.

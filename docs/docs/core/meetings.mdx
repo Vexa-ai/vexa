@@ -30,6 +30,13 @@ workspace binding, and the eventual transcript all live together:
 | **Live** | `requested → joining → awaiting_admission → active → stopping` | the bot lifecycle FSM |
 | **Done** | `completed` · `failed` | terminal |
 
+Terminal lifecycle events carry a completion reason. `left_alone` means the active meeting produced no
+remote microphone audio for its configured silence window (10 minutes by default), covering both an empty
+room and a silent bots-only room with one platform-agnostic rule. Qualifying remote speech resets the full
+window; local bot speech does not. If capture is unavailable, the detector fails closed and keeps the bot
+seated. The deliberate trade is that a human who remains silent for the whole window is also treated as an
+ended meeting; callers can raise the per-meeting window with `automatic_leave.max_time_left_alone`.
+
 Sending a bot to a planned meeting (manually or via auto-join) **upgrades the same record in
 place** — it is never duplicated, and a planned record can be edited or deleted only while it is
 still planned (the FSM is never fought).

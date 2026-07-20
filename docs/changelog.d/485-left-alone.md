@@ -1,0 +1,1 @@
+- **Meeting bots now leave ended calls instead of parking until the hard cap (#545).** After the configured remote-audio silence window, empty rooms and silent bots-only rooms finish as `completed(left_alone)`; `automatic_leave.max_time_left_alone` overrides the 10-minute default. See [Send a bot and get a transcript](/how-to/send-a-bot#when-the-bot-leaves-on-its-own).

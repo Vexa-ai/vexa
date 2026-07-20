@@ -164,6 +164,73 @@ def test_post_bots_201(monkeypatch):
     assert r.json()["status"] == "requested"
 
 
+def test_post_bots_forwards_automatic_leave_to_invocation(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "silence-window",
+            "automatic_leave": {
+                "max_wait_for_admission": 321_000,
+                "max_time_left_alone": 12_345,
+                "everyone_left_timeout": 99_999,
+                "no_one_joined_timeout": 45_000,
+            },
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"] == {
+        "waitingRoomTimeout": 321_000,
+        "everyoneLeftTimeout": 12_345,
+        "noOneJoinedTimeout": 45_000,
+    }
+
+
+def test_post_bots_legacy_everyone_left_alias_still_works(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "legacy-window",
+            "automatic_leave": {"everyone_left_timeout": 23_456},
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["everyoneLeftTimeout"] == 23_456
+
+
+def test_post_bots_omits_everyone_left_when_not_explicit(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "module-default"},
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"] == {"waitingRoomTimeout": 600_000}
+
+
+def test_post_bots_rejects_invalid_automatic_leave_timeout(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    r = _client().post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "bad-window",
+            "automatic_leave": {"max_time_left_alone": 0},
+        },
+    )
+    assert r.status_code == 422
+    assert "positive integer" in r.text
+
+
 def test_post_bots_409_on_duplicate(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
