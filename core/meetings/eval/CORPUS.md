@@ -48,6 +48,13 @@ duplicate identity, holes, coverage, published words. Any latency derived from i
 not production's — cadence is `replay-paced.test.ts`. Mock STT says nothing about ASR quality and
 must never be reported as content evidence.
 
+**`coverage` is harness-relative and is NOT a product figure.** It is downstream of submission
+cadence, which an unpaced replay does not reproduce, so it means something only compared against
+ITSELF on the same fixture and harness. Measured both ways on `zoom/2026-07-20-live-zoom`: the live
+session covered **0.808** of its span, the replay of the same audio **0.378**. Reading a lane-block
+coverage as "the lane covers X% of a meeting" is a factual error — that number can only come from a
+live session or a paced replay.
+
 **Its tolerances are measured, not assumed.** A tape fixture drives the real segmenter alongside an
 async pump, so the interleaving — and with it the number of resubmissions — varies. Across five
 consecutive runs of identical code on the youtube entry: coverage 0.905–0.906, holes 6/6/6/6/6,
@@ -74,7 +81,7 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 | delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
 | shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
 | content | recall 0.858 · **precision 0.723** (whisper-1, single pass) |
-| lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467 · 5 holes >2s |
+| lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467¹ · 5 holes >2s |
 
 This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
 discrimination: same source material, same lane, same STT — 65.0% vs 94.9% delivered, and precision
@@ -91,7 +98,7 @@ hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. 
 | delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
 | shape | no recorded cuts (tape) — the lane run segments it live |
 | content | **recall 0.905 · precision 0.941** (whisper-1, single pass) |
-| lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905 · 6 holes >2s |
+| lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905¹ · 6 holes >2s |
 
 The red evidence for **#854**: 9.5% of what this same model extracts from this same audio in one
 pass never reaches the transcript, and 5.9% of the transcript is not in that pass. That comparison
@@ -107,7 +114,7 @@ entry carrying a human verdict, which is what the other numbers are calibrated a
 |---|---|
 | delivery | **duty cycle 1.000** · **zero** gaps over 100ms in 557s |
 | content | not scorable — the desktop store had restarted, so no live transcript survived to compare |
-| lane | 81 store rows · 0 dup texts · 1307 words · coverage 0.909 · 9 holes >2s |
+| lane | 81 store rows · 0 dup texts · 1307 words · coverage 0.909¹ · 9 holes >2s |
 
 Its value is the far end of the delivery curve: **100.0%** here against the jitsi bot's **65.0%** on
 the same capture code. Whatever removes 35% there does not touch this source at all, which is what
@@ -146,6 +153,9 @@ Its hint stream is the finding: a **2-second poll with no `isEnd` events at all*
 one participant. The binder never learns when anyone stops, and three people are lit so rarely they
 lose every max-overlap vote — which is how 5 speakers become 2 while every truth-free signal except
 cardinality reads clean.
+
+¹ harness-relative — comparable only against the same fixture's own baseline, never read as the
+share of a meeting the lane covers. See the note above the entries.
 
 ## The contract
 
