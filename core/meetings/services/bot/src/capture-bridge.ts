@@ -84,6 +84,35 @@ export function makeTelemetryTap(lane: 'gmeet' | 'mixed', telemetry?: TelemetryS
  * implausible skew is re-stamped Node-side and warned LOUDLY, never silently bound
  * to nothing. Also counts arrivals (C1 hop 2: page → Node).
  */
+/**
+ * Turn the active-speaker signal (`name | null`) into the hint pair the binder needs.
+ *
+ * The signal only says who is lit NOW. The binder also needs to know when someone STOPPED, and the
+ * two are not the same event: a real meeting hands over directly, A -> B, without ever passing
+ * through "nobody lit". Emitting only a start for B leaves A's claim window open forever.
+ *
+ * Measured on a live Zoom call (corpus entry zoom/2026-07-20-live-zoom): 142 hints, 13 speaker
+ * switches, and ZERO end hints, because every switch was a direct handover. Two of five
+ * participants reached the transcript — a speaker whose turn never closes keeps winning the
+ * max-overlap vote against everyone who follows.
+ *
+ * Pure, so the rule is provable without a page; the bridge around it is browser glue.
+ */
+export function makeActiveSpeakerBridge(
+  emit: (name: string, tMs: number, isEnd: boolean) => void,
+  now: () => number = () => Date.now(),
+): (name: string | null) => void {
+  let lastActive: string | null = null;
+  return (name: string | null): void => {
+    const tMs = now();
+    // A handover CLOSES the previous speaker before opening the next, so two turns never overlap
+    // in the binder's view.
+    if (lastActive && lastActive !== name) emit(lastActive, tMs, true);
+    if (name) emit(name, tMs, false);      // start, or a heartbeat re-assert of the same name
+    lastActive = name;
+  };
+}
+
 export const HINT_MAX_SKEW_MS = 10 * 60 * 1000;
 export function makeSpeakerHintSink(
   pipeline: Pick<BotPipeline, 'recordHint'>,
@@ -420,16 +449,20 @@ export async function startCaptureBridge(
         // 'dom-active' (Zoom's true kind — the mixed lane's DOM-active lag model).
         // Timestamps are page Date.now() = epoch ms, the same clock Node stamps with.
         if (w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
+          // A direct handover (A -> B) must close A, not only open B. Emitting an end only when
+          // NOBODY is lit leaves the previous speaker's claim window open, and on a live Zoom call
+          // that produced 142 hints with zero ends across 13 handovers.
           let lastActive: string | null = null;
+          const onActive = (name: string | null): void => {
+            const tMs = Date.now();
+            if (lastActive && lastActive !== name) w.__vexaSpeakerHint?.(lastActive, tMs, true);
+            if (name) w.__vexaSpeakerHint?.(name, tMs, false);   // start / heartbeat re-assert
+            lastActive = name;
+          };
           w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
             selfName: botName,
             log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
-            onSpeakerChange: (name: string | null) => {
-              const tMs = Date.now();
-              if (name) w.__vexaSpeakerHint?.(name, tMs, false);           // start / heartbeat re-assert
-              else if (lastActive) w.__vexaSpeakerHint?.(lastActive, tMs, true); // nobody lit → close the turn
-              lastActive = name;
-            },
+            onSpeakerChange: onActive,
           });
         }
       }
