@@ -20,7 +20,9 @@
 // can run the REAL PyannoteSegmenter (the model loads locally in ~2s), which is strictly more
 // faithful than replaying someone else's cuts.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { decodeAudioFrame, decodeEvent } from '@vexa/capture-codec';
+// eval is deliberately NOT a workspace member (its scripts run against arbitrary checkouts), so
+// the codec brick is imported by path, same as the other eval scripts import bricks.
+import { decodeAudioFrame, decodeEvent } from '../../modules/capture-codec/dist/index.js';
 
 const [, , tapePath, outArg] = process.argv;
 if (!tapePath) {
@@ -45,8 +47,13 @@ for (const line of lines.slice(1)) {
   try { rec = JSON.parse(line); } catch { skipped++; continue; }
   if (rec.bin) {
     const buf = Buffer.from(rec.d, 'base64');
+    // The tape is the VERBATIM ingest stream, so binary messages are audio frames AND recording
+    // chunks. A recording chunk fed to decodeAudioFrame yields plausible-looking garbage (its
+    // 'REC1' magic reads as a speakerIndex, media bytes as denormal timestamps), so discriminate
+    // on the magic first.
+    if (buf.byteLength >= 4 && buf.readInt32LE(0) === 0x52454331) { skipped++; continue; }
     const f = decodeAudioFrame(buf.buffer, buf.byteOffset, buf.byteLength);
-    if (!f) { skipped++; continue; }
+    if (!f || !Number.isFinite(f.ts) || f.ts <= 0) { skipped++; continue; }
     if (!firstTs) firstTs = f.ts;
     let rms = 0;
     for (let i = 0; i < f.samples.length; i++) rms += f.samples[i] * f.samples[i];

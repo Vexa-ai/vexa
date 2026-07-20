@@ -21,6 +21,53 @@ Speaker attribution is platform-specific **only at the source** (glow names / DO
 binding logic is shared. One mixed-core fix lands on jitsi + teams + zoom + youtube at once;
 per-platform work reduces to (a) capture delivery, (b) hint quality.
 
+## Speaker attribution — one engine, four thin adapters
+
+```
+zoom-speakers.ts    ─┐ 'dom-active'
+jitsi-speakers.ts   ─┤ 'dom-active'   ─▶ ClusterNameBinder ─▶ ChunkedTranscriber
+msteams-speakers.ts ─┘ 'dom-outline'     (THE binding logic:   (turns · publish · repaint)
+                                          vote · claim window ·
+gmeet-speakers.ts   ──── per-channel glow  blocked names)
+                         (gmeet lane: bound at CAPTURE, no binder)
+```
+
+`ClusterNameBinder` converges two unreliable signals: the diarizer says WHEN the speaker changed
+(provisional cluster ids), the platform UI says WHO around a wall-clock time. Per-platform variation
+is only the hint stream (`hintKindForPlatform`: teams → `dom-outline`, else `dom-active`) and the DOM
+read. Each adapter is THE shared implementation for its platform, used by BOTH the bot and the
+extension. **Therefore validating the binder on ONE mixed platform validates it for all of them**;
+what stays platform-specific is hint quality (selector rot, lag, null gaps).
+
+### Its own stage chain
+
+`name source → hint transport → binding → repaint/rename → store`
+
+Worked examples: #616 = name source (glow re-lights behind onset) · #797 = transport/binding (hints
+detected, silently discarded) · `seg_N` on screen = binding never resolved · one sentence under two
+speakers = repaint.
+
+### Four signals that need NO ground truth
+
+1. **provisional rate** — share of published words whose `source` is `provisional-cluster-id`
+   (transcript.v1 carries `source` + `confidence`, so "never bound" is machine-detectable).
+2. **hint miss rate** — `onHintOutcome({outcome:'matched'|'missed'})` already exists in
+   ChunkedTranscriber; #797's "discards SILENTLY" is exactly this counter going unread.
+3. **rename churn / convergence** — a turn whose name flips A→B→A is defective regardless of
+   which name is right.
+4. **speaker cardinality** — distinct published speakers vs distinct hint names.
+
+### Two truth-bearing oracles
+
+5. **Self-identifying speech** — the TTS clips lead with their own name ("Boris here, …"), so the
+   CONTENT carries the label: locate the self-ID in the single-pass reference, check which speaker
+   the pipeline attached there. Attribution truth with no labelling and no diarization reference.
+6. **Recorded hints as the binder's reference** — replay the hint stream; the binder must reproduce
+   the same attribution deterministically (`replay-mixed.test.ts`).
+
+**The split that keeps attribution off a human's time:** *binder correctness* = published vs
+recorded hints (deterministic); *hint quality* = recorded hints vs reality (needs self-ID or human).
+
 ## Six stages — every defect attributed to exactly one, by evidence
 
 `capture → segmentation → STT → assembly/confirm → publish → store`
@@ -36,7 +83,7 @@ capture 65% duty cycle, window-size-driven hallucination, publish identity.)
 |---|---|---|---|
 | delivery | **capture duty cycle** = audio-sec ÷ wall-sec | the recorded session itself | capture |
 | content | recall/precision vs **single-pass same-model reference** | same audio, same STT, one pass | streaming loss (ours) vs model ceiling (not ours) |
-| attribution | words under the right speaker | channel names / hints / known-text fixtures | capture naming + binder |
+| attribution | provisional rate · hint miss rate · rename churn · cardinality (truth-free) + self-ID match (truth-bearing) — **NOT implemented yet, see G2** | channel names / hints / self-identifying fixtures | capture naming + binder |
 | integrity | duplicates; one row per sentence | segment_id identity | publish/store |
 | shape | segs/turn · dur p50 · %<1s · mid-sentence ends | continuous-speech source | segmentation |
 | latency | time-to-first-draft · time-to-confirm · cadence regularity | wall clock at PRODUCTION config | assembly cadence |
@@ -88,3 +135,60 @@ known-text) · `services/bot/src/quality-mixed.test.ts` (mixed, recorded session
 Fixed on this branch already: mixed draft-identity (`4c030cd8`) · gmeet close-tail (`3894680d`) ·
 recorder reachability (`2053c156`). Open: mixed-core streaming loss · jitsi capture duty cycle ·
 gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gmeet glow pre-roll (#616).
+
+## Coverage matrix — what has actually been measured (fill in; blanks are honest)
+
+| platform | lane | delivery | content | attribution | integrity | shape | latency |
+|---|---|---|---|---|---|---|---|
+| youtube (extension) | mixed | ✅ 94.9% | ✅ recall .905 / prec .941 | n/a (no hints by design) | ✅ 0 dupes | ✅ p50 3.0s | ❌ |
+| jitsi (bot) | mixed | ✅ 65.0% | ❌ | ❌ (`seg_N` seen, unscored) | ✅ fixed 4c030cd8 | ✅ p50 0.30s | ❌ |
+| zoom | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| teams | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| gmeet | gmeet | ❌ | ❌ (TTS fixture only) | ❌ (golden only) | ❌ | ❌ | ✅ ~8.15s projected |
+
+## Known gaps in THIS framework (audited 2026-07-20)
+
+Written down because an un-named gap becomes a false claim of coverage — the exact failure that
+made 0.12.16 aim wrong.
+
+**G1 — the content oracle is speaker-blind.** `single_pass_truth.py` scores recall/precision on a
+flat word sequence. A transcript with perfect words and completely scrambled speakers scores
+1.000/1.000. This is mock-blindness repeating on a different axis. Until the self-ID scorer exists,
+content green must never be reported as attribution evidence.
+
+**G2 — the attribution row is aspirational.** The four truth-free signals are all *available*
+(`source`, `onHintOutcome`, rename stream) and none are *implemented* in the scorers. The metric
+table lists them as if live; they are not.
+
+**G3 — the reference is uncalibrated.** Nothing verifies the single-pass reference is better than
+the live transcript; recall may be measuring agreement, not truth. Needs: a second-pass stability
+check, and one run against a known-text fixture where absolute truth exists. Chunking is also
+unvalidated — 60s windows with 3s overlap can both duplicate at seams (inflating the reference) and
+drop words at them.
+
+**G4 — no fixture corpus.** Today's jitsi and youtube fixtures live in a session scratchpad and will
+be lost. The framework claims "every witnessed session joins the regression corpus" and there is no
+corpus: no location, no naming, no index, no per-fixture baseline file. A fixture without recorded
+expected values cannot be a regression test.
+
+**G5 — nothing runs in CI.** None of the instruments are in `scripts/gates.mjs`. Every metric here
+is a thing a human remembers to run, so regressions are caught only by luck.
+
+**G6 — the store stage has no fidelity metric.** Integrity is measured at publish; the store adds
+its own (db-writer flush thresholds). The false "64.9% dropped" came from exactly this stage, and the
+response was a *rule* ("never score mid-flush") rather than a *metric* (published vs stored).
+
+**G7 — latency is not measured in the live loops.** `replay-paced` measures it offline at production
+config; the external loop only asks a human whether it "feels" fast. Nothing records time-to-first-
+text live, so the number a user actually experiences is unlogged.
+
+**G8 — English only.** Every measurement here is English. The originating complaint was a Russian
+meeting, and hallucination boilerplate is language-conditioned (`Продолжение следует` vs
+`Thank you.` vs `ご視聴ありがとうございました`). No non-English fixture, no per-language baseline.
+
+**G9 — no overlap metric.** Real meetings have simultaneous speech; the segmenter emits
+overlap-onset/offset and nothing scores whether overlapped turns survive attribution.
+
+**G10 — no single session bundle.** Input (tape), intermediates (segmenter cuts, STT tap) and output
+(published segments) are three artifacts in three places; correlating them is manual. The bot's
+`captured-signal.v1` carries cuts, the desktop tape does not.
