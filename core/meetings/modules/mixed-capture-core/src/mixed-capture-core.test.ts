@@ -80,6 +80,21 @@ const fire = (samples: Float32Array) => {
   check('stop() closes the capture context', closed.length === before + 1);
 }
 
+// ── the default lets EVERYTHING through, digital silence included ─────────────
+// Dropping a frame drops TIME, and a codec's silence suppression emits exactly-zero buffers — so
+// the case a disabled gate most needs to pass is the one a naive `maxVal > 0` would still refuse.
+{
+  const pcms: Float32Array[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (pcm) => pcms.push(pcm), { sampleRate: 16000, replay: false });
+  ctxClock = 0;
+  fire(new Float32Array(8));               // digital silence — what DTX sends
+  fire(new Float32Array(8).fill(0.0005));  // near-silence, under the old 0.005 gate
+  fire(new Float32Array(8).fill(0.5));     // speech
+  check('by default nothing is gated — silence keeps the timeline intact', pcms.length === 3);
+  check('and the gate reports nothing refused', cap.stats().gatedSec === 0);
+  cap.stop();
+}
+
 // ── delivery accounting: the two losses must be told apart ────────────────────
 // A frame missing downstream was either refused by the gate or never handed over by the
 // ScriptProcessor, and the fixes are unrelated (drop the gate vs move to an AudioWorklet). The
