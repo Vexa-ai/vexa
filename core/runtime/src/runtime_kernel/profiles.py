@@ -109,10 +109,29 @@ def default_registry() -> ProfileRegistry:
         if bot_pod_contract is not None
         else ["/app/vexa-bot/entrypoint.sh"]
     )
+    speaker_stream_env = {
+        key: os.environ[key]
+        for key in (
+            "BOT_SPEAKER_MIN_AUDIO_SEC",
+            "BOT_SPEAKER_SUBMIT_INTERVAL_SEC",
+            "BOT_SPEAKER_CONFIRM_THRESHOLD",
+            "BOT_SPEAKER_MAX_BUFFER_SEC",
+            "BOT_SPEAKER_IDLE_TIMEOUT_SEC",
+        )
+        if os.environ.get(key, "").strip()
+    }
     return ProfileRegistry(
         {
             # Meeting bot — Playwright browser; lifetime managed by meeting-api, so no idle timeout.
             # The bot's whole config arrives as one env var VEXA_BOT_CONFIG (invocation.v1).
+            # No command: the shipped bot image already declares the launcher as its ENTRYPOINT
+            # (core/meetings/services/bot/Dockerfile: ENTRYPOINT ["/app/entrypoint.sh"]), so every
+            # backend must exec THAT and nothing else. A profile command here would either be a
+            # harmless trailing arg (docker Cmd-append) or REPLACE the entrypoint with a path that
+            # does not exist in the image (k8s `kubectl run --command` → StartError). Leaving it
+            # empty makes docker (omit Cmd) and k8s (omit --command) both boot the image entrypoint
+            # identically. The process backend (lite) never uses this default — it sets BOT_COMMAND
+            # to its in-container launcher (deploy/lite/bin/vexa-bot-launch), applied below.
             "meeting-bot": Profile(
                 name="meeting-bot",
                 runnable=Runnable(
@@ -121,7 +140,7 @@ def default_registry() -> ProfileRegistry:
                     bot_pod_contract=bot_pod_contract,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
-                base_env={},
+                base_env=speaker_stream_env,
             ),
             # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
@@ -141,10 +160,11 @@ def default_registry() -> ProfileRegistry:
     )
 
 
-# Per-deployment command overrides: env var → the profile whose Runnable.command it replaces. The
-# default commands (above) are the container-IMAGE entrypoints the docker/k8s backends exec; a
-# process-backend deployment (single-host `lite`) instead points these at in-container launchers
-# that wire the right venv/PYTHONPATH/cwd before exec'ing the same workload.
+# Per-deployment command overrides: env var → the profile whose Runnable.command it replaces. Under
+# the container backends the meeting-bot command is empty (the image ENTRYPOINT is authoritative) and
+# the agent command is the image's launch argv; a process-backend deployment (single-host `lite`) has
+# no image ENTRYPOINT to lean on, so it MUST point these at in-container launchers that wire the right
+# venv/PYTHONPATH/cwd before exec'ing the same workload (the process backend requires a command).
 _COMMAND_OVERRIDE_ENV = {
     "meeting-bot": "BOT_COMMAND",
     "agent": "AGENT_WORKER_COMMAND",

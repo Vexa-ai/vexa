@@ -7,7 +7,18 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.agentApi.replicaCount }}
+  {{- if eq (.Values.agentApi.workspaces.accessMode | default "ReadWriteOnce") "ReadWriteMany" }}
   {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  {{- else }}
+  # agent-api mounts the single agent-workspaces PVC. A ReadWriteOnce volume cannot be held by two
+  # pods at once, so the shared zero-downtime RollingUpdate (maxSurge:1) would deadlock on a
+  # Multi-Attach error — the new pod can't mount until the old one releases, and maxUnavailable:0
+  # forbids the old one from leaving first. Recreate tears the old pod down before the new one
+  # starts. A ReadWriteMany workspace (multi-worker dispatch) lifts the constraint and takes the
+  # shared rolling strategy instead.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
@@ -44,6 +55,12 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: VEXA_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            # Owner-scopes the live SSE feed (GET /api/meeting/stream): agent-api hits GET /meetings/{id}
+            # on meeting-api to verify the caller owns the row before opening the redis transcript stream
+            # (P0 cross-tenant guard, fail-closed). The compose-only default http://meeting-api:8080 does
+            # not resolve in-cluster, so set the release-qualified Service DNS (#677, sibling of #634).
+            - name: VEXA_MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: VEXA_AGENT_PROFILE
               value: "agent"
             - name: VEXA_WORKSPACES_DIR
@@ -128,18 +145,21 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.agentApi.resources | nindent 12 }}
       volumes:
@@ -157,5 +177,8 @@ spec:
       {{- with .Values.global.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.agentApi "agent-api")) }}
+      {{- . | nindent 6 }}
       {{- end }}
 {{- end }}

@@ -1,0 +1,44 @@
+Third-party model weights baked into the Vexa bot / lite images
+===============================================================
+
+Artifact : onnx-community/pyannote-segmentation-3.0
+           (an ONNX conversion of pyannote/segmentation-3.0)
+Role     : baked into /opt/hf-cache and loaded OFFLINE at runtime by the mixed
+           (Zoom/Teams) speaker-diarization lane — see
+           core/meetings/services/bot/warm-hf-cache.mjs and
+           core/meetings/modules/mixed-pipeline/src/pyannote-segmenter.ts
+Baked by : core/meetings/services/bot/Dockerfile (vexaai/vexa-bot)
+           deploy/lite/Dockerfile.lite            (vexaai/vexa-lite)
+Source   : https://huggingface.co/onnx-community/pyannote-segmentation-3.0
+Upstream : https://huggingface.co/pyannote/segmentation-3.0
+Project  : pyannote.audio — https://github.com/pyannote/pyannote-audio
+License  : MIT
+
+The publisher (onnx-community) declares the model MIT but the model card ships
+no LICENSE file of its own. The weights derive from the pyannote.audio project;
+the notice reproduced verbatim below is that project's MIT license, whose
+copyright governs these weights. It is preserved here to satisfy the MIT
+requirement that the copyright and permission notice travel with the software.
+
+------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2020 CNRS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

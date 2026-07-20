@@ -34,6 +34,16 @@ class MeetingRepo(Protocol):
         set; ``stopping`` is in-flight too — see ``_ACTIVE_STATUSES``)."""
         ...
 
+    async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
+        """Any user's ACTIVE meeting whose spawn carried this ``userdata_s3_path``
+        (``meeting.data.auth_userdata_path``), or ``None``. The per-identity serialization
+        boundary for authenticated bots: one stored browser session = one Google identity =
+        one live cookie jar, so a second concurrent spawn against the same path is refused
+        (→ HTTP 409, ``AuthSessionBusy``) — running one identity from N containers/IPs at
+        once is both an account-risk signal and a write-back race. Cross-user by design:
+        the identity is deployment-scoped, not per-user."""
+        ...
+
     async def find_latest(self, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:
         """The user's MOST-RECENT meeting for ``(platform, native_id)`` regardless of status, or
         ``None``. ``continue_meeting`` reuses this row when it is TERMINAL (completed/failed)."""
@@ -203,6 +213,31 @@ class MaxBotsExceeded(Exception):
         self.user_id = user_id
         self.cap = cap
         super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
+
+
+class AuthSessionNotConfigured(Exception):
+    """``BOT_AUTHENTICATED=true`` without a complete userdata store config — HTTP 503.
+
+    Authenticated mode is a deployment property: the knob demands ``BOT_USERDATA_S3_PATH`` +
+    ``BOT_S3_ENDPOINT`` + ``BOT_S3_BUCKET`` (scoped credentials via ``BOT_S3_ACCESS_KEY`` /
+    ``BOT_S3_SECRET_KEY``). A spawn is refused loud BEFORE any DB write — never a bot that
+    silently joins anonymous when the operator configured signed-in."""
+
+
+class AuthSessionBusy(Exception):
+    """A second concurrent authenticated spawn against the SAME stored session — HTTP 409.
+
+    Names the conflicting meeting so the operator can wait for or stop it. One identity,
+    one writer: serializing spawns per ``userdata_s3_path`` protects both the account's
+    risk posture (one cookie jar live from one place) and write-back integrity."""
+
+    def __init__(self, conflicting_meeting_id: int, userdata_s3_path: str):
+        self.conflicting_meeting_id = conflicting_meeting_id
+        self.userdata_s3_path = userdata_s3_path
+        super().__init__(
+            f"authenticated session '{userdata_s3_path}' is in use by active meeting "
+            f"{conflicting_meeting_id} — one stored session runs one bot at a time"
+        )
 
 
 class SpawnFailed(Exception):

@@ -2,6 +2,7 @@
  *  gateway (`/api/user/models`, `/api/user/transcription` — admin-api behind it, secrets masked
  *  on every read-back). The GLOBAL defaults ride the admin-gated terminal route
  *  (`/api/admin/settings/{key}` — 404 for non-admins, indistinguishable from absent). */
+import { ApiError } from "./apiClient";
 
 export type ModelPrefs = {
   mode?: "subscription" | "custom" | null;
@@ -23,9 +24,10 @@ export type GlobalSetting = Record<string, string>;
 
 async function jsonOrThrow(res: Response) {
   if (!res.ok) {
-    let detail = `${res.status}`;
-    try { detail = ((await res.json()) as { detail?: string; error?: string }).detail || detail; } catch { /* body not json */ }
-    throw new Error(detail);
+    // Structured failure (P18): carry status + detail so the presenter maps it to user truth.
+    let detail = "";
+    try { detail = ((await res.json()) as { detail?: string; error?: string }).detail || ""; } catch { /* body not json */ }
+    throw new ApiError(res.status, detail, res.url);
   }
   return res.json();
 }

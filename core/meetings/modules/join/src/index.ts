@@ -79,13 +79,18 @@ export function resolvePlatform(meetingUrl: string): Platform {
  * Drive a meeting join to its admission verdict on the page you hand in.
  * Returns once admitted, rejected, or timed out. Does NOT record or transcribe.
  */
+/** Default bot name, reads env at call time so tests and the server-side proxy observe it when set. */
+export function defaultBotName(): string {
+  return process.env.DEFAULT_BOT_NAME?.trim() || "Vexa Join Layer";
+}
+
 export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinResult> {
   if (opts.hooks) setHooks(opts.hooks);
 
   const platform = opts.platform ?? resolvePlatform(opts.meetingUrl);
   const botConfig: BotConfig = {
     platform,
-    botName: opts.botName ?? "Vexa Join Layer",
+    botName: opts.botName ?? defaultBotName(),
     passcode: opts.passcode,
     authenticated: opts.authenticated,
     uiInteractionMode: opts.uiInteractionMode,
@@ -114,10 +119,17 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForJitsiMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
-  } else {
+  } else if (platform === "google_meet") {
     await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
     admitted = await waitForGoogleMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
+  } else {
+    // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
+    // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
+    // minutes later with misattributed selector errors instead of naming the real problem here.
+    throw new Error(
+      `Unsupported platform '${platform}' — this join layer drives google_meet, teams, zoom, jitsi`,
     );
   }
 
@@ -125,11 +137,14 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
-// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure). It is THROWN by the
-// admission wait; the JoinDriver adapter catches it and maps the outcome → a JoinOutcome so a host DENIAL
-// is recorded as a permanent `rejected`, not collapsed into a transient (retried) `join_failure` (G1).
-export { AdmissionError } from "./googlemeet/admission";
-export type { AdmissionOutcome } from "./googlemeet/admission";
+// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
+// It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
+// JoinOutcome so a host DENIAL is recorded as a permanent `rejected` — and a signed-out profile
+// (AuthSessionError, an AdmissionError subclass) as the permanent `auth_session_missing` — never
+// collapsed into a transient (retried) `join_failure` (G1).
+export { AdmissionError } from "./shared/admission";
+export type { AdmissionOutcome } from "./shared/admission";
+export { AuthSessionError } from "./googlemeet/join";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

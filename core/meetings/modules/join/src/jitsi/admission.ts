@@ -3,6 +3,7 @@ import { log, callAwaitingAdmissionCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import { fillPasswordPromptIfPresent } from "./password";
+import { AdmissionError } from "../shared/admission";
 import {
   jitsiHangupButtonSelectors,
   jitsiConferenceIndicators,
@@ -24,6 +25,46 @@ export async function getAppJoinedState(page: Page): Promise<"joined" | "not-joi
       return "no-api";
     } catch { return "no-api"; }
   }).catch(() => "no-api") as "joined" | "not-joined" | "no-api";
+}
+
+/** A fresh meet.jit.si room is members-only until a moderator arrives: the conference join fails
+ *  with MEMBERS_ONLY, which jitsi reliably emits to the page console (`conference.connectionError.
+ *  membersOnly … <room>@lobby.<host>`) — observed on every run. We latch that host-side (below)
+ *  because it fires even when the DOM renders NO lobby affordances (a blank/error page) and the
+ *  redux store isn't wired up yet pre-admission — the exact state that made a real lobby look like
+ *  "unknown" and drove the illegal `joining → needs_help` escalation (#592). Attach BEFORE
+ *  navigation (from join.ts) so the event is never missed; the flag lives on the page object. */
+const MEMBERS_ONLY_RE = /conference\.connectionError\.membersOnly|MEMBERS_ONLY/i;
+
+export function attachMembersOnlyWatch(page: Page): void {
+  const p = page as any;
+  if (p.__vexaMembersOnlyWatch) return; // idempotent per page
+  p.__vexaMembersOnlyWatch = true;
+  page.on("console", (msg) => {
+    try { if (MEMBERS_ONLY_RE.test(msg.text())) p.__vexaMembersOnly = true; } catch { /* noop */ }
+  });
+}
+
+function membersOnlyLatched(page: Page): boolean {
+  return (page as any).__vexaMembersOnly === true;
+}
+
+/** The app's own lobby verdict via redux — a secondary signal (self-hosted / explicit-Lobby
+ *  deployments where the store IS populated). On stock meet.jit.si the members-only latch above
+ *  is the primary signal; this returns "no-api" pre-admission when the store isn't wired. */
+export async function getLobbyState(page: Page): Promise<"lobby" | "not-lobby" | "no-api"> {
+  return await page.evaluate(() => {
+    try {
+      const app = (globalThis as any).APP;
+      const state = app?.store?.getState?.();
+      if (!state) return "no-api";
+      const conf = state["features/base/conference"];
+      if (conf && conf.membersOnly) return "lobby"; // members-only lobby room JID when locked out
+      const lobby = state["features/lobby"];
+      if (lobby && lobby.knocking) return "lobby"; // explicit Lobby feature: knocking to be let in
+      return "not-lobby";
+    } catch { return "no-api"; }
+  }).catch(() => "no-api") as "lobby" | "not-lobby" | "no-api";
 }
 
 /** The hangup control is footer-only — never rendered on the prejoin or lobby screens. */
@@ -75,6 +116,15 @@ export async function isAdmitted(page: Page): Promise<boolean> {
 /** Check if the bot is on the lobby (knocking) screen or a waiting-for-host dialog. */
 async function isInLobby(page: Page): Promise<boolean> {
   try {
+    // Authoritative first: the members-only conference-failure latched from the page console.
+    // Reliable even on the blank/error render where the DOM affordances never appear — the
+    // render that made a real lobby look like "unknown" and took the broken escalation path (#592).
+    if (membersOnlyLatched(page)) return true;
+
+    // Secondary: the app's own redux lobby verdict (self-hosted / explicit-Lobby deployments).
+    if ((await getLobbyState(page)) === "lobby") return true;
+
+    // DOM fallback: explicit lobby/knock screens + APP-stripped custom builds.
     for (const sel of jitsiLobbyIndicators) {
       const visible = await page.locator(sel).first().isVisible({ timeout: 200 }).catch(() => false);
       if (visible) return true;
@@ -138,7 +188,9 @@ export async function waitForJitsiMeetingAdmission(
     const terminal = await isRejectedOrEnded(page);
     if (terminal) {
       log(`[Jitsi] Terminal state during admission wait (matched: "${terminal}")`);
-      throw new Error(`Bot was rejected from the Jitsi meeting or meeting ended (matched: "${terminal}")`);
+      // A lobby decline / kick is a permanent host verdict — a typed denial, not a transient
+      // join_failure — so the driver records `awaiting_admission_rejected`, not a retry.
+      throw new AdmissionError("denial", `Bot was rejected from the Jitsi meeting or meeting ended (matched: "${terminal}")`);
     }
 
     if (await isAdmitted(page)) {
@@ -175,7 +227,10 @@ export async function waitForJitsiMeetingAdmission(
     log(`[Jitsi] Still waiting for admission... ${elapsed}s elapsed`);
   }
 
-  throw new Error(`[Jitsi] Bot not admitted within ${effectiveTimeout()}ms timeout`);
+  // Timed out waiting to be let in. A typed `lobby_timeout` (not a bare Error) so the driver
+  // reports `awaiting_admission_timeout` / stage=awaiting_admission — an honest terminal reason
+  // — instead of collapsing to a generic, silently-retried `join_failure` (#592).
+  throw new AdmissionError("lobby_timeout", `[Jitsi] Bot not admitted within ${effectiveTimeout()}ms timeout`);
 }
 
 export async function checkForJitsiAdmissionSilent(page: Page): Promise<boolean> {

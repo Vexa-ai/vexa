@@ -26,3 +26,6 @@ allowBuilds:
 # API-compatible. clients/terminal/package.json carries the same floor for its npm lockfile.
 overrides:
   "postcss@<8.5.10": ">=8.5.10"
+  # Security floor (GHSA-xcpc-8h2w-3j85): crafted-ZIP 4 GB allocation in adm-zip <0.6.0,
+  # reached only in onnxruntime-node's postinstall unpack of its own runtime archive.
+  "adm-zip@<0.6.0": ">=0.6.0"

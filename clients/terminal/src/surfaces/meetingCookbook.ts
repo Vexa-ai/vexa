@@ -7,6 +7,7 @@
  *  toggles, two domains — composed into one op. Partial failure is SURFACED in the returned state, never
  *  swallowed (P18). */
 import { ApiError, getJson } from "./apiClient";
+import { defaultBotName } from "./defaultBotName";
 
 export interface AgentOnMeetingInput {
   platform: string; // e.g. "google_meet"
@@ -43,7 +44,7 @@ export async function agentOnMeeting(input: AgentOnMeetingInput): Promise<AgentO
       platform,
       native_meeting_id: native_id,
       meeting_url: meetingUrlFor(platform, native_id, input.meeting_url),
-      bot_name: input.bot_name ?? "Vexa",
+      bot_name: input.bot_name ?? defaultBotName(),
     }),
   });
   // Step 2 — AGENT domain: enable the copilot (POST /api/meeting/process). Surface a failure, don't throw.

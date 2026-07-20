@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 const addFormats = addFormatsDefault as unknown as (ajv: Ajv) => Ajv;
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 
 export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
 export type TranscriptionTier = 'realtime' | 'deferred';
@@ -66,8 +67,10 @@ export interface Invocation {
   transcriptionTier?: TranscriptionTier;
   transcriptionServiceUrl?: string;
   transcriptionServiceToken?: string;
+  transcriptionModel?: string | null;
   // ── recording ──
   recordingEnabled?: boolean;
+  captureSignalEnabled?: boolean;
   captureModes?: string[];
   recordingUploadUrl?: string;
   // ── lifecycle timeouts ──
@@ -132,4 +135,35 @@ export function parseInvocation(raw: string | undefined): Invocation {
 /** Boot helper — read VEXA_BOT_CONFIG from the environment and validate it (P7: config by env). */
 export function loadInvocation(env: NodeJS.ProcessEnv = process.env): Invocation {
   return parseInvocation(env.VEXA_BOT_CONFIG);
+}
+
+const SPEAKER_STREAM_ENV: Array<[keyof SpeakerStreamManagerConfig, string]> = [
+  ['minAudioDuration', 'BOT_SPEAKER_MIN_AUDIO_SEC'],
+  ['submitInterval', 'BOT_SPEAKER_SUBMIT_INTERVAL_SEC'],
+  ['confirmThreshold', 'BOT_SPEAKER_CONFIRM_THRESHOLD'],
+  ['maxBufferDuration', 'BOT_SPEAKER_MAX_BUFFER_SEC'],
+  ['idleTimeoutSec', 'BOT_SPEAKER_IDLE_TIMEOUT_SEC'],
+];
+
+/** Read optional Meet speaker-stream tuning knobs from the bot environment. */
+export function speakerStreamConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (message) => console.warn(`[bot] ${message}`),
+): SpeakerStreamManagerConfig | undefined {
+  const config: SpeakerStreamManagerConfig = {};
+  let configured = false;
+  for (const [property, key] of SPEAKER_STREAM_ENV) {
+    const raw = env[key];
+    if (raw === undefined || raw.trim() === '') continue;
+    const value = Number(raw);
+    const valid = Number.isFinite(value) && value > 0 &&
+      (property !== 'confirmThreshold' || Number.isInteger(value));
+    if (!valid) {
+      warn(`${key}=${JSON.stringify(raw)} is invalid; using the built-in speaker-stream default`);
+      continue;
+    }
+    config[property] = value;
+    configured = true;
+  }
+  return configured ? config : undefined;
 }

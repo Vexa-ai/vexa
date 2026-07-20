@@ -9,22 +9,9 @@ import {
   googleConsentPromptIndicators
 } from "./selectors";
 
-/**
- * Distinct admission outcomes emitted by the detector.
- * denial        — host explicitly rejected the bot from the waiting room.
- * lobby_timeout — bot stayed in the waiting room past the admission timeout.
- * join_failure  — bot never reached the lobby / no admission indicators appeared.
- */
-export type AdmissionOutcome = "denial" | "lobby_timeout" | "join_failure";
-
-export class AdmissionError extends Error {
-  readonly outcome: AdmissionOutcome;
-  constructor(outcome: AdmissionOutcome, message: string) {
-    super(message);
-    this.name = "AdmissionError";
-    this.outcome = outcome;
-  }
-}
+// AdmissionError + AdmissionOutcome moved to ../shared/admission so every platform (jitsi/zoom/
+// teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
+import { AdmissionError } from "../shared/admission";
 
 // Detect an active reCAPTCHA (enterprise) challenge. Google renders it in iframes whose
 // URL contains "/recaptcha/"; it can sit on the same screen as error affordances
@@ -379,7 +366,7 @@ export async function waitForGoogleMeetingAdmission(
       const finalWaitingCheck = await checkForWaitingRoomIndicators(page);
       
       if (finalWaitingCheck) {
-        throw new Error("Bot is still in the Google Meet waiting room after timeout - not admitted to the meeting");
+        throw new AdmissionError("lobby_timeout", "Bot is still in the Google Meet waiting room after timeout - not admitted to the meeting");
       }
     } else {
       // Not in waiting room and not admitted yet: actively poll during the timeout

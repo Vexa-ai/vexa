@@ -195,3 +195,85 @@ def test_typed_builder_validates_against_sealed_schema(goldens):
     env = build_typed_envelope(ch)
     assert env["event_type"] == "meeting.completed"
     assert set(env["data"].keys()) == {"meeting"}
+
+
+# ── delivery OUTCOME is reported (#815) ──────────────────────────────────────────────────────────
+# `WebhookSink.deliver` never raises: it RETURNS delivered|suppressed|blocked|failed|queued. That
+# outcome used to be discarded, so a webhook the subscriber never received (unsubscribed event type,
+# SSRF-blocked target, 4xx endpoint) looked exactly like one that arrived — "my webhooks stopped"
+# was undiagnosable in production. Every outcome now emits one `webhook_delivery` logevent.
+
+class _OutcomeSink:
+    """A WebhookSink stand-in that returns a chosen DeliveryResult."""
+
+    def __init__(self, result):
+        self._result = result
+
+    async def deliver(self, url, envelope, webhook_secret=None, *, scope="per-client",
+                      events_config=None, label="", metadata=None):
+        return self._result
+
+
+def _delivery_logs(capsys):
+    import json as _json
+
+    out = []
+    for line in capsys.readouterr().out.splitlines():
+        try:
+            rec = _json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("event") == "webhook_delivery":
+            out.append(rec)
+    return out
+
+
+def _run_advance(repo, sink, goldens):
+    client = TestClient(create_app(meeting_repo=repo, webhook_sink=sink))
+    return client.post("/bots/internal/callback/lifecycle", json=goldens["joining"])
+
+
+def test_delivered_outcome_is_logged(goldens, capsys):
+    repo = InMemoryMeetingRepo()
+    _seed(repo, session_uid="sess-uid", data={
+        "webhook_url": "https://hook.example/x?token=SECRET-IN-URL",
+        "webhook_events": {"meeting.status_change": True},
+    })
+    r = _run_advance(repo, _OutcomeSink(DeliveryResult(status="delivered", status_code=200)), goldens)
+    assert r.status_code == 200, r.text
+    logs = _delivery_logs(capsys)
+    assert logs, "a delivered webhook emitted no webhook_delivery logevent"
+    rec = logs[0]
+    assert rec["fields"]["outcome"] == "delivered"
+    assert rec["fields"]["event_type"] == "meeting.status_change"
+    assert rec["fields"]["status_code"] == 200
+    # The target is reported as HOST ONLY — a webhook URL can carry a secret in its path/query.
+    assert rec["fields"]["target_host"] == "hook.example"
+    assert "SECRET-IN-URL" not in _json_dumps(rec)
+
+
+def test_silent_non_delivery_outcomes_are_logged_as_warnings(goldens, capsys):
+    """suppressed (unsubscribed event) and blocked (SSRF) are the two silent killers in production."""
+    for outcome, result in (
+        ("suppressed", DeliveryResult(status="suppressed")),
+        ("blocked", DeliveryResult(status="blocked", error="Webhook URL cannot target internal or private networks")),
+        ("failed", DeliveryResult(status="failed", status_code=400, error="HTTP 400")),
+    ):
+        repo = InMemoryMeetingRepo()
+        _seed(repo, session_uid="sess-uid", data={
+            "webhook_url": "https://hook.example/x",
+            "webhook_events": {"meeting.status_change": True},
+        })
+        r = _run_advance(repo, _OutcomeSink(result), goldens)
+        assert r.status_code == 200, r.text
+        logs = _delivery_logs(capsys)
+        assert logs, f"{outcome} webhook emitted no webhook_delivery logevent — silent non-delivery"
+        rec = logs[0]
+        assert rec["fields"]["outcome"] == outcome
+        assert rec["level"] == "warning", f"{outcome} must not be logged as a success"
+
+
+def _json_dumps(rec):
+    import json as _json
+
+    return _json.dumps(rec)

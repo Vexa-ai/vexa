@@ -1,0 +1,11 @@
+# Japanese hallucination phrases — faster-whisper "YouTube-outro" boilerplate emitted on silence.
+# Reported in #613 (Google Meet, hosted transcription) attributed to a phantom "Speaker".
+# One phrase per line; '#' comments ignored; matched case-insensitively after trim (see hallucination-filter.ts).
+ご視聴ありがとうございました
+ご視聴ありがとうございます
+次の動画でお会いしましょう
+チャンネル登録をお願いします
+チャンネル登録よろしくお願いします
+高評価とチャンネル登録をお願いします
+また次回の動画でお会いしましょう
+最後までご視聴いただきありがとうございました

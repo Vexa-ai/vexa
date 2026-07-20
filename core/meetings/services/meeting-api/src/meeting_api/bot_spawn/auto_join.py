@@ -71,10 +71,16 @@ def due_rows(rows: list[dict], *, now: datetime,
 
 def _production_transcribe_gate() -> Optional[str]:
     """Mirror POST /bots' CC4 fail-loud STT gate: when transcription resolves ON (env default) but
-    the ``stt`` capability is not configured, refuse the auto-spawn with the reason string."""
-    from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
+    the ``stt`` capability is not configured, refuse the auto-spawn with the reason string.
 
-    if os.getenv("TRANSCRIBE_ENABLED", "true").lower() != "true":
+    Read through ``env_flag`` for the same reason as router.py: with a bare ``os.getenv`` a
+    set-but-empty ``TRANSCRIBE_ENABLED=`` made ``"" != "true"`` true, so this gate returned None and
+    refused nothing — the empty value both disabled transcription AND disarmed the alarm meant to
+    catch it. That double failure is why the v0.12.5 witness saw silence with no error."""
+    from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
+    from .env_flags import env_flag
+
+    if not env_flag("TRANSCRIBE_ENABLED", True):
         return None
     state = capability_state("stt")
     if state != CONFIGURED:
@@ -96,16 +102,22 @@ async def auto_join_tick(
     retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
     token_secret: Optional[str] = None,
     redis_url: Optional[str] = None,
+    allow_uncapped: bool = False,
 ) -> dict:
     """One sweep: spawn every due scheduled meeting. Returns counters for observability:
-    ``{"due": n, "spawned": n, "already": n, "errors": n}``.
+    ``{"due": n, "spawned": n, "already": n, "errors": n, "skipped_uncapped": n}``.
 
     ``fetch_bot_context(user_id)`` supplies the per-user spawn context the gateway would have
     injected as headers (``{"max_concurrent", "webhook_url", "webhook_secret", "webhook_events"}``).
-    Three states: the callable is ``None`` (identity lookup not configured — spawn uncapped, the
-    self-host degrade); it returns a dict (use it); it returns ``None`` (identity is configured but
-    UNAVAILABLE right now — SKIP the row this tick, fail-closed, never spawn uncapped past a cap we
-    merely could not read).
+    Three states: the callable is ``None`` (no admin edge configured — the per-user cap is
+    UNRESOLVABLE); it returns a dict (use it); it returns ``None`` (identity is configured but
+    UNAVAILABLE right now — SKIP the row this tick).
+
+    Fail-closed by default: an unresolvable cap SKIPS the row (never spawns past a cap we cannot
+    read), both when no admin edge is configured (``fetch_bot_context is None``) and when identity
+    is unreachable (the fetch returns ``None``). Set ``allow_uncapped=True`` (the deliberate
+    self-host opt-in, env ``AUTO_JOIN_ALLOW_UNCAPPED=1``) to spawn uncapped when no admin edge is
+    configured — the unsafe mode is then chosen, never defaulted.
 
     ``publish_status(user_id=…, meeting_id=…, native_id=…, status=…, when=…)`` optionally fans the
     row's frame to ``u:{user}:meetings`` after an error stamp so the terminal refreshes."""
@@ -114,8 +126,9 @@ async def auto_join_tick(
 
     rows = await repo.list_scheduled_meetings()
     due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s)
-    counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0}
+    counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
     ctx_cache: dict[int, Optional[dict]] = {}
+    uncapped_warned = False
 
     async def _stamp_error(row: dict, message: str) -> None:
         counters["errors"] += 1
@@ -144,6 +157,19 @@ async def auto_join_tick(
 
         ctx: Optional[dict]
         if fetch_bot_context is None:
+            # No admin edge configured → the per-user cap is unresolvable. Fail closed: refuse to
+            # spawn rather than spawn uncapped, unless the operator explicitly opted in.
+            if not allow_uncapped:
+                counters["skipped_uncapped"] += 1
+                if not uncapped_warned:
+                    uncapped_warned = True
+                    log_event(
+                        "auto_join_skipped_uncapped", audience="operator", level="warning",
+                        span="meetings.auto_join", user_id=user_id, meeting_id=str(row["id"]),
+                        fields={"reason": "no ADMIN_API_URL/INTERNAL_API_SECRET — per-user cap "
+                                "unresolvable; refusing uncapped spawn. Set AUTO_JOIN_ALLOW_UNCAPPED=1 "
+                                "to opt into uncapped self-host spawns."})
+                continue
             ctx = {}
         else:
             if user_id not in ctx_cache:

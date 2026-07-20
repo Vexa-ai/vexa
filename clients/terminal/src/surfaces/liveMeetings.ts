@@ -129,6 +129,7 @@ function formatTranscriptTime(start?: number | null): string {
 const LIVE_STATUSES = new Set(["active", "joining", "requested", "awaiting_admission", "needs_help", "stopping"]);
 
 let meetings: MeetingMock[] = [];
+let wsConnected = false;   // the live meeting.status stream's connection state — part of the store's external state
 const subs = new Set<() => void>();
 let started = false;
 let wsUnsub: (() => void) | null = null;
@@ -259,6 +260,13 @@ function ensureStarted() {
   void snapshot();                          // initial snapshot on mount
   wsUnsub = onMeetingStatus(applyFrame);    // then live status deltas over the gateway WS
   connUnsub = onGatewayWSConnected((ok) => {
+    // Propagate connected-ness into the store's external state: consumers (the meeting header's
+    // bot controls) must know when the rows are a possibly-stale snapshot rather than live truth
+    // (issue #674) — a disconnected store never silently serves stale rows as current.
+    if (wsConnected !== ok) {
+      wsConnected = ok;
+      subs.forEach((f) => f());
+    }
     if (ok) void snapshot();
   });
 }
@@ -311,6 +319,18 @@ export function liveMeetingsNow(): MeetingMock[] {
  *  list reflects the new status immediately, even before the echoing WS frame lands. */
 export function refreshMeetings(): void {
   void snapshot();
+}
+
+/** Subscribe a component to the live `meeting.status` stream's CONNECTION state. `false` means the
+ *  rows are the last snapshot, not live truth — state-bearing controls (Stop bot …) must degrade
+ *  to indeterminate/disabled until it is `true` again (ws.v1 is the authoritative state channel). */
+export function useLiveMeetingsConnection(): boolean {
+  ensureStarted();
+  return useSyncExternalStore(
+    (cb) => { subs.add(cb); return () => subs.delete(cb); },
+    () => wsConnected,
+    () => false,
+  );
 }
 
 /** Subscribe a component to the meetings feed (live + past). */

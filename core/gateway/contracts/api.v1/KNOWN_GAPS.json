@@ -1,0 +1,85 @@
+{
+  "_README": "Audited exception ledger for the reverse (contract ⊆ impl) conformance gate (issue #591). The sealed api.v1 declares every (path, method) below, but the shipped gateway+meeting-api pair does NOT serve it. gate:contract-conformance reads this file, reports each entry LOUDLY ('SEALED-BUT-WAIVED' / 'OWNED-ELSEWHERE'), and FAILS on any unimplemented sealed route that is NOT listed here. Adding a row is a deliberate, diff-visible act in the sealed contracts dir (the file is not a *.schema.json, so it does NOT change the api.v1 seal hash). Removing a gap means implementing the route (and deleting its row) or re-versioning the contract in a lane:contract PR. This is NOT a seal file and NOT a place to silence real drift cheaply — every row must carry a reason and an issue link.",
+  "contract": "api.v1",
+  "issue": "https://github.com/Vexa-ai/vexa/issues/591",
+  "depends_on": "https://github.com/Vexa-ai/vexa/pull/666",
+  "owned_elsewhere": {
+    "_note": "api.v1 paths under these prefixes are NOT the gateway+meeting-api REST pair's responsibility — the gateway forwards them to another service (admin-api, agent-api, the mcp service) or serves a gateway-local concern. They are declared by the sealed contract but conform under THAT service's surface, so the union-reverse check classifies them out of THIS gate's scope (reported as OWNED-ELSEWHERE, never silently dropped). Each prefix names its owner.",
+    "prefixes": [
+      { "prefix": "/admin", "owner": "admin-api", "note": "gateway proxies /admin/{path} to admin-api under separate admin-key auth" },
+      { "prefix": "/api", "owner": "agent-api", "note": "chat/sessions surface; gateway exposes it as /agent/* (chat, sessions, reset)" },
+      { "prefix": "/mcp", "owner": "mcp-service", "note": "Model-Context-Protocol endpoint; separate service, gateway proxies /mcp{,/path}" },
+      { "prefix": "/calendar", "owner": "agent-api (integrations)", "note": "calendar connect/status/events/preferences; gateway exposes it under /user/calendar" },
+      { "prefix": "/b", "owner": "gateway-local", "note": "browser-scope token storage (/b/{token}{,/save,/storage})" },
+      { "prefix": "/public", "owner": "gateway-local", "note": "unauthenticated public transcript render (/public/transcripts/{share_id}.txt)" },
+      { "prefix": "/recording-config", "owner": "agent-api (user-config)", "note": "per-user recording defaults; gateway exposes it under /user/*" },
+      { "prefix": "/user/workspace-git", "owner": "agent-api (user-config)", "note": "workspace-git binding; user-config surface, not the meeting pair" },
+      { "prefix": "/", "exact": true, "owner": "gateway-local", "note": "GET / service index, not a data route" }
+    ]
+  },
+  "known_gaps": [
+    {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/chat",
+      "reason": "No bot-command (send-to-meeting) backend in the 0.12 core — same class as /speak and /config, which also lack a downstream handler. Chat frames flow live over the WS va:*:chat channel; there is no REST send. Registering a 200 that does nothing would fake the capability, so the send half is left unimplemented and recorded here.",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/579"
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/transcribe",
+      "reason": "No on-demand re-transcribe orchestration exists in the 0.12 core (transcription is a live-pipeline concern). Left unimplemented + recorded rather than faked.",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "PUT",
+      "path": "/bots/{platform}/{native_meeting_id}/avatar",
+      "reason": "Bot-command channel (set avatar) — a live acts.v1 PUBLISH to an active bot, not meeting-api persistence. No downstream handler in the 0.12 carve (voice/media-agent carve, same family as /speak, /config).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bots/{platform}/{native_meeting_id}/avatar",
+      "reason": "Bot-command channel (clear avatar) — live acts.v1 PUBLISH, no downstream handler in the 0.12 carve (voice/media-agent carve).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/screen",
+      "reason": "Bot-command channel (start screen-share) — live acts.v1 PUBLISH, no downstream handler in the 0.12 carve (voice/media-agent carve).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bots/{platform}/{native_meeting_id}/screen",
+      "reason": "Bot-command channel (stop screen-share) — live acts.v1 PUBLISH, no downstream handler in the 0.12 carve (voice/media-agent carve).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bots/{platform}/{native_meeting_id}/speak",
+      "reason": "Bot-command channel (stop TTS) — live acts.v1 PUBLISH, no downstream handler in the 0.12 carve. The POST /speak counterpart IS forwarded by the gateway but likewise has no backend; the DELETE (stop) half is not even registered.",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "GET",
+      "path": "/bots/id/{meeting_id}",
+      "reason": "api.v1 declares it (desc: 'Forward to meeting-api GET /bots/{meeting_id}') but the gateway maps the meeting-detail read to GET /meetings/{meeting_id} instead; the dashboard reads /meetings/{id}. Deferred reconcile (drop from api.v1 or implement) is a lane:contract change (A1/A2, MATURITY-FINDINGS.md).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    },
+    {
+      "method": "DELETE",
+      "path": "/recordings/{recording_id}",
+      "reason": "api.v1 declares recording delete; not implemented in the 0.12 carve (no consumer wired it — recording delete rides DELETE /meetings/{platform}/{native}, which purges the meeting's recordings). Deferred reconcile (A2, MATURITY-FINDINGS.md).",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    }
+  ],
+  "shape_gaps": [
+    {
+      "golden": "TranscriptShareResponse",
+      "method": "POST",
+      "path": "/transcripts/{platform}/{native_meeting_id}/share",
+      "reason": "PATH restored by #666 (aliased to the moved POST /meetings/{platform}/{native}/share mint, so no more 404), but the RESPONSE SHAPE diverges: the 0.10 sealed TranscriptShareResponse is a public-URL share ({share_id, url, expires_at, expires_in_seconds}); the 0.12 mint returns a capability-token share ({id, token, mode, expires_at}). The public-URL-share backend is not in the 0.12 core. No golden example for this shape ships in golden/, so the golden-driven shape check does not enforce it today; recorded here as a restore-or-re-version decision, not a silent pass.",
+      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
+    }
+  ]
+}

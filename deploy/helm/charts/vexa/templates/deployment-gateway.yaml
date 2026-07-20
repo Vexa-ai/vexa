@@ -92,18 +92,21 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
       {{- with .Values.global.nodeSelector }}
@@ -117,5 +120,8 @@ spec:
       {{- with .Values.global.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.gateway "gateway")) }}
+      {{- . | nindent 6 }}
       {{- end }}
 {{- end }}

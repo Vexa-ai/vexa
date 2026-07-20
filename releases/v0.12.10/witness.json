@@ -1,0 +1,103 @@
+{
+  "version": "v0.12.10",
+  "candidate": "v0.12.10",
+  "generated_from": "v0.12.9...v0.12.10",
+  "witnessed_by": "Dmitriy Grankin (@DmitriyG228)",
+  "witnessed_at": "2026-07-17",
+  "deployment": "lite (throwaway Linode VM, LOCAL_STT=1, image index sha256:a3128453130806eb2a49e6f579124c2d8b999968cdd23893b3918bb72b5889e7 (linux/amd64 image sha256:43c9e3200f75c37681d363eb3d8b2742e32640a76b299bf6820b07ede133057c))",
+  "values": [
+    {
+      "pr": "614",
+      "title": "fix(#520): crash-safe Redis reliable-queue for the webhook retry drain",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_webhook_seam.py"
+    },
+    {
+      "pr": "615",
+      "title": "packaging hygiene: offline bake VERIFY in validate-lite + baked-model licence notice + per-release SPDX SBOM",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "sbom job artifact vexa-sbom-v0.12.10.spdx.json in the tag run (SPDX-2.3, pyannote model present) + validate-lite offline bake VERIFY leg green"
+    },
+    {
+      "pr": "619",
+      "title": "gmeet: stop silence hallucinations — ja/tr phrase lists + near-silent submit gate (#617)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "evidence": "core/meetings/modules/gmeet-pipeline/src/silence-gate.test.ts + hallucination-filter.test.ts (L2); live walk performed on the delivered lite deployment",
+      "platform": "gmeet",
+      "pass": "live Meet with near-silence periods: no phantom phrases appear in the transcript (ja/tr classes included); bot log shows near-silent windows gated, not submitted",
+      "observation": "Operator walked the delivered lite deployment (http://172.234.244.41:3001): bot admitted to a live Meet, speech transcribed, near-silence periods produced no phantom phrases in the transcript. Confirmed working per operator report 2026-07-17."
+    },
+    {
+      "pr": "623",
+      "title": "gmeet: empirical hallucination harvester — one script, every Whisper language (#617 follow-up)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/modules/gmeet-pipeline/src/harvest-hallucinations.test.ts"
+    },
+    {
+      "pr": "687",
+      "title": "release: v0.12.9 witness receipt (signed)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "releases/v0.12.9/witness.json committed on main — the receipt IS the artifact; gates green at head"
+    },
+    {
+      "pr": "692",
+      "title": "docs(governance): the two loops — debugging discipline, flake discipline, human placement (Closes #688)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "docs/docs/governance/delivery.mdx §the-two-loops published; docs-current + gates green at head"
+    },
+    {
+      "pr": "700",
+      "title": "docs(governance): value definition leads the prepared-issue body",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "governance rule published; the 2026-07-17 prepared-issue batch is written value-definition-first (observable on #694-#699)"
+    },
+    {
+      "pr": "701",
+      "title": "docs/tests: kill the merge-train tax (fragments + merge=union + fan-out) + edge-guard safe-config caveat",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "mechanism proven by use: this release assembled its changelog from docs/changelog.d fragments (collector run in #707) with zero merge conflicts"
+    },
+    {
+      "pr": "703",
+      "title": "fix(db-budget-gate): scan the committed tree — a numpy fixture in a gitignored .venv was reding the connection budget (#702)",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "node scripts/gates.mjs db-budget green on a previously-red dev machine (gitignored .venv present) + CI static leg on main"
+    },
+    {
+      "pr": "707",
+      "title": "release: v0.12.10 version-bump — fragments assembled, credits, docs-reflects advanced",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "gate:docs-version green at head (Chart.yaml appVersion == docs-reflects == 0.12.10); changelog.d emptied by collector"
+    },
+    {
+      "pr": "708",
+      "title": "release: package.json 0.12.10 — the third preflight version stamp (+README §0 names it)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "release-images preflight passes on the v0.12.10 tag (three stamps aligned) — the failed first tag run is the negative control"
+    }
+  ],
+  "signed_off": true,
+  "witness_deployment": {
+    "url": "http://172.234.244.41:3001",
+    "provisioned_by": "agent (throwaway Linode 100898379 us-sea, vexaai/vexa-lite:v0.12.10, make -C deploy/lite all)",
+    "prevalidated": [
+      "gateway /health 200 from public internet",
+      "terminal UI 200 (Next.js serves)",
+      "debug login 200 for test-substring email + 403 negative control for non-test email",
+      "X-API-Key authenticated GET /meetings 200 + no-key 401 negative control",
+      "STT: whisper /health 200 + stt-smoke synthesized speech transcribed correctly",
+      "13 supervised services RUNNING, RestartCount=0, sidecars (postgres, minio, whisper) up"
+    ]
+  }
+}

@@ -9,6 +9,12 @@ the source of truth**; leave the bot lifecycle FSM untouched.
 
 This doc is grounded in the real 0.12 code; every claim cites `file:line`.
 
+**Client contract:** the `meeting.status` stream is the **single source of truth** for any
+client's bot/meeting-state controls. A client MUST degrade state-bearing controls (Stop bot,
+Send bot…) to an indeterminate/disabled state while the stream is not connected — a cached
+REST snapshot is display-only, never a basis for an actionable control (the terminal implements
+this via `useLiveMeetingsConnection()` gating the meeting-header `BotControls`).
+
 ---
 
 ## 0. Grounding — what exists today

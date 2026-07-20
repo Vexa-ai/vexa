@@ -14,11 +14,24 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
+from ..collector.meeting_link import parse_meeting_url
+from .env_flags import env_flag
+from .ports import (
+    AuthSessionBusy,
+    AuthSessionNotConfigured,
+    MaxBotsExceeded,
+    MeetingRepo,
+    QuotaExceeded,
+    RuntimeClient,
+    SpawnFailed,
+    TranscriptionNotConfigured,
+)
+from .invocation import SPAWNABLE_PLATFORMS
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 from .url_validation import UnsafeMeetingUrl, validate_meeting_url
 
@@ -27,9 +40,12 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
     """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
     (default ``true``), so a dashboard bot records by default. The request value is type-validated —
     a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
-    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``)."""
+    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``).
+
+    The env is read through ``env_flag``, so a set-but-empty ``RECORDING_ENABLED=`` keeps the
+    default instead of resolving False (see env_flags — the v0.12.5 witness bug)."""
     if value is None:
-        return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+        return env_flag("RECORDING_ENABLED", True)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -44,9 +60,12 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
 def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
     (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
-    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable."""
+    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable.
+
+    The env is read through ``env_flag``: a set-but-empty ``TRANSCRIBE_ENABLED=`` kept the default
+    OFF and shipped capture-only bots to every Lite self-host (the v0.12.5 witness bug)."""
     if value is None:
-        return os.getenv("TRANSCRIBE_ENABLED", "true").lower() == "true"
+        return env_flag("TRANSCRIBE_ENABLED", True)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -111,6 +130,21 @@ def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
     return None
 
 
+def _passcode_from_url(meeting_url: str) -> Optional[str]:
+    """The passcode a meeting URL itself carries — zoom's ``?pwd=`` / teams' ``?p=`` query param.
+    Consulted only on the derive path (url-only body) and only when the body sent no explicit
+    ``passcode``; anything else returns None."""
+    try:
+        query = parse_qs(urlparse(meeting_url).query)
+    except Exception:
+        return None
+    for key in ("pwd", "p"):
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return None
+
+
 def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports."""
     router = APIRouter()
@@ -147,13 +181,69 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         native_meeting_id = str(body.get("native_meeting_id", "")).strip()
         meeting_url = body.get("meeting_url")
         # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
-        # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
+        # (zoom/jitsi). It is SSRF-validated below (422 on violation) before the bot navigates.
+        passcode = body.get("passcode")
+        # api.v1 promise: a meeting_url provided WITHOUT native_meeting_id is parsed to extract
+        # platform, native_meeting_id, and passcode (collector.meeting_link — the same parser the
+        # planned-meeting routes use). An underivable URL is a typed 422, NEVER a persisted ''
+        # key: (platform, native_meeting_id) is the only user-facing address for stop/transcripts,
+        # so an empty id would be a 201 that creates a meeting no API call can reach again.
+        # Derivation is a pure URL parse (no network) and runs before the SSRF guard only so a
+        # url-only body has its platform resolved; a supplied native_meeting_id is authoritative.
+        if not native_meeting_id and meeting_url:
+            derived = parse_meeting_url(meeting_url)
+            if derived is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "'native_meeting_id' is required: it could not be derived from "
+                        f"meeting_url '{meeting_url}' (unrecognized meeting link)"
+                    ),
+                )
+            derived_platform, native_meeting_id = derived
+            if platform and platform != derived_platform:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"platform '{platform}' disagrees with meeting_url "
+                        f"(which is a '{derived_platform}' link) — drop one or make them agree"
+                    ),
+                )
+            platform = derived_platform
+            if not passcode:
+                passcode = _passcode_from_url(meeting_url)
+        # SSRF hygiene (ZAKI): validate the passthrough meeting_url against the now-resolved
+        # platform's approved hosts before the bot browser navigates to it. Because host approval
+        # is platform-bound (an empty platform approves no host), this MUST run after derivation so
+        # a url-only body is checked against its real platform rather than rejected outright — the
+        # guard still gates every navigation, so derivation cannot bypass it.
         if meeting_url is not None:
             meeting_url = _validate_meeting_url(meeting_url, platform=platform)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,
                 detail="'platform' and 'native_meeting_id' (or 'meeting_url') are required",
+            )
+        # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
+        # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
+        # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
+        # sailed past the constructibility guard below, wrote its `requested` meeting row, and then
+        # died inside build_invocation's schema validation: a 500, plus an ORPHANED active row that
+        # 409s the user's retry on the dedup guard. The refusal names the real state of the world.
+        if platform not in SPAWNABLE_PLATFORMS:
+            supported = ", ".join(sorted(SPAWNABLE_PLATFORMS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"platform '{platform}' cannot be spawned as a meeting bot — supported: "
+                    f"{supported}"
+                    + (
+                        ". browser_session is a provisioning workload, not a meeting bot; its "
+                        "0.12 runtime path is not yet restored (tracked in "
+                        "https://github.com/Vexa-ai/vexa/issues/816)"
+                        if platform == "browser_session" else ""
+                    )
+                ),
             )
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
@@ -179,7 +269,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 bot_name=body.get("bot_name"),
-                passcode=body.get("passcode"),
+                passcode=passcode,
                 meeting_url=meeting_url,
                 language=body.get("language"),
                 task=body.get("task"),
@@ -197,6 +287,14 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
+        except AuthSessionNotConfigured as e:
+            # Deployment misconfiguration (BOT_AUTHENTICATED without a complete userdata store) —
+            # a service-side 503 like the transcription gate, never a silent anonymous join.
+            raise HTTPException(status_code=503, detail=str(e))
+        except AuthSessionBusy as e:
+            # One stored session, one live bot: the second concurrent authenticated spawn is
+            # refused naming the conflicting meeting (per-identity serialization, #725).
+            raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

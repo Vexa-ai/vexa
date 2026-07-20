@@ -35,3 +35,16 @@ docker compose -f deploy/compose/docker-compose.yml down -v
 `.env.example` documents every variable (faithful to the 0.11 `deploy/compose` names: `DB_*`,
 `REDIS_URL`, `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, `MINIO_*`, `BROWSER_IMAGE`/`AGENT_IMAGE`,
 `DOCKER_GID`, `*_HOST_PORT`).
+
+## Smoke probe — "is this install actually working?"
+
+```bash
+make probe                       # from the repo root (compose is the default surface)
+```
+
+Drives the ONE full journey through the gateway front door — spawn → schedule → boot → join →
+transcribe → live-view → stop — then sweeps every component's logs once. Each stage prints
+Expected / Actual / Verdict; a red stage names where the journey broke and fails the command.
+With the mock bot as `BROWSER_IMAGE` (`mock-bot:dev`) the journey is a deterministic green,
+transcript included; with the real bot it drives a dead synthetic meeting to a truthful named
+`join_failure`. See `deploy/compose/probe.sh` (a wrapper over `scripts/probe/journey.sh`).
