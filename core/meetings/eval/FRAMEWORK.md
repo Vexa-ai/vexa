@@ -146,8 +146,8 @@ Both are corpus entries now — the numbers below are `baseline.json`, not prose
 
 | entry | duty cycle | recall | precision | note |
 |---|---|---|---|---|
-| `jitsi/2026-07-20-capture-gaps` | **0.650** | 0.858 | **0.723** | capture defect (#850); the invention is the sub-second-window hallucination, measured |
-| `youtube/2026-07-20-continuous-speech` | 0.949 | **0.905** | **0.941** | control; the 9.5% streaming loss is #854 |
+| `jitsi/2026-07-20-capture-gaps` | **0.650** | 0.872 | **0.723** | capture defect (#850); the invention is the sub-second-window hallucination, measured |
+| `youtube/2026-07-20-continuous-speech` | 0.949 | **0.920** | **0.941** | control; the 9.5% streaming loss is #854 |
 
 Same source material, same lane, same STT on both — so the gap between the rows is the bot's capture
 chain and nothing else.
@@ -197,7 +197,13 @@ than agreement — the thing this gap doubted. It also prices the split the fram
 of the 9.3 points between the pipeline and perfect, **7.0 are the streaming design's own** and 2.3
 are the model's ceiling on this audio.
 
-**G3 (residual) — chunking is still unvalidated.** Nothing verifies the single-pass reference is better than
+**G3 (residual) — the SEAM DROP half.** The duplication half is closed: chunk overlap was being
+counted as reference content (122 words, 3.2% on the youtube control), understating recall by that
+much; `dedupe_seams` removes it. What remains is the opposite error — a word LOST at a cut is
+invisible without a second reference built with different cut points, so the reference's own recall
+is still unbounded from below.
+
+**G3 (residual, older note) — chunking is still unvalidated.** Nothing verifies the single-pass reference is better than
 the live transcript; recall may be measuring agreement, not truth. 60s windows with 3s overlap can still both duplicate at seams
 (inflating the reference) and drop words at them; the calibration above bounds the total error but
 does not isolate the seams.
