@@ -275,13 +275,22 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
         # only the full URL says WHICH deployment to join).
         if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
-            raise HTTPException(
-                status_code=422,
-                detail=(
+            # Say WHICH of the two reasons applies. A teams id that is not a thread id is not an
+            # unsupported platform, and telling the caller so would send them to fix the wrong
+            # thing — the id is the problem, and only the full invite link carries what is missing.
+            if platform == "teams":
+                detail = (
+                    f"teams native_meeting_id '{native_meeting_id}' is not a joinable thread id — "
+                    "a Teams deep link needs 19:meeting_<id>@thread.v2 plus its context "
+                    "(tenant + organizer), which a numeric meeting id does not carry. "
+                    "Pass the full invite link as meeting_url."
+                )
+            else:
+                detail = (
                     f"unsupported platform '{platform}' without a meeting_url — "
                     "use google_meet/teams, or provide meeting_url (required for zoom/jitsi)"
-                ),
-            )
+                )
+            raise HTTPException(status_code=422, detail=detail)
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
