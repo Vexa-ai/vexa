@@ -62,7 +62,14 @@ published words 2746–2750 — but STT call count 429–440. Structure is stabl
 figures are not, and `score-fixture` tolerances them from that spread. What the corpus exists to
 catch moves far further: reverting `4c030cd8` takes `storeDupes` from 0 to 11.
 
-**Content scoring needs a high duty cycle to mean anything.** The reference is built from the
+**Reference stability must be MEASURED per entry, never inferred.** `--chunk-offset-sec` builds a
+second reference with the cuts moved; the disagreement between them bounds what any content figure
+from that entry can carry. Measured: **4.4%** (youtube control, duty 0.949, one speaker), **7.2%**
+(witnessed panel, duty 1.000, multi-voice), **23.9%** (jitsi capture-gaps, duty 0.650). Note the
+cleanest-delivery entry is NOT the most stable — duty is one term, not the predictor, and content
+type looks like another. Do not cite a content figure without this number beside it.
+
+**Low duty is still disqualifying.** The reference is built from the
 session's DELIVERED audio, so every capture hole becomes a splice the model reads across. Two
 references over identical audio, cuts shifted 25s apart (`--chunk-offset-sec`), disagree by **4.4%**
 on the youtube control (duty 0.949) and by **23.9%** on the jitsi capture-gaps entry (duty 0.650) —
