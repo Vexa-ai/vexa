@@ -62,6 +62,13 @@ published words 2746–2750 — but STT call count 429–440. Structure is stabl
 figures are not, and `score-fixture` tolerances them from that spread. What the corpus exists to
 catch moves far further: reverting `4c030cd8` takes `storeDupes` from 0 to 11.
 
+**Content scoring needs a high duty cycle to mean anything.** The reference is built from the
+session's DELIVERED audio, so every capture hole becomes a splice the model reads across. Two
+references over identical audio, cuts shifted 25s apart (`--chunk-offset-sec`), disagree by **4.4%**
+on the youtube control (duty 0.949) and by **23.9%** on the jitsi capture-gaps entry (duty 0.650) —
+where the instrument is noisier than the 12.8% it is measuring. **Do not cite content figures from a
+low-duty entry.** Delivery figures are unaffected: those come from the bytes, not from a model.
+
 **`retention` is recorded only against real STT.** A mock that invents fresh tokens per call turns
 every LocalAgreement resubmission of the same audio into denominator it never lost, so retention
 under a mock measures resubmission overlap and calls it loss.
@@ -80,7 +87,7 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 |---|---|
 | delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
 | shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
-| content | recall 0.872 · **precision 0.723** (whisper-1, single pass) |
+| content | recall 0.872² · **precision 0.723²** (whisper-1, single pass) |
 | lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467¹ · 5 holes >2s |
 
 This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
@@ -97,7 +104,7 @@ hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. 
 |---|---|
 | delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
 | shape | no recorded cuts (tape) — the lane run segments it live |
-| content | **recall 0.920 · precision 0.941** (whisper-1, single pass) |
+| content | **recall 0.920 ±0.044 · precision 0.941** (whisper-1, single pass) |
 | lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905¹ · 6 holes >2s |
 
 The red evidence for **#854**: **8.0%** of what this same model extracts from this same audio in one
@@ -153,6 +160,9 @@ Its hint stream is the finding: a **2-second poll with no `isEnd` events at all*
 one participant. The binder never learns when anyone stops, and three people are lit so rarely they
 lose every max-overlap vote — which is how 5 speakers become 2 while every truth-free signal except
 cardinality reads clean.
+
+² NOT CITABLE — at duty 0.650 the reference disagrees with a differently-cut reference by 23.9%,
+more than the 12.8% loss it reports. The delivery figure above is unaffected.
 
 ¹ harness-relative — comparable only against the same fixture's own baseline, never read as the
 share of a meeting the lane covers. See the note above the entries.
