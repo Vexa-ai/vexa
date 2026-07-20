@@ -61,6 +61,24 @@ if (PROBE) { await ctx.close(); process.exit(state.inConference ? 0 : 3); }
 const unmute = page.locator('[aria-label*="Unmute"], [data-testid="toolbox.mute"]').first();
 if (await unmute.isVisible({ timeout: 2000 }).catch(() => false)) await unmute.click().catch(() => {});
 console.log(`[speaker:${NAME}] holding ${HOLD_MS}ms`);
-await page.waitForTimeout(HOLD_MS);
+
+// ADMIT=1 makes this participant the room's doorkeeper. meet.jit.si puts a joining bot in the
+// lobby — even in an empty room — and a bot cannot admit itself, which would put a human in the
+// loop for every autonomous multi-party run. The FIRST participant is moderator, so a speaker that
+// joined first can let the bot in. Polling beats a one-shot wait: the knock arrives whenever the
+// bot's own join finishes, which is not a time this script can predict.
+const ADMIT = process.env.ADMIT === '1';
+const deadline = Date.now() + HOLD_MS;
+let admitted = 0;
+while (Date.now() < deadline) {
+  if (ADMIT) {
+    const btn = page.locator('[data-testid="lobby.allow"], [aria-label*="Admit"], button:has-text("Admit")').first();
+    if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await btn.click().catch(() => { /* the knock may vanish between seeing and clicking */ });
+      console.log(`[speaker:${NAME}] ADMITTED a lobby knock (${++admitted} total)`);
+    }
+  }
+  await page.waitForTimeout(2000);
+}
 await ctx.close();
 console.log(`[speaker:${NAME}] done`);
