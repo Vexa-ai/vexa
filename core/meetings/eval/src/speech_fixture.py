@@ -68,6 +68,28 @@ def frames_of(samples, start_ms, speaker_index, speaker_name, seq0):
     return frames
 
 
+def mixed_frames(samples, start_ms, seq0):
+    """The MIXED lane's wire shape: one stream, and NO name on any frame.
+
+    The gmeet lane carries the speaker on the frame because capture genuinely knows it (per-
+    participant elements, glow-named at source). Every other platform delivers one mixed stream and
+    names it out-of-band from the DOM — so a mixed fixture must withhold the name here, or it hands
+    the binder the very answer it is being tested on."""
+    frames, seq, n = [], seq0, len(samples)
+    for off in range(0, n, FRAME_SAMPLES):
+        chunk = samples[off:off + FRAME_SAMPLES]
+        f32 = struct.pack(f"<{len(chunk)}f", *(s / 32768.0 for s in chunk))
+        rms = math.sqrt(sum((s / 32768.0) ** 2 for s in chunk) / max(1, len(chunk)))
+        frames.append({
+            "seq": seq, "ts": start_ms + round(off / SAMPLE_RATE * 1000),
+            "speakerIndex": 999,
+            "pcm": base64.b64encode(f32).decode(), "pcm_len": len(chunk),
+            "rms": round(rms, 6), "lane": "mixed",
+        })
+        seq += 1
+    return frames
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--speakers", default="A,B", help="clip-pool ids, e.g. A,B")
@@ -75,30 +97,70 @@ def main():
     ap.add_argument("--gap-ms", type=int, default=800, help="silence between turns")
     ap.add_argument("--out", default="/tmp/speech-fixture")
     ap.add_argument("--started-at", default="2026-07-19T12:00:00.000Z")
+    ap.add_argument("--lane", default="gmeet", choices=["gmeet", "mixed"],
+                    help="gmeet names frames at capture; mixed withholds the name and emits DOM hints")
+    ap.add_argument("--platform", default=None, help="header platform (default follows --lane)")
+    # Hint realism dials. A DOM hint is not a label: the UI lights up late, sometimes never, and
+    # sometimes for the wrong person. These make each of those failure modes reproducible on demand
+    # instead of waiting for a meeting to happen to produce one.
+    ap.add_argument("--hint-lag-ms", type=int, default=250, help="how late the UI notices a speaker")
+    ap.add_argument("--hint-drop", type=float, default=0.0, help="fraction of turns whose hint never arrives")
+    ap.add_argument("--hint-wrong", type=float, default=0.0, help="fraction of turns hinted as the WRONG speaker")
+    ap.add_argument("--seed", type=int, default=7, help="dial randomness is seeded — a fixture must be reproducible")
     args = ap.parse_args()
 
     speakers = args.speakers.split(",")
     pools = {s: load_clips(s) for s in speakers}
 
+    import random
+    rng = random.Random(args.seed)
+    platform = args.platform or ("google_meet" if args.lane == "gmeet" else "zoom")
     header = {
-        "type": "captured_signal_header", "v": 1, "platform": "google_meet",
+        "type": "captured_signal_header", "v": 1, "platform": platform,
         "native_meeting_id": f"speech-{'-'.join(speakers)}-{args.turns}",
-        "language": "en", "lane": "gmeet", "sample_rate": SAMPLE_RATE,
+        "language": "en", "lane": args.lane, "sample_rate": SAMPLE_RATE,
         "started_at": args.started_at,
     }
 
-    lines, truth, t_ms, seq = [json.dumps(header)], [], 0, 0
+    records, truth, t_ms, seq = [], [], 0, 0
     for turn in range(args.turns):
         sid = speakers[turn % len(speakers)]
         text, samples = pools[sid][turn // len(speakers) % len(pools[sid])]
         idx = speakers.index(sid)
-        fr = frames_of(samples, t_ms, idx, NAMES.get(sid, sid), seq)
-        lines += [json.dumps(f) for f in fr]
+        name = NAMES.get(sid, sid)
         dur_ms = round(len(samples) / SAMPLE_RATE * 1000)
-        truth.append({"turn": turn, "speakerIndex": idx, "speaker": NAMES.get(sid, sid),
-                      "text": text, "startMs": t_ms, "endMs": t_ms + dur_ms})
+
+        if args.lane == "mixed":
+            fr = mixed_frames(samples, t_ms, seq)
+            # The hint stream is the ONLY name source on this lane, so its defects are the binder's
+            # whole input. Each dial is applied per turn and recorded in truth, so a scorer can ask
+            # the sharper question: did the binder get it right GIVEN what the DOM told it?
+            hinted, dropped, wrong = name, False, False
+            if rng.random() < args.hint_drop:
+                dropped = True
+            elif rng.random() < args.hint_wrong:
+                others = [NAMES.get(s, s) for s in speakers if s != sid]
+                if others:
+                    hinted, wrong = rng.choice(others), True
+            if not dropped:
+                records.append({"type": "hint", "t": t_ms + args.hint_lag_ms, "name": hinted,
+                                "isEnd": False, "lane": "mixed"})
+                records.append({"type": "hint", "t": t_ms + dur_ms + args.hint_lag_ms, "name": hinted,
+                                "isEnd": True, "lane": "mixed"})
+        else:
+            fr = frames_of(samples, t_ms, idx, name, seq)
+            hinted, dropped, wrong = name, False, False
+
+        records += fr
+        truth.append({"turn": turn, "speakerIndex": idx, "speaker": name,
+                      "text": text, "startMs": t_ms, "endMs": t_ms + dur_ms,
+                      "hintedAs": None if dropped else hinted,
+                      "hintDropped": dropped, "hintWrong": wrong})
         seq += len(fr)
         t_ms += dur_ms + args.gap_ms
+
+    records.sort(key=lambda r: r.get("ts", r.get("t", 0)))
+    lines = [json.dumps(header)] + [json.dumps(r) for r in records]
 
     sig_path, truth_path = f"{args.out}.captured-signal.jsonl", f"{args.out}.truth.json"
     with open(sig_path, "w") as f:
@@ -107,8 +169,13 @@ def main():
         json.dump({"header": header, "turns": truth}, f, indent=2)
 
     words = sum(len(t["text"].split()) for t in truth)
-    print(f"{sig_path}\n  {len(lines)-1} frames · {len(truth)} turns · "
+    nframes = sum(1 for r in records if "pcm" in r)
+    nhints = sum(1 for r in records if r.get("type") == "hint")
+    print(f"{sig_path}\n  {nframes} frames · {nhints} hints · {len(truth)} turns · "
           f"{t_ms/1000:.1f}s · {words} known words · speakers {','.join(sorted({t['speaker'] for t in truth}))}")
+    if args.lane == "mixed":
+        d = sum(1 for t in truth if t["hintDropped"]); w = sum(1 for t in truth if t["hintWrong"])
+        print(f"  hints: lag {args.hint_lag_ms}ms · {d} dropped · {w} wrong")
     print(f"{truth_path}")
 
 
