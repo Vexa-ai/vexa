@@ -148,6 +148,7 @@ async def request_bot(
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    max_lifetime_sec: Optional[int] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -309,6 +310,7 @@ async def request_bot(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
         callback_url=f"{meeting_api_url}/runtime/callback",
+        max_lifetime_sec=max_lifetime_sec,
     )
     try:
         result = await runtime.create_workload(spec)

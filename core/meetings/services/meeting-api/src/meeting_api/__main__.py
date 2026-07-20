@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 log = logging.getLogger("meeting_api.entrypoint")
 
@@ -72,6 +73,8 @@ def build_production_app():
     from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo
     from .collector.adapters import RedisStreamBus, SqlAlchemyTranscriptStore
     from .recordings.adapters import S3Storage, SqlAlchemyRecordingRepo
+    from .retention.adapters import S3RetentionStorage, SqlAlchemyRetentionRepo
+    from .zaki_control import ControlConfig
 
     database_url = _database_url()
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -102,6 +105,35 @@ def build_production_app():
         access_key=os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ACCESS_KEY"),
         secret_key=os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY"),
     )
+
+    # Default-off: no control router, schema, or Hub callback exists unless an operator explicitly
+    # enables the feature.  Enabling fails closed if either signing/callback secret is absent.
+    zaki_control_config = ControlConfig.from_env()
+    zaki_control_store = None
+    zaki_control_callback = None
+    zaki_control_retention_repo = None
+    zaki_control_retention_storage = None
+    if zaki_control_config is not None:
+        from .zaki_control.adapters import SqlAlchemyControlStore
+        from .zaki_control.callbacks import ControlCallbackDispatcher
+
+        callback_url = os.getenv("MINUTES_ENGINE_CALLBACK_URL", "")
+        callback_hmac_key = os.getenv("MINUTES_ENGINE_CALLBACK_HMAC_KEY", "")
+        if not callback_url or len(callback_hmac_key) < 32:
+            raise RuntimeError("ZAKI Minutes control is enabled without its Hub callback configuration")
+        zaki_control_store = SqlAlchemyControlStore(session_factory)
+        zaki_control_callback = ControlCallbackDispatcher(
+            zaki_control_store,
+            callback_url=callback_url,
+            hmac_key=callback_hmac_key,
+        )
+        zaki_control_retention_repo = SqlAlchemyRetentionRepo(session_factory)
+        zaki_control_retention_storage = S3RetentionStorage(
+            bucket=os.getenv("MINIO_BUCKET", os.getenv("RECORDING_BUCKET", "vexa")),
+            endpoint_url=os.getenv("S3_ENDPOINT") or _minio_endpoint_url(),
+            access_key=os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ACCESS_KEY"),
+            secret_key=os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY"),
+        )
 
     # Per-user webhook delivery (WebhookSink: SSRF-guard → event-filter → sign → POST → enqueue-retry).
     # httpx transport; failures route to the redis RetryQueue the background drain loop sweeps.
@@ -177,9 +209,20 @@ def build_production_app():
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
         zaki_read_token=_zaki_read_token(),
+        zaki_control_store=zaki_control_store,
+        zaki_control_config=zaki_control_config,
+        zaki_control_retention_repo=zaki_control_retention_repo,
+        zaki_control_retention_storage=zaki_control_retention_storage,
+        zaki_control_callback=zaki_control_callback,
     )
 
-    _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client)
+    _attach_background_loops(
+        app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        zaki_control_store=zaki_control_store,
+        zaki_control_callback=zaki_control_callback,
+        zaki_ttl_session_factory=session_factory if zaki_control_config is not None else None,
+        zaki_ttl_storage=zaki_control_retention_storage,
+    )
     return app
 
 
@@ -192,9 +235,49 @@ def _minio_endpoint_url() -> str:
     return f"{scheme}://{endpoint}"
 
 
-def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None) -> None:
+def _zaki_ttl_settings(*, control_enabled: bool) -> tuple[float, int] | None:
+    """Return the bounded retention sweep cadence for an active Minutes control plane.
+
+    Retention promises are part of the client-facing capture contract.  Once control is
+    enabled, silently leaving its expiry worker off would retain data beyond the advertised
+    window, so this is an explicit launch-time requirement rather than a best-effort toggle.
+    """
+    if not control_enabled:
+        return None
+    if os.getenv("ZAKI_MINUTES_TTL_ENABLED", "false").lower() != "true":
+        raise RuntimeError("ZAKI Minutes control requires ZAKI_MINUTES_TTL_ENABLED=true")
+    try:
+        interval = float(os.getenv("ZAKI_MINUTES_TTL_INTERVAL_S", "60"))
+        limit = int(os.getenv("ZAKI_MINUTES_TTL_BATCH_LIMIT", "100"))
+    except (TypeError, ValueError):
+        raise RuntimeError("ZAKI Minutes TTL cadence and batch limit must be numeric") from None
+    import math
+
+    if not math.isfinite(interval) or not 1 <= interval <= 3_600:
+        raise RuntimeError("ZAKI_MINUTES_TTL_INTERVAL_S must be between 1 and 3600 seconds")
+    if not 1 <= limit <= 500:
+        raise RuntimeError("ZAKI_MINUTES_TTL_BATCH_LIMIT must be between 1 and 500")
+    return interval, limit
+
+
+def _attach_background_loops(
+    app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
+    *, zaki_control_store=None, zaki_control_callback=None,
+    zaki_ttl_session_factory=None, zaki_ttl_storage=None,
+) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops."""
     from .collector.ingest import consume_segments
+    import math
+
+    def _bounded_interval(name: str, default: str) -> float:
+        raw = os.getenv(name, default)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise RuntimeError(f"{name} must be a finite interval") from None
+        if not math.isfinite(value) or not 0.2 <= value <= 60:
+            raise RuntimeError(f"{name} must be between 0.2 and 60 seconds")
+        return value
 
     seg_interval = float(os.getenv("SEGMENT_CONSUMER_INTERVAL", "0.5"))
     webhook_interval = float(os.getenv("WEBHOOK_DRAIN_INTERVAL", "5"))
@@ -408,6 +491,14 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     # calendar UID — next occurrence only). Per-user try/except: one bad feed never stalls the
     # sweep. Unset ADMIN_API_URL/INTERNAL_API_SECRET → no-op (capability degrade, not boot-fail).
     calendar_interval = float(os.getenv("CALENDAR_SYNC_INTERVAL_S", "300"))
+    zaki_control_callback_interval = (
+        _bounded_interval("ZAKI_CONTROL_CALLBACK_INTERVAL_S", "5")
+        if zaki_control_callback is not None
+        else None
+    )
+    zaki_ttl = _zaki_ttl_settings(control_enabled=zaki_control_store is not None)
+    if zaki_ttl is not None and (zaki_ttl_session_factory is None or zaki_ttl_storage is None):
+        raise RuntimeError("ZAKI Minutes TTL worker requires durable database and object storage")
 
     async def _cal_publish(user_id, entry):
         import json as _json
@@ -440,8 +531,53 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                 log.exception("calendar sync tick failed")
             await asyncio.sleep(calendar_interval)
 
+    async def _zaki_control_callback_loop() -> None:
+        if zaki_control_callback is None:
+            return
+        assert zaki_control_callback_interval is not None
+        while True:
+            try:
+                await zaki_control_callback.reconcile_once()
+                await zaki_control_callback.drain_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("ZAKI Minutes callback drain failed")
+            await asyncio.sleep(zaki_control_callback_interval)
+
+    async def _zaki_ttl_loop() -> None:
+        if zaki_ttl is None:
+            return
+        from .retention import run_production_ttl_once
+
+        interval, limit = zaki_ttl
+        while True:
+            try:
+                receipt = await run_production_ttl_once(
+                    enabled=True,
+                    now=datetime.now(timezone.utc),
+                    limit=limit,
+                    session_factory=zaki_ttl_session_factory,
+                    object_storage=zaki_ttl_storage,
+                )
+                if receipt.failed:
+                    log.warning("ZAKI Minutes TTL batch has retryable failures: %s", receipt.failed)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A failed object-store/database operation leaves the due scope intact for the
+                # next bounded attempt; keep the worker alive without claiming expiry succeeded.
+                log.exception("ZAKI Minutes TTL sweep failed")
+            await asyncio.sleep(interval)
+
     @asynccontextmanager
     async def lifespan(_app):
+        if zaki_control_store is not None:
+            # Schema creation is part of control activation.  A green process without its durable
+            # idempotency/outbox tables would be materially unsafe, so fail startup instead.
+            app.state.zaki_control_ready = False
+            await zaki_control_store.ensure_schema()
+            app.state.zaki_control_ready = True
         tasks = [
             asyncio.create_task(_segment_consumer_loop(), name="segment-consumer"),
             asyncio.create_task(_db_writer_loop(), name="db-writer"),
@@ -450,11 +586,15 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
+            asyncio.create_task(_zaki_control_callback_loop(), name="zaki-control-callback"),
+            asyncio.create_task(_zaki_ttl_loop(), name="zaki-ttl"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:
             yield
         finally:
+            if zaki_control_store is not None:
+                app.state.zaki_control_ready = False
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

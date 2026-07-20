@@ -200,7 +200,7 @@
       "unique-id": "meeting-api",
       "node-type": "service",
       "name": "meeting-api",
-      "description": "collector + bot-spawn + recordings + sessions (the hub)",
+      "description": "collector + bot-spawn + recordings + sessions (the hub); also serves the sealed zaki-read.v1 read plane and the zaki-control.v1 Hub-BFF control plane (both default-off, operator-gated)",
       "metadata": [
         {
           "path": "core/meetings/services/meeting-api"
@@ -209,6 +209,10 @@
       "interfaces": [
         {
           "unique-id": "meeting-api-rest",
+          "type": "api"
+        },
+        {
+          "unique-id": "meeting-api-zaki-control",
           "type": "api"
         }
       ]
@@ -628,7 +632,7 @@
       "unique-id": "zaki-read.v1",
       "node-type": "contract",
       "name": "zaki-read.v1",
-      "description": "zaki-read.v1 — unsealed bounded read-only Minutes profile",
+      "description": "zaki-read.v1 \u2014 unsealed bounded read-only Minutes profile",
       "metadata": [
         {
           "path": "core/meetings/contracts/zaki-read.v1",
@@ -640,7 +644,7 @@
       "unique-id": "zaki-control.v1",
       "node-type": "contract",
       "name": "zaki-control.v1",
-      "description": "zaki-control.v1 — sealed owner-scoped Minutes control-plane and signed-callback profile",
+      "description": "zaki-control.v1 \u2014 sealed owner-scoped Minutes control-plane and signed-callback profile",
       "metadata": [
         {
           "path": "core/meetings/contracts/zaki-control.v1",
@@ -1088,6 +1092,26 @@
       "description": "S3-compatible object store for recordings"
     },
     {
+      "unique-id": "zaki-hub",
+      "node-type": "service",
+      "name": "zaki-hub (external)",
+      "description": "the ZAKI Hub BFF \u2014 sole authenticated caller of the zaki-control.v1 control plane and the receiver of its signed lifecycle/usage callbacks. Lives in the zaki-prod repo; no source in this tree.",
+      "metadata": [
+        {
+          "external": true
+        },
+        {
+          "contract": "zaki-control.v1"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "zaki-hub-minutes-callback",
+          "type": "api"
+        }
+      ]
+    },
+    {
       "unique-id": "bm-status",
       "node-type": "data-asset",
       "name": "bm:meeting:{id}:status (pubsub)",
@@ -1285,7 +1309,8 @@
             "u-meetings",
             "bot-commands",
             "segments-table",
-            "recording-blob"
+            "recording-blob",
+            "zaki-hub"
           ]
         }
       }
@@ -2150,6 +2175,54 @@
           ]
         }
       }
+    },
+    {
+      "unique-id": "hub-calls-control-plane",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "zaki-hub"
+          },
+          "destination": {
+            "node": "meeting-api"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "contract": "zaki-control.v1"
+        },
+        {
+          "description": "Hub BFF -> control plane: ensure/capture/stop/erase over zaki-control.v1, operator-gated"
+        }
+      ]
+    },
+    {
+      "unique-id": "control-plane-signs-hub-callbacks",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "zaki-hub"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "contract": "zaki-control.v1"
+        },
+        {
+          "description": "control plane -> Hub: HMAC-signed lifecycle/usage callbacks (timestamp.raw_body), durable outbox"
+        }
+      ]
     }
   ],
   "flows": [

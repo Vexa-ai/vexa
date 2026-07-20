@@ -102,6 +102,8 @@ def _capture_evidence(
     platform: str,
     native_meeting_id: str,
     evaluated_at: datetime,
+    recording_enabled: bool,
+    agent_read_enabled: bool,
 ) -> dict:
     if (
         isinstance(authority.subject_user_id, bool)
@@ -221,10 +223,16 @@ def _capture_evidence(
         expiries = materialize_scope_expiries(authority.scope_expiries)
     except (TypeError, ValueError):
         raise CaptureDenied(CaptureDenial.RETENTION_POLICY_INVALID) from None
-    if any(
-        getattr(expiries, scope) <= evaluated_at
-        for scope in ("audio", "transcript", "summary")
-    ):
+    # Both flags are gate inputs, so both are type-checked BEFORE either is read. `recording_enabled`
+    # decides whether the audio retention window is required at all — a truthy non-bool reaching the
+    # scope selection below would relax a retention gate, so it fails closed like the read flag.
+    if type(agent_read_enabled) is not bool or type(recording_enabled) is not bool:
+        raise CaptureDenied(CaptureDenial.TENANT_POLICY_INVALID)
+    # A zero-day audio window means the policy intentionally does not retain recordings.  The bot
+    # can still transcribe live audio, but no recording writer is enabled.  Transcript and summary
+    # always need a positive durable window; they remain fail-closed.
+    required_scopes = ("audio", "transcript", "summary") if recording_enabled else ("transcript", "summary")
+    if any(getattr(expiries, scope) <= evaluated_at for scope in required_scopes):
         raise CaptureDenied(CaptureDenial.RETENTION_POLICY_INVALID)
     metadata["zaki_retention"] = {
         "state": "open",
@@ -234,6 +242,7 @@ def _capture_evidence(
         },
         "expired_scopes": [],
     }
+    metadata["zaki_read"] = {"enabled": agent_read_enabled}
     return metadata
 
 
@@ -301,6 +310,9 @@ async def request_capture(
     meeting_api_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
+    recording_enabled: bool = True,
+    agent_read_enabled: bool = False,
+    max_lifetime_sec: Optional[int] = None,
     evaluated_at: Optional[datetime] = None,
 ) -> dict:
     """Authorize and start one ZAKI-managed capture through the existing spawn pipeline.
@@ -331,7 +343,15 @@ async def request_capture(
         platform=platform,
         native_meeting_id=native_meeting_id,
         evaluated_at=evaluated_at,
+        recording_enabled=recording_enabled,
+        agent_read_enabled=agent_read_enabled,
     )
+    if max_lifetime_sec is not None and (
+        isinstance(max_lifetime_sec, bool)
+        or not isinstance(max_lifetime_sec, int)
+        or max_lifetime_sec <= 0
+    ):
+        raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
     capture_repo = _CaptureEvidenceRepo(repo, metadata)
     try:
         return await request_bot(
@@ -345,7 +365,7 @@ async def request_capture(
             meeting_url=meeting_url,
             language=language,
             task=task,
-            recording_enabled=True,
+            recording_enabled=recording_enabled,
             transcribe_enabled=True,
             continue_meeting=False,
             max_concurrent=max_concurrent,
@@ -353,6 +373,7 @@ async def request_capture(
             meeting_api_url=meeting_api_url,
             internal_secret=internal_secret,
             token_secret=token_secret,
+            max_lifetime_sec=max_lifetime_sec,
         )
     except CaptureGrantConsumed as error:
         raise CaptureDenied(CaptureDenial.AUTHORITY_REPLAYED) from error
