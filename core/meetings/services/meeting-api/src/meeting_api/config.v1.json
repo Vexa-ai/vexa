@@ -146,6 +146,16 @@
    ]
   },
   {
+   "key": "CAPTURE_SIGNAL_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "deployment-scoped capture-signal knob: when true, every POST /bots spawn carries invocation.v1 captureSignalEnabled, so the bot tees its RAW capture stream (audio frames + speaker hints + segmenter cuts) as captured-signal.v1 and a failed meeting can be replayed offline instead of being irreproducible. OFF by default on purpose — it persists raw meeting audio, a stronger retention claim than a transcript, so turning it on is an explicit operator decision.",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
    "key": "BOT_AUTHENTICATED",
    "class": "defaulted",
    "default": "false",
