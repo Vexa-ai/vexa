@@ -24,6 +24,19 @@ from .ports import (
 )
 
 
+def _iso_utc(dt) -> Optional[str]:
+    """Serialize a datetime as an unambiguous UTC ISO-8601 string (``…Z``).
+
+    The meeting time columns are naive but hold UTC (the DB session is UTC). Emitting a bare
+    ``isoformat()`` yields a zone-less string that a browser's ``new Date()`` parses as LOCAL —
+    so the value renders offset by the viewer's UTC offset. Stamping UTC makes clients localize it.
+    """
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
 def _row_to_dict(m) -> dict:
     return {
         "id": m.id,
@@ -33,11 +46,11 @@ def _row_to_dict(m) -> dict:
         "platform_specific_id": m.platform_specific_id,
         "status": m.status,
         "bot_container_id": m.bot_container_id,
-        "start_time": m.start_time.isoformat() if m.start_time else None,
-        "end_time": m.end_time.isoformat() if m.end_time else None,
+        "start_time": _iso_utc(m.start_time),
+        "end_time": _iso_utc(m.end_time),
         "data": m.data if isinstance(m.data, dict) else {},
-        "created_at": m.created_at.isoformat() if m.created_at else None,
-        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+        "created_at": _iso_utc(m.created_at),
+        "updated_at": _iso_utc(m.updated_at),
     }
 
 
