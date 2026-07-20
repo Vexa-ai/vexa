@@ -113,6 +113,24 @@ Its value is the far end of the delivery curve: **100.0%** here against the jits
 the same capture code. Whatever removes 35% there does not touch this source at all, which is what
 makes the silence gate — not the chain — the thing to change.
 
+### `jitsi/2026-07-20-gate-off` — the #850 green arm, 2.0 MB
+The same bot capture chain as the entry above, with the silence gate off. Two synthetic speakers on
+an open Jitsi host (`jitsi.dorf-post.de`, which admits unauthenticated joins) — **fully autonomous,
+nobody admitted anything.** Recorded at `2c9b4b62`.
+
+| | gate on (`capture-gaps`) | gate off (this entry) |
+|---|---|---|
+| duty cycle | 0.650 | **0.999** |
+| gaps >100ms | 199 / 115.1s | **9 / 1.9s** |
+| inter-cut p50 | 0.41s | **1.47s** |
+| cuts under 1s | 142 | **10** |
+| provisional words | 16.7% | **0.0%** |
+
+The pair is the framework's cleanest red→green: same chain, one policy changed, and both predicted
+knock-ons visible — the segmenter stops cutting on holes, and attribution improves without the binder
+being touched, because hints finally have turns to bind to. Not a matched A/B (the red arm is
+continuous speech, this one sparse clips), so read the duty cycle, not the shape deltas.
+
 ## The contract
 
 1. A defect is only worked against an entry in this corpus — no fixture, no fix.
