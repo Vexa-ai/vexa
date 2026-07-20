@@ -306,8 +306,15 @@ async function main(): Promise<void> {
     hintNames: hintNames.size,
     briefNames,
   };
+  // "matched" is the hint-hop instrument and nothing more: did this hint find an OPEN TURN TO NAME
+  // AT THE INSTANT IT ARRIVED. A hint 250ms into a turn lands before any audio has been transcribed
+  // into that turn, so it reports missed — and the binder still names the turn correctly afterwards
+  // by max-overlap. Measured on the synthetic zoom-lane fixture: 0 bound on arrival, 8 early, and
+  // attribution accuracy 0.947 with zero wrong. Printing that as "100.0% miss" reads exactly like a
+  // dead hint stream, which is the #852 symptom, so the line says what it measures instead.
   console.log(`  attribution   provisional ${(attribution.provisionalRate * 100).toFixed(1)}% of words · ` +
-    `hints ${hintMatched} matched / ${hintMissed} missed (${(attribution.hintMissRate * 100).toFixed(1)}% miss) · ` +
+    `hint-hop ${hintMatched} bound on arrival / ${hintMissed} arrived before their turn existed ` +
+    `(${(attribution.hintMissRate * 100).toFixed(1)}% — NOT an attribution failure, read ACCURACY below) · ` +
     `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} substantively hinted` +
     (briefNames ? ` (+${briefNames} lit under ${SUBSTANTIVE_LIT_MS / 1000}s, not counted)` : ''));
 
