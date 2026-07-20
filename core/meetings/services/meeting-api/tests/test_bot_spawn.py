@@ -505,3 +505,45 @@ def test_spawnable_platforms_is_the_sealed_invocation_enum():
 
     assert SPAWNABLE_PLATFORMS == frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
     assert "browser_session" not in SPAWNABLE_PLATFORMS
+
+
+def test_native_meeting_id_over_column_length_is_422_not_500(monkeypatch):
+    """#843: `platform_specific_id` is varchar(255). An over-long id used to sail past this
+    boundary and die at the INSERT on asyncpg's StringDataRightTruncationError — a 500 ~5.6s in,
+    observed in production. It must be refused HERE, typed, and write no row."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "A" * 20000,
+    })
+    assert r.status_code == 422, f"expected typed refusal, got {r.status_code} {r.text}"
+    detail = r.json()["detail"]
+    assert "255" in detail, f"the refusal must name the limit, got: {detail}"
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_native_meeting_id_with_nul_byte_is_422_not_500(monkeypatch):
+    """#843: a NUL byte reaches Postgres as an invalid text value and 500s at the INSERT."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "abc" + chr(0) + "def",
+    })
+    assert r.status_code == 422, f"expected typed refusal, got {r.status_code} {r.text}"
+    assert "control" in r.json()["detail"].lower(), r.text
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_native_meeting_id_bounds_do_not_validate_SHAPE(monkeypatch):
+    """NEGATIVE CONTROL — the guard bounds length/bytes ONLY, never the id's shape.
+
+    Production evidence: a bare-numeric Teams id (the dial-in kind) transcribed a real meeting
+    (24368, 67 segments) while another of the SAME shape failed. Shape does not predict success,
+    so a format rule would refuse working meetings. These must all still spawn."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    for odd_but_legal in ("474226440982", "abc-defg-hij", "x", "A" * 255, "id with spaces"):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={
+            "platform": "google_meet", "native_meeting_id": odd_but_legal,
+        })
+        assert r.status_code == 201, f"{odd_but_legal!r} was refused: {r.status_code} {r.text}"
