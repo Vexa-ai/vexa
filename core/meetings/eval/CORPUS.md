@@ -43,14 +43,25 @@ corpus doing its job; re-baseline only when the new numbers are the ones you mea
 | **content** (recall/precision) | stored reference + stored transcript | same; both sides are pinned |
 | **lane** (`--lane`) | the REAL `@vexa/mixed-pipeline` re-run over the fixture, mock STT | **our code moved** — everything else is held fixed |
 
-Only the lane block is a code regression detector, and it detects **structure**: retention, store
-rows, duplicate identity, holes. Replay is unpaced, so its submission-window sizes and any latency
-derived from them are the harness's, not production's — cadence is `replay-paced.test.ts`. Mock STT
-says nothing about ASR quality and must never be reported as content evidence.
+Only the lane block is a code regression detector, and it detects **structure**: store rows,
+duplicate identity, holes, coverage, published words. Any latency derived from it is the harness's,
+not production's — cadence is `replay-paced.test.ts`. Mock STT says nothing about ASR quality and
+must never be reported as content evidence.
+
+**Its tolerances are measured, not assumed.** A tape fixture drives the real segmenter alongside an
+async pump, so the interleaving — and with it the number of resubmissions — varies. Across five
+consecutive runs of identical code on the youtube entry: coverage 0.905–0.906, holes 6/6/6/6/6,
+published words 2746–2750 — but STT call count 429–440. Structure is stable; call-count-derived
+figures are not, and `score-fixture` tolerances them from that spread. What the corpus exists to
+catch moves far further: reverting `4c030cd8` takes `storeDupes` from 0 to 11.
+
+**`retention` is recorded only against real STT.** A mock that invents fresh tokens per call turns
+every LocalAgreement resubmission of the same audio into denominator it never lost, so retention
+under a mock measures resubmission overlap and calls it loss.
 
 The lane's cut source follows the fixture: a bot session replays production's own recorded
 boundaries, a desktop tape has none and gets the REAL PyannoteSegmenter (~70s for a 20-minute
-session, deterministic run to run).
+session).
 
 ## Entries
 
@@ -63,7 +74,7 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 | delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
 | shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
 | content | recall 0.858 · **precision 0.723** (whisper-1, single pass) |
-| lane | 54 store rows · 0 dup texts · retention 1.000 · coverage 0.422 · 6 holes >2s |
+| lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467 · 5 holes >2s |
 
 This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
 discrimination: same source material, same lane, same STT — 65.0% vs 94.9% delivered, and precision
@@ -80,15 +91,20 @@ hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. 
 | delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
 | shape | no recorded cuts (tape) — the lane run segments it live |
 | content | **recall 0.905 · precision 0.941** (whisper-1, single pass) |
-| lane | 11 store rows · 0 dup texts · **retention 0.944** · coverage 0.990 · 1 hole >2s |
+| lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905 · 6 holes >2s |
 
 The red evidence for **#854**: 9.5% of what this same model extracts from this same audio in one
-pass never reaches the transcript, and 5.9% of the transcript is not in that pass.
+pass never reaches the transcript, and 5.9% of the transcript is not in that pass. That comparison
+is built from the session's DELIVERED PCM, so it measures streaming loss relative to what capture
+handed over — it is structurally blind to capture loss, and cannot be read as a total.
 
 ## The contract
 
 1. A defect is only worked against an entry in this corpus — no fixture, no fix.
 2. An entry is added the day its session is witnessed, not the day someone needs it.
 3. An entry that once caught a defect keeps catching it: `4c030cd8` (mixed draft identity) reverted
-   takes `youtube/2026-07-20-continuous-speech` from 11 store rows / 0 duplicates to **22 rows / 11
-   duplicates** — every sentence stored twice — and `score-fixture --lane` fails on it.
+   takes `youtube/2026-07-20-continuous-speech` from 0 duplicate texts to **11** — every sentence
+   stored twice — and `score-fixture --lane` fails on it.
+4. Repeat a run before recording it as a baseline. Both instrument defects found on 2026-07-20 —
+   a replay outrunning the lane's ring, and a ratio whose denominator the mock controlled — looked
+   like clean numbers in a single run and were only visible across five.
