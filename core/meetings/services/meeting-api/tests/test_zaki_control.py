@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 import base64
 from datetime import datetime, timezone
 import hashlib
@@ -587,3 +588,31 @@ async def test_pending_callbacks_casts_the_nullable_capture_id_parameter():
 
     tokens = set(re.findall(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)", sql))
     assert tokens <= {"capture_id", "limit"}, tokens
+
+
+def test_every_inline_sql_statement_compiles_under_sqlalchemy_text():
+    """sqlalchemy text() has lexer edge cases (colon-name tokens in comments,
+    quoted colon literals adjacent to ::casts) that leave binds unconverted and
+    only explode against a real database — two of them shipped in one week.
+    Compile every inline SQL string in the adapters module through text() so
+    the whole file is guarded, not just the statements a regression already
+    covers. Skips offline (the gate venv deliberately has no sqlalchemy);
+    the container/compose lanes run it for real."""
+    import re
+    from pathlib import Path
+
+    pytest.importorskip("sqlalchemy")
+    from sqlalchemy import text
+    from sqlalchemy.dialects import postgresql
+
+    source = Path(__file__).resolve().parents[1] / "src/meeting_api/zaki_control/adapters.py"
+    blocks = re.findall(r'"""\s*\n(\s+(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER)[\s\S]*?)"""', source.read_text())
+    inline = re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER)[^"\n]{10,})"', source.read_text())
+    statements = blocks + inline
+    assert len(statements) >= 10, f"SQL scan found too few statements ({len(statements)}) — regex drifted"
+    for sql in statements:
+        # The default dialect renders binds AS :name; postgresql renders
+        # pyformat, so any surviving colon-token is a genuine lexer miss.
+        compiled = str(text(sql).compile(dialect=postgresql.dialect()))
+        leftover = re.findall(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)", compiled)
+        assert not leftover, f"unconverted bind tokens {leftover} in: {sql[:120]}"

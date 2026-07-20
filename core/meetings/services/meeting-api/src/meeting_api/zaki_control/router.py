@@ -11,6 +11,9 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import logging
+
+_log = logging.getLogger("meeting_api.zaki_control")
 import json
 import re
 import uuid
@@ -561,6 +564,10 @@ def build_router(
                 fence=claim.fence,
             )
         except Exception:
+            # The contract answer stays content-free; the CAUSE goes to the log —
+            # a swallowed exception cost a day of staging diagnosis (advisory-lock
+            # lexer bug answered 503 with zero trace).
+            _log.exception("control operation failed (request_id=%s)", x_request_id)
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         return _response(result, request_id=x_request_id)
 
@@ -730,6 +737,10 @@ def build_router(
         except DuplicateMeeting:
             return _control_error(409, "invalid_state", request_id=x_request_id)
         except Exception:
+            # The contract answer stays content-free; the CAUSE goes to the log —
+            # a swallowed exception cost a day of staging diagnosis (advisory-lock
+            # lexer bug answered 503 with zero trace).
+            _log.exception("control operation failed (request_id=%s)", x_request_id)
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         return _response(result, request_id=x_request_id)
 
@@ -839,6 +850,10 @@ def build_router(
         except CaptureDenied:
             return _control_error(409, "invalid_state", request_id=x_request_id)
         except Exception:
+            # The contract answer stays content-free; the CAUSE goes to the log —
+            # a swallowed exception cost a day of staging diagnosis (advisory-lock
+            # lexer bug answered 503 with zero trace).
+            _log.exception("control operation failed (request_id=%s)", x_request_id)
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         return _response(result, request_id=x_request_id)
 
@@ -1126,6 +1141,10 @@ def build_router(
         except ErasureFailed:
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         except Exception:
+            # The contract answer stays content-free; the CAUSE goes to the log —
+            # a swallowed exception cost a day of staging diagnosis (advisory-lock
+            # lexer bug answered 503 with zero trace).
+            _log.exception("control operation failed (request_id=%s)", x_request_id)
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         return _response(result, request_id=x_request_id)
 
@@ -1224,6 +1243,10 @@ def build_router(
         except ErasureFailed:
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         except Exception:
+            # The contract answer stays content-free; the CAUSE goes to the log —
+            # a swallowed exception cost a day of staging diagnosis (advisory-lock
+            # lexer bug answered 503 with zero trace).
+            _log.exception("control operation failed (request_id=%s)", x_request_id)
             return _control_error(503, "upstream_unavailable", request_id=x_request_id)
         return _response(result, request_id=x_request_id)
 
