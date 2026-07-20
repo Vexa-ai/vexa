@@ -115,8 +115,29 @@ async function main(): Promise<void> {
     check('lazy: quit() with no connection does not call client.quit()', fake2.quitCalls === 0, `quitCalls=${fake2.quitCalls}`);
   }
 
+  // ── quit() must be BOUNDED: node-redis v4's DEFAULT reconnectStrategy retries forever, so
+  //    connect() against an unreachable server stays PENDING — never resolves, never rejects.
+  //    An unbounded `await connecting` there hangs teardown: a bot whose redis is down never
+  //    exits. The control below is the pending-forever client; without the bound this HANGS.
+  {
+    const neverSettles: LazyConnectable = {
+      connect() { return new Promise<void>(() => { /* pending forever, by construction */ }); },
+      quit() { return Promise.resolve(); },
+      get isOpen() { return false; },
+    } as unknown as LazyConnectable;
+
+    const lazy = makeLazyConnect(neverSettles, { quitSettleMs: 20 });
+    void lazy.ensure().catch(() => undefined);
+    const raced = await Promise.race([
+      lazy.quit().then(() => 'returned'),
+      new Promise((r) => setTimeout(() => r('HUNG'), 1000)),
+    ]);
+    check('lazy: quit() does not hang on a connect that never settles (unreachable redis)',
+      raced === 'returned', String(raced));
+  }
+
   if (failed) { console.error(`\n❌ redis-lazy-connect (L3): ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log('\n✅ redis-lazy-connect (L3): concurrent first-use callers share one connect (no "Socket already opened" race); failed connect retries; quit settles in-flight + guards isOpen.');
+  console.log('\n✅ redis-lazy-connect (L3): concurrent first-use callers share one connect (no "Socket already opened" race); failed connect retries; quit settles in-flight, is bounded against a pending-forever connect, and guards isOpen.');
 }
 
 void main();

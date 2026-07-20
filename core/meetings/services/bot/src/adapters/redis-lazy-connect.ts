@@ -24,11 +24,22 @@ export interface LazyConnect {
   /** Connect on first call; concurrent first-use callers all await the SAME connect(). */
   ensure(): Promise<void>;
   /** Settle any in-flight connect first (so quit never races a half-open socket), then quit()
-   *  iff the socket is actually open. Resets the memo so a later ensure() can reconnect. */
+   *  iff the socket is actually open. Resets the memo so a later ensure() can reconnect.
+   *  The settle wait is BOUNDED — see `quitSettleMs`. */
   quit(): Promise<void>;
 }
 
-export function makeLazyConnect(client: LazyConnectable): LazyConnect {
+/** How long quit() waits for an in-flight connect before tearing down anyway.
+ *  node-redis v4's DEFAULT reconnectStrategy retries forever, so `connect()` against an
+ *  unreachable server stays PENDING — it neither resolves nor rejects. An unbounded await
+ *  there hangs teardown: a bot whose redis is down never exits. Bound it. */
+export const DEFAULT_QUIT_SETTLE_MS = 5_000;
+
+export function makeLazyConnect(
+  client: LazyConnectable,
+  opts: { quitSettleMs?: number } = {},
+): LazyConnect {
+  const quitSettleMs = opts.quitSettleMs ?? DEFAULT_QUIT_SETTLE_MS;
   let connecting: Promise<void> | null = null;
   const ensure = (): Promise<void> => {
     if (!connecting) {
@@ -45,7 +56,17 @@ export function makeLazyConnect(client: LazyConnectable): LazyConnect {
   return {
     ensure,
     async quit() {
-      if (connecting) await connecting.catch(() => undefined);
+      if (connecting) {
+        // BOUNDED wait: a pending-forever connect (unreachable redis) must not hold teardown.
+        // The timer is unref'd so it can never keep the process alive on its own.
+        await Promise.race([
+          connecting.catch(() => undefined),
+          new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, quitSettleMs);
+            (t as unknown as { unref?: () => void }).unref?.();
+          }),
+        ]);
+      }
       if (client.isOpen) await client.quit();
       connecting = null;
     },
