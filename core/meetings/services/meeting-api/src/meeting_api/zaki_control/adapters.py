@@ -955,9 +955,11 @@ class SqlAlchemyControlStore:
                         SELECT event_id, body, tenant_id, user_id, capture_id, terminal
                         FROM zaki_control_callback_outbox
                         WHERE delivered_at IS NULL
-                          -- asyncpg prepares server-side: a bare NULL parameter in
-                          -- ":x IS NULL OR col = :x" has no inferable type and raises
-                          -- AmbiguousParameterError. The cast anchors it to the column type.
+                          -- asyncpg prepares server-side: a bare NULL bind in the
+                          -- null-check-or-equality shape has no inferable type and raises
+                          -- AmbiguousParameterError; the CAST anchors it to the column
+                          -- type. NOTE sqlalchemy text() scans COMMENTS for colon-name
+                          -- binds too, so this comment must never contain one.
                           AND (CAST(:capture_id AS VARCHAR(160)) IS NULL
                                OR capture_id = CAST(:capture_id AS VARCHAR(160)))
                         ORDER BY created_at, event_id

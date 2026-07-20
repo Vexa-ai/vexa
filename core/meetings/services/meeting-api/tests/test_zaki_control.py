@@ -579,3 +579,11 @@ async def test_pending_callbacks_casts_the_nullable_capture_id_parameter():
     sql = record["sql"]
     assert sql.count("CAST(:capture_id AS VARCHAR(160))") == 2, sql
     assert ":capture_id IS NULL" not in sql, sql
+    # sqlalchemy text() scans the WHOLE string for colon-name binds — including
+    # SQL comments (a comment containing a colon-word token broke this exact
+    # query in staging with "A value is required for bind parameter"). Only the
+    # two intended binds may appear anywhere in the statement.
+    import re
+
+    tokens = set(re.findall(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)", sql))
+    assert tokens <= {"capture_id", "limit"}, tokens
