@@ -368,7 +368,8 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  // Factored so a navigation can re-run it — see the re-arm below.
+  const setup = (): Promise<void> => page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -504,8 +505,26 @@ export async function startCaptureBridge(
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName });
+
+  await setup().catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
+  });
+
+  // RE-ARM ON NAVIGATION. The browser bundle and the WebRTC hook go in via addInitScript, so they
+  // are re-injected into every document; the block above runs ONCE, in whichever document existed
+  // when it fired. Its watchers are setInterval loops that die with that document — so a client
+  // that navigates after join (Zoom's web client picks up an `_x_zm_rtaid` on the way in) leaves
+  // the audio path alive and the NAME path silently dead. That asymmetry is exactly the shape of a
+  // meeting transcribed correctly and attributed to nobody (#852).
+  //
+  // Re-running the setup is safe: every branch is guarded on its own `w.__vexa*` handle, and a
+  // fresh document has a fresh window, so this installs one watcher per document and never two.
+  const rearm = (): void => {
+    void setup().catch(() => { /* a navigation mid-setup is not worth failing the bot over */ });
+  };
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) rearm();
   });
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
