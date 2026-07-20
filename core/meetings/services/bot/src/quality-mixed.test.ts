@@ -46,6 +46,8 @@ const LANG = process.env.TX_LANG ?? 'en';
 const MIN_TURN_MS = Number(process.env.MIN_TURN_MS ?? 0);
 const MOCK = process.env.MOCK_STT === '1';
 const CLOSE_ONLY = process.env.CLOSE_ONLY === '1';
+/** Every STT submission with the audio that produced it — see the transcribe callback. */
+const windowLog: Array<{ sec: number; rms: number; peak: number; text: string }> | null = process.env.WINDOW_LOG ? [] : null;
 const SR = 16000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -126,6 +128,19 @@ async function main(): Promise<void> {
       try {
         const r = await client.transcribe(pcm, LANG, prompt);
         sttWords += words(r.text).length;
+        // WINDOW_LOG is the tap that makes an invented phrase traceable: every submission with the
+        // audio that produced it — duration, level, and the answer. Without it "the model made this
+        // up" cannot be tied to the samples responsible, and the mechanism stays a guess.
+        if (windowLog) {
+          let peak = 0, sum = 0;
+          for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; sum += pcm[i] * pcm[i]; }
+          windowLog.push({
+            sec: Number((pcm.length / SR).toFixed(2)),
+            rms: Number(Math.sqrt(sum / Math.max(1, pcm.length)).toFixed(5)),
+            peak: Number(peak.toFixed(4)),
+            text: (r.text || '').trim().slice(0, 120),
+          });
+        }
         return r;
       } catch (e) { sttFails++; throw e; }
     },
@@ -326,6 +341,25 @@ async function main(): Promise<void> {
       ...attribution,
     }, null, 2) + '\n');
     console.log(`  metrics written: ${process.env.METRICS_JSON}`);
+  }
+
+  // The replay's own transcript, in the shape `single_pass_truth.py --realtime` reads. Without this
+  // a lane change can only be judged on structure: the stored transcript in a corpus entry came from
+  // the ORIGINAL live session, so it cannot score a replay, and every content question about a diff
+  // ("did that fix lose words?") was unanswerable. Written in seconds to match the reference's clock.
+  if (process.env.TRANSCRIPT_OUT) {
+    writeFileSync(process.env.TRANSCRIPT_OUT, JSON.stringify({
+      segments: [...store.entries()].map(([id, r]) => {
+        const p = published.find((q) => q.id === id);
+        return { segment_id: id, speaker: r.speaker, text: r.text, start: (p?.startMs ?? 0) / 1000, end: (p?.endMs ?? 0) / 1000 };
+      }).sort((a, b) => a.start - b.start),
+    }, null, 2) + '\n');
+    console.log(`  transcript written: ${process.env.TRANSCRIPT_OUT}`);
+  }
+
+  if (windowLog && process.env.WINDOW_LOG) {
+    writeFileSync(process.env.WINDOW_LOG, JSON.stringify(windowLog, null, 2) + '\n');
+    console.log(`  window log written: ${process.env.WINDOW_LOG} (${windowLog.length} submissions)`);
   }
 
   console.log('\n--- transcript ---');
