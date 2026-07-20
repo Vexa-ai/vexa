@@ -119,6 +119,18 @@ async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
 
 
+def test_iso_utc_marks_naive_utc_with_z():
+    # Meeting time columns are naive but hold UTC. Serializing must emit a Z marker so a browser
+    # parses it as UTC and renders local — a bare isoformat is read as LOCAL (the 6h-skew bug).
+    from datetime import datetime, timezone
+
+    from meeting_api.bot_spawn.adapters import _iso_utc
+
+    assert _iso_utc(datetime(2026, 7, 20, 1, 0, 0)) == "2026-07-20T01:00:00Z"
+    assert _iso_utc(datetime(2026, 7, 20, 1, 0, 0, tzinfo=timezone.utc)) == "2026-07-20T01:00:00Z"
+    assert _iso_utc(None) is None
+
+
 async def test_request_bot_dedup_raises(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
