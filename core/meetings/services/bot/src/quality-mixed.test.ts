@@ -38,6 +38,7 @@ const TX_MODEL = process.env.TX_MODEL ?? 'Systran/faster-whisper-small';
 const LANG = process.env.TX_LANG ?? 'en';
 const MIN_TURN_MS = Number(process.env.MIN_TURN_MS ?? 0);
 const MOCK = process.env.MOCK_STT === '1';
+const CLOSE_ONLY = process.env.CLOSE_ONLY === '1';
 const SR = 16000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -125,7 +126,12 @@ async function main(): Promise<void> {
 
   for (const ev of timeline) {
     if (ev.cut) {
-      if (ev.cut.tMs - lastCutMs < MIN_TURN_MS) { cutsSuppressed++; continue; }
+      // CLOSE_ONLY: coalesce only boundaries that would END a turn early. Suppressing an
+      // OPENING boundary means the turn never opens and the audio arriving then has nowhere to
+      // accumulate — which is why blanket suppression lost content.
+      const closes = ev.cut.kind === 'speaker→silence' || ev.cut.kind === 'overlap-offset';
+      const tooSoon = ev.cut.tMs - lastCutMs < MIN_TURN_MS;
+      if (tooSoon && (!CLOSE_ONLY || closes)) { cutsSuppressed++; continue; }
       emitBoundary({ kind: ev.cut.kind as BoundaryEvent['kind'], tMs: ev.cut.tMs, confidence: ev.cut.confidence ?? 0.9 });
       lastCutMs = ev.cut.tMs; cutsEmitted++;
     } else if (ev.hint) {
@@ -168,7 +174,7 @@ async function main(): Promise<void> {
   console.log(`  segments      ${published.length} · p50 dur ${(durs[Math.floor(durs.length / 2)] ?? 0).toFixed(2)}s · under1s ${durs.filter((d) => d < 1).length}`);
   console.log(`  holes >2s     ${holes.length}${holes.length ? ' → ' + holes.map(([a, b]) => `${a.toFixed(1)}-${b.toFixed(1)}`).join(', ') : ''}`);
   console.log(`  duplicates    ${dupes}`);
-  console.log(`\nSWEEP mock=${MOCK ? 1 : 0} min_turn_ms=${MIN_TURN_MS} coverage=${(covered / wallSec).toFixed(3)} retention=${(txWords / Math.max(1, sttWords)).toFixed(3)} segs=${published.length} words=${txWords} sttWords=${sttWords} holes=${holes.length} calls=${sttCalls}`);
+  console.log(`\nSWEEP mock=${MOCK ? 1 : 0} closeOnly=${CLOSE_ONLY ? 1 : 0} min_turn_ms=${MIN_TURN_MS} coverage=${(covered / wallSec).toFixed(3)} retention=${(txWords / Math.max(1, sttWords)).toFixed(3)} segs=${published.length} words=${txWords} sttWords=${sttWords} holes=${holes.length} calls=${sttCalls}`);
 
   console.log('\n--- transcript ---');
   for (const p of published) console.log(`  [${((p.startMs - t0) / 1000).toFixed(2)}-${((p.endMs - t0) / 1000).toFixed(2)}] ${p.speaker}: ${p.text.slice(0, 80)}`);
