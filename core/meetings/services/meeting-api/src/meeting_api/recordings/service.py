@@ -294,6 +294,19 @@ async def _finalize_master_under_lease(
         master_bytes = build_recording_master(chunks, media_format)
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
 
+    # Steady-state read of an already-finalized master (nothing rebuilt AND the media-file row already
+    # reflects the assembled state): skip the row-locking mutate + finalized_at churn. `finalize_master`
+    # is called on EVERY byte-range playback read, so writing on each one serializes concurrent seeks
+    # behind a `SELECT ... FOR UPDATE` on the meeting row. Any real change — a rebuild above, or a
+    # not-yet-stamped media file — still falls through to the atomic stamp below.
+    if (
+        not rebuild
+        and mf.get("is_final")
+        and mf.get("storage_path") == master_key
+        and mf.get("assembled_chunk_count") == listed_count
+    ):
+        return master_key
+
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
     # uploaded above, idempotently by key). The mutator re-reads the LIVE recording.

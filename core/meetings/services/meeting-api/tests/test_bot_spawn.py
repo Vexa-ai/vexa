@@ -529,6 +529,15 @@ def test_post_bots_url_only_jitsi_derives_room(monkeypatch):
     assert body["native_meeting_id"] == "daily@meet.example.org"
 
 
+def test_post_bots_non_string_meeting_url_is_422_not_500(monkeypatch):
+    """A JSON non-string meeting_url (number/object/bool) must be a typed 422, not an unhandled 500 from
+    the url-only derive path calling parse_meeting_url(...).strip() on a non-str."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS, json={"meeting_url": 12345})
+    assert r.status_code == 422, r.text
+    assert "meeting_url" in r.json()["detail"]
+
+
 def test_post_bots_url_only_derives_passcode(monkeypatch):
     """F4: the contract sentence also promises passcode extraction — zoom ?pwd= rides into the
     invocation when the body carries none."""

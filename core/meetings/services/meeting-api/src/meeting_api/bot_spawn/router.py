@@ -180,6 +180,11 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         platform = str(body.get("platform", "")).strip()
         native_meeting_id = str(body.get("native_meeting_id", "")).strip()
         meeting_url = body.get("meeting_url")
+        if meeting_url is not None and not isinstance(meeting_url, str):
+            # A truthy non-string (JSON number/bool/object) would otherwise reach parse_meeting_url on
+            # the url-only derive path and raise AttributeError (.strip) → an unhandled 500. Reject it
+            # typed here, matching the SSRF validator's "must be a string" 422 on the explicit-id path.
+            raise HTTPException(status_code=422, detail="meeting_url must be a string")
         # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
         # (zoom/jitsi). It is SSRF-validated below (422 on violation) before the bot navigates.
         passcode = body.get("passcode")

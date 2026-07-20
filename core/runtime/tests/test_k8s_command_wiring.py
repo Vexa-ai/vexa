@@ -1,16 +1,19 @@
 """A1 (#675) — OFFLINE proof that the k8s backend execs an in-image path for the meeting-bot profile.
 
-`kubectl run --command -- <argv>` REPLACES the image entrypoint (sets Pod.spec.containers[].command).
-So whatever the meeting-bot profile carries as its command becomes argv[0] of the Pod. The shipped bot
-image has ENTRYPOINT ["/app/entrypoint.sh"] and no /app/vexa-bot/ directory — so a profile command of
-/app/vexa-bot/entrypoint.sh makes every k8s spawn StartError (exit 128, "no such file or directory").
+This fork's k8s backend spawns via a complete `kubectl run --overrides` container (the only way to
+attach the #15 pod-hardening securityContext), so a profile's command lands in
+`Pod.spec.containers[0].command` INSIDE that --overrides JSON — NOT via a `kubectl run --command` flag.
+The shipped bot image has ENTRYPOINT ["/app/entrypoint.sh"] and no /app/vexa-bot/ directory — so a
+container command of /app/vexa-bot/entrypoint.sh makes every k8s spawn StartError.
 
-The fix drops the meeting-bot profile command: the k8s backend then omits `--command` entirely and the
-Pod boots the image ENTRYPOINT — the real launcher. These tests capture the exact kubectl argv without
-a cluster (the live-cluster lifecycle lives in test_k8s_backend.py) by stubbing the module's _kubectl.
+The #675 fix drops the meeting-bot profile command (command=None): the --overrides container then emits
+NO `command` key and the Pod boots the image ENTRYPOINT — the real launcher. These tests capture the
+exact kubectl argv + --overrides spec without a cluster (the live-cluster lifecycle lives in
+test_k8s_backend.py) by stubbing the module's _kubectl.
 
-RED on main: pre-fix the meeting-bot runnable carries ["/app/vexa-bot/entrypoint.sh"], so the argv here
-would contain `--command -- /app/vexa-bot/entrypoint.sh` and the assertions below fail.
+RED on main: pre-fix the meeting-bot runnable carried ["/app/vexa-bot/entrypoint.sh"], so the
+--overrides container below would carry `"command": ["/app/vexa-bot/entrypoint.sh"]` and the
+container-command assertion here would fail.
 """
 from __future__ import annotations
 
@@ -39,8 +42,10 @@ def _capture_run_argv(monkeypatch) -> list:
 
 
 def test_meeting_bot_k8s_run_omits_command_uses_image_entrypoint(monkeypatch):
-    """The meeting-bot profile has no command ⇒ `kubectl run` carries NO `--command`, so the Pod execs
-    the shipped bot image's own ENTRYPOINT (the real, in-image launcher)."""
+    """The meeting-bot profile has no command ⇒ its --overrides container carries NO `command` key
+    (and the argv no `--command` flag), so the Pod execs the shipped bot image's own ENTRYPOINT."""
+    import json
+
     calls = _capture_run_argv(monkeypatch)
     monkeypatch.setenv("BROWSER_IMAGE", "vexaai/vexa-bot:test")
     runnable = default_registry().resolve("meeting-bot")
@@ -51,9 +56,12 @@ def test_meeting_bot_k8s_run_omits_command_uses_image_entrypoint(monkeypatch):
 
     run_argv = calls[0]
     assert run_argv[0] == "run"
-    # No entrypoint replacement: the image ENTRYPOINT (/app/entrypoint.sh) boots the container.
+    # The MEANINGFUL proof: this backend puts the command in the --overrides container, so assert that
+    # container carries no `command` key — hence k8s boots the image ENTRYPOINT.
+    override = json.loads(run_argv[run_argv.index("--overrides") + 1])
+    assert "command" not in override["spec"]["containers"][0]
+    # No --command flag either, and the phantom path never appears anywhere in the argv.
     assert "--command" not in run_argv
-    # And the phantom path never appears anywhere in the argv.
     assert not any("/app/vexa-bot/entrypoint.sh" in a for a in run_argv)
 
 
