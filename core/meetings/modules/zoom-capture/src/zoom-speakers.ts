@@ -22,6 +22,9 @@ export interface ZoomSpeakersOptions {
   /** Fired when the active speaker changes (name or null when nobody is active).
    *  Legacy single-track mode (used when remote audio is one mixed track). */
   onSpeakerChange?: (name: string | null) => void;
+  /** How often to report that no speaker has EVER been seen (ms, default 30s). A watcher whose
+   *  selectors have gone stale is otherwise completely silent — see the report in `tick`. */
+  blindReportMs?: number;
   /** Per-track naming (multi-channel mode): fired when a track index is mapped/
    *  locked to a participant name via active-speaker voting. */
   onName?: (index: number, name: string) => void;
@@ -153,6 +156,11 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
   const HEARTBEAT_POLLS = Math.max(1, Math.round(2000 / pollMs));
   let sinceEmit = 0;
 
+  // Blindness reporting: how often to say "still nothing", and whether anything was EVER seen.
+  const BLIND_REPORT_POLLS = Math.max(1, Math.round((opts.blindReportMs ?? 30_000) / pollMs));
+  let polls = 0;
+  let sawAnySpeaker = false;
+
   // One poll cycle: read the lit speaker; emit on change, or periodically re-assert.
   function tick(): void {
     let name: string | null = null;
@@ -175,6 +183,26 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
         try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
       }
     }
+    // SAY SO WHEN BLIND. This watcher's only output is a speaker transition, so selectors that stop
+    // matching produce perfect silence — no error, no warning, a clean log and a full transcript
+    // whose speaker column reads seg_0, seg_4, seg_7. Observed live on 2026-07-20: Zoom's web
+    // client no longer renders ANY of ACTIVE_CONTAINER_SELECTORS, every poll returned null for a
+    // whole meeting, and nothing anywhere said so (#852).
+    //
+    // A watcher that has never once seen a speaker is either in a silent room or broken, and it
+    // cannot tell which — but it CAN report the ambiguity instead of hiding it.
+    polls++;
+    if (name) sawAnySpeaker = true;
+    if (!sawAnySpeaker && polls % BLIND_REPORT_POLLS === 0) {
+      const anchors = ACTIVE_CONTAINER_SELECTORS.filter((sel) => document.querySelector(sel));
+      log(
+        `NO ACTIVE SPEAKER seen in ${Math.round((polls * pollMs) / 1000)}s — ` +
+        (anchors.length
+          ? `containers present (${anchors.join(', ')}) but none named; the room may be silent`
+          : `and NONE of the containers exist in this DOM (${ACTIVE_CONTAINER_SELECTORS.join(', ')}) — selectors are stale, attribution WILL be empty`),
+      );
+    }
+
     // Multi-channel: correlate the active speaker with the track that's audible.
     if (opts.onName) { try { voteOnce(); } catch { /* ignore */ } }
   }
