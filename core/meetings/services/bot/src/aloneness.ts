@@ -3,7 +3,22 @@ import type { AlonenessSource } from './ports.js';
 
 export const DEFAULT_ALONE_SILENCE_WINDOW_MS = 10 * 60 * 1000;
 export const DEFAULT_ALONENESS_POLL_MS = 1_500;
-export const REMOTE_AUDIO_ENERGY_FLOOR = 0.005;
+/** Presence floor for a DELIVERED remote frame — deliberately 0 (arrival is the signal).
+ *
+ *  Capture is the single silence oracle: the page emits a frame only when its PEAK sample exceeds
+ *  its own gate (`mixed-audio.ts` / `gmeet-capture.ts`, 0.005), and the activity tap sits on the
+ *  Node side of that gate (`capture-bridge.ts:289,298`). So every frame that reaches this seam has
+ *  ALREADY proven it carries audio — and was sent to STT and transcribed on that basis.
+ *
+ *  Re-testing such a frame with RMS (always ≤ peak; for speech 3–5× lower) against the SAME 0.005
+ *  could only ever REJECT audio the capture gate accepted — never admit anything it refused. It was
+ *  a pure false-negative generator: a participant speaking quietly was transcribed while counting as
+ *  silence toward `left_alone`, so the bot could leave a meeting it could hear. #850 measured 23.3%
+ *  of frames in one real fixture sitting in exactly that peak-passes/RMS-fails band.
+ *
+ *  A cost decision ("don't pay Whisper for near-silence") is not a presence decision. Only a frame
+ *  carrying no energy at all is silence here; anything the capture gate delivered is someone. */
+export const REMOTE_AUDIO_ENERGY_FLOOR = 0;
 
 export interface RemoteAudioActivitySnapshot {
   available: boolean;
@@ -49,7 +64,8 @@ export function createRemoteAudioActivityTap(options: {
       state = { available: true, lastRemoteAudioAt: now() };
     },
     observeRemoteEnergy(energy: number): void {
-      if (!state.available || !Number.isFinite(energy) || energy < energyFloor) return;
+      // Digital silence (or a nonsense reading) is not presence; every other delivered frame is.
+      if (!state.available || !Number.isFinite(energy) || energy <= 0 || energy < energyFloor) return;
       state = { available: true, lastRemoteAudioAt: now() };
     },
     unavailable(): void {

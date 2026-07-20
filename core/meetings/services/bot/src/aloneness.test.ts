@@ -106,7 +106,11 @@ function fixture(windowMs = 1_000) {
   check('local bot speech does not reset remote silence', fired === 1);
 }
 
-// Frames below the energy floor are silence and do not reset the anchor.
+// A QUIET delivered frame is still presence. Capture is the single silence oracle: the page emits
+// a frame only when its PEAK clears the capture gate, and this tap sits downstream of it — so an
+// arriving frame has already proven it carries audio and was transcribed on that basis. Re-judging
+// it by RMS (always <= peak) could only discard real speech, letting the bot leave a meeting it
+// could hear. Quiet must NOT reset-suppress.
 {
   const f = fixture();
   let fired = 0;
@@ -115,7 +119,19 @@ function fixture(windowMs = 1_000) {
   f.clock.advance(900);
   f.activity.observeRemoteEnergy(quietEnergy);
   f.clock.advance(100); f.scheduler.tick();
-  check('near-silent remote frames do not reset', fired === 1);
+  check('a quiet delivered frame counts as presence (no false leave)', fired === 0);
+}
+
+// ...but digital silence is not presence: a zero-energy reading must never hold the meeting open.
+{
+  const f = fixture();
+  let fired = 0;
+  f.activity.ready();
+  f.source.onAlone(() => fired++);
+  f.clock.advance(900);
+  f.activity.observeRemoteEnergy(0);
+  f.clock.advance(100); f.scheduler.tick();
+  check('a zero-energy frame is silence, not presence', fired === 1);
 }
 
 // No capture readiness means no signal, not silence: fail closed forever.
