@@ -562,6 +562,16 @@ probe), not inferred from planning docs.
 
 - **Meeting bots now leave ended calls instead of parking until the hard cap (#545).** After the configured remote-audio silence window, empty rooms and silent bots-only rooms finish as `completed(left_alone)`; `automatic_leave.max_time_left_alone` overrides the 10-minute default. See [Send a bot and get a transcript](/how-to/send-a-bot#when-the-bot-leaves-on-its-own).
 
+- **A meeting with no transcript now says why.** When the transcription backend refuses — an
+  exhausted token, a rejected key, an unreachable service — the bot counts the failures and
+  reports them once on its terminal `lifecycle.v1` event, and meeting-api persists them to
+  `meeting.data.stt_fault` and onto the `meeting.status_change` webhook. Previously those faults
+  were fully typed and attributed inside the bot and then died in a `console.error`, so a meeting
+  whose STT was dead completed indistinguishable from a silent room — the empty-transcript reports
+  that could never be diagnosed after the fact. The report carries the backend's own words
+  (`payment_required`, HTTP 402, "Insufficient balance…") and one count per kind, so a storm of
+  per-chunk failures becomes one honest summary rather than a flood.
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
