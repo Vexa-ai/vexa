@@ -185,21 +185,31 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
     }
     // SAY SO WHEN BLIND. This watcher's only output is a speaker transition, so selectors that stop
     // matching produce perfect silence — no error, no warning, a clean log and a full transcript
-    // whose speaker column reads seg_0, seg_4, seg_7. Observed live on 2026-07-20: Zoom's web
-    // client no longer renders ANY of ACTIVE_CONTAINER_SELECTORS, every poll returned null for a
-    // whole meeting, and nothing anywhere said so (#852).
+    // whose speaker column reads seg_0, seg_4, seg_7 (#852).
     //
-    // A watcher that has never once seen a speaker is either in a silent room or broken, and it
-    // cannot tell which — but it CAN report the ambiguity instead of hiding it.
+    // A watcher that has never once seen a speaker is in a silent room, or looking at a DOM without
+    // the chrome, or looking at renamed classes. It cannot tell which — so it reports the counts
+    // that separate them and leaves the verdict to whoever reads them. The first version of this
+    // block did draw the verdict ("selectors are stale"), and a second browser joined to the SAME
+    // meeting at the SAME moment found both selectors present: the layout was the variable, not
+    // the class names, and the confident message sent the investigation the wrong way.
     polls++;
     if (name) sawAnySpeaker = true;
     if (!sawAnySpeaker && polls % BLIND_REPORT_POLLS === 0) {
       const anchors = ACTIVE_CONTAINER_SELECTORS.filter((sel) => document.querySelector(sel));
+      const speakerish = document.querySelectorAll('[class*="speaker"]').length;
+      const frames = document.querySelectorAll('[class*="video-frame"]').length;
+      const footers = document.querySelectorAll(NAME_FOOTER_SELECTOR).length;
       log(
         `NO ACTIVE SPEAKER seen in ${Math.round((polls * pollMs) / 1000)}s — ` +
         (anchors.length
           ? `containers present (${anchors.join(', ')}) but none named; the room may be silent`
-          : `and NONE of the containers exist in this DOM (${ACTIVE_CONTAINER_SELECTORS.join(', ')}) — selectors are stale, attribution WILL be empty`),
+          : `none of ${ACTIVE_CONTAINER_SELECTORS.join(', ')} exist here. This DOM: ` +
+            `${speakerish} [class*=speaker], ${frames} [class*=video-frame], ${footers} name footers, ` +
+            `${document.querySelectorAll('iframe').length} iframes, ` +
+            `viewport ${window.innerWidth}x${window.innerHeight}, visibility=${document.visibilityState}. ` +
+            `All zero means this client renders no speaker chrome at all; non-zero means the class ` +
+            `names moved. Attribution is empty either way.`),
       );
     }
 
