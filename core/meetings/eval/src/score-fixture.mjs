@@ -46,15 +46,21 @@ const TOL = {
   retention: 0.001, coverage: 0.01, segP50Sec: 0.25,
   sttCalls: 15, sttWords: 250, publishCalls: 5, uniqueSegmentIds: 5,
   storeRows: 5, segments: 5, segUnder1s: 8, publishedWords: 25,
+  // Attribution rides the same resubmission jitter, so it gets the same treatment. The numbers it
+  // exists to catch — a lane that stops naming anyone, a hint stream that goes dark — move in
+  // tenths, not hundredths.
+  provisionalRate: 0.03, hintMissRate: 0.03, hintMatched: 5, hintMissed: 5,
+  renames: 3, churnedTurns: 3, publishedSpeakers: 0, hintNames: 0,
 };
 const DEFAULT_TOL = 0;
 // Where a metric has a direction, say so — it turns "changed" into "better" or "worse" in the
 // report. Metrics with no entry are directionless: any movement is reported as a difference.
-const HIGHER_IS_BETTER = new Set(['dutyCycle', 'recall', 'precision', 'retention', 'coverage']);
+const HIGHER_IS_BETTER = new Set(['dutyCycle', 'recall', 'precision', 'retention', 'coverage', 'hintMatched']);
 // `storeRows` and `segments` are deliberately absent: for a fixed fixture more rows can mean a
 // duplication defect OR a session that was previously scored as one useless turn, and only the
 // content tells them apart. Naming a direction there would assert a verdict the number cannot carry.
-const LOWER_IS_BETTER = new Set(['storeDupes', 'holesOver2s', 'segUnder1s', 'gapCount', 'gapTotalSec', 'sttFails']);
+const LOWER_IS_BETTER = new Set(['storeDupes', 'holesOver2s', 'segUnder1s', 'gapCount', 'gapTotalSec', 'sttFails',
+  'provisionalRate', 'hintMissRate', 'hintMissed', 'churnedTurns']);
 
 function entries() {
   if (named.length) return named.map((n) => ({ id: n, dir: path.join(CORPUS, n) }));
@@ -144,6 +150,16 @@ for (const { id, dir } of entries()) {
       console.log(`  lane      ${lane.storeRows} store rows (${lane.storeDupes} dup texts) · ${lane.publishedWords} words · ` +
         `coverage ${lane.coverage} · ${lane.holesOver2s} holes >2s` +
         (lane.retention === undefined ? '' : ` · retention ${lane.retention}`));
+      // With no hint stream there is no name source, so everything is provisional BY DESIGN — a
+      // shared tab has nobody to name. Saying so keeps a 100% that means "not applicable" from
+      // reading as a 100% that means "the namer is dead".
+      if (lane.hintNames === 0) {
+        console.log(`  attribution n/a — no hints in this fixture (nothing to name from); ${lane.provisionalRate * 100}% provisional is the expected floor`);
+      } else if (lane.provisionalRate !== undefined) {
+        console.log(`  attribution ${(lane.provisionalRate * 100).toFixed(1)}% of words provisional · ` +
+          `hint miss ${(lane.hintMissRate * 100).toFixed(1)}% (${lane.hintMissed}/${lane.hintMatched + lane.hintMissed}) · ` +
+          `${lane.renames} renames, ${lane.churnedTurns} churned · ${lane.publishedSpeakers} named vs ${lane.hintNames} hinted`);
+      }
     }
   }
 
