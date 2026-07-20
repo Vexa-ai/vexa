@@ -93,10 +93,28 @@ if (refPath) copyFileSync(refPath, path.join(dir, 'reference.txt'));
 // A URL is fetched, not linked: the desktop store keeps growing after the session ends, so the
 // transcript must be pinned at promotion time or the baseline drifts under its own fixture.
 if (txPath) {
+  // A transcript and a session must be the SAME meeting, and nothing but this check enforces it.
+  // Pairing them by hand has produced two wrong conclusions: a live transcript from one Zoom call
+  // scored against a replay of another, and a reference scored against a store that had restarted.
+  // Both looked like findings. The id is right there in the URL, so refuse rather than trust.
+  const urlId = txPath.startsWith('http') ? decodeURIComponent(txPath.split('?')[0].replace(/\/+$/, '').split('/').pop() ?? '') : null;
+  if (urlId && header.native_meeting_id && urlId !== String(header.native_meeting_id)) {
+    console.error(`REFUSING: transcript is for meeting "${urlId}" but this session is "${header.native_meeting_id}".`);
+    console.error('  A transcript from a different meeting scores as invention and loss that never happened.');
+    process.exit(3);
+  }
   if (txPath.startsWith('http')) {
     const r = await fetch(txPath);
     if (!r.ok) throw new Error(`transcript fetch ${r.status} from ${txPath}`);
-    writeFileSync(path.join(dir, 'transcript.json'), JSON.stringify(await r.json(), null, 2));
+    const body = await r.json();
+    const segs = body?.segments ?? body;
+    // An empty transcript is not a transcript. The desktop store restarts, and a fixture promoted
+    // against an emptied store carries a content baseline of zero that reads as catastrophic loss.
+    if (!Array.isArray(segs) || segs.length === 0) {
+      console.error(`REFUSING: ${txPath} returned no segments — the store is empty or the meeting id is wrong.`);
+      process.exit(3);
+    }
+    writeFileSync(path.join(dir, 'transcript.json'), JSON.stringify(body, null, 2));
   } else {
     copyFileSync(txPath, path.join(dir, 'transcript.json'));
   }
