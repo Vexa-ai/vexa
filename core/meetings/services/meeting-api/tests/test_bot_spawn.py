@@ -720,3 +720,26 @@ def test_native_meeting_id_with_url_chars_is_422_not_join_failure(monkeypatch):
         "passcode": "X8hcQVTnGNpGelJLSv",
     })
     assert ok.status_code == 201, f"bare id + separate passcode was refused: {ok.text}"
+
+
+def test_capture_signal_reaches_the_bot_when_the_deployment_enables_it():
+    """The deployment knob must reach the bot invocation; default-off omits the field."""
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(
+        meeting_id=1,
+        platform="google_meet",
+        meeting_url="https://meet.google.com/abc-defg-hij",
+        bot_name="VexaBot",
+        token=token,
+        native_meeting_id="abc-defg-hij",
+        connection_id="conn-1",
+        redis_url="redis://redis:6379/0",
+    )
+
+    enabled = build_invocation(**base, capture_signal_enabled=True)
+    conforms_invocation(enabled)
+    assert enabled["captureSignalEnabled"] is True
+
+    disabled = build_invocation(**base)
+    conforms_invocation(disabled)
+    assert "captureSignalEnabled" not in disabled
