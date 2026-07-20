@@ -189,11 +189,18 @@ and published-vs-hinted cardinality. Still open and tracked separately: the gmee
 capture from the glow and needs its own reading (#851/#853), and no self-ID oracle exists yet — these
 score WHETHER a name was assigned, never whether it was RIGHT.
 
-**G3 — the reference is uncalibrated.** Nothing verifies the single-pass reference is better than
-the live transcript; recall may be measuring agreement, not truth. Needs: a second-pass stability
-check, and one run against a known-text fixture where absolute truth exists. Chunking is also
-unvalidated — 60s windows with 3s overlap can both duplicate at seams (inflating the reference) and
-drop words at them.
+**G3 — CLOSED by calibration.** On a synthetic fixture where the spoken text is known absolutely,
+the single-pass reference scores **recall 0.977 / precision 0.943** against that truth, while the
+live replay of the same audio through the same STT scores 0.907 / 0.917. The reference is therefore
+substantially closer to truth than the pipeline is, and recall measured against it is LOSS rather
+than agreement — the thing this gap doubted. It also prices the split the framework exists to make:
+of the 9.3 points between the pipeline and perfect, **7.0 are the streaming design's own** and 2.3
+are the model's ceiling on this audio.
+
+**G3 (residual) — chunking is still unvalidated.** Nothing verifies the single-pass reference is better than
+the live transcript; recall may be measuring agreement, not truth. 60s windows with 3s overlap can still both duplicate at seams
+(inflating the reference) and drop words at them; the calibration above bounds the total error but
+does not isolate the seams.
 
 **G4 — CLOSED (#848).** The corpus exists: `$VEXA_CORPUS/<platform>/<slug>/` with a session, a
 `baseline.json` recording every metric at promotion time, a `manifest.json` pinning provenance, and
