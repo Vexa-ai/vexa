@@ -144,7 +144,7 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 | jitsi (bot) | mixed | ✅ 65.0% | ❌ | ❌ (`seg_N` seen, unscored) | ✅ fixed 4c030cd8 | ✅ p50 0.30s | ❌ |
 | zoom | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | teams | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| gmeet | gmeet | ❌ | ❌ (TTS fixture only) | ❌ (golden only) | ❌ | ❌ | ✅ ~8.15s projected |
+| gmeet | gmeet | ❌ (own capture path, NOT #850's chain) | ❌ (TTS fixture only — never vs a single-pass reference on real audio) | ❌ (golden only; 0.12.15 attested good, unrecorded) | ❌ | ❌ | ✅ ~8.15s projected |
 
 ## Known gaps in THIS framework (audited 2026-07-20)
 
@@ -177,6 +177,12 @@ is a thing a human remembers to run, so regressions are caught only by luck.
 **G6 — the store stage has no fidelity metric.** Integrity is measured at publish; the store adds
 its own (db-writer flush thresholds). The false "64.9% dropped" came from exactly this stage, and the
 response was a *rule* ("never score mid-flush") rather than a *metric* (published vs stored).
+
+**G11 — no per-lane loss parity.** Content loss was measured on the MIXED lane (recall .905) and
+never on gmeet against a real-audio reference. The lanes have different confirm economies
+(LA-2 vs LA-3), different capture paths (per-channel elements vs the bot's webrtc-hook chain) and
+gmeet-only loss surfaces (glow gating #616, the silence gate). A measurement on one lane says
+nothing about the other; the coverage matrix must be filled per lane, not per pipeline.
 
 **G7 — latency is not measured in the live loops.** `replay-paced` measures it offline at production
 config; the external loop only asks a human whether it "feels" fast. Nothing records time-to-first-
