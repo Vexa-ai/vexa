@@ -48,6 +48,56 @@ hit the **production API** (`secrets.env`) and put bots in a **real meeting**.
 5. 🤖 `replay <tape> REPLAY_PLATFORM=teams` → the same data exercises the Teams path
    (a tape is platform-agnostic: mixed audio + hints).
 
+## The two-leg witness — quality first, then speakers
+
+A platform is proven by two runs that answer different questions, and mixing them is how a
+green run hides a dead half. **Leg 1 asks "are the words right?"** through the extension, the
+path a customer actually uses. **Leg 2 asks "are the names right?"** through the bot, which is
+the only thing the bot uniquely carries and the only place #852 lives. Leg 2 is SHORT — 90s is
+enough to see hints crossing the bridge — because it is not measuring content.
+
+Both legs speak the same known truth, so neither depends on an STT reference:
+
+```bash
+RIG=~/vexa-test-rig
+python3 src/build_truth_wav.py --speaker A --name Anna  --out $RIG/truth   # 269s · 827 words
+python3 src/build_truth_wav.py --speaker B --name Boris --out $RIG/truth   # 187s · 643 words
+```
+
+**Leg 1 — quality (extension).** Put the synthetic speakers in the room, then capture:
+
+```bash
+ZOOM_URL=<url> NAME=Anna  WAV=$RIG/truth/Anna.wav  HOLD_MS=300000 node src/zoom-speaker.mjs &
+ZOOM_URL=<url> NAME=Boris WAV=$RIG/truth/Boris.wav HOLD_MS=300000 node src/zoom-speaker.mjs &
+# each prints AUDIO_START=<epoch> — clip offset zero, needed below
+```
+> 🧑 Join the same meeting in **Chrome**, **click the Vexa toolbar icon on that tab**, then
+> **Start**. That click is not optional and never will be: `chrome.tabCapture.getMediaStreamId`
+> needs an activeTab grant, and only a toolbar click / context menu / keyboard command produces
+> one (`clients/extension/src/background.ts:538`). `extension-loop.mjs` drives everything else,
+> but it cannot produce that gesture — it waits for it and says so.
+
+```bash
+python3 src/score_truth.py --truth $RIG/truth/Anna.truth.json@<epoch> \
+                           --truth $RIG/truth/Boris.truth.json@<epoch> \
+                           --transcript http://localhost:8056/transcripts/zoom/<native>
+```
+
+**Leg 2 — speakers (bot).** Same meeting, same speakers still talking, 90 seconds:
+
+```bash
+curl -s -X POST localhost:18156/bots -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+  -d '{"platform":"zoom","native_meeting_id":"<native>","bot_name":"vexa-witness"}'
+docker logs -f <bot> 2>&1 | grep -E 'bridge-crossed|NO ACTIVE SPEAKER|hint'
+```
+`bridge-crossed=0` **with** `NO ACTIVE SPEAKER seen in Ns` ⇒ the DOM never lit anyone (a silent
+room or stale selectors). `bridge-crossed=0` **without** it ⇒ the watchers saw speakers and the
+hints died crossing into node — the injection-lifetime half. That discriminator is the whole
+point of the 90 seconds.
+
+Teams runs the same two legs with `src/teams-speaker.mjs` (`TEAMS_URL=`) — the extension matches
+`teams.microsoft.com` and the lane is the same mixed one.
+
 ## 🧑 HUMAN-IN-THE-LOOP — when to STOP and prompt
 The agent **cannot** drive the browser, mint capture permissions, or admit bots. At
 these moments, stop and give the human the prompt **verbatim**, then wait for "ok".
