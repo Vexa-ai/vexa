@@ -73,7 +73,13 @@ const deadline = Date.now() + HOLD_MS;
 let wasIn = false;
 while (Date.now() < deadline) {
   const inMeeting = await admitted();
-  if (inMeeting !== wasIn) { log(inMeeting ? 'ADMITTED — speaking' : 'left the meeting'); wasIn = inMeeting; }
+  if (inMeeting !== wasIn) {
+    // Clip offset zero for score_truth.py: the fake-capture file feeds the track from the moment
+    // the meeting accepts it. Guessing this instant misattributes whole turns while leaving the
+    // content numbers looking fine, which is the worst kind of wrong.
+    if (inMeeting) log(`AUDIO_START=${(Date.now() / 1000).toFixed(3)}`);
+    log(inMeeting ? 'ADMITTED — speaking' : 'left the meeting'); wasIn = inMeeting;
+  }
   else if (!inMeeting) log('still in the lobby (nobody has admitted this speaker yet)');
   await page.waitForTimeout(15000);
 }

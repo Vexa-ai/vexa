@@ -62,6 +62,12 @@ for (const sel of ['button:has-text("Join Audio by Computer")', 'button:has-text
   }
 }
 
+// Chromium starts the fake-capture file when the mic track is created, i.e. at the moment audio
+// joins — so THIS is clip offset zero. score_truth.py maps a clip's offset to a wall-clock window
+// from this number, and attribution is the half that depends on it: a wrong instant misattributes
+// whole turns while leaving the content numbers untouched. Print it so it is never guessed.
+console.log(`[zoom:${NAME}] AUDIO_START=${(Date.now() / 1000).toFixed(3)}`);
+
 const state = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 220) }));
 console.log(`[zoom:${NAME}] state ${JSON.stringify(state)}`);
 console.log(`[zoom:${NAME}] holding ${HOLD_MS}ms`);
