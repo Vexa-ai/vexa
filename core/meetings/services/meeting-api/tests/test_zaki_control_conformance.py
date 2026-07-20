@@ -588,3 +588,38 @@ async def test_terminal_settlement_carries_true_captured_seconds():
         if event.body.get("event_type") == "minutes.capture.usage"
     ]
     assert capped_usage and capped_usage[-1].body["data"]["metering"]["captured_seconds_total"] == 3600
+
+
+async def test_reconcile_replays_the_minimal_legal_path_for_an_advanced_meeting():
+    """The reconcile loop crash-looped in staging on the first real capture:
+    WP-M6 shipped `reconcile_capture_lifecycle` consuming `_RECOVERY_STEPS`
+    without ever defining it, and no test drove the path (NameError every
+    tick). This drives the REAL dispatcher through reconciliation for a
+    meeting that reached `completed` while the control mapping was down, and
+    asserts the capture is walked requested→joining→active→completed with a
+    terminal settlement queued."""
+    store = InMemoryControlStore()
+    capture = replace(_CAPTURE, state="requested")
+    store.captures[capture.capture_id] = capture
+    dispatcher = ControlCallbackDispatcher(
+        store,
+        callback_url="https://hub.example/api/minutes/callback/v1",
+        hmac_key="hub-callback-hmac-key-0123456789abcdef",
+    )
+
+    await dispatcher.reconcile_capture_lifecycle(
+        {"id": capture.meeting_id, "status": "completed", "data": {}}
+    )
+
+    assert store.captures["cap-1"].state == "completed"
+    states = [
+        event.body["data"].get("state")
+        for event in await store.pending_callbacks(limit=50, capture_id="cap-1")
+        if event.body.get("event_type") == "minutes.capture.status"
+    ]
+    assert states == ["joining", "active", "completed"], states
+    usage = [
+        event for event in await store.pending_callbacks(limit=50, capture_id="cap-1")
+        if event.body.get("event_type") == "minutes.capture.usage"
+    ]
+    assert usage, "terminal settlement must be queued by the replay"

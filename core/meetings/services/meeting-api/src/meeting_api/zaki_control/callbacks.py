@@ -31,6 +31,22 @@ _ADJACENCY: dict[str, tuple[str, ...]] = {
 }
 _LIFECYCLE_STATES = frozenset(_ADJACENCY)
 
+# Replay paths for a bot that advanced while the engine's control mapping was
+# unavailable: the Hub initialized the capture at `requested`, so reconciliation
+# walks the MINIMAL adjacency-legal path from `requested` up to the meeting's
+# observed status. Each step is chained-adjacent; deterministic event IDs make
+# an overlapping replay idempotent. (WP-M6 shipped the consumer of this table
+# without the table — the reconcile loop crash-looped on NameError in the first
+# staging capture, and no test drove the path.)
+_RECOVERY_STEPS: dict[str, tuple[str, ...]] = {
+    "joining": ("joining",),
+    "awaiting_admission": ("joining", "awaiting_admission"),
+    "active": ("joining", "active"),
+    "stopping": ("joining", "active", "stopping"),
+    "completed": ("joining", "active", "completed"),
+    "failed": ("failed",),
+}
+
 
 def _legal_path(current: str, target: str) -> tuple[str, ...] | None:
     """Shortest legal walk from ``current`` to ``target``, excluding ``current``.
@@ -261,6 +277,13 @@ class ControlCallbackDispatcher:
                 state=step,
                 failure_code=failure if step == "failed" else None,
             )
+            # The adjacency guard checks the CAPTURE we hand it — a stale
+            # snapshot refuses every step after the first, silently stranding
+            # the walk one state in. Re-read the store's truth between steps.
+            refreshed = await self._store.get_capture_for_meeting(str(meeting_id))
+            if refreshed is None:
+                return
+            capture = refreshed
 
     async def reconcile_once(self, *, limit: int = 50) -> int:
         """Restart-safe reconciliation for a bot callback that beat control-map binding."""
