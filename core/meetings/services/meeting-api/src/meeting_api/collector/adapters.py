@@ -59,6 +59,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _iso_utc(dt) -> Optional[str]:
+    """UTC ISO-8601 (``…Z``) for a naive-or-aware datetime. The meeting time columns are naive but
+    hold UTC (the DB session is UTC); a bare ``isoformat()`` is zone-less, so a browser's ``new Date()``
+    parses it as LOCAL and renders it offset by the viewer's UTC offset. Stamping UTC fixes that."""
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
 def _expired(iso: Optional[str]) -> bool:
     """True if the ISO-8601 timestamp is in the past (None = never expires)."""
     if not iso:
@@ -200,11 +210,11 @@ def _fill_absolute_times(segments: list, base) -> None:
         except (TypeError, ValueError):
             continue
         if st >= _EPOCH_THRESHOLD_S:
-            s["absolute_start_time"] = datetime.fromtimestamp(st, timezone.utc).isoformat()
-            s["absolute_end_time"] = datetime.fromtimestamp(en, timezone.utc).isoformat()
+            s["absolute_start_time"] = _iso_utc(datetime.fromtimestamp(st, timezone.utc))
+            s["absolute_end_time"] = _iso_utc(datetime.fromtimestamp(en, timezone.utc))
         elif base is not None:
-            s["absolute_start_time"] = (base + timedelta(seconds=st)).isoformat()
-            s["absolute_end_time"] = (base + timedelta(seconds=en)).isoformat()
+            s["absolute_start_time"] = _iso_utc(base + timedelta(seconds=st))
+            s["absolute_end_time"] = _iso_utc(base + timedelta(seconds=en))
 
 
 def _segment_to_api(seg: dict) -> dict:
@@ -350,8 +360,8 @@ class SqlAlchemyTranscriptStore:
             "native_meeting_id": snap["platform_specific_id"],
             "constructed_meeting_url": (data.get("constructed_meeting_url")),
             "status": snap["status"],
-            "start_time": snap["start_time"].isoformat() if snap["start_time"] else None,
-            "end_time": snap["end_time"].isoformat() if snap["end_time"] else None,
+            "start_time": _iso_utc(snap["start_time"]),
+            "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
             "data": data,
@@ -502,11 +512,11 @@ class SqlAlchemyTranscriptStore:
                     if isinstance(m.data, dict) else None,
                     "status": m.status,
                     "bot_container_id": m.bot_container_id,
-                    "start_time": m.start_time.isoformat() if m.start_time else None,
-                    "end_time": m.end_time.isoformat() if m.end_time else None,
+                    "start_time": _iso_utc(m.start_time),
+                    "end_time": _iso_utc(m.end_time),
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    "created_at": _iso_utc(m.created_at),
+                    "updated_at": _iso_utc(m.updated_at),
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
                     # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
                     # (title/docs/flags).
@@ -865,12 +875,12 @@ class SqlAlchemyTranscriptStore:
             if isinstance(m.data, dict) else None,
             "status": m.status,
             "bot_container_id": m.bot_container_id,
-            "start_time": m.start_time.isoformat() if m.start_time else None,
-            "end_time": m.end_time.isoformat() if m.end_time else None,
+            "start_time": _iso_utc(m.start_time),
+            "end_time": _iso_utc(m.end_time),
             "data": m.data if isinstance(m.data, dict) else {},
             "shared": False,
-            "created_at": m.created_at.isoformat() if m.created_at else None,
-            "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+            "created_at": _iso_utc(m.created_at),
+            "updated_at": _iso_utc(m.updated_at),
         }
 
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,

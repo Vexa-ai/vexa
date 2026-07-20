@@ -60,7 +60,8 @@ async def test_merge_assembles_response_and_merges_live_redis():
     assert doc["id"] == 5 and doc["platform"] == "google_meet"
     assert doc["native_meeting_id"] == "abc-defg-hij"
     assert doc["status"] == "active"
-    assert doc["start_time"] == START.isoformat() and doc["end_time"] is None
+    # start_time is serialized as UTC ISO with a Z marker (clients parse it as UTC, render local).
+    assert doc["start_time"] == START.isoformat().replace("+00:00", "Z") and doc["end_time"] is None
     assert doc["notes"] == "hi" and doc["recordings"] == [{"id": "r1"}]
     # The live Redis-only segment is merged in AND sorted before the later persisted one.
     ids = [s["segment_id"] for s in doc["segments"]]
