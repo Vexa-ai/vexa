@@ -17,6 +17,11 @@ youtube:    tab <video>, no hints (extension)                ─┘
             @vexa/transcribe-whisper → assembly/confirm → publish (segment_id identity) → collector/store
 ```
 
+Measured on identical 3-speaker known-text material, the two lanes price attribution very
+differently: **gmeet 1.000** (named at capture, nothing to get wrong) against **mixed 0.964** with a
+clean hint stream — and **0.478** when the hint stream names the wrong person a third of the time.
+The mixed lane's attribution is only ever as good as its hints.
+
 Speaker attribution is platform-specific **only at the source** (glow names / DOM hints); the
 binding logic is shared. One mixed-core fix lands on jitsi + teams + zoom + youtube at once;
 per-platform work reduces to (a) capture delivery, (b) hint quality.
@@ -159,7 +164,7 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 | jitsi (bot) | mixed | ✅ 65.0% | ✅ recall .858 / prec .723 | ✅ 16.7% provisional · 91.9% hint miss | ✅ 57 rows / 0 dupes | ✅ p50 0.30s | ❌ |
 | zoom | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | teams | mixed | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| gmeet | gmeet | ❌ (own capture path, NOT #850's chain) | ❌ (TTS fixture only — never vs a single-pass reference on real audio) | ❌ (golden only; 0.12.15 attested good, unrecorded) | ❌ | ❌ | ✅ ~8.15s projected |
+| gmeet | gmeet | ❌ (own capture path, NOT #850's chain) | ✅ recall .873 / prec .963 (known text) | ✅ **1.000** (14/14, named at capture) | ❌ | ✅ 1.6 segs/turn | ✅ ~8.15s projected |
 
 ## Known gaps in THIS framework (audited 2026-07-20)
 
