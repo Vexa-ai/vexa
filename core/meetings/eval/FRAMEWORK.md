@@ -166,6 +166,13 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 Written down because an un-named gap becomes a false claim of coverage — the exact failure that
 made 0.12.16 aim wrong.
 
+**G1a — DEMONSTRATED, and worse than stated.** The four truth-free signals are blind to
+MISATTRIBUTION, not merely to content. On a synthetic 3-speaker fixture whose hint stream names the
+wrong person 34% of the time, attribution accuracy collapses to 47.8% — 12 of 23 rows under the
+wrong speaker — while every truth-free signal reads healthy: 0.0% provisional, 3 speakers published
+against 3 hinted, nothing unnamed. A lane that confidently names every turn after the wrong person
+scores perfectly on all of them. Truth-free signals answer "did the namer run", never "was it right".
+
 **G1 — the content oracle is speaker-blind.** `single_pass_truth.py` scores recall/precision on a
 flat word sequence. A transcript with perfect words and completely scrambled speakers scores
 1.000/1.000. This is mock-blindness repeating on a different axis. Until the self-ID scorer exists,

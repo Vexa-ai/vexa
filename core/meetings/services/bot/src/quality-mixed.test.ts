@@ -275,6 +275,46 @@ async function main(): Promise<void> {
     `hints ${hintMatched} matched / ${hintMissed} missed (${(attribution.hintMissRate * 100).toFixed(1)}% miss) · ` +
     `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} hinted`);
 
+  // ── Attribution ACCURACY — the truth-bearing oracle ─────────────────────────────────────────
+  // The four signals above say whether a name was assigned. They cannot say whether it was RIGHT,
+  // and a lane that confidently names every turn after the wrong person scores perfectly on all of
+  // them. A synthetic fixture knows who spoke when (`--lane mixed` in speech_fixture.py), so the
+  // question becomes answerable without anyone labelling a meeting.
+  let accuracy: Record<string, number> | null = null;
+  if (process.env.TRUTH_JSON) {
+    const truth = JSON.parse(readFileSync(process.env.TRUTH_JSON, 'utf8')).turns as
+      Array<{ speaker: string; startMs: number; endMs: number; hintedAs: string | null; hintWrong: boolean }>;
+    let correct = 0, wrong = 0, unnamed = 0, scored = 0, correctGivenHint = 0, hintable = 0;
+    for (const row of storeRows) {
+      // Every stored row belongs to the spoken turn it overlaps MOST in time — first-match placement
+      // silently mis-assigns anything that straddles a boundary.
+      const seg = published.find((p) => p.id && store.get(p.id) === row) ?? published.find((p) => p.text === row.text);
+      if (!seg) continue;
+      let best: typeof truth[number] | undefined, bestOv = 0;
+      for (const t of truth) {
+        const ov = Math.min(seg.endMs, t.endMs) - Math.max(seg.startMs, t.startMs);
+        if (ov > bestOv) { bestOv = ov; best = t; }
+      }
+      if (!best) continue;
+      scored++;
+      if (isProvisional(row.speaker)) unnamed++;
+      else if (row.speaker === best.speaker) correct++;
+      else wrong++;
+      // The sharper question: given what the DOM actually told it, did the binder do the right thing?
+      // A turn hinted as the wrong person is the hint stream's failure, not the binder's.
+      if (best.hintedAs && !best.hintWrong) { hintable++; if (row.speaker === best.speaker) correctGivenHint++; }
+    }
+    accuracy = {
+      scoredRows: scored,
+      attrCorrect: correct, attrWrong: wrong, attrUnnamed: unnamed,
+      attrAccuracy: Number((correct / Math.max(1, scored)).toFixed(3)),
+      attrAccuracyGivenGoodHint: Number((correctGivenHint / Math.max(1, hintable)).toFixed(3)),
+    };
+    console.log(`  ACCURACY      ${accuracy.attrCorrect} right · ${accuracy.attrWrong} WRONG · ${accuracy.attrUnnamed} unnamed ` +
+      `of ${scored} rows = ${(accuracy.attrAccuracy * 100).toFixed(1)}% ` +
+      `(given a good hint: ${(accuracy.attrAccuracyGivenGoodHint * 100).toFixed(1)}%)`);
+  }
+
   // A corpus baseline is this block, not the prose above it: a later run diffs against it, so a
   // regression is a failing comparison rather than something someone has to notice in a log.
   if (process.env.METRICS_JSON) {
@@ -303,6 +343,7 @@ async function main(): Promise<void> {
       resendRatio: Number((submitSecs.reduce((a, b) => a + b, 0) / Math.max(1, covered)).toFixed(2)),
       maxSubmitSec: Number(Math.max(0, ...submitSecs).toFixed(1)),
       ...attribution,
+      ...(accuracy ?? {}),
     }, null, 2) + '\n');
     console.log(`  metrics written: ${process.env.METRICS_JSON}`);
   }
