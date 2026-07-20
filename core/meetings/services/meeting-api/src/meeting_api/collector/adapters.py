@@ -1,22 +1,3 @@
-"""Production adapters — the real implementations of the ``ports.py`` Protocols.
-
-These are the wiring used when the collector runs for real: a SQLAlchemy-async session bound to
-the ``meetings`` / ``transcriptions`` tables for the ``TranscriptStore``, and a ``redis.asyncio``
-client for the segment-ingestion ``RedisBus`` (XREADGROUP the ``transcription_segments`` stream,
-PUBLISH ``tc:meeting:{id}:mutable``).
-
-They are deliberately thin — the carved behavior lives in ``app.py`` / ``ingest.py``; these only
-translate the port calls to the concrete clients, exactly as the deployed
-``services/meeting-api/meeting_api/collector/`` does (``endpoints.py`` SELECTs; ``consumer.py``
-XREADGROUP/XACK; ``processors.py`` HSET/PUBLISH). They carry NO test logic.
-
-Importing the heavy symbols is LAZY (inside ``build_production_app`` / the methods) so the
-package can be imported (and unit-tested with the in-memory fakes) without SQLAlchemy-async or
-redis installed in the test venv — which is why ``pyproject.toml`` needs NO ``greenlet`` pin
-(SQLAlchemy-async is never imported during the gates).
-"""
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -409,161 +390,61 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from sqlalchemy import cast, func, select, union_all
-        from sqlalchemy.dialects.postgresql import JSONB
-
-        from .models import Meeting
-        from .projection import DEFAULT_LIST_LIMIT, project_list_data
-
-        async with self._session_factory() as db:
-            # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
-            # (owned by someone else) surface in the caller's list so a share recipient can find + open them.
-            #
-            # #800: the branches are UNIONed, never OR-ed. A single `WHERE a OR b` plans as a backward
-            # walk of the created_at index with the OR as a Filter — for a caller with few/old meetings
-            # that scans most of the table (100s+ per call under production load). Each branch below is
-            # independently index-scannable (owner → ix_meeting_user_created_at, viewer →
-            # ix_meeting_transcript_viewers_gin, workspace → ix_meeting_workspace_created_at) with its
-            # own top-N ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
-            access = [
-                Meeting.user_id == user_id,
-                cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
-            ]
-            if member_workspaces:
-                access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
-
-            if list_view:
-                fetch_bound = (offset or 0) + (limit if limit is not None else DEFAULT_LIST_LIMIT) + 1
-            else:
-                fetch_bound = ((offset or 0) + limit) if limit else None
-
-            def _branch(cond):
-                s = select(Meeting.id).where(cond)
-                if status:
-                    # A sequence selects a SET of statuses in SQL (`/bots/status` wants the five
-                    # non-terminal ones). Filtering here instead of in Python is the difference
-                    # between reading a caller's handful of live meetings and reading their entire
-                    # history — see the `slim=` note below (#803).
-                    s = s.where(
-                        Meeting.status.in_(tuple(status))
-                        if isinstance(status, (list, tuple, set, frozenset))
-                        else Meeting.status == status
-                    )
-                if meeting_id is not None:
-                    # Detail-by-id: constrain in SQL rather than enumerating the account and
-                    # filtering in Python. The access union still decides WHETHER the caller may
-                    # see it, so ownership/share semantics are unchanged.
-                    s = s.where(Meeting.id == meeting_id)
-                if platform:
-                    s = s.where(Meeting.platform == platform)
-                if fetch_bound is not None:
-                    # ORDER BY inside a compound member is only meaningful (and only kept by
-                    # the compiler) together with LIMIT; an unbounded branch returns its full
-                    # set, so the outer ORDER BY alone decides.
-                    s = s.order_by(Meeting.created_at.desc()).limit(fetch_bound)
-                return s
-
-            ids = union_all(*[_branch(c) for c in access]).subquery()
-            stmt = (
-                select(Meeting)
-                .where(Meeting.id.in_(select(ids.c.id)))
-                .order_by(Meeting.created_at.desc())
-            )
-            if list_view:
-                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
-                # with a default page size (an explicit `limit` still wins) and over-fetch one row past
-                # the page to compute `has_more` without a second COUNT query.
-                effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
-                if offset:
-                    stmt = stmt.offset(offset)
-                stmt = stmt.limit(effective_limit + 1)
-                rows = (await db.execute(stmt)).scalars().all()
-                has_more = len(rows) > effective_limit
-                rows = rows[:effective_limit]
-            else:
-                # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
-                # explicit `limit` only, NO default cap, full `data` retained below.
-                if limit:
-                    stmt = stmt.limit(limit)
-                if offset:
-                    stmt = stmt.offset(offset)
-                rows = (await db.execute(stmt)).scalars().all()
-                has_more = False
-
-            def _row(m):
-                row = {
-                    "id": m.id,
-                    "user_id": m.user_id,
-                    "platform": m.platform,
-                    "native_meeting_id": m.platform_specific_id,
-                    "constructed_meeting_url": (m.data or {}).get("constructed_meeting_url")
-                    if isinstance(m.data, dict) else None,
-                    "status": m.status,
-                    "bot_container_id": m.bot_container_id,
-                    "start_time": m.start_time.isoformat() if m.start_time else None,
-                    "end_time": m.end_time.isoformat() if m.end_time else None,
-                    "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
-                    # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
-                    # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
-                    # (title/docs/flags).
-                    # #803: `slim` extends the SAME projection to a non-list caller that renders none
-                    # of the heavy keys either. `/bots/status` powers a running-bots badge, yet it
-                    # materialized every byte of `data` — 180 MB for one production account, 144 MB of
-                    # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
-                    # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
-                    # (the detail view, calendar sync, reconciliation) leave both flags off.
-                    "data": project_list_data(m.data) if (list_view or slim)
-                    else (m.data if isinstance(m.data, dict) else {}),
-                }
-                return row
-
-            result = [_row(m) for m in rows]
-            return (result, has_more) if list_view else result
-
-    async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
-        """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
-        (a) OWNERSHIP (unchanged) — the meeting's owner may always subscribe;
-        (b) MEMBERSHIP (Lane A) — any meeting BOUND (``data.workspace_id``) to a shared workspace the
-            caller is a member of. ``member_workspaces`` is the caller's workspace-id set (gateway-injected
-            x-user-workspaces). The binding IS the authorization: a member of the bound workspace sees the
-            feed. Native-id collisions across tenants are handled by scanning candidates and matching the
-            binding, never by picking a row blindly."""
+    async def get_transcript_by_native(self, native_meeting_id, platform, user_id=None) -> Optional[dict]:
+        """Cross-user transcript lookup by native meeting id, authorized only if the caller has an
+        active transcript-share grant for this meeting (data.transcript_viewers[])."""
         from sqlalchemy import select
 
         from .models import Meeting
 
         async with self._session_factory() as db:
-            owned = (await db.execute(
-                select(Meeting).where(
-                    Meeting.user_id == user_id,
-                    Meeting.platform == platform,
-                    Meeting.platform_specific_id == native_meeting_id,
-                ).order_by(Meeting.created_at.desc()).limit(1)
-            )).scalars().first()
-            if owned:
-                return owned.id  # (a) owner
-            rows = (await db.execute(
-                select(Meeting).where(
-                    Meeting.platform == platform,
-                    Meeting.platform_specific_id == native_meeting_id,
-                )
-            )).scalars().all()
-            for mtg in rows:
-                data = mtg.data if isinstance(mtg.data, dict) else {}
-                if member_workspaces and data.get("workspace_id") in member_workspaces:
-                    return mtg.id  # (b) member of the meeting's bound shared workspace (optional convenience)
-                if user_id in (data.get("transcript_viewers") or []):
-                    return mtg.id  # (c) redeemed an INDEPENDENT transcript-share link for this meeting
-            return None
+            stmt = select(Meeting).where(
+                Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc()).limit(1)
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            if user_id is not None and user_id not in (data.get("transcript_viewers") or []):
+                return None
+            pg = await self._transcript_pg_part(db, meeting)
+        return await self._merge_live_segments(pg)
 
-    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
-        """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
-        subscribe to the live transcript feed (authorize_subscribe branch b). Many meetings → one workspace
-        (Amendment 6). Returns the bound workspace_id, or None if the caller owns no such meeting."""
+    async def authorize_subscribe(self, user_id, platform, native_meeting_id) -> "Optional[tuple[int, str]]":
+        """Check the three-way authorization: (a) owner, (b) member of the bound workspace,
+        (c) redeemed a transcript-share link (data.transcript_viewers[]).
+
+        When an owner OR a workspace member OR a share-redeemer subscribes, returns
+        ``(meeting_id, platform)`` (so the caller injects the ``<platform>:<native>`` key into
+        the pub-sub set / returns the meeting row). Otherwise returns None (→ caller returns 404,
+        never revealing existence to an unauthorized caller)."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = select(Meeting).where(
+                Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc()).limit(1)
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            # Owner (a) or workspace member (b) or share-redeemer (c) may subscribe.
+            authorized = (
+                meeting.user_id == user_id
+                or (data.get("transcript_viewers") and user_id in data["transcript_viewers"])
+            )
+            if not authorized:
+                return None
+            return (meeting.id, meeting.platform)
+
+    async def set_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> Optional[str]:
+        """Owner-scoped atomic write of the workspace_id in meeting.data (Q6 workspace binding path,
+        e.g. the workspace-require trigger or a post-spawn reservation agent call — see O-STACK-2 Q-
+        6). Returns the bound workspace_id, or None if the caller owns no such meeting."""
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
@@ -684,10 +565,6 @@ class SqlAlchemyTranscriptStore:
         ``ix_transcription_meeting_segment`` in the admin-api authoritative schema), exactly the
         parent db-writer's ON CONFLICT statement: idempotent, a re-flushed rewrite lands as an
         UPDATE, never a duplicate row."""
-        from datetime import datetime as _dt
-
-        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
-
         rows = []
         for seg in segments:
             sid = seg.get("segment_id")
@@ -704,7 +581,7 @@ class SqlAlchemyTranscriptStore:
                 "mid": int(meeting_id), "start": start, "end": end,
                 "text": seg.get("text") or "", "speaker": seg.get("speaker"),
                 "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": _dt.utcnow(),
+                "segid": str(sid), "created": datetime.now(timezone.utc),
             })
         if not rows:
             return
