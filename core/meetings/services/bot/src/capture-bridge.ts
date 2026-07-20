@@ -24,6 +24,7 @@
  * cross as plain `(speakerIndex: number, samples: number[])` over `page.exposeFunction`, exactly
  * as production does, so the bot's import surface stays within the gate.
  */
+import { join } from 'node:path';
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
@@ -142,6 +143,9 @@ export function makeSpeakerHintSink(
     },
   };
 }
+
+/** Where to drop periodic screenshots of the bot's own page. Unset in production. */
+const shotDir = process.env.VEXA_DEBUG_SHOT_DIR;
 
 /** Path (in the bot container image) to the prebuilt page-side capture bundle that defines
  *  window.VexaBrowserUtils (createGmeetCapture / createGmeetSpeakers / mixed taps). Mirrors
@@ -349,6 +353,16 @@ export async function startCaptureBridge(
   const countersTimer = mixed ? setInterval(() => {
     const c = pipeline.hintCounters;
     console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+    // WHAT THE BOT IS ACTUALLY LOOKING AT. Every #852 observation so far came from querySelectorAll,
+    // which can only answer questions someone thought to ask — it cannot show a layout nobody
+    // predicted, a dialog over the meeting, or a page that is not the meeting at all. One PNG
+    // settles in a glance what a dozen selector probes argued about. Off unless a dir is set.
+    if (shotDir) {
+      const at = new Date().toISOString().replace(/[:.]/g, '-');
+      page.screenshot({ path: join(shotDir, `bot-${at}.png`), fullPage: false })
+        .then(() => console.log(`[bot] screenshot → ${join(shotDir, `bot-${at}.png`)}`))
+        .catch((e: Error) => console.log(`[bot] screenshot failed: ${e.message}`));
+    }
   }, 30_000) : null;
   countersTimer?.unref?.();   // observability only — never holds the process open
 
