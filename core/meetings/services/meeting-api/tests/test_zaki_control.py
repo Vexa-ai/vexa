@@ -536,3 +536,46 @@ def test_control_fence_rejects_a_reclaimed_executor():
         raise AssertionError("stale executor was not fenced")
 
     asyncio.run(exercise())
+
+
+class _RecordingResult:
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
+class _RecordingSession:
+    def __init__(self, record: dict):
+        self._record = record
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, statement, params=None):
+        self._record["sql"] = str(getattr(statement, "text", statement))
+        self._record["params"] = params
+        return _RecordingResult()
+
+
+async def test_pending_callbacks_casts_the_nullable_capture_id_parameter():
+    """asyncpg prepares statements server-side: a bare NULL parameter in
+    ":x IS NULL OR col = :x" has no inferable type and raises
+    AmbiguousParameterError at runtime — which broke every outbox scan (and with
+    it the consent path) on first staging boot. The regression pins the rendered
+    SQL: the nullable parameter must be anchored to the column type with a CAST
+    in BOTH positions."""
+    from meeting_api.zaki_control.adapters import SqlAlchemyControlStore
+
+    record: dict = {}
+    store = SqlAlchemyControlStore(
+        lambda: _RecordingSession(record), statement_factory=lambda sql: sql
+    )
+    await store.pending_callbacks(limit=50, capture_id=None)
+    sql = record["sql"]
+    assert sql.count("CAST(:capture_id AS VARCHAR(160))") == 2, sql
+    assert ":capture_id IS NULL" not in sql, sql
