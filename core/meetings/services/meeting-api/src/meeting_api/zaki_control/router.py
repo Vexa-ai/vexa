@@ -35,7 +35,7 @@ from ..capture import (
     withdraw_capture,
 )
 from ..retention import ErasureFailed, ScopeExpiries, erase_meeting
-from .callbacks import ControlCallbackDispatcher
+from .callbacks import ControlCallbackDispatcher, capture_seconds_at
 from .ports import Capture, ControlStore, ErasureTarget, Policy, Subject
 from .schema import conforms
 
@@ -252,13 +252,8 @@ def _receipt_id() -> str:
 
 
 def _capture_seconds_at(capture: Capture, current: datetime) -> int:
-    """Bound an erasure-side terminal settlement by the engine's enforced capture cap."""
-    seconds = max(0, capture.captured_seconds_total)
-    if capture.started_at is not None:
-        seconds = max(seconds, int(max(timedelta(0), current - capture.started_at).total_seconds()))
-    if capture.max_capture_seconds:
-        seconds = min(seconds, capture.max_capture_seconds)
-    return seconds
+    """Bound a terminal settlement by the engine's enforced capture cap (shared impl)."""
+    return capture_seconds_at(capture, current)
 
 
 def _parse_datetime(value: object) -> datetime | None:

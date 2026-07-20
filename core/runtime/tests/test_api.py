@@ -72,3 +72,22 @@ def test_double_create_over_http_touches_not_respawns():
     finally:
         client.post("/workloads/w1/stop", json={"reason": "stopped"})
         client.delete("/workloads/w1")
+
+
+def test_create_and_stop_wire_the_enforcer(client_factory=None):
+    """WP-M8: the Enforcer only reaps workloads it was told about — the API's
+    create/stop/destroy seams must register and forget. Before the wiring,
+    create_app accepted no enforcer at all and every workload was invisible to
+    the reaper (the immortal-bot incident)."""
+    from runtime_kernel.enforcement import Enforcer
+
+    runtime = Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=3.0)
+    enforcer = Enforcer(runtime)
+    client = TestClient(create_app(runtime, enforcer=enforcer))
+
+    created = client.post("/workloads", json={"workloadId": "wl-enforce-1", "profile": "test", "env": {}})
+    assert created.status_code == 201, created.text
+    assert "wl-enforce-1" in enforcer._tracked
+    stopped = client.post("/workloads/wl-enforce-1/stop", json={"reason": "stopped"})
+    assert stopped.status_code == 200, stopped.text
+    assert "wl-enforce-1" not in enforcer._tracked

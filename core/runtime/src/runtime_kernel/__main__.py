@@ -179,7 +179,39 @@ def build_production_app():
             )
     except Exception as e:  # noqa: BLE001 — adoption is a boot aid; it must never block the boot
         logger.warning("workload re-adoption failed: %s", e)
-    return create_app(runtime, scheduler=scheduler)
+
+    # WP-M8: the reaper. The Enforcer was fully specified and tested but never
+    # constructed in production — a bot whose meeting never ended was immortal
+    # (H14 ratified: we keep our kernel, so we own this loop). Adopted workloads
+    # are tracked from NOW — a conservative restart semantics that restarts
+    # their lifetime clock rather than leaving them untracked forever.
+    from .enforcement import Enforcer
+
+    enforcer = Enforcer(runtime)
+    for record in runtime.store.list():
+        enforcer.track(record.status.workloadId)
+    _start_enforcer(enforcer)
+    return create_app(runtime, scheduler=scheduler, enforcer=enforcer)
+
+
+def _start_enforcer(enforcer) -> None:
+    """Sweep on an interval in a daemon thread (mirrors the scheduler ticker).
+    RUNTIME_ENFORCE_TICK_SEC=0 disables — evals drive sweep() explicitly."""
+    interval = float(os.getenv("RUNTIME_ENFORCE_TICK_SEC", "15"))
+    if interval <= 0:
+        return
+
+    def _loop() -> None:
+        while True:
+            try:
+                stopped = enforcer.sweep()
+                if stopped:
+                    logger.info("enforcer stopped %d workload(s): %s", len(stopped), ",".join(stopped))
+            except Exception as e:  # noqa: BLE001 — one bad sweep must not kill the reaper
+                logger.warning("enforcement sweep failed: %s", e)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="enforcer-sweep", daemon=True).start()
 
 
 def main() -> None:
