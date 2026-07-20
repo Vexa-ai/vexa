@@ -131,6 +131,22 @@ knock-ons visible — the segmenter stops cutting on holes, and attribution impr
 being touched, because hints finally have turns to bind to. Not a matched A/B (the red arm is
 continuous speech, this one sparse clips), so read the duty cycle, not the shape deltas.
 
+### `zoom/2026-07-20-live-zoom` — the first real platform, 16.3 MB
+A human-witnessed live Zoom call captured through the extension with the silence gate off. The first
+entry from a platform we actually ship, and the first carrying **real** DOM hints — 142 of them over
+5 names — so the binder can be tested against a real UI rather than synthetic ones.
+
+| | |
+|---|---|
+| delivery | **duty cycle 1.001 · ZERO gaps over 100ms in 269s** — #850 validated on a product surface |
+| attribution | 0.0% provisional, but **2 speakers published against 5 hinted** |
+| shape | live p50 1.37s (31% under 1s) · replay p50 2.06s (27% under 1s) |
+
+Its hint stream is the finding: a **2-second poll with no `isEnd` events at all**, 80% of hints naming
+one participant. The binder never learns when anyone stops, and three people are lit so rarely they
+lose every max-overlap vote — which is how 5 speakers become 2 while every truth-free signal except
+cardinality reads clean.
+
 ## The contract
 
 1. A defect is only worked against an entry in this corpus — no fixture, no fix.
@@ -138,6 +154,9 @@ continuous speech, this one sparse clips), so read the duty cycle, not the shape
 3. An entry that once caught a defect keeps catching it: `4c030cd8` (mixed draft identity) reverted
    takes `youtube/2026-07-20-continuous-speech` from 0 duplicate texts to **11** — every sentence
    stored twice — and `score-fixture --lane` fails on it.
-4. Repeat a run before recording it as a baseline. Both instrument defects found on 2026-07-20 —
+4. A transcript and a session must be the SAME meeting — `promote-fixture` refuses a mismatched
+   `native_meeting_id` and an empty store, because pairing them by hand produced two confident wrong
+   conclusions in one day.
+5. Repeat a run before recording it as a baseline. Both instrument defects found on 2026-07-20 —
    a replay outrunning the lane's ring, and a ratio whose denominator the mock controlled — looked
    like clean numbers in a single run and were only visible across five.
