@@ -18,6 +18,7 @@ import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
+import { presentError } from "./apiClient";
 import { DocMetaContext } from "../ui-kit/docLinks";
 import {
   readAttachedWorkspaces, readActiveSet, listSharedMemberships, renameWorkspace,
@@ -77,7 +78,7 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true); setErr(null); setNote(null);
     try { await fn(); if (ok) setNote(ok); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -192,7 +193,7 @@ function ReadmeBody({ slug }: { slug: string }) {
     setText(undefined); setError(null);
     const load = () => void readWorkspaceFile("README.md", { slug })
       .then((c) => { if (live) { setText(c); setError(null); } })
-      .catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
+      .catch((e: unknown) => { if (live) setError(presentError(e).headline); });
     load();
     const iv = setInterval(() => { if (!document.hidden) load(); }, 8000);
     window.addEventListener("focus", load);
@@ -295,7 +296,7 @@ function PurposeSection({ slug }: { slug: string }) {
   const save = async () => {
     setBusy(true); setErr(null);
     try { const p = await writeWorkspacePurpose(draft, { slug }); setPurpose(p); setDraft(p); setEditing(false); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   return (

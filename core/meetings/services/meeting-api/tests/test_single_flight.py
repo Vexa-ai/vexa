@@ -7,13 +7,19 @@ ONE lock and one counter: the winner's body runs, the loser's does NOT (counter 
 the winner releases, a later tick by the loser DOES run (counter == 2). The negative control shows
 that calling the bodies directly (no guard) yields counter == 2 — the guard, not chance, halves it.
 
-Also asserts the disjoint-keyspace fork: the sweep lock key is the two-arg
-``(SWEEP_LOCK_CLASSID, crc32(loop_name))`` form, which cannot collide with the single-arg per-user
-``pg_advisory_xact_lock(:user_id)`` locks.
+Also asserts the disjoint-keyspace fork: the sweep lock key is a single 64-bit
+``(SWEEP_LOCK_CLASSID << 32) | crc32(loop_name)`` value taken via the **single-arg**
+``pg_try_advisory_lock(bigint)`` form — disjoint from the small per-user
+``pg_advisory_xact_lock(:user_id)`` locks. (The earlier two-arg ``(classid, objid)`` form was the
+#637 witness regression: crc32 overflowed signed int4 → bound as bigint → ``pg_try_advisory_lock(
+int4, bigint)`` doesn't exist.) The REAL SQL is now exercised too: a real-Postgres conformance test
+runs when ``MEETING_API_TEST_DATABASE_URL`` is set — the offline lane alone let that mismatch slip to
+the live witness.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -131,11 +137,93 @@ async def test_body_exception_releases_lock():
 
 
 def test_sweep_key_disjoint_from_user_locks():
-    """The two-arg (classid, objid) sweep key can't collide with single-arg per-user xact locks."""
-    # A fixed namespace classid pairs with every crc32(loop_name); the per-user locks are single-arg
-    # on user-id ints, a disjoint Postgres advisory-lock space.
+    """The 64-bit sweep key ((SWEEP_LOCK_CLASSID << 32) | crc32) can't collide with the small
+    per-user single-arg locks — the namespace lives in the high 32 bits, above any user-id."""
+    # Both use the single-arg pg_try/advisory_lock(bigint) space now; disjointness comes from the
+    # SWP\0 namespace in the high 32 bits (user-ids are small, high bits 0).
     assert isinstance(SWEEP_LOCK_CLASSID, int)
     keys = {name: sweep_lock_key(name) for name in
             ("db-writer", "webhook-drain", "stop-reconcile", "auto-join", "calendar-sync")}
     assert len(set(keys.values())) == len(keys), "each loop hashes to a distinct objid (no collision)"
     assert sweep_lock_key("calendar-sync") == sweep_lock_key("calendar-sync"), "stable per loop name"
+
+
+# ── #637 witness regression: the real advisory-lock contract (offline shape + real-PG conformance) ──
+
+INT8_MAX = 2**63 - 1
+
+
+def test_sweep_lock_key_is_valid_positive_int8():
+    """Every sweep key must be a POSITIVE signed int8 (Postgres ``bigint``). The old objid was
+    ``crc32(loop_name)`` alone — which overflows signed int4 for names whose hash exceeds 2**31, and
+    in the two-arg form bound as bigint → ``pg_try_advisory_lock(int4, bigint)`` (the witness bug).
+    Packing the namespace into the high 32 bits makes the key a well-formed bigint for every name."""
+    names = ["segment-consumer", "db-writer", "webhook-drain", "stop-reconcile", "auto-join",
+             "calendar-sync", "", "x" * 300, "é-loop-ÿ"]
+    keys = [sweep_lock_key(n) for n in names]
+    for n, k in zip(names, keys):
+        assert 0 < k <= INT8_MAX, f"sweep_lock_key({n!r}) = {k} is not a positive int8"
+        assert (k >> 32) == SWEEP_LOCK_CLASSID, f"{n!r}: namespace not in the high 32 bits"
+    assert len(set(keys)) == len(set(names)), "distinct loop names must map to distinct keys"
+
+
+async def test_pg_advisory_lock_issues_single_arg_bigint_sql():
+    """``PgAdvisoryLock`` must issue the SINGLE-arg ``pg_try_advisory_lock(cast(:key as bigint))`` —
+    NOT the two-arg ``(:cls, :obj)`` form that failed on real Postgres at the v0.12.5 witness.
+    Needs SQLAlchemy (the lock builds the statement with it); the offline lane lacks it, which is
+    part of why the two-arg form reached the live witness — so this runs wherever SQLAlchemy is."""
+    pytest.importorskip("sqlalchemy")
+    from meeting_api.sweeps.single_flight import PgAdvisoryLock
+
+    executed: list[str] = []
+
+    class _Result:
+        def scalar(self):
+            return True
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt, *a, **k):
+            executed.append(str(stmt))
+            return _Result()
+
+    lock = PgAdvisoryLock(lambda: _Session())
+    key = sweep_lock_key("calendar-sync")
+    assert await lock.try_lock(key) is True
+    await lock.unlock(key)
+    sql = " ".join(executed).lower()
+    assert "pg_try_advisory_lock(cast(:key as bigint))" in sql, f"not single-arg bigint: {sql}"
+    assert "pg_advisory_unlock(cast(:key as bigint))" in sql
+    assert ":cls" not in sql and ":obj" not in sql, "the two-arg (classid, objid) form must be gone"
+
+
+@pytest.mark.skipif(
+    not os.getenv("MEETING_API_TEST_DATABASE_URL"),
+    reason="real-Postgres conformance for the advisory lock; set MEETING_API_TEST_DATABASE_URL to run",
+)
+async def test_pg_advisory_lock_runs_on_real_postgres():
+    """Fake-conformance guard (the class the witness caught): run the ACTUAL advisory-lock SQL against
+    a REAL Postgres. ``FakeAdvisoryLock`` never executes it, so the ``(int4, bigint)`` mismatch was
+    invisible until a live meeting. Here ``try_lock`` executes the real ``pg_try_advisory_lock`` — the
+    witness bug would raise ``UndefinedFunctionError`` on this line — and contention/release behave."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from meeting_api.sweeps.single_flight import PgAdvisoryLock
+
+    engine = create_async_engine(os.environ["MEETING_API_TEST_DATABASE_URL"])
+    try:
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        holder, contender = PgAdvisoryLock(sf), PgAdvisoryLock(sf)
+        key = sweep_lock_key("calendar-sync")
+        assert await holder.try_lock(key) is True       # runs the real SQL (bug would raise here)
+        assert await contender.try_lock(key) is False    # contended: session-level lock is held
+        await holder.unlock(key)
+        assert await contender.try_lock(key) is True     # released -> now acquirable
+        await contender.unlock(key)
+    finally:
+        await engine.dispose()

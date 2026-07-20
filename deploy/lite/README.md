@@ -104,7 +104,8 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 | Variable | Default | Description |
 |---|---|---|
-| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key. Unset → bots capture, no transcript |
+| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
+| `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
 | `ADMIN_TOKEN` | `changeme` | admin API token (the stack's shared admin secret) |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 
@@ -142,3 +143,14 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
 | Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+
+## Smoke probe — "is this install actually working?"
+
+```bash
+make probe SURFACE=lite          # from the repo root, against a running `make lite`
+```
+
+The full-journey smoke (spawn → schedule → boot → join → transcribe → live-view → stop + a
+one-shot log sweep of the container and every bot workload log), driven through the published
+gateway. Lite runs the real bot, so the dead-URL journey's truthful terminal is a NAMED
+failure — never a fake green. See `deploy/lite/probe.sh`.

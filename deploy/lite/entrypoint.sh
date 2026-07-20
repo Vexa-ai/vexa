@@ -37,6 +37,7 @@ export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-lite-internal-secret}"
+export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
 # profile forwards configured values to every spawned bot process.
@@ -48,6 +49,8 @@ export BOT_SPEAKER_IDLE_TIMEOUT_SEC="${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}"
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
+# STT model id for validating backends (Groq/vLLM); empty → whisper-1.
+export TRANSCRIPTION_MODEL="${TRANSCRIPTION_MODEL:-}"
 
 export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
 export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"

@@ -27,15 +27,41 @@ import {
 import {
   ChunkedTranscriber,
   type ChunkSegment,
+  type ChunkedTranscriberCallbacks,
+  type HintKind,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, type Invocation } from './config.js';
+import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
 /** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
 export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+
+/** Each platform's TRUE hint kind — the binder's lag correction is per-kind
+ *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
+ *  Teams' voice-level outline is 'dom-outline'; Zoom's active-speaker DOM poll and
+ *  jitsi's dominant-speaker signal ride 'dom-active'. Bound once at wiring time —
+ *  the page-side watcher and the transcriber never renegotiate it. */
+export function hintKindForPlatform(platform: Platform | string): HintKind {
+  return platform === 'teams' ? 'dom-outline' : 'dom-active';
+}
+
+/** Cumulative hint-hop counters (the C1 instrument): how many hints crossed into the
+ *  pipeline, and their instantaneous binder outcome. Printed on the bridge's periodic
+ *  counter line so a name lost between the page and the transcript names its hop. */
+export interface HintCounters {
+  received: number;
+  matched: number;
+  missed: number;
+}
+
+/** The mixed-lane transcriber seam — the REAL ChunkedTranscriber in production,
+ *  injectable so an offline test observes exactly what reaches the transcriber
+ *  (name, KIND, tMs) without the pyannote model load. */
+export type MixedTranscriber = Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>;
+export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
  *  orchestrator only sees start/stop; the capture bridge holds the BotPipeline to feedAudio. */
@@ -44,8 +70,13 @@ export interface BotPipeline extends Pipeline {
   feedAudio(channel: number, glowName: string | undefined, pcm: Float32Array, tsMs: number): void;
   /** One mixed (Zoom/Teams) capture.v1 frame: a single mixed PCM stream, named downstream. */
   feedMixedAudio(pcm: Float32Array, tsMs: number): void;
-  /** A mixed-lane "who is lit" hint (Zoom/Teams active-speaker), windowed by the namer. */
+  /** A mixed-lane "who is lit" hint (platform active-speaker), windowed by the namer.
+   *  CLOCK CONTRACT: tMs MUST be epoch ms — the same domain as feedMixedAudio's tsMs —
+   *  or no hint window can ever overlap a speech turn (the bridge guards this). The
+   *  platform's hint KIND is bound at wiring time (hintKindForPlatform), not per call. */
   recordHint(name: string, tMs: number, isEnd?: boolean): void;
+  /** Mixed lane only: the cumulative hint-hop counters (undefined on the gmeet lane). */
+  readonly hintCounters?: HintCounters;
 }
 
 /** The lane segments are the SEALED transcript.v1 view — structurally identical to the bot's
@@ -141,11 +172,14 @@ function createGmeetBotPipeline(
 function createMixedBotPipeline(
   transcribe: Transcribe,
   sink: TranscriptSink,
+  hintKind: HintKind,
   language?: string,
   onError?: (e: unknown) => void,
+  createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
 ): BotPipeline {
-  let transcriber: ChunkedTranscriber | null = null;
-  let creating: Promise<ChunkedTranscriber> | null = null;
+  let transcriber: MixedTranscriber | null = null;
+  let creating: Promise<MixedTranscriber> | null = null;
+  const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
 
   const publish = (speaker: string, segs: ChunkSegment[], completed: boolean): void => {
     for (const c of segs) {
@@ -155,10 +189,10 @@ function createMixedBotPipeline(
     }
   };
 
-  const ensure = (): Promise<ChunkedTranscriber> => {
+  const ensure = (): Promise<MixedTranscriber> => {
     if (transcriber) return Promise.resolve(transcriber);
     if (!creating) {
-      creating = ChunkedTranscriber.create({
+      creating = createTranscriber({
         transcribe,
         // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail.
         publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); publish(speaker, pending, false); },
@@ -167,6 +201,9 @@ function createMixedBotPipeline(
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
         language,
         onError,
+        // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
+        // overlapping turn increments `missed` (loudly, on the periodic counter line).
+        onHintOutcome: (o) => { if (o.outcome === 'matched') hintCounters.matched++; else hintCounters.missed++; },
       }).then((t) => { transcriber = t; return t; })
         // #593: DON'T cache a rejected create promise. The mixed lane's create() loads the pyannote
         // model (from_pretrained) — if that rejects (empty HF cache, no egress), leaving `creating`
@@ -182,7 +219,9 @@ function createMixedBotPipeline(
     async stop() { if (transcriber) await transcriber.dispose(); },
     feedAudio() { /* not the mixed lane (mixed has no per-channel glow) */ },
     feedMixedAudio: (pcm, tsMs) => { transcriber?.feedAudio(pcm, tsMs); },
-    recordHint: (name, tMs, isEnd) => { transcriber?.recordHint(name, 'dom-active', tMs, isEnd); },
+    // C1 hop 3 + C2: count the arrival, forward under the platform's TRUE kind.
+    recordHint: (name, tMs, isEnd) => { hintCounters.received++; transcriber?.recordHint(name, hintKind, tMs, isEnd); },
+    hintCounters,
   };
 }
 
@@ -196,6 +235,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
+    model: inv.transcriptionModel ?? undefined,
   });
   const language = inv.language ?? undefined;
   return (pcm, prompt) => client.transcribe(pcm, language, prompt);
@@ -208,11 +248,21 @@ export function createTranscribe(inv: Invocation): Transcribe {
 export function createBotPipeline(
   inv: Invocation,
   sink: TranscriptSink,
-  opts: { transcribe?: Transcribe; config?: SpeakerStreamManagerConfig; onError?: (e: unknown) => void } = {},
+  opts: {
+    transcribe?: Transcribe;
+    config?: SpeakerStreamManagerConfig;
+    onError?: (e: unknown) => void;
+    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
+     *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
+    createMixedTranscriber?: MixedTranscriberFactory;
+  } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
   if (isMixedLanePlatform(inv.platform)) {
-    return createMixedBotPipeline(transcribe, sink, inv.language ?? undefined, opts.onError);
+    return createMixedBotPipeline(
+      transcribe, sink, hintKindForPlatform(inv.platform),
+      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,
+    );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
 }

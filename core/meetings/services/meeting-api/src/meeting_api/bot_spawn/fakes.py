@@ -50,6 +50,15 @@ class InMemoryMeetingRepo:
                 return dict(m)
         return None
 
+    async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
+        for m in self._meetings.values():
+            if (
+                m["status"] in _ACTIVE_STATUSES
+                and m.get("data", {}).get("auth_userdata_path") == userdata_s3_path
+            ):
+                return dict(m)
+        return None
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         rows = [
             m for m in self._meetings.values()
@@ -208,7 +217,12 @@ class InMemoryMeetingRepo:
         sid = next(
             (s["session_uid"] for s in reversed(self.sessions) if s["meeting_id"] == row["id"]), None
         )
-        return {"meeting_id": row["id"], "status": row["status"], "session_uid": sid}
+        return {
+            "meeting_id": row["id"],
+            "status": row["status"],
+            "session_uid": sid,
+            "stop_requested": bool((row.get("data") or {}).get("stop_requested")),
+        }
 
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None

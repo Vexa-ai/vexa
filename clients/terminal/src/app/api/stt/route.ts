@@ -10,6 +10,7 @@
  */
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
+import { sttEndpoint } from "./endpoint";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const base = (process.env.TRANSCRIPTION_SERVICE_URL ?? "").replace(/\/+$/, "");
   if (!base) return NextResponse.json({ error: "Transcription is not configured (TRANSCRIPTION_SERVICE_URL)" }, { status: 503 });
+  const endpoint = sttEndpoint(base);
 
   const wav = await req.arrayBuffer();
   if (wav.byteLength < 100) return NextResponse.json({ error: "Empty recording" }, { status: 400 });
@@ -35,7 +37,9 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "dictation.wav");
-  form.append("model", "whisper-1");
+  // The deployment's STT model id (validating backends reject unknown ids) — same env the
+  // meeting pipeline's invocation carries; unset → whisper-1.
+  form.append("model", process.env.TRANSCRIPTION_MODEL || "whisper-1");
   form.append("response_format", "verbose_json");
   form.append("timestamp_granularities", "word");
   if (prompt) form.append("prompt", prompt.slice(0, 800));
@@ -45,7 +49,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   try {
-    const r = await fetch(`${base}/v1/audio/transcriptions`, { method: "POST", headers, body: form, signal: AbortSignal.timeout(30000) });
+    const r = await fetch(endpoint, { method: "POST", headers, body: form, signal: AbortSignal.timeout(30000) });
     if (!r.ok) {
       const detail = await r.text().catch(() => "");
       return NextResponse.json({ error: `Transcription failed (${r.status})`, detail: detail.slice(0, 300) }, { status: 502 });

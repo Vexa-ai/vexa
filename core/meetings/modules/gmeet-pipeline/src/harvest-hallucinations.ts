@@ -1,0 +1,140 @@
+/**
+ * Hallucination HARVESTER (#617 follow-up) — one script, every language Whisper serves.
+ *
+ * The hand-curated phrase lists (hallucinations/<lang>.txt) are whack-a-mole and go stale when the
+ * STT model changes. This harvests them EMPIRICALLY instead: feed guaranteed-NON-SPEECH audio
+ * (digital silence + white noise) through the real STT, forcing each language in turn — and since
+ * there is NO speech in the input, EVERY string it transcribes is a hallucination by construction.
+ * The output is written to hallucinations/<lang>.harvested.txt, which the filter's loader already
+ * reads alongside the curated lists.
+ *
+ * NON-SPEECH ONLY — this is load-bearing: if the input contained any speech or song lyrics we would
+ * harvest REAL words into the filter and then start SUPPRESSING real speech. So the corpus is
+ * generated (silence + seeded white noise), never arbitrary audio/video.
+ *
+ * The pure core (WHISPER_LANGUAGES, nonSpeechCorpus, harvest, renderHarvestFile) is exported and
+ * unit-tested with a fake transcribe. The CLI (`main`) wires the real TranscriptionClient behind
+ * VEXA_TX_KEY — it hits the paid hosted STT and is nondeterministic, so it is an OPERATOR-run
+ * generation step (re-run when the STT model bumps), never a CI gate. Its output (the .txt files) is
+ * committed and pinned by hallucination-filter.test.ts.
+ */
+import { writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/** Every language the Whisper family serves (OpenAI Whisper / faster-whisper tokenizer set). */
+export const WHISPER_LANGUAGES: readonly string[] = [
+  'en', 'zh', 'de', 'es', 'ru', 'ko', 'fr', 'ja', 'pt', 'tr', 'pl', 'ca', 'nl', 'ar', 'sv', 'it',
+  'id', 'hi', 'fi', 'vi', 'he', 'uk', 'el', 'ms', 'cs', 'ro', 'da', 'hu', 'ta', 'no', 'th', 'ur',
+  'hr', 'bg', 'lt', 'la', 'mi', 'ml', 'cy', 'sk', 'te', 'fa', 'lv', 'bn', 'sr', 'az', 'sl', 'kn',
+  'et', 'mk', 'br', 'eu', 'is', 'hy', 'ne', 'mn', 'bs', 'kk', 'sq', 'sw', 'gl', 'mr', 'pa', 'si',
+  'km', 'sn', 'yo', 'so', 'af', 'oc', 'ka', 'be', 'tg', 'sd', 'gu', 'am', 'yi', 'lo', 'uz', 'fo',
+  'ht', 'ps', 'tk', 'nn', 'mt', 'sa', 'lb', 'my', 'bo', 'tl', 'mg', 'as', 'tt', 'haw', 'ln', 'ha',
+  'ba', 'jw', 'su', 'yue',
+];
+
+export interface NoiseSample { name: string; pcm: Float32Array; }
+
+/** Deterministic LCG so the corpus (and the test) are reproducible run-to-run. */
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => { s = (1664525 * s + 1013904223) >>> 0; return s / 0x100000000; };
+}
+
+/**
+ * Guaranteed speech-free audio: digital silence (Whisper hallucinates hardest here) plus white
+ * noise at a few amplitudes — including levels ABOVE the production near-silent RMS gate, i.e. the
+ * exact non-speech that reaches Whisper in the field and still hallucinates.
+ */
+export function nonSpeechCorpus(sampleRate = 16000, durationSec = 15): NoiseSample[] {
+  const n = Math.round(sampleRate * durationSec);
+  const noise = (amp: number, seed: number): Float32Array => {
+    const rand = lcg(seed);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = (rand() * 2 - 1) * amp;
+    return out;
+  };
+  return [
+    { name: 'silence', pcm: new Float32Array(n) },
+    { name: 'white-noise-low', pcm: noise(0.01, 1) },   // ~RMS 0.006 — above the 0.0025 gate
+    { name: 'white-noise-mid', pcm: noise(0.05, 2) },
+    { name: 'white-noise-high', pcm: noise(0.2, 3) },
+  ];
+}
+
+export type Transcribe = (pcm: Float32Array, language: string) => Promise<string>;
+
+/**
+ * For every (language × non-speech sample), transcribe and collect each non-empty result — a
+ * hallucination by construction. Returns lang → set of trimmed phrases. Per-call failures are
+ * isolated (one bad language never aborts the sweep) and reported via onError.
+ */
+export async function harvest(
+  transcribe: Transcribe,
+  languages: readonly string[],
+  corpus: NoiseSample[],
+  hooks: { onLang?: (lang: string, found: number) => void; onError?: (lang: string, sample: string, err: unknown) => void } = {},
+): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  for (const lang of languages) {
+    const found = new Set<string>();
+    for (const sample of corpus) {
+      try {
+        const text = (await transcribe(sample.pcm, lang))?.trim();
+        if (text) found.add(text);
+      } catch (err) {
+        hooks.onError?.(lang, sample.name, err);
+      }
+    }
+    if (found.size > 0) out.set(lang, found);
+    hooks.onLang?.(lang, found.size);
+  }
+  return out;
+}
+
+/** The <lang>.harvested.txt body: a provenance header + one phrase per line (sorted, deduped). */
+export function renderHarvestFile(lang: string, phrases: Iterable<string>, meta: { model: string; date: string; url: string }): string {
+  const lines = [...new Set([...phrases].map((p) => p.trim()).filter(Boolean))].sort();
+  return (
+    `# ${lang} — GENERATED by harvest-hallucinations.ts. Do NOT hand-edit; re-run the harvester.\n` +
+    `# Every line is a string the STT transcribed from NON-SPEECH audio (silence/noise) → a hallucination.\n` +
+    `# model: ${meta.model} · harvested: ${meta.date} · via: ${meta.url}\n` +
+    lines.join('\n') + '\n'
+  );
+}
+
+// ── CLI (operator-run; hits the paid hosted STT behind VEXA_TX_KEY) ────────────────────────────
+async function main(): Promise<void> {
+  const KEY = process.env.VEXA_TX_KEY;
+  const URL = process.env.VEXA_TX_URL || 'https://transcription.vexa.ai';
+  if (!KEY) {
+    console.error('harvest-hallucinations: set VEXA_TX_KEY (this hits the real STT). Optional: VEXA_TX_URL, VEXA_HARVEST_LANGS=ja,tr,…');
+    process.exit(2);
+  }
+  const { TranscriptionClient } = await import('@vexa/transcribe-whisper');
+  const client = new TranscriptionClient({ serviceUrl: URL, apiToken: KEY });
+  const transcribe: Transcribe = async (pcm, lang) => (await client.transcribe(pcm, lang)).text || '';
+
+  const langs = (process.env.VEXA_HARVEST_LANGS?.split(',').map((s) => s.trim()).filter(Boolean)) || WHISPER_LANGUAGES;
+  const corpus = nonSpeechCorpus();
+  const date = new Date().toISOString().slice(0, 10);
+  const model = process.env.VEXA_STT_MODEL || 'unknown';
+  console.log(`Harvesting hallucinations across ${langs.length} language(s) × ${corpus.length} non-speech samples via ${URL} …`);
+
+  const harvested = await harvest(transcribe, langs, corpus, {
+    onLang: (lang, found) => console.log(`  ${found > 0 ? '⚠️ ' : '✓ '} ${lang}: ${found} hallucination(s)`),
+    onError: (lang, sample, err) => console.error(`  ✗ ${lang}/${sample}: ${String((err as any)?.message ?? err)}`),
+  });
+
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), 'hallucinations');
+  let files = 0;
+  for (const [lang, phrases] of harvested) {
+    writeFileSync(join(dir, `${lang}.harvested.txt`), renderHarvestFile(lang, phrases, { model, date, url: URL }));
+    files++;
+  }
+  console.log(`\nWrote ${files} <lang>.harvested.txt file(s) → ${dir}. Review the diff, then commit.`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
+}

@@ -1,0 +1,220 @@
+{
+  "version": "v0.12.15",
+  "candidate": "v0.12.15",
+  "generated_from": "v0.12.12...v0.12.15",
+  "witnessed_by": "Dmitriy Grankin (@DmitriyG228)",
+  "witnessed_at": "2026-07-19",
+  "deployment": "helm (hosted production, rev 92) \u2014 hosted-compat FORK build of the v0.12.15 release: vexaai/v012-meeting-api:0.12.15-260719-hc13 (image sha256:771879e3ed84c5c4df27278b10018d35cc8c69237f76530fba038ba37bac5ce6). NOTE: prod runs the hosted-compat fork, not the public vexaai/vexa-lite:v0.12.15; this receipt witnesses the fork build in production, corroborated by the public :v0.12.15 lite/bot images having passed release-validate.",
+  "witness_deployment": {
+    "url": "https://dashboard.vexa.ai",
+    "provisioned_by": "delivered to production via helm rev 92 (hosted-compat fork build 0.12.15-260719-hc13), serving real users continuously since the cutover 2026-07-19 ~12:12 UTC",
+    "prevalidated": [
+      "prod value at scale: 8 completed meetings since cutover, all 8 carrying the segments_captured transcript-delivery marker (real users, real transcripts)",
+      "storm validation (2026-07-19 ~20:00 UTC, same image on staging + prod unauth surface): auth wall 16/16, tenant isolation (IDOR) 403, typed refusals 422 across bad inputs, per-user max-bots cap race-safe (7 concurrent \u2192 5x201+2x429), control plane held under a spawn storm (health steady ~0.55s), Redis pod-kill survived with 0 restarts, gateway pod-kill zero-blip, 21 over-capacity meetings reconciled requested->failed",
+      "prod-health watchdog 89 samples/12 min during the storm: /health 530-671ms == baseline, meeting-api 3/3 every sample \u2014 the storm never degraded prod",
+      "bounded live prod spawn+teardown: 3 bots spawned, capacity-reserve preempted a placeholder for an instant slot, DELETE tore them down, placeholder self-healed 2/2"
+    ]
+  },
+  "values": [
+    {
+      "pr": "621",
+      "title": "feat(terminal): configurable default bot name",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/modules/join/src/__tests__/defaultBotName.test.ts"
+    },
+    {
+      "pr": "781",
+      "title": "feat(bot): fail-fast control-plane reachability gate \u2014 infra faults exit 3 with named channels, never an opaque crashloop (#530)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/bot/src/orchestrator.test.ts (\"gate both-down: exit code 3\" asserts CONTROL_PLANE_UNREACHABLE_EXIT, #530)"
+    },
+    {
+      "pr": "782",
+      "title": "fix(msteams): leave fallbacks were dead \u2014 ':has-text()' through querySelector; canonical clicker hoisted to shared, gate covers the Teams array (#759)",
+      "visibility": "user-visible",
+      "platform": "ms-teams",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/modules/join/src/msteams/leave.test.ts"
+    },
+    {
+      "pr": "784",
+      "title": "release: v0.12.12 witness receipt \u2014 SIGNED",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "releases/v0.12.12/witness.json (the prior signed receipt)"
+    },
+    {
+      "pr": "786",
+      "title": "governance: four D-book amendments from the v0.12.12 retro \u2014 sha-pinned TAKE, one re-stamp rule, mechanism-vs-tree closure, era-stamped intake (#785)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "docs/docs/governance/delivery.mdx (four D-book amendments)"
+    },
+    {
+      "pr": "787",
+      "title": "fix(zoom): wire createZoomSpeakers \u2014 Zoom transcripts carry who spoke (#538)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/bot/src/zoom-speaker-wiring.test.ts"
+    },
+    {
+      "pr": "788",
+      "title": "fix(gmeet): auth guard pinned by a running test + i18n-safe signed-out lobby detection (#756, #757)",
+      "visibility": "user-visible",
+      "platform": "google-meet",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/modules/join/src/googlemeet/session.test.ts"
+    },
+    {
+      "pr": "789",
+      "title": "fix(msteams): wire speaker name hints to the transcriber \u2014 segments carry who spoke (#498)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/bot/src/speaker-hints.test.ts"
+    },
+    {
+      "pr": "790",
+      "title": "feat(bots): authenticated session lifecycle \u2014 provisioning end-to-end + write-back on teardown (#724, #725)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_authenticated_spawn.py"
+    },
+    {
+      "pr": "793",
+      "title": "sec(deps): adm-zip >=0.6.0 via override \u2014 Dependabot high closed at the resolution layer (#773)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "pnpm-workspace.yaml (adm-zip >=0.6.0 pnpm.overrides block, GHSA-xcpc-8h2w-3j85)"
+    },
+    {
+      "pr": "794",
+      "title": "fix(meeting-api): POST /bots derives native_meeting_id from meeting_url or refuses typed 422 \u2014 no more orphan meetings (#792)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "malformed/missing native_meeting_id is refused typed and never leaves an orphan meeting row",
+      "observation": "Storm 2026-07-19: POST /bots missing platform/native_meeting_id \u2192 HTTP 422. Oversized (>255) and NUL-byte native_meeting_id crashed the INSERT (see finding F1) but ATOMICALLY \u2014 zero orphan rows verified in the DB. The no-orphan guarantee holds even on that crash."
+    },
+    {
+      "pr": "799",
+      "title": "fix(merge-card): concurrency group scoped per trigger event \u2014 cross-event runs never cancel each other (#798)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/merge-card.yml (concurrency group scoped per trigger event)"
+    },
+    {
+      "pr": "801",
+      "title": "fix(meeting-api): shared-meetings list \u2014 UNION-split access branches + per-branch indexes (#800)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/src/meeting_api/collector/adapters.py:list_meetings (union_all UNION-split branches)"
+    },
+    {
+      "pr": "804",
+      "title": "chart: probe timeoutSeconds=5 across app services \u2014 1s default probe-kills busy-but-healthy async workers (#802)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "app-service probes use timeoutSeconds=5 so a busy-but-healthy async worker is not probe-killed",
+      "observation": "Prod 2026-07-19: deployed meeting-api startupProbe/readinessProbe/livenessProbe all timeoutSeconds=5 (kubectl-read from the live Deployment)."
+    },
+    {
+      "pr": "808",
+      "title": "harden: bot callback horizon ~0.6s\u21927.5s + completed-meeting delivery marker (#806, #807)",
+      "visibility": "user-visible",
+      "pass": "completed meetings carry the segments_captured delivery marker (the extended callback horizon lands)",
+      "witnessed": true,
+      "observation": "Prod 2026-07-19 since cutover: 8 completed meetings, ALL 8 carrying the data->segments_captured delivery marker (real-user value at scale on the delivered image)."
+    },
+    {
+      "pr": "814",
+      "title": "docs: truthful value claims \u2014 Teams/Zoom speaker bullets corrected to wiring-only + fragment rule (witness retro)",
+      "visibility": "docs",
+      "witnessed": "by-proxy",
+      "evidence": "docs/docs/changelog.mdx (Teams/Zoom speaker bullets corrected to wiring-only)"
+    },
+    {
+      "pr": "817",
+      "title": "fix(meeting-api): report every webhook delivery outcome \u2014 non-delivery was silent (#815)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_webhook_wiring.py"
+    },
+    {
+      "pr": "818",
+      "title": "fix(compose): first-run 'make all' \u2014 expand ${IMAGE_TAG} in BROWSER_IMAGE before the spawn-image pull (#812)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/compose/Makefile (${IMAGE_TAG} expansion in BROWSER_IMAGE)"
+    },
+    {
+      "pr": "823",
+      "title": "fix(config): a wrong STT URL or token is caught where you set it, not by an empty transcript (#511)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_config_contract.py"
+    },
+    {
+      "pr": "824",
+      "title": "fix(lifecycle): a bot that was never admitted is not a completed meeting (#807)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "a bot that never reaches the meeting resolves terminal as failed/join_failure, never completed",
+      "observation": "Storm 2026-07-19 ~20:15 UTC: staging bots 13530/13531 spawned into unadmittable google_meet URLs \u2192 meetings resolved status=failed, completion_reason=join_failure (DB-observed), NOT completed. Separately, 21 over-capacity meetings whose bot pods never scheduled all converged requested\u2192failed via reconcile_stale_nonterminal_sweep within ~4 min."
+    },
+    {
+      "pr": "825",
+      "title": "fix(meeting-api): answer /bots/status from the query, not from the whole account (#803)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "/bots/status answers from a slim query projection, not the whole account's data blobs",
+      "observation": "Storm 2026-07-19: GET /bots/status on staging returned a slim projection \u2014 978 bytes for a 5-bot account in 0.73s, items carry id/user_id/platform/native_meeting_id only, no heavy data blob."
+    },
+    {
+      "pr": "827",
+      "title": "fix(join): Zoom/Teams admission verdicts are typed \u2014 permanent failures stop being retried (#806)",
+      "visibility": "user-visible",
+      "platform": "ms-teams",
+      "pass": "a permanent admission failure is classified typed and not retried into a false completed",
+      "witnessed": true,
+      "observation": "Storm 2026-07-19: the never-admitted staging bots carried a typed join_failure attribution (the #806 taxonomy) and were classified permanent \u2014 resolved failed, not retried into a completed."
+    },
+    {
+      "pr": "828",
+      "title": "feat(deploy): the deprecated 0.10 dashboard gets a bounded, off-by-default home (#813)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/helm/tests/test_template.sh (dashboard absent by default / dashboard.enabled assertions)"
+    },
+    {
+      "pr": "829",
+      "title": "fix(bot-spawn,join): browser_session refuses typed at intake; unknown platforms refuse in the join layer (#816)",
+      "visibility": "user-visible",
+      "pass": "browser_session and unknown platforms are refused with a typed 422 at intake, never a 500 or orphan",
+      "witnessed": true,
+      "observation": "Storm 2026-07-19: POST /bots {platform:browser_session} \u2192 HTTP 422 typed; {platform:skype} \u2192 HTTP 422 typed. No 5xx, no orphan meeting row created."
+    },
+    {
+      "pr": "831",
+      "title": "feat(bot): record-always at the capture boundary \u2014 captured-signal.v1 recorder, hint capture, STT tap, distiller (#830)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/bot/src/telemetry-recorder.test.ts"
+    },
+    {
+      "pr": "832",
+      "title": "fix(config): an exhausted STT token probes RED \u2014 the preflight transcribes real audio (#511 follow-up)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/agent/tests/test_config_test.py:test_transcription_exhausted_token_fails_loud_despite_valid_auth"
+    },
+    {
+      "pr": "833",
+      "title": "gov: your own worktree BEFORE your first edit \u2014 trespass tells + remedies (AGENTS.md, D14b)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "AGENTS.md (D14b own-worktree-before-first-edit)"
+    }
+  ],
+  "signed_off": true
+}

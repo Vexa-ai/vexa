@@ -16,13 +16,10 @@ FAKE_URL = "postgresql+asyncpg://u:p@localhost:5432/vexa"
 
 
 def test_configure_applies_pool_size_and_max_overflow():
-    # NB: pass the sizes via variables (not integer-literal kwargs) so the db-budget gate's repo-wide
-    # explicit-pool grep doesn't read a test's kwargs as a service's declared pool ceiling.
-    want_size, want_over = 7, 3
-    app_db.configure(FAKE_URL, pool_size=want_size, max_overflow=want_over)
+    app_db.configure(FAKE_URL, pool_size=7, max_overflow=3)
     engine = app_db.get_engine()
-    assert engine.pool.size() == want_size
-    assert engine.pool._max_overflow == want_over
+    assert engine.pool.size() == 7
+    assert engine.pool._max_overflow == 3
 
 
 def test_configure_defaults_to_framework_pool_when_unset():

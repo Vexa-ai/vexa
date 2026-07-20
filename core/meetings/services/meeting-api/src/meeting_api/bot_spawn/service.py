@@ -27,9 +27,13 @@ import os
 import uuid
 from typing import Any, Optional
 
+from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
+from .env_flags import env_flag
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .ports import (
+    AuthSessionBusy,
+    AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
@@ -46,6 +50,11 @@ __all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting"]
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
 _TERMINAL_STATUSES = ("completed", "failed")
+
+# How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
+# declared ttl_s: past it the cache holds no actionable opinion, so a spawn proceeds rather than
+# blocking on a verdict that predates the operator's fix.
+_STT_VERDICT_MAX_AGE_S = 60.0
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
 # NO jitsi template: a jitsi room name is scoped to a DEPLOYMENT (meet.jit.si is only the public
@@ -174,17 +183,72 @@ async def request_bot(
     #     env-only capability check.
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
     configured = await _resolve_transcription_backend(user_id)
     if configured.get("url"):
         transcription_service_url = configured["url"]
         # A configured backend's token replaces the env token even when empty — the env token
-        # belongs to the ENV backend, never to a user-supplied endpoint.
+        # belongs to the ENV backend, never to a user-supplied endpoint. Same rule for the
+        # model id: the env model names the ENV backend's served model, so a configured
+        # backend carries its own (unset → the client's whisper-1 default).
         transcription_service_token = configured.get("token") or None
+        transcription_model = configured.get("model") or None
     if transcribe_enabled and not transcription_service_url:
         raise TranscriptionNotConfigured(
             "no transcription backend configured — set it in Settings or environment variables "
             "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
         )
+    # 1b-ii. SET-but-MISCONFIGURED is the other half of the same gate (#511 C3): a URL/token that is
+    #     present but rejected (or points at a 404) used to spawn a bot that joined, captured, and
+    #     transcribed NOTHING. Refuse it here, with the probe's own named reason, before the DB
+    #     write. Three bounds keep the refusal honest:
+    #       * CACHED verdicts only (boot preflight seeds them, /health refreshes them per ttl) — no
+    #         probe I/O rides the spawn path;
+    #       * CONFIG faults only — a `unreachable` verdict is the endpoint being down, and refusing
+    #         on it would make every spawn fail for a minute whenever STT restarts. The bot's own
+    #         client retries; a wrong URL never heals by itself. Only the latter is ours to refuse;
+    #       * the ENV backend only — the verdict describes that endpoint, so a Settings-configured
+    #         backend (a different endpoint) must never be blocked by the env one's health.
+    if transcribe_enabled and not configured.get("url"):
+        verdict = cached_probe_verdict("stt", max_age_s=_STT_VERDICT_MAX_AGE_S)
+        if verdict is not None and verdict.get("kind") in CONFIG_FAULT_KINDS:
+            log_event(
+                "bot_spawn_stt_backend_unhealthy", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"reason": verdict.get("reason"), "status": verdict.get("status")},
+            )
+            raise TranscriptionNotConfigured(
+                f"the configured transcription backend is not working: {verdict.get('reason')} — "
+                f"fix TRANSCRIPTION_SERVICE_URL / TRANSCRIPTION_SERVICE_TOKEN; this re-tests within "
+                f"{int(_STT_VERDICT_MAX_AGE_S)}s, or call /health?force=1 to re-probe now"
+            )
+
+    # 1c. Authenticated-bot mode (#724, deployment-scoped knob — Q1-A): when BOT_AUTHENTICATED is
+    #     set, EVERY spawn carries the sealed invocation.v1 auth block, so the bot restores the
+    #     deployment's provisioned browser session (`make login`) and joins signed-in. Config is
+    #     gated loud BEFORE any DB write (the TranscriptionNotConfigured precedent) — a half-
+    #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
+    #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
+    #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
+    #     ride the invocation env into the bot container, so their blast radius must stay the
+    #     userdata prefix).
+    authenticated = env_flag("BOT_AUTHENTICATED", False)
+    auth_userdata_path: Optional[str] = None
+    auth_s3: dict[str, Optional[str]] = {}
+    if authenticated:
+        auth_userdata_path = os.getenv("BOT_USERDATA_S3_PATH") or None
+        auth_s3 = {
+            "s3_endpoint": os.getenv("BOT_S3_ENDPOINT") or None,
+            "s3_bucket": os.getenv("BOT_S3_BUCKET") or None,
+            "s3_access_key": os.getenv("BOT_S3_ACCESS_KEY") or None,
+            "s3_secret_key": os.getenv("BOT_S3_SECRET_KEY") or None,
+        }
+        if not (auth_userdata_path and auth_s3["s3_endpoint"] and auth_s3["s3_bucket"]):
+            raise AuthSessionNotConfigured(
+                "BOT_AUTHENTICATED is set but the userdata store is incomplete — set "
+                "BOT_USERDATA_S3_PATH + BOT_S3_ENDPOINT + BOT_S3_BUCKET (and scoped "
+                "BOT_S3_ACCESS_KEY/BOT_S3_SECRET_KEY); provision the session with `make login`"
+            )
 
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
@@ -204,6 +268,22 @@ async def request_bot(
     #     real adapter serializes per-user with a pg advisory lock + a unique partial index backstop;
     #     the fake has no await between the check and the insert). The continue_meeting (reused-
     #     terminal-row) path reopens an existing row and is unchanged.
+    # 2d. Per-identity serialization (#725 C2): one stored session = one live bot. Refuse a
+    #     second concurrent authenticated spawn against the same userdata path with a typed 409
+    #     naming the conflicting meeting. Control-plane pre-check against the tracked active set
+    #     (the issue's default); it runs just before the row insert, so the remaining window is a
+    #     single request interleaving — the storage-side lock fork stays available if a multi-
+    #     replica deployment ever witnesses it.
+    if authenticated and auth_userdata_path:
+        conflict = await repo.find_active_by_userdata(auth_userdata_path)
+        if conflict is not None and (reused_row is None or conflict["id"] != reused_row["id"]):
+            log_event(
+                "bot_spawn_auth_session_busy", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"conflicting_meeting_id": conflict["id"]},
+            )
+            raise AuthSessionBusy(conflict["id"], auth_userdata_path)
+
     if reused_row is not None:
         # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not
         # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
@@ -230,6 +310,9 @@ async def request_bot(
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
+        if authenticated and auth_userdata_path:
+            meeting_data["auth_userdata_path"] = auth_userdata_path
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
         # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS).
         if webhook_url:
@@ -263,7 +346,7 @@ async def request_bot(
         "INTERNAL_API_SECRET"
     )
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
-    # transcription_service_url/token flow into the invocation below. Without either the bot
+    # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
     # (transcribe still gated by transcribe_enabled, which step 1b refuses when unresolvable).
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
@@ -276,7 +359,7 @@ async def request_bot(
         meeting_id=meeting_id,
         platform=platform,
         meeting_url=constructed_url,
-        bot_name=bot_name or f"VexaBot-{uuid.uuid4().hex[:6]}",
+        bot_name=bot_name or (os.getenv("DEFAULT_BOT_NAME") or f"VexaBot-{uuid.uuid4().hex[:6]}"),
         passcode=passcode,
         token=token,
         native_meeting_id=native_meeting_id,
@@ -290,9 +373,16 @@ async def request_bot(
         transcribe_enabled=transcribe_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
+        transcription_model=transcription_model,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
+        authenticated=True if authenticated else None,
+        userdata_s3_path=auth_userdata_path,
+        s3_endpoint=auth_s3.get("s3_endpoint"),
+        s3_bucket=auth_s3.get("s3_bucket"),
+        s3_access_key=auth_s3.get("s3_access_key"),
+        s3_secret_key=auth_s3.get("s3_secret_key"),
         # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
         # fail the meeting; everyoneLeftTimeout matches the O6 config.
         automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},

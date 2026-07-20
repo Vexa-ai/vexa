@@ -90,6 +90,12 @@
    "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
   },
   {
+   "key": "DEFAULT_BOT_NAME",
+   "class": "defaulted",
+   "default": "(unset — request_bot falls back to VexaBot-{random})",
+   "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
+  },
+  {
    "key": "TRANSCRIPTION_SERVICE_URL",
    "class": "capability",
    "capability": "stt",
@@ -101,6 +107,16 @@
    "capability": "stt",
    "secret": true,
    "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
+  },
+  {
+   "key": "TRANSCRIPTION_MODEL",
+   "class": "defaulted",
+   "default": "(unset — the whisper client sends whisper-1)",
+   "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part) — required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
+   "targets": [
+    "compose",
+    "lite"
+   ]
   },
   {
    "key": "TRANSCRIBE_ENABLED",
@@ -127,6 +143,68 @@
    "description": "deployment-level default for a spawn's recording_enabled when the request does not say",
    "targets": [
     "compose"
+   ]
+  },
+  {
+   "key": "BOT_AUTHENTICATED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "deployment-scoped authenticated-bot knob: when true, EVERY POST /bots spawn carries the invocation.v1 auth block so the bot restores the provisioned browser session (make login) and joins signed-in. Demands the BOT_USERDATA_S3_PATH + BOT_S3_* keys — incomplete config answers a typed 503 (never a silent anonymous join).",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_USERDATA_S3_PATH",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true; the userdata prefix holding the provisioned session, e.g. userdata/bot-identity-1)",
+   "description": "stored-session prefix; also the per-identity serialization key (one live authenticated bot per prefix)",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true)",
+   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_BUCKET",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true)",
+   "description": "userdata store bucket",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_ACCESS_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "secret": true,
+   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_SECRET_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "secret": true,
+   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+   "targets": [
+    "compose",
+    "helm"
    ]
   },
   {
@@ -314,9 +392,13 @@
   {
    "key": "ADMIN_API_URL",
    "class": "defaulted",
-   "default": "(unset — auto-join spawn-context + calendar-sync discovery are then disabled: auto-join spawns uncapped, calendar sync no-ops)",
-   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs)",
-   "targets": []
+   "default": "(unset — calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
+   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
   },
   {
    "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
@@ -344,6 +426,13 @@
    "class": "defaulted",
    "default": "300",
    "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+   "targets": []
+  },
+  {
+   "key": "AUTO_JOIN_ALLOW_UNCAPPED",
+   "class": "defaulted",
+   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
    "targets": []
   },
   {
@@ -382,6 +471,13 @@
    "targets": []
   },
   {
+   "key": "COLLECTOR_CONSUMER_TTL_MS",
+   "class": "defaulted",
+   "default": "1800000",
+   "description": "#660: idle (ms) after which an abandoned per-recreate consumer (pending==0) is pruned from collector_group by the reclaim sweep (XGROUP DELCONSUMER); default 30 min, well above COLLECTOR_RECLAIM_MIN_IDLE_MS so a briefly-quiet live replica is never removed",
+   "targets": []
+  },
+  {
    "key": "COLLECTOR_RECLAIM_MIN_IDLE_MS",
    "class": "defaulted",
    "default": "60000",
@@ -410,8 +506,8 @@
    "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s) — bots must opt out explicitly (transcribe_enabled=false / TRANSCRIBE_ENABLED=false) to spawn capture-only",
    "probe": {
     "kind": "http",
-    "timeout_s": 2,
-    "ttl_s": 60,
+    "timeout_s": 15,
+    "ttl_s": 900,
     "http": {
      "method": "POST",
      "url_key": "TRANSCRIPTION_SERVICE_URL",
@@ -420,6 +516,13 @@
      "unauthorized_statuses": [
       401,
       403
+     ],
+     "invalid_statuses": [
+      404
+     ],
+     "payload": "audio",
+     "exhausted_statuses": [
+      402
      ]
     }
    }

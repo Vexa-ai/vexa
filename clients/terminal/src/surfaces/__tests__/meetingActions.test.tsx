@@ -93,20 +93,55 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("active→Stop reports network failures instead of throwing", async () => {
+  it("active→Stop reports network failures instead of throwing — as user truth, raw on the console", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onFailure = vi.fn();
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
     await expect(actionsFor(row("active")).find((a) => a.id === "stop")!.run(onFailure)).resolves.toBeUndefined();
 
+    // UI channel: the presented truth, never the fetch engine's message.
     expect(onFailure).toHaveBeenCalledWith({
       actionId: "stop",
       actionLabel: "Stop",
       native: NATIVE,
-      message: "Failed to fetch",
+      message: "Couldn't reach the Vexa server — check that the stack is running.",
     });
+    // Operator channel: the raw plumbing stays on the console (P18).
     expect(warn).toHaveBeenCalledWith("meeting action failed", expect.objectContaining({ actionId: "stop", message: "Failed to fetch" }));
+  });
+
+  it("a 404 on Stop yields the HUMAN no-longer-active message + a reconciling re-snapshot — never the raw JSON body (issue #674)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onFailure = vi.fn();
+    fetchMock.mockResolvedValueOnce({
+      ok: false, status: 404, statusText: "Not Found", url: `/api/bots/google_meet/${NATIVE}`,
+      json: async () => ({ detail: "No active meeting found for this bot in google_meet with ID abc-defg-hij" }),
+    } as unknown as Response);
+
+    await actionsFor(row("active")).find((a) => a.id === "stop")!.run(onFailure);
+
+    const { message } = onFailure.mock.calls[0][0];
+    expect(message).toBe("This meeting is no longer active — refreshing the list.");
+    expect(message).not.toContain("404");
+    expect(message).not.toContain("{");
+    // reconcile: the finally-path re-snapshot was requested so the control self-corrects
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/api/meetings"))).toBe(true);
+    // the raw upstream detail is preserved on the operator channel
+    expect(warn).toHaveBeenCalledWith("meeting action failed", expect.objectContaining({ message: expect.stringContaining("No active meeting found") }));
+  });
+
+  it("a 409 on Send maps to the human already-has-a-bot line", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onFailure = vi.fn();
+    fetchMock.mockResolvedValueOnce({
+      ok: false, status: 409, statusText: "Conflict", url: "/api/bots",
+      json: async () => ({ detail: "An active or requested meeting already exists" }),
+    } as unknown as Response);
+
+    await actionsFor(row("idle")).find((a) => a.id === "send")!.run(onFailure);
+
+    expect(onFailure.mock.calls[0][0].message).toBe("That meeting already has a bot.");
   });
 
   it("idle→Schedule PUTs intent:scheduled with an ISO `at`", () => {

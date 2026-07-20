@@ -50,6 +50,14 @@ _RUNTIME_SCHEMA = _load_schema(
 _INV_REGISTRY = Registry().with_resource(
     _INVOCATION_SCHEMA["$id"], Resource.from_contents(_INVOCATION_SCHEMA)
 )
+
+#: The platforms the MEETING-BOT spawn flow can actually invoke — the sealed invocation.v1
+#: Platform enum, read from the schema itself so this set can never drift from what
+#: ``build_invocation`` will accept. NB: api.v1's Platform enum is WIDER (it also seals
+#: ``browser_session``, whose runtime path is a distinct non-meeting workload — #816); the
+#: router refuses the difference with a typed 422 BEFORE any DB write, instead of writing a
+#: meeting row and then dying inside the schema validation with a 500 that orphans the row.
+SPAWNABLE_PLATFORMS = frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
 _RT_REGISTRY = Registry().with_resource(
     _RUNTIME_SCHEMA["$id"], Resource.from_contents(_RUNTIME_SCHEMA)
 )
@@ -141,6 +149,13 @@ def build_invocation(
     recording_upload_url: Optional[str] = None,
     transcription_service_url: Optional[str] = None,
     transcription_service_token: Optional[str] = None,
+    transcription_model: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+    userdata_s3_path: Optional[str] = None,
+    s3_endpoint: Optional[str] = None,
+    s3_bucket: Optional[str] = None,
+    s3_access_key: Optional[str] = None,
+    s3_secret_key: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -163,12 +178,23 @@ def build_invocation(
         "transcribeEnabled": transcribe_enabled,
         "transcriptionServiceUrl": transcription_service_url,
         "transcriptionServiceToken": transcription_service_token,
+        "transcriptionModel": transcription_model,
         "recordingEnabled": recording_enabled,
         "captureModes": capture_modes,
         "recordingUploadUrl": recording_upload_url,
         "meetingApiCallbackUrl": meeting_api_callback_url,
         "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
+        # Authenticated-bot mode (sealed invocation.v1 auth block): the bot restores the stored
+        # browser session from the userdata store before launch and joins signed-in. Deployment-
+        # scoped — set by the BOT_AUTHENTICATED knob in ``request_bot``; None-stripped otherwise
+        # so anonymous invocations carry no auth fields at all.
+        "authenticated": authenticated,
+        "userdataS3Path": userdata_s3_path,
+        "s3Endpoint": s3_endpoint,
+        "s3Bucket": s3_bucket,
+        "s3AccessKey": s3_access_key,
+        "s3SecretKey": s3_secret_key,
     }
     invocation = {k: v for k, v in invocation.items() if v is not None}
     conforms_invocation(invocation)

@@ -4,7 +4,8 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
- *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|all]
+ *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
+ *                                lite-makefile|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -427,14 +428,22 @@ function gateAccess() {
   return true;
 }
 
-// gate:contract-conformance (P8) — the SHIPPED meeting-api conforms to the sealed api.v1. gate:schema
-// proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the RUNNING
-// service implements the contract it serves — and it drifted (api.v1 declares routes meeting-api never
-// implemented; the conformance harness drove a FAKE that masked it). This is the OFFLINE STRUCTURAL half:
-// a pytest imports the real create_app(), enumerates app.routes, and asserts every implemented api.v1
-// route matches a declared (path, method) AND every declared route is implemented OR on an explicit,
-// reasoned waiver list (known drift bounded + documented; NEW unwaived drift → RED). Discovers the proof
-// by filename (mirrors gate:access). RED if the proof is absent — an ungated contract is the gap this closes.
+// gate:contract-conformance (P8) — the SHIPPED impl conforms to the sealed api.v1, BOTH directions.
+// gate:schema proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the
+// RUNNING service implements the contract it serves — and it drifted BOTH ways (api.v1 declares routes
+// meeting-api never implemented; the conformance harness drove a FAKE that masked it). This is the
+// OFFLINE STRUCTURAL check, discovered by filename (mirrors gate:access), asserting per service:
+//   • forward (impl ⊆ contract): every api.v1 route the real create_app() registers matches a declared
+//     (path, method) — a route that drifts from the contract's spelling is a bug; and
+//   • REVERSE (contract ⊆ impl, #591): for EVERY (path, method) the sealed api.v1 declares, the UNION of
+//     the gateway edge + meeting-api it forwards to registers it, OR the route is audited in
+//     core/gateway/contracts/api.v1/KNOWN_GAPS.json (owned-elsewhere prefix / reasoned known-gap, each
+//     reported LOUDLY). A sealed route that is renamed/dropped and NOT audited → RED, listed by name.
+//   • golden RESPONSE-SHAPE: the frozen golden examples drive the REAL response so a field RENAME
+//     (running_bots → running) fails, not just a path removal.
+// The KNOWN_GAPS.json ledger is the audited exception path: adding a row is a deliberate, diff-visible
+// change in the sealed contracts dir (it is NOT a *.schema.json, so it does not move the api.v1 seal hash).
+// RED if the proof is absent — an ungated contract is the gap this closes.
 // L4 extension (bbb): live input-fuzzing (schemathesis vs the running OpenAPI) is the dynamic half.
 function gateContractConformance() {
   const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_contract_conformance.py")));
@@ -443,7 +452,7 @@ function gateContractConformance() {
     try { execSync("uv run pytest -q tests/test_contract_conformance.py", { cwd: d, stdio: "pipe" }); }
     catch (e) { return fail([`contract-conformance ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
   }
-  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (routes ≡ contract; drift waived + documented)`);
+  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (impl⊆contract + contract⊆impl + golden shapes; gaps audited in KNOWN_GAPS.json)`);
   return true;
 }
 
@@ -891,33 +900,63 @@ function gateDbSchema() {
 // service that constructs a Postgres engine must be in deploy/db-budget.json; Σ(helm replicas ×
 // per-service pool ceiling) + reserved must fit max_connections; and no service's code may set a
 // pool_size/max_overflow HIGHER than its declared ceiling (so the budget can't silently under-count).
+// Both scans below read the COMMITTED tree via `git grep --untracked` — tracked files plus new
+// not-yet-added ones, never gitignored paths. The .venv/site-packages trees gate:python materializes
+// under core/ match both patterns (numpy fixtures set pool_size=; sqlalchemy defines
+// create_async_engine) and must not enter the budget. --untracked keeps a brand-new .py in scope.
+//
+// Both scans count a service's PRODUCTION source only. A test's engine is a throwaway no deployment
+// runs: it holds zero production connections, so a pool literal in a test cannot under-state a budget
+// whose unit is Σ(helm replicas × pool ceiling), and counting one could only invent a red against a
+// service whose deployed pool is whatever its production source says. Excluding tests is therefore
+// the contract gateDbBudget() already states in its own error text ("no non-test source constructs a
+// DB engine there") — the two scans share one path test so they can never disagree on the population.
+//
+// A file is a test when it sits under a tests/ dir or its BASENAME starts with test_ — not merely
+// when "test_" occurs somewhere in the path, which would drop production files (latest_pool.py) out
+// of a production budget: the one direction this gate must never fail. pytest's other convention,
+// the *_test.py suffix, is deliberately NOT a rule: core/agent/control_plane/config_test.py is
+// production source (it implements the Settings → Models "Test" buttons), and excluding it would
+// under-count for real. Filename heuristics have counterexamples in this tree; both are checked.
+const _isTestPath = (p) => /(^|\/)tests?\//.test(p) || /(^|\/)test_[^/]*$/.test(p);
+
 function _dbHoldingServices() {
   let out;
   try {
-    out = execSync("grep -rl --include='*.py' create_async_engine core", { cwd: ROOT }).toString();
+    out = execSync("git grep --untracked -l create_async_engine -- 'core/*.py'", { cwd: ROOT }).toString();
   } catch { return new Set(); }  // grep exit 1 = no matches
   const svcs = new Set();
   for (const path of out.split("\n")) {
-    if (!path || /(^|\/)tests?\//.test(path) || path.includes("test_")) continue;
+    if (!path || _isTestPath(path)) continue;
     const m = path.match(/\/services\/([^/]+)\//);
     if (m) svcs.add(m[1]);
   }
   return svcs;
 }
 
-function _explicitPool(service) {
-  // the largest explicit pool_size= / max_overflow= a service's code sets, or {} when it relies on
-  // the framework default (the "silent default" the issue names). Used to reject an under-stated budget.
+function _explicitPool() {
+  // the largest explicit pool_size= / max_overflow= a service's production code sets and where, or {}
+  // when every service relies on the framework default (the "silent default" #529 names). Used to
+  // reject an under-stated budget. `-n -o`, never `-h`: the path has to survive the scan both to be
+  // filtered on and to name the file in the error — a bare number is a verdict nobody can trace back
+  // to a line. `-o` also splits two literals on one source line (pool_size=…, max_overflow=…) into
+  // two records, so neither hides behind the other.
   let out = "";
   try {
-    out = execSync(`grep -rhoE --include='*.py' '(pool_size|max_overflow) *= *[0-9]+' core 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
+    out = execSync(`git grep --untracked -noE '(pool_size|max_overflow) *= *[0-9]+' -- 'core/*.py' 2>/dev/null || true`, { cwd: ROOT }).toString();
   } catch { out = ""; }
   const found = {};
   for (const line of out.split("\n")) {
-    const m = line.match(/(pool_size|max_overflow)\s*=\s*(\d+)/);
-    if (m) found[m[1]] = Math.max(found[m[1]] || 0, parseInt(m[2], 10));
+    // anchored to git grep's whole `path:lineno:match` record: -o makes the match the entire final
+    // field, so a path that happens to spell "pool_size=5" can never be parsed as the literal.
+    const m = line.match(/^(.+?):(\d+):(pool_size|max_overflow) *= *(\d+)$/);
+    if (!m) continue;
+    const [, path, lineno, key, val] = m;
+    if (_isTestPath(path)) continue;
+    const value = parseInt(val, 10);
+    if (!found[key] || value > found[key].value) found[key] = { value, where: `${path}:${lineno}` };
   }
-  return found;  // note: repo-wide (explicit overrides are rare); a match anywhere raises the floor
+  return found;  // repo-wide (explicit overrides are rare); a match anywhere raises the floor
 }
 
 function _helmReplicas(key) {
@@ -953,10 +992,10 @@ function gateDbBudget() {
   for (const [svc, cfg] of Object.entries(budget.services || {})) {
     const replicas = _helmReplicas(cfg.helm_key);
     if (replicas === null) { errs.push(`${svc}: could not read replicaCount for helm key '${cfg.helm_key}' in values.yaml`); continue; }
-    if (explicit.pool_size && explicit.pool_size > cfg.pool_size)
-      errs.push(`${svc}: code sets pool_size=${explicit.pool_size} but db-budget declares ${cfg.pool_size} (under-count)`);
-    if (explicit.max_overflow && explicit.max_overflow > cfg.max_overflow)
-      errs.push(`${svc}: code sets max_overflow=${explicit.max_overflow} but db-budget declares ${cfg.max_overflow} (under-count)`);
+    if (explicit.pool_size && explicit.pool_size.value > cfg.pool_size)
+      errs.push(`${svc}: code sets pool_size=${explicit.pool_size.value} (${explicit.pool_size.where}) but db-budget declares ${cfg.pool_size} (under-count)`);
+    if (explicit.max_overflow && explicit.max_overflow.value > cfg.max_overflow)
+      errs.push(`${svc}: code sets max_overflow=${explicit.max_overflow.value} (${explicit.max_overflow.where}) but db-budget declares ${cfg.max_overflow} (under-count)`);
     const ceiling = Number(cfg.pool_size || 0) + Number(cfg.max_overflow || 0);
     const conns = replicas * ceiling;
     total += conns;
@@ -971,7 +1010,31 @@ function gateDbBudget() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:lite-makefile (#581) — no comment line inside a `\`-continued recipe block in
+// deploy/lite/Makefile. A bare `#` recipe line without a trailing `\` ENDS the continuation, so
+// make runs the rest in a separate shell where the block's variables are lost (the empty-$IMG
+// class: `docker run … $IMG` with no image); with a trailing `\` the shell comment swallows the
+// continued line instead. Either way the block silently breaks — commentary belongs ABOVE the
+// recipe, in `##` doc lines. Green-on-empty if the Makefile is absent.
+function gateLiteMakefile() {
+  const f = join(ROOT, "deploy", "lite", "Makefile");
+  if (!existsSync(f)) { console.log("  ✓ gate:lite-makefile — no deploy/lite/Makefile (green-on-empty)"); return true; }
+  const lines = readFileSync(f, "utf8").split("\n");
+  const errs = [];
+  let cont = false;  // the previous RECIPE line ended with `\` — we are inside a continued block
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const recipe = line.startsWith("\t");
+    if (recipe && cont && line.trim().startsWith("#"))
+      errs.push(`deploy/lite/Makefile:${i + 1} — comment line inside a \`\\\`-continued recipe block (orphans the rest of the block's shell state; move it above the recipe as a \`##\` doc line)`);
+    cont = recipe && line.replace(/\s+$/, "").endsWith("\\");
+  }
+  if (errs.length) return fail(["lite-makefile (#581, the empty-$IMG class):", ...errs.map((e) => "   " + e)]);
+  console.log("  ✓ gate:lite-makefile — no comment lines inside continued recipe blocks (deploy/lite/Makefile)");
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

@@ -35,11 +35,17 @@ attribution, scaling.
 | Fully **air-gapped** (bundled self-hosted GPU STT unit) | ✅ | 🟡 BYO STT wiring | ❌ | 🟡 local models | 🟡 build it |
 | Bot joins **Meet + Teams + Zoom + Jitsi** | ✅ | ✅ | ✅ | ❌ device audio | 🟡 build ×3 |
 | Real-time transcript API, speaker-attributed | ✅ | ✅ | ✅ | 🟡 app-local | 🟡 build it |
+| 99+ languages: auto-detect or forced, per-window segment labels | ✅ | 🟡 provider-dependent | ✅ | 🟡 model-dependent | 🟡 build it |
 | **Bring your own models** (STT + LLM endpoints) | ✅ | 🟡 STT providers | ❌ | ✅ | ✅ |
 | Kubernetes / OpenShift scale-out (Helm, a Pod per workload) | ✅ | 🟡 compose-first | n/a | ❌ | 🟡 build it |
 | Knowledge layer: transcripts → git Markdown workspace + sandboxed agents | ✅ | ❌ | ❌ | 🟡 app notes | ❌ |
 | Architecture built for AI-assisted maintenance ([one-concern modules, sealed contracts, golden fixtures](/architecture/modules)) | ✅ | 🟡 conventional | n/a | ❌ | — |
 | License | Apache-2.0 | Apache-2.0 | proprietary | varies | — |
+
+*Bring your own models* covers both halves of the STT contract: the endpoint
+(`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
+validate the id (Groq, vLLM, OpenAI-compatible gateways) work end-to-end, not just backends that
+ignore it. See [Configuration](/configuration#transcription-stt).
 
 ## When to choose what — honestly
 

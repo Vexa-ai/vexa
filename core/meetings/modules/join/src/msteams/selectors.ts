@@ -11,6 +11,10 @@
 // entries were replaced with the unquoted substring form on 2026-07-04;
 // src/shared/selector-validity.test.ts now gates every selector array.
 
+// Browser-context button matcher (shared shape) — see ../shared/leave-click.
+import type { BrowserContextButtonMatcher } from "../shared/leave-click";
+export type { BrowserContextButtonMatcher };
+
 export const teamsInitialAdmissionIndicators: string[] = [
   // Most reliable indicators: Leave buttons that actually exist in Teams meetings
   'button[id="hangup-button"]',
@@ -221,50 +225,66 @@ export const teamsNameInputSelectors: string[] = [
 // Primary hangup button selector (most reliable)
 export const teamsPrimaryHangupButtonSelector = '#hangup-button';
 
-// Teams comprehensive leave selectors (stateless - covers all scenarios)
-export const teamsLeaveSelectors: string[] = [
+// Teams comprehensive leave matchers (stateless — covers all scenarios).
+// BROWSER CONTEXT: consumed inside page.evaluate via document.querySelector —
+// declared in browserContextSelectorArrays below, so the validity gate
+// CSS-parses every `css` field. Tried in order; first visible match wins.
+// Text-labelled buttons (Teams confirmation dialogs name their buttons by
+// textContent, not aria-label) are `text` matchers — the `:has-text()`
+// semantics, expressed for a plain-CSS engine. Priority order is preserved
+// from the working `#hangup-button` first down to generic close/cancel, so a
+// confirmation Leave/End cannot be outranked by a stray Close.
+export const teamsLeaveButtonMatchers: BrowserContextButtonMatcher[] = [
   // WORKING SELECTORS FIRST - confirmed from logs
-  'button[id="hangup-button"]', // ✅ CONFIRMED WORKING - successfully clicked in logs
+  { css: 'button[id="hangup-button"]' }, // ✅ CONFIRMED WORKING - successfully clicked in logs
 
   // Teams-specific leave/hangup buttons
-  'button[data-tid="hangup-main-btn"]',
+  { css: 'button[data-tid="hangup-main-btn"]' },
 
   // Cancel buttons (for awaiting admission/waiting room)
-  'button[aria-label="Cancel"]',
-  'button:has-text("Cancel")',
+  { css: 'button[aria-label="Cancel"]' },
+  { text: 'Cancel' },
 
   // Leave buttons (for active meetings)
-  'button[aria-label="Leave"]',
-  'button:has-text("Leave")',
+  { css: 'button[aria-label="Leave"]' },
+  { text: 'Leave' },
 
   // More specific leave patterns
-  'button[aria-label*="Leave"]',
-  'button[aria-label*="leave"]',
-  '[role="toolbar"] button[aria-label*="Leave"]',
+  { css: 'button[aria-label*="Leave"]' },
+  { css: 'button[aria-label*="leave"]' },
+  { css: '[role="toolbar"] button[aria-label*="Leave"]' },
 
   // End meeting alternatives
-  'button[aria-label*="End meeting"]',
-  'button:has-text("End meeting")',
-  'button[aria-label*="Hang up"]',
-  'button:has-text("Hang up")',
+  { css: 'button[aria-label*="End meeting"]' },
+  { text: 'End meeting' },
+  { css: 'button[aria-label*="Hang up"]' },
+  { text: 'Hang up' },
 
   // Close/dismiss alternatives
-  'button:has-text("Close")',
-  'button[aria-label="Close"]',
-  'button:has-text("Dismiss")',
-  'button[aria-label="Dismiss"]',
+  { text: 'Close' },
+  { css: 'button[aria-label="Close"]' },
+  { text: 'Dismiss' },
+  { css: 'button[aria-label="Dismiss"]' },
 
   // Generic cancel patterns
-  'button[aria-label*="Cancel"]',
-  'button[data-tid*="cancel"]',
-  '[role="button"]:has-text("Cancel")',
+  { css: 'button[aria-label*="Cancel"]' },
+  { css: 'button[data-tid*="cancel"]' },
+  { css: '[role="button"]', text: 'Cancel' },
 
   // Confirmation dialog buttons
-  '[role="dialog"] button:has-text("Leave")',
-  '[role="dialog"] button:has-text("End meeting")',
-  '[role="alertdialog"] button:has-text("Leave")',
+  { css: '[role="dialog"] button', text: 'Leave' },
+  { css: '[role="dialog"] button', text: 'End meeting' },
+  { css: '[role="alertdialog"] button', text: 'Leave' },
 
   // Fallback patterns
-  'input[type="button"][value="Cancel"]',
-  'input[type="submit"][value="Cancel"]'
+  { css: 'input[type="button"][value="Cancel"]' },
+  { css: 'input[type="submit"][value="Cancel"]' }
 ];
+
+// EXECUTION-CONTEXT DECLARATION — consumed by src/shared/selector-validity.test.ts.
+// teamsLeaveButtonMatchers ships into page.evaluate and runs through
+// document.querySelector, so the gate's LANE 2 additionally CSS-parses every
+// `css` field: a Playwright-only `:has-text()` — invalid in that context —
+// would otherwise ship green as a dead selector. `text` fields are raw strings
+// matched against textContent in-page, never parsed as selectors.
+export const browserContextSelectorArrays: string[] = ['teamsLeaveButtonMatchers'];

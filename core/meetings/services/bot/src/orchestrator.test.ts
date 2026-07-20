@@ -16,10 +16,10 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator } from './orchestrator.js';
+import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink } from './ports.js';
+import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
 
 let failed = 0;
@@ -318,6 +318,83 @@ async function main(): Promise<void> {
     check('#593: leave NEVER called with pipeline_start_failed', !leaveReasons.includes('pipeline_start_failed'), leaveReasons.join(','));
     check('#593: ended cleanly via the leave act → completed(stopped)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
     check('#593: both subsystem faults surfaced loud (capture + engine)', faults.includes('capture-start') && faults.includes('engine-start'), faults.join(','));
+  }
+
+  // ── #530 reachability gate: BOTH channels down → refuse to join, exit 3, typed terminal ──
+  // The FIRST `joining` emit is load-bearing. A sink whose emitReachable reports `unreachable` +
+  // a secondary probe that reports redis down ⇒ the bot must NOT navigate to the meeting; it
+  // terminates failed(requested) with the control_plane_unreachable attribution and exit 3.
+  // RED AT BASE: before the gate, run() ignores reachability and proceeds to join.join().
+  {
+    const events: LifecycleEvent[] = [];
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'unreachable' as PrimaryReachability; },
+    };
+    let joinCalls = 0;
+    const spyJoin: JoinDriver = {
+      async join(report) { joinCalls++; await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
+    };
+    const res = await createOrchestrator(inv(), {
+      lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs(),
+      reachability: { async probeSecondary() { return false; } },
+    }).run();
+    check('gate both-down: NO join attempted (refused before meeting navigation)', joinCalls === 0, `joinCalls=${joinCalls}`);
+    check('gate both-down: exit code 3 (dedicated infra signal)', res.exitCode === CONTROL_PLANE_UNREACHABLE_EXIT, String(res.exitCode));
+    check('gate both-down: terminal failed', res.status === 'failed');
+    check('gate both-down: failure_stage=requested (distinct from a real join failure)', last(events).failure_stage === 'requested', JSON.stringify(last(events)));
+    check('gate both-down: infra_fault=control_plane_unreachable', last(events).infra_fault === CONTROL_PLANE_UNREACHABLE, JSON.stringify(last(events)));
+    check('gate both-down: unreachable_channels names both deps', JSON.stringify(last(events).unreachable_channels) === JSON.stringify(['meeting_api_callback', 'redis']), JSON.stringify(last(events).unreachable_channels));
+    check('gate both-down: reason text carries the discriminator', (last(events).reason ?? '').startsWith(CONTROL_PLANE_UNREACHABLE), last(events).reason);
+    check('gate both-down: exit_code on the event = 3', last(events).exit_code === CONTROL_PLANE_UNREACHABLE_EXIT, String(last(events).exit_code));
+    check('gate both-down: terminal event still conforms to lifecycle.v1', allConform(events), ajv.errorsText(validateLifecycle.errors));
+    check('gate both-down: never reached active', !seq(events).includes('active'), JSON.stringify(seq(events)));
+  }
+
+  // ── #530 gate: primary DOWN but SECONDARY up → proceed (either-channel rule) ──
+  {
+    const events: LifecycleEvent[] = [];
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'unreachable' as PrimaryReachability; },
+    };
+    let joinCalls = 0;
+    const spyJoin: JoinDriver = {
+      async join(report) { joinCalls++; await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
+    };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
+      reachability: { async probeSecondary() { return true; } },   // redis up
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('gate either-channel: join PROCEEDED (secondary up ⇒ can still report)', joinCalls === 1, `joinCalls=${joinCalls}`);
+    check('gate either-channel: completed(stopped), not an infra abort', res.status === 'completed' && res.exitCode === 0, JSON.stringify(res));
+    check('gate either-channel: no infra_fault emitted', !events.some((e) => e.infra_fault), JSON.stringify(seq(events)));
+  }
+
+  // ── #530 gate: primary REACHABLE (e.g. a 503 mapped to reachable) → proceed, ZERO extra probe ──
+  {
+    const events: LifecycleEvent[] = [];
+    let secondaryProbed = 0;
+    const gateSink: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitReachable(e) { events.push(e); return 'reachable' as PrimaryReachability; },
+    };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: gateSink, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
+      reachability: { async probeSecondary() { secondaryProbed++; return false; } },
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('gate reachable: proceeded to completed', res.status === 'completed', JSON.stringify(res));
+    check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }

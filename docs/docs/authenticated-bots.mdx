@@ -1,0 +1,143 @@
+---
+title: "Authenticated bots"
+description: "Run every bot signed in to a real account — provision a session once, spawn through the stock API, keep the session alive through use."
+---
+
+By default a Vexa bot joins **anonymously**: it knocks on the lobby under a guest name and a host
+admits it. Authenticated mode makes every bot join **signed in to a real account** instead — the
+participant list shows the account identity, and org-restricted meetings that refuse anonymous
+participants open to it. The flow is three parts: provision a session once, configure the
+deployment to spawn with it, and let normal use keep it alive.
+
+**Validated on Google Meet.** The mechanism is platform-agnostic (the session store never inspects
+a platform; the provisioner also knows Teams and Zoom sign-in surfaces), but Teams and Zoom
+authenticated joins ride the same setup and validate on their own waves. Zoom is expected to move
+to a server-side (RTMS) lane that would not need browser auth at all.
+
+## 1. Provision the session — `make login`
+
+Provisioning opens a browser, a human signs in **once**, and the session's auth-essential subset
+(~200 KB: cookies, local/session storage, login data, preferences — never cache or history) is
+uploaded to your deployment's userdata storage.
+
+```bash
+export BOT_USERDATA_S3_PATH=userdata/bot-identity-1   # a dedicated prefix per bot identity
+export BOT_S3_ENDPOINT=http://localhost:9000          # your deployment's MinIO/S3
+export BOT_S3_BUCKET=vexa
+export BOT_S3_ACCESS_KEY=...                          # SCOPED userdata credentials — see security
+export BOT_S3_SECRET_KEY=...
+
+make login          # AUTH_PLATFORM=google (default) | teams | zoom
+```
+
+The command opens the platform's sign-in page (headed on a desktop; inside a container, attach via
+the provisioning browser's VNC on `:6080`), waits for you to finish signing in, **confirms** the
+session (it only succeeds after a logged-in validation passes), then uploads. Aborting without
+signing in exits non-zero with the login verdict and leaves the storage prefix untouched.
+Prerequisite on the machine running it: the `aws` CLI (the bot image ships it; a desktop needs it
+installed).
+
+Use a **dedicated account** for the bot (a Workspace user like `notetaker@your-org.com`), never a
+personal one.
+
+## 2. Configure the deployment to spawn signed-in
+
+Authenticated mode is a **deployment property**: set it once on `meeting-api` and every stock
+`POST /bots` spawns signed-in — no per-request field, no hand-crafted bot config.
+
+```bash
+# meeting-api environment (compose: deploy/compose .env; helm: meeting-api env values)
+BOT_AUTHENTICATED=true
+BOT_USERDATA_S3_PATH=userdata/bot-identity-1
+BOT_S3_ENDPOINT=http://minio:9000        # as reachable FROM the bot containers
+BOT_S3_BUCKET=vexa
+BOT_S3_ACCESS_KEY=...
+BOT_S3_SECRET_KEY=...
+```
+
+With the knob set, each bot restores the stored session into its own ephemeral browser profile
+before launch and joins as the signed-in account — no guest-name entry, no lobby knock where the
+account has access. If the knob is set but the storage config is incomplete, `POST /bots` refuses
+with a 503 naming what's missing — a half-configured deployment never silently spawns anonymous
+bots. If the session store is unreachable at spawn time, the bot fails loud with a typed
+`session-restore` error naming the step and endpoint — it never joins signed-out on a failed
+restore.
+
+**One session, one bot at a time.** A second concurrent spawn against the same stored session is
+refused with a 409 naming the meeting that holds it. One live cookie jar used from N containers
+and IPs at once is a textbook account-risk signal to Google, and concurrent runs would race the
+write-back below. Need N concurrent authenticated bots? Provision N accounts under N
+`BOT_USERDATA_S3_PATH` prefixes (today that means N deployments of the spawn knob, one identity
+each).
+
+## 3. Session lifetime — the session stays alive because it is used
+
+Google rotates session cookies continuously during use and re-challenges state that looks stale.
+A stored session that is only ever *read* decays with every restore. Vexa therefore closes the
+round trip: **restore freshest → use → write back**. On every clean bot teardown, the rotated
+session is uploaded back to the userdata prefix, so the next spawn restores the freshest state
+instead of a decaying snapshot.
+
+The boundary, stated honestly: write-back runs on **clean teardown only**. A hard-killed bot
+(SIGKILL, node crash) never reaches it — the durable copy simply stays at the last successful
+write-back, and the next clean meeting refreshes it. A write-back failure is an attributed warning
+in the bot log, never a hang on exit.
+
+The levers that make session lifetime a configured property instead of luck:
+
+- **Workspace session-duration policy** — the biggest lever, pure configuration. In Google
+  Workspace Admin, set the bot account's OU session duration to the maximum (or "never expire").
+- **Stable egress and browser** — keep each identity on a stable egress IP and a stable bot image
+  version. An identity that hops IPs and browser fingerprints looks cloned.
+- **Keep-warm** — an idle identity decays on Google's clock. If the account doesn't meet regularly,
+  run a periodic authenticated meeting (or simply schedule the bot into a recurring internal
+  meeting) so rotation keeps happening. There is no packaged keep-warm job today; a cron'd
+  `POST /bots` into a standing meeting is the recipe.
+- **N accounts for N concurrent bots** — follows from the one-session-one-bot rule above.
+
+## When the session dies anyway — the recovery loop
+
+Eventually a session can decay past recovery (a Workspace policy change, a security challenge, a
+long idle gap). A bot restoring a signed-out session is reported as a failed meeting (the typed
+`auth_session_missing` verdict is landing with the signed-out detection change — until it merges,
+the failure surfaces as the join failing to proceed as the signed-in account; see
+[Troubleshooting](/troubleshooting#authenticated-bot-fails-or-joins-signed-out)). The fix is
+always the same one command:
+
+```bash
+make login    # re-provision; the next spawn picks the fresh session up automatically
+```
+
+If sessions die **soon after provisioning** rather than after weeks, don't just re-provision in a
+loop — check the lifetime levers above (is write-back running? one bot per session? stable
+egress?).
+
+## Storage layout and security
+
+```
+s3://<BOT_S3_BUCKET>/<BOT_USERDATA_S3_PATH>/browser-data/
+  Local State
+  Default/Cookies              ← the live credential material
+  Default/Login Data ...
+  Default/Local Storage/ ...
+  Default/Session Storage/ ...
+```
+
+- **The stored session IS a credential.** Anyone who can read the prefix can be the account.
+  Create **dedicated S3 credentials scoped to the userdata prefix** for `BOT_S3_ACCESS_KEY` /
+  `BOT_S3_SECRET_KEY` — never reuse the deployment's admin S3 credentials.
+- **The boundary, stated honestly:** the S3 credentials ride the bot's invocation into the bot
+  container's environment (that is how the bot restores and writes back). Anyone with `docker
+  inspect` on the bot host, or read access to the runtime API, can see them — which is exactly why
+  they must be scoped to the userdata prefix and nothing else. Secret *values* are never printed
+  in bot logs.
+- The session subset is not otherwise encrypted at rest beyond what your S3/MinIO deployment
+  provides.
+
+## Availability by deployment surface
+
+- **Compose** — supported as above; MinIO is in the stack.
+- **Kubernetes/Helm** — set the same `BOT_AUTHENTICATED` / `BOT_*` env on the meeting-api
+  deployment (values → env); point the S3 vars at storage the bot pods can reach.
+- **Lite** — the single-container build does not package a userdata store or the provisioning
+  flow; authenticated mode is not available on Lite today.

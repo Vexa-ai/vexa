@@ -1,0 +1,36 @@
+# .gitattributes — merge strategy per path.
+#
+# `merge=union` tells git, on a merge conflict in a file, to KEEP BOTH SIDES' added lines instead
+# of raising a conflict. It is correct ONLY for genuinely append-only content: lines are added, never
+# edited in place, and line ORDER carries no meaning. Applied to anything else it silently corrupts —
+# so this file is deliberately conservative. Every `merge=union` line says why it is safe; the long
+# comment block at the end says why the obvious candidates are NOT union-ized. (See issue #691.)
+
+# ── union-safe: per-PR changelog fragments ───────────────────────────────────────────────────────
+# Each release PR drops its own docs/changelog.d/<pr>-<slug>.md (the towncrier pattern, see that
+# dir's README). The primary anti-collision mechanism is one-file-per-PR — distinct new files never
+# conflict at all. union here is the safety net for the rare case two PRs add lines to the SAME
+# fragment file: fragments are unordered Markdown bullets that are never edited once written, so
+# keeping both sides' bullets is exactly the right resolution. Genuinely append-only ⇒ union-safe.
+docs/changelog.d/*.md merge=union
+
+# ── NOT union-safe — intentionally left to human resolution (do not add merge=union below) ────────
+#
+# deploy/helm/tests/test_template.sh — the gate:helm static-render proof. Its assertions are
+#   `need <count> <pattern> <label>`; adding a k8s resource means EDITING an existing count line
+#   (e.g. `need 7 '^kind: Deployment'` → `need 8`), not appending. Two PRs each bumping the same
+#   count is a true semantic conflict — union would keep BOTH `need 7` and `need 8`, a silently-wrong
+#   gate. A visible conflict is the correct outcome here. Keep two agents off it via AGENTS.md's
+#   fan-out rule (#691 C3); the long-term fix is deriving counts instead of asserting literals.
+#
+# docs/docs/changelog.mdx — prose, plus the `docs-reflects:` version stamp that gate:docs-version
+#   pins to Chart.yaml appVersion. Interleaved release bullets read wrong under union, and union near
+#   the stamp could duplicate it. Solved by the fragments above (C1), NOT by union — never union-ize.
+#
+# docs/docs/deployment-kubernetes.mdx — prose. Two PRs appending different sections would interleave
+#   into nonsense under union. Solved by the fan-out rule (C3), NOT by union — never union-ize.
+#
+# Structured config (deploy/helm/charts/vexa/Chart.yaml, **/config.v1.json, deploy/**/.env.example,
+#   package.json, security-insights.yml, license-exceptions.json, docker-compose*.yml, …) — JSON /
+#   YAML / KEY=VALUE. A changed value is an EDITED line, not an append, and union would produce
+#   duplicate keys or structurally invalid files. Never union-ize structured formats.

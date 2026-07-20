@@ -97,6 +97,41 @@ curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
 
 Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
 
+The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
+/meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
+newest owned row and applies the same rules (`404` unknown/unowned, `409` once FSM-owned). Use it
+when you address meetings by their join-link identity rather than the record id; `DELETE` answers
+`200` on this path (the by-record-id `DELETE` answers `204`).
+
+## api.v1 native-id support (per route)
+
+`api.v1` is sealed as a **file hash** (`contracts.seal.json`), which pins the schema document, not
+the running implementation. This table states, per route, whether the `(platform,
+native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
+
+| Route | Native-id keying in 0.12 |
+|---|---|
+| `PATCH /meetings/{platform}/{native_meeting_id}` | **Yes** — resolves to your newest owned row. |
+| `DELETE /meetings/{platform}/{native_meeting_id}` | **Yes** — `200` on success (by-id path is `204`). |
+| `GET /bots/status` | **Yes** — body carries both `running_bots` (0.10) and `running`/`count` (0.12). |
+| `POST /transcripts/{platform}/{native_meeting_id}/share` | **Aliased** to the moved `POST /meetings/{platform}/{native_meeting_id}/share` mint. The response is the capability-token share (`{id, token, mode, expires_at}`), not the 0.10 public-URL `TranscriptShareResponse` — the public-URL-share backend is not in the 0.12 core. |
+| `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
+| `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
+| `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
+| `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
+
+<Note>
+**What the seal enforces now.** Because the file hash pins the *document* and not the *running
+implementation*, CI now also runs a **reverse** conformance check (`gate:contract-conformance`): for
+every `(path, method)` `api.v1` declares, the shipped gateway + meeting-api must serve it — otherwise
+the route must be recorded in the audited `core/gateway/contracts/api.v1/KNOWN_GAPS.json` ledger (with
+a reason + issue link), which the gate prints loudly on every run. A sealed endpoint renamed or dropped
+without a ledger entry fails CI. The frozen golden examples are also driven against the real responses,
+so a renamed response field (e.g. `running_bots` → `running`) fails too. The two **Not implemented**
+rows above and the share **response-shape** divergence are the current recorded gaps — a client can rely
+on the seal meaning "served, or explicitly listed as a gap", not merely "the schema file didn't change".
+</Note>
+
 ## Auto-join
 
 A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
@@ -160,7 +195,13 @@ the secret address.
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
 <ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
-<ParamField body="language" type="string">ISO code (e.g. `en`); omit to auto-detect.</ParamField>
+<ParamField body="language" type="string">ISO code (e.g. `en`). **Omitted** = auto mode: each STT
+window's language is detected independently and stamped on its segments' `language` field. **Set** =
+forced mode: every STT call is pinned to this code and every segment carries it. Granularity is the
+transcription window (a few seconds of one speaker's audio), not word-level; in auto mode a
+low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the window rather than
+guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
+the 0.12 API.)</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
 
 ```bash POST /bots

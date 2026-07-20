@@ -89,35 +89,58 @@ def _balance(email, minutes):
     return 200, json.dumps({"email": email, "balance_minutes": minutes})
 
 
-def test_transcription_internal_token_billing_exempt():
-    out = ct.run_transcription_test("https://transcription.vexa.ai", "tok", "env",
-                                    get=lambda u, h: _balance("internal@vexa.ai", 0.0))
-    assert out["ok"] and "billing-exempt" in out["summary"]
+# The 2026-07-19 recurrence, as a permanent pair: two tokens, both reporting balance 0.0 —
+# one exhausted (every request 402s), one billing-exempt (transcribes fine). NO balance
+# threshold and NO account name can tell them apart; only the endpoint's answer to real audio
+# can. Neither row names any specific account: identity must never be the oracle.
 
-
-def test_transcription_zero_balance_external_fails_loud():
-    out = ct.run_transcription_test("https://transcription.vexa.ai", "tok", "settings",
-                                    get=lambda u, h: _balance("someone@gmail.com", 0.0))
+def test_transcription_exhausted_token_fails_loud_despite_valid_auth():
+    out = ct.run_transcription_test(
+        "https://transcription.vexa.ai", "tok", "settings",
+        get=lambda u, h: _balance("someone@gmail.com", 0.0),
+        probe=lambda e, t: (402, '{"detail":"Insufficient balance"}'))
     assert not out["ok"] and "402" in out["summary"] and out["source"] == "settings"
+    assert "NO transcript" in out["summary"], "the verdict must name the consequence"
+
+
+def test_transcription_zero_balance_but_transcribing_token_is_green():
+    """A billing-exempt account reports 0.0 minutes and transcribes perfectly — the round-trip
+    must green it where a balance threshold would condemn it."""
+    out = ct.run_transcription_test(
+        "https://transcription.vexa.ai", "tok", "env",
+        get=lambda u, h: _balance("svc-account@example.com", 0.0),
+        probe=lambda e, t: (200, '{"text":"probe"}'))
+    assert out["ok"], "zero balance alone must never fail a token that transcribes"
+    assert "svc-account@example.com" in out["summary"]
 
 
 def test_transcription_funded_external_ok():
-    out = ct.run_transcription_test("https://transcription.vexa.ai", "tok", "env",
-                                    get=lambda u, h: _balance("someone@gmail.com", 42.5))
-    assert out["ok"] and "42.5" in out["summary"]
+    out = ct.run_transcription_test(
+        "https://transcription.vexa.ai", "tok", "env",
+        get=lambda u, h: _balance("someone@gmail.com", 42.5),
+        probe=lambda e, t: (200, '{"text":"probe"}'))
+    assert out["ok"] and "someone@gmail.com" in out["summary"]
 
 
 def test_transcription_rejected_token():
-    out = ct.run_transcription_test("https://x", "bad", "env", get=lambda u, h: (403, ""))
+    out = ct.run_transcription_test("https://x", "bad", "env", get=lambda u, h: (403, ""),
+                                    probe=lambda e, t: (403, ""))
     assert not out["ok"] and "REJECTED" in out["summary"]
+
+
+def test_transcription_backend_5xx_is_red():
+    out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""),
+                                    probe=lambda e, t: (503, ""))
+    assert not out["ok"] and "503" in out["summary"]
 
 
 def test_transcription_strips_v1_path_for_balance_probe():
     seen = []
     def get(url, headers):
         seen.append(url)
-        return _balance("internal@vexa.ai", 0.0)
-    ct.run_transcription_test("https://t.vexa.ai/v1/audio/transcriptions", "tok", "env", get=get)
+        return _balance("someone@example.com", 5.0)
+    ct.run_transcription_test("https://t.vexa.ai/v1/audio/transcriptions", "tok", "env", get=get,
+                              probe=lambda e, t: (200, "{}"))
     assert seen == ["https://t.vexa.ai/balance"]
 
 
@@ -128,10 +151,65 @@ def test_transcription_no_backend_and_no_token():
     assert not out["ok"] and "NO token" in out["summary"]
 
 
-def test_transcription_unreachable_and_non_gateway():
-    def boom(url, headers):
+def test_transcription_unreachable():
+    def boom(endpoint, token):
         raise OSError("timeout")
-    out = ct.run_transcription_test("https://t", "tok", "env", get=boom)
+    out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""),
+                                    probe=boom)
     assert not out["ok"] and "unreachable" in out["summary"]
-    out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""))
-    assert out["ok"] and out.get("unverified") is True  # reachable, token unproven — says so
+
+
+def test_transcription_balance_failure_never_blocks_the_verdict():
+    """/balance is a courtesy account lookup, never the oracle — a gateway without it (or one
+    that errors) must not stop the round-trip from grading the backend."""
+    def boom(url, headers):
+        raise OSError("no /balance here")
+    out = ct.run_transcription_test("https://t", "tok", "env", get=boom,
+                                    probe=lambda e, t: (200, "{}"))
+    assert out["ok"]
+
+
+# ── C2 (#511): a non-Vexa backend is graded by the endpoint BOTS use, never "reachable" ──────────
+# No /balance means "not a Vexa gateway", which is not a verdict on the operator's question. The
+# round-trip runs the bot's own first-chunk request (same probe body as the boot preflight), so
+# the wizard's green means "a bot will transcribe" on ANY OpenAI-compatible endpoint.
+
+_NO_BALANCE = lambda u, h: (404, "")  # noqa: E731 — the non-Vexa signature, reused by every row
+
+
+def test_transcription_openai_wrong_key_is_red():
+    """A1/A2: a rejected key on an OpenAI-compatible endpoint is RED at the click — it used to
+    return green-unverified and fail mid-meeting."""
+    out = ct.run_transcription_test("https://api.openai.com", "sk-wrong", "settings",
+                                    get=_NO_BALANCE, probe=lambda e, t: (401, ""))
+    assert not out["ok"], "a rejected key must never test green"
+    assert "REJECTED" in out["summary"] and out["status"] == 401
+    assert out.get("unverified") is None, "there is no longer an unverified green"
+
+
+def test_transcription_openai_good_key_is_green_and_names_the_endpoint():
+    out = ct.run_transcription_test("https://api.openai.com", "sk-good", "settings",
+                                    get=_NO_BALANCE, probe=lambda e, t: (200, '{"text":""}'))
+    assert out["ok"]
+    assert "/v1/audio/transcriptions" in out["summary"]
+
+
+def test_transcription_openai_wrong_url_is_red():
+    out = ct.run_transcription_test("https://api.openai.com/wrong", "sk-good", "env",
+                                    get=_NO_BALANCE, probe=lambda e, t: (404, ""))
+    assert not out["ok"] and "URL shape" in out["summary"]
+
+
+def test_transcription_probe_hits_the_transcriptions_path_once():
+    """C4 (A5) at this consumer: base URL and full-path URL must hit the SAME endpoint once with
+    the configured token (the /balance lookup's X-API-Key is Vexa-gateway-only)."""
+    for configured in ("https://api.openai.com", "https://api.openai.com/v1/audio/transcriptions"):
+        seen = []
+        def probe(endpoint, token):
+            seen.append((endpoint, token))
+            return 200, "{}"
+        out = ct.run_transcription_test(configured, "sk-good", "env", get=_NO_BALANCE, probe=probe)
+        assert out["ok"], f"{configured} must verify green"
+        assert seen == [("https://api.openai.com/v1/audio/transcriptions", "sk-good")], (
+            f"{configured} → {seen}"
+        )

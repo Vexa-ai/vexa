@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.5 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.15 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.5`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.15`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -80,7 +80,7 @@ probe), not inferred from planning docs.
 | Zoom **bring-your-own OBF/ZAK tokens** + native SDK path (main PR #320) | not carried — **planned back in the 0.12.x Zoom track** | Verified: the carved bot joins Zoom via the **web client only** (`buildZoomWebClientUrl` → `app.zoom.us/wc/…/join`); no ZAK/OBF token handling and no native-SDK branch exist yet. Authorized-join (tokens and/or SDK) returns with the 0.12.x Zoom work. |
 | **Segment-latency env knobs** (main PR #447: `MIN_AUDIO_DURATION_SEC`, `SUBMIT_INTERVAL_SEC`, `IDLE_TIMEOUT_SEC`) | partial | The three knobs exist as **programmatic** config (`SpeakerStreamManagerConfig`: `minAudioDuration` / `submitInterval` / `idleTimeoutSec`), but nothing reads them from the environment — a deployment cannot opt into low-latency mode without code. |
 | `max_concurrent_bots=0` treated as **depleted, not unlimited** (main PR #456) | **carried (fixed 2026-07-04)** | The gap was found while fact-checking this page and fixed the same day (0.12 PR #44, mirroring main's #456): a cap of `0` now rejects the spawn as depleted, with a regression test. |
-| Swagger/OpenAPI **auth-scheme fixes** (main PRs #319, #336) | not carried | The 0.12 admin-api declares both `APIKeyHeader`s **without `scheme_name`** — the exact collapsed-scheme Swagger bug #319 fixed; the 0.12 gateway declares no OpenAPI security schemes at all. Cosmetic-but-real DX gap in the *served* docs (the sealed contract is unaffected). |
+| Swagger/OpenAPI **auth-scheme fixes** (main PRs #319, #336) | not carried | The 0.12 admin-api declares both `APIKeyHeader`s **without `scheme_name`** — the exact collapsed-scheme Swagger bug #319 fixed; the 0.12 gateway declares no OpenAPI security schemes at all. Cosmetic-but-real DX gap in the *served* docs. The sealed contract carried the same class of bug — all 61 secured operations referenced the undefined `APIKeyHeader` scheme (#62) — fixed by #531 (refs now resolve to `ApiKeyAuth`/`AdminApiKeyAuth`, pinned by `validate.mjs`); the *served*-spec gap remains open. |
 | Dashboard-authz + schedule-callback hardening (main PR #406) | superseded by architecture | 0.12 scheduling compiles `schedule.v1` jobs that the runtime scheduler fires internally — there is no exposed schedule-callback endpoint to harden. The vendored dashboard rides as an optional compose overlay behind the gateway. |
 | Hardened Python Docker builds (main PR #435) | superseded | 0.12 rebuilt all of its images. |
 
@@ -143,6 +143,410 @@ probe), not inferred from planning docs.
   contract-sealed today, control plane not yet wired.
 - **`discord` ingest and `GET …/participants`**: **planned back in the 0.12.x line** with the
   next `api.v1` contract revision.
+
+## 0.12.x maintenance fixes
+
+- **Compose: `BROWSER_IMAGE` pinned to the release tag (#659).** `deploy/compose` now pins
+  `BROWSER_IMAGE` to the immutable release tag instead of a moving `:v012` tag, so `make all`
+  deploys are reproducible. See [Deployment](/deployment).
+- **Admin-API: empty token scopes backfilled on upgrade (#578).** Upgrading a 0.10 stack to 0.12
+  backfills `api_token` rows that had empty `scopes`, so pre-existing tokens keep working under the
+  scoped gateway. No action required — the backfill runs during schema sync.
+- **Lite: terminal transcription env wired (#628).** In `deploy/lite`, the `[program:terminal]`
+  worker now receives the STT and internal-secret environment it needs, so speech-to-text works in
+  the single-container lite deploy. See [Deployment](/deployment).
+
+- **Webhooks: crash-safe retry drain (#520).** The retry drain now uses a Redis reliable-queue, so failed webhook deliveries survive a storage outage and are still delivered after recovery instead of being lost.
+
+- **Google Meet: stop silence hallucinations (#617).** Added ja/tr phrase lists plus a near-silent submit gate, so near-silent audio windows are no longer sent to Whisper — killing the phantom phrases Whisper emits for near-silence.
+
+- **Google Meet: empirical hallucination harvester (#617 follow-up).** A single script that harvests hallucination phrase-lists empirically across every Whisper language — groundwork for the broader silence-hallucination work (#622).
+- **Credits (v0.12.10).** @waqaskhan137 — the orphan-process-group diagnosis (#486) and the
+  transcription-model findings whose regression rows now live in #522/#525; @m-tauqueer — driving
+  the leave-when-alone value (#270) whose spec is now #545. Superseded PRs are credited on their
+  threads; findings are contributions.
+
+- **STT model id is now a deployment choice: `TRANSCRIPTION_MODEL` (#522).** The bot's whisper
+  client used to hardcode `model=whisper-1` on every live transcription request, so OpenAI-compatible
+  backends that validate model ids (Groq, vLLM, LiteLLM, gateways) rejected every request — the bot
+  joined and captured but produced no transcript. Set `TRANSCRIPTION_MODEL` (e.g.
+  `whisper-large-v3-turbo` for Groq) in the stack `.env` and every request — bot pipeline and the
+  terminal's composer-mic dictation — carries that id end-to-end; unset, the wire stays `whisper-1`
+  byte-for-byte. The bundled `deploy/transcription` unit still ignores the field (its model is its
+  own `MODEL_SIZE`). Credit: @waqaskhan137's #489 prototyped the client-side half. See
+  [Configuration](/configuration#transcription-stt).
+
+- **Google Meet segments now carry a real `language` (#523).** The Meet lane stamps the
+  STT-detected (or forced) language of each transcription window onto its segments, so
+  `GET /transcripts/...` labels Meet segments the same way Zoom/Teams always did — mixed-language
+  meetings read truthfully instead of `null`. The language contract (auto vs forced mode,
+  window-level granularity) is now documented in [Send a bot](/how-to/send-a-bot) and the
+  [Meetings API](/api/meetings#send-a-bot-to-a-meeting).
+
+- **Terminal errors now speak user truth (#533).** Every error a terminal surface shows states
+  what happened in the user's vocabulary ("Couldn't reach the Vexa server — check that the stack
+  is running.", "Your API key was rejected — sign in again.", or the backend's own reason
+  verbatim) instead of transport plumbing like `/api/... → 502: upstream unreachable:
+  ConnectError`. The full technical string is preserved on the browser console for operators. A
+  new presenter seam (`presentError` beside `ApiError`) plus a grep-guard test keep the 46 former
+  raw render sites — and any future one — honest.
+
+- **Google Meet leave: confirmation-dialog fallbacks work again, and the error spam is gone (#542).**
+  The browser-context leave click fed Playwright-only `:has-text()` selectors to
+  `document.querySelector`, so every dialog-confirmation fallback ("Leave meeting", "Just leave
+  the meeting", dialog-scoped Leave/End) was silently dead, and each leave attempt logged a burst
+  of `not a valid selector` errors that read like join failures (#432). Leave buttons are now
+  matched in-page with plain CSS plus real text matching, and the selector-validity gate
+  CSS-parses every array declared browser-context, so this class of dead selector fails CI
+  loudly instead of shipping green.
+
+- **Per-PR lite boot smoke: lite-only breakage now fails the PR, not the release (#581).** A new
+  `lite-smoke` job in `pr-value` builds `deploy/lite/Dockerfile.lite` from the PR's own tree, boots
+  it with `make -C deploy/lite up`, probes the front doors, and runs the concurrent-bots smoke —
+  scoped to PRs that touch `deploy/lite/**` or `core/**`, with no secrets (anonymous pulls). Three
+  v0.12.2 release blockers were lite-only bugs this leg would have caught per-PR. A companion
+  `gate:lite-makefile` statically rejects the exact footgun class (a comment line inside a
+  `\`-continued recipe block in `deploy/lite/Makefile`, which once shipped `docker run` with an
+  empty image).
+
+- **Pre-active teardown attribution: lobby waits are no longer filed as join errors (#598).** A bot
+  whose workload is torn down while it sits in `awaiting_admission` now terminates with
+  `completion_reason: awaiting_admission_timeout` ("the room never admitted the bot") instead of the
+  generic `join_failure`; bots destroyed at `requested`/`joining` keep `join_failure`. Both reasons
+  stay transient→retry, so only the label — what operators see on the meeting terminal — changes.
+
+- **Meeting-header bot controls follow the live WebSocket, never a stale snapshot (#674).** When
+  the `meeting.status` stream is disconnected the header shows "Reconnecting…" and Stop/Send bot
+  are disabled — a stale-live row can no longer offer an actionable "Stop bot" for a meeting the
+  backend no longer has. A stop that races reality (404/409) now shows a human message ("This
+  meeting is no longer active — refreshing the list.") and reconciles the control, instead of a
+  raw JSON toast.
+
+- **`make probe` — the standing full-journey smoke probe, per surface (#690).** One command per
+  install surface (`make probe`, `SURFACE=compose|lite|helm`) drives the whole journey through the
+  gateway front door — spawn → schedule → boot → join → transcribe → live-view → stop — then sweeps
+  every component's logs once. Each stage prints Expected / Actual / Verdict and a red stage names
+  where the journey broke, so an operator (or an agent mid-debug) gets a truthful install verdict
+  in minutes with zero humans. See [Kubernetes deployment](/deployment-kubernetes) and the
+  `deploy/*/probe.sh` wrappers.
+
+- **Merge card: acceptance row — `Closes` can no longer silently drop delivery legs (#712).** The
+  merge card grows a third row: every issue a PR would auto-close must have its whole Acceptance
+  section delivered (checkbox and legacy-bullet shapes both parsed); undelivered legs red-card the
+  PR until they ship, carry delivered evidence on the issue, or the link is re-filed as
+  `Part of #N`. A dropped acceptance leg is now a decision on record, never a GitHub-keyword
+  side-effect. See [Delivery](/governance/delivery#integration-—-the-merge-bar).
+
+- **Release witness receipts: full image digests or no pass (#713).** The witness gate now rejects
+  any `sha256:` in a receipt's deployment fields that is not followed by the full 64-hex digest
+  (prefixes and trailing ellipses fail, naming the field), and the generator's skeleton asks for the
+  full index + platform-image digests at fill time. The v0.12.10 receipt's deployment field is
+  completed to the full values in the same change — the record of which bytes were witnessed no
+  longer needs a registry lookup to be evidence.
+
+- **Release runbook: publish step named (#714).** `releases/README.md` §the-two-phase-flow gains
+  step 4 — after `:v012` moves, a human publishes the GitHub Release with `gh release create
+  vX.Y.Z --verify-tag --latest --notes-file <notes>`; the guard's retract-to-draft re-check now
+  lives under the act it guards. An operator ships a release end-to-end from the runbook alone.
+
+- **Sealed `api.v1` contract: security references now resolve (#531, closes #62).** All 61
+  secured operations in the sealed OpenAPI document referenced `APIKeyHeader` — a scheme the
+  document never defines — so Swagger UI's Authorize dialog could not attach the key and
+  spec-driven client generators emitted clients that never sent `X-API-Key`. The per-operation
+  references now point at the document's own defined schemes: `ApiKeyAuth` (`X-API-Key`) on the
+  56 client operations, `AdminApiKeyAuth` (`X-Admin-API-Key`) on the 5 `/admin/{path}`
+  operations — the headers the running gateway and admin-api already honor. `gate:schema`'s
+  `validate.mjs` now pins referential integrity (every referenced scheme must be defined, first
+  offenders named), so a re-capture can never re-import the bug.
+
+- **Recordings: opening a recording mid-meeting no longer freezes it (#768).** Master assembly is now
+  re-assemblable instead of write-once — a `GET /recordings/{id}/master` while the meeting is still
+  recording serves the audio captured so far without permanently freezing the file, and every later
+  read that finds new chunks rebuilds the master (repairing already-frozen recordings on their next
+  read). The assembled-chunk-count is recorded and compared so the freeze cannot silently return.
+
+- **Recordings: long recordings over ~1000 chunks are assembled in full (#769).** The chunk listing
+  now paginates `list_objects_v2` to exhaustion (looping on `IsTruncated`/`NextContinuationToken`)
+  instead of reading only the first 1000-key page, so a master built from a very long meeting no
+  longer silently drops everything past the first page. A chunk-count mismatch is logged loudly.
+
+- **Helm: spread replicas across nodes with `topologySpreadConstraints` (#770).** `replicaCount > 1`
+  no longer means "all on one node" — set `global.topologySpreadConstraints` (applied to every
+  component) or a per-component `<component>.topologySpreadConstraints` override, and the chart
+  injects that component's own pod selector when you omit `labelSelector`, so a single block spreads
+  each component's own replicas. Empty by default (single-node / k3s installs are unaffected). See
+  the chart README's "Spreading replicas across nodes".
+
+- **Speaker-stream tuning now reaches spawned bots (#771).** `runtime.speakerStream.*`
+  (`BOT_SPEAKER_MIN_AUDIO_SEC`, `BOT_SPEAKER_SUBMIT_INTERVAL_SEC`, `BOT_SPEAKER_CONFIRM_THRESHOLD`,
+  `BOT_SPEAKER_MAX_BUFFER_SEC`, `BOT_SPEAKER_IDLE_TIMEOUT_SEC`) rendered onto the runtime pod are
+  now merged into each spawned bot workload's environment, so the accuracy/latency knobs actually
+  take effect on k8s and docker-backed deployments instead of rendering as dead config. See
+  [Configuration](/configuration).
+
+- **Helm: agent-api no longer deadlocks on upgrade (#774).** agent-api mounts the single
+  `agent-workspaces` PVC, whose default access mode is `ReadWriteOnce`; the shared zero-downtime
+  RollingUpdate (`maxSurge:1`) made any pod-spec-changing `helm upgrade` stall on a Multi-Attach
+  error. agent-api now renders `strategy: Recreate` under an RWO workspace (the same opt-out redis
+  already carries), and keeps RollingUpdate when the workspace is `ReadWriteMany`.
+
+- **Teams bot speaker attribution: the hint pipeline now reaches the transcriber (#498 — wiring
+  only; live attribution NOT yet delivered).** ⚠ The v0.12.14 witness pass (2026-07-19) observed a
+  live 2-speaker Teams meeting still publishing every segment as `seg_N` — the hints cross, the
+  name resolution does not complete. #498 remains open; the end-to-end value lands in a later
+  release. What this change DID deliver: the bot now
+  bundles the Teams voice-level-outline speaker watcher (`@vexa/teams-capture` — the same module
+  the desktop extension runs) into its browser bundle and wires it to the transcriber: hints cross
+  the page→Node boundary under Teams' true `dom-outline` kind (previously erased to Zoom's
+  `dom-active`), on one epoch-ms clock with a loud skew guard, and a periodic
+  `hint-counters` log line names the exact hop if a name ever goes missing again. A headless
+  boundary CI test pins the wiring so the regression cannot ship silently.
+
+- **Bots fail fast when the control plane is unreachable, instead of an opaque crashloop (#530).** On a
+  freshly autoscaled k8s node whose network hasn't converged, a bot's first callback to meeting-api can
+  be unreachable. The bot now makes its first `joining` lifecycle emit load-bearing: if the meeting-api
+  callback is unreachable it probes redis, and only if BOTH control-plane channels are down does it
+  refuse to join — terminating in under a few seconds with a dedicated exit code (3) and an attributed
+  terminal (`failure_stage: requested`, `infra_fault: control_plane_unreachable`) rather than a generic
+  `join_failure` or a stuck-`requested` meeting. A reachable control plane adds zero latency (the
+  secondary channel is never probed). Operators can now tell "broken node" from "broken join" in one
+  `kubectl describe`. See [Kubernetes deployment](/deployment-kubernetes) and [Troubleshooting](/troubleshooting).
+
+- **Zoom speaker hints: watcher wired into the capture bundle (#538 — wiring only; live
+  attribution NOT yet delivered).** ⚠ The v0.12.14 witness pass observed live Zoom segments still
+  publishing as `seg_N`; #538 remains open. What this change DID deliver: the Zoom active-speaker
+  watcher
+  (`createZoomSpeakers`) is wired into the bot's page-side capture bundle: active-speaker
+  transitions cross to the name binder as `dom-active` hints, so Zoom bot segments carry the
+  real participant's name instead of `seg_N` placeholders — the same attribution Google Meet
+  and Jitsi already deliver. Flicker-debounced (a single ~250 ms tile blip never mislabels a
+  turn); screen-share layouts and nameless tiles emit no hint rather than a wrong one.
+
+- **Google Meet authenticated join: fail closed on signed-out browser profile (#607).** When
+  `authenticated: true` the bot refuses to degrade to an anonymous join if the browser profile
+  is signed out — the guard throws a typed `AuthSessionError` (an `AdmissionError` subclass with
+  outcome `auth_session_missing`) which the join driver maps to the new permanent
+  `auth_session_missing` completion reason: the control plane records the truth and never
+  re-spawns against the dead profile. `auth_session_missing` is added to the lifecycle.v1 and
+  api.v1 completion-reason enums (api.v1 also gains the previously missing `startup_alone`;
+  contracts re-sealed, lane:contract). The guard distinguishes a signed-out guest lobby (name
+  input visible) from a signed-in-but-not-pre-admitted account (no name input), which still
+  knocks via "Ask to join".
+
+- **Authenticated bots: the user flow exists end to end (#724).** Provision a signed-in bot session
+  with one command (`make login` — sign in once, the session lands in the deployment's userdata
+  storage), then set `BOT_AUTHENTICATED=true` on meeting-api and every stock `POST /bots` spawns
+  signed-in under the account identity. A failed session restore is now a typed, attributed
+  `session-restore` error instead of an unattributed pre-launch death. See
+  [Authenticated bots](/authenticated-bots).
+
+- **Authenticated bots: sessions survive use (#725).** The bot writes the rotated browser session
+  back to the userdata store on clean teardown, so the next spawn restores the freshest state
+  instead of a decaying snapshot; a second concurrent spawn against the same stored session is
+  refused with a 409 naming the conflict (one identity, one live bot). The session-lifetime levers
+  are documented on [Authenticated bots](/authenticated-bots).
+
+- **Google Meet auth-session guard is now pinned by an offline test (#756).** `session.test.ts`
+  drives `joinGoogleMeeting`'s authenticated branch against fabricated lobby fixtures: a
+  signed-out guest lobby must throw the typed `auth_session_missing` refusal and a signed-in
+  not-pre-admitted lobby must knock. Deleting the guard turns the join module's suite red —
+  the guard is no longer carried only by the live leg.
+
+- **Signed-out detection on Google Meet no longer depends on English UI text (#757).** The
+  authenticated lobby's join CTA and the signed-out guest-lobby probe are now located by
+  structural (jsname/attribute) selectors first, with English text as last-resort fallbacks —
+  so a non-English lobby still fails closed with the actionable `auth_session_missing` error
+  instead of a misleading "no join button found" timeout. Both selector arrays are covered by
+  the selector-validity gate.
+
+- **Teams bot leave — dead browser-context fallbacks revived (#759).** The Microsoft Teams
+  leave path ran its fallback list through the browser's `document.querySelector`, but 10 of the
+  25 entries were Playwright-only `:has-text()` locators — invalid CSS that threw on every call,
+  so every text-labelled button (all three leave-confirmation dialog buttons included) was
+  silently un-clickable and each leave attempt logged 10 "not a valid selector" errors. The array
+  is now a `{ css | text }` matcher list driven by the same shared in-page clicker as Google Meet
+  (#542), and it joins the selector-validity gate's browser-context lane so the class fails loudly
+  for Teams too.
+
+- **Governance: four D-book amendments from the v0.12.12 retro (#785).** TAKE verdicts now name the head sha they examined (a later push makes the endorsement historical); one rule governs sealed-contract re-stamps (a back-compatible re-seal may ride a `lane:contract` PR whose merge is the ruling, breaking changes get an issue-recorded ruling first); the closure mechanism gains mechanism-vs-tree verification over open prepared issues (catching deliveries no link sweep sees); and the incoming-report template now requires the deployed version / verified tag. See [Delivery](/governance/delivery).
+
+- **Security floor: adm-zip bumped to 0.6.0 via pnpm override (#773).** Closes Dependabot high
+  GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation in adm-zip <0.6.0), which rode in through
+  onnxruntime-node's install-time unpack under `@vexa/mixed-pipeline`. Exposure was
+  postinstall-only, but the resolution layer now excludes the vulnerable range entirely.
+
+- **`POST /bots` with only a `meeting_url` now derives the meeting id — no more orphan meetings
+  (#792).** A url-only body used to return 201 while persisting `native_meeting_id=''`, creating a
+  meeting (and a live bot) no `DELETE /bots/...` or `GET /transcripts/...` could ever address. The
+  API now honors what api.v1 always promised: the URL is parsed to extract `platform`,
+  `native_meeting_id`, and the passcode (Zoom `?pwd=` / Teams `?p=`); an unrecognizable URL is a
+  typed `422` naming the missing `native_meeting_id`, and a `platform` that disagrees with the URL
+  is a `422` too. Explicit `native_meeting_id` is never overridden. See
+  [Send a bot](/how-to/send-a-bot).
+
+- merge-card: concurrency group scoped per trigger event — near-simultaneous approval + label events no longer cancel each other's runs, leaving a stale red required check on the final mile (#798)
+
+- **meeting-api: shared-meetings list no longer melts the database under load (#800).** The
+  meetings list combined owner, transcript-share, and workspace access in one `OR`, which planned
+  as a backward walk of the whole `created_at` index — 100s+ per call for users with few or old
+  meetings, enough concurrent calls to saturate the connection pool (this rolled back a hosted
+  0.12.12 production cutover). The three access branches now run as an indexed `UNION` (each with
+  its own top-N scan) plus supporting indexes; worst-case calls drop from hundreds of seconds to
+  sub-millisecond with identical results. Deployers: build the three new `meetings` indexes
+  `CONCURRENTLY` before rolling the image on a large live table.
+
+- **helm chart: probe timeouts raised to 5s across app services (#802).** Liveness/readiness/startup
+  probes previously inherited Kubernetes' 1-second default `timeoutSeconds`; on a busy single-event-loop
+  service a healthy pod can hold `/health` past 1s, and the liveness kill turned load into a restart
+  storm (observed in hosted production on meeting-api: pods serving 200s probe-killed every ~10 min).
+  All HTTP-probed app deployments (meeting-api, gateway, admin-api, runtime, agent-api, terminal) now
+  declare `timeoutSeconds: 5`.
+
+- **Bot lifecycle callbacks survive meeting-api blips; completions carry a delivery marker (#806, #807).**
+  The bot's status-callback retry horizon grows from ~0.6s (3×200ms) to ~7.5s (5×500ms exponential) —
+  in hosted production a brief meeting-api disruption made seated, healthy bots unable to report
+  `joining`, and the reaper then failed their meetings; a longer horizon rides out such blips.
+  Separately, every terminal transition now stamps `meeting.data.segments_captured`, so a meeting
+  that "completed" without capturing any transcript is queryable and alertable instead of being
+  indistinguishable from a success.
+
+- **Record-always at the capture boundary: bots can now persist their raw
+  `captured-signal.v1` stream for offline replay.** With `captureSignalEnabled` in the
+  invocation (or `VEXA_CAPTURE_SIGNAL=1`), the bot tees every raw capture frame — per-channel
+  PCM audio plus the speaker events it was captured with — into a session JSONL, and logs each
+  STT round-trip beside it (`<session>.stt.jsonl`). A recorded session replays byte-for-byte
+  through the exact transcription pipeline with no live meeting (`REPLAY_FIXTURE=<file> tsx
+  src/replay.test.ts`), and `eval/src/distill.mjs` cuts a session down to a minimal fixture
+  around a reported symptom (time window / speaker). A session stores both halves of the
+  signal: the audio frames and — for Zoom/Teams/Jitsi, whose single mixed stream is named from
+  active-speaker hints arriving on their own channel — those hints as `type: "hint"` records,
+  so a replay reproduces who spoke, not just what was heard. Off by default; when off, the
+  capture path is unchanged (a single branch). This is the diagnostic layer for zero-transcript
+  and misattribution reports: the failing meeting's input becomes a deterministic red test.
+
+- **Governance: a session's own worktree comes before its first edit.** The actor contract
+  (AGENTS.md) now spells out the two trespass tells — `git worktree add` answering "already
+  used by worktree" and uncommitted files you didn't write — and the remedy for each: branch
+  from the ref into a fresh worktree of your own, never edit `main`, the primary checkout, or
+  another session's tree. D14b ties the claim lease to that own-worktree rule.
+
+- **An exhausted STT token is now caught where you set it — by transcribing real audio, not by
+  guessing from balances or account names.** The config preflight's STT probe posts a ~1s WAV
+  (the same request a bot's first chunk makes); a metered backend that answers 402 becomes a
+  typed `exhausted` configuration fault that demotes `/health`, refuses bot spawns, and names
+  the consequence ("meetings will complete with no transcript"). The old empty-body probe
+  could never elicit the 402 and greened the dead token. The wizard's Test button now runs the
+  same round-trip and no longer consults `balance_minutes` — which reads 0.0 both for an
+  exhausted token and for a billing-exempt service account that transcribes perfectly — and no
+  account identity is hardcoded anywhere. The probe is metered, so it caches for 15 minutes.
+
+- **Cold first-run no longer dies on `invalid reference format` (#812).** Stock `.env.example` ships
+  `BROWSER_IMAGE=vexaai/vexa-bot:${IMAGE_TAG}` — docker-compose expands it, but `make all`'s
+  spawn-image pull read the literal string and handed `docker pull` an invalid reference, breaking
+  every fresh install at the last step. The pull now resolves `${IMAGE_TAG}` (and hardens the tag
+  read against duplicate lines); a genuinely custom literal `BROWSER_IMAGE` still pulls verbatim.
+
+- **Webhook deliveries now report every outcome (#815).** `WebhookSink.deliver` returns
+  `delivered | suppressed | blocked | failed | queued`, and that outcome used to be discarded — so a
+  webhook a subscriber never received (an event type outside their filter, an SSRF-refused target, an
+  endpoint returning 4xx) was indistinguishable from one that arrived, and even successful deliveries
+  logged nothing. Each delivery now emits one `webhook_delivery` logevent carrying the outcome, the
+  event type, the target **host** (never the full URL — it can carry a token in its path or query),
+  the HTTP status and the error, at `warning` for anything that did not arrive. "My webhooks stopped"
+  is now a one-query answer instead of a silent failure. A compose-stack test asserts the outcome is
+  reported end-to-end.
+
+### Fixed
+
+- **A wrong STT URL or token is now caught where you set it, not by an empty transcript.** The
+  config probe treated *any* answer except 401/403 as proof of a working backend, so a URL whose
+  transcriptions path 404s — the most common misconfiguration — passed every check. It is now
+  reported as `misconfigured` with the reason, on the boot log and the `stt` row of `GET /health`.
+  ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **The setup wizard's green now means "a bot will transcribe".** On any non-Vexa
+  OpenAI-compatible endpoint the test previously reported "reachable; token was not verified" as a
+  PASS, so a rejected key tested green and failed mid-meeting. It now verifies with the same
+  request a bot's first audio chunk makes, and grades the endpoint's own answer.
+  ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **`POST /bots` refuses a set-but-broken backend** with a typed 503 carrying the probe's reason,
+  before the meeting row is written — instead of spawning a bot that joins and captures nothing.
+  The refusal names how to re-test immediately. ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+- **`TRANSCRIPTION_SERVICE_URL` accepts both documented shapes everywhere.** A full
+  `…/v1/audio/transcriptions` URL worked in meetings but double-pathed into a 404 in the boot probe
+  and the terminal's dictation route. All four consumers now share one rule: append the path only
+  when it is absent. ([#511](https://github.com/Vexa-ai/vexa/issues/511))
+
+### Fixed
+
+- **A bot that never got into the meeting is no longer reported as a completed meeting.** Stopping
+  a bot still sitting in the waiting room overwrote the stage it had reached, so the terminal
+  classifier concluded the bot had been live and persisted the run as `completed` with zero
+  transcript — a failure the system reported as success. The stage now survives the stop, and such
+  a run ends `failed` with `failure_stage` naming where it actually died. Reproduced on the deployed 0.12.14 build
+  (meeting 24336's own transition log records the illegal edge); the prior-era share of this
+  shape was ~49% of zero-segment completions.
+  ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+- **Cancelling a bot before it is admitted no longer re-spawns it three times.** The terminal
+  reason for a user stop is now the user-terminal `stopped` (permanent) rather than
+  `awaiting_admission_timeout` (transient), so a meeting the user deliberately walked away from is
+  not retried on their quota. An admission wait that times out on its own is unchanged and still
+  retried. ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+- **A redelivered `DELETE /bots/…` no longer publishes a second leave command.** The stop trigger
+  is one-shot, guarded on the recorded user intent instead of a status side-effect — the previous
+  guard held only against the in-memory test double, never against the real database.
+  ([#807](https://github.com/Vexa-ai/vexa/issues/807))
+
+### Fixed
+
+- **`GET /bots/status` no longer reads a caller's entire meeting history to answer a running-bots
+  badge.** It fetched every meeting the account ever had, with the full `data` JSONB, and filtered
+  in Python — 4,896 meetings / 180 MB on one production account, 144 MB of that `bot_logs` no
+  endpoint renders. Four concurrent polls demanded roughly 740 MB transiently and OOM-killed the
+  pod at the default 1 GiB limit. The status filter and the heavy-key projection now both happen in
+  the query. ([#803](https://github.com/Vexa-ai/vexa/issues/803))
+- **`GET /meetings/{id}` fetches the row instead of enumerating the account and filtering by id.**
+  Access rules are unchanged — the same ownership/share union decides visibility — and the detail
+  view still returns full `data`. ([#803](https://github.com/Vexa-ai/vexa/issues/803))
+
+### Fixed
+
+- **Zoom and Teams admission verdicts are now typed, so permanent failures are no longer
+  retried on your quota.** Both platforms threw plain errors for every admission failure, which
+  the control plane classified as transient `join_failure` and re-spawned up to 3× — a Zoom host
+  denial re-knocked on the same host, the Zoom RTMS anti-bot wall was retried into the same wall,
+  and a meeting restricted to signed-in users was rejoined just as signed-out. They now throw the
+  same typed `AdmissionError` Google Meet and Jitsi already use: denials and auth walls are
+  permanent (no retry), lobby timeouts stay transient (still retried). Teams additionally had an
+  outer catch that re-wrapped *any* error — including a typed one — into a plain string; typed
+  verdicts now pass through it. Failure reasons land in `completion_reason`
+  (`awaiting_admission_rejected` / `awaiting_admission_timeout` / `auth_session_missing`), making
+  these modes measurable per platform for the first time.
+  ([#806](https://github.com/Vexa-ai/vexa/issues/806))
+
+### Added
+
+- **The deprecated 0.10 dashboard is back in the stack as an off-by-default option** — a
+  `dashboard` compose profile (`docker compose --profile dashboard up -d`, port 13001) and a
+  `dashboard.enabled` helm value, both wiring the pinned external image
+  `vexaai/dashboard:0.10.6.3.14` to the gateway's hosted-compat surface exactly as hosted
+  production runs it. It stays deprecated and versions on its own pinned tag (never
+  `global.imageTag`); it ships because it is still load-bearing — the authenticated-session
+  flows are only walkable through it today — and the UI users actually see should belong to a
+  release. Deletion, not porting, is the deprecation exit.
+  ([#813](https://github.com/Vexa-ai/vexa/issues/813))
+
+### Fixed
+
+- **Requesting a `browser_session` bot answers a typed 422 instead of a 500 that poisons the
+  retry.** api.v1 seals more platforms than the meeting-bot invocation contract carries; with a
+  `meeting_url` attached, such a request wrote its meeting row and then died inside schema
+  validation — a 500 plus an orphaned active row that made the user's retry 409. The refusal now
+  happens before any write, names the supported platforms, and points at the tracked
+  restoration ([#816](https://github.com/Vexa-ai/vexa/issues/816)).
+- **The join layer refuses an unknown platform instead of silently running the Google Meet
+  flow.** The dispatch's fallback branch WAS the Google Meet branch, so an unrecognized platform
+  drove Meet selectors against an arbitrary URL and failed minutes later with misattributed
+  selector errors. ([#816](https://github.com/Vexa-ai/vexa/issues/816))
 
 ## Versioning
 

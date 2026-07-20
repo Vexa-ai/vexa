@@ -68,7 +68,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # runs build-browser-utils.mjs, which esbuild-bundles these bricks' dist into
 # window.VexaBrowserUtils (the global capture-bridge.ts injects via addInitScript) —
 # so their dist/ must already exist when the bot build runs.
-RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" run build
+RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" --filter "@vexa/teams-capture" --filter "@vexa/zoom-capture" run build
 
 # Build @vexa/bot and everything it depends on (the `...` selector pulls the deps;
 # pnpm runs them in topological order, each package's own `build` = tsc → dist/).
@@ -100,15 +100,21 @@ RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs
 FROM vexa/meet-join-env:dev AS runtime
 
 # The bot's OWN runtime deps NOT in the meet-join env: PulseAudio (the speak/TTS
-# + capture audio chain) and fluxbox (a WM for the X11 session). The Playwright +
-# humanized-X11 stack (xvfb·xdotool·xclip·x11vnc·websockify) comes from the base.
+# + capture audio chain), fluxbox (a WM for the X11 session), and the aws CLI —
+# the authenticated-bot session store (@vexa/remote-browser session-store.ts)
+# shells out to `aws s3` to restore the signed-in profile before launch and write
+# it back on clean teardown; without the binary every authenticated spawn fails
+# at session-restore. The Playwright + humanized-X11 stack (xvfb·xdotool·xclip·
+# x11vnc·websockify) comes from the base.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        pulseaudio \
        fluxbox \
        socat \
-    && rm -rf /var/lib/apt/lists/*
+       awscli \
+    && rm -rf /var/lib/apt/lists/* \
+    && aws --version
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DISPLAY=:99 \
@@ -135,6 +141,11 @@ COPY --from=builder /build/core/meetings/services/bot/dist/browser-utils.global.
 # so the Zoom/Teams diarizer loads the model from disk with NO network at runtime.
 COPY --from=builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
+# License hygiene: the baked weights are onnx-community/pyannote-segmentation-3.0
+# (MIT). MIT requires the copyright + permission notice travel with the software,
+# so ship it next to the cache. Recorded in repo THIRD_PARTY_LICENSES.md + the
+# per-release SPDX SBOM (scripts/sbom.mjs); model weights sit outside gate:licenses.
+COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache/LICENSE.pyannote-segmentation-3.0
 
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.

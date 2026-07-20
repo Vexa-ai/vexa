@@ -6,10 +6,18 @@
  *  (link-less plans have no native id to address). The calendar config (`/api/user/calendar`)
  *  lives in the identity domain — the ICS URL is a secret, so reads come back MASKED. */
 
+import { ApiError } from "./apiClient";
+
 async function jsonOrThrow<T>(r: Response): Promise<T> {
   if (!r.ok) {
-    const detail = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
-    throw new Error(detail || `${r.status} ${r.statusText}`);
+    // Structured failure (P18): carry status + detail so the presenter maps it to user truth.
+    let detail = "";
+    try {
+      const b = (await r.json()) as { detail?: unknown; error?: unknown };
+      const d = b?.detail ?? b?.error;
+      detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
+    } catch { /* body wasn't JSON — the status alone is the signal */ }
+    throw new ApiError(r.status, detail, r.url);
   }
   return r.status === 204 ? (undefined as T) : ((await r.json()) as T);
 }

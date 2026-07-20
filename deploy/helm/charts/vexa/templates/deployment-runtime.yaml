@@ -105,6 +105,19 @@ spec:
               value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | default "info" | quote }}
+            {{- if eq .Values.runtime.backend "k8s" }}
+            # Scheduling parity for SPAWNED Pods (#673). A `kubectl run` bot/agent Pod is not a child of
+            # this Deployment, so it inherits none of the nodeSelector/tolerations applied below at the
+            # pod spec (:143-154). Hand the runtime its OWN scheduling constraints as JSON so the spawn
+            # backend can stamp them onto every spawned Pod — otherwise, on an all-tainted pool (dedicated
+            # / spot / GPU node pools), every spawn strands Pending and the meeting silently fails.
+            # Defaults to the runtime's own constraints (global.*); override per-runtime for a distinct
+            # spawn pool (e.g. GPU bots).
+            - name: RUNTIME_K8S_TOLERATIONS
+              value: {{ .Values.runtime.tolerations | default .Values.global.tolerations | toJson | quote }}
+            - name: RUNTIME_K8S_NODE_SELECTOR
+              value: {{ .Values.runtime.nodeSelector | default .Values.global.nodeSelector | toJson | quote }}
+            {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -119,18 +132,21 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 40
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
       {{- if eq .Values.runtime.backend "docker" }}
@@ -151,5 +167,8 @@ spec:
       {{- with .Values.global.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.runtime "runtime")) }}
+      {{- . | nindent 6 }}
       {{- end }}
 {{- end }}

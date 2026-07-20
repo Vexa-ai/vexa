@@ -44,6 +44,12 @@ jobs:
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
+      # Tests OF the gate scripts (the instruments the steps above trust). scripts/ is not a
+      # workspace package, so `pnpm test` — turbo run test — never reaches it: this step is the
+      # only lane these files run in. Kept here, beside the gates they cover, rather than in the
+      # node job, whose install/build cost buys them nothing.
+      - name: gate script tests
+        run: node --test scripts/*.test.mjs
 
   python:
     runs-on: ubuntu-latest

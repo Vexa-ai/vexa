@@ -140,6 +140,31 @@ describe("liveMeetings store", () => {
     expect(snapshotCalls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("(e) exposes WS connected-ness: open → true, close → false (stale rows are never silently 'live truth'), reopen → true + re-snapshot", async () => {
+    const { mod, hook } = await startStore();
+    const conn = renderHook(() => mod.useLiveMeetingsConnection());
+    await waitFor(() => expect(conn.result.current).toBe(true));
+
+    // Drive the WS down while an active-looking row is seeded — the store must EXPOSE the drop.
+    await act(async () => {
+      FakeWebSocket.last!.onclose?.();
+    });
+    await waitFor(() => expect(conn.result.current).toBe(false));
+    // the rows themselves are still served (last snapshot) — but marked as not-live-truth
+    expect(hook.result.current.length).toBe(1);
+
+    // Reconnect restores connected AND re-snapshots (repairs any missed frame).
+    const before = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
+    await act(async () => {
+      FakeWebSocket.last!.onopen?.();
+    });
+    await waitFor(() => expect(conn.result.current).toBe(true));
+    await waitFor(() => {
+      const now = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
+      expect(now).toBeGreaterThan(before);
+    });
+  });
+
   it("(d) a 'deleted' frame REMOVES the row (a retired plan never masquerades as Recorded)", async () => {
     const { hook } = await startStore();
     expect(hook.result.current.length).toBe(1);

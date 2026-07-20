@@ -14,6 +14,7 @@
   "transcriptionTier": "realtime",
   "transcriptionServiceUrl": "http://transcription:8083",
   "transcriptionServiceToken": "STT_TOKEN_PLACEHOLDER",
+  "transcriptionModel": "whisper-large-v3-turbo",
   "recordingEnabled": true,
   "captureModes": ["audio", "video"],
   "recordingUploadUrl": "https://s3.example.com/recordings/42",

@@ -12,6 +12,7 @@ import yaml
 
 from llm import run_harness_turn
 from llm.claude_code import ClaudeCodeHarness, build_argv, parse_stream_json
+from llm.ports import harness_subprocess_env
 
 
 def _git(d: Path, *a: str) -> None:
@@ -117,6 +118,52 @@ def test_build_argv_core_flags_and_session_model():
     assert "--allowedTools" in argv and "Read" in argv
     assert "--resume" in argv and "s1" in argv
     assert "--model" in argv and "m1" in argv
+
+
+# ── the untrusted-subprocess env scrub (data-plane tenancy) ──────────────────
+# The model-driven harness CLI exposes a Bash tool. It must NOT inherit the worker's REDIS_URL (which
+# reaches the SHARED redis — another tenant's tc:meeting:* / unit:*:in) nor the minted per-dispatch
+# bearer token. Filesystem tenancy is mount-enforced; the data plane is enforced HERE, at the launch env.
+
+def test_harness_subprocess_env_strips_data_plane_secrets(monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://the-shared-bus:6379/0")
+    monkeypatch.setenv("VEXA_AGENT_IDENTITY_TOKEN", "minted.bearer.jwt")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-model-cred")   # the subprocess DOES need its model cred
+    monkeypatch.setenv("GIT_DIR", "/hook/.git")                # git-discovery scrub still composes
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = harness_subprocess_env()
+    assert "REDIS_URL" not in env, "REDIS_URL must not reach the model's Bash (cross-tenant redis reach)"
+    assert "VEXA_AGENT_IDENTITY_TOKEN" not in env, "the per-dispatch bearer token must not leak in"
+    assert "GIT_DIR" not in env, "the git repo-discovery scrub still composes"
+    assert env["ANTHROPIC_API_KEY"] == "sk-model-cred", "model credentials must survive"
+    assert env["PATH"] == "/usr/bin", "benign vars pass through untouched"
+
+
+def test_exec_subprocess_launches_with_scrubbed_env(monkeypatch):
+    """The DEFAULT runner (real launch path) must pass the scrubbed env to the actual subprocess —
+    negative control: before the fix REDIS_URL/token WOULD ride ``scrubbed_git_env`` into the child."""
+    from llm import claude_code
+
+    monkeypatch.setenv("REDIS_URL", "redis://the-shared-bus:6379/0")
+    monkeypatch.setenv("VEXA_AGENT_IDENTITY_TOKEN", "minted.bearer.jwt")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-model-cred")
+    captured: dict = {}
+
+    class _FakeProc:
+        stdout = iter(())
+
+        def wait(self):
+            return 0
+
+    def _fake_popen(argv, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _FakeProc()
+
+    monkeypatch.setattr(claude_code.subprocess, "Popen", _fake_popen)
+    list(claude_code._exec_subprocess(["claude", "-p", "hi"], "/tmp"))
+    assert "REDIS_URL" not in captured["env"]
+    assert "VEXA_AGENT_IDENTITY_TOKEN" not in captured["env"]
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-model-cred"  # model cred still delivered
 
 
 # ── run_harness_turn: conformant + free-zone writes both commit ──────────────

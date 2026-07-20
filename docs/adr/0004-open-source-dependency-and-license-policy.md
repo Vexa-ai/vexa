@@ -27,8 +27,12 @@ largely to govern this; we adopt its posture and the ASF licence-category model.
 **pnpm's built-in licence index** (`pnpm licenses list --json`) — no extra dependency to vet, itself a P17
 win; the Python side adds `pip-licenses` when those deps grow. **Fail** on any Category X *and on any
 unclassified licence* (fail-safe); **require a logged exception** (`license-exceptions.json`) for every
-Category B. Emit an **SBOM** (SPDX) per release so the consumer's OSPO can audit. Allowlist + exception
-log live in the repo (machine-readable), so the policy is data, not prose.
+Category B. Emit an **SBOM** (SPDX 2.3) per release so the consumer's OSPO can audit —
+`scripts/sbom.mjs` inventories the npm tree (the same pnpm index), the pip tree (from the committed
+`uv.lock`s), **and baked non-dependency artifacts the gate cannot see** (model weights, below); the
+`release-images` workflow runs it and its `validate` leg gates on the SBOM artifact, so no release
+promotes without one. Allowlist + exception log live in the repo (machine-readable), so the policy is
+data, not prose.
 
 **Transitive pruning is part of the policy.** Prefer deps with clean trees; where an optional transitive
 dep drags in an encumbered licence for a feature we don't use, prune it at packaging. *Known case:* the
@@ -37,6 +41,15 @@ dep drags in an encumbered licence for a feature we don't use, prune it at packa
 exception (`license-exceptions.json`: LGPL, dynamically linked, unmodified — compliant) **and** pruned
 from the deployment artifact (`--no-optional`), so no LGPL binary ships. Audit (2026-06-18): **112 of 113
 npm deps are Category A**; this is the only non-permissive one.
+
+**Baked artifacts are covered outside the dependency gate.** `gate:licenses` scans the resolved
+*dependency* tree; it cannot see bytes baked into an image that are not npm/pip deps — notably model
+weights pulled from a hub at build time. The mixed (Zoom/Teams) lane bakes
+`onnx-community/pyannote-segmentation-3.0` (**MIT**, Category A) into `vexaai/vexa-bot` and
+`vexaai/vexa-lite` at `/opt/hf-cache`. It is recorded three ways: the notice travels with the weights
+(`/opt/hf-cache/LICENSE.pyannote-segmentation-3.0`), the repo manifest [`THIRD_PARTY_LICENSES.md`] lists
+it, and the per-release SBOM (`scripts/sbom.mjs`) emits it as a fully-specified package. Any new baked
+artifact follows the same three-step record — the packaging-side complement to this gate.
 
 ## Consequences
 
