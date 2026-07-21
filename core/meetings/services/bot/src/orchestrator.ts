@@ -21,6 +21,7 @@ import {
   type LifecycleEvent,
   type Act,
   canTransition,
+  isTerminal,
 } from './contracts.js';
 import type {
   JoinDriver,
@@ -28,6 +29,7 @@ import type {
   Pipeline,
   LifecycleSink,
   ActsSource,
+  AlonenessSource,
   RecordingSink,
   ControlPlaneProbe,
 } from './ports.js';
@@ -37,6 +39,7 @@ export interface OrchestratorDeps {
   join: JoinDriver;
   pipeline: Pipeline;
   acts: ActsSource;
+  aloneness: AlonenessSource;
   /** Optional — recording is gated by invocation.recordingEnabled; the core only closes it. */
   recording?: RecordingSink;
   /** Optional (#530) — the SECONDARY control-plane channel probe (redis), consulted only when
@@ -44,6 +47,15 @@ export interface OrchestratorDeps {
    *  treated as reachable (conservative: never abort on an un-probeable channel), so the gate
    *  never turns a missing probe into a join refusal. */
   reachability?: ControlPlaneProbe;
+  /** Optional — what DEGRADED the meeting without ending it (today: STT refusing every chunk).
+   *  Consulted once, when a TERMINAL event is built, and merged onto it. A meeting whose STT
+   *  backend was dead used to reach `completed` indistinguishable from a silent room: the faults
+   *  were typed and attributed all the way to the composition root and then died in a
+   *  console.error, so the emptiest possible transcript arrived with no reason attached (the #807
+   *  shape). Rides lifecycle.v1 exactly as `infra_fault` does — the contract is
+   *  additionalProperties:true, so this is additive.
+   *  Returns `undefined` when nothing degraded. MUST NOT throw. */
+  degraded?: () => Record<string, unknown> | undefined;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -97,7 +109,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
     }
     cur = status;
-    await deps.lifecycle.emit({ ...base, status, ...extra });
+    // A terminal event is the LAST thing anyone hears from this bot — if the meeting was degraded,
+    // it says so here or the reason dies with the container. A reporter fault must never change the
+    // exit path (P18: report, but never at the cost of the report itself).
+    let degraded: Record<string, unknown> | undefined;
+    if (isTerminal(status) && deps.degraded) {
+      try { degraded = deps.degraded(); } catch { degraded = undefined; }
+    }
+    await deps.lifecycle.emit({ ...base, status, ...extra, ...(degraded ?? {}) });
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
@@ -225,6 +244,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     const stopRemoval = deps.join.onRemoval(() => signalEnd?.('evicted'));
+    const stopAloneness = deps.aloneness.onAlone(() => signalEnd?.('left_alone'));
     const unsubscribe = deps.acts.subscribe(handle);
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
@@ -235,6 +255,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // ── graceful teardown (best-effort; never masks the completion reason) ──
     if (cap) clearTimeout(cap);
     unsubscribe();
+    stopAloneness();
     stopRemoval();
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);

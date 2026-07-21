@@ -21,6 +21,7 @@ import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
+import type { ChunkedTranscriberCallbacks } from '@vexa/mixed-pipeline';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -145,6 +146,56 @@ async function main(): Promise<void> {
     (globalThis as any).fetch = realFetch;
     check('invocation.transcriptionModel rides the model form part', modelParts[0] === 'whisper-large-v3-turbo', JSON.stringify(modelParts[0]));
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
+  }
+
+  // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
+  //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
+  //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
+  //     name — so per-speaker consumers group unattributed turns as ONE speaker, not hundreds.
+  //     segment_id/speaker_key keep the unique turn key (the repaint anchor for late attribution);
+  //     a REAL name passes through untouched (the predicate only rewrites /^seg_\d+$/). The internal
+  //     mixed-pipeline still uses seg_N as its key (claim.smoke.test.ts) — this rewrite is ABOVE it. ──
+  {
+    const sink = captureSink();
+    let cb: ChunkedTranscriberCallbacks | null = null;
+    const factory = async (c: ChunkedTranscriberCallbacks) => {
+      cb = c;
+      return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
+    };
+    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, { createMixedTranscriber: factory });
+    await pipe.start();   // triggers the transcriber factory → captures the mixed lane's publish callback
+    check('mixed lane: transcriber factory wired (publish callback captured)', !!cb, 'factory not called');
+
+    // The mixed lane confirms an UNATTRIBUTED turn: speaker is the provisional cluster id seg_54,
+    // the confirmed segment id is the unique turn key turn:54:0.
+    cb!.publish('seg_54', [{ text: 'hello there', startMs: 1000, endMs: 2000, language: 'en', segmentId: 'turn:54:0' }], []);
+    // …and later, a REAL name confirm — must survive verbatim.
+    cb!.publish('Alice', [{ text: 'hi', startMs: 2000, endMs: 3000, language: 'en', segmentId: 'turn:55:0' }], []);
+    await sleep(20);   // sink.publish() is async fire-and-forget out of the mixed lane's publish
+
+    const junk = sink.published.find((s) => s.segment_id === 'turn:54:0');
+    const real = sink.published.find((s) => s.segment_id === 'turn:55:0');
+    check('unattributed turn: speaker is the stable "Speaker" label, not the seg_N cluster id',
+      junk?.speaker === 'Speaker', JSON.stringify(junk));
+    check('unattributed turn: segment_id keeps the unique turn key (late-attribution repaint anchor)',
+      junk?.segment_id === 'turn:54:0', junk?.segment_id);
+    check('unattributed turn: speaker_key keeps the unique turn key (NOT collapsed to "Speaker")',
+      junk?.speaker_key === 'turn:54:0', junk?.speaker_key);
+    check('no seg_N string ever leaks as a display speaker across the mixed lane',
+      sink.published.every((s) => !/^seg_\d+$/.test(s.speaker ?? '')), JSON.stringify(sink.published.map((s) => s.speaker)));
+    check('a REAL speaker name passes through the boundary untouched',
+      real?.speaker === 'Alice', JSON.stringify(real));
+    check('mixed-lane segments are transcript.v1-valid (ajv vs SSOT)',
+      sink.published.length > 0 && sink.published.every((s) => !!validateSeg(s)), ajv.errorsText(validateSeg.errors));
+    // REGRESSION (Teams/Zoom live render): the mixed lane must stamp absolute_start_time at the
+    // producer, exactly as the gmeet lane does (check above). A null here makes the dashboard's live
+    // renderer SKIP every pending draft (it keys on absolute time), so Teams transcripts only appeared
+    // after a reload (the REST read re-derives it). The gmeet-only stamp fix once missed this mapper.
+    check('mixed-lane segments carry absolute_start_time == epoch(start) (producer-stamped live-render key)',
+      sink.published.length > 0 && sink.published.every((s) =>
+        !!s.absolute_start_time &&
+        Math.abs(new Date(s.absolute_start_time).getTime() / 1000 - (s.start ?? 0)) < 1),
+      JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

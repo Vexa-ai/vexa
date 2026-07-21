@@ -84,6 +84,11 @@ export interface ActsSource {
   subscribe(handler: (act: Act) => void | Promise<void>): () => void;
 }
 
+/** Active-phase aloneness verdict source. Missing capture fails closed inside the adapter. */
+export interface AlonenessSource {
+  onAlone(callback: () => void): () => void;
+}
+
 /** recording.v1 sink — accumulates capture chunks and assembles the master. The real
  *  adapter is @vexa/recording's assembler → upload; the orchestrator only signals close. */
 export interface RecordingSink {

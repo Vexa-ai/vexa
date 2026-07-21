@@ -3,7 +3,7 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.15 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.16 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
 > 📌 **These docs reflect Vexa `v0.12.15`** — the latest released control-plane. Older self-hosts
@@ -547,6 +547,51 @@ probe), not inferred from planning docs.
   flow.** The dispatch's fallback branch WAS the Google Meet branch, so an unrecognized platform
   drove Meet selectors against an arbitrary URL and failed minutes later with misattributed
   selector errors. ([#816](https://github.com/Vexa-ai/vexa/issues/816))
+
+- **Lite: bots no longer echo in Google Meet (#819).** Vexa Lite left the bot's microphone path
+  (`tts_sink` / `virtual_mic`) unmuted by default, so meeting audio looped back and participants
+  heard themselves. Lite now mutes the mic by default like the per-meeting bot does; on-demand
+  speaking still unmutes for the utterance. See [Deployment](/deployment).
+
+- **Bot: no more "Socket already opened" on first use (#820).** The redis adapters flipped a
+  `connected` flag only *after* `connect()` resolved, so two concurrent first-use callers both saw
+  it false and both connected — node-redis v4 throws on the second. Both adapters now share one
+  idempotent `makeLazyConnect` memo, so concurrent first-use callers await a single `connect()`.
+
+- **A malformed `native_meeting_id` is refused at the door, not by the database (#843).** A meeting id longer than 255 characters, or one containing a NUL/control byte, used to travel the whole spawn path and fail inside the Postgres INSERT — surfacing as an opaque `500` about five seconds later. It is now a typed `422` naming the problem, alongside the other request-shape refusals. Only length and control bytes are checked: the id's *shape* is deliberately not validated, because ids that look unusual do join real meetings.
+
+- **Meeting bots now leave ended calls instead of parking until the hard cap (#545).** After the configured remote-audio silence window, empty rooms and silent bots-only rooms finish as `completed(left_alone)`; `automatic_leave.max_time_left_alone` overrides the 10-minute default. See [Send a bot and get a transcript](/how-to/send-a-bot#when-the-bot-leaves-on-its-own).
+
+- **A meeting with no transcript now says why.** When the transcription backend refuses — an
+  exhausted token, a rejected key, an unreachable service — the bot counts the failures and
+  reports them once on its terminal `lifecycle.v1` event, and meeting-api persists them to
+  `meeting.data.stt_fault` and onto the `meeting.status_change` webhook. Previously those faults
+  were fully typed and attributed inside the bot and then died in a `console.error`, so a meeting
+  whose STT was dead completed indistinguishable from a silent room — the empty-transcript reports
+  that could never be diagnosed after the fact. The report carries the backend's own words
+  (`payment_required`, HTTP 402, "Insufficient balance…") and one count per kind, so a storm of
+  per-chunk failures becomes one honest summary rather than a flood.
+
+- **Meeting timestamps serialize as UTC (#860).** `created_at` / `start_time` / `end_time` left the
+  API as naive datetimes, so clients parsed server-local wall time as their own local time and
+  rendered meetings hours off. Every meeting timestamp now carries the `Z` suffix, so standard
+  client parsing lands on the correct local time.
+
+- **Bring-your-own STT endpoint, documented (#537).** Any OpenAI-compatible transcription endpoint
+  can serve as the backend via `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN`; the
+  contract (request shape, auth, response fields) is now written down. See
+  [Custom STT endpoints](/how-to/custom-stt). The FunASR/SenseVoice example is
+  community-contributed and not yet independently validated (#863).
+
+- **Fixed:** Teams transcripts no longer show a new fake speaker per line. Unattributed turns on the
+  mixed lane (Teams/Zoom) now carry the stable "Speaker" label instead of leaking the internal
+  `seg_N` cluster id, so per-speaker consumers group them as one speaker; late attribution still
+  repaints by segment id. ([#890](https://github.com/Vexa-ai/vexa/issues/890))
+
+- **Fixed:** Teams/Zoom live transcripts now paint in real time on the dashboard instead of only
+  after a reload. The bot's mixed-lane segment mapper wasn't stamping `absolute_start_time`, so the
+  live renderer (which keys on it) skipped every pending draft; a prior producer-stamp fix had
+  covered only Google Meet. ([#895](https://github.com/Vexa-ai/vexa/issues/895))
 
 ## Versioning
 

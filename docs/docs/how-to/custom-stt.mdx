@@ -1,0 +1,112 @@
+---
+title: "Use a custom STT endpoint"
+description: "Point Vexa at any OpenAI-compatible speech-to-text service, including self-hosted FunASR or SenseVoice gateways."
+---
+
+Vexa sends meeting audio to one OpenAI-compatible speech-to-text endpoint. The endpoint can be the
+bundled faster-whisper service, Vexa's hosted transcription service, or a self-hosted gateway that
+implements the same request shape.
+
+Use this path when you want a different ASR model without changing the bot, meeting-api, or live
+transcript pipeline.
+
+## Contract
+
+Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends multipart form data:
+
+| Field | Required | Notes |
+|---|---:|---|
+| `file` | yes | Audio window captured by the bot. |
+| `model` | yes | Comes from `TRANSCRIPTION_MODEL`, or `whisper-1` when unset. |
+| `language` | no | Present when the bot request pins a language. |
+| `response_format` | no | Backends may return plain JSON or verbose JSON. |
+
+The minimum response Vexa needs is:
+
+```json
+{ "text": "transcribed speech" }
+```
+
+Backends may include segments, words, timestamps, duration, or usage metadata. Keep those fields
+additive: the meeting pipeline must still work when only `text` is present.
+
+## Configure Vexa
+
+Set these variables in `deploy/compose/.env`:
+
+```bash
+TRANSCRIPTION_SERVICE_URL=http://<stt-host>:8000
+TRANSCRIPTION_SERVICE_TOKEN=<token-if-required>
+TRANSCRIPTION_MODEL=<model-id-your-backend-validates>
+```
+
+`TRANSCRIPTION_SERVICE_URL` is the base URL. Do not include `/v1/audio/transcriptions`; Vexa appends
+that path.
+
+If the backend ignores the `model` form part, leave `TRANSCRIPTION_MODEL` unset. If it validates model
+ids, set the exact served name.
+
+## Example: FunASR or SenseVoice
+
+<Note>
+**Community-contributed and unwitnessed.** The contract above is verified against Vexa's own STT
+client. This example is not: no Vexa maintainer has run Vexa against a FunASR or SenseVoice gateway,
+so the language-quality claim below is the contributor's, not a tested guarantee. Independent
+validation is tracked in [#863](https://github.com/Vexa-ai/vexa/issues/863) — reports welcome.
+</Note>
+
+Self-hosted FunASR/SenseVoice gateways are reported to be a good fit when you need local Chinese,
+mixed Chinese-English, Cantonese, Japanese, or Korean transcription.
+
+Run or deploy a gateway that accepts:
+
+```bash
+curl -sS http://<stt-host>:8000/v1/audio/transcriptions \
+  -H "Authorization: Bearer <token-if-required>" \
+  -F file=@sample.wav \
+  -F model=FunAudioLLM/SenseVoiceSmall \
+  -F language=zh
+```
+
+Then point Vexa at the same host:
+
+```bash
+TRANSCRIPTION_SERVICE_URL=http://<stt-host>:8000
+TRANSCRIPTION_SERVICE_TOKEN=<token-if-required>
+TRANSCRIPTION_MODEL=FunAudioLLM/SenseVoiceSmall
+```
+
+For Fun-ASR-Nano or other FunASR checkpoints, set `TRANSCRIPTION_MODEL` to the model id your gateway
+expects, for example `FunAudioLLM/Fun-ASR-Nano-2512`.
+
+<Note>
+Vexa treats the STT service as a network dependency. Put the ASR runtime on a GPU box if needed, and
+keep the main stack CPU-only.
+</Note>
+
+## Preflight before a meeting
+
+Test the endpoint from the Vexa host before sending a bot:
+
+```bash
+curl -sS "$TRANSCRIPTION_SERVICE_URL/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $TRANSCRIPTION_SERVICE_TOKEN" \
+  -F file=@sample.wav \
+  -F model="${TRANSCRIPTION_MODEL:-whisper-1}"
+```
+
+Accept the endpoint only if it returns HTTP 2xx and a non-empty `text` field. A 404 usually means the
+base URL already included `/v1` or `/v1/audio/transcriptions`. A 401 or 403 means the token is missing
+or wrong. A `model_not_found` response means `TRANSCRIPTION_MODEL` does not match the served model id.
+
+## Keep provider errors attributable
+
+When adding or operating a custom STT backend:
+
+- Preserve the raw HTTP status in logs.
+- Keep provider error messages sanitized, but do not collapse every failure into "transcription failed".
+- Separate route errors, auth errors, model-id errors, and audio-format errors.
+- Keep long-audio chunking on the backend side if the model has a fixed window limit.
+
+That makes a bad URL, expired token, unsupported model id, or model-specific audio limit diagnosable
+without changing the meeting bot.

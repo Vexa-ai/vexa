@@ -119,6 +119,18 @@ async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
 
 
+def test_iso_utc_marks_naive_utc_with_z():
+    # Meeting time columns are naive but hold UTC. Serializing must emit a Z marker so a browser
+    # parses it as UTC and renders local — a bare isoformat is read as LOCAL (the 6h-skew bug).
+    from datetime import datetime, timezone
+
+    from meeting_api.bot_spawn.adapters import _iso_utc
+
+    assert _iso_utc(datetime(2026, 7, 20, 1, 0, 0)) == "2026-07-20T01:00:00Z"
+    assert _iso_utc(datetime(2026, 7, 20, 1, 0, 0, tzinfo=timezone.utc)) == "2026-07-20T01:00:00Z"
+    assert _iso_utc(None) is None
+
+
 async def test_request_bot_dedup_raises(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
@@ -162,6 +174,73 @@ def test_post_bots_201(monkeypatch):
                     json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
     assert r.status_code == 201, r.text
     assert r.json()["status"] == "requested"
+
+
+def test_post_bots_forwards_automatic_leave_to_invocation(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "silence-window",
+            "automatic_leave": {
+                "max_wait_for_admission": 321_000,
+                "max_time_left_alone": 12_345,
+                "everyone_left_timeout": 99_999,
+                "no_one_joined_timeout": 45_000,
+            },
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"] == {
+        "waitingRoomTimeout": 321_000,
+        "everyoneLeftTimeout": 12_345,
+        "noOneJoinedTimeout": 45_000,
+    }
+
+
+def test_post_bots_legacy_everyone_left_alias_still_works(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "legacy-window",
+            "automatic_leave": {"everyone_left_timeout": 23_456},
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["everyoneLeftTimeout"] == 23_456
+
+
+def test_post_bots_omits_everyone_left_when_not_explicit(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "module-default"},
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"] == {"waitingRoomTimeout": 600_000}
+
+
+def test_post_bots_rejects_invalid_automatic_leave_timeout(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    r = _client().post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "bad-window",
+            "automatic_leave": {"max_time_left_alone": 0},
+        },
+    )
+    assert r.status_code == 422
+    assert "positive integer" in r.text
 
 
 def test_post_bots_409_on_duplicate(monkeypatch):
@@ -505,3 +584,45 @@ def test_spawnable_platforms_is_the_sealed_invocation_enum():
 
     assert SPAWNABLE_PLATFORMS == frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
     assert "browser_session" not in SPAWNABLE_PLATFORMS
+
+
+def test_native_meeting_id_over_column_length_is_422_not_500(monkeypatch):
+    """#843: `platform_specific_id` is varchar(255). An over-long id used to sail past this
+    boundary and die at the INSERT on asyncpg's StringDataRightTruncationError — a 500 ~5.6s in,
+    observed in production. It must be refused HERE, typed, and write no row."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "A" * 20000,
+    })
+    assert r.status_code == 422, f"expected typed refusal, got {r.status_code} {r.text}"
+    detail = r.json()["detail"]
+    assert "255" in detail, f"the refusal must name the limit, got: {detail}"
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_native_meeting_id_with_nul_byte_is_422_not_500(monkeypatch):
+    """#843: a NUL byte reaches Postgres as an invalid text value and 500s at the INSERT."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "abc" + chr(0) + "def",
+    })
+    assert r.status_code == 422, f"expected typed refusal, got {r.status_code} {r.text}"
+    assert "control" in r.json()["detail"].lower(), r.text
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+
+def test_native_meeting_id_bounds_do_not_validate_SHAPE(monkeypatch):
+    """NEGATIVE CONTROL — the guard bounds length/bytes ONLY, never the id's shape.
+
+    Production evidence: a bare-numeric Teams id (the dial-in kind) transcribed a real meeting
+    (24368, 67 segments) while another of the SAME shape failed. Shape does not predict success,
+    so a format rule would refuse working meetings. These must all still spawn."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    for odd_but_legal in ("474226440982", "abc-defg-hij", "x", "A" * 255, "id with spaces"):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={
+            "platform": "google_meet", "native_meeting_id": odd_but_legal,
+        })
+        assert r.status_code == 201, f"{odd_but_legal!r} was refused: {r.status_code} {r.text}"
