@@ -99,10 +99,15 @@ to the pre-fold build; only the bot's content actually changed.
 - `helm template … -f values-staging.yaml --set global.imageTag=v0.12.17-rc.1` → renders **26
   objects**, all **8** image refs resolve to `…:v0.12.17-rc.1`, **zero** `:dev` / `:v012` /
   unpinned leaks.
-- Chart is **unchanged** by the fold (`git diff 9fbe8a1e..ca675774 -- deploy/helm` is empty), so the
-  render equals the chart already proven at rev10.
-- Diff vs current staging: rev10 renders identical objects at `…:v0.12.16-rc.3`; the only field that
-  changes at deploy is the 8 image tags `-rc.3 → -rc.1` (`--reuse-values` holds everything else).
+- Chart is **unchanged** by this session's fold (`git diff 9fbe8a1e..ca675774 -- deploy/helm` is
+  empty).
+- Diff vs the **0.12.16 chart currently on staging** (rev10): rc/0.12.17 adds exactly **one** new
+  meeting-api env var, `CAPTURE_SIGNAL_ENABLED` (values.yaml `meetingApi.captureSignalEnabled`).
+  It is **inert under `--reuse-values`**: the template renders it `| default "false"` and the
+  values default is `"false"`, so with `--reuse-values` not supplying the key it still renders
+  `CAPTURE_SIGNAL_ENABLED="false"` (verified) — capture-recording stays OFF, no missing-value
+  failure. Net effect at deploy: the 8 image tags move `-rc.3 → -rc.1` and meeting-api gains that
+  one env var at its safe default; `--reuse-values` holds all live state.
   `helm diff` plugin not installed locally; the template-vs-template comparison stands in for it.
 
 ## Rollback (one command)
