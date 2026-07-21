@@ -93,15 +93,32 @@ async function main(): Promise<void> {
     // page.evaluate-serialized functions; shim it page-side so the REAL bridge code
     // (which ships helper-free via tsc) runs unmodified under the test runner.
     await page.evaluate('globalThis.__name = globalThis.__name || ((t, v) => t);');
-    const stop = await startCaptureBridge(page, inv, pipeline);
+    let readyCalls = 0;
+    let unavailableCalls = 0;
+    const activity = {
+      ready() { readyCalls++; },
+      unavailable() { unavailableCalls++; },
+      observeRemoteEnergy() { /* unused — empty-room latch must not need energy */ },
+      snapshot() { return { available: readyCalls > 0 }; },
+    };
+    const stop = await startCaptureBridge(page, inv, pipeline, undefined, undefined, activity);
+
+    // #866 — mixed lane (Teams here) must latch ready when the mix destination exists, even with
+    // ZERO remote audio frames. Waiting on the first gated PCM frame made empty-room left_alone
+    // unreachable on Zoom/Teams/Jitsi.
+    await sleep(200);
+    check('mixed lane latches remote-audio ready without any PCM frames (#866)', readyCalls === 1,
+      `readyCalls=${readyCalls}`);
 
     // Fixture drives the speaking signal: occlusion class ON (start) → OFF (end).
-    await sleep(600);   // observer attach + initial silent state past the 200ms hysteresis
+    await sleep(400);   // observer attach + initial silent state past the 200ms hysteresis
     await page.evaluate(`document.getElementById('alice-outline').classList.add('vdi-frame-occlusion')`);
     await sleep(900);   // 200ms hysteresis + 300ms debounce + margin
     await page.evaluate(`document.getElementById('alice-outline').classList.remove('vdi-frame-occlusion')`);
     await sleep(900);
     await stop();
+    check('teardown reports unavailable (fail-closed; no spurious alone after stop) (#866 A4)',
+      unavailableCalls >= 1, `unavailableCalls=${unavailableCalls}`);
 
     // ── 3) the assertions: hints crossed with name, epoch clock, order ──
     check('page-side watcher started (hop 1 visible in page logs)', pageLogs.some((l) => l.includes('[TeamsSpeakers]')), JSON.stringify(pageLogs.slice(0, 3)));

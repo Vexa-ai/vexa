@@ -130,8 +130,9 @@ join. Re-authenticate the browser profile and retry.
 
 An active bot leaves after it receives no remote microphone audio for **10 minutes** and the meeting
 finishes as `completed(left_alone)`. The same rule covers an empty room and a room containing only silent
-notetakers: it listens to the remote-audio signal and does not identify participants by name. Bot-generated
-speech is not part of that signal.
+notetakers — on **Google Meet, Zoom, Microsoft Teams, and Jitsi** alike: it listens to the remote-audio
+signal (capture attached and able to hear, not "someone has already spoken") and does not identify
+participants by name. Bot-generated speech is not part of that signal.
 
 Set a per-meeting window with `automatic_leave.max_time_left_alone` (milliseconds):
 
