@@ -171,6 +171,26 @@ jobs:
       - name: Concurrent-bots smoke (the #478 class + the #585 stream-authz guard)
         if: steps.scope.outputs.hit == '1'
         run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+      # The capture→archive E2E rig (WP-M9 workstream C). One live session found NINE stacked
+      # defects between "capture requested" and "archive readable" — each invisible behind the
+      # previous, because nothing exercised the path end-to-end per PR. This stage drives a
+      # synthetic meeting through the REAL engine in the ALREADY-BOOTED lite stack: control-plane
+      # capture → runtime process-spawn → lifecycle FSM → transcription_segments stream →
+      # collector → transcriptions rows → stop → settlement callbacks → summarizer → read index.
+      # It lives INSIDE lite-smoke rather than as its own job because the boot cost dominates:
+      # a separate job would rebuild + reboot the same image (~10+ min duplicated); here the rig
+      # only restarts the app container with the e2e env (postgres/minio kept) and adds single-
+      # digit minutes. Instruments are two local files (a scripted bot via the runtime's
+      # documented BOT_COMMAND override + a loopback OpenAI-compatible/Hub-callback stub) wired
+      # through EXISTING declared config keys — no new config.v1 surface. Fails loud with the
+      # failing stage named (run_e2e.sh header lists the stages).
+      # NOTE: the two settlement stages assert WORKSTREAM A's metering contract (true active
+      # seconds; lobby-only settles 0) and are EXPECTED RED against pre-A engines — that red run
+      # is A's defect evidence. E2E_SETTLEMENT_STRICT=0 downgrades only those stages if C must
+      # land ahead of A.
+      - name: E2E rig — synthetic capture→archive through the booted lite stack (WP-M9 C)
+        if: steps.scope.outputs.hit == '1'
+        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/e2e/run_e2e.sh
       - name: Present the lite-leg row (job summary)
         if: always() && steps.scope.outputs.hit == '1'
         run: |
@@ -178,7 +198,10 @@ jobs:
             echo "## pr-value/lite-smoke — the lite boot leg (#581)"
             echo
             echo "Built \`deploy/lite/Dockerfile.lite\` from this PR's tree, booted it via"
-            echo "\`make -C deploy/lite up\`, probed the front doors, ran the concurrent-bots smoke."
+            echo "\`make -C deploy/lite up\`, probed the front doors, ran the concurrent-bots smoke,"
+            echo "then the capture→archive E2E rig (\`deploy/lite/tests/e2e/run_e2e.sh\`): a synthetic"
+            echo "meeting through the real control plane, lifecycle FSM, segment stream, collector,"
+            echo "durable transcript flush, stop/settlement, summarizer, and the read index."
             echo
             echo "Verdict: **${{ job.status }}** — green means the lite image assembles and boots"
             echo "from THIS tree. Real-Meet admission and audio→words remain release-bar legs."
