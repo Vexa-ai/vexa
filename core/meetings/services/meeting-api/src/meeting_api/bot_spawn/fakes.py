@@ -276,7 +276,7 @@ class InMemoryMeetingRepo:
             capture.update(
                 {
                     "state": "withdrawn",
-                    "withdrawal_reason": "consent_withdrawn",
+                    "withdrawal_reason": "capture_stopped",
                     "withdrawn_at": withdrawn_at,
                 }
             )

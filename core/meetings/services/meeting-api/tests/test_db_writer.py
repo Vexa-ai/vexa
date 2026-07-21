@@ -479,3 +479,44 @@ async def test_rest_after_completion_with_redis_wiped_serves_transcript_and_proc
     assert [n["text"] for n in views[0]["doc"]["notes"]] == ["Closing words, cleaned."]
     assert views[0]["params"] == {"model": "claude-x"}
     assert_api_conforms("TranscriptionResponse", body)
+
+
+# ── stop is not withdrawal (owner round-4: "the bot was there, I spoke, nothing surfaced") ──────
+
+async def test_stopped_meeting_still_flushes_its_transcript(store, bus, redis_c):
+    """An ordinary STOP tombstones the capture AUTHORITY (state=withdrawn, reason
+    capture_stopped) so no future capture rides the old grant — but the segments already
+    captured under valid consent MUST land durably. Before the reason split, the delayed
+    db-writer flush hit the privacy barrier on every stopped meeting and silently purged
+    the whole buffered transcript."""
+    await bus.xadd("transcription_segments", json.loads(_message(1, [
+        _seg("s1", 1.0, "Thank you if you can hear me."),
+    ])["payload"]))
+    await consume_segments(store, bus)
+    store._meetings[1]["data"]["zaki_capture"] = {
+        "state": "withdrawn", "withdrawal_reason": "capture_stopped",
+        "withdrawn_at": "2026-07-21T13:27:00+00:00",
+    }
+
+    stored = await flush_meeting_segments(redis_c, store, 1, now=LATER)
+
+    assert stored == 1
+    assert _durable_texts(store) == ["Thank you if you can hear me."]
+
+
+async def test_privacy_withdrawal_still_purges_buffered_segments(store, bus, redis_c):
+    """The REAL privacy barrier is unchanged: a consent withdrawal refuses the flush and
+    purges the buffer — and an unknown/missing reason fails closed the same way."""
+    await bus.xadd("transcription_segments", json.loads(_message(1, [
+        _seg("s1", 1.0, "private detail"),
+    ])["payload"]))
+    await consume_segments(store, bus)
+    store._meetings[1]["data"]["zaki_capture"] = {
+        "state": "withdrawn", "withdrawal_reason": "consent_withdrawn",
+    }
+
+    stored = await flush_meeting_segments(redis_c, store, 1, now=LATER)
+
+    assert stored == 0
+    assert _durable_texts(store) == []
+    assert await redis_c.hlen("meeting:1:segments") == 0

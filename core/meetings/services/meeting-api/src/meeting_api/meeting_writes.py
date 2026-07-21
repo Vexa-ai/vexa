@@ -14,6 +14,27 @@ def capture_is_withdrawn(data: object) -> bool:
     return isinstance(capture, Mapping) and capture.get("state") == "withdrawn"
 
 
+def transcript_writes_refused(data: object) -> bool:
+    """Should the transcript write barrier refuse this meeting?
+
+    STOPPING a capture is not a privacy event: the stop tombstones the AUTHORITY
+    (state=withdrawn — no future capture may ride the old grant; that check stays
+    on ``capture_is_withdrawn``/``capture_authority_is_stale``) but the segments
+    ALREADY captured under valid consent must still flush to the archive. Before
+    this split, every ordinarily-stopped meeting hit the privacy barrier at the
+    delayed db-writer flush and its ENTIRE buffered transcript was purged —
+    "the bot was there, I spoke, nothing surfaced".
+
+    Only a tombstone carrying privacy intent refuses (and purges). Fail closed:
+    an unknown or missing reason on a withdrawn capture refuses — exactly the
+    pre-split behavior — so only the explicit ``capture_stopped`` reason opts out.
+    """
+    capture = data.get("zaki_capture") if isinstance(data, Mapping) else None
+    if not (isinstance(capture, Mapping) and capture.get("state") == "withdrawn"):
+        return False
+    return capture.get("withdrawal_reason") != "capture_stopped"
+
+
 def capture_authority_is_stale(incoming: object, prior: object) -> bool:
     """Reject capture authority that does not post-date a durable scope withdrawal.
 

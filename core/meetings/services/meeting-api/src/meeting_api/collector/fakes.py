@@ -620,11 +620,11 @@ class InMemoryTranscriptStore:
 
     @asynccontextmanager
     async def transcript_write_lease(self, meeting_id):
-        from ..meeting_writes import capture_is_withdrawn
+        from ..meeting_writes import transcript_writes_refused
         from .ports import TranscriptWriteRefused
 
         meeting = self._meetings.get(meeting_id)
-        if meeting and capture_is_withdrawn(meeting.get("data")):
+        if meeting and transcript_writes_refused(meeting.get("data")):
             raise TranscriptWriteRefused("meeting is not writable")
         yield _InMemoryTranscriptBatchWriter(self, meeting_id)
 
@@ -653,8 +653,14 @@ class InMemoryTranscriptStore:
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink (the dict stands in for the ``transcriptions`` table):
-        upsert by ``segment_id`` — idempotent, a re-flush updates in place."""
+        upsert by ``segment_id`` — idempotent, a re-flush updates in place. Mirrors the SQL
+        adapter's privacy barrier (a fake without it let the purge regression pass silently)."""
+        from ..meeting_writes import transcript_writes_refused
+        from .ports import TranscriptWriteRefused
+
         m = self._row_or_placeholder(meeting_id)
+        if transcript_writes_refused(m.get("data")):
+            raise TranscriptWriteRefused("meeting is not writable")
         for seg in segments:
             sid = seg.get("segment_id")
             if sid:
@@ -674,12 +680,12 @@ class InMemoryTranscriptStore:
     ) -> None:
         """Persist drained copilot notes into ``data['processed']['views']`` — the SAME pure
         upsert the SqlAlchemy store commits (the versioned multi-view shape, merged by note id)."""
-        from ..meeting_writes import capture_is_withdrawn
+        from ..meeting_writes import transcript_writes_refused
         from .adapters import _upsert_processed_view
         from .ports import TranscriptWriteRefused
 
         m = self._row_or_placeholder(meeting_id)
-        if capture_is_withdrawn(m.get("data")):
+        if transcript_writes_refused(m.get("data")):
             raise TranscriptWriteRefused("meeting is not writable")
         m["data"] = _upsert_processed_view(
             m["data"], view_id=view_id, kind=kind, notes=notes,

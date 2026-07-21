@@ -109,7 +109,7 @@ async def test_postgres_withdrawal_serializes_with_spawn_before_selecting_the_ca
     assert meeting["data"]["zaki_capture"] == {
         "tenant_id": "tenant-a",
         "state": "withdrawn",
-        "withdrawal_reason": "consent_withdrawn",
+        "withdrawal_reason": "capture_stopped",
         "withdrawn_at": "2026-07-15T08:41:00+00:00",
     }
     assert meeting["data"]["stop_requested"] is True

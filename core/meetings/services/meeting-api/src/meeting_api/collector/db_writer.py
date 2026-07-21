@@ -228,6 +228,13 @@ async def flush_meeting_segments(
         try:
             await sink.upsert_segments(meeting_id, batch)
         except TranscriptWriteRefused:
+            # A privacy barrier purge is CORRECT — but it must never be silent: this
+            # branch once discarded whole meetings' words with no trace while a stop
+            # was misclassified as a withdrawal.
+            log.warning(
+                "transcript write refused for meeting %s — purging %d buffered segment(s) "
+                "(privacy barrier: withdrawn capture)", meeting_id, len(batch),
+            )
             await redis_c.delete(hash_key)
             await redis_c.srem(ACTIVE_MEETINGS_KEY, str(meeting_id))
             return 0

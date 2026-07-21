@@ -391,8 +391,12 @@ async def request_bot(
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
         # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
-        # fail the meeting; everyoneLeftTimeout matches the O6 config.
-        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
+        # fail the meeting. everyoneLeftTimeout: how long the bot lingers ALONE
+        # before leaving on its own — 15 min (the O6 default) read as "it didn't
+        # autostop" to the owner who ended the meeting and watched the bot stay
+        # `active`, billing lobby-priced minutes. 2 min is long enough to survive
+        # a host reconnect and short enough to read as self-cleaning.
+        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 120000},
     )
 
     # 5. Spawn over runtime.v1.

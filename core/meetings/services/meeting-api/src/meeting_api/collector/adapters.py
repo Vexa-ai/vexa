@@ -26,7 +26,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, capture_is_withdrawn
+from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, transcript_writes_refused
 from .ports import RedisBus, TranscriptStore, TranscriptWriteRefused
 
 log = logging.getLogger("meeting_api.collector.adapters")
@@ -892,7 +892,7 @@ class SqlAlchemyTranscriptStore:
                 )
                 row = result.mappings().first()
                 data = row["data"] if row and isinstance(row["data"], dict) else {}
-                if row is None or capture_is_withdrawn(data):
+                if row is None or transcript_writes_refused(data):
                     raise TranscriptWriteRefused("meeting is not writable")
                 yield _RedisTranscriptBatchWriter(self._redis, int(meeting_id))
             finally:
@@ -955,7 +955,7 @@ class SqlAlchemyTranscriptStore:
             )
             meeting = result.mappings().first()
             data = meeting["data"] if meeting and isinstance(meeting["data"], dict) else {}
-            if meeting is None or capture_is_withdrawn(data):
+            if meeting is None or transcript_writes_refused(data):
                 raise TranscriptWriteRefused("meeting is not writable")
             for row in rows:
                 await db.execute(
@@ -1013,7 +1013,7 @@ class SqlAlchemyTranscriptStore:
             )
             row = result.mappings().first()
             data = row["data"] if row and isinstance(row["data"], dict) else {}
-            if row is None or capture_is_withdrawn(data):
+            if row is None or transcript_writes_refused(data):
                 raise TranscriptWriteRefused("meeting is not writable")
             updated = _upsert_processed_view(
                 data, view_id=view_id, kind=kind, notes=notes,

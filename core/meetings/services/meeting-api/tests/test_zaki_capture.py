@@ -134,7 +134,9 @@ async def test_withdrawal_persists_before_stopping_and_returns_content_free_rece
     }
     assert stored["status"] == "stopping"
     assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
-    assert stored["data"]["zaki_capture"]["withdrawal_reason"] == "consent_withdrawn"
+    # The STOP path tombstones the AUTHORITY with its own reason — `capture_stopped` —
+    # so the transcript write barrier keeps flushing what was captured under valid consent.
+    assert stored["data"]["zaki_capture"]["withdrawal_reason"] == "capture_stopped"
     assert stored["data"]["stop_requested"] is True
     assert publisher.published == [
         (
