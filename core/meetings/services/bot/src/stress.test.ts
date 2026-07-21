@@ -10,8 +10,9 @@
  */
 import { createOrchestrator } from './orchestrator.js';
 import { canTransition, type BotStatus, type LifecycleEvent } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, AlonenessSource } from './ports.js';
+import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource } from './ports.js';
 import type { Invocation } from './config.js';
+import { noopAloneness, noopPipeline, noopActs } from './test-doubles.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -29,14 +30,13 @@ const sink = (): LifecycleSink & { readonly events: LifecycleEvent[] } => {
   const events: LifecycleEvent[] = [];
   return { events, async emit(e: LifecycleEvent) { events.push(e); } };
 };
-const noopPipeline = (): Pipeline => ({ async start() { /* */ }, async stop() { /* */ } });
 // The orchestrator subscribes to acts AFTER it reaches active — so an acts source that fires on
 // subscribe delivers its acts during the active phase (when the handler is wired). `nLeaves` floods.
 const leavesOnSubscribe = (n: number): ActsSource => ({
   subscribe(handler) { for (let i = 0; i < n; i++) void handler({ action: 'leave' }); return () => { /* */ }; },
 });
-const noActs: ActsSource = { subscribe() { return () => { /* */ }; } };
-const noAloneness: AlonenessSource = { onAlone() { return () => { /* */ }; } };
+const noActs = noopActs();
+const noAloneness = noopAloneness();
 
 const terminals = (e: LifecycleEvent[]) => e.filter((x) => x.status === 'completed' || x.status === 'failed');
 const allLegal = (e: LifecycleEvent[]) =>
