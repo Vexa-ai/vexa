@@ -340,17 +340,34 @@ export async function startCaptureBridge(
       // has arrived". An empty room (no remote tracks yet, nobody ever speaks) must still latch
       // ready so the silence window can fire; waiting on the first frame made that headline case
       // unreachable on every mixed-lane platform.
-      const setupMix = (): void => {
-        if (!w.__vexaMixCtx) {
-          w.__vexaMixCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
-          w.__vexaMixCtx.resume?.();
-          w.__vexaMixDest = w.__vexaMixCtx.createMediaStreamDestination();
-          w.__vexaMixSeen = new Set();
-          if (!w.__vexaRemoteAudioReadyLatched) {
-            w.__vexaRemoteAudioReadyLatched = true;
-            void w.__vexaRemoteAudioReady?.();
-            w.logBot?.('[mixed] remote-audio ready (mix destination attached)');
+      //
+      // AudioContext construction is best-effort and MUST NOT abort the rest of this block: the
+      // Zoom/Teams/Jitsi WHO watchers install below and are independent of the mix graph. An
+      // in-process L3 shim (zoom-speaker-wiring) has no real AudioContext — throwing here used
+      // to skip createZoomSpeakers entirely and zero the boundary arrivals.
+      const ensureMixDestination = (): boolean => {
+        if (w.__vexaMixDest) return true;
+        try {
+          if (!w.__vexaMixCtx) {
+            const AC = (globalThis as any).AudioContext || (globalThis as any).webkitAudioContext;
+            if (typeof AC !== 'function') throw new Error('AudioContext unavailable');
+            w.__vexaMixCtx = new AC({ sampleRate: 16000 });
+            w.__vexaMixCtx.resume?.();
           }
+          w.__vexaMixDest = w.__vexaMixCtx.createMediaStreamDestination();
+          w.__vexaMixSeen = w.__vexaMixSeen ?? new Set();
+          return true;
+        } catch (e) {
+          w.logBot?.('[mixed] mix destination unavailable: ' + String(e));
+          return false;
+        }
+      };
+      const setupMix = (): void => {
+        if (!ensureMixDestination()) return;
+        if (!w.__vexaRemoteAudioReadyLatched) {
+          w.__vexaRemoteAudioReadyLatched = true;
+          void w.__vexaRemoteAudioReady?.();
+          w.logBot?.('[mixed] remote-audio ready (mix destination attached)');
         }
         const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
         if (!streams.length) return;
