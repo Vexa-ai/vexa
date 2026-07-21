@@ -187,6 +187,15 @@ async function main(): Promise<void> {
       real?.speaker === 'Alice', JSON.stringify(real));
     check('mixed-lane segments are transcript.v1-valid (ajv vs SSOT)',
       sink.published.length > 0 && sink.published.every((s) => !!validateSeg(s)), ajv.errorsText(validateSeg.errors));
+    // REGRESSION (Teams/Zoom live render): the mixed lane must stamp absolute_start_time at the
+    // producer, exactly as the gmeet lane does (check above). A null here makes the dashboard's live
+    // renderer SKIP every pending draft (it keys on absolute time), so Teams transcripts only appeared
+    // after a reload (the REST read re-derives it). The gmeet-only stamp fix once missed this mapper.
+    check('mixed-lane segments carry absolute_start_time == epoch(start) (producer-stamped live-render key)',
+      sink.published.length > 0 && sink.published.every((s) =>
+        !!s.absolute_start_time &&
+        Math.abs(new Date(s.absolute_start_time).getTime() / 1000 - (s.start ?? 0)) < 1),
+      JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }
