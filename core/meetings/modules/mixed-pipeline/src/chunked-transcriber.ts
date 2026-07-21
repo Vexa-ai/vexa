@@ -153,6 +153,10 @@ export interface ChunkedTranscriberCallbacks {
 }
 
 interface RingFrame { pcm: Float32Array; tMs: number }
+
+/** One contiguous run inside a cut: where it sits in the compressed audio, and the wall instant it
+ *  came from. A cut over a gapless span has exactly one; each hole adds another. */
+interface CutSpan { fromSample: number; wallStartMs: number; samples: number }
 /** Segmentation lifecycle items on the serialized queue: a boundary opens a turn
  *  (speech start / speaker change) or closes the open one (speaker change / end). */
 type SegItem =
@@ -444,10 +448,19 @@ export class ChunkedTranscriber {
     void this.pump();
   }
 
-  /** Exact retroactive cut from the ring (frames are contiguous per source;
-   *  partial frames at the edges are sliced by sample offset). */
-  private cut(t0: number, t1: number): Float32Array {
+  /**
+   * Exact retroactive cut from the ring, with the layout needed to read its timestamps back.
+   *
+   * A span may contain HOLES — instants no frame ever covered, because capture dropped a buffer,
+   * gated a silence, or the source renegotiated. The cut concatenates only what exists, so the
+   * audio handed to STT is SHORTER than the span it covers and its internal clock is not the wall
+   * clock. Zero-filling the holes would restore that equality at the price of inviting the model to
+   * hallucinate over manufactured silence, so the audio stays compressed and `spans` records which
+   * wall instant each run of it came from. Partial frames at the edges are sliced by sample offset.
+   */
+  private cut(t0: number, t1: number): { pcm: Float32Array; spans: CutSpan[] } {
     const parts: Float32Array[] = [];
+    const spans: CutSpan[] = [];
     let total = 0;
     for (const f of this.ring) {
       const fStart = f.tMs;
@@ -456,12 +469,47 @@ export class ChunkedTranscriber {
       if (fStart >= t1) break;
       const from = Math.max(0, Math.round(((t0 - fStart) / 1000) * SAMPLE_RATE));
       const to = Math.min(f.pcm.length, Math.round(((t1 - fStart) / 1000) * SAMPLE_RATE));
-      if (to > from) { parts.push(f.pcm.subarray(from, to)); total += to - from; }
+      if (to <= from) continue;
+      const wallStartMs = fStart + (from / SAMPLE_RATE) * 1000;
+      const prev = spans[spans.length - 1];
+      // Frames that abut in wall time are ONE run; a jump opens a new one. Measuring against the
+      // previous run's end is what makes a hole a hole rather than a per-frame accounting artefact.
+      if (prev && Math.abs(wallStartMs - (prev.wallStartMs + (prev.samples / SAMPLE_RATE) * 1000)) < 1) {
+        prev.samples += to - from;
+      } else {
+        spans.push({ fromSample: total, wallStartMs, samples: to - from });
+      }
+      parts.push(f.pcm.subarray(from, to));
+      total += to - from;
     }
     const out = new Float32Array(total);
     let off = 0;
     for (const p of parts) { out.set(p, off); off += p.length; }
-    return out;
+    return { pcm: out, spans };
+  }
+
+  /**
+   * Compressed audio time (seconds into a cut) → wall time (ms).
+   *
+   * Without it every word after a hole is stamped early by the accumulated hole and the error
+   * compounds across the turn: turns open and close against the wrong instants, and the hint binder
+   * matches names against a clock that has drifted away from the meeting's.
+   */
+  private wallTimeAt(spans: CutSpan[], sec: number, fallbackMs: number, edge: 'start' | 'end' = 'start'): number {
+    if (!spans.length) return fallbackMs + Math.max(0, sec) * 1000;
+    const raw = Math.round(Math.max(0, sec) * SAMPLE_RATE);
+    // A time landing exactly on a run boundary is ambiguous, and the two edges resolve it opposite
+    // ways: a START opens the next run, an END closes the previous one. Resolving an end from the
+    // last sample it covers is what stops a sentence being stretched across the hole that follows it.
+    const sample = edge === 'end' ? Math.max(0, raw - 1) : raw;
+    for (const s of spans) {
+      if (sample < s.fromSample + s.samples) {
+        const off = Math.max(0, sample - s.fromSample) + (edge === 'end' ? 1 : 0);
+        return s.wallStartMs + (off / SAMPLE_RATE) * 1000;
+      }
+    }
+    const last = spans[spans.length - 1];
+    return last.wallStartMs + (last.samples / SAMPLE_RATE) * 1000;
   }
 
   // ── Serialized pipeline ────────────────────────────────────────
@@ -543,7 +591,13 @@ export class ChunkedTranscriber {
    *  confirmation is LocalAgreement-2 (the bot's word-prefix stability); on
    *  close everything confirms. */
   private async submitTurn(turn: Turn, closing: boolean): Promise<void> {
-    const spanStart = turn.confirmedUpToMs;
+    // Never ask for audio the ring has already evicted. `cut` can only return what it still holds,
+    // so a span reaching further back yields RECENT audio under an OLD start time — the whole turn
+    // then lands at the wrong instant. Clamping to the oldest surviving frame keeps the claim and
+    // the samples the same age; audio older than the ring is gone and pretending otherwise is worse
+    // than admitting it.
+    const oldestRingMs = this.ring.length ? this.ring[0].tMs : turn.confirmedUpToMs;
+    const spanStart = Math.max(turn.confirmedUpToMs, oldestRingMs);
     // Open turns read to the LIVE AUDIO EDGE, not the last commit — pending
     // tracks speech in near-real-time and stability builds at tick cadence.
     // The trailing un-committed second may belong to the next speaker; the
@@ -563,7 +617,7 @@ export class ChunkedTranscriber {
     if (!closing && spanEnd - turn.lastSubmitEndMs < 500) return;
     turn.lastSubmitEndMs = spanEnd;
 
-    const pcm = this.cut(spanStart, spanEnd);
+    const { pcm, spans } = this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
       if (closing) await this.closeOut(turn);
       return;
@@ -583,11 +637,13 @@ export class ChunkedTranscriber {
       return;
     }
 
-    // Map whisper segments (relative to spanStart) to audio time.
+    // Map whisper segments from the CUT's timebase to wall time. Whisper describes the audio it was
+    // handed, which is the span minus its holes — so the two clocks agree only when the span was
+    // gapless, and `spans` is what carries the difference.
     const lang = this.cb.language || result!.language || 'en';
     const mapped = gated.map((ws) => {
-      const startMs = spanStart + (ws.start || 0) * 1000;
-      const rawEndMs = spanStart + (ws.end || 0) * 1000;
+      const startMs = this.wallTimeAt(spans, ws.start || 0, spanStart);
+      const rawEndMs = this.wallTimeAt(spans, ws.end || 0, spanStart, 'end');
       const endMs = Math.min(publishEnd, rawEndMs || publishEnd) || publishEnd;
       return {
         text: ws.text.trim(),
@@ -624,16 +680,21 @@ export class ChunkedTranscriber {
     const name = this.resolveName(turn);
     if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
 
+    const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
+      text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
+      segmentId: `turn:${turn.turnId}:${turn.seq++}`,
+    }));
+
+    // The forming tail carries the ids it will CONFIRM under (turn.seq is already past this
+    // pass's confirmations). A segment_id is an identity — the store upserts on it — so a draft
+    // published under an id of its own would never be replaced by its confirmation, and every
+    // sentence would end up stored twice.
     const tail: ChunkSegment[] = mapped.slice(confirmCount).map((s, i) => ({
       text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-      segmentId: `turn:${turn.turnId}:p${i}`,
+      segmentId: `turn:${turn.turnId}:${turn.seq + i}`,
     }));
 
     if (confirmCount > 0) {
-      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
-        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
-      }));
       // ONE bundle: confirmed + surviving tail. Splitting them deletes the
       // client's pending block for seconds (the "vanishing transcript" bug).
       this.cb.publish(name, confirmed, closing ? [] : tail);
@@ -726,6 +787,10 @@ export class ChunkedTranscriber {
     if (r.source !== 'provisional-cluster-id') {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
       turn.resolvedName = r.speakerName;
+    } else {
+      const d = this.binder.explainMatch(commit);
+      const b = d.best ? ` best=${d.best.name} support=${Math.round(d.best.supportMs)}ms cov=${d.best.coverage.toFixed(2)} conf=${d.best.confidence.toFixed(2)}` : '';
+      this.log(`[binder-reject] ${turn.clusterId} [${Math.round(turn.t0)},${Math.round(turn.t1)}] reason=${d.reject} candidates=${d.candidates} flickerSkipped=${d.flickerSkipped}${b}`);
     }
     return r.speakerName;
   }

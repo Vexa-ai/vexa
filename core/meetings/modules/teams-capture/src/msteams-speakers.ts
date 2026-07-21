@@ -61,6 +61,73 @@ export const teamsMeetingContainerSelectors: string[] = [
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
 
+/** UI-control / icon-ligature / role words that a tile's text leaves may carry but
+ *  which are never a participant's name. Shared by the explicit-selector path and the
+ *  structural fallback so both reject the same non-name strings. */
+const TEAMS_FORBIDDEN_NAME_SUBSTRINGS: string[] = [
+  'more_vert', 'mic_off', 'mic', 'mute', 'videocam', 'videocam_off',
+  'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
+  'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
+];
+
+/**
+ * Resolve a participant's display name from a Teams tile element.
+ *
+ * Two stages: (1) the explicit `teamsNameSelectors` — the fast path when a name node
+ * carries a stable data-tid/aria/class; (2) a selector-agnostic STRUCTURAL FALLBACK
+ * (#853, witnessed live) for today's Teams DOM, where the name label is a div whose
+ * ONLY classes are minified atomic hashes (`___12zni01 f1cmbuwj …`) that rotate every
+ * release — the exact drift #797 predicted, and why chasing a class prefix
+ * (`___2u340f0`) can never hold. The fallback finds the name the way a human reads the
+ * tile: the first text-bearing leaf that looks like a name (has a letter, isn't a
+ * timer/UI-control word). It runs ONLY after every explicit selector missed, so a real
+ * name node still wins the fast path.
+ *
+ * `opts.structuralFallback` (default true) exists so tests can pin the pre-fallback
+ * RED: with it off, a tile whose classes match no explicit selector resolves to ''.
+ */
+export function extractTeamsSpeakerName(
+  element: HTMLElement,
+  opts?: { structuralFallback?: boolean },
+): string {
+  const forbidden = TEAMS_FORBIDDEN_NAME_SUBSTRINGS;
+  for (const selector of teamsNameSelectors) {
+    const nameElement = element.querySelector(selector) as HTMLElement | null;
+    if (!nameElement) continue;
+    let nameText = nameElement.textContent ||
+      (nameElement as any).innerText ||
+      nameElement.getAttribute('title') ||
+      nameElement.getAttribute('aria-label');
+    if (!nameText || !nameText.trim()) continue;
+    nameText = nameText.trim();
+    if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
+    if (nameText.length > 1 && nameText.length < 50) return nameText;
+  }
+  const ariaLabel = element.getAttribute('aria-label');
+  if (ariaLabel && ariaLabel.includes('name')) {
+    const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
+    if (m && m[1]) {
+      const nameText = m[1].trim();
+      if (nameText.length > 1 && nameText.length < 50) return nameText;
+    }
+  }
+  if (opts?.structuralFallback === false) return '';
+  const looksLikeName = (s: string): boolean => {
+    if (s.length < 2 || s.length > 50) return false;
+    if (!/[a-zA-Z]/.test(s)) return false;                 // pure digits/timer "00:30" → no
+    if (/^\d{1,2}:\d{2}/.test(s)) return false;            // leading clock
+    return !forbidden.some((sub) => s.toLowerCase().includes(sub.toLowerCase()));
+  };
+  const leaves = element.querySelectorAll('*');
+  for (let i = 0; i < leaves.length; i++) {
+    const leaf = leaves[i] as HTMLElement;
+    if (leaf.children.length !== 0) continue;               // leaf nodes only
+    const t = (leaf.textContent || '').trim();
+    if (looksLikeName(t)) return t;
+  }
+  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+}
+
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
@@ -75,6 +142,14 @@ export interface TeamsSpeakersOptions {
   log?: (msg: string) => void;
   /** Debounce for state-change emission (ms). Default 300 — matches the bot. */
   debounceMs?: number;
+  /** Rate-limit for the no-name discard report (ms, default 10s). A drifted name
+   *  selector fires the voice signal every frame; without a throttle the "resolver
+   *  returned empty" line would flood the log. See the guard in `emit`. */
+  noNameReportMs?: number;
+  /** How often to report that no speaker has EVER been seen (ms, default 30s). A
+   *  watcher whose voice-outline selector has gone stale is otherwise completely
+   *  silent — mirrors Zoom's blind-watcher report (#852). See `blindReport`. */
+  blindReportMs?: number;
 }
 
 export interface TeamsSpeakers {
@@ -89,6 +164,16 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
   const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
+  const noNameReportMs = opts.noNameReportMs ?? 10_000;
+  const blindReportMs = opts.blindReportMs ?? 30_000;
+
+  // A short, sanitized element description: tag + first class tokens ONLY, never
+  // textContent — a drifted selector must be diagnosable without leaking a
+  // participant's name into the logs.
+  function describeEl(el: HTMLElement): string {
+    const cls = (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 3).join('.');
+    return `<${el.tagName.toLowerCase()}${cls ? ` class~="${cls}"` : ''}>`;
+  }
 
   interface Identity { id: string; name: string; element: HTMLElement }
 
@@ -119,34 +204,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     return id!;
   }
 
-  function extractName(element: HTMLElement): string {
-    const forbidden = [
-      'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
-      'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
-      'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
-    ];
-    for (const selector of teamsNameSelectors) {
-      const nameElement = element.querySelector(selector) as HTMLElement | null;
-      if (!nameElement) continue;
-      let nameText = nameElement.textContent ||
-        (nameElement as any).innerText ||
-        nameElement.getAttribute('title') ||
-        nameElement.getAttribute('aria-label');
-      if (!nameText || !nameText.trim()) continue;
-      nameText = nameText.trim();
-      if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
-      if (nameText.length > 1 && nameText.length < 50) return nameText;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel && ariaLabel.includes('name')) {
-      const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
-      if (m && m[1]) {
-        const nameText = m[1].trim();
-        if (nameText.length > 1 && nameText.length < 50) return nameText;
-      }
-    }
-    return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
-  }
+  const extractName = (element: HTMLElement): string => extractTeamsSpeakerName(element);
 
   function getIdentity(element: HTMLElement): Identity {
     let identity = cache.get(element);
@@ -207,10 +265,34 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const speakingStates = new Map<string, SpeakingState>();
   let destroyed = false;
 
+  // Blindness reporting: whether a named speaker was EVER emitted, and when the last
+  // no-name discard was reported (rate-limited so a drifted selector cannot flood).
+  const startedAt = Date.now();
+  let sawAnySpeaker = false;
+  let lastNoNameReport = 0;
+
   function emit(state: SpeakingState, identity: Identity): void {
     if (state === 'unknown' || destroyed) return;
-    if (!identity.name) return;   // unresolved name → don't emit a nameless/GUID hint
+    if (!identity.name) {
+      // A voice signal fired for this tile but the name resolver returned '' — the
+      // #797 red. Silently dropping it is exactly the failure that meeting cost to
+      // find, so SAY SO: which resolver strategies were tried, and a sanitized
+      // description of the element (tag/class prefix, NO user text). Rate-limited
+      // so a drifted selector reports once per window instead of every frame.
+      const now = Date.now();
+      if (now - lastNoNameReport >= noNameReportMs) {
+        lastNoNameReport = now;
+        log(
+          `🈳 [TeamsSpeakers] SPEAKING SIGNAL with NO NAME — the voice-outline fired but the name ` +
+          `resolver returned empty. Tried: ${teamsNameSelectors.join(', ')} + aria-label name-match. ` +
+          `Element ${describeEl(identity.element)} (id=${identity.id}). Name selectors are likely stale ` +
+          `(#797); attribution for this turn WILL be empty.`,
+        );
+      }
+      return;   // unresolved name → don't emit a nameless/GUID hint
+    }
     if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
+    if (state === 'speaking') sawAnySpeaker = true;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     opts.onSpeaking(identity.name, identity.id, state !== 'speaking', Date.now());
   }
@@ -340,6 +422,27 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     }
   }, 2000) as unknown as number;
 
+  // SAY SO WHEN BLIND. This watcher's only output is a speaker transition, so a
+  // voice-outline selector that has stopped matching produces perfect silence — no
+  // error, no warning, a clean bot log and a full transcript whose speaker column is
+  // all provisional. A watcher that has never once emitted a named speaker is either
+  // in a silent room or broken, and it cannot tell which — but it CAN report which of
+  // the two the DOM supports (#797, mirrors Zoom's #852 blind report).
+  const blindReport = setInterval(() => {
+    if (destroyed || sawAnySpeaker) return;
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    const voiceSignals = document.querySelectorAll(VOICE_LEVEL_SELECTOR).length;
+    const tilesPresent = teamsParticipantSelectors.some((sel) => document.querySelector(sel));
+    log(
+      `NO ACTIVE SPEAKER seen in ${secs}s — ` +
+      (voiceSignals > 0
+        ? `voice-outline signal present (${VOICE_LEVEL_SELECTOR} ×${voiceSignals}) but no named speaker emitted; the room may be silent or the name selectors are stale (see any NO NAME reports above)`
+        : tilesPresent
+          ? `NONE of the voice-outline signals exist (${VOICE_LEVEL_SELECTOR}) though participant tiles are present — the voice selector is stale, attribution WILL be empty`
+          : `and NONE of the participant containers exist in this DOM (${teamsParticipantSelectors.join(', ')}) — selectors are stale, attribution WILL be empty`),
+    );
+  }, blindReportMs) as unknown as number;
+
   return {
     getSpeaking(): string[] {
       const names: string[] = [];
@@ -353,6 +456,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       destroyed = true;
       clearInterval(rescanInterval);
       clearInterval(heartbeat);
+      clearInterval(blindReport);
       bodyObserver.disconnect();
       for (const obs of observers.values()) obs.forEach(o => o.disconnect());
       observers.clear();

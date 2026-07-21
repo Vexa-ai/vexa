@@ -31,6 +31,20 @@ import { createRecordingSink, type RecordingMaster } from './recording-sink.js';
 import { ownerOnly, type CanAccess } from './access.js';
 
 const SAMPLE_RATE = 16000;
+
+/** The gmeet lane's cadence, read from the SAME BOT_SPEAKER_* knobs the shipped bot reads
+ *  (services/bot/src/config.ts), defaulting to the SAME values the lane itself defaults to.
+ *  The desktop is the hot loop people judge latency and fragmentation in, so it has to run the
+ *  configuration that ships — a desktop-only cadence makes every observation describe a
+ *  deployment nobody has. */
+const speakerLaneConfig = () => ({
+  sampleRate: SAMPLE_RATE,
+  minAudioDuration: Number(process.env.BOT_SPEAKER_MIN_AUDIO_SEC ?? 2),
+  submitInterval: Number(process.env.BOT_SPEAKER_SUBMIT_INTERVAL_SEC ?? 2),
+  confirmThreshold: Number(process.env.BOT_SPEAKER_CONFIRM_THRESHOLD ?? 2),
+  maxBufferDuration: Number(process.env.BOT_SPEAKER_MAX_BUFFER_SEC ?? 30),
+  idleTimeoutSec: Number(process.env.BOT_SPEAKER_IDLE_TIMEOUT_SEC ?? 15),
+});
 const REC_CONTENT_TYPE: Record<string, string> = { wav: 'audio/wav', webm: 'audio/webm' };
 const MIXED_CHANNEL = 999, MIC_CHANNEL = 1000;   // mixed lane: one mixed remote stream + the local "You" mic
 const MIXED_PLATFORMS = new Set(['zoom', 'teams', 'msteams', 'youtube']);   // everything else (google_meet, …) → gmeet
@@ -337,7 +351,24 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     const key = keyOf(platform, native);
     resolve(platform, native);
     const lang = language && language !== 'auto' ? language : undefined;
-    const transcribe = async (pcm: Float32Array, prompt?: string) => { if (!txClient) throw new Error('no STT (set TRANSCRIPTION_SERVICE_URL)'); return txClient.transcribe(pcm, lang, prompt); };
+    // VEXA_STT_TAP=1 logs every submission's WINDOW and what came back. A transcript hole is
+    // ambiguous without it — audio that was never submitted and audio that was submitted and
+    // answered with nothing look identical downstream, and they have different causes.
+    const sttTap = process.env.VEXA_STT_TAP === '1';
+    const transcribe = async (pcm: Float32Array, prompt?: string) => {
+      if (!txClient) throw new Error('no STT (set TRANSCRIPTION_SERVICE_URL)');
+      if (!sttTap) return txClient.transcribe(pcm, lang, prompt);
+      const dur = pcm.length / SAMPLE_RATE;
+      const t0 = Date.now();
+      try {
+        const r = await txClient.transcribe(pcm, lang, prompt);
+        log(`  [stt] ${dur.toFixed(2)}s in ${Date.now() - t0}ms -> ${JSON.stringify((r.text || '').trim().slice(0, 70))}`);
+        return r;
+      } catch (e) {
+        log(`  [stt] ${dur.toFixed(2)}s FAILED in ${Date.now() - t0}ms: ${String(e).slice(0, 90)}`);
+        throw e;
+      }
+    };
     const isMixed = MIXED_PLATFORMS.has(platform);
 
     // ── Raw-signal tape recorder (env-gated VEXA_RECORD_TAPE=<dir>) ──
@@ -398,7 +429,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     } else if (txClient) {
       pipe = createGmeetPipeline({
         transcribe,
-        config: { sampleRate: SAMPLE_RATE, minAudioDuration: 2, submitInterval: 1.5, confirmThreshold: 3, maxBufferDuration: 30, idleTimeoutSec: 15 },
+        config: speakerLaneConfig(),
         sink: { segment: (t) => broadcast(key, t), draft: (t) => { if (t.text.trim()) broadcast(key, t); }, finalize: () => { /* live */ } },
         onError: (e) => reportFault(key, e),   // P18: STT/engine fault → observable health frame
       });

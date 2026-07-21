@@ -18,9 +18,14 @@ const g = globalThis as any;
 let lastProc: any = null;            // the most-recently-created ScriptProcessor
 const closed: any[] = [];            // contexts that got .close()
 
+// The context clock, driven by the test. In a browser it advances with rendering; here advancing
+// it independently of `fire()` is exactly how a starved ScriptProcessor is modelled.
+let ctxClock = 0;
+
 class FakeAudioContext {
   sampleRate: number;
   destination = { _id: 'dest' };
+  get currentTime() { return ctxClock; }
   constructor(opts?: { sampleRate?: number }) { this.sampleRate = opts?.sampleRate ?? 48000; }
   createMediaStreamSource() { return { connect() {} }; }
   createScriptProcessor() {
@@ -73,6 +78,53 @@ const fire = (samples: Float32Array) => {
   const before = closed.length;
   cap.stop();
   check('stop() closes the capture context', closed.length === before + 1);
+}
+
+// ── the default lets EVERYTHING through, digital silence included ─────────────
+// Dropping a frame drops TIME, and a codec's silence suppression emits exactly-zero buffers — so
+// the case a disabled gate most needs to pass is the one a naive `maxVal > 0` would still refuse.
+{
+  const pcms: Float32Array[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (pcm) => pcms.push(pcm), { sampleRate: 16000, replay: false });
+  ctxClock = 0;
+  fire(new Float32Array(8));               // digital silence — what DTX sends
+  fire(new Float32Array(8).fill(0.0005));  // near-silence, under the old 0.005 gate
+  fire(new Float32Array(8).fill(0.5));     // speech
+  check('by default nothing is gated — silence keeps the timeline intact', pcms.length === 3);
+  check('and the gate reports nothing refused', cap.stats().gatedSec === 0);
+  cap.stop();
+}
+
+// ── delivery accounting: the two losses must be told apart ────────────────────
+// A frame missing downstream was either refused by the gate or never handed over by the
+// ScriptProcessor, and the fixes are unrelated (drop the gate vs move to an AudioWorklet). The
+// context clock is the only local witness to how much audio existed, so stats() measures both
+// against it — which is what makes a capture deficit attributable at all.
+{
+  const SR = 16000, BUF = 4096, FRAME = BUF / SR;
+  ctxClock = 0;
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, () => { /* */ },
+    { sampleRate: SR, silenceThreshold: 0.005, replay: false });
+
+  // Ten buffers rendered, ten delivered, three of them silent: the gate is the whole deficit.
+  for (let i = 0; i < 10; i++) { ctxClock += FRAME; fire(new Float32Array(BUF).fill(i < 3 ? 0.001 : 0.5)); }
+  let s = cap.stats();
+  check('seen counts every buffer the processor delivered', s.seen === 10);
+  check('emitted counts only what passed the gate', s.emitted === 7);
+  check('gated time is the silent buffers', Math.abs(s.gatedSec - 3 * FRAME) < 1e-6);
+  check('no processor deficit when every rendered buffer arrives', s.processorDeficitSec < 1e-6);
+
+  // Now the context renders five buffers' worth of time while one buffer arrives — the signature
+  // of a ScriptProcessor starved on the main thread. The gate must not be blamed for it.
+  ctxClock += 5 * FRAME;
+  fire(new Float32Array(BUF).fill(0.5));
+  s = cap.stats();
+  check('processor deficit appears when rendered time outruns delivered buffers',
+    Math.abs(s.processorDeficitSec - 4 * FRAME) < 1e-6);
+  check('gated time is unchanged by a processor deficit', Math.abs(s.gatedSec - 3 * FRAME) < 1e-6);
+  check('delivered time counts real samples, not an assumed buffer size',
+    Math.abs(s.deliveredSec - 11 * FRAME) < 1e-6);
+  cap.stop();
 }
 
 // ── installRemoteAudioHook contract: no RTCPeerConnection → no-op false ─────────

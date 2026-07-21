@@ -12,3 +12,39 @@ Small, committed fixtures for the offline replay + flag evals (no meeting, no mo
 
 Deterministic: re-running yields identical output. The fixtures are intentionally tiny — they test
 that the pipeline produces the SAME segmentation/structure for the same raw signal, not STT quality.
+
+## `session-mixed.captured-signal.jsonl.gz` — the MIXED-lane (zoom/teams/jitsi) golden
+
+Consumed by `services/bot/src/replay-mixed.test.ts`. Where the gmeet golden proves *segmentation*
+off per-channel glow-named frames, this one proves **attribution**: the mixed lane carries one
+audio stream for everybody and names it only from out-of-band speaker hints, which is where
+#797 / #499 / #539 live.
+
+Provenance: harvested from a REAL jitsi meeting through the capture-signal recorder (two scripted
+speakers whose microphones were ground-truth WAVs), then distilled with `eval/src/distill.mjs` to
+the ~18s window spanning one Anna→Boris turn change — 58 audio frames + 9 hint records.
+
+**Chunked by production's OWN cuts.** The session carries `type:"boundary"` records — the real
+`PyannoteSegmenter` verdicts teed out of a live run — so the replay chunks exactly as the meeting
+did. This matters more than it sounds: the mixed lane's chunking IS its behaviour, and a harness
+that substitutes its own cut source measures the substitute. Before cuts were recorded, the same
+session read 2.9-11.3s time-to-text with the opening turn never drafting; with production's cuts
+it reads 2.8s p50 and attributes both speakers. A session with no `boundary` records still
+replays (the harness falls back and says so), but nothing measured from it should be gated.
+
+**Real timing, synthetic waveform** (the same convention as the gmeet golden): every frame keeps
+its harvested `ts`/`pcm_len` and every hint its harvested `t`/`name`, but the PCM is a
+deterministic speech-level tone. The attribution oracle reads timing and hints, never the
+waveform — verified by replaying the real-audio cut and this one to identical output
+(`Anna:8.5s`, `Boris:6.3s`). That drops 1.2 MB to 27 KB gzipped. Two properties are load-bearing
+if you regenerate it:
+
+- **Amplitude ~0.1.** A low-amplitude ramp falls under the capture energy gate and the session
+  replays to *zero* segments.
+- **Start at the session's natural start.** A window cut mid-turn makes the pipeline cold-start
+  mid-speech and emit `seg_0` for the opening turn — indistinguishable from the #797 bug, and
+  purely an artifact (the full session attributes fine). Verify any suspicious cut against the
+  undistilled session before believing it.
+- **A realistic first turn.** Cut too tight (≤1s of leading audio) and the pipeline's
+  short-UI-switch guard correctly rejects the opening name as a spurious tile flip, so the turn
+  replays as `seg_0` — a fixture artifact, not a bug.

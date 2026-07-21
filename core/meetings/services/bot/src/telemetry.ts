@@ -19,7 +19,7 @@ import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import { rmsOf } from './capture-bridge.js';
-import type { CapturedFrame, HintEvent, TelemetrySink } from './ports.js';
+import type { BoundaryRecord, CapturedFrame, HintEvent, TelemetrySink } from './ports.js';
 
 /** Where a session's JSONL lines land. append() receives whole lines (newline-terminated). */
 export interface SignalWriter {
@@ -168,6 +168,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   timer?.unref?.();
 
   let hints = 0;
+  let boundaries = 0;
   const sink: TelemetrySink = {
     // The mixed lane's speaker hints arrive out-of-band; without them a replay of this session
     // has audio but no way to attribute it (the gmeet lane binds its name onto the frame instead).
@@ -178,6 +179,18 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
         buf.push(line);
         bufBytes += line.length;
         hints++;
+        if (bufBytes >= maxBuffer) void flush();
+      } catch { /* must never throw into capture */ }
+    },
+    // The mixed lane's chunking is decided by these cuts; without them a replay must invent its
+    // own, and measures the invention.
+    captureBoundary(boundary: BoundaryRecord): void {
+      if (!writer) return;
+      try {
+        const line = JSON.stringify(boundary) + '\n';
+        buf.push(line);
+        bufBytes += line.length;
+        boundaries++;
         if (bufBytes >= maxBuffer) void flush();
       } catch { /* must never throw into capture */ }
     },
@@ -210,7 +223,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
       try {
         await flush();
         await writer?.end();
-        log(`session written: ${path} (${seq} frames, ${hints} hints)`);
+        log(`session written: ${path} (${seq} frames, ${hints} hints, ${boundaries} cuts)`);
       } catch (e) {
         log(`close failed: ${String(e)}`);
       }

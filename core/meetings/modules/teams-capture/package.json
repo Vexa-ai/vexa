@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/teams-capture.test.ts",
+    "test": "tsx src/teams-capture.test.ts && tsx src/blindness.test.ts && tsx src/name-drift.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},
