@@ -199,7 +199,14 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
-  const sttFaults = createSttFaultReporter();
+  // The LIVE half of STT-fault reporting (#552): the notice rides the transcript sink — the same
+  // pipe the segments the user is waiting for ride — so a running meeting can say WHY it is empty
+  // instead of reading `active` in silence until the bot exits. Best-effort by construction: the
+  // wrapper is synchronous and swallows its own rejection, because `record()` runs on the degraded
+  // path where a floating rejection would kill the process exactly when the bot must stay alive.
+  const sttFaults = createSttFaultReporter(undefined, undefined, (n) => {
+    void transcript.notice?.(n).catch(() => { /* the live leg never disturbs the meeting */ });
+  });
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);

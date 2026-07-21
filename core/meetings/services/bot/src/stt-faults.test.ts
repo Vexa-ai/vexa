@@ -6,12 +6,15 @@
  * meeting whose backend refused every chunk reached `completed` indistinguishable from a silent
  * room, which is exactly the zero-segment shape nobody could diagnose after the fact.
  *
- * Asserts the accumulator's contract AND the orchestrator wiring: the terminal lifecycle.v1 event
- * carries the summary, non-terminal events never do, a fault storm collapses to one report, and
- * neither a non-STT fault nor a throwing reporter can perturb the exit path.
+ * Asserts the accumulator's contract AND BOTH carriers:
+ *   DURABLE — the terminal lifecycle.v1 event carries the summary; no non-terminal event does.
+ *   LIVE    — a bounded notice announces the moment a kind first refuses, so a RUNNING meeting can
+ *             say why it is empty instead of reading `active` in silence until the bot exits.
+ * A fault storm collapses to one report and at most four notices per kind, and neither a non-STT
+ * fault nor a throwing reporter can perturb the exit path.
  * Run: npx tsx src/stt-faults.test.ts
  */
-import { createSttFaultReporter } from './stt-faults.js';
+import { createSttFaultReporter, type SttFaultNotice } from './stt-faults.js';
 import { createOrchestrator } from './orchestrator.js';
 import type { Invocation } from './config.js';
 import type { LifecycleEvent } from './contracts.js';
@@ -126,6 +129,31 @@ async function main(): Promise<void> {
     check('a throwing reporter still lets the bot report its terminal state',
       result.status === 'completed' && events.some((e) => e.status === 'completed'),
       JSON.stringify(result));
+  }
+
+  // ── 6) the LIVE channel: it must reach the user DURING the meeting, and must not flood ──
+  {
+    const notices: SttFaultNotice[] = [];
+    const r = createSttFaultReporter(() => { /* quiet */ }, () => new Date(0), (n) => notices.push(n));
+
+    r.record(sttError('payment_required', 402, 'Insufficient balance'));
+    check('the FIRST fault of a kind announces immediately (the meeting says why while running)',
+      notices.length === 1 && notices[0].kind === 'payment_required', JSON.stringify(notices));
+    check('the notice carries the backend HTTP status and its OWN words',
+      notices[0]?.status === 402 && String(notices[0]?.detail).includes('Insufficient balance'),
+      JSON.stringify(notices[0]));
+
+    // A dead backend refuses every chunk. 500 more faults must NOT be 500 more notices.
+    for (let i = 0; i < 500; i++) r.record(sttError('payment_required', 402, 'Insufficient balance'));
+    check('a storm is bounded — first + thresholds only, never one notice per chunk',
+      notices.length === 3, `notices=${notices.length} (expected 1 + crossings of 10 and 100)`);
+    check('the announced count carries the storm', notices[2]?.count === 100, String(notices[2]?.count));
+
+    // A non-STT fault reaching the same seam must never render to a user as a model error.
+    const before = notices.length;
+    r.record({ kind: 'publish_failed', message: 'redis refused' });
+    check('a non-STT fault is recorded but never announced on the live channel',
+      notices.length === before && r.total() > 0, `notices=${notices.length}`);
   }
 
   if (failed) { console.error(`\n❌ stt-faults: ${failed} check(s) FAILED.`); process.exit(1); }

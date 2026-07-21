@@ -190,6 +190,28 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
                 _log_publish_failure(meeting_id, e)
         return 0
+    if msg_type == "stt_fault":
+        # The bot's STT boundary refused a window. Forward it onto the row-keyed transcript stream
+        # this collector single-writes (P23) so the live SSE can say WHY the transcript is empty
+        # WHILE the meeting is still running — the terminal-only lifecycle report (#836) arrives
+        # after the bot exits, which left a degraded meeting reading `active` in silence for its
+        # whole duration (the #807 shape). Same routing premise the segments already rely on.
+        mid_raw = data.get("meeting_id")
+        try:
+            meeting_id = int(mid_raw) if mid_raw is not None else None
+        except (TypeError, ValueError):
+            meeting_id = None
+        if meeting_id is not None:
+            try:
+                await redis.xadd(_transcript_stream(meeting_id), {
+                    "type": "stt_fault",
+                    "kind": str(data.get("kind") or "unknown"),
+                    "status": str(data.get("status") or ""),
+                    "detail": str(data.get("detail") or "")[:300],
+                })
+            except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
+                _log_publish_failure(meeting_id, e)
+        return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
         return 0

@@ -16,6 +16,7 @@
 import { createClient } from 'redis';
 import type { TranscriptSegment } from '../contracts.js';
 import type { TranscriptSink } from '../ports.js';
+import type { SttFaultNotice } from '../stt-faults.js';
 import { makeLazyConnect } from './redis-lazy-connect.js';
 
 /** The redis stream the collector consumes (durable transcript.v1 feed). */
@@ -64,7 +65,19 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     await client.publish(channel, msg);
   }
 
-  return { publish };
+  /** Leg 1 ONLY: the live degradation notice rides the same durable stream the segments do, so it
+   *  reaches the collector through a path production already proves every meeting. Deliberately
+   *  NOT leg 2 — the mutable bundle is `additionalProperties:false` and serves a different client,
+   *  so an unknown type there would be a contract violation rather than a dropped event. */
+  async function notice(n: SttFaultNotice): Promise<void> {
+    const payload = JSON.stringify({
+      type: 'stt_fault', meeting_id: meetingId, native_meeting_id: nativeMeetingId,
+      kind: n.kind, status: n.status, detail: n.detail, count: n.count,
+    });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+  }
+
+  return { publish, notice };
 }
 
 /** A live transcript client that also exposes connect/quit so the composition root can

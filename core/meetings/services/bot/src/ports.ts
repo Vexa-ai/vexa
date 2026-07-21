@@ -14,6 +14,7 @@
  * The L2 harness substitutes in-memory FAKES for every one of these (no client libs needed).
  */
 import type { BotStatus, LifecycleEvent, Act, TranscriptSegment } from './contracts.js';
+import type { SttFaultNotice } from './stt-faults.js';
 
 /** The outcome of the join+admission attempt (an Anti-Corruption verdict, P5 — the
  *  platform's many failure modes translated into the bot's vocabulary). */
@@ -47,6 +48,10 @@ export interface Pipeline {
  *  adapter publishes them to the redis stream / bus consumed by the collector. */
 export interface TranscriptSink {
   publish(segment: TranscriptSegment): Promise<void>;
+  /** OPTIONAL live degradation notice — why the segments STOPPED, on the same pipe the segments
+   *  themselves ride, so a running meeting can say it. Optional so every existing fake stays a
+   *  valid TranscriptSink; a sink without it simply has no live channel. */
+  notice?(n: SttFaultNotice): Promise<void>;
 }
 
 /** The reachability verdict of the FIRST (load-bearing) lifecycle emit (#530). `reachable` iff

@@ -1864,6 +1864,25 @@ def create_app(
                             "completed": seg.get("completed", True),
                             "id": seg.get("segment_id")}, cursor())
 
+            def fault_events(payload):
+                """An STT-boundary refusal → the `model-error` SSE event the terminal ALREADY
+                renders (meetingLive.ts:144 → addIssue{kind:"model"} → MeetingHealthBanner).
+
+                This is the LIVE half of #836/#552: the lifecycle report lands only on the bot's
+                terminal event, so before this a meeting whose backend refused every window read
+                `active` with an empty transcript and no reason for its entire duration. The bot
+                bounds the notices (first per kind, then at 10/100/1000), so this cannot flood.
+                `model` carries the fault KIND and `message` the backend's own words — never our
+                paraphrase — so the banner names what refused and why."""
+                status = (payload.get("status") or "").strip()
+                detail = (payload.get("detail") or "").strip()
+                kind = payload.get("kind") or "unknown"
+                headline = f"Transcription backend refused ({kind}{f' HTTP {status}' if status else ''})"
+                yield ({"type": "model-error",
+                        "error": {"stage": "transcription", "model": kind,
+                                  "message": f"{headline}: {detail}" if detail else headline}},
+                       cursor())
+
             def note_events(entry_fields):
                 """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
                 (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
@@ -1887,6 +1906,9 @@ def create_app(
                         ending = True
                         ending_at = _time.monotonic()
                         last.pop(tkey, None)
+                        continue
+                    if payload.get("type") == "stt_fault":
+                        yield from fault_events(payload)
                         continue
                     yield from seg_events(payload)
             if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
@@ -1933,6 +1955,9 @@ def create_app(
                                 ending_at = _time.monotonic()
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
+                            if payload.get("type") == "stt_fault":
+                                yield from fault_events(payload)
+                                continue
                             yield from seg_events(payload)
                         elif stream == pkey:
                             yield from note_events(fields)

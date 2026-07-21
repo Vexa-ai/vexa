@@ -9,9 +9,17 @@
  * whose STT backend was dead completed indistinguishable from a silent room — the #807 shape,
  * and the reason the 2026-07-19 exhausted-token deployment produced zero transcripts in silence.
  *
- * This collapses a storm into ONE report. A dead backend faults on every chunk (18 in a 2-minute
- * live run), so counting per kind and reporting once — on the terminal lifecycle event — is both
- * the honest summary and the only shape that cannot flood the control plane.
+ * This collapses a storm into ONE report, and carries it on TWO channels with different jobs:
+ *
+ *   DURABLE — `report()` merges a per-kind summary onto the TERMINAL lifecycle.v1 event. It is the
+ *   record that outlives the container, and it is the only channel that can carry a final count.
+ *
+ *   LIVE — `announce` emits a bounded notice the moment a kind first refuses, so the meeting says
+ *   WHY while it is still running. Terminal-only reporting meant a 60-minute meeting spent 60
+ *   minutes reading `active` with an empty transcript and no reason — which is the #807 shape
+ *   restated, not fixed. Announcing is rate-limited by construction: once per kind, then only as
+ *   the count crosses 10/100/1000, so a dead backend costs at most 4 notices per kind however many
+ *   chunks it refuses.
  */
 
 /** The structural shape of a @vexa/transcribe-whisper TranscriptionError, matched without
@@ -34,6 +42,15 @@ export interface SttFaultSummary {
   first_at: string;              // ISO — when the degradation started
 }
 
+/** One LIVE notice — the in-flight half. Deliberately smaller than SttFaultSummary: it says what
+ *  is refusing right now, not the meeting's final tally (that is `report()`'s job). */
+export interface SttFaultNotice {
+  kind: string;
+  status?: number;
+  detail?: string;
+  count: number;
+}
+
 export interface SttFaultReporter {
   /** Record one fault from a pipeline `onError`. Never throws. */
   record(fault: unknown): void;
@@ -51,12 +68,29 @@ function isSttFault(f: SttFaultLike): boolean {
   return f?.source === 'stt' || typeof f?.kind === 'string';
 }
 
+/** The counts at which a continuing storm re-announces. Bounded on purpose: first + these = at
+ *  most 4 live notices per kind, however long the backend stays dead. */
+const ANNOUNCE_AT = new Set([10, 100, 1000]);
+
 export function createSttFaultReporter(
   log: (m: string) => void = (m) => console.error(m),
   now: () => Date = () => new Date(),
+  /** The LIVE channel. Injected, synchronous, and MUST NOT throw or return a floating rejection —
+   *  it is called from inside `record()`, on the degraded path, where an unhandled rejection would
+   *  take the process down exactly when the meeting most needs the bot alive. */
+  announce?: (notice: SttFaultNotice) => void,
 ): SttFaultReporter {
   const byKind = new Map<string, SttFaultSummary>();
   let total = 0;
+
+  /** Announce only for a fault the STT adapter itself stamped (P5). `isSttFault` is deliberately
+   *  permissive so `record()` classifies anything the pipeline hands it — but the LIVE channel is
+   *  bounded to the real STT boundary, so a transcript-publish rejection arriving at the same seam
+   *  can never be rendered to a user as a model error. */
+  const announceIf = (fromStt: boolean, s: SttFaultSummary): void => {
+    if (!announce || !fromStt) return;
+    announce({ kind: s.kind, status: s.status, detail: s.detail, count: s.count });
+  };
 
   return {
     total: () => total,
@@ -64,15 +98,20 @@ export function createSttFaultReporter(
       try {
         const f = (fault ?? {}) as SttFaultLike;
         if (!isSttFault(f)) return;
+        const fromStt = f?.source === 'stt';
         total++;
         const kind = f.kind ?? 'unknown';
         const seen = byKind.get(kind);
         if (seen) {
           seen.count++;
+          // A storm re-announces only at the thresholds — the count carries the rest.
+          if (ANNOUNCE_AT.has(seen.count)) announceIf(fromStt, seen);
           return;
         }
         const detail = (f.detail ?? f.message ?? '').slice(0, DETAIL_MAX) || undefined;
-        byKind.set(kind, { kind, count: 1, status: f.status, detail, first_at: now().toISOString() });
+        const summary: SttFaultSummary = { kind, count: 1, status: f.status, detail, first_at: now().toISOString() };
+        byKind.set(kind, summary);
+        announceIf(fromStt, summary);
         // FIRST of a kind is loud — an operator watching logs should not wait for the terminal
         // event to learn the backend is refusing. Repeats are silent (the count carries them).
         log(`[bot] STT DEGRADED (${kind}${f.status ? ` HTTP ${f.status}` : ''}): ${detail ?? 'no detail'} — transcription is failing; this meeting will be short or empty`);
