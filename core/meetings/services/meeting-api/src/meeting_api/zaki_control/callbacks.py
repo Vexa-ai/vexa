@@ -93,6 +93,16 @@ def _callback_url(value: str) -> str:
     return value
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Timestamps cross this module from two worlds: the DB driver hands back
+    NAIVE datetimes (TIMESTAMP WITHOUT TIME ZONE columns, stored as UTC) while
+    the clock injects aware-UTC. Subtracting across worlds raises TypeError —
+    which crash-looped the callback drain on the first stop of a real joined
+    meeting (captures wedged at `stopping`, outbox backed up, seconds settled 0).
+    Naive means UTC here, by storage contract."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def capture_seconds_at(capture, current: datetime) -> int:
     """True captured seconds for a terminal settlement: wall time since start,
     floored by any already-recorded total, capped by the enforced capture cap.
@@ -100,7 +110,8 @@ def capture_seconds_at(capture, current: datetime) -> int:
     terminal usage event carried 0 and settled as a full refund."""
     seconds = max(0, capture.captured_seconds_total)
     if capture.started_at is not None:
-        seconds = max(seconds, int(max(timedelta(0), current - capture.started_at).total_seconds()))
+        elapsed = _as_utc(current) - _as_utc(capture.started_at)
+        seconds = max(seconds, int(max(timedelta(0), elapsed).total_seconds()))
     if capture.max_capture_seconds:
         seconds = min(seconds, capture.max_capture_seconds)
     return seconds

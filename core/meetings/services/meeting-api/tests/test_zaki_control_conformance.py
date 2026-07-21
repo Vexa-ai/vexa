@@ -461,7 +461,7 @@ def test_operator_jitsi_host_comes_only_from_validated_configuration():
 
 from dataclasses import replace  # noqa: E402
 
-from meeting_api.zaki_control.callbacks import ControlCallbackDispatcher  # noqa: E402
+from meeting_api.zaki_control.callbacks import ControlCallbackDispatcher, capture_seconds_at  # noqa: E402
 from meeting_api.zaki_control.fakes import InMemoryControlStore  # noqa: E402
 from meeting_api.zaki_control.ports import Capture, Subject  # noqa: E402
 
@@ -623,3 +623,22 @@ async def test_reconcile_replays_the_minimal_legal_path_for_an_advanced_meeting(
         if event.body.get("event_type") == "minutes.capture.usage"
     ]
     assert usage, "terminal settlement must be queued by the replay"
+
+
+def test_capture_seconds_survive_naive_db_timestamps():
+    """The DB driver hands back NAIVE datetimes (TIMESTAMP WITHOUT TIME ZONE,
+    stored UTC) while the clock injects aware-UTC. The subtraction raised
+    TypeError on the FIRST stop of a real joined meeting and crash-looped the
+    callback drain: captures wedged at `stopping`, the outbox backed up, and
+    settlements read 0 seconds. Naive means UTC by storage contract."""
+    aware_now = datetime(2026, 7, 21, 12, 3, 0, tzinfo=timezone.utc)
+    naive_start = datetime(2026, 7, 21, 12, 1, 30)  # exactly 90s earlier, no tzinfo
+    capture = replace(_CAPTURE, started_at=naive_start, captured_seconds_total=0,
+                      max_capture_seconds=3600)
+    assert capture_seconds_at(capture, aware_now) == 90
+    # and the mirror shape: naive clock against an aware row
+    aware_start = datetime(2026, 7, 21, 12, 1, 30, tzinfo=timezone.utc)
+    naive_now = datetime(2026, 7, 21, 12, 3, 0)
+    capture = replace(_CAPTURE, started_at=aware_start, captured_seconds_total=0,
+                      max_capture_seconds=3600)
+    assert capture_seconds_at(capture, naive_now) == 90
