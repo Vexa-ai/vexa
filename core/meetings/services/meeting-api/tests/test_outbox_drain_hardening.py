@@ -382,3 +382,38 @@ async def test_409_on_a_terminal_settlement_never_dead_letters(monkeypatch, capl
     assert len(await store.pending_callbacks(limit=50)) == 1
     assert not await store.terminal_callbacks_delivered("cap-9"), "the erasure gate stays closed"
     assert _dead_letter_warnings(caplog) == []
+
+
+async def test_409_on_a_terminal_status_echo_of_a_settled_capture_dead_letters(monkeypatch, caplog):
+    """The staging specimen (capture-7c420dd4): ``failed`` landed at the Hub first, the reaper
+    later forced ``completed`` locally, and that terminal STATUS echo re-earned the same final 409
+    every 5s sweep forever — with erasure wedged behind it, because ``terminal_callbacks_delivered``
+    was waiting on an event the Hub will never accept.  The settlement shield is the usage event's
+    alone: a status echo carries no seconds, so a final 409 on it dead-letters once and the erasure
+    gate opens."""
+    store = InMemoryControlStore()
+    capture = _capture("cap-7", "active")
+    store.captures["cap-7"] = capture
+    await store.record_capture_transition(
+        capture=capture, state="completed", failure_code=None,
+        events=(
+            # Production drain order: the status echo sorts ahead of the settlement
+            # (same created_at transaction, event_id tie-break) and dead-letters FIRST —
+            # the erasure gate must still wait for the usage delivery behind it.
+            _event("status-cap-7-completed", "cap-7", "completed", terminal=True),
+            _event("usage-cap-7-1", "cap-7", "completed", terminal=True),
+        ),
+    )
+    dispatcher = _dispatcher(store)
+    _patch_httpx(monkeypatch, [
+        _Response(409, {"failure": "invalid_state"}),
+        _ack("usage-cap-7-1"),
+    ])
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER):
+        assert await dispatcher.drain_once() == 1, "the settlement itself delivered"
+
+    assert await store.pending_callbacks(limit=50) == (), "the echo is dead, not immortal"
+    warnings = _dead_letter_warnings(caplog)
+    assert len(warnings) == 1 and "status-cap-7-completed" in warnings[0].getMessage()
+    assert await store.terminal_callbacks_delivered("cap-7"), "the erasure gate opens"

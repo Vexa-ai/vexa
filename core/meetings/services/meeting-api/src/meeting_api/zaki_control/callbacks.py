@@ -386,12 +386,15 @@ class ControlCallbackDispatcher:
         The Hub answers ``invalid_state`` both for a genuinely stale lifecycle step (its capture
         already terminal — the live incident) and for a transition SKIP when the event arrived
         ahead of a predecessor that is merely still pending.  Only the first shape may dead-letter:
-        the event is non-terminal and the local capture can no longer advance (terminal, or gone —
-        an erased capture's events have nothing left to wait for).  A terminal settlement never
+        the event is stale because the local capture can no longer advance (terminal, or gone —
+        an erased capture's events have nothing left to wait for).  The usage settlement never
         dead-letters on 409: ``terminal_callbacks_delivered`` counts dead-letters as delivered, so
-        killing it would open the erasure gate on seconds the Hub never settled.
+        killing it would open the erasure gate on seconds the Hub never settled.  That shield is
+        the settlement's alone — a terminal STATUS echo carries no seconds, and when the Hub holds
+        a different terminal state (capture-7c420dd4: ``failed`` landed first, the reaper's later
+        ``completed`` 409s forever) an immortal echo wedges that same erasure gate shut instead.
         """
-        if event.terminal:
+        if event.terminal and event.event_id.startswith("usage-"):
             return False
         if event.capture_id is None or event.subject is None:
             return True
