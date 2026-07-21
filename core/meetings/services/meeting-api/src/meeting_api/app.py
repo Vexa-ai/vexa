@@ -62,7 +62,12 @@ async def _pipeline_health(app) -> "tuple[dict, bool]":
     stamping, so its tick_age_s climbs past PIPELINE_TICK_STALE_S even while the process and the
     live-WS path look healthy — the 2026-04-26 silent hang. A crashed replica's delivered-but-un-acked
     batch is NOT lag (it was delivered) and NOT a stale heartbeat on the survivor, so #636 surfaces it
-    as ``pending_depth``. Returns ``({loops, consumer_lag, pending_depth}, degraded)``.
+    as ``pending_depth``. Returns ``({loops, redis_reachable, consumer_lag, pending_depth}, degraded)``.
+
+    #809 — Redis is a CACHE/QUEUE dependency, not the process's spine: an unreachable Redis is
+    reported HONESTLY as ``redis_reachable: false`` but NEVER flips ``degraded`` (so it cannot 503 the
+    shared probe). DB-backed reads keep serving through a Redis outage, so readiness stays true — a
+    cache blip no longer becomes a total core outage (the 2026-07-19 boot-block/CrashLoop).
 
     The probe MUST NOT itself hang (that would defeat the point): the XINFO/XPENDING calls are each
     bounded by a 2s wait_for and any failure degrades that field to ``"unavailable"`` — never blocks."""
@@ -76,8 +81,27 @@ async def _pipeline_health(app) -> "tuple[dict, bool]":
 
     lag = None
     pending_depth = None
+    redis_reachable = None
     redis = getattr(st, "pipeline_redis", None)
     if redis is not None:
+        # #809: a bounded reachability PING FIRST — the honest per-component signal the 2026-07-19
+        # incident lacked (/health read "ok" through a 40-minute Redis outage). A dead Redis fails
+        # here within 2s; we then SKIP the stream probes (they would only time out too) and report
+        # their fields "unavailable". This NEVER sets `degraded`: Redis is a cache/queue, so the
+        # DB-backed readiness paths stay green and the shared probe stays 200 (no CrashLoop recurrence).
+        # `ping` is resolved defensively: a client without it (a minimal probe stub) leaves
+        # reachability UNKNOWN (None) and the stream probes run exactly as before — the real
+        # ``redis.asyncio`` client always has ``ping``, so production always gets the honest signal.
+        ping = getattr(redis, "ping", None)
+        if ping is not None:
+            try:
+                await asyncio.wait_for(ping(), timeout=2.0)
+                redis_reachable = True
+            except Exception:
+                redis_reachable = False
+    # Run the stream probes unless we KNOW Redis is down (reachable is False). Unknown (None, no
+    # ping) or True → probe, preserving the pre-#809 lag/pending behaviour.
+    if redis is not None and redis_reachable is not False:
         try:
             groups = await asyncio.wait_for(redis.xinfo_groups(st.pipeline_stream), timeout=2.0)
             for g in groups or []:
@@ -99,11 +123,20 @@ async def _pipeline_health(app) -> "tuple[dict, bool]":
                 pending_depth = "unavailable"
         except Exception:
             pending_depth = "unavailable"  # never block the probe on a pending read
+    elif redis is not None and redis_reachable is False:
+        # #809: Redis unreachable → the stream signals are unavailable, but readiness is NOT degraded.
+        lag = "unavailable"
+        pending_depth = "unavailable"
     if isinstance(lag, int) and lag > lag_alarm:
         degraded = True
     if isinstance(pending_depth, int) and pending_depth > pending_alarm:
         degraded = True
-    return {"loops": loops, "consumer_lag": lag, "pending_depth": pending_depth}, degraded
+    return {
+        "loops": loops,
+        "redis_reachable": redis_reachable,
+        "consumer_lag": lag,
+        "pending_depth": pending_depth,
+    }, degraded
 
 
 def create_app(
