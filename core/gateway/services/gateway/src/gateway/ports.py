@@ -86,6 +86,7 @@ class DownstreamClient(Protocol):
         headers: Optional[dict] = None,
         params: Optional[dict] = None,
         content: Optional[bytes] = None,
+        timeout: Optional[float] = None,
     ) -> DownstreamResponse:
         ...
 

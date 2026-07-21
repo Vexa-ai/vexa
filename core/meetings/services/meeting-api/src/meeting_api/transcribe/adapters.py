@@ -14,6 +14,7 @@ from typing import Optional
 
 import httpx
 
+from ..config_preflight import probe_url
 from .service import TranscribeFault
 
 _ENDPOINT_PATH = "/v1/audio/transcriptions"
@@ -59,7 +60,7 @@ class HttpSttTranscriber:
         token: Optional[str] = None,
         model: str = "whisper-1",
         transport: Optional[httpx.AsyncBaseTransport] = None,
-        max_busy_retries: int = 60,
+        max_busy_retries: int = 20,
     ):
         self.base_url = base_url
         self.token = token
@@ -77,12 +78,6 @@ class HttpSttTranscriber:
             model=os.getenv("TRANSCRIPTION_MODEL") or "whisper-1",
         )
 
-    def _endpoint(self) -> str:
-        # Append-only-when-missing, the ONE url rule the TS client and
-        # config_preflight already share; anything else double-paths into a 404.
-        base = (self.base_url or "").rstrip("/")
-        return base if base.endswith(_ENDPOINT_PATH) else base + _ENDPOINT_PATH
-
     async def transcribe(self, audio: bytes, *, language: Optional[str] = None) -> dict:
         if not self.base_url:
             raise TranscribeFault(
@@ -91,27 +86,32 @@ class HttpSttTranscriber:
         data = {
             "model": self.model,
             "response_format": "verbose_json",
-            "transcription_tier": "deferred",
         }
         if language:
             data["language"] = language
         # ponytail: filename hint is master.wav regardless of container; thread the real
         # fmt through the resolver if a provider ever starts sniffing extensions.
         files = {"file": ("master.wav", audio, "audio/wav")}
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        # The tier travels as the X-Transcription-Tier HEADER (the bundled service's alias),
+        # never a form field: a strict remote OpenAI-compatible provider 400s unknown
+        # multipart fields, and remote providers ignore unknown headers safely.
+        headers = {"X-Transcription-Tier": "deferred"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
 
+        endpoint = probe_url(self.base_url, _ENDPOINT_PATH)
         try:
             async with httpx.AsyncClient(
                 transport=self._transport, timeout=httpx.Timeout(600.0, connect=10.0),
             ) as client:
                 for attempt in range(self._max_busy_retries + 1):
-                    resp = await client.post(
-                        self._endpoint(), data=data, files=files, headers=headers,
-                    )
+                    resp = await client.post(endpoint, data=data, files=files, headers=headers)
                     if resp.status_code != 503 or attempt == self._max_busy_retries:
                         break
                     try:
-                        retry_after = float(resp.headers.get("Retry-After", "1"))
+                        # Sleep cap bounds the worst-case wait so the whole call stays inside
+                        # the gateway's per-route forward timeout.
+                        retry_after = min(float(resp.headers.get("Retry-After", "1")), 15.0)
                     except ValueError:
                         retry_after = 1.0
                     await asyncio.sleep(retry_after)
@@ -144,12 +144,17 @@ def master_audio_resolver(repo, storage):
 
     async def resolve(meeting_id: int) -> Optional[bytes]:
         for rec in await repo.get_recordings(meeting_id):
-            key = await finalize_master(
-                repo, storage, meeting_id=meeting_id, recording_id=rec.get("id"),
-                media_type="audio",
-            )
-            if key is not None:
-                return await storage.get(key)
+            try:
+                key = await finalize_master(
+                    repo, storage, meeting_id=meeting_id, recording_id=rec.get("id"),
+                    media_type="audio",
+                )
+                if key is not None:
+                    return await storage.get(key)
+            except Exception as e:  # noqa: BLE001, a storage fault must be typed, not a 500
+                raise TranscribeFault(
+                    "unavailable", f"recording storage read failed: {e}",
+                )
         return None
 
     return resolve

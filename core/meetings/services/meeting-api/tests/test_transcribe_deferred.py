@@ -182,16 +182,19 @@ async def test_request_carries_model_verbose_json_and_deferred_tier():
     await run(store, mid, make_stt(handler), language="en")
 
     (req,) = seen
-    # Bare base URL gets the OpenAI-compatible path appended (append-only-when-missing,
-    # the one rule the TS client and config_preflight already share).
+    # Bare base URL gets the OpenAI-compatible path appended (probe_url, the one rule the
+    # TS client and config_preflight already share).
     assert req.url.path == "/v1/audio/transcriptions"
     assert req.headers.get("authorization") == "Bearer test-stt-token"
+    # The tier travels as a HEADER (bundled service's alias): a strict remote provider
+    # 400s unknown multipart fields but ignores unknown headers.
+    assert req.headers.get("x-transcription-tier") == "deferred"
 
     body = req.read()
     assert b'name="file"' in body
     assert b'name="model"\r\n\r\nwhisper-large-v3-turbo' in body      # defect-1 floor
     assert b'name="response_format"\r\n\r\nverbose_json' in body      # defect-2 floor
-    assert b'name="transcription_tier"\r\n\r\ndeferred' in body       # the deferred tier
+    assert b'name="transcription_tier"' not in body                   # never a form field
     assert b'name="language"\r\n\r\nen' in body                       # caller hint forwarded
 
 
@@ -226,6 +229,30 @@ async def test_absent_master_is_a_no_recording_fault_not_a_500():
     with pytest.raises(TranscribeFault) as ei:
         await run(store, mid, make_stt(lambda r: httpx.Response(500)), resolver=no_master)
     assert ei.value.kind == "no_recording"
+
+
+async def test_storage_read_failure_is_a_typed_unavailable_not_a_500():
+    from meeting_api.transcribe import master_audio_resolver
+
+    class OneRecordingRepo:
+        async def get_recordings(self, meeting_id):
+            return [{"id": 1, "media_files": [{"type": "audio"}]}]
+
+    class BrokenStorage:
+        async def exists(self, key):
+            raise RuntimeError("S3 unreachable")
+
+        async def get(self, key):
+            raise RuntimeError("S3 unreachable")
+
+        async def list(self, prefix):
+            raise RuntimeError("S3 unreachable")
+
+    resolver = master_audio_resolver(OneRecordingRepo(), BrokenStorage())
+    store, mid = seeded_store()
+    with pytest.raises(TranscribeFault) as ei:
+        await run(store, mid, make_stt(lambda r: httpx.Response(500)), resolver=resolver)
+    assert ei.value.kind == "unavailable"
 
 
 async def test_foreign_meeting_is_not_found():

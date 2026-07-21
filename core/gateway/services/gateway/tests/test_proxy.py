@@ -238,6 +238,10 @@ def test_transcribe_forwards_to_meeting_api():
     assert downstream.last["method"] == "POST"
     assert downstream.last["url"].endswith("/meetings/42/transcribe")
     assert "meeting-api" in downstream.last["url"]
+    # Synchronous by design: the forward must outlive the default 30s hop (upload + STT +
+    # the deferred tier's bounded 503 backoff), else the edge 504s exactly when the
+    # backpressure works and a retry then 409s against the stored transcript.
+    assert downstream.last["timeout"] == 660.0
 
 
 def test_native_share_alias_forwards_to_meetings_share_mint():

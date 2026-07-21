@@ -78,9 +78,9 @@ class FakeDownstream:
         ]
         self.last: Optional[dict] = None
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         self.last = {"method": method, "url": url, "headers": headers or {},
-                     "params": params, "content": content}
+                     "params": params, "content": content, "timeout": timeout}
         return _Resp(self.status_code, json.dumps(self._body).encode(),
                      {"content-type": self._content_type, **self._extra_headers})
 
