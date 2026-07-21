@@ -40,6 +40,12 @@ interface SpeakerBuffer {
    *  round-trip exceeds submitInterval — every tick that lands mid-flight is dropped with no
    *  catch-up and the effective cadence degrades to a multiple of the interval. */
   owedSubmit: boolean;
+  /** The turn's FIRST submission has gone out. Until then feedAudio submits immediately once
+   *  minAudioDuration of audio has accrued, rather than waiting for the next submitInterval tick
+   *  (first-submit fast path, fix b, #851) — the tick phase alone cost up to a full interval
+   *  before any text could form. Set in submitBuffer, reset on fullReset; subsequent submissions
+   *  stay on the tick + catch-up cadence. */
+  firstSubmitDone: boolean;
   /** Wall-clock time (ms) when the current unconfirmed window started */
   windowStartMs: number;
   /** Wall-clock time (ms) when the buffer first started (for segment timing) */
@@ -155,6 +161,7 @@ export class SpeakerStreamManager {
       lastWords: [],
       inFlight: false,
       owedSubmit: false,
+      firstSubmitDone: false,
       windowStartMs: now,
       bufferStartMs: now,
       sequenceNumber: 0,
@@ -228,6 +235,18 @@ export class SpeakerStreamManager {
     buffer.totalSamples += audioData.length;
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
+
+    // First-submit fast path (fix b, #851): the turn's first submission otherwise waits for the
+    // next submitInterval tick — up to a full interval of dead air before any text can form, on
+    // top of the STT round-trip. Once minAudioDuration of audio has accrued for a turn that has
+    // never submitted (and nothing is in flight), submit NOW rather than at the tick phase.
+    // Scoped to the first submission: subsequent windows stay on the tick + catch-up cadence.
+    // submitBuffer keeps the RMS silence gate authoritative — a near-silent first window is still
+    // skipped there and never reaches Whisper.
+    if (!buffer.firstSubmitDone && !buffer.inFlight
+        && this.unconfirmedSamples(buffer) >= this.minAudioDuration * this.sampleRate) {
+      void this.submitBuffer(buffer);
+    }
   }
 
   /**
@@ -676,6 +695,7 @@ export class SpeakerStreamManager {
     }
 
     buffer.inFlight = true;
+    buffer.firstSubmitDone = true;
     this.submitGeneration.set(buffer.speakerId, buffer.generation);
 
     try {
@@ -855,6 +875,7 @@ export class SpeakerStreamManager {
     buffer.lastWords = [];
     buffer.inFlight = false;
     buffer.owedSubmit = false;
+    buffer.firstSubmitDone = false;
     buffer.windowStartMs = Date.now();
     buffer.bufferStartMs = Date.now();
     buffer.lastAudioTimestamp = Date.now();
