@@ -1292,3 +1292,37 @@ def test_user_stop_of_a_live_bot_still_completes():
     row = _stop_then_destroy("active")
     assert row["status"] == "completed"
     assert row["data"].get("completion_reason") == "stopped"
+
+
+# ── #803: the in-process envelope capture is BOUNDED (RSS-leak regression guard) ─────────────────
+def test_status_change_envelope_log_is_bounded_under_sustained_callbacks():
+    """The in-process ``app.state.status_change_webhooks`` capture is an eval/introspection seam that
+    lives on the PRODUCTION app; every bot lifecycle callback appends one envelope embedding the
+    meeting projection. Left unbounded it grew RSS monotonically under production callback traffic
+    (#803) — invisible to idle staging (no callbacks) and to single-endpoint hammering (never hits
+    this path). It must be a bounded ring buffer.
+
+    BUG (pre-fix): the capture was ``[]`` — its length equalled the number of advances forever.
+    Expected: after cap+N genuine advances the capture holds at most the cap, and it holds the most
+    RECENT envelopes (ring semantics every reader relies on)."""
+    from meeting_api.app import _ENVELOPE_LOG_CAP
+
+    repo = InMemoryMeetingRepo()
+    app = create_app(meeting_repo=repo)
+    client = TestClient(app)
+
+    overshoot = _ENVELOPE_LOG_CAP + 50
+    for i in range(overshoot):
+        uid = f"leak-sess-{i}"
+        _seed(repo, status="requested", session_uid=uid)
+        r = client.post(ENDPOINT, json={"connection_id": uid, "status": "joining"})
+        assert r.status_code == 200, r.text
+
+    cap = _ENVELOPE_LOG_CAP
+    assert len(app.state.status_change_webhooks) == cap, (
+        f"envelope capture unbounded: {overshoot} advances retained "
+        f"{len(app.state.status_change_webhooks)} envelopes (expected cap {cap})"
+    )
+    # ring semantics: the LAST advance is still the most recent captured envelope
+    last = app.state.status_change_webhooks[-1]["data"]["meeting"]["connection_id"]
+    assert last == f"leak-sess-{overshoot - 1}"

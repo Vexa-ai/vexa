@@ -12,6 +12,7 @@ the record store is in-memory (`MeetingStore`).
 from __future__ import annotations
 
 import json
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -23,6 +24,11 @@ from referencing import Registry, Resource
 from .machine import IllegalTransition, LifecycleSink, MeetingStore, TransitionSource
 from .webhook import build_status_change_envelope, build_typed_envelope
 from ..obs import TraceMiddleware, log_event
+
+#: See ``meeting_api.app._ENVELOPE_LOG_CAP`` — the same bounded eval/introspection seam applies to
+#: the standalone lifecycle receiver: an append-only list grew RSS under production callback traffic
+#: (#803). Bounded ring buffer, recent-envelope semantics preserved.
+_ENVELOPE_LOG_CAP = 256
 
 
 def _load_lifecycle_schema() -> dict:
@@ -68,8 +74,8 @@ def create_app(
     sink = LifecycleSink(store=store if store is not None else MeetingStore())
     app.state.sink = sink
     app.state.store = sink.store
-    app.state.status_change_webhooks = []  # every emitted status_change envelope, for the eval
-    app.state.typed_webhooks = []  # every emitted TYPED envelope (started/completed/failed)
+    app.state.status_change_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)  # recent status_change envelopes, for the eval
+    app.state.typed_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)  # recent TYPED envelopes (started/completed/failed)
     # Bind the upstream gateway's X-Trace-Id for each request so this hop's structured logs
     # (logevent.v1) correlate with the gateway's on the same trace_id.
     app.add_middleware(TraceMiddleware)

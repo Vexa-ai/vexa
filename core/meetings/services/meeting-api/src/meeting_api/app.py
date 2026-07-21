@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -39,6 +40,15 @@ from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
+
+#: In-process capture of the last N emitted webhook envelopes — an eval/introspection seam, never a
+#: durable store (the DB meeting row is the durable record; the WebhookSink is the delivery path).
+#: BOUNDED because it lives on the production app and every bot lifecycle callback appends one
+#: envelope that embeds the meeting's ``data`` projection; an unbounded list grew RSS monotonically
+#: under production callback traffic while idle staging (no callbacks) stayed flat (#803). A ring
+#: buffer keeps the recent-envelope semantics every reader relies on (``[-1]``, ``len``, iteration)
+#: while capping retention.
+_ENVELOPE_LOG_CAP = 256
 
 
 def _xpending_total(summary) -> "Optional[int]":
@@ -280,8 +290,8 @@ def _mount_lifecycle(
             "updated_at": _iso(row.get("updated_at")),
         }
 
-    app.state.status_change_webhooks = []
-    app.state.typed_webhooks = []
+    app.state.status_change_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)
+    app.state.typed_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)
 
     async def _apply_lifecycle_event(
         body: dict,
