@@ -359,6 +359,22 @@ export class ClusterNameBinder {
     }
   }
 
+  /** Total lit-time (ms) of `name` across all hint kinds within [fromMs, toMs].
+   *  Flicker-short slices count — this is raw testimony of the name's activity
+   *  around a window, and the CALLER thresholds it (a stale tile flip is one
+   *  short slice; a real speaker's heartbeats total seconds). */
+  litMsAround(name: string, fromMs: number, toMs: number): number {
+    let ms = 0;
+    for (const log of this.turns.values()) {
+      for (const turn of log) {
+        if (turn.name !== name) continue;
+        const end = turn.tEndMs ?? (turn.tStartMs + OPEN_TURN_GRACE_MS);
+        ms += Math.max(0, Math.min(end, toMs) - Math.max(turn.tStartMs, fromMs));
+      }
+    }
+    return ms;
+  }
+
   /** Diagnostics for telemetry. */
   stats(): { hintTurns: Record<string, number>; clustersWithVotes: number; resolvedClusters: number } {
     const hintTurns: Record<string, number> = {};
