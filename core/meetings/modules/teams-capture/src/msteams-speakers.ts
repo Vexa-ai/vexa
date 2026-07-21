@@ -65,7 +65,7 @@ const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
  *  which are never a participant's name. Shared by the explicit-selector path and the
  *  structural fallback so both reject the same non-name strings. */
 const TEAMS_FORBIDDEN_NAME_SUBSTRINGS: string[] = [
-  'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
+  'more_vert', 'mic_off', 'mic', 'mute', 'videocam', 'videocam_off',
   'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
   'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
 ];
