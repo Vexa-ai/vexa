@@ -320,6 +320,9 @@ services:
       # provisioned browser session (make login) from the userdata store and joins signed-in.
       # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
       # Docs: /authenticated-bots.
+      # Capture-signal recording (off by default — it persists RAW meeting audio, a stronger
+      # retention claim than a transcript, so turning it on is an explicit operator decision).
+      - CAPTURE_SIGNAL_ENABLED=${CAPTURE_SIGNAL_ENABLED:-false}
       - BOT_AUTHENTICATED=${BOT_AUTHENTICATED:-false}
       - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
       - BOT_S3_ENDPOINT=${BOT_S3_ENDPOINT:-}
