@@ -235,6 +235,10 @@ async function main(): Promise<void> {
 
   const t0 = Date.now();
   const confirmedAt: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
+  // Time-to-first-PUBLISHED-DRAFT: the pending text the terminal renders BEFORE confirmation —
+  // what a user actually sees first. Keyed per speaker's first non-empty draft, stamped with the
+  // draft's own start (the turn start), so it is comparable to the confirmed number below.
+  const firstDraftAt = new Map<string, { startMs: number; atMs: number }>();
   const pipe = createGmeetPipeline({
     transcribe,
     // PRODUCTION defaults, deliberately. An earlier version of this harness passed an aggressive
@@ -260,7 +264,12 @@ async function main(): Promise<void> {
           atMs: Date.now() - t0,
         });
       },
-      draft: () => { /* */ }, finalize: () => { /* */ },
+      draft: (s) => {
+        const speaker = s.speaker ?? '?';
+        if (!s.text || !s.text.trim() || firstDraftAt.has(speaker)) return;
+        firstDraftAt.set(speaker, { startMs: Math.round(s.start * 1000), atMs: Date.now() - t0 });
+      },
+      finalize: () => { /* */ },
     },
   });
 
@@ -300,6 +309,15 @@ async function main(): Promise<void> {
   console.log(`  fed ${frames.length} frames over ${(fedAt / 1000).toFixed(1)}s wall (mock STT ${STT_MS}ms/call)`);
   for (const s of samples) console.log(`    ${s.speaker}: turn began @${((s.startMs - base) / 1000).toFixed(1)}s (span ${(s.spanMs / 1000).toFixed(1)}s) → text confirmed +${s.latencyMs}ms`);
   console.log(`  TIME-TO-TEXT (turn start → confirmed): n=${lat.length} p50=${p50}ms p95=${p95}ms max=${max}ms`);
+
+  // Time-to-first-DRAFT: the pending text the terminal shows before confirmation — the first thing
+  // a user sees. It lands one confirm short of the number above (no second STT round-trip), so it
+  // is the honest "first text" figure when "first text" means what appears on screen.
+  const draftLat = [...firstDraftAt.values()]
+    .map((d) => Math.round(d.atMs - (d.startMs - base) / SPEED))
+    .sort((a, b) => a - b);
+  const dq = (p: number) => (draftLat.length ? draftLat[Math.min(draftLat.length - 1, Math.floor((draftLat.length - 1) * p))] : 0);
+  console.log(`  TIME-TO-FIRST-DRAFT (turn start → first pending text): n=${draftLat.length} p50=${dq(0.5)}ms p95=${dq(0.95)}ms max=${draftLat[draftLat.length - 1] ?? 0}ms`);
 
   check('every segment was confirmed', samples.length > 0, String(samples.length));
   check('no text confirmed before its turn began (causality)',
