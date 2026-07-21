@@ -93,9 +93,33 @@ async def _resolve_transcription_backend(user_id: int) -> dict:
         return {}
 
 
+def is_joinable_teams_id(native_meeting_id: str) -> bool:
+    """Does this Teams id carry the thread that makes a deep link resolvable?
+
+    A joinable Teams link is ``…/l/meetup-join/19:meeting_<b64>@thread.v2/0?context={…}`` — the
+    THREAD id, and a context naming tenant and organizer. Anything else (notably the numeric
+    dial-in style meeting id a person reads off an invite) formats into a syntactically fine URL
+    that Teams cannot resolve, so it answers with a redirect to
+    ``login.microsoftonline.com/…/oauth2/v2.0/authorize``.
+
+    The bot then spends a full container lifecycle probing a login form: every pre-join control
+    reports "not found", admission polls for 31s and finds no indicator, and the pod exits 1 with
+    the caller seeing a spawned bot and no transcript. Observed on production 2026-07-20 across
+    8 of 34 visible bot pods (#501)."""
+    s = (native_meeting_id or "").lower()
+    return "thread." in s and ("19:" in s or "19%3a" in s)
+
+
 def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str]:
     """Best-effort meeting URL for ``(platform, native_id)`` (zoom needs more than the id →
-    None; the caller may pass an explicit ``meeting_url`` instead)."""
+    None; the caller may pass an explicit ``meeting_url`` instead).
+
+    Teams joins the None case whenever the id is not a thread id. The reasoning is the one already
+    written above ``_URL_TEMPLATES`` for jitsi — a bare id does not identify a joinable meeting —
+    and it applies harder here: a jitsi room name at least resolves to SOME room, while a Teams id
+    without its thread resolves to nothing and lands the bot on a login page."""
+    if platform == "teams" and not is_joinable_teams_id(native_meeting_id):
+        return None
     tmpl = _URL_TEMPLATES.get(platform)
     return tmpl.format(native_meeting_id=native_meeting_id) if tmpl else None
 
@@ -232,6 +256,15 @@ async def request_bot(
     #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
     #     ride the invocation env into the bot container, so their blast radius must stay the
     #     userdata prefix).
+    # 1d. Capture-signal recording (deployment-scoped knob). The bot can tee the RAW capture
+    #     stream (audio frames + speaker hints + segmenter cuts) as captured-signal.v1 so a
+    #     failure replays offline instead of being irreproducible. Without this the recorder
+    #     shipped in 0.12.15 is unreachable: nothing sets the invocation field, so no operator
+    #     can turn it on. Deployment-scoped and OFF by default on purpose — it stores raw
+    #     meeting audio, which is a stronger retention claim than a transcript, so enabling it
+    #     is an explicit operator decision (see the retention note in the configuration docs).
+    capture_signal_enabled = env_flag("CAPTURE_SIGNAL_ENABLED", False)
+
     authenticated = env_flag("BOT_AUTHENTICATED", False)
     auth_userdata_path: Optional[str] = None
     auth_s3: dict[str, Optional[str]] = {}
@@ -375,6 +408,7 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
+        capture_signal_enabled=capture_signal_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,

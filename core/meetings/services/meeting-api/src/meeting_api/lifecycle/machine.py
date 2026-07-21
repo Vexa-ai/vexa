@@ -213,6 +213,9 @@ class MeetingRecord:
     bot_logs: Optional[List[str]] = None
     bot_logs_truncated: bool = False
     bot_resources: Optional[Dict[str, Any]] = None
+    #: What degraded the meeting without ending it — today the STT backend refusing chunks
+    #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
+    stt_fault: Optional[Dict[str, Any]] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -249,6 +252,8 @@ class MeetingRecord:
             d["bot_resources"] = dict(self.bot_resources)
         if self.stop_requested:
             d["stop_requested"] = True
+        if self.stt_fault is not None:
+            d["stt_fault"] = dict(self.stt_fault)
         return d
 
 
@@ -435,6 +440,12 @@ class LifecycleSink:
                 rec.bot_logs, rec.bot_logs_truncated = _trim_bot_logs(list(event["bot_logs"]))
             if event.get("bot_resources"):
                 rec.bot_resources = dict(event["bot_resources"])
+            # WHY a transcript is short or empty. The bot counts STT failures across the meeting
+            # and reports them once, here — without it a meeting whose backend refused every chunk
+            # completes indistinguishable from a silent room (the zero-segment shape). Additive on
+            # lifecycle.v1 (additionalProperties: true), same as infra_fault.
+            if event.get("stt_fault"):
+                rec.stt_fault = dict(event["stt_fault"])
 
         rec.status = to
         rec.history.append(to)
