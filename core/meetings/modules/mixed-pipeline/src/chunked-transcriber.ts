@@ -200,8 +200,16 @@ interface Turn {
 }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
- *  clusterSegments, so only the window + key are kept here. */
-interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNames?: Set<string> }
+ *  clusterSegments, so only the window + key are kept here. `reasserted` counts
+ *  FRESH post-hold hints per blocked name: a transient tile flip never speaks
+ *  again, so a blocked name that keeps re-asserting was the real speaker and
+ *  earns its claim back (see recordHint). */
+interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNames?: Set<string>; reasserted?: Map<string, number> }
+
+/** Fresh hints of a held-back name needed to lift a short-UI-switch block. One
+ *  heartbeat could be the tail of the same blip; two (~4s apart on the Zoom/Teams
+ *  re-assert cadence) is a speaker who is still talking. */
+const REASSERT_UNBLOCK_COUNT = 2;
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -362,6 +370,18 @@ export class ChunkedTranscriber {
     for (const u of this.unresolved) {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (m && blocked.has(m.name) && name === m.name) {
+        // The held-back name is speaking AGAIN (this very hint is fresh testimony,
+        // not a re-read of the slice that got it blocked). A transient flip never
+        // re-asserts; a real speaker's heartbeat does — after enough, lift the block.
+        const seen = (u.reasserted ??= new Map()).get(m.name) ?? 0;
+        if (seen + 1 >= REASSERT_UNBLOCK_COUNT) {
+          blocked.delete(m.name);
+          this.log(`[ChunkedTranscriber] short-UI block lifted for "${m.name}" on ${u.clusterId} — re-asserted ×${seen + 1}`);
+        } else {
+          u.reasserted.set(m.name, seen + 1);
+        }
+      }
       if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
       if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
       else still.push(u);
