@@ -24,6 +24,7 @@
  * cross as plain `(speakerIndex: number, samples: number[])` over `page.exposeFunction`, exactly
  * as production does, so the bot's import surface stays within the gate.
  */
+import { join } from 'node:path';
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
@@ -84,6 +85,35 @@ export function makeTelemetryTap(lane: 'gmeet' | 'mixed', telemetry?: TelemetryS
  * implausible skew is re-stamped Node-side and warned LOUDLY, never silently bound
  * to nothing. Also counts arrivals (C1 hop 2: page → Node).
  */
+/**
+ * Turn the active-speaker signal (`name | null`) into the hint pair the binder needs.
+ *
+ * The signal only says who is lit NOW. The binder also needs to know when someone STOPPED, and the
+ * two are not the same event: a real meeting hands over directly, A -> B, without ever passing
+ * through "nobody lit". Emitting only a start for B leaves A's claim window open forever.
+ *
+ * Measured on a live Zoom call (corpus entry zoom/2026-07-20-live-zoom): 142 hints, 13 speaker
+ * switches, and ZERO end hints, because every switch was a direct handover. Two of five
+ * participants reached the transcript — a speaker whose turn never closes keeps winning the
+ * max-overlap vote against everyone who follows.
+ *
+ * Pure, so the rule is provable without a page; the bridge around it is browser glue.
+ */
+export function makeActiveSpeakerBridge(
+  emit: (name: string, tMs: number, isEnd: boolean) => void,
+  now: () => number = () => Date.now(),
+): (name: string | null) => void {
+  let lastActive: string | null = null;
+  return (name: string | null): void => {
+    const tMs = now();
+    // A handover CLOSES the previous speaker before opening the next, so two turns never overlap
+    // in the binder's view.
+    if (lastActive && lastActive !== name) emit(lastActive, tMs, true);
+    if (name) emit(name, tMs, false);      // start, or a heartbeat re-assert of the same name
+    lastActive = name;
+  };
+}
+
 export const HINT_MAX_SKEW_MS = 10 * 60 * 1000;
 export function makeSpeakerHintSink(
   pipeline: Pick<BotPipeline, 'recordHint'>,
@@ -113,6 +143,9 @@ export function makeSpeakerHintSink(
     },
   };
 }
+
+/** Where to drop periodic screenshots of the bot's own page. Unset in production. */
+const shotDir = process.env.VEXA_DEBUG_SHOT_DIR;
 
 /** Path (in the bot container image) to the prebuilt page-side capture bundle that defines
  *  window.VexaBrowserUtils (createGmeetCapture / createGmeetSpeakers / mixed taps). Mirrors
@@ -163,9 +196,16 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);
   // Inject the page-side capture bundle on every navigation (defines window.VexaBrowserUtils).
-  await context.addInitScript({ path: BROWSER_UTILS_PATH }).catch(() => {
-    // The bundle may be loaded by other means in some images; capture wiring degrades to the
-    // inline fallback below. Never fatal at launch.
+  await context.addInitScript({ path: BROWSER_UTILS_PATH }).catch((e: Error) => {
+    // The bundle may be loaded by other means in some images, so this stays non-fatal — but it is
+    // never quiet. window.VexaBrowserUtils is the whole page side: mixed capture, the gmeet
+    // per-channel capture, and every platform's speaker watcher. Without it a bot joins, sits
+    // there, and emits nothing at all — no audio, no hints, no page logs — which reads exactly
+    // like a silent room or a dead hint stream. Swallowing this cost a live Zoom run that was
+    // misread as bridge-crossed=0 evidence before the missing path was noticed.
+    console.log(`[bot] ⚠ page-side bundle NOT injected from ${BROWSER_UTILS_PATH} (${e.message}) — ` +
+      `if window.VexaBrowserUtils is not provided some other way, this bot will capture NOTHING. ` +
+      `Set VEXA_BROWSER_UTILS_PATH when running outside the container image.`);
   });
 
   // #593 A1: a page-context global fault logger, installed at document-start on EVERY frame/nav so
@@ -215,7 +255,12 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   await context.exposeFunction('logBot', (m: string) => console.log(`[page] ${m}`)).catch(() => { /* already registered */ });
   page.on('console', (msg) => {
     const t = msg.text();
-    if (/perspeaker|capture|stream|vexabrowser|audiocontext|error|fail/i.test(t)) console.log(`[page-console:${msg.type()}] ${t}`);
+    // `speaker` and `hint` are load-bearing, not decoration: attribution lives entirely in the
+    // page-side speaker watchers, so a filter that drops their diagnostics makes an empty hint
+    // stream indistinguishable from a silent room from outside the browser. The blindness reporter
+    // ("NO ACTIVE SPEAKER seen in Ns …") exists precisely to tell those two apart and matched none
+    // of the other words, so it was invisible in every bot log ever collected.
+    if (/perspeaker|speaker|hint|capture|stream|vexabrowser|audiocontext|error|fail/i.test(t)) console.log(`[page-console:${msg.type()}] ${t}`);
   });
 
   return {
@@ -308,6 +353,16 @@ export async function startCaptureBridge(
   const countersTimer = mixed ? setInterval(() => {
     const c = pipeline.hintCounters;
     console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+    // WHAT THE BOT IS ACTUALLY LOOKING AT. Every #852 observation so far came from querySelectorAll,
+    // which can only answer questions someone thought to ask — it cannot show a layout nobody
+    // predicted, a dialog over the meeting, or a page that is not the meeting at all. One PNG
+    // settles in a glance what a dozen selector probes argued about. Off unless a dir is set.
+    if (shotDir) {
+      const at = new Date().toISOString().replace(/[:.]/g, '-');
+      page.screenshot({ path: join(shotDir, `bot-${at}.png`), fullPage: false })
+        .then(() => console.log(`[bot] screenshot → ${join(shotDir, `bot-${at}.png`)}`))
+        .catch((e: Error) => console.log(`[bot] screenshot failed: ${e.message}`));
+    }
   }, 30_000) : null;
   countersTimer?.unref?.();   // observability only — never holds the process open
 
@@ -324,7 +379,8 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  // Factored so a navigation can re-run it — see the re-arm below.
+  const setup = (): Promise<void> => page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -420,16 +476,20 @@ export async function startCaptureBridge(
         // 'dom-active' (Zoom's true kind — the mixed lane's DOM-active lag model).
         // Timestamps are page Date.now() = epoch ms, the same clock Node stamps with.
         if (w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
+          // A direct handover (A -> B) must close A, not only open B. Emitting an end only when
+          // NOBODY is lit leaves the previous speaker's claim window open, and on a live Zoom call
+          // that produced 142 hints with zero ends across 13 handovers.
           let lastActive: string | null = null;
+          const onActive = (name: string | null): void => {
+            const tMs = Date.now();
+            if (lastActive && lastActive !== name) w.__vexaSpeakerHint?.(lastActive, tMs, true);
+            if (name) w.__vexaSpeakerHint?.(name, tMs, false);   // start / heartbeat re-assert
+            lastActive = name;
+          };
           w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
             selfName: botName,
             log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
-            onSpeakerChange: (name: string | null) => {
-              const tMs = Date.now();
-              if (name) w.__vexaSpeakerHint?.(name, tMs, false);           // start / heartbeat re-assert
-              else if (lastActive) w.__vexaSpeakerHint?.(lastActive, tMs, true); // nobody lit → close the turn
-              lastActive = name;
-            },
+            onSpeakerChange: onActive,
           });
         }
       }
@@ -452,8 +512,26 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName });
+
+  await setup().catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
+  });
+
+  // RE-ARM ON NAVIGATION. The browser bundle and the WebRTC hook go in via addInitScript, so they
+  // are re-injected into every document; the block above runs ONCE, in whichever document existed
+  // when it fired. Its watchers are setInterval loops that die with that document — so a client
+  // that navigates after join (Zoom's web client picks up an `_x_zm_rtaid` on the way in) leaves
+  // the audio path alive and the NAME path silently dead. That asymmetry is exactly the shape of a
+  // meeting transcribed correctly and attributed to nobody (#852).
+  //
+  // Re-running the setup is safe: every branch is guarded on its own `w.__vexa*` handle, and a
+  // fresh document has a fresh window, so this installs one watcher per document and never two.
+  const rearm = (): void => {
+    void setup().catch(() => { /* a navigation mid-setup is not worth failing the bot over */ });
+  };
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) rearm();
   });
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
