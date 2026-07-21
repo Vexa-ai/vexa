@@ -25,12 +25,6 @@
       "issue": "https://github.com/Vexa-ai/vexa/issues/579"
     },
     {
-      "method": "POST",
-      "path": "/meetings/{meeting_id}/transcribe",
-      "reason": "No on-demand re-transcribe orchestration exists in the 0.12 core (transcription is a live-pipeline concern). Left unimplemented + recorded rather than faked.",
-      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
-    },
-    {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/avatar",
       "reason": "Bot-command channel (set avatar) — a live acts.v1 PUBLISH to an active bot, not meeting-api persistence. No downstream handler in the 0.12 carve (voice/media-agent carve, same family as /speak, /config).",

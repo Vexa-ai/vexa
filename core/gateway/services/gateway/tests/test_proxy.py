@@ -228,6 +228,18 @@ def test_native_meeting_mutate_passes_downstream_404_verbatim():
     assert r.status_code == 404
 
 
+def test_transcribe_forwards_to_meeting_api():
+    """#525 C2: the sealed POST /meetings/{meeting_id}/transcribe forwards verbatim to meeting-api's
+    transcribe module. Negative control: before this route the gateway 404'd a sealed path (the
+    KNOWN_GAPS row this change removes)."""
+    client, downstream = _client()
+    r = client.post("/meetings/42/transcribe", headers=AUTH, json={"language": "en"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"].endswith("/meetings/42/transcribe")
+    assert "meeting-api" in downstream.last["url"]
+
+
 def test_native_share_alias_forwards_to_meetings_share_mint():
     """#579 C3: the 0.10 POST /transcripts/{platform}/{native}/share aliases to the moved mint at
     POST /meetings/{platform}/{native}/share."""

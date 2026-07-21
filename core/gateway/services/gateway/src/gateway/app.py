@@ -407,6 +407,12 @@ def create_app(
     async def patch_planned_meeting(meeting_id: int, request: Request):
         return await _forward("PATCH", _meeting(f"/meetings/{meeting_id}"), request)
 
+    # Deferred transcription from the recording (#525): the sealed api.v1 route, forwarded to
+    # meeting-api's transcribe module (serve-fork ruling — what api.v1 seals, the stack serves).
+    @app.post("/meetings/{meeting_id}/transcribe")
+    async def transcribe_meeting(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/transcribe"), request)
+
     @app.delete("/meetings/{meeting_id}", status_code=204)
     async def delete_planned_meeting(meeting_id: int, request: Request):
         return await _forward("DELETE", _meeting(f"/meetings/{meeting_id}"), request)
