@@ -248,13 +248,20 @@ export class ClusterNameBinder {
     for (const log of this.turns.values()) {
       for (const turn of log) {
         // FLICKER DEBOUNCE: a closed turn shorter than the window is a transient (noise
-        // burst / UI blip), never a real turn — skip it so it can't steal a segment.
+        // burst / UI blip) — but only when it carries NO in-span evidence. A short slice
+        // that intersects the commit span itself is testimony about who lit DURING the
+        // commit, and evicting it handed the window to the lagging neighbour (the sole
+        // remaining candidate) on the botsig9 red (#868). Out-of-span transients still
+        // can't steal a segment: in-span ranking + in-span confidence outvote them.
         if (turn.tEndMs !== undefined && turn.tEndMs - turn.tStartMs < FLICKER_MIN_MS) {
-          // Count only flickers that would otherwise have overlapped this window,
-          // so the diagnostic names what the debounce actually cost here.
           const fEnd = turn.tEndMs;
-          if (Math.min(fEnd, windowEnd) - Math.max(turn.tStartMs, windowStart) > 0) flickerSkipped++;
-          continue;
+          const inSpanHere = Math.min(fEnd, commit.tEndMs) - Math.max(turn.tStartMs, commit.tStartMs);
+          if (inSpanHere <= 0) {
+            // Count only flickers that would otherwise have overlapped this window,
+            // so the diagnostic names what the debounce actually cost here.
+            if (Math.min(fEnd, windowEnd) - Math.max(turn.tStartMs, windowStart) > 0) flickerSkipped++;
+            continue;
+          }
         }
         const turnEnd = turn.tEndMs ?? (turn.tStartMs + OPEN_TURN_GRACE_MS);
         const o = Math.max(0, Math.min(turnEnd, windowEnd) - Math.max(turn.tStartMs, windowStart));
@@ -281,13 +288,19 @@ export class ClusterNameBinder {
     // previous speaker's heartbeat slices — on the botsig9 red those were chosen as
     // best with inSpanMs=0 and then rejected at confidence 0.00, #868). Only when
     // NOBODY lit in-span (pure hint lag) does slack support choose, as before.
-    const rank = totalInSpanMs > 0
-      ? (a: { inSpanMs: number }) => a.inSpanMs
-      : (a: { supportMs: number }) => a.supportMs;
+    // The tie window must live on the metric's own scale: in-span durations are
+    // bounded by the commit (sub-second here), so the slack-scale RECENCY_TIE_MS
+    // would call EVERY comparison a tie and let recency — the neighbour's latest
+    // heartbeat — decide anyway (the pass-two regression). In-span ties are a
+    // fifth of the larger claim, floored at 50ms; recency still breaks real ties.
+    const inSpanRank = totalInSpanMs > 0;
     for (const [name, a] of agg) {
       if (!best) { best = { name, ...a }; continue; }
-      if (rank(a) > rank(best) + RECENCY_TIE_MS) best = { name, ...a };
-      else if (rank(a) >= rank(best) - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
+      const av = inSpanRank ? a.inSpanMs : a.supportMs;
+      const bv = inSpanRank ? best.inSpanMs : best.supportMs;
+      const tie = inSpanRank ? Math.max(50, 0.2 * Math.max(av, bv)) : RECENCY_TIE_MS;
+      if (av > bv + tie) best = { name, ...a };
+      else if (av >= bv - tie && a.lastStart > best.lastStart) best = { name, ...a };
     }
     if (!best) return { result: null, reject: 'no-hint-overlap', candidates: agg.size, flickerSkipped };
     const coverage = Math.min(1, best.supportMs / commitDur);
