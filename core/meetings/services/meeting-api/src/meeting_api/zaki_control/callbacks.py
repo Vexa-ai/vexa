@@ -103,14 +103,38 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def capture_seconds_at(capture, current: datetime) -> int:
-    """True captured seconds for a terminal settlement: wall time since start,
-    floored by any already-recorded total, capped by the enforced capture cap.
+def _meeting_end(value: object) -> datetime | None:
+    """Two feeders hand ``reconcile_capture_lifecycle`` a meeting row and they
+    disagree on shape: the sweep projection carries ``end_time`` as a datetime,
+    while crash recovery rebuilds the row through the meeting repo adapter,
+    which isoformats every timestamp. For a crash-before-bind capture that
+    recovery door is the ONLY settlement path, so refusing the string form
+    re-bounds the settlement with wall-clock-at-retry — and the deterministic
+    terminal event ID makes that wrong number permanent. Naive means UTC here,
+    by the same storage contract as ``_as_utc``."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def capture_seconds_at(capture, current: datetime, *, ended_at: datetime | None = None) -> int:
+    """True captured seconds for a terminal settlement: the active window from
+    start to the meeting's END, floored by any already-recorded total, capped by
+    the enforced capture cap. ``current`` bounds the window only when no end is
+    known — it is the clock of whichever process settles, and a late reconcile
+    that used it settled 2033s for a 2-minute meeting. A never-active capture
+    (``started_at`` None) has no window at all and settles at the floor.
     WP-M8/H15: this was only ever applied on the erasure path, so every normal
     terminal usage event carried 0 and settled as a full refund."""
     seconds = max(0, capture.captured_seconds_total)
     if capture.started_at is not None:
-        elapsed = _as_utc(current) - _as_utc(capture.started_at)
+        end = ended_at if ended_at is not None else current
+        elapsed = _as_utc(end) - _as_utc(capture.started_at)
         seconds = max(seconds, int(max(timedelta(0), elapsed).total_seconds()))
     if capture.max_capture_seconds:
         seconds = min(seconds, capture.max_capture_seconds)
@@ -164,6 +188,7 @@ class ControlCallbackDispatcher:
         *,
         state: str,
         failure_code: str | None = None,
+        ended_at: datetime | None = None,
     ) -> None:
         """Record ONE lifecycle advance that is adjacent to the capture's current state.
 
@@ -177,7 +202,9 @@ class ControlCallbackDispatcher:
             return
         if state != capture.state and state not in _ADJACENCY.get(capture.state, ()):
             return
-        await self._emit_capture_status(capture, state=state, failure_code=failure_code)
+        await self._emit_capture_status(
+            capture, state=state, failure_code=failure_code, ended_at=ended_at
+        )
 
     async def _emit_capture_status(
         self,
@@ -185,6 +212,7 @@ class ControlCallbackDispatcher:
         *,
         state: str,
         failure_code: str | None = None,
+        ended_at: datetime | None = None,
     ) -> None:
         """Write one transition whose legality the caller has already established."""
         if state in _TERMINAL:
@@ -192,7 +220,13 @@ class ControlCallbackDispatcher:
             # every caller (advance, walk, stop, erasure) passes through here.
             # Without this the terminal usage event carried the default 0 and
             # the Hub settled a full refund of real bot compute.
-            capture = replace(capture, captured_seconds_total=capture_seconds_at(capture, self._now()))
+            # `ended_at` is the meeting's END when the caller carries one
+            # (reconciliation); the clock stays the bound only for live paths,
+            # where event-time approximates the end.
+            capture = replace(
+                capture,
+                captured_seconds_total=capture_seconds_at(capture, self._now(), ended_at=ended_at),
+            )
         if state == "failed":
             failure_code = failure_code if failure_code in _FAILURE_CODES else "internal_failure"
         else:
@@ -282,11 +316,16 @@ class ControlCallbackDispatcher:
             return
         data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
         failure = data.get("failure_code") or data.get("failure_stage")
+        # Reconciliation runs on ITS OWN clock, arbitrarily later than the meeting:
+        # a terminal settlement here must be bounded by the meeting's recorded end,
+        # not by wall-clock-at-reconcile (which settled 2033s for a 2-min meeting).
+        ended_at = _meeting_end(meeting_row.get("end_time"))
         for step in _RECOVERY_STEPS.get(state, ()):
             await self.record_capture_status(
                 capture,
                 state=step,
                 failure_code=failure if step == "failed" else None,
+                ended_at=ended_at,
             )
             # The adjacency guard checks the CAPTURE we hand it — a stale
             # snapshot refuses every step after the first, silently stranding

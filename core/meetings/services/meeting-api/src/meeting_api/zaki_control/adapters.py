@@ -633,9 +633,11 @@ class SqlAlchemyControlStore:
         max_capture_seconds = max(0, int(row.get("max_capture_seconds") or 0))
         if max_capture_seconds:
             seconds = min(seconds, max_capture_seconds)
-        started_at = started if isinstance(started, datetime) else row.get("created_at")
-        if not isinstance(started_at, datetime):
-            started_at = None
+        # The meter anchors ONLY on active (meetings.start_time). A bot that never
+        # reached active has no meterable window: anchoring on the row's created_at
+        # billed lobby time (a 782s settlement for a capture that recorded nothing),
+        # so never-active keeps started_at None and settles at the recorded floor.
+        started_at = started if isinstance(started, datetime) else None
         return Capture(
             capture_id=str(row["capture_id"]),
             subject=Subject(str(row["tenant_id"]), str(row["user_id"])),
@@ -724,7 +726,7 @@ class SqlAlchemyControlStore:
                 await db.execute(
                     self._statement(
                         """
-                        SELECT m.id, m.status, m.data
+                        SELECT m.id, m.status, m.data, m.end_time
                         FROM zaki_control_captures c
                         JOIN meetings m ON m.id = c.meeting_id AND m.user_id = c.user_id
                         WHERE m.status IS NOT NULL
@@ -737,7 +739,13 @@ class SqlAlchemyControlStore:
                     {"limit": max(1, min(int(limit), 500))},
                 )
             ).mappings().all()
-        return tuple({"id": row["id"], "status": row["status"], "data": row["data"]} for row in rows)
+        # end_time rides along because reconciliation may run arbitrarily long after
+        # the meeting ended, and a terminal settlement without it can only fall back
+        # to the reconcile tick's clock (2033s settled for a 2-minute meeting).
+        return tuple(
+            {"id": row["id"], "status": row["status"], "data": row["data"], "end_time": row["end_time"]}
+            for row in rows
+        )
 
     async def mark_capture_state(self, *, capture_id: str, state: str, failure_code: str | None = None) -> None:
         async with self._session_factory() as db:

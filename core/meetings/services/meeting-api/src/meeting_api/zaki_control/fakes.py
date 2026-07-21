@@ -146,7 +146,18 @@ class InMemoryControlStore(ControlStore):
         return None
 
     async def capture_meetings_needing_reconciliation(self, *, limit):
-        return tuple(self.reconcile_meetings[:limit])
+        # Same row shape as the SQL projection: `end_time` is present even when a
+        # test seeds a minimal dict, because terminal settlement reads the meeting's
+        # END from this row rather than the reconcile tick's clock.
+        return tuple(
+            {
+                "id": row.get("id"),
+                "status": row.get("status"),
+                "data": row.get("data"),
+                "end_time": row.get("end_time"),
+            }
+            for row in self.reconcile_meetings[:limit]
+        )
 
     async def mark_capture_state(self, *, capture_id, state, failure_code=None):
         capture = self.captures[capture_id]
