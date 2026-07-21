@@ -8,7 +8,9 @@ never a silent ``[]`` (#355 defects 1 and 2; P18).
 """
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Optional, Protocol
+from typing import Any, Awaitable, Callable, Optional
+
+from .ports import SttTranscriber
 
 
 class TranscribeFault(Exception):
@@ -35,10 +37,6 @@ class TranscribeFault(Exception):
         self.detail = detail
         self.status = status
         self.provider_code = provider_code
-
-
-class SttTranscriber(Protocol):
-    async def transcribe(self, audio: bytes, *, language: Optional[str] = None) -> dict: ...
 
 
 # Whisper's own language inventory, inverted: full name (lowercased) → ISO-639-1 code.

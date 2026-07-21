@@ -10,6 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Header, HTTPException
 
+from ..obs import log_event
 from .service import TranscribeFault, transcribe_meeting
 
 _FAULT_STATUS = {
@@ -48,16 +49,27 @@ def build_router(store, stt, resolve_master) -> APIRouter:
         user_id = _resolve_user_id(x_user_id)
         language = (body or {}).get("language")
         try:
-            return await transcribe_meeting(
+            result = await transcribe_meeting(
                 store=store, stt=stt, resolve_master=resolve_master,
                 user_id=user_id, meeting_id=meeting_id, language=language,
             )
         except TranscribeFault as fault:
+            log_event(
+                "deferred_transcribe_refused", audience="user", level="warning",
+                span="transcribe", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"reason": fault.kind, "provider_code": fault.provider_code},
+            )
             detail = {"reason": fault.kind, "message": fault.detail}
             if fault.provider_code:
                 detail["provider_code"] = fault.provider_code
             raise HTTPException(
                 status_code=_FAULT_STATUS.get(fault.kind, 502), detail=detail,
             )
+        log_event(
+            "deferred_transcribed", audience="user", span="transcribe",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"segments_stored": result["segments_stored"], "language": result["language"]},
+        )
+        return result
 
     return router

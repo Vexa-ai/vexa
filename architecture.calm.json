@@ -1670,6 +1670,42 @@
     }
    }
   },
+    {
+   "unique-id": "meeting-api-stt",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "transcription",
+      "interface": "stt-endpoint"
+     }
+    }
+   },
+   "description": "deferred transcription of a master recording (POST /meetings/{id}/transcribe, #525) via TRANSCRIPTION_SERVICE_URL",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "STT is first-party and self-hostable; default destination is tenant-hosted, so audio need not leave the tenant",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "config": {
+        "dataClass": "audio",
+        "destination": "tenant-hosted",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
+  },
   {
    "unique-id": "bot-commands-read",
    "relationship-type": {

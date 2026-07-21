@@ -169,6 +169,8 @@ def build_production_app():
         from .calendar_sync import read_stamp
         return await read_stamp(redis_client, user_id)
 
+    from .transcribe import HttpSttTranscriber
+
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
@@ -176,6 +178,8 @@ def build_production_app():
         runtime=runtime_client,
         recording_repo=recording_repo,
         storage=storage,
+        # deferred transcribe (#525): the deployment's configured STT backend + #522 model
+        stt=HttpSttTranscriber.from_env(),
         token_secret=token_secret,
         # The user-stop route (DELETE /bots) publishes the bot's `leave` command on redis pub/sub.
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).

@@ -318,6 +318,37 @@ async def test_second_transcription_is_refused_as_conflict():
     assert ei.value.kind == "already_transcribed"
 
 
+# --- the sealed route itself: fault kinds mapped to HTTP statuses -----------------------
+
+def test_router_maps_faults_to_http_statuses():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from meeting_api.transcribe import build_router
+    from meeting_api.transcribe.fakes import FakeSttTranscriber
+
+    store, mid = seeded_store()
+    app = FastAPI()
+    app.include_router(build_router(
+        store, FakeSttTranscriber(result=VERBOSE_JSON_LANGUAGE_ENGLISH), resolve_master,
+    ))
+    client = TestClient(app)
+
+    assert client.post(f"/meetings/{mid}/transcribe").status_code == 401  # no identity
+
+    ok = client.post(f"/meetings/{mid}/transcribe", headers={"x-user-id": "7"})
+    assert ok.status_code == 200
+    assert ok.json() == {"meeting_id": mid, "segments_stored": 2, "language": "en"}
+
+    conflict = client.post(f"/meetings/{mid}/transcribe", headers={"x-user-id": "7"})
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["reason"] == "already_transcribed"
+
+    missing = client.post("/meetings/999999/transcribe", headers={"x-user-id": "7"})
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["reason"] == "not_found"
+
+
 # --- #522 semantics: the model id comes from the deployment, default whisper-1 ----------
 
 async def test_from_env_model_resolution(monkeypatch):

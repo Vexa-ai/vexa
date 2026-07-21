@@ -97,6 +97,7 @@ edges:
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
+  meeting-api -call-> transcription  # deferred transcription of a master recording (POST /meetings/{id}/transcribe, #525) via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status

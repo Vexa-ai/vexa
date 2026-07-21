@@ -117,8 +117,8 @@ def create_app(
     # recordings ports
     recording_repo: Optional["_recordings.RecordingRepo"] = None,
     storage: Optional["_recordings.Storage"] = None,
-    # transcribe port (#525) — None builds the env-configured HTTP client (whose routes
-    # refuse with a typed 503 when TRANSCRIPTION_SERVICE_URL is unset)
+    # transcribe port (#525) — None falls back to the in-memory fake like every other port;
+    # production passes HttpSttTranscriber.from_env() (see __main__.build_production_app)
     stt: Optional["object"] = None,
     # lifecycle store
     meeting_store: Optional[MeetingStore] = None,
@@ -215,7 +215,7 @@ def create_app(
     from . import transcribe as _transcribe
 
     if stt is None:
-        stt = _transcribe.HttpSttTranscriber.from_env()
+        stt = _transcribe_fakes().FakeSttTranscriber()
     app.include_router(_transcribe.build_router(
         transcript_store, stt, _transcribe.master_audio_resolver(recording_repo, storage),
     ))
@@ -662,6 +662,12 @@ def _bot_spawn_fakes():
 
 def _collector_fakes():
     from .collector import fakes
+
+    return fakes
+
+
+def _transcribe_fakes():
+    from .transcribe import fakes
 
     return fakes
 
