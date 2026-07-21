@@ -1,0 +1,1 @@
+- **Bot test doubles: shared `noopAloneness` (+ siblings) and named missing-port errors (#865).** Pure L2 scaffolding — no user-facing behaviour change. Stops every new orchestrator construction site rediscovering the required `aloneness` seam by crashing with a raw TypeError.
