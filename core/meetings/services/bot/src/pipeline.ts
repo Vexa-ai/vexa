@@ -136,7 +136,11 @@ function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => 
 function chunkToBotSegment(speaker: string, c: ChunkSegment, completed: boolean): TranscriptSegment {
   return {
     segment_id: c.segmentId,
-    speaker,
+    // Provisional cluster ids (seg_N) are an internal key, never a display name; while
+    // unattributed, emit the stable 'Speaker' label the gmeet lane uses (gmeet-pipeline.ts:52)
+    // so per-speaker consumers group as one speaker, not hundreds; late attribution still
+    // repaints by segment_id.
+    speaker: /^seg_\d+$/.test(speaker) ? 'Speaker' : speaker,
     speaker_key: c.segmentId,
     text: c.text,
     start: c.startMs / 1000,
