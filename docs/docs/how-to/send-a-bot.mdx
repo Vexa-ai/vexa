@@ -70,6 +70,22 @@ Detection is **per window** (one STT call, a few seconds of one speaker's audio)
 code-switching *within* a window takes the window's language; switching between utterances lands on
 the segment boundary. A window whose language could not be determined has `language: null`.
 
+### Capture-only (no STT)
+
+Default spawns **require** a configured transcription backend. Without `TRANSCRIPTION_SERVICE_URL`
+/ `TRANSCRIPTION_SERVICE_TOKEN`, `POST /bots` answers **503** (refuse loud) rather than joining a
+bot that can never produce text. For a deliberate no-STT meeting, opt out on the spawn:
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa","transcribe_enabled":false}'
+```
+
+Or set `TRANSCRIBE_ENABLED=false` in the deployment env so every spawn defaults to capture-only.
+Recording is separate: pass `recording_enabled` / `RECORDING_ENABLED` if you also need persisted
+audio. See [Configuration](/configuration#transcription-stt).
+
 On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
 lobby enabled behaves the same way.
 
