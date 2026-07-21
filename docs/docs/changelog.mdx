@@ -583,6 +583,16 @@ probe), not inferred from planning docs.
   [Custom STT endpoints](/how-to/custom-stt). The FunASR/SenseVoice example is
   community-contributed and not yet independently validated (#863).
 
+- **Fixed:** Teams transcripts no longer show a new fake speaker per line. Unattributed turns on the
+  mixed lane (Teams/Zoom) now carry the stable "Speaker" label instead of leaking the internal
+  `seg_N` cluster id, so per-speaker consumers group them as one speaker; late attribution still
+  repaints by segment id. ([#890](https://github.com/Vexa-ai/vexa/issues/890))
+
+- **Fixed:** Teams/Zoom live transcripts now paint in real time on the dashboard instead of only
+  after a reload. The bot's mixed-lane segment mapper wasn't stamping `absolute_start_time`, so the
+  live renderer (which keys on it) skipped every pending draft; a prior producer-stamp fix had
+  covered only Google Meet. ([#895](https://github.com/Vexa-ai/vexa/issues/895))
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
