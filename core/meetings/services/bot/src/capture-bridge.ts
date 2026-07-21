@@ -270,19 +270,31 @@ export async function startCaptureBridge(
   const tee = makeTelemetryTap(lane, telemetry);
 
   // ── Node-side frame sink: one capture.v1 frame crossing the Playwright boundary. ──
-  // The page serializes PCM as a plain number[] (Array.from(Float32Array)); we restore the
-  // Float32Array and stamp the capture time if the page didn't supply one (production stamps
-  // Date.now() on the Node side — index.ts:1598–1605).
-  const onPerSpeakerAudio = (speakerIndex: number, samples: number[], tsMs?: number): void => {
-    const pcm = new Float32Array(samples);
+  // PCM crosses as base64, not as a number[]. A 4096-sample frame is 16.0 KB raw; JSON-encoding it
+  // as decimal numbers costs 80.8 KB — 5.05x — because every sample becomes a ~20-character string.
+  // At 4 frames a second that is 1.2 GB per hour per bot, and it is pure serialization: base64 of
+  // the same bytes is 21.3 KB, so the hop drops to 0.3 GB/hour for identical samples. The number[]
+  // form is still accepted, because a page from an older bundle can be mid-session.
+  const decodePcm = (samples: number[] | string): Float32Array => {
+    if (typeof samples !== 'string') return new Float32Array(samples);
+    const buf = Buffer.from(samples, 'base64');
+    // Copy rather than view: Buffer.from may hand back a slice of a pooled ArrayBuffer, whose
+    // byteOffset is not guaranteed 4-byte aligned for a Float32Array view.
+    const out = new Float32Array(buf.byteLength / 4);
+    Buffer.from(out.buffer).set(buf);
+    return out;
+  };
+
+  const onPerSpeakerAudio = (speakerIndex: number, samples: number[] | string, tsMs?: number): void => {
+    const pcm = decodePcm(samples);
     const ts = tsMs ?? Date.now();
     tee(speakerIndex, pcm, ts);                                 // O-TEL-1: tap BEFORE the pipeline
     if (mixed) pipeline.feedMixedAudio(pcm, ts);
     else pipeline.feedAudio(speakerIndex, undefined, pcm, ts); // glow name is bound page-side in the v1 producer; channel index here
   };
   // gmeet: the v1 producer stamps the glow name page-side; this named variant carries it through.
-  const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[], tsMs?: number): void => {
-    const pcm = new Float32Array(samples);
+  const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[] | string, tsMs?: number): void => {
+    const pcm = decodePcm(samples);
     const ts = tsMs ?? Date.now();
     tee(channel, pcm, ts, glowName);                            // O-TEL-1: tap BEFORE the pipeline
     pipeline.feedAudio(channel, glowName, pcm, ts);
@@ -319,6 +331,18 @@ export async function startCaptureBridge(
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
       // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
       // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
+      // Float32 PCM -> base64, chunked. String.fromCharCode.apply over a 16 KB frame exceeds the
+      // argument limit and throws, so the bytes are walked in slices; this runs 4x a second, so it
+      // stays a tight loop rather than a spread.
+      w.__vexaB64 = (pcm: Float32Array): string => {
+        const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)) as unknown as number[]);
+        }
+        return btoa(bin);
+      };
+
       const setupMix = (): void => {
         const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
         if (!streams.length) return;
@@ -338,7 +362,16 @@ export async function startCaptureBridge(
         }
         if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
+          // `log` is not decoration here: capture reports how much audio the graph rendered against
+          // how much reached the callback and how much the silence gate refused. Without that split
+          // a missing 256 ms is unattributable — which is how a 35% capture deficit ran unnoticed.
+          // The gmeet lane has always logged its seen/emitted counters; this lane never did.
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(
+            w.__vexaMixDest.stream,
+            // base64, not Array.from: a decimal number[] is 5x the raw bytes over this hop.
+            (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, w.__vexaB64(pcm)),
+            { log: (m: string) => w.logBot?.('[mixed] ' + m) },
+          ))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
             .then(() => w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)'))
             .catch((e: any) => { w.__vexaMixedCapture = null; w.logBot?.('[mixed] capture start failed: ' + String(e)); });

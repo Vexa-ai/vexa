@@ -176,6 +176,11 @@ async function main(): Promise<void> {
       tc.recordHint(ev.hint.name, 'dom-active', ev.hint.t, ev.hint.isEnd);
     } else if (ev.frame) {
       tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
+      // Yield between frames. feedAudio is synchronous, so a tight loop feeds the WHOLE session
+      // before the lane's async pump runs once — audio is evicted from the 120s ring before anything
+      // reads it, and the run scores the leftovers rather than the session. Yielding lets the pump
+      // interleave; the replay is still far faster than real time.
+      await sleep(0);
     }
   }
   // Closing the last turn is the harness standing in for the meeting ending — true for either cut
@@ -230,12 +235,25 @@ async function main(): Promise<void> {
       sttCalls, sttWords, sttFails,
       publishCalls: published.length, uniqueSegmentIds: byId.size,
       storeRows: storeRows.length, storeDupes,
-      retention: Number((txWords / Math.max(1, sttWords)).toFixed(3)),
+      publishedWords: txWords,
+      // Retention is only a LOSS metric against real STT. The mock invents fresh tokens per call,
+      // so every LocalAgreement resubmission of the same audio inflates the denominator with words
+      // that were never new — retention then measures resubmission overlap and calls it loss. It is
+      // recorded only when the words on both sides came from the same answer to the same audio.
+      ...(MOCK ? {} : { retention: Number((txWords / Math.max(1, sttWords)).toFixed(3)) }),
       coverage: Number((covered / wallSec).toFixed(3)),
       segments: published.length,
       segP50Sec: Number((durs[Math.floor(durs.length / 2)] ?? 0).toFixed(2)),
       segUnder1s: durs.filter((d) => d < 1).length,
       holesOver2s: holes.length,
+      // The COST of LocalAgreement: a turn re-sends its whole unconfirmed span every pass, so the
+      // same audio is transcribed once per pass until it confirms. Two numbers say whether that is
+      // the designed price or a runaway — the ratio of audio sent to distinct audio covered, and the
+      // longest span any single submission reached. The tail is what a user feels as latency: on a
+      // live desktop session the p50 was 3 passes / 5.3s but the tail hit 11 passes / 35.0s, and a
+      // 35s window costs seconds of STT before a word can appear.
+      resendRatio: Number((submitSecs.reduce((a, b) => a + b, 0) / Math.max(1, covered)).toFixed(2)),
+      maxSubmitSec: Number(Math.max(0, ...submitSecs).toFixed(1)),
     }, null, 2) + '\n');
     console.log(`  metrics written: ${process.env.METRICS_JSON}`);
   }
