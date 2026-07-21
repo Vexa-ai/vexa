@@ -9,6 +9,7 @@
  */
 export {
   createTeamsSpeakers,
+  extractTeamsSpeakerName,
   teamsParticipantSelectors,
   teamsNameSelectors,
   teamsParticipantIdSelectors,
