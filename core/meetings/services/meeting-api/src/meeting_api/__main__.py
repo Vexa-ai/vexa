@@ -125,6 +125,13 @@ def build_production_app():
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
 
+    # #841: the per-user delivery ledger — the queryable record GET /webhooks/deliveries serves.
+    # A per-user capped Redis list; the lifecycle callback records each delivery outcome so the
+    # dashboard's Delivery History reflects real deliveries, not just its own Test button.
+    from .webhooks import RedisDeliveryLedger
+
+    delivery_ledger = RedisDeliveryLedger(redis_client)
+
     # Completion finalization: when the lifecycle FSM lands on a terminal status the callback runs
     # this — flush the meeting's remaining redis segments to Postgres (threshold 0) + persist the
     # processed doc into meeting.data, so a finished meeting is durable IMMEDIATELY (not `whenever
@@ -181,6 +188,7 @@ def build_production_app():
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
+        delivery_ledger=delivery_ledger,
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,

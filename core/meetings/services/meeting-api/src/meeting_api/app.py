@@ -134,6 +134,10 @@ def create_app(
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
+    # per-user delivery ledger (#841) — the queryable record GET /webhooks/deliveries reads. The
+    # lifecycle callback records each delivery outcome here so the dashboard's Delivery History
+    # reflects real deliveries, not just the Test button. None → in-memory fake (app-factory/tests).
+    delivery_ledger: Optional["object"] = None,
     # completion finalizer — awaited with the NUMERIC meeting id when the FSM lands on a TERMINAL
     # status (completed/failed). Production wires collector/db_writer.finalize_meeting: flush the
     # meeting's remaining redis segments to Postgres + persist the processed doc into meeting.data,
@@ -187,9 +191,17 @@ def create_app(
     app.state.lifecycle_sink = sink
     app.state.lifecycle_store = sink.store
     app.state.webhook_sink = webhook_sink
+    # #841: the per-user delivery ledger the read endpoint serves. Default to the in-memory fake so
+    # the app-factory / conformance path stands up without redis (same pattern as the other ports).
+    if delivery_ledger is None:
+        from .webhooks import InMemoryDeliveryLedger
+
+        delivery_ledger = InMemoryDeliveryLedger()
+    app.state.delivery_ledger = delivery_ledger
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer)
+    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
+                     delivery_ledger)
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
@@ -218,7 +230,38 @@ def create_app(
         storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
+    # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
+    app.include_router(_build_webhooks_router(delivery_ledger))
+
     return app
+
+
+# ── webhooks read surface (#841): the queryable delivery ledger the dashboard's history reads ────
+
+
+def _build_webhooks_router(delivery_ledger: "object") -> "object":
+    """``GET /webhooks/deliveries`` — the per-user webhook delivery history (#841).
+
+    Owner-scoped via ``X-User-Id`` (the gateway injects it from the resolved key; the client never
+    sets it). Returns ``{deliveries: [...]}`` newest-first — each row is the #817 outcome taxonomy
+    (host only, never a URL or secret; P14). This is the user-facing completion of #815→#817:
+    the dispatcher records every outcome here, so real deliveries appear in Delivery History, not
+    just the dashboard's own Test button.
+    """
+    from fastapi import APIRouter, Header, Query
+
+    router = APIRouter()
+
+    @router.get("/webhooks/deliveries")
+    async def list_deliveries(
+        x_user_id: Optional[str] = Header(default=None),
+        limit: int = Query(default=100, ge=1, le=500),
+    ):
+        user_id = x_user_id
+        deliveries = await delivery_ledger.list(user_id, limit=limit) if user_id else []
+        return {"deliveries": deliveries}
+
+    return router
 
 
 # ── lifecycle mount (the receiver's callback route, on the shared app) ───────────────────────────
@@ -242,6 +285,7 @@ def _mount_lifecycle(
     webhook_sink: "object" = None,
     redis: "object" = None,
     transcript_finalizer: "object" = None,
+    delivery_ledger: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -461,6 +505,31 @@ def _mount_lifecycle(
                                 "error": result.error,
                             },
                         )
+                        # #841: ALSO record the outcome in the per-user delivery ledger — the
+                        # queryable surface GET /webhooks/deliveries serves. Logs (above) rotate and
+                        # are operator-facing; the ledger is the user's Delivery History. Host only,
+                        # never the URL/secret (P14). Best-effort — a ledger hiccup never fails the
+                        # callback, and a suppressed event is still worth recording (the user asked
+                        # "why didn't my webhook fire?" — "suppressed: unsubscribed" is the answer).
+                        if delivery_ledger is not None:
+                            from .webhooks import build_delivery_record
+
+                            try:
+                                await delivery_ledger.record(
+                                    meeting_row.get("user_id"),
+                                    build_delivery_record(
+                                        event_type=env.get("event_type"),
+                                        event_id=env.get("event_id"),
+                                        target_host=_webhook_target_host(url),
+                                        outcome=result.status,
+                                        status_code=result.status_code,
+                                        meeting_id=meeting_row.get("id"),
+                                    ),
+                                )
+                            except Exception as le:  # noqa: BLE001 — ledger is best-effort
+                                log_event("webhook_ledger_failed", audience="system",
+                                          level="warning", span="lifecycle.callback",
+                                          fields={"error": str(le)})
                     except Exception as e:  # noqa: BLE001 — delivery is best-effort
                         log_event("webhook_deliver_failed", audience="system", level="warning",
                                   span="lifecycle.callback", fields={"error": str(e)})
