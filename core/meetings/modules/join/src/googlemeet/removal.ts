@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../_host";
 import { googleRemovalIndicators } from "./selectors";
+import { countRealParticipantTiles } from "./admission";
 
 // Function to check if bot has been removed from the meeting
 export async function checkForGoogleRemoval(page: Page): Promise<boolean> {
@@ -73,4 +74,54 @@ export function startGoogleRemovalMonitor(page: Page, onRemoval?: () => void | P
   return () => {
     clearInterval(removalCheckInterval);
   };
+}
+
+/** Alone-in-meeting watcher (the missing half of `automaticLeave.everyoneLeftTimeout`):
+ *  the timeout was plumbed through invocation.v1 and consumed ONLY by the 4h max-active
+ *  backstop derivation — no detector existed, so a bot whose host left simply sat in the
+ *  empty meeting billing minutes until a manual stop (owner rounds 4–6). Polls the SAME
+ *  real-participant-tile counter admission trusts (effects phantom excluded; the bot is
+ *  itself one tile, so alone means count <= 1). Continuous aloneness for `timeoutMs`
+ *  fires `onEveryoneLeft` ONCE; company re-arriving resets the clock. Count errors
+ *  (navigation, teardown) reset the clock too — never a spurious leave on a flaky read. */
+export function startGoogleAlonenessMonitor(
+  page: Page,
+  timeoutMs: number,
+  onEveryoneLeft: () => void | Promise<void>,
+  pollMs = 10_000,
+  counter: (page: Page) => Promise<number> = countRealParticipantTiles,
+): () => void {
+  log(`Starting alone-in-meeting monitoring (leave after ${Math.round(timeoutMs / 1000)}s alone)...`);
+  let aloneSinceMs: number | null = null;
+  let fired = false;
+
+  const interval = setInterval(async () => {
+    if (fired) return;
+    let real: number;
+    try {
+      real = await counter(page);
+    } catch {
+      aloneSinceMs = null; // flaky read — never a spurious leave
+      return;
+    }
+    if (real > 1) {
+      if (aloneSinceMs !== null) log("Company returned — aloneness clock reset.");
+      aloneSinceMs = null;
+      return;
+    }
+    const now = Date.now();
+    if (aloneSinceMs === null) {
+      aloneSinceMs = now;
+      log(`Alone in the meeting (${real} tile) — leaving in ${Math.round(timeoutMs / 1000)}s unless company returns.`);
+      return;
+    }
+    if (now - aloneSinceMs >= timeoutMs) {
+      fired = true;
+      clearInterval(interval);
+      log("🕐 Alone past the everyone-left timeout — initiating graceful leave...");
+      try { await onEveryoneLeft(); } catch { /* the caller owns failure handling */ }
+    }
+  }, pollMs);
+
+  return () => clearInterval(interval);
 }

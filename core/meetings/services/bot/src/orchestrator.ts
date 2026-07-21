@@ -230,6 +230,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     const stopRemoval = deps.join.onRemoval(() => signalEnd?.('evicted'));
+    // The everyone-left detector (Google lane): alone past automaticLeave.everyoneLeftTimeout
+    // ends the meeting as `left_alone` — the vocabulary existed sealed, the DETECTOR did not,
+    // so a bot whose host left sat billing minutes until a manual stop (owner rounds 4-6).
+    const stopAloneness = deps.join.onEveryoneLeft?.(
+      () => signalEnd?.('left_alone'),
+      inv.automaticLeave?.everyoneLeftTimeout ?? 120_000,
+    ) ?? (() => { /* lane without a detector — max-active backstop bounds it */ });
     const unsubscribe = deps.acts.subscribe(handle);
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
@@ -241,6 +248,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (cap) clearTimeout(cap);
     unsubscribe();
     stopRemoval();
+    stopAloneness();
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);
     // Bound the leave: a hung platform leave (e.g. a slow Zoom web-client teardown) must not stall

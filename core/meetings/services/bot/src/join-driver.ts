@@ -10,7 +10,7 @@ import {
   joinMeeting,
   AdmissionError,
   leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, leaveJitsiMeeting,
-  startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
+  startGoogleRemovalMonitor, startGoogleAlonenessMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
   type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
@@ -87,6 +87,12 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb);
       if (platform === 'jitsi') return startJitsiRemovalMonitor(page, cb);
       return startGoogleRemovalMonitor(page, cb);
+    },
+    onEveryoneLeft(cb, timeoutMs) {
+      // Google Meet only for now: the other lanes have no trusted participant counter yet;
+      // their bots stay bounded by the max-active backstop.
+      if (platform !== 'google_meet') return () => { /* no detector on this lane */ };
+      return startGoogleAlonenessMonitor(page, timeoutMs, cb);
     },
     async leave(reason) {
       if (platform === 'teams') { await leaveMicrosoftTeams(page, undefined, reason); return; }

@@ -27,6 +27,10 @@ export interface JoinDriver {
   join(report: (s: BotStatus) => void | Promise<void>): Promise<JoinOutcome>;
   /** Watch for being removed from the meeting while active; returns a stop fn. */
   onRemoval(cb: () => void): () => void;
+  /** OPTIONAL alone-in-meeting watcher: fire `cb` once the bot has been the ONLY
+   *  participant for `timeoutMs` continuously (`automaticLeave.everyoneLeftTimeout`).
+   *  Platforms without a detector omit it — the 4h max-active backstop still bounds them. */
+  onEveryoneLeft?(cb: () => void, timeoutMs: number): () => void;
   /** Leave the meeting (best-effort; never throws fatally). */
   leave(reason: string): Promise<void>;
   /** Withdraw a PENDING join request from the waiting room / pre-join screen (Bug 2): cancel the

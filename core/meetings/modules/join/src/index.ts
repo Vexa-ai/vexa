@@ -137,6 +137,7 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
+export { startGoogleAlonenessMonitor } from "./googlemeet/removal";
 // AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
 // It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
 // JoinOutcome so a host DENIAL is recorded as a permanent `rejected` — and a signed-out profile
