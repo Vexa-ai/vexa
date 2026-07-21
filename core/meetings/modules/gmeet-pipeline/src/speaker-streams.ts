@@ -33,6 +33,19 @@ interface SpeakerBuffer {
   /** Word-level prefix confirmation: words from previous Whisper submission */
   lastWords: string[];
   inFlight: boolean;
+  /** A submit tick fired while a request was in flight and could not run: the submission is
+   *  OWED. Set by trySubmit when it bails on the inFlight guard; consumed by
+   *  handleTranscriptionResult, which re-fires trySubmit the moment inFlight clears (rather than
+   *  waiting a full submitInterval for the next tick). Without this, at production STT — where a
+   *  round-trip exceeds submitInterval — every tick that lands mid-flight is dropped with no
+   *  catch-up and the effective cadence degrades to a multiple of the interval. */
+  owedSubmit: boolean;
+  /** The turn's FIRST submission has gone out. Until then feedAudio submits immediately once
+   *  minAudioDuration of audio has accrued, rather than waiting for the next submitInterval tick
+   *  (first-submit fast path, fix b, #851) — the tick phase alone cost up to a full interval
+   *  before any text could form. Set in submitBuffer, reset on fullReset; subsequent submissions
+   *  stay on the tick + catch-up cadence. */
+  firstSubmitDone: boolean;
   /** Wall-clock time (ms) when the current unconfirmed window started */
   windowStartMs: number;
   /** Wall-clock time (ms) when the buffer first started (for segment timing) */
@@ -147,6 +160,8 @@ export class SpeakerStreamManager {
       confirmCount: 0,
       lastWords: [],
       inFlight: false,
+      owedSubmit: false,
+      firstSubmitDone: false,
       windowStartMs: now,
       bufferStartMs: now,
       sequenceNumber: 0,
@@ -220,6 +235,18 @@ export class SpeakerStreamManager {
     buffer.totalSamples += audioData.length;
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
+
+    // First-submit fast path (fix b, #851): the turn's first submission otherwise waits for the
+    // next submitInterval tick — up to a full interval of dead air before any text can form, on
+    // top of the STT round-trip. Once minAudioDuration of audio has accrued for a turn that has
+    // never submitted (and nothing is in flight), submit NOW rather than at the tick phase.
+    // Scoped to the first submission: subsequent windows stay on the tick + catch-up cadence.
+    // submitBuffer keeps the RMS silence gate authoritative — a near-silent first window is still
+    // skipped there and never reaches Whisper.
+    if (!buffer.firstSubmitDone && !buffer.inFlight
+        && this.unconfirmedSamples(buffer) >= this.minAudioDuration * this.sampleRate) {
+      void this.submitBuffer(buffer);
+    }
   }
 
   /**
@@ -242,6 +269,19 @@ export class SpeakerStreamManager {
     if (!buffer) return false;
 
     buffer.inFlight = false;
+
+    // Catch-up for the tick(s) dropped while this request was in flight (fix a, #851). A submit
+    // tick that landed mid-flight set owedSubmit rather than being lost; now that inFlight is
+    // clear, re-run trySubmit so the owed window submits at the STT round-trip rather than waiting
+    // a full submitInterval for the next tick. Consumed here (owed reset) so it fires ONCE per
+    // response — no unconditional re-fire, no busy loop: trySubmit re-checks every condition
+    // (unconfirmed ≥ minAudioDuration, not inFlight), and the next mid-flight tick re-owes it.
+    // Deferred to a microtask so it runs AFTER this handler's confirm/reset logic settles, and
+    // regardless of which return path below executes. In the fast regime (STT « submitInterval) a
+    // tick never lands mid-flight, so owedSubmit is never set and this is inert — no regression.
+    const catchUp = buffer.owedSubmit;
+    buffer.owedSubmit = false;
+    if (catchUp) queueMicrotask(() => { void this.trySubmit(speakerId); });
 
     // Discard stale responses: if the buffer was reset (generation bumped)
     // while a Whisper request was in flight, this response is for audio that
@@ -564,7 +604,12 @@ export class SpeakerStreamManager {
 
   private async trySubmit(speakerId: string): Promise<void> {
     const buffer = this.buffers.get(speakerId);
-    if (!buffer || buffer.inFlight) return;
+    if (!buffer) return;
+    // A request is in flight: this tick cannot submit. Record that a submission is OWED so
+    // handleTranscriptionResult re-fires the moment inFlight clears, instead of dropping the tick
+    // and waiting a full submitInterval for the next one (the catch-up the fast regime never
+    // needs but the production regime — STT round-trip > submitInterval — critically does).
+    if (buffer.inFlight) { buffer.owedSubmit = true; return; }
 
     const unconfirmedSec = this.unconfirmedSamples(buffer) / this.sampleRate;
     const totalSec = buffer.totalSamples / this.sampleRate;
@@ -650,6 +695,7 @@ export class SpeakerStreamManager {
     }
 
     buffer.inFlight = true;
+    buffer.firstSubmitDone = true;
     this.submitGeneration.set(buffer.speakerId, buffer.generation);
 
     try {
@@ -828,6 +874,8 @@ export class SpeakerStreamManager {
     buffer.confirmCount = 0;
     buffer.lastWords = [];
     buffer.inFlight = false;
+    buffer.owedSubmit = false;
+    buffer.firstSubmitDone = false;
     buffer.windowStartMs = Date.now();
     buffer.bufferStartMs = Date.now();
     buffer.lastAudioTimestamp = Date.now();
