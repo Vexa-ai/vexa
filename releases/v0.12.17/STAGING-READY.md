@@ -147,3 +147,14 @@ Rev **10** is the current-good `v0.12.16-rc.3`. (History also holds rev 9 = `0.1
 (`package.json`, `Chart.yaml` appVersion) are still `0.12.16`. A real `v0.12.17` git tag / GitHub
 release would need them bumped (release-images preflight) + the witness/value gates; none of that is
 required for the RC-on-staging path.
+
+---
+
+## Deploy artifacts PROVEN runnable (image smoke, 2026-07-21)
+
+The pushed `v0.12.17-rc.1` images were pulled and run on a throwaway VM under k3s + this repo's helm chart at `--set global.imageTag=v0.12.17-rc.1` (the same chart + tag lever staging uses) — the actual registry artifacts, not a source build:
+- **8/8 image digests MATCH** the table above (cross-confirmed at the containerd/`crictl` layer).
+- Control plane healthy: 6/6 deployments Available, `/health` 200 across services, typed 401s, minted key → `/bots` 200, DB migrations converge (6 tables), no crashloops over 7m.
+- **Verdict: the pushed v0.12.17-rc.1 images are deploy-ready (pull + run + healthy).**
+
+Two chart findings (both INERT on staging, filed as follow-ups): (1) admin-api has no DB-connect retry at boot (self-heals via k8s restart + startup probe); (2) `templates/job-migrations.yaml` ignores `global.imageTag` (inert since `migrations.enabled=false` on staging).
