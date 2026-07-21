@@ -1,0 +1,1 @@
+- **Empty-room `left_alone` on Zoom/Teams/Jitsi (#866).** Mixed-lane capture now reports remote-audio ready when the mix destination is attached — not when the first gated PCM frame arrives — so a bot alone from the start can leave after the silence window on every platform. See [Send a bot](/how-to/send-a-bot#when-the-bot-leaves-on-its-own).

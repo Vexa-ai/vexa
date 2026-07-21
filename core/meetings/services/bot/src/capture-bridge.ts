@@ -330,19 +330,30 @@ export async function startCaptureBridge(
   await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
-      // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
+      // Zoom/Teams/Jitsi: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
       // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
       // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
+      //
+      // Readiness (#866): `left_alone` fails closed until capture reports ready. Ready means
+      // "the mix destination exists — capture is attached and could hear", NOT "a gated PCM frame
+      // has arrived". An empty room (no remote tracks yet, nobody ever speaks) must still latch
+      // ready so the silence window can fire; waiting on the first frame made that headline case
+      // unreachable on every mixed-lane platform.
       const setupMix = (): void => {
-        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
-        if (!streams.length) return;
         if (!w.__vexaMixCtx) {
           w.__vexaMixCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
           w.__vexaMixCtx.resume?.();
           w.__vexaMixDest = w.__vexaMixCtx.createMediaStreamDestination();
           w.__vexaMixSeen = new Set();
+          if (!w.__vexaRemoteAudioReadyLatched) {
+            w.__vexaRemoteAudioReadyLatched = true;
+            void w.__vexaRemoteAudioReady?.();
+            w.logBot?.('[mixed] remote-audio ready (mix destination attached)');
+          }
         }
+        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
+        if (!streams.length) return;
         for (const s of streams) {
           if (!s || w.__vexaMixSeen.has(s.id)) continue;
           try {
@@ -355,8 +366,7 @@ export async function startCaptureBridge(
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
-            .then(async () => {
-              await w.__vexaRemoteAudioReady?.();
+            .then(() => {
               w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');
             })
             .catch((e: any) => { w.__vexaMixedCapture = null; w.logBot?.('[mixed] capture start failed: ' + String(e)); });
