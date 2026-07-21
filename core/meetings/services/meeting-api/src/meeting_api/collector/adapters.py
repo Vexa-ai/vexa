@@ -514,6 +514,10 @@ class SqlAlchemyTranscriptStore:
                     "bot_container_id": m.bot_container_id,
                     "start_time": _iso_utc(m.start_time),
                     "end_time": _iso_utc(m.end_time),
+                    # api.v1 MeetingResponse declares these at top level; the values live in `data`
+                    # (hoisted the same way as `_meeting_projection_from_row` in app.py).
+                    "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
+                    "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),

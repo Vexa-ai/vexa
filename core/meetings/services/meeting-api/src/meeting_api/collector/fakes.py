@@ -216,6 +216,9 @@ class InMemoryTranscriptStore:
                 "bot_container_id": m.get("bot_container_id"),
                 "start_time": m["start_time"],
                 "end_time": m["end_time"],
+                # api.v1 MeetingResponse declares these at top level; the values live in `data`.
+                "completion_reason": (m.get("data") or {}).get("completion_reason") if isinstance(m.get("data"), dict) else None,
+                "failure_stage": (m.get("data") or {}).get("failure_stage") if isinstance(m.get("data"), dict) else None,
                 "shared": m["user_id"] != user_id,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
