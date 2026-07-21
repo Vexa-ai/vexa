@@ -163,6 +163,26 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         if (nameText.length > 1 && nameText.length < 50) return nameText;
       }
     }
+    // Structural fallback (#853, witnessed live): today's Teams renders the name label in a div
+    // whose ONLY classes are minified atomic hashes (e.g. `___12zni01 f1cmbuwj …`) that rotate
+    // every release — the exact drift #797 predicted, and why chasing a class prefix
+    // (`___2u340f0`) can never hold. Instead of a new hash to go stale, find the name the way a
+    // human reads the tile: the shortest text-bearing leaf inside the tile that looks like a name
+    // (has a letter, isn't a timer/UI-control word). Selector-agnostic, so it survives the next
+    // hash roll. Runs ONLY after every explicit selector missed, so a real name node still wins.
+    const looksLikeName = (s: string): boolean => {
+      if (s.length < 2 || s.length > 50) return false;
+      if (!/[a-zA-Z]/.test(s)) return false;                 // pure digits/timer "00:30" → no
+      if (/^\d{1,2}:\d{2}/.test(s)) return false;            // leading clock
+      return !forbidden.some((sub) => s.toLowerCase().includes(sub.toLowerCase()));
+    };
+    const leaves = element.querySelectorAll('*');
+    for (let i = 0; i < leaves.length; i++) {
+      const leaf = leaves[i] as HTMLElement;
+      if (leaf.children.length !== 0) continue;               // leaf nodes only
+      const t = (leaf.textContent || '').trim();
+      if (looksLikeName(t)) return t;
+    }
     return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
   }
 
