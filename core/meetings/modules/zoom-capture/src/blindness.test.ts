@@ -43,7 +43,7 @@ async function main(): Promise<void> {
     w.destroy?.();
     const blind = logs.filter((l) => l.includes('NO ACTIVE SPEAKER'));
     ok(blind.length > 0, 'a watcher that never sees a speaker reports it instead of staying silent');
-    ok(blind.some((l) => l.includes('NONE of the containers exist')),
+    ok(blind.some((l) => l.includes('exist here')),
       'and names the cause the DOM supports: the selectors are stale, not the room quiet');
     ok(blind.some((l) => l.includes('speaker-active-container')),
       'listing the selectors that missed, so the fix does not need a source dive');

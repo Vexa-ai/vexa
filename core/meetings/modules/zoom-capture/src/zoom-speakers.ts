@@ -230,7 +230,7 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
           : `none of ${ACTIVE_CONTAINER_SELECTORS.join(', ')} exist here. This DOM: ` +
             `${speakerish} [class*=speaker], ${frames} [class*=video-frame], ${footers} name footers, ` +
             `${document.querySelectorAll('iframe').length} iframes, ` +
-            `viewport ${window.innerWidth}x${window.innerHeight}, visibility=${document.visibilityState}. ` +
+            `viewport ${typeof window !== 'undefined' ? window.innerWidth : 0}x${typeof window !== 'undefined' ? window.innerHeight : 0}, visibility=${document.visibilityState}. ` +
             `All zero means this client renders no speaker chrome at all; non-zero means the class ` +
             `names moved. Attribution is empty either way.`),
       );
