@@ -182,6 +182,10 @@ meetingApi:
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
   # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.
   botAuthenticated: "false"
+  # Capture-signal recording: tee the bot's RAW capture stream (audio + speaker hints +
+  # segmenter cuts) as captured-signal.v1 so a failed meeting replays offline. OFF by
+  # default — it persists raw meeting audio (a stronger retention claim than a transcript).
+  captureSignalEnabled: "false"
   botUserdataS3Path: ""
   botS3Endpoint: ""
   botS3Bucket: ""

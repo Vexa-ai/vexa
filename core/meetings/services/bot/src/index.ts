@@ -221,6 +221,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
       transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
       config: speakerStreamConfig,
+      // Record production's OWN cuts alongside the audio, so a replay of this session chunks the
+      // way the meeting actually chunked.
+      onBoundary: signalRecorder ? (ev) => signalRecorder.sink.captureBoundary?.({ type: 'boundary', ...ev }) : undefined,
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
       onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },

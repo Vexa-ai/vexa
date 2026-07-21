@@ -626,3 +626,28 @@ def test_native_meeting_id_bounds_do_not_validate_SHAPE(monkeypatch):
             "platform": "google_meet", "native_meeting_id": odd_but_legal,
         })
         assert r.status_code == 201, f"{odd_but_legal!r} was refused: {r.status_code} {r.text}"
+
+
+def test_capture_signal_reaches_the_bot_when_the_deployment_enables_it():
+    """The recorder is only useful if an OPERATOR can turn it on.
+
+    It shipped in 0.12.15 with the bot honouring `captureSignalEnabled`, but NOTHING set the
+    field: bot_spawn didn't know it existed and the runtime never set the env either, so the
+    feature was unreachable in every real deployment — the live runs that "proved" it worked had
+    the env var set by hand on containers launched outside the control plane, which is exactly
+    what hid the gap. This pins the reachable path: deployment knob → invocation → bot.
+    """
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
+                bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
+                connection_id="conn-1", redis_url="redis://redis:6379/0")
+
+    on = build_invocation(**base, capture_signal_enabled=True)
+    conforms_invocation(on)
+    assert on["captureSignalEnabled"] is True, "an enabled deployment must reach the bot"
+
+    # OFF is the default, and must ship NO field at all (None-stripped) — an unconfigured
+    # deployment records nothing and says nothing about recording.
+    off = build_invocation(**base)
+    conforms_invocation(off)
+    assert "captureSignalEnabled" not in off

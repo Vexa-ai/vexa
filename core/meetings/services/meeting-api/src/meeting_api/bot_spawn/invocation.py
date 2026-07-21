@@ -145,6 +145,7 @@ def build_invocation(
     internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
     recording_enabled: bool = False,
+    capture_signal_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
     recording_upload_url: Optional[str] = None,
     transcription_service_url: Optional[str] = None,
@@ -180,6 +181,8 @@ def build_invocation(
         "transcriptionServiceToken": transcription_service_token,
         "transcriptionModel": transcription_model,
         "recordingEnabled": recording_enabled,
+        # None-stripped when off, so an unconfigured deployment ships no capture-signal field.
+        "captureSignalEnabled": capture_signal_enabled or None,
         "captureModes": capture_modes,
         "recordingUploadUrl": recording_upload_url,
         "meetingApiCallbackUrl": meeting_api_callback_url,

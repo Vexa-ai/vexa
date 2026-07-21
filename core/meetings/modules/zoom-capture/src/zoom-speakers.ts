@@ -22,6 +22,9 @@ export interface ZoomSpeakersOptions {
   /** Fired when the active speaker changes (name or null when nobody is active).
    *  Legacy single-track mode (used when remote audio is one mixed track). */
   onSpeakerChange?: (name: string | null) => void;
+  /** How often to report that no speaker has EVER been seen (ms, default 30s). A watcher whose
+   *  selectors have gone stale is otherwise completely silent — see the report in `tick`. */
+  blindReportMs?: number;
   /** Per-track naming (multi-channel mode): fired when a track index is mapped/
    *  locked to a participant name via active-speaker voting. */
   onName?: (index: number, name: string) => void;
@@ -68,9 +71,25 @@ export interface ZoomSpeakersState {
 
 // Active-speaker containers (normal view + screen-share view), and the avatar
 // footer that holds the name. Verbatim from vexa-bot zoom/web/selectors.ts.
+// Zoom does not serve one layout. A browser with hardware acceleration and a camera gets the
+// gallery — a speaker bar plus a large active tile, the first two selectors. A browser without
+// them (the bot: --disable-gpu, --in-process-gpu, no fake capture device) is served a SINGLE-TILE
+// client instead, whose active-speaker frame is `single-main-container__video-frame` and whose
+// name footer is the same `.video-avatar__avatar-footer`. Zoom even says so in a banner: "For a
+// better meeting experience, enable the option 'Use graphics/hardware acceleration'".
+//
+// This is #852. The watcher, the module and the selectors were all correct — for the layout the
+// EXTENSION sees, running in a human's ordinary Chrome. The bot was watching for chrome its own
+// client never renders, and the DOM query that proved it also hid it: every count came back zero,
+// which reads like a dead page. A screenshot of the same instant showed the speaker's name on
+// screen with a live level meter beside it.
+//
+// Observed live in a 26-person room, four consecutive polls, single-tile layout:
+//   Tracy → Captain crunch WoOdiefrOmdahoodie bkallday → Lenny Bo → derrick austin
 const ACTIVE_CONTAINER_SELECTORS = [
   '.speaker-active-container__video-frame',
   '.speaker-bar-container__video-frame--active',
+  '.single-main-container__video-frame',
 ];
 const NAME_FOOTER_SELECTOR = '.video-avatar__avatar-footer';
 
@@ -153,6 +172,11 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
   const HEARTBEAT_POLLS = Math.max(1, Math.round(2000 / pollMs));
   let sinceEmit = 0;
 
+  // Blindness reporting: how often to say "still nothing", and whether anything was EVER seen.
+  const BLIND_REPORT_POLLS = Math.max(1, Math.round((opts.blindReportMs ?? 30_000) / pollMs));
+  let polls = 0;
+  let sawAnySpeaker = false;
+
   // One poll cycle: read the lit speaker; emit on change, or periodically re-assert.
   function tick(): void {
     let name: string | null = null;
@@ -175,6 +199,43 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
         try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
       }
     }
+    // SAY SO WHEN BLIND. This watcher's only output is a speaker transition, so selectors that stop
+    // matching produce perfect silence — no error, no warning, a clean log and a full transcript
+    // whose speaker column reads seg_0, seg_4, seg_7 (#852).
+    //
+    // A watcher that has never once seen a speaker is in a silent room, or looking at a DOM without
+    // the chrome, or looking at renamed classes. It cannot tell which — so it reports the counts
+    // that separate them and leaves the verdict to whoever reads them. The first version of this
+    // block did draw the verdict ("selectors are stale"), and a second browser joined to the SAME
+    // meeting at the SAME moment found both selectors present: the layout was the variable, not
+    // the class names, and the confident message sent the investigation the wrong way.
+    polls++;
+    if (name) sawAnySpeaker = true;
+    if (!sawAnySpeaker && polls % BLIND_REPORT_POLLS === 0) {
+      const anchors = ACTIVE_CONTAINER_SELECTORS.filter((sel) => document.querySelector(sel));
+      const speakerish = document.querySelectorAll('[class*="speaker"]').length;
+      const frames = document.querySelectorAll('[class*="video-frame"]').length;
+      const footers = document.querySelectorAll(NAME_FOOTER_SELECTOR).length;
+      // A screenshot of a blind bot showed the active speaker's NAME on screen, beside a live
+      // audio-level meter, while every selector above counted zero — Zoom serves a cameraless,
+      // GPU-less client a single-tile layout whose class names are nothing like the gallery's.
+      // So when blind, describe whatever carries a level meter: that is where the name lives.
+      for (const el of Array.from(document.querySelectorAll(`${NAME_FOOTER_SELECTOR}, [class*="video-frame"]`)).slice(0, 6)) {
+        log(`  name-bearing node: <${el.tagName.toLowerCase()} class="${el.className}"> text="${(el.textContent || '').trim().slice(0, 50)}"`);
+      }
+      log(
+        `NO ACTIVE SPEAKER seen in ${Math.round((polls * pollMs) / 1000)}s — ` +
+        (anchors.length
+          ? `containers present (${anchors.join(', ')}) but none named; the room may be silent`
+          : `none of ${ACTIVE_CONTAINER_SELECTORS.join(', ')} exist here. This DOM: ` +
+            `${speakerish} [class*=speaker], ${frames} [class*=video-frame], ${footers} name footers, ` +
+            `${document.querySelectorAll('iframe').length} iframes, ` +
+            `viewport ${window.innerWidth}x${window.innerHeight}, visibility=${document.visibilityState}. ` +
+            `All zero means this client renders no speaker chrome at all; non-zero means the class ` +
+            `names moved. Attribution is empty either way.`),
+      );
+    }
+
     // Multi-channel: correlate the active speaker with the track that's audible.
     if (opts.onName) { try { voteOnce(); } catch { /* ignore */ } }
   }

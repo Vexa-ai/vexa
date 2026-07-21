@@ -1,17 +1,22 @@
 {
   "name": "@vexa/zoom-capture",
   "version": "0.1.0",
-  "description": "Zoom capture (browser): active-speaker DOM watcher (→ mixed-capture.v1 hints) + chat reader. Mixed audio comes from @vexa/mixed-capture-core; names resolve downstream in @vexa/mixed-pipeline.",
+  "description": "Zoom capture (browser): active-speaker DOM watcher (\u2192 mixed-capture.v1 hints) + chat reader. Mixed audio comes from @vexa/mixed-capture-core; names resolve downstream in @vexa/mixed-pipeline.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/zoom-capture.test.ts",
+    "test": "tsx src/zoom-capture.test.ts && tsx src/blindness.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

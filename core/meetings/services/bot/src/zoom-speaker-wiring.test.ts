@@ -78,6 +78,11 @@ check('bundle: window.VexaBrowserUtils.createZoomSpeakers is exported (RED at ba
 const page = {
   async exposeFunction(name: string, fn: unknown): Promise<void> { g[name] = fn; },
   async evaluate(fn: (arg: never) => unknown, arg?: unknown): Promise<unknown> { return fn(arg as never); },
+  // The bridge re-arms its watchers on navigation (#852): it registers a `framenavigated`
+  // listener and compares against the main frame. This offline harness never navigates, so the
+  // listener is a no-op sink and the main frame is a stable sentinel.
+  on(_event: string, _cb: (arg: never) => void): void { /* no navigation in this offline test */ },
+  mainFrame(): unknown { return undefined; },
 } as never;
 
 // ── Node side: the pipeline seam the hints must reach ──
