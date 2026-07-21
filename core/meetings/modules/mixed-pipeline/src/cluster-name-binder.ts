@@ -242,7 +242,7 @@ export class ClusterNameBinder {
     const supportStart = commit.tStartMs - HINT_SUPPORT_SLACK_MS;
     const supportEnd = commit.tEndMs + HINT_SUPPORT_SLACK_MS;
     const commitDur = Math.max(1, commit.tEndMs - commit.tStartMs);
-    const agg = new Map<string, { ms: number; supportMs: number; lastStart: number }>();
+    const agg = new Map<string, { ms: number; supportMs: number; inSpanMs: number; lastStart: number }>();
 
     let flickerSkipped = 0;
     for (const log of this.turns.values()) {
@@ -261,8 +261,9 @@ export class ClusterNameBinder {
         if (o <= 0) continue;
         const support = Math.max(0, Math.min(turnEnd, supportEnd) - Math.max(turn.tStartMs, supportStart));
         if (support <= 0) continue;
-        const a = agg.get(turn.name) ?? { ms: 0, supportMs: 0, lastStart: -Infinity };
-        a.ms += o; a.supportMs += support; a.lastStart = Math.max(a.lastStart, turn.tStartMs);
+        const inSpan = Math.max(0, Math.min(turnEnd, commit.tEndMs) - Math.max(turn.tStartMs, commit.tStartMs));
+        const a = agg.get(turn.name) ?? { ms: 0, supportMs: 0, inSpanMs: 0, lastStart: -Infinity };
+        a.ms += o; a.supportMs += support; a.inSpanMs += inSpan; a.lastStart = Math.max(a.lastStart, turn.tStartMs);
         agg.set(turn.name, a);
       }
     }
@@ -271,17 +272,28 @@ export class ClusterNameBinder {
     // Most overlap-ms wins; on a near-tie (within RECENCY_TIE_MS) the MORE RECENT
     // hint wins — so a previous speaker's still-open turn can't out-vote the speaker
     // who actually just started.
-    let best: { name: string; ms: number; supportMs: number; lastStart: number } | null = null;
+    let best: { name: string; ms: number; supportMs: number; inSpanMs: number; lastStart: number } | null = null;
     let totalSupportMs = 0;
+    let totalInSpanMs = 0;
     for (const [name, a] of agg) {
       totalSupportMs += a.supportMs;
+      totalInSpanMs += a.inSpanMs;
       if (!best) { best = { name, ...a }; continue; }
       if (a.supportMs > best.supportMs + RECENCY_TIE_MS) best = { name, ...a };
       else if (a.supportMs >= best.supportMs - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
     }
     if (!best) return { result: null, reject: 'no-hint-overlap', candidates: agg.size, flickerSkipped };
     const coverage = Math.min(1, best.supportMs / commitDur);
-    const confidence = totalSupportMs > 0 ? best.supportMs / totalSupportMs : 0;
+    // Confidence is CONTESTED-NESS INSIDE THE COMMIT SPAN. The ±support slack exists to
+    // absorb hint-lag jitter, not to give the neighbouring speaker's adjacent speech a
+    // vote: with sub-second diarizer turns, a handover commit fully covered by one name
+    // was still scoring conf<0.6 because the previous speaker's closed heartbeat slices
+    // sat inside the slack — 10 of 13 unnamed turns on the botsig9 red arm (#868). When
+    // no hint time falls inside the span at all (pure lag), the slack-window share is
+    // the only evidence there is, and judges as before.
+    const confidence = totalInSpanMs > 0
+      ? best.inSpanMs / totalInSpanMs
+      : (totalSupportMs > 0 ? best.supportMs / totalSupportMs : 0);
     const bestDiag = { name: best.name, supportMs: best.supportMs, coverage, confidence };
     const requiredSupport = Math.min(MIN_MATCH_SUPPORT_MS, commitDur * 0.8);
     if (best.supportMs < requiredSupport) return { result: null, reject: 'support', candidates: agg.size, flickerSkipped, best: bestDiag };
