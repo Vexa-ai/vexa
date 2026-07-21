@@ -694,6 +694,8 @@ class SqlAlchemyTranscriptStore:
         ``ix_transcription_meeting_segment`` in the admin-api authoritative schema), exactly the
         parent db-writer's ON CONFLICT statement: idempotent, a re-flushed rewrite lands as an
         UPDATE, never a duplicate row."""
+        from datetime import datetime as _dt
+
         from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
 
         rows = []
@@ -712,7 +714,7 @@ class SqlAlchemyTranscriptStore:
                 "mid": int(meeting_id), "start": start, "end": end,
                 "text": seg.get("text") or "", "speaker": seg.get("speaker"),
                 "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": datetime.now(timezone.utc),
+                "segid": str(sid), "created": _dt.utcnow(),
             })
         if not rows:
             return

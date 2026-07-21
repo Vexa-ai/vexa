@@ -5,9 +5,9 @@ Derived from the real admin-api behavior (`services/admin-api/app/main.py::valid
 
 - A token carries a `subject` (owning user id), `scopes[]` drawn from {bot, tx, browser}
   (admin-models `VALID_SCOPES`), an optional `expires_at`, and an optional `email`.
-- Validation rejects an **expired** token (parent: `expires_at < datetime.now(timezone.utc)`
-  → 401 "Token expired") and rejects a token **out of scope** for the capability being checked
-  (parent: the request scope must intersect the token's DB scopes, else 403).
+- Validation rejects an **expired** token (parent: `expires_at < utcnow()` → 401 "Token expired")
+  and rejects a token **out of scope** for the capability being checked (parent: the request scope
+  must intersect the token's DB scopes, else 403).
 
 The parent's opaque `vxa_<scope>_<random>` wire string + DB lookup is the *transport*; here the
 `ScopedToken` value object IS the validated identity (the seam an upstream resolver hands us).

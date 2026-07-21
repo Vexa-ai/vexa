@@ -23,7 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import declarative_base, relationship
-from datetime import datetime, timezone
+from datetime import datetime
 
 Base = declarative_base()
 
@@ -139,7 +139,7 @@ class Transcription(Base):
     text = Column(Text, nullable=False)
     speaker = Column(String(255), nullable=True)
     language = Column(String(10), nullable=True)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
     session_uid = Column(String, nullable=True, index=True)
     segment_id = Column(String, nullable=True)
 
