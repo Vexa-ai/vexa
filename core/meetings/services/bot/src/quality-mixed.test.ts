@@ -90,6 +90,21 @@ async function main(): Promise<void> {
   // shows that, and it is the framework's `integrity` axis (FRAMEWORK.md G6).
   const store = new Map<string, { speaker: string; text: string }>();
 
+  // ── Attribution, scored WITHOUT ground truth (#849) ──────────────────────────────────────────
+  // Nobody has to label this session. Four signals answer "is the namer working?" from the
+  // pipeline's own outputs: a turn that never got a name, a hint that named nothing, a name that
+  // could not make up its mind, and a speaker count that does not match the room.
+  let hintMatched = 0, hintMissed = 0;
+  const renames: Array<{ from: string; to: string; n: number }> = [];
+  const names = new Map<string, string[]>();
+  const nameHistory = (id: string): string[] => {
+    let h = names.get(id);
+    if (!h) { h = []; names.set(id, h); }
+    return h;
+  };
+  /** `seg_<n>` is the segmenter's provisional cluster id — a turn published before any hint claimed it. */
+  const isProvisional = (s: string): boolean => /^seg_\d+$/.test(s);
+
   let emitBoundary!: (ev: BoundaryEvent) => void;
   const tc = await ChunkedTranscriber.create({
     language: LANG,
@@ -121,6 +136,7 @@ async function main(): Promise<void> {
       for (const c of confirmed) {
         published.push({ speaker, text: c.text, startMs: c.startMs, endMs: c.endMs, id: c.segmentId, via: 'publish' });
         store.set(c.segmentId, { speaker, text: c.text });
+        nameHistory(c.segmentId).push(speaker);
       }
       for (const p of pending) store.set(p.segmentId, { speaker, text: p.text });
     },
@@ -131,7 +147,17 @@ async function main(): Promise<void> {
       for (const s of segments) store.set(s.segmentId, { speaker, text: s.text });
     },
     clearPending: () => { /* a client-side clear is not a delete; the store keeps what it was told */ },
-    rename: (oldS, newS) => { for (const p of published) if (p.speaker === oldS) p.speaker = newS; },
+    rename: (oldS, newS, segments) => {
+      renames.push({ from: oldS, to: newS, n: segments?.length ?? 0 });
+      for (const p of published) if (p.speaker === oldS) p.speaker = newS;
+      // The store repaints in place — same ids, new name — so the attribution a reader ends up
+      // with is the LAST name each row was given, not the first.
+      for (const s of segments ?? []) { const row = store.get(s.segmentId); if (row) row.speaker = newS; }
+      for (const s of segments ?? []) nameHistory(s.segmentId).push(newS);
+    },
+    // The binder's own instantaneous verdict per hint. It has always been emitted and never read —
+    // #797's "hints detected, silently discarded" is exactly this counter going unwatched.
+    onHintOutcome: (o) => { if (o.outcome === 'matched') hintMatched++; else hintMissed++; },
     // Two cut sources, and which one is right depends on where the fixture came from. A BOT records
     // production's own boundary events, so replaying them chunks the session exactly as the meeting
     // chunked — the faithful choice, and the one that lets MIN_TURN_MS be swept against real cuts.
@@ -227,6 +253,49 @@ async function main(): Promise<void> {
   const storeDupes = storeTexts.length - new Set(storeTexts).size;
   console.log(`  store         ${storeRows.length} rows · ${storeDupes} duplicate texts (upsert-by-segment_id, drafts included)`);
 
+  // ── Attribution (#849) — four signals, no ground truth required ─────────────────────────────
+  const storeWords = (r: { text: string }): number => words(r.text).length;
+  const totalWords = storeRows.reduce((n, r) => n + storeWords(r), 0);
+  const provisionalWords = storeRows.filter((r) => isProvisional(r.speaker)).reduce((n, r) => n + storeWords(r), 0);
+  // Churn counts turns whose name settled on something OTHER than what it was first given. A turn
+  // renamed A→B→A is defective whichever name is right, so distinctness is the measure, not length.
+  const churned = [...names.values()].filter((h) => new Set(h).size > 1).length;
+  const publishedSpeakers = new Set(storeRows.map((r) => r.speaker).filter((s) => !isProvisional(s)));
+  // Cardinality must weight by how long each name was LIT, not just count distinct names. A hint
+  // stream is a poll: a cough, a "yeah", or a poll landing on the wrong tile makes someone a
+  // "participant" the transcript then appears to lose. On a real Zoom call three people were lit
+  // for 6s, 4s and 2s of 269s — twelve seconds between them — and counting them as missing
+  // speakers produced a confident finding that was simply wrong.
+  const LIT_POLL_MS = 2000;          // the hint stream's own resolution
+  const SUBSTANTIVE_LIT_MS = 8000;   // below this, nobody could own a turn worth naming
+  const litMs = new Map<string, number>();
+  {
+    const ordered = hints.slice().sort((a, b) => a.t - b.t);
+    let cur: string | null = null, start = 0, prev = 0;
+    const flush = (): void => { if (cur !== null) litMs.set(cur, (litMs.get(cur) ?? 0) + (prev - start) + LIT_POLL_MS); };
+    for (const h of ordered) {
+      if (h.name !== cur) { flush(); cur = h.name; start = h.t; }
+      prev = h.t;
+    }
+    flush();
+  }
+  const hintNames = new Set([...litMs.entries()].filter(([, ms]) => ms >= SUBSTANTIVE_LIT_MS).map(([n]) => n));
+  const briefNames = litMs.size - hintNames.size;
+  const attribution = {
+    provisionalRate: Number((provisionalWords / Math.max(1, totalWords)).toFixed(3)),
+    hintMatched, hintMissed,
+    hintMissRate: Number((hintMissed / Math.max(1, hintMatched + hintMissed)).toFixed(3)),
+    renames: renames.length,
+    churnedTurns: churned,
+    publishedSpeakers: publishedSpeakers.size,
+    hintNames: hintNames.size,
+    briefNames,
+  };
+  console.log(`  attribution   provisional ${(attribution.provisionalRate * 100).toFixed(1)}% of words · ` +
+    `hints ${hintMatched} matched / ${hintMissed} missed (${(attribution.hintMissRate * 100).toFixed(1)}% miss) · ` +
+    `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} substantively hinted` +
+    (briefNames ? ` (+${briefNames} lit under ${SUBSTANTIVE_LIT_MS / 1000}s, not counted)` : ''));
+
   // A corpus baseline is this block, not the prose above it: a later run diffs against it, so a
   // regression is a failing comparison rather than something someone has to notice in a log.
   if (process.env.METRICS_JSON) {
@@ -254,6 +323,7 @@ async function main(): Promise<void> {
       // 35s window costs seconds of STT before a word can appear.
       resendRatio: Number((submitSecs.reduce((a, b) => a + b, 0) / Math.max(1, covered)).toFixed(2)),
       maxSubmitSec: Number(Math.max(0, ...submitSecs).toFixed(1)),
+      ...attribution,
     }, null, 2) + '\n');
     console.log(`  metrics written: ${process.env.METRICS_JSON}`);
   }
