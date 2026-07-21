@@ -246,7 +246,9 @@ def create_app(
         return headers, None
 
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request) -> Response:
+    async def _forward(
+        method: str, url: str, request: Request, *, timeout: Optional[float] = None,
+    ) -> Response:
         headers, error = await _authorize(method, request)
         if error is not None:
             return error
@@ -262,6 +264,7 @@ def create_app(
                 headers=headers,
                 params=dict(request.query_params) or None,
                 content=content,
+                timeout=timeout,
             )
         except httpx.TimeoutException:
             return Response(content=json.dumps({"detail": "upstream timeout"}),
@@ -406,6 +409,16 @@ def create_app(
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
         return await _forward("PATCH", _meeting(f"/meetings/{meeting_id}"), request)
+
+    # Deferred transcription from the recording (#525): the sealed api.v1 route, forwarded to
+    # meeting-api's transcribe module (serve-fork ruling: what api.v1 seals, the stack serves).
+    # Synchronous by design (the client waits for its transcript), so the forward outlives the
+    # default 30s hop: master upload + STT + the deferred tier's bounded 503 backoff.
+    @app.post("/meetings/{meeting_id}/transcribe")
+    async def transcribe_meeting(meeting_id: int, request: Request):
+        return await _forward(
+            "POST", _meeting(f"/meetings/{meeting_id}/transcribe"), request, timeout=660.0,
+        )
 
     @app.delete("/meetings/{meeting_id}", status_code=204)
     async def delete_planned_meeting(meeting_id: int, request: Request):

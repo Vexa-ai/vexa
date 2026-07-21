@@ -42,7 +42,8 @@ class _ConformanceDownstream:
     def __init__(self, client: httpx.AsyncClient):
         self._client = client
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
+        # timeout is accepted for port parity and ignored: the in-process ASGI hop has no wire.
         parts = urlsplit(url)
         path = parts.path or "/"
         if parts.query:

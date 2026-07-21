@@ -32,9 +32,12 @@ class HttpxDownstreamClient:
     def __init__(self, client):
         self._client = client
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
+        import httpx
+
         return await self._client.request(
-            method, url, headers=headers, params=params or None, content=content
+            method, url, headers=headers, params=params or None, content=content,
+            timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
         )
 
     async def stream(self, method, url, *, headers=None, params=None, content=None):

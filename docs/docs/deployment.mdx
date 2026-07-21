@@ -73,7 +73,10 @@ runs GPU-free and anywhere, and the STT service is its own deploy unit at
 ([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/transcription)
 is the brick — faster-whisper / CTranslate2 behind an OpenAI-compatible `/v1/audio/transcriptions`).
 Language is detected per transcription window and stamped on each segment; force a single language
-via the bot request's `language` (see [Send a bot](/how-to/send-a-bot)).
+via the bot request's `language` (see [Send a bot](/how-to/send-a-bot)). After-the-fact
+transcription of a recording (`POST /meetings/{id}/transcribe`) runs on the service's **deferred
+tier**, which is capacity-reserved behind live meetings: on a busy deployment those requests are
+answered `503` + `Retry-After` and the caller retries, so live transcription never starves.
 
 Stand it up wherever a GPU lives (the same host or a dedicated GPU box):
 

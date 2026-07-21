@@ -197,6 +197,12 @@ def build_fake_downstream() -> FastAPI:
         # The real bot-manager returns the meeting it acted on.
         return _golden("MeetingResponse.example.json")
 
+    @app.post("/meetings/{meeting_id}/transcribe")
+    async def transcribe_meeting(meeting_id: int):
+        # Deferred transcription from the recording (#525) — the module's honest result shape
+        # (the sealed 200 schema is unconstrained).
+        return {"meeting_id": meeting_id, "segments_stored": 0, "language": None}
+
     # --- recordings (gateway forwards /recordings to meeting-api; no sealed api.v1 component) ---
     @app.get("/recordings")
     async def list_recordings():

@@ -118,7 +118,7 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
 | `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
 | `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
-| `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
+| `POST /meetings/{meeting_id}/transcribe` | **Served** (row-id keyed, no native-id form). See [Transcribe a recording](#transcribe-a-recording). |
 
 <Note>
 **What the seal enforces now.** Because the file hash pins the *document* and not the *running
@@ -127,10 +127,39 @@ every `(path, method)` `api.v1` declares, the shipped gateway + meeting-api must
 the route must be recorded in the audited `core/gateway/contracts/api.v1/KNOWN_GAPS.json` ledger (with
 a reason + issue link), which the gate prints loudly on every run. A sealed endpoint renamed or dropped
 without a ledger entry fails CI. The frozen golden examples are also driven against the real responses,
-so a renamed response field (e.g. `running_bots` → `running`) fails too. The two **Not implemented**
-rows above and the share **response-shape** divergence are the current recorded gaps — a client can rely
+so a renamed response field (e.g. `running_bots` → `running`) fails too. The **Not implemented**
+row above and the share **response-shape** divergence are the current recorded gaps — a client can rely
 on the seal meaning "served, or explicitly listed as a gap", not merely "the schema file didn't change".
 </Note>
+
+## Transcribe a recording
+
+A completed meeting that was **recorded** but not transcribed (transcription off, or STT down
+mid-meeting) can be transcribed after the fact from its master recording:
+
+```bash POST /meetings/{meeting_id}/transcribe
+curl -X POST "$API_BASE/meetings/42/transcribe" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"language": "en"}'   # body optional; language is a hint to the STT backend
+```
+
+```json Response
+{ "meeting_id": 42, "segments_stored": 27, "language": "en" }
+```
+
+The transcript is then readable at `GET /transcripts/by-id/{meeting_id}` as usual. Refusals are
+typed (`{"detail": {"reason": …, "message": …}}`):
+
+- `409 already_transcribed`: the meeting already has transcript rows; a second run is refused.
+- `404 no_recording`: no finalized master recording (recording disabled, or nothing captured).
+- `502 provider_rejected` / `no_segments`: the STT backend rejected the request or did not honor
+  `verbose_json`; the body carries the provider's own code and message (e.g. Groq
+  `model_not_found`), never a silent empty transcript.
+- `503 unavailable` / `stt_unconfigured`: backend busy past retries, or
+  `TRANSCRIPTION_SERVICE_URL` unset on the deployment.
+
+The request runs on the STT service's **deferred tier** (capacity-reserved so live meetings keep
+priority) and the detected language is stored as an ISO-639-1 code on every segment.
 
 ## Auto-join
 

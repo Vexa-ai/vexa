@@ -106,6 +106,14 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
   normal, not a failure.
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
+- **If the meeting was recorded**, the transcript is recoverable:
+  `POST /meetings/{id}/transcribe` transcribes the master recording after the fact (see
+  [Meetings API](/api/meetings#transcribe-a-recording)).
+- **"0 segments" from a remote STT provider** (Groq and friends): on 0.10, a wrong model id or a
+  backend ignoring `response_format=verbose_json` made deferred transcription report success and
+  store an empty transcript. Since the deferred path returned in 0.12, both conditions are a loud
+  `502` carrying the provider's own error: an empty transcript can no longer mean that; it means
+  the audio was silent or the meeting produced no confirmed segments.
 
 ## What terminal errors look like — and where the technical details live
 

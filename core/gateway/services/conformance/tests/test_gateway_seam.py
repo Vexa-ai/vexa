@@ -66,7 +66,7 @@ class _RaisingDownstream:
     def __init__(self, exc: Exception):
         self._exc = exc
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         raise self._exc
 
 
@@ -79,7 +79,7 @@ class _StatusDownstream:
         self._content = content
         self._content_type = content_type
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         return httpx.Response(
             status_code=self._status,
             content=self._content,
@@ -94,7 +94,7 @@ class _CapturingDownstream:
     def __init__(self):
         self.seen_headers: dict | None = None
 
-    async def request(self, method, url, *, headers=None, params=None, content=None):
+    async def request(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         self.seen_headers = dict(headers or {})
         return httpx.Response(status_code=200, content=b'{"ok": true}',
                               headers={"content-type": "application/json"})
