@@ -274,6 +274,22 @@ class RedisBus(Protocol):
         a consumer it has already confirmed holds ``pending == 0``."""
         ...
 
+    async def group_backlog(self, *, group: str, stream: str) -> Optional[dict]:
+        """WP-M9: the stream-vs-group cursor evidence the desync self-heal reads — one probe of
+        XLEN + XINFO STREAM + XINFO GROUPS folded into ``{"length", "pending", "lag",
+        "entries_read", "entries_added"}``. The counter fields are ``None`` when the server does
+        not report them (they are Redis 7+), which keeps the heal a no-op there. Returns ``None``
+        when the stream or group does not exist yet, or on a Redis without XINFO — the same
+        no-op-on-unsupported contract as ``reclaim_orphans``, so an unavailable probe can never
+        break the consume path."""
+        ...
+
+    async def reset_group_cursor(self, *, group: str, stream: str) -> None:
+        """WP-M9: re-point ``group`` at the stream start (XGROUP SETID <stream> <group> 0) so
+        every retained entry is delivered again. Only ever called on a group whose PEL is empty;
+        the replay is safe because the durable sink upserts by ``segment_id``."""
+        ...
+
     async def ack(self, *, group: str, stream: str, message_ids: list[str]) -> None: ...
 
     async def publish(self, channel: str, data: str) -> Any: ...

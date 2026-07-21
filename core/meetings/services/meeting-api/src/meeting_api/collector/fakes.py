@@ -793,6 +793,30 @@ class FakeRedisBus:
     async def delete_consumer(self, *, group, stream, consumer):
         return await self._client.xgroup_delconsumer(stream, group, consumer)
 
+    async def group_backlog(self, *, group, stream):
+        """WP-M9: mirror of ``RedisStreamBus.group_backlog`` over fakeredis (which reports the
+        Redis-7 counters — entries-read / entries-added / lag). ``None`` when the stream or the
+        group does not exist yet, like the real adapter."""
+        from redis.exceptions import ResponseError
+
+        from .adapters import _fold_group_backlog
+
+        try:
+            length = await self._client.xlen(stream)
+            stream_info = await self._client.xinfo_stream(stream)
+            groups = await self._client.xinfo_groups(stream)
+        except ResponseError:
+            return None
+        return _fold_group_backlog(group, length, stream_info, groups)
+
+    async def reset_group_cursor(self, *, group, stream):
+        # fakeredis's XGROUP SETID resolves the target id to the entry AT it (``find_index``), so
+        # a SETID-0 there marks the FIRST entry delivered and a replay would skip it. Destroy +
+        # recreate at id 0 expresses the same contract over fakeredis — legal because the healer
+        # only ever resets a group whose PEL is empty.
+        await self._client.xgroup_destroy(stream, group)
+        await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
             await self._client.xack(stream, group, *message_ids)

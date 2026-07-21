@@ -53,6 +53,43 @@ def _decode_claimed(resp) -> "list[tuple[str, dict]]":
     return out
 
 
+def _info_map(entry) -> dict:
+    """Decode one XINFO reply mapping's keys (bytes on a non-decoding client) to str."""
+    return {
+        (k.decode() if isinstance(k, bytes) else k): v
+        for k, v in (entry or {}).items()
+    }
+
+
+def _fold_group_backlog(group: str, length, stream_info, groups) -> "Optional[dict]":
+    """Fold raw XLEN + XINFO STREAM + XINFO GROUPS replies into the WP-M9 desync-probe evidence
+    (``ports.RedisBus.group_backlog``). Counter fields fall back to ``None`` where the server
+    omits them (pre-7 Redis) — the healer treats unknown as healthy. Shared by the production
+    bus and the fakeredis fake so both report the identical shape."""
+
+    def _count(value) -> "Optional[int]":
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    stream_map = _info_map(stream_info)
+    for entry in groups or []:
+        info = _info_map(entry)
+        name = info.get("name")
+        name = name.decode() if isinstance(name, bytes) else name
+        if name != group:
+            continue
+        return {
+            "length": int(length or 0),
+            "pending": int(info.get("pending") or 0),
+            "lag": _count(info.get("lag")),
+            "entries_read": _count(info.get("entries-read")),
+            "entries_added": _count(stream_map.get("entries-added")),
+        }
+    return None
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -1460,6 +1497,31 @@ class RedisStreamBus:
     async def delete_consumer(self, *, group, stream, consumer):
         """#660: XGROUP DELCONSUMER — returns the pending count the consumer held (0 for a ghost)."""
         return await self._client.xgroup_delconsumer(stream, group, consumer)
+
+    async def group_backlog(self, *, group, stream):
+        """WP-M9: one desync probe — XLEN + XINFO STREAM/GROUPS folded into the evidence dict the
+        collector's ``GroupDesyncHealer`` reads. ``None`` (never raise) when the stream or group
+        does not exist yet or the server lacks XINFO — the same degrade contract as
+        ``list_consumers``, so probing can never break the consume path."""
+        from redis.exceptions import ResponseError
+
+        try:
+            length = await self._client.xlen(stream)
+            stream_info = await self._client.xinfo_stream(stream)
+            groups = await self._client.xinfo_groups(stream)
+        except ResponseError as e:
+            msg = str(e).lower()
+            if (
+                "unknown command" in msg or "xinfo" in msg
+                or "no such key" in msg or "nogroup" in msg
+            ):
+                return None
+            raise
+        return _fold_group_backlog(group, length, stream_info, groups)
+
+    async def reset_group_cursor(self, *, group, stream):
+        """WP-M9: XGROUP SETID 0 — deliver every retained entry to the desynced group again."""
+        await self._client.xgroup_setid(stream, group, "0")
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:

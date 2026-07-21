@@ -6,13 +6,22 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import logging
 from typing import Callable
 from urllib.parse import urlparse
 
 from .ports import CallbackEvent, Capture, ControlStore
 
+log = logging.getLogger("meeting_api.zaki_control.callbacks")
 
 _TERMINAL = {"completed", "failed"}
+# Hub statuses that can NEVER succeed on retry — the Hub's contract refusal of an event that is
+# permanently unacceptable: 409 {failure:"invalid_state"} for a stale non-terminal lifecycle step
+# once the capture is already terminal, 410 for a subject that no longer exists, 422 for a body the
+# sealed schema rejects. The drain used to treat every non-2xx as retryable: attempts reached 97
+# live and six orphaned events had to be settled by hand in the staging DB while they blocked the
+# outbox (and, for terminal events, blocked erasure behind them).
+_PERMANENT_REFUSALS = frozenset({409, 410, 422})
 _FAILURE_CODES = {
     "join_denied", "kicked", "meeting_ended_early", "quota_exhausted",
     "invalid_meeting", "capture_timeout", "upstream_unavailable", "internal_failure",
@@ -371,12 +380,38 @@ class ControlCallbackDispatcher:
                 failure_code=failure_code if step == "failed" else None,
             )
 
+    async def _hub_409_is_final(self, event: CallbackEvent) -> bool:
+        """Whether a 409 is a verdict on THIS event rather than on its arrival order.
+
+        The Hub answers ``invalid_state`` both for a genuinely stale lifecycle step (its capture
+        already terminal — the live incident) and for a transition SKIP when the event arrived
+        ahead of a predecessor that is merely still pending.  Only the first shape may dead-letter:
+        the event is non-terminal and the local capture can no longer advance (terminal, or gone —
+        an erased capture's events have nothing left to wait for).  A terminal settlement never
+        dead-letters on 409: ``terminal_callbacks_delivered`` counts dead-letters as delivered, so
+        killing it would open the erasure gate on seconds the Hub never settled.
+        """
+        if event.terminal:
+            return False
+        if event.capture_id is None or event.subject is None:
+            return True
+        capture = await self._store.get_capture(subject=event.subject, capture_id=event.capture_id)
+        return capture is None or capture.state in _TERMINAL
+
     async def drain_once(self, *, limit: int = 50, capture_id: str | None = None) -> int:
         """Deliver a bounded outbox batch.  A non-acknowledging 2xx is retryable, not success."""
         import httpx
 
         delivered = 0
+        # Captures with a retryably-failed event this sweep.  Their later events are skipped, not
+        # attempted: the batch is lifecycle-ordered per capture, and POSTing a successor while its
+        # predecessor is still pending earns a Hub transition-skip 409 that the permanent-refusal
+        # lane would misread as staleness — a transient outage must never lose the events behind
+        # it.  A dead-letter sets no bar; the drain still proceeds past it.
+        barred: set[str] = set()
         for event in await self._store.pending_callbacks(limit=limit, capture_id=capture_id):
+            if event.capture_id is not None and event.capture_id in barred:
+                continue
             raw = json.dumps(event.body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
             timestamp = str(int(self._now().timestamp()))
             signature = hmac.new(self._key, f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
@@ -391,6 +426,36 @@ class ControlCallbackDispatcher:
                             "X-Webhook-Signature": f"sha256={signature}",
                         },
                     )
+            except Exception:
+                # Transport failures (timeout, connect refusal) carry no verdict — retryable.
+                await self._store.mark_callback_failed(event.event_id)
+                if event.capture_id is not None:
+                    barred.add(event.capture_id)
+                continue
+            if response.status_code in _PERMANENT_REFUSALS:
+                if response.status_code == 409 and not await self._hub_409_is_final(event):
+                    log.info(
+                        "outbox event %s got HTTP 409 while capture %s can still advance — "
+                        "out-of-order delivery, retrying after its predecessor lands",
+                        event.event_id,
+                        event.capture_id,
+                    )
+                    await self._store.mark_callback_failed(event.event_id)
+                    if event.capture_id is not None:
+                        barred.add(event.capture_id)
+                    continue
+                # Marking the event delivered is the dead-letter: the outbox has no other lane,
+                # and leaving it pending re-earns the same refusal forever while every event
+                # queued behind it (including terminal settlements erasure waits on) starves.
+                log.warning(
+                    "outbox event %s dead-lettered on HTTP %s: "
+                    "hub refused as invalid_state — event is stale, not retryable",
+                    event.event_id,
+                    response.status_code,
+                )
+                await self._store.mark_callback_delivered(event.event_id)
+                continue
+            try:
                 body = response.json() if 200 <= response.status_code < 300 else None
                 if not (
                     isinstance(body, dict)
@@ -401,6 +466,8 @@ class ControlCallbackDispatcher:
                     raise RuntimeError("Hub did not acknowledge the sealed callback event")
             except Exception:
                 await self._store.mark_callback_failed(event.event_id)
+                if event.capture_id is not None:
+                    barred.add(event.capture_id)
                 continue
             await self._store.mark_callback_delivered(event.event_id)
             delivered += 1

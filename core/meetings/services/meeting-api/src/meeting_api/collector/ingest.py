@@ -21,12 +21,15 @@ The ``:mutable`` payload mirrors the bot's live publisher
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore, TranscriptWriteRefused
+
+log = logging.getLogger("meeting_api.collector.ingest")
 
 # Stream / consumer-group defaults (parent ``collector/config.py``).
 STREAM_NAME = "transcription_segments"
@@ -378,3 +381,85 @@ async def prune_idle_consumers(
         await redis.delete_consumer(group=group, stream=stream, consumer=name)
         pruned += 1
     return pruned
+
+
+# WP-M9: how many CONSECUTIVE matching probes confirm the desync before the cursor is reset —
+# one clean probe in between re-arms the count, so a transient mid-batch read never trips it.
+GROUP_DESYNC_CONFIRM_TICKS = 2
+
+
+class GroupDesyncHealer:
+    """Self-heal the consumer group after a stream trim+recreate desynced its cursor (WP-M9).
+
+    Live incident: recreating ``transcription_segments`` under the surviving ``collector_group``
+    left the group's bookkeeping AHEAD of the stream (entries-read > entries-added), so
+    XREADGROUP '>' returned nothing while XLEN grew — and with lag 0 and pending 0 the group
+    looked healthy while ingestion silently stopped. A manual ``XGROUP SETID <stream> <group> 0``
+    was the only recovery.
+
+    Detection needs MORE than the starved shape (XLEN > 0, lag 0, pending 0): the db-writer trims
+    this stream by min last-delivered id only on its own ~10s cadence, so consumed-but-not-yet-
+    trimmed entries make that exact shape the NORMAL quiet state between trims — matching on it
+    alone would loudly replay the whole stream every couple of ticks forever. The discriminator is
+    the impossible counter relation ``entries_read > entries_added``: only a cursor that outlived
+    its stream reports having read more entries than the stream ever added. On a Redis without
+    those counters (pre-7) the probe carries ``None`` and this stays a no-op, like the other
+    introspection-degrade seams. The reset replays every retained entry, which is safe because
+    the durable sink upserts by ``segment_id``.
+    """
+
+    def __init__(
+        self,
+        redis: RedisBus,
+        *,
+        stream: str = STREAM_NAME,
+        group: str = CONSUMER_GROUP,
+        confirm_ticks: int = GROUP_DESYNC_CONFIRM_TICKS,
+    ):
+        self._redis = redis
+        self._stream = stream
+        self._group = group
+        self._confirm_ticks = max(1, int(confirm_ticks))
+        self._strikes = 0
+
+    @staticmethod
+    def _desynced(probe: dict) -> bool:
+        entries_read = probe.get("entries_read")
+        entries_added = probe.get("entries_added")
+        lag = probe.get("lag")
+        return (
+            int(probe.get("length") or 0) > 0
+            and int(probe.get("pending") or 0) == 0
+            # lag <= 0: Redis reported 0 in the live incident; a fake/edge server may surface the
+            # raw negative difference for the same broken bookkeeping. Unknown (None) never heals.
+            and lag is not None
+            and int(lag) <= 0
+            and entries_read is not None
+            and entries_added is not None
+            and int(entries_read) > int(entries_added)
+        )
+
+    async def tick(self) -> bool:
+        """One probe; returns True when the cursor reset was applied this call."""
+        probe = await self._redis.group_backlog(group=self._group, stream=self._stream)
+        if probe is None or not self._desynced(probe):
+            self._strikes = 0
+            return False
+        self._strikes += 1
+        if self._strikes < self._confirm_ticks:
+            return False
+        log.warning(
+            "consumer group %r on stream %r is desynced past its stream "
+            "(entries-read %s > entries-added %s, XLEN %s, lag %s, pending 0): "
+            "XREADGROUP '>' is starved — resetting the group cursor to 0 and replaying "
+            "(the durable sink upserts by segment_id, so re-ingest is idempotent)",
+            self._group,
+            self._stream,
+            probe.get("entries_read"),
+            probe.get("entries_added"),
+            probe.get("length"),
+            probe.get("lag"),
+        )
+        await self._redis.reset_group_cursor(group=self._group, stream=self._stream)
+        self._strikes = 0
+        return True

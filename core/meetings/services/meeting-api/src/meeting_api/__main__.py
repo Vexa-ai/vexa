@@ -289,7 +289,12 @@ def _attach_background_loops(
     """
     import math
 
-    from .collector.ingest import RECLAIM_MIN_IDLE_MS, consume_segments, reclaim_segments
+    from .collector.ingest import (
+        RECLAIM_MIN_IDLE_MS,
+        GroupDesyncHealer,
+        consume_segments,
+        reclaim_segments,
+    )
     from .sweeps.single_flight import PgAdvisoryLock, run_single_flight, sweep_lock_key
 
     # One shared advisory-lock backend across the guarded loops (each keyed by its own loop name).
@@ -365,9 +370,17 @@ def _attach_background_loops(
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
         tick_n = 0
+        # WP-M9: a stream trim+recreate can leave collector_group's bookkeeping AHEAD of the
+        # stream (entries-read > entries-added) — '>' reads starve while XLEN grows and lag 0 /
+        # pending 0 make it look healthy. The healer probes each tick and resets the cursor
+        # (XGROUP SETID 0) once the shape holds two consecutive ticks; the replay is idempotent
+        # (the durable sink upserts by segment_id). Redundant across replicas but harmless: the
+        # reset only fires on a group whose PEL is empty.
+        desync_healer = GroupDesyncHealer(segment_bus)
         while True:
             try:
                 await consume_segments(transcript_store, segment_bus)
+                await desync_healer.tick()
                 # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
                 # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to
                 # one XAUTOCLAIM per pass (its cursor continues next time) — never a hang surface.
