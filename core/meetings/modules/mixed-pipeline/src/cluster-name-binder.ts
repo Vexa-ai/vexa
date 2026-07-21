@@ -122,6 +122,20 @@ export interface ResolveOptions {
   recordVote?: boolean;
 }
 
+/** Why a window-match returned null (or that it didn't) — per-commit, for the
+ *  attribution instruments (#849/#852). `no-hint-overlap` = no hint turn touched
+ *  the tolerance window at all; the gate reasons mean a candidate existed and a
+ *  specific threshold rejected it. */
+export interface MatchDiagnostics {
+  result: { name: string; confidence: number } | null;
+  reject?: 'no-hint-overlap' | 'support' | 'coverage' | 'confidence';
+  /** Distinct candidate names that overlapped the window. */
+  candidates: number;
+  /** Hint turns skipped by the flicker debounce while scanning this window. */
+  flickerSkipped: number;
+  best?: { name: string; supportMs: number; coverage: number; confidence: number };
+}
+
 interface HintTurn {
   name: string;
   /** Lag-corrected start (ms). */
@@ -210,7 +224,17 @@ export class ClusterNameBinder {
     return this.windowMatch(commit);
   }
 
+  /** windowMatch with its working shown: the same scan, but reporting WHICH gate
+   *  rejected the best candidate (or that none overlapped). Read-only. */
+  explainMatch(commit: CommitInfo): MatchDiagnostics {
+    return this.windowMatchDiag(commit);
+  }
+
   private windowMatch(commit: CommitInfo): { name: string; confidence: number } | null {
+    return this.windowMatchDiag(commit).result;
+  }
+
+  private windowMatchDiag(commit: CommitInfo): MatchDiagnostics {
     // Hints are already lag-corrected at insert, so the commit window only
     // needs tolerance slack.
     const windowStart = commit.tStartMs - this.matchToleranceMs;
@@ -220,11 +244,18 @@ export class ClusterNameBinder {
     const commitDur = Math.max(1, commit.tEndMs - commit.tStartMs);
     const agg = new Map<string, { ms: number; supportMs: number; lastStart: number }>();
 
+    let flickerSkipped = 0;
     for (const log of this.turns.values()) {
       for (const turn of log) {
         // FLICKER DEBOUNCE: a closed turn shorter than the window is a transient (noise
         // burst / UI blip), never a real turn — skip it so it can't steal a segment.
-        if (turn.tEndMs !== undefined && turn.tEndMs - turn.tStartMs < FLICKER_MIN_MS) continue;
+        if (turn.tEndMs !== undefined && turn.tEndMs - turn.tStartMs < FLICKER_MIN_MS) {
+          // Count only flickers that would otherwise have overlapped this window,
+          // so the diagnostic names what the debounce actually cost here.
+          const fEnd = turn.tEndMs;
+          if (Math.min(fEnd, windowEnd) - Math.max(turn.tStartMs, windowStart) > 0) flickerSkipped++;
+          continue;
+        }
         const turnEnd = turn.tEndMs ?? (turn.tStartMs + OPEN_TURN_GRACE_MS);
         const o = Math.max(0, Math.min(turnEnd, windowEnd) - Math.max(turn.tStartMs, windowStart));
         if (o <= 0) continue;
@@ -235,7 +266,7 @@ export class ClusterNameBinder {
         agg.set(turn.name, a);
       }
     }
-    if (agg.size === 0) return null;
+    if (agg.size === 0) return { result: null, reject: 'no-hint-overlap', candidates: 0, flickerSkipped };
 
     // Most overlap-ms wins; on a near-tie (within RECENCY_TIE_MS) the MORE RECENT
     // hint wins — so a previous speaker's still-open turn can't out-vote the speaker
@@ -248,14 +279,15 @@ export class ClusterNameBinder {
       if (a.supportMs > best.supportMs + RECENCY_TIE_MS) best = { name, ...a };
       else if (a.supportMs >= best.supportMs - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
     }
-    if (!best) return null;
+    if (!best) return { result: null, reject: 'no-hint-overlap', candidates: agg.size, flickerSkipped };
     const coverage = Math.min(1, best.supportMs / commitDur);
     const confidence = totalSupportMs > 0 ? best.supportMs / totalSupportMs : 0;
+    const bestDiag = { name: best.name, supportMs: best.supportMs, coverage, confidence };
     const requiredSupport = Math.min(MIN_MATCH_SUPPORT_MS, commitDur * 0.8);
-    if (best.supportMs < requiredSupport) return null;
-    if (coverage < MIN_MATCH_COVERAGE) return null;
-    if (confidence < MIN_MATCH_CONFIDENCE) return null;
-    return { name: best.name, confidence: Math.min(coverage, confidence) };
+    if (best.supportMs < requiredSupport) return { result: null, reject: 'support', candidates: agg.size, flickerSkipped, best: bestDiag };
+    if (coverage < MIN_MATCH_COVERAGE) return { result: null, reject: 'coverage', candidates: agg.size, flickerSkipped, best: bestDiag };
+    if (confidence < MIN_MATCH_CONFIDENCE) return { result: null, reject: 'confidence', candidates: agg.size, flickerSkipped, best: bestDiag };
+    return { result: { name: best.name, confidence: Math.min(coverage, confidence) }, candidates: agg.size, flickerSkipped, best: bestDiag };
   }
 
   private clusterMajority(clusterId: string): { name: string; confidence: number } | null {

@@ -787,6 +787,10 @@ export class ChunkedTranscriber {
     if (r.source !== 'provisional-cluster-id') {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
       turn.resolvedName = r.speakerName;
+    } else {
+      const d = this.binder.explainMatch(commit);
+      const b = d.best ? ` best=${d.best.name} support=${Math.round(d.best.supportMs)}ms cov=${d.best.coverage.toFixed(2)} conf=${d.best.confidence.toFixed(2)}` : '';
+      this.log(`[binder-reject] ${turn.clusterId} [${Math.round(turn.t0)},${Math.round(turn.t1)}] reason=${d.reject} candidates=${d.candidates} flickerSkipped=${d.flickerSkipped}${b}`);
     }
     return r.speakerName;
   }

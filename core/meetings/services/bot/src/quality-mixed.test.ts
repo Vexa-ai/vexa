@@ -97,6 +97,8 @@ async function main(): Promise<void> {
   // pipeline's own outputs: a turn that never got a name, a hint that named nothing, a name that
   // could not make up its mind, and a speaker count that does not match the room.
   let hintMatched = 0, hintMissed = 0;
+  /** reason → count, from the lane's own [binder-reject] narration (last reject per resolve attempt). */
+  const binderRejects = new Map<string, number>();
   const renames: Array<{ from: string; to: string; n: number }> = [];
   const names = new Map<string, string[]>();
   const nameHistory = (id: string): string[] => {
@@ -184,7 +186,13 @@ async function main(): Promise<void> {
       if (!REAL_SEG) return Promise.resolve<BoundarySource>({ appendFrame: async () => { /* */ }, reset() { /* */ } });
       return PyannoteSegmenter.create({ inferIntervalMs: 500, onBoundary }) as unknown as Promise<BoundarySource>;
     },
-    log: () => { /* quiet */ },
+    // The lane narrates why each provisional turn stayed unnamed ([binder-reject] …);
+    // tally the reasons so the run ends with a per-gate count, not 27 anecdotes.
+    log: (msg: string) => {
+      const m = msg.match(/\[binder-reject\] .* reason=(\S+)/);
+      if (m) binderRejects.set(m[1], (binderRejects.get(m[1]) ?? 0) + 1);
+      if (process.env.BINDER_DIAG) console.log(msg);
+    },
   });
 
   type Ev = { t: number; frame?: Frame; hint?: Hint; cut?: Cut };
@@ -317,6 +325,10 @@ async function main(): Promise<void> {
     `(${(attribution.hintMissRate * 100).toFixed(1)}% — NOT an attribution failure, read ACCURACY below) · ` +
     `${renames.length} renames, ${churned} turns churned · speakers ${publishedSpeakers.size} published vs ${hintNames.size} substantively hinted` +
     (briefNames ? ` (+${briefNames} lit under ${SUBSTANTIVE_LIT_MS / 1000}s, not counted)` : ''));
+  if (binderRejects.size > 0) {
+    const tally = [...binderRejects.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}=${n}`).join(' · ');
+    console.log(`  binder-reject ${tally}  (per resolve attempt; BINDER_DIAG=1 for per-turn lines)`);
+  }
 
   // ── Attribution ACCURACY — the truth-bearing oracle ─────────────────────────────────────────
   // The four signals above say whether a name was assigned. They cannot say whether it was RIGHT,
