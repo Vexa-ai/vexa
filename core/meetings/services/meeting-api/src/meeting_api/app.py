@@ -117,6 +117,9 @@ def create_app(
     # recordings ports
     recording_repo: Optional["_recordings.RecordingRepo"] = None,
     storage: Optional["_recordings.Storage"] = None,
+    # transcribe port (#525) — None builds the env-configured HTTP client (whose routes
+    # refuse with a typed 503 when TRANSCRIPTION_SERVICE_URL is unset)
+    stt: Optional["object"] = None,
     # lifecycle store
     meeting_store: Optional[MeetingStore] = None,
     token_secret: Optional[str] = None,
@@ -207,6 +210,15 @@ def create_app(
     if storage is None:
         storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
+
+    # --- transcribe: POST /meetings/{id}/transcribe — deferred STT from the recording (#525) ---
+    from . import transcribe as _transcribe
+
+    if stt is None:
+        stt = _transcribe.HttpSttTranscriber.from_env()
+    app.include_router(_transcribe.build_router(
+        transcript_store, stt, _transcribe.master_audio_resolver(recording_repo, storage),
+    ))
 
     return app
 
