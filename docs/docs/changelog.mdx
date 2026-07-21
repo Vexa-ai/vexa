@@ -572,6 +572,17 @@ probe), not inferred from planning docs.
   (`payment_required`, HTTP 402, "Insufficient balance…") and one count per kind, so a storm of
   per-chunk failures becomes one honest summary rather than a flood.
 
+- **Meeting timestamps serialize as UTC (#860).** `created_at` / `start_time` / `end_time` left the
+  API as naive datetimes, so clients parsed server-local wall time as their own local time and
+  rendered meetings hours off. Every meeting timestamp now carries the `Z` suffix, so standard
+  client parsing lands on the correct local time.
+
+- **Bring-your-own STT endpoint, documented (#537).** Any OpenAI-compatible transcription endpoint
+  can serve as the backend via `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN`; the
+  contract (request shape, auth, response fields) is now written down. See
+  [Custom STT endpoints](/how-to/custom-stt). The FunASR/SenseVoice example is
+  community-contributed and not yet independently validated (#863).
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
