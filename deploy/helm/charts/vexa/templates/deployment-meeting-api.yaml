@@ -112,10 +112,14 @@ spec:
               value: {{ .Values.meetingApi.botS3Endpoint | default "" | quote }}
             - name: BOT_S3_BUCKET
               value: {{ .Values.meetingApi.botS3Bucket | default "" | quote }}
+            {{- if .Values.meetingApi.botS3AccessKey }}
             - name: BOT_S3_ACCESS_KEY
-              value: {{ .Values.meetingApi.botS3AccessKey | default "" | quote }}
+              value: {{ .Values.meetingApi.botS3AccessKey | quote }}
+            {{- end }}
+            {{- if .Values.meetingApi.botS3SecretKey }}
             - name: BOT_S3_SECRET_KEY
-              value: {{ .Values.meetingApi.botS3SecretKey | default "" | quote }}
+              value: {{ .Values.meetingApi.botS3SecretKey | quote }}
+            {{- end }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
