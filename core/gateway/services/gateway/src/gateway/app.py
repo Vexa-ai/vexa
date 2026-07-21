@@ -467,6 +467,15 @@ def create_app(
     async def get_user_webhook(request: Request):
         return await _forward("GET", _admin("/user/webhook"), request)
 
+    # #841: the per-user webhook DELIVERY HISTORY — the queryable record of real delivery outcomes
+    # (the user-facing completion of #815→#817). Unlike the config above (identity-owned, admin-api),
+    # the deliveries live in meeting-api (the dispatcher that records each outcome), so this forwards
+    # THERE. No ROUTE_SCOPES entry (any valid key reads its own history, parity with /user/webhook);
+    # the shared auth prep injects X-User-Id so meeting-api scopes the read to the owner.
+    @app.get("/user/webhook/deliveries")
+    async def get_user_webhook_deliveries(request: Request):
+        return await _forward("GET", _meeting("/webhooks/deliveries"), request)
+
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
     # The ICS URL is a secret — admin-api masks it on every read-back. No ROUTE_SCOPES entry
     # (any valid key manages its own calendar), parity with the webhook self-serve. ----
