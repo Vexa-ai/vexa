@@ -22,7 +22,7 @@ Recordings + notes live in ``meetings.data`` JSONB (there is NO separate recordi
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -109,7 +109,7 @@ class Transcription(Base):
     text = Column(Text, nullable=False)
     speaker = Column(String(255), nullable=True)
     language = Column(String(10), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     session_uid = Column(String, nullable=True, index=True)
     segment_id = Column(String, nullable=True)
 

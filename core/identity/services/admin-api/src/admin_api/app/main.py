@@ -17,7 +17,7 @@ exercises:
 """
 import hmac
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security, status
@@ -270,9 +270,9 @@ def create_app() -> FastAPI:
         token_value = generate_prefixed_token(scope_list[0])
         expires_at = None
         if expires_in is not None and expires_in > 0:
-            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
-                       name=name, created_at=datetime.utcnow(), expires_at=expires_at)
+                       name=name, created_at=datetime.now(timezone.utc), expires_at=expires_at)
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
@@ -478,10 +478,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
         api_token, user = row
 
-        if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
+        if api_token.expires_at is not None and api_token.expires_at < datetime.now(timezone.utc):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
-        api_token.last_used_at = datetime.utcnow()
+        api_token.last_used_at = datetime.now(timezone.utc)
         await db.commit()
 
         scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
