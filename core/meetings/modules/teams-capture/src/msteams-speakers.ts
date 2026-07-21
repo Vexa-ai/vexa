@@ -61,6 +61,73 @@ export const teamsMeetingContainerSelectors: string[] = [
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
 
+/** UI-control / icon-ligature / role words that a tile's text leaves may carry but
+ *  which are never a participant's name. Shared by the explicit-selector path and the
+ *  structural fallback so both reject the same non-name strings. */
+const TEAMS_FORBIDDEN_NAME_SUBSTRINGS: string[] = [
+  'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
+  'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
+  'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
+];
+
+/**
+ * Resolve a participant's display name from a Teams tile element.
+ *
+ * Two stages: (1) the explicit `teamsNameSelectors` — the fast path when a name node
+ * carries a stable data-tid/aria/class; (2) a selector-agnostic STRUCTURAL FALLBACK
+ * (#853, witnessed live) for today's Teams DOM, where the name label is a div whose
+ * ONLY classes are minified atomic hashes (`___12zni01 f1cmbuwj …`) that rotate every
+ * release — the exact drift #797 predicted, and why chasing a class prefix
+ * (`___2u340f0`) can never hold. The fallback finds the name the way a human reads the
+ * tile: the first text-bearing leaf that looks like a name (has a letter, isn't a
+ * timer/UI-control word). It runs ONLY after every explicit selector missed, so a real
+ * name node still wins the fast path.
+ *
+ * `opts.structuralFallback` (default true) exists so tests can pin the pre-fallback
+ * RED: with it off, a tile whose classes match no explicit selector resolves to ''.
+ */
+export function extractTeamsSpeakerName(
+  element: HTMLElement,
+  opts?: { structuralFallback?: boolean },
+): string {
+  const forbidden = TEAMS_FORBIDDEN_NAME_SUBSTRINGS;
+  for (const selector of teamsNameSelectors) {
+    const nameElement = element.querySelector(selector) as HTMLElement | null;
+    if (!nameElement) continue;
+    let nameText = nameElement.textContent ||
+      (nameElement as any).innerText ||
+      nameElement.getAttribute('title') ||
+      nameElement.getAttribute('aria-label');
+    if (!nameText || !nameText.trim()) continue;
+    nameText = nameText.trim();
+    if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
+    if (nameText.length > 1 && nameText.length < 50) return nameText;
+  }
+  const ariaLabel = element.getAttribute('aria-label');
+  if (ariaLabel && ariaLabel.includes('name')) {
+    const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
+    if (m && m[1]) {
+      const nameText = m[1].trim();
+      if (nameText.length > 1 && nameText.length < 50) return nameText;
+    }
+  }
+  if (opts?.structuralFallback === false) return '';
+  const looksLikeName = (s: string): boolean => {
+    if (s.length < 2 || s.length > 50) return false;
+    if (!/[a-zA-Z]/.test(s)) return false;                 // pure digits/timer "00:30" → no
+    if (/^\d{1,2}:\d{2}/.test(s)) return false;            // leading clock
+    return !forbidden.some((sub) => s.toLowerCase().includes(sub.toLowerCase()));
+  };
+  const leaves = element.querySelectorAll('*');
+  for (let i = 0; i < leaves.length; i++) {
+    const leaf = leaves[i] as HTMLElement;
+    if (leaf.children.length !== 0) continue;               // leaf nodes only
+    const t = (leaf.textContent || '').trim();
+    if (looksLikeName(t)) return t;
+  }
+  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+}
+
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
@@ -137,54 +204,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     return id!;
   }
 
-  function extractName(element: HTMLElement): string {
-    const forbidden = [
-      'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
-      'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
-      'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
-    ];
-    for (const selector of teamsNameSelectors) {
-      const nameElement = element.querySelector(selector) as HTMLElement | null;
-      if (!nameElement) continue;
-      let nameText = nameElement.textContent ||
-        (nameElement as any).innerText ||
-        nameElement.getAttribute('title') ||
-        nameElement.getAttribute('aria-label');
-      if (!nameText || !nameText.trim()) continue;
-      nameText = nameText.trim();
-      if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
-      if (nameText.length > 1 && nameText.length < 50) return nameText;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel && ariaLabel.includes('name')) {
-      const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
-      if (m && m[1]) {
-        const nameText = m[1].trim();
-        if (nameText.length > 1 && nameText.length < 50) return nameText;
-      }
-    }
-    // Structural fallback (#853, witnessed live): today's Teams renders the name label in a div
-    // whose ONLY classes are minified atomic hashes (e.g. `___12zni01 f1cmbuwj …`) that rotate
-    // every release — the exact drift #797 predicted, and why chasing a class prefix
-    // (`___2u340f0`) can never hold. Instead of a new hash to go stale, find the name the way a
-    // human reads the tile: the shortest text-bearing leaf inside the tile that looks like a name
-    // (has a letter, isn't a timer/UI-control word). Selector-agnostic, so it survives the next
-    // hash roll. Runs ONLY after every explicit selector missed, so a real name node still wins.
-    const looksLikeName = (s: string): boolean => {
-      if (s.length < 2 || s.length > 50) return false;
-      if (!/[a-zA-Z]/.test(s)) return false;                 // pure digits/timer "00:30" → no
-      if (/^\d{1,2}:\d{2}/.test(s)) return false;            // leading clock
-      return !forbidden.some((sub) => s.toLowerCase().includes(sub.toLowerCase()));
-    };
-    const leaves = element.querySelectorAll('*');
-    for (let i = 0; i < leaves.length; i++) {
-      const leaf = leaves[i] as HTMLElement;
-      if (leaf.children.length !== 0) continue;               // leaf nodes only
-      const t = (leaf.textContent || '').trim();
-      if (looksLikeName(t)) return t;
-    }
-    return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
-  }
+  const extractName = (element: HTMLElement): string => extractTeamsSpeakerName(element);
 
   function getIdentity(element: HTMLElement): Identity {
     let identity = cache.get(element);
