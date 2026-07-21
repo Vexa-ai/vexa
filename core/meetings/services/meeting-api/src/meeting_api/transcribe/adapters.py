@@ -1,7 +1,7 @@
 """Production adapters for the transcribe module (#525 C1).
 
 ``HttpSttTranscriber`` speaks the OpenAI-compatible ``POST /v1/audio/transcriptions``
-contract — the single ASR seam (#437 ruling) — against the deployment's configured
+contract, the single ASR seam (#437 ruling), against the deployment's configured
 backend (bundled unit or a remote provider like Groq). ``master_audio_resolver``
 composes the recordings seam (finalize-on-read, #768) into the byte-resolver port
 the service flow consumes.
@@ -36,7 +36,7 @@ def _provider_fault(resp: httpx.Response) -> TranscribeFault:
             message = err.get("message") or str(err)
         else:
             message = str(body.get("detail") or resp.text)
-    except Exception:  # noqa: BLE001 — a non-JSON error body still surfaces verbatim
+    except Exception:  # noqa: BLE001, a non-JSON error body still surfaces verbatim
         message = resp.text
     return TranscribeFault(
         "provider_rejected", message, status=resp.status_code, provider_code=code,
@@ -48,7 +48,7 @@ class HttpSttTranscriber:
 
     Sends the resolved model id + ``response_format=verbose_json`` +
     ``transcription_tier=deferred`` (#355 defects 1+2, the deferred capacity tier),
-    and loops on 503 honoring Retry-After — the bundled service fails fast when
+    and loops on 503 honoring Retry-After, the bundled service fails fast when
     busy, so a deferred caller waits its turn.
     """
 
@@ -78,7 +78,7 @@ class HttpSttTranscriber:
         )
 
     def _endpoint(self) -> str:
-        # Append-only-when-missing — the ONE url rule the TS client and
+        # Append-only-when-missing, the ONE url rule the TS client and
         # config_preflight already share; anything else double-paths into a 404.
         base = (self.base_url or "").rstrip("/")
         return base if base.endswith(_ENDPOINT_PATH) else base + _ENDPOINT_PATH
@@ -120,7 +120,7 @@ class HttpSttTranscriber:
 
         if resp.status_code == 503:
             raise TranscribeFault(
-                "unavailable", "transcription backend busy — retries exhausted", status=503,
+                "unavailable", "transcription backend busy, retries exhausted", status=503,
             )
         if resp.status_code >= 400:
             raise _provider_fault(resp)
@@ -138,7 +138,7 @@ def master_audio_resolver(repo, storage):
 
     Finalize-on-read over every recording of the meeting (a meeting can carry
     several); the first media file that finalizes to a master wins. None when
-    nothing finalizes — recording disabled, or nothing captured.
+    nothing finalizes, recording disabled, or nothing captured.
     """
     from ..recordings.service import finalize_master
 

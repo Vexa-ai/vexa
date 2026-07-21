@@ -235,6 +235,51 @@ async def test_foreign_meeting_is_not_found():
     assert ei.value.kind == "not_found"
 
 
+async def test_active_meeting_is_refused_not_partially_transcribed():
+    # finalize-on-read assembles a PARTIAL master mid-recording (#768); transcribing it would
+    # store a partial transcript that then 409-blocks the full run forever. Refuse, typed.
+    store, mid = seeded_store()
+    store._meetings[mid]["status"] = "active"
+    with pytest.raises(TranscribeFault) as ei:
+        await run(store, mid, make_stt(lambda r: httpx.Response(500)))
+    assert ei.value.kind == "not_completed"
+
+    doc = await store.get_transcript_by_id(7, mid)
+    assert doc["segments"] == []
+
+
+async def test_transcript_share_viewer_cannot_transcribe():
+    # Transcription is an OWNER-tier mutation (provider cost, rows written, the single Q2 run
+    # consumed); the read-tier ACL admits share viewers, the transcribe gate must not.
+    store, mid = seeded_store(data={"transcript_viewers": [9]})
+    with pytest.raises(TranscribeFault) as ei:
+        await run(store, mid, make_stt(lambda r: httpx.Response(500)), user_id=9)
+    assert ei.value.kind == "not_found"
+
+
+async def test_concurrent_second_run_is_refused_while_first_transcribes():
+    import asyncio
+
+    release = asyncio.Event()
+
+    class SlowStt:
+        async def transcribe(self, audio, *, language=None):
+            await release.wait()
+            return VERBOSE_JSON_LANGUAGE_ENGLISH
+
+    store, mid = seeded_store()
+    first = asyncio.create_task(run(store, mid, SlowStt()))
+    await asyncio.sleep(0)  # let the first run enter the STT await
+
+    with pytest.raises(TranscribeFault) as ei:
+        await run(store, mid, SlowStt())
+    assert ei.value.kind == "already_running"
+
+    release.set()
+    result = await first
+    assert result["segments_stored"] == 2
+
+
 async def test_second_transcription_is_refused_as_conflict():
     # Q2 ruling (2026-07-21): keep 0.10's refuse-second-run semantics, typed.
     store, mid = seeded_store(segments=[

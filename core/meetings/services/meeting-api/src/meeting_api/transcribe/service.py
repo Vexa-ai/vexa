@@ -1,9 +1,9 @@
-"""Deferred transcription from the recording (#525 C1) — the pure flow over ports.
+"""Deferred transcription from the recording (#525 C1), the pure flow over ports.
 
 A completed meeting with a master recording gains transcript rows on demand:
 resolve the master via the recordings seam, POST it to the STT service, normalize
 the detected language to ISO-639-1 (#355 defect 3), store rows through the
-collector's durable-write seam. Every failure is a typed ``TranscribeFault`` —
+collector's durable-write seam. Every failure is a typed ``TranscribeFault``,
 never a silent ``[]`` (#355 defects 1 and 2; P18).
 """
 from __future__ import annotations
@@ -15,8 +15,9 @@ class TranscribeFault(Exception):
     """A typed refusal/failure of the deferred-transcribe flow.
 
     ``kind`` is the machine-readable reason the router maps to an HTTP status:
-    ``not_found`` · ``no_recording`` · ``already_transcribed`` · ``no_segments`` ·
-    ``provider_rejected`` · ``unavailable`` · ``stt_unconfigured``.
+    ``not_found`` · ``not_completed`` · ``no_recording`` · ``already_transcribed`` ·
+    ``already_running`` · ``no_segments`` · ``provider_rejected`` · ``unavailable`` ·
+    ``stt_unconfigured``.
     ``provider_code``/``status`` carry the upstream provider's error verbatim so an
     operator sees WHY (0.10 collapsed a Groq model_not_found 404 into a generic 502).
     """
@@ -73,7 +74,7 @@ def normalize_language(value: Optional[str]) -> Optional[str]:
     """A provider language value → ISO-639-1 code, or None when it can't be one.
 
     Codes pass through; full names map via the whisper inventory; anything else
-    stores as NULL — never a value the String(10) column and code-expecting
+    stores as NULL, never a value the String(10) column and code-expecting
     consumers can't hold (the 0.10 read path dropped every segment over exactly
     this, #355 defect 3).
     """
@@ -85,6 +86,16 @@ def normalize_language(value: Optional[str]) -> Optional[str]:
     if len(v) <= 3:  # already a code (whisper's own form, incl. "haw"/"yue")
         return v
     return None
+
+
+# ponytail: per-process in-flight guard, a second meeting-api replica can double-run;
+# move to a redis lock when meeting-api scales past one replica (docs already caveat that).
+_IN_FLIGHT: set[int] = set()
+
+# Statuses whose recording is final. Anything earlier (active/awaiting/...) would transcribe
+# a PARTIAL master (finalize-on-read is deliberately re-assemblable mid-recording, #768) and
+# then 409-block the full run forever via the Q2 conflict check.
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
 
 async def transcribe_meeting(
@@ -99,8 +110,23 @@ async def transcribe_meeting(
     """Transcribe a completed meeting's master recording into transcript rows.
 
     Returns ``{"meeting_id", "segments_stored", "language"}``. Raises
-    ``TranscribeFault`` for every refusal — the router owns the HTTP mapping.
+    ``TranscribeFault`` for every refusal, the router owns the HTTP mapping.
     """
+    # OWNER-only: transcription incurs STT cost, writes rows into the meeting, and consumes
+    # the single Q2-permitted run, owner-tier mutations, so the read-tier ACL that admits
+    # transcript-share viewers and workspace members is not enough. ``shared`` is the store's
+    # own owner test (user_id mismatch).
+    rows = await store.list_meetings(user_id, meeting_id=meeting_id, slim=True)
+    row = rows[0] if rows else None
+    if row is None or row.get("shared"):
+        raise TranscribeFault("not_found", f"meeting {meeting_id} not found for this user")
+    if row.get("status") not in _TERMINAL_STATUSES:
+        raise TranscribeFault(
+            "not_completed",
+            f"meeting {meeting_id} is {row.get('status')!r}, a transcript from a still-running "
+            "recording would be partial and would block the full run; retry after the meeting ends",
+        )
+
     doc = await store.get_transcript_by_id(user_id, meeting_id)
     if doc is None:
         raise TranscribeFault("not_found", f"meeting {meeting_id} not found for this user")
@@ -111,6 +137,30 @@ async def transcribe_meeting(
             f"meeting {meeting_id} already has {len(doc['segments'])} transcript segments",
         )
 
+    if meeting_id in _IN_FLIGHT:
+        # The Q2 check alone is check-then-act across a minutes-long STT await: a concurrent
+        # second run would double-spend the provider. Refuse it while the first is running.
+        raise TranscribeFault(
+            "already_running", f"a transcription of meeting {meeting_id} is already in progress",
+        )
+    _IN_FLIGHT.add(meeting_id)
+    try:
+        return await _transcribe_locked(
+            store=store, stt=stt, resolve_master=resolve_master,
+            meeting_id=meeting_id, language=language,
+        )
+    finally:
+        _IN_FLIGHT.discard(meeting_id)
+
+
+async def _transcribe_locked(
+    *,
+    store: Any,
+    stt: SttTranscriber,
+    resolve_master: Callable[[int], Awaitable[Optional[bytes]]],
+    meeting_id: int,
+    language: Optional[str],
+) -> dict:
     audio = await resolve_master(meeting_id)
     if audio is None:
         raise TranscribeFault(
@@ -124,7 +174,7 @@ async def transcribe_meeting(
         # defect 2). A present-but-empty list is legitimate silence, not this fault.
         raise TranscribeFault(
             "no_segments",
-            "provider returned no segments[] — response_format=verbose_json not honored "
+            "provider returned no segments[], response_format=verbose_json not honored "
             "by the transcription backend",
         )
 

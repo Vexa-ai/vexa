@@ -1,4 +1,4 @@
-"""POST /meetings/{meeting_id}/transcribe — the sealed api.v1 route (#525 C1).
+"""POST /meetings/{meeting_id}/transcribe, the sealed api.v1 route (#525 C1).
 
 The contract stops lying: the route either serves a transcript from a completed
 meeting's recording or refuses with a typed reason. Fault→HTTP mapping lives
@@ -14,8 +14,10 @@ from .service import TranscribeFault, transcribe_meeting
 
 _FAULT_STATUS = {
     "not_found": 404,
+    "not_completed": 409,         # still recording, a partial transcript would 409-block the full one
     "no_recording": 404,          # prepared: a reasoned 404, never a 500
     "already_transcribed": 409,   # Q2 ruling: refuse a second run, typed
+    "already_running": 409,       # concurrent duplicate, the first run is still transcribing
     "no_segments": 502,
     "provider_rejected": 502,
     "unavailable": 503,
