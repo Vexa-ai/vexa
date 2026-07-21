@@ -57,7 +57,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             <Logo size="md" showText={false} className="group-hover:scale-105 transition-transform" />
             <span className="hidden sm:inline-block text-[15px] font-semibold tracking-[-0.01em] text-foreground">vexa</span>
           </Link>
-          <VersionChip className="hidden sm:inline-flex" />
+          <VersionChip className="hidden sm:inline-flex" platformVersion={config?.platformVersion} />
         </div>
 
         {/* Spacer */}

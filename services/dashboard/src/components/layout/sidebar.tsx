@@ -376,7 +376,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             <div className="px-3">
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-muted-foreground">vexa</span>
-                <VersionChip variant="minimal" look="pill" />
+                <VersionChip variant="minimal" look="pill" platformVersion={config?.platformVersion} />
               </div>
             </div>
           </div>
