@@ -111,6 +111,11 @@ async function main(): Promise<void> {
 
   if (failed) { console.error(`\n❌ mock fidelity (L2): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log(`\n✅ mock fidelity (L2): all ${Object.keys(SCENARIOS).length} scenarios drive a schema-valid lifecycle.v1 + transcript.v1 — the mock cannot emit off-contract.`);
+  // A scenario transport leaves a live handle behind on slow machines (4-vCPU CI runners lose
+  // the race that faster boxes win), so relying on natural event-loop exit wedged the whole
+  // node lane to the 6h job timeout. Every check has passed by this line — exit explicitly,
+  // exactly as the failure path already does.
+  process.exit(0);
 }
 
 void main();

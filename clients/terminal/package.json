@@ -2,13 +2,13 @@
   "name": "@vexa/terminal",
   "version": "0.1.0",
   "private": true,
-  "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference.",
+  "description": "Vexa Terminal \u2014 an AI-first knowledge-worker terminal (Claude Code \u00d7 Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference.",
   "scripts": {
     "dev": "PORT=3000 node server.mjs",
     "build": "next build",
     "start": "PORT=3000 NODE_ENV=production node server.mjs",
     "lint": "next lint",
-    "test": "vitest run"
+    "test": "vitest run --pool=forks"
   },
   "dependencies": {
     "@mdx-js/mdx": "^3.1.1",

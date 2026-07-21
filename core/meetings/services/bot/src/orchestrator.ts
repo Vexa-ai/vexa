@@ -97,6 +97,11 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
     }
     cur = status;
+    if (status === 'failed') {
+      // The reason used to travel ONLY inside the callback body — a hosted join could die
+      // with an empty pod log (the EROFS-screenshot incident). Terminal failures print.
+      console.error(`[bot] terminal failed (stage=${extra.failure_stage ?? '?'}, reason=${extra.completion_reason ?? '?'}): ${extra.reason ?? ''}`);
+    }
     await deps.lifecycle.emit({ ...base, status, ...extra });
   };
 

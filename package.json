@@ -10,7 +10,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test --log-order=stream",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "gate:readme": "node scripts/gates.mjs readme",

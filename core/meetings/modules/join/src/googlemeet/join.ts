@@ -11,6 +11,7 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
+import { checkpoint } from "../shared/checkpoint";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -86,8 +87,8 @@ export async function waitForAnySelector(
     return winner;
   }
 
-  const shot = `/app/storage/screenshots/bot-checkpoint-${label.replace(/[^a-z0-9]+/gi, "-")}-not-found.png`;
-  try { await page.screenshot({ path: shot, fullPage: true }); } catch { /* best-effort */ }
+  const shot = `${label.replace(/[^a-z0-9]+/gi, "-")}-not-found`;
+  await checkpoint(page, shot);
   log(`📸 Screenshot: ${label} not found by any of ${selectors.length} selectors (tried: ${selectors.join(" | ")})`);
   throw new Error(`Could not locate ${label} by any locale-agnostic or English selector after ${timeoutMs}ms`);
 }
@@ -101,9 +102,7 @@ export async function joinGoogleMeeting(
   await page.goto(meetingUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
-  // Take screenshot after navigation
-  await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true });
-  log("📸 Screenshot taken: After navigation to meeting URL");
+  await checkpoint(page, "0-after-navigation");
 
   // --- Call joining callback to notify meeting-api that bot is joining ---
   // Fix 2: Propagate JOINING callback failure — bot must NOT proceed if server rejected
@@ -120,8 +119,8 @@ export async function joinGoogleMeeting(
     humanizer = new HumanizedInteractor(MOCAP_LIBRARY, {
       log,
       onMissScreenshot: async (p, reason) => {
-        await p.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-humanized-click-miss.png', fullPage: true });
-        log(`📸 Screenshot: humanized click abandoned as off-target — ${reason}`);
+        await checkpoint(p, "humanized-click-miss");
+        log(`humanized click abandoned as off-target — ${reason}`);
       },
     });
     if (!(await humanizer.available())) {
@@ -172,9 +171,7 @@ export async function joinGoogleMeeting(
     log("Waiting for lobby to load...");
     await page.waitForTimeout(5000);
 
-    // Diagnostic screenshot to see what the lobby shows
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-lobby.png', fullPage: true });
-    log("📸 Diagnostic screenshot: auth lobby state");
+    await checkpoint(page, "auth-lobby");
 
     // Mute mic and camera if visible
     try {
@@ -210,7 +207,7 @@ export async function joinGoogleMeeting(
     // guard holds on non-English lobbies too. A signed-in account that is
     // merely not pre-admitted shows no name input and proceeds to knock.
     if (await isGoogleSignedOutLobby(page)) {
-      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-signed-out.png', fullPage: true });
+      await checkpoint(page, "auth-signed-out");
       log("📸 Screenshot: authenticated mode but browser profile is signed out (guest lobby).");
       throw new AuthSessionError(
         "Browser profile signed out — cannot authenticate with Google. Re-authenticate the profile and retry."
@@ -220,7 +217,7 @@ export async function joinGoogleMeeting(
     await clickHandle(ctaHandle, "authenticated_join");
     log(`Bot clicked the authenticated join CTA (via ${ctaSelector}).`);
 
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-join-now.png', fullPage: true });
+    await checkpoint(page, "0-after-join-now");
     log("📸 Screenshot taken: After join click (authenticated)");
   } else {
     // Anonymous flow: enter bot name and ask to join
@@ -234,7 +231,7 @@ export async function joinGoogleMeeting(
     );
     log("Name input field found.");
 
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
+    await checkpoint(page, "0-name-field-found");
 
     await fillField(nameHandle!, nameFieldSelector, botName, "name");
 
@@ -262,7 +259,7 @@ export async function joinGoogleMeeting(
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);
 
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true });
+    await checkpoint(page, "0-after-ask-to-join");
     log("📸 Screenshot taken: After clicking 'Ask to join'");
   }
 }
