@@ -200,8 +200,27 @@ interface Turn {
 }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
- *  clusterSegments, so only the window + key are kept here. */
-interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNames?: Set<string> }
+ *  clusterSegments, so only the window + key are kept here. `reasserted` counts
+ *  FRESH post-hold hints per blocked name: a transient tile flip never speaks
+ *  again, so a blocked name that keeps re-asserting was the real speaker and
+ *  earns its claim back (see recordHint). */
+interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNames?: Set<string>; reasserted?: Map<string, number> }
+
+/** Fresh hints of a held-back name needed to lift a short-UI-switch block. One
+ *  heartbeat could be the tail of the same blip; two (~4s apart on the Zoom/Teams
+ *  re-assert cadence) is a speaker who is still talking. */
+const REASSERT_UNBLOCK_COUNT = 2;
+/** How long after a held turn's end a blocked name's fresh hints still count as
+ *  testimony about it. Two heartbeats plus slack; past this, the room has moved
+ *  on and the hold stands. */
+const REASSERT_WINDOW_MS = 8000;
+/** A held turn is adjudicated by the SWEEP once its re-assertion window has
+ *  passed: if the held-back name's total lit time around the turn reaches this,
+ *  it was a speaker (heartbeats total seconds), not a tile flip (one short
+ *  slice) — the vetoed match stands and the turn repaints. */
+const REAL_SPEAKER_LIT_MS = 2000;
+/** Audio-time cadence for the held-turn sweep. */
+const SWEEP_EVERY_MS = 1000;
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -229,6 +248,7 @@ export class ChunkedTranscriber {
   private queue: Array<SegItem | 'tick'> = [];
   /** Timestamp of the freshest audio in the ring (the live edge). */
   private latestAudioMs = 0;
+  private lastSweepMs = 0;
   private pumping = false;
   private lastConfirmedText = '';
   /** Audio-time end of the last processed commit — used to detect the silence
@@ -317,6 +337,10 @@ export class ChunkedTranscriber {
     if (this.disposed) return;
     if (this.firstAudioMs === null) this.firstAudioMs = tsMs;
     this.latestAudioMs = Math.max(this.latestAudioMs, tsMs + (pcm.length / SAMPLE_RATE) * 1000);
+    if (this.latestAudioMs - this.lastSweepMs >= SWEEP_EVERY_MS) {
+      this.lastSweepMs = this.latestAudioMs;
+      this.sweepHeld(this.latestAudioMs);
+    }
     this.ring.push({ pcm, tMs: tsMs });
     this.ringMs += (pcm.length / SAMPLE_RATE) * 1000;
     while (this.ring.length > 0 && this.ringMs > RING_MS) {
@@ -362,12 +386,60 @@ export class ChunkedTranscriber {
     for (const u of this.unresolved) {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (!isEnd && blocked.has(name) && tMs - u.t1 <= REASSERT_WINDOW_MS) {
+        // The held-back name is speaking AGAIN. The hold vetoed a window-match that
+        // had already passed every binder gate, on suspicion of a tile flip — and a
+        // transient flip never re-asserts, while a real speaker's heartbeat does.
+        // Fresh testimony is judged on ARRIVAL TIME (within a couple of heartbeats
+        // of the held turn's end), not on re-matching the past window, which a
+        // later hint can never do. At the threshold the suspicion is disproved:
+        // the original match stands — lift and claim.
+        const seen = ((u.reasserted ??= new Map()).get(name) ?? 0) + 1;
+        if (seen >= REASSERT_UNBLOCK_COUNT) {
+          blocked.delete(name);
+          this.log(`[ChunkedTranscriber] short-UI block lifted for "${name}" on ${u.clusterId} — re-asserted ×${seen}`);
+          this.claimTurn(u.clusterId, name);
+          matchedNow = true;
+          continue;
+        }
+        u.reasserted.set(name, seen);
+      }
       if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
       if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
       else still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
     report();
+  }
+
+  /** THE SWEEP (audio-clock driven, and once more at dispose): adjudicate every
+   *  held or unnamed turn whose re-assertion window has closed, against the
+   *  hints ALREADY recorded. A hold must not depend on a future hint — under
+   *  hint-leads-turn interleaving there is none — and it must not be a life
+   *  sentence: the binder match the hold vetoed either stands (the name shows
+   *  real lit time around the turn) or the turn stays provisional. */
+  private sweepHeld(nowMs: number): void {
+    if (this.unresolved.length === 0) return;
+    const still: UnresolvedTurn[] = [];
+    for (const u of this.unresolved) {
+      if (nowMs < u.t1 + REASSERT_WINDOW_MS) { still.push(u); continue; }
+      const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (!m) { still.push(u); continue; }
+      const blocked = u.blockedNames;
+      if (blocked?.has(m.name)) {
+        const lit = this.binder.litMsAround(m.name, u.t0 - REASSERT_WINDOW_MS, u.t1 + REASSERT_WINDOW_MS);
+        if (lit >= REAL_SPEAKER_LIT_MS) {
+          blocked.delete(m.name);
+          this.log(`[ChunkedTranscriber] sweep adjudicated ${u.clusterId} → "${m.name}" (lit ${Math.round(lit)}ms around the turn — a speaker, not a flip)`);
+          this.claimTurn(u.clusterId, m.name);
+          continue;
+        }
+        still.push(u);   // one short slice — the flip suspicion stands
+        continue;
+      }
+      this.claimTurn(u.clusterId, m.name);   // ordinary late window-match, no hold involved
+    }
+    this.unresolved = still;
   }
 
   /** Late-box claim: repaint a provisional turn's published segments under `name`
@@ -399,6 +471,9 @@ export class ChunkedTranscriber {
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
     await this.pump(true);
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
+    // Final adjudication: every held turn gets its sweep verdict from the full
+    // hint log before the session ends — a hold is never left undecided.
+    this.sweepHeld(Infinity);
     try { this.segmenter?.reset(); } catch { /* best effort */ }
   }
 
@@ -787,6 +862,10 @@ export class ChunkedTranscriber {
     if (r.source !== 'provisional-cluster-id') {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
       turn.resolvedName = r.speakerName;
+    } else {
+      const d = this.binder.explainMatch(commit);
+      const b = d.best ? ` best=${d.best.name} support=${Math.round(d.best.supportMs)}ms cov=${d.best.coverage.toFixed(2)} conf=${d.best.confidence.toFixed(2)}` : '';
+      this.log(`[binder-reject] ${turn.clusterId} [${Math.round(turn.t0)},${Math.round(turn.t1)}] reason=${d.reject} candidates=${d.candidates} flickerSkipped=${d.flickerSkipped}${b}`);
     }
     return r.speakerName;
   }
