@@ -210,6 +210,10 @@ interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNam
  *  heartbeat could be the tail of the same blip; two (~4s apart on the Zoom/Teams
  *  re-assert cadence) is a speaker who is still talking. */
 const REASSERT_UNBLOCK_COUNT = 2;
+/** How long after a held turn's end a blocked name's fresh hints still count as
+ *  testimony about it. Two heartbeats plus slack; past this, the room has moved
+ *  on and the hold stands. */
+const REASSERT_WINDOW_MS = 8000;
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -370,17 +374,23 @@ export class ChunkedTranscriber {
     for (const u of this.unresolved) {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
-      if (m && blocked.has(m.name) && name === m.name) {
-        // The held-back name is speaking AGAIN (this very hint is fresh testimony,
-        // not a re-read of the slice that got it blocked). A transient flip never
-        // re-asserts; a real speaker's heartbeat does — after enough, lift the block.
-        const seen = (u.reasserted ??= new Map()).get(m.name) ?? 0;
-        if (seen + 1 >= REASSERT_UNBLOCK_COUNT) {
-          blocked.delete(m.name);
-          this.log(`[ChunkedTranscriber] short-UI block lifted for "${m.name}" on ${u.clusterId} — re-asserted ×${seen + 1}`);
-        } else {
-          u.reasserted.set(m.name, seen + 1);
+      if (!isEnd && blocked.has(name) && tMs - u.t1 <= REASSERT_WINDOW_MS) {
+        // The held-back name is speaking AGAIN. The hold vetoed a window-match that
+        // had already passed every binder gate, on suspicion of a tile flip — and a
+        // transient flip never re-asserts, while a real speaker's heartbeat does.
+        // Fresh testimony is judged on ARRIVAL TIME (within a couple of heartbeats
+        // of the held turn's end), not on re-matching the past window, which a
+        // later hint can never do. At the threshold the suspicion is disproved:
+        // the original match stands — lift and claim.
+        const seen = ((u.reasserted ??= new Map()).get(name) ?? 0) + 1;
+        if (seen >= REASSERT_UNBLOCK_COUNT) {
+          blocked.delete(name);
+          this.log(`[ChunkedTranscriber] short-UI block lifted for "${name}" on ${u.clusterId} — re-asserted ×${seen}`);
+          this.claimTurn(u.clusterId, name);
+          matchedNow = true;
+          continue;
         }
+        u.reasserted.set(name, seen);
       }
       if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
       if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
