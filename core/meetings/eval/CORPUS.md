@@ -48,12 +48,33 @@ duplicate identity, holes, coverage, published words. Any latency derived from i
 not production's — cadence is `replay-paced.test.ts`. Mock STT says nothing about ASR quality and
 must never be reported as content evidence.
 
+**`coverage` is harness-relative and is NOT a product figure.** It is downstream of submission
+cadence, which an unpaced replay does not reproduce, so it means something only compared against
+ITSELF on the same fixture and harness. Measured both ways on `zoom/2026-07-20-live-zoom`: the live
+session covered **0.808** of its span, the replay of the same audio **0.378**. Reading a lane-block
+coverage as "the lane covers X% of a meeting" is a factual error — that number can only come from a
+live session or a paced replay.
+
 **Its tolerances are measured, not assumed.** A tape fixture drives the real segmenter alongside an
 async pump, so the interleaving — and with it the number of resubmissions — varies. Across five
 consecutive runs of identical code on the youtube entry: coverage 0.905–0.906, holes 6/6/6/6/6,
 published words 2746–2750 — but STT call count 429–440. Structure is stable; call-count-derived
 figures are not, and `score-fixture` tolerances them from that spread. What the corpus exists to
 catch moves far further: reverting `4c030cd8` takes `storeDupes` from 0 to 11.
+
+**Reference stability must be MEASURED per entry, never inferred.** `--chunk-offset-sec` builds a
+second reference with the cuts moved; the disagreement between them bounds what any content figure
+from that entry can carry. Measured: **4.4%** (youtube control, duty 0.949, one speaker), **7.2%**
+(witnessed panel, duty 1.000, multi-voice), **23.9%** (jitsi capture-gaps, duty 0.650). Note the
+cleanest-delivery entry is NOT the most stable — duty is one term, not the predictor, and content
+type looks like another. Do not cite a content figure without this number beside it.
+
+**Low duty is still disqualifying.** The reference is built from the
+session's DELIVERED audio, so every capture hole becomes a splice the model reads across. Two
+references over identical audio, cuts shifted 25s apart (`--chunk-offset-sec`), disagree by **4.4%**
+on the youtube control (duty 0.949) and by **23.9%** on the jitsi capture-gaps entry (duty 0.650) —
+where the instrument is noisier than the 12.8% it is measuring. **Do not cite content figures from a
+low-duty entry.** Delivery figures are unaffected: those come from the bytes, not from a model.
 
 **`retention` is recorded only against real STT.** A mock that invents fresh tokens per call turns
 every LocalAgreement resubmission of the same audio into denominator it never lost, so retention
@@ -73,14 +94,16 @@ control, delivered through the bot's webrtc-hook chain instead. Recorded at `5b1
 |---|---|
 | delivery | **duty cycle 0.650** · 199 gaps totalling 115.1s · p50 0.40s · max 4.37s |
 | shape | inter-cut p50 0.41s · 142 cuts under 1s · silent frames 10.2% |
-| content | recall 0.858 · **precision 0.723** (whisper-1, single pass) |
-| lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467 · 5 holes >2s |
+| content | recall 0.872² · **precision 0.723²** (whisper-1, single pass) |
+| lane | 57 store rows · 0 dup texts · 239 words · coverage 0.467¹ · 5 holes >2s |
 
-This is the red evidence for **#850**. Paired with the control it is also the framework's sharpest
-discrimination: same source material, same lane, same STT — 65.0% vs 94.9% delivered, and precision
-0.723 vs 0.941. The invention the low duty cycle buys (27.7% of live words absent from a single pass
-over the same audio) is the sub-second-window hallucination measured as a number rather than
-described.
+This is the red evidence for **#850**, on its DELIVERY figure: 65.0% against the control's 94.9% on
+the same source material, same lane, same STT. That comparison is computed from bytes and holds.
+
+Its content columns do not. Scored against a second reference cut 25s differently, precision reads
+0.853 rather than 0.723 — the first reference was missing 48 live words at its own seams. An earlier
+version of this entry described the gap as sub-second-window hallucination "measured as a number";
+that was measuring the instrument. At duty 0.650 this entry cannot carry a content claim.
 
 ### `youtube/2026-07-20-continuous-speech` — the control, 69 MB
 One continuous speaker from a shared YouTube tab through the extension into the desktop, so every
@@ -90,10 +113,10 @@ hole is a defect by construction. Derived from a tape with `--head-sec 1195.3`. 
 |---|---|
 | delivery | duty cycle 0.949 · 161 gaps totalling 61.4s · p50 0.26s · max 1.02s |
 | shape | no recorded cuts (tape) — the lane run segments it live |
-| content | **recall 0.905 · precision 0.941** (whisper-1, single pass) |
-| lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905 · 6 holes >2s |
+| content | **recall 0.920 ±0.044 · precision 0.941** (whisper-1, single pass) |
+| lane | 279 store rows · 0 dup texts · 2746 words · coverage 0.905¹ · 6 holes >2s |
 
-The red evidence for **#854**: 9.5% of what this same model extracts from this same audio in one
+The red evidence for **#854**: **8.0%** of what this same model extracts from this same audio in one
 pass never reaches the transcript, and 5.9% of the transcript is not in that pass. That comparison
 is built from the session's DELIVERED PCM, so it measures streaming loss relative to what capture
 handed over — it is structurally blind to capture loss, and cannot be read as a total.
@@ -107,7 +130,7 @@ entry carrying a human verdict, which is what the other numbers are calibrated a
 |---|---|
 | delivery | **duty cycle 1.000** · **zero** gaps over 100ms in 557s |
 | content | not scorable — the desktop store had restarted, so no live transcript survived to compare |
-| lane | 81 store rows · 0 dup texts · 1307 words · coverage 0.909 · 9 holes >2s |
+| lane | 81 store rows · 0 dup texts · 1307 words · coverage 0.909¹ · 9 holes >2s |
 
 Its value is the far end of the delivery curve: **100.0%** here against the jitsi bot's **65.0%** on
 the same capture code. Whatever removes 35% there does not touch this source at all, which is what
@@ -146,6 +169,58 @@ Its hint stream is the finding: a **2-second poll with no `isEnd` events at all*
 one participant. The binder never learns when anyone stops, and three people are lit so rarely they
 lose every max-overlap vote — which is how 5 speakers become 2 while every truth-free signal except
 cardinality reads clean.
+
+² NOT CITABLE — at duty 0.650 the reference disagrees with a differently-cut reference by 23.9%,
+more than the 12.8% loss it reports. The delivery figure above is unaffected.
+
+¹ harness-relative — comparable only against the same fixture's own baseline, never read as the
+share of a meeting the lane covers. See the note above the entries.
+
+## The synthetic entry that needs no session at all
+
+Every entry above is a recording, so every one of them cost a meeting. One does not:
+`speech_fixture.py` builds the mixed lane's whole input — PCM frames plus DOM hints — out of the
+cached TTS clips, whose text is known before any audio exists. There is no reference to calibrate
+and no clock to get wrong; the truth is absolute, and the fixture regenerates byte-identically from
+its seed instead of living on disk.
+
+That makes it the one place where "is the quality good?" is answerable with no person, no platform
+and no live room — and the mixed lane it exercises is the same one Zoom and Teams both ride.
+
+```bash
+python3 src/speech_fixture.py --speakers A,B --turns 8 --lane mixed --platform zoom --out /tmp/zoomlane
+# → 450 frames · 16 hints · 8 turns · 95.5s · 315 known words · Anna,Boris · hint lag 250ms
+
+cd ../services/bot && QUALITY_MIXED_FIXTURE=/tmp/zoomlane.captured-signal.jsonl REAL_SEGMENTER=1 \
+  TRUTH_JSON=/tmp/zoomlane.truth.json TRANSCRIPT_OUT=/tmp/zoomlane.replay.json \
+  TX_URL=$TRANSCRIPTION_SERVICE_URL TX_TOKEN=$TRANSCRIPTION_SERVICE_TOKEN TX_MODEL=whisper-1 \
+  npx tsx src/quality-mixed.test.ts
+
+python3 src/score_replay.py /tmp/zoomlane.replay.json --truth /tmp/zoomlane.truth.json
+```
+
+Measured 2026-07-20 at `9d9a1cee` — real STT (`whisper-1`), real pyannote segmenter, production lane
+config. **Three consecutive runs returned identical figures to three decimals**, down to the STT call
+count (18) and the words it returned (350): fixed audio through fixed cut points is deterministic
+even across a remote model. The tape entries are not — theirs swing 429-440 calls — so this is the
+only entry whose tolerances are zero:
+
+| | |
+|---|---|
+| content recall | **0.924** — 291 of 315 known words kept, in order |
+| content precision | **0.936** — 20 published words that were never said |
+| attribution accuracy | **0.947**, 0 wrong, 1.0% of words provisional |
+| coverage · retention | 0.825 · 0.869 |
+| structure | 19 segments · 0 duplicate texts · 1 hole >2s · 18 STT calls, 0 failed |
+
+Read it for exactly what it is. It starts at `captured-signal.v1`, so it says nothing about whether
+capture delivered the audio (that is the delivery block, and the live legs) or whether the platform's
+DOM lit the right names (that is #852, and the bot leg). It says that GIVEN the signal, the lane
+keeps 92% of the words and names them right 95% of the time — any hour of any day, nobody in the room.
+
+Unlike the recorded entries, precision here charges STT error as invention: `Boris` came back as
+`Doris`, and one phrase arrived that nobody said. That is the model's ceiling rather than the lane's
+loss, and the two are only separable because the truth is known.
 
 ## The contract
 

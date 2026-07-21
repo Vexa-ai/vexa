@@ -146,8 +146,8 @@ Both are corpus entries now — the numbers below are `baseline.json`, not prose
 
 | entry | duty cycle | recall | precision | note |
 |---|---|---|---|---|
-| `jitsi/2026-07-20-capture-gaps` | **0.650** | 0.858 | **0.723** | capture defect (#850); the invention is the sub-second-window hallucination, measured |
-| `youtube/2026-07-20-continuous-speech` | 0.949 | **0.905** | **0.941** | control; the 9.5% streaming loss is #854 |
+| `jitsi/2026-07-20-capture-gaps` | **0.650** | 0.872 | **0.723** | capture defect (#850); the invention is the sub-second-window hallucination, measured |
+| `youtube/2026-07-20-continuous-speech` | 0.949 | **0.920** | **0.941** | control; the 9.5% streaming loss is #854 |
 
 Same source material, same lane, same STT on both — so the gap between the rows is the bot's capture
 chain and nothing else.
@@ -171,6 +171,13 @@ gmeet cadence (~8.15s projected time-to-text) · per-platform hints (#797) · gm
 Written down because an un-named gap becomes a false claim of coverage — the exact failure that
 made 0.12.16 aim wrong.
 
+**G1a — DEMONSTRATED, and worse than stated.** The four truth-free signals are blind to
+MISATTRIBUTION, not merely to content. On a synthetic 3-speaker fixture whose hint stream names the
+wrong person 34% of the time, attribution accuracy collapses to 47.8% — 12 of 23 rows under the
+wrong speaker — while every truth-free signal reads healthy: 0.0% provisional, 3 speakers published
+against 3 hinted, nothing unnamed. A lane that confidently names every turn after the wrong person
+scores perfectly on all of them. Truth-free signals answer "did the namer run", never "was it right".
+
 **G1 — the content oracle is speaker-blind.** `single_pass_truth.py` scores recall/precision on a
 flat word sequence. A transcript with perfect words and completely scrambled speakers scores
 1.000/1.000. This is mock-blindness repeating on a different axis. Until the self-ID scorer exists,
@@ -182,11 +189,24 @@ and published-vs-hinted cardinality. Still open and tracked separately: the gmee
 capture from the glow and needs its own reading (#851/#853), and no self-ID oracle exists yet — these
 score WHETHER a name was assigned, never whether it was RIGHT.
 
-**G3 — the reference is uncalibrated.** Nothing verifies the single-pass reference is better than
-the live transcript; recall may be measuring agreement, not truth. Needs: a second-pass stability
-check, and one run against a known-text fixture where absolute truth exists. Chunking is also
-unvalidated — 60s windows with 3s overlap can both duplicate at seams (inflating the reference) and
-drop words at them.
+**G3 — CLOSED by calibration.** On a synthetic fixture where the spoken text is known absolutely,
+the single-pass reference scores **recall 0.977 / precision 0.943** against that truth, while the
+live replay of the same audio through the same STT scores 0.907 / 0.917. The reference is therefore
+substantially closer to truth than the pipeline is, and recall measured against it is LOSS rather
+than agreement — the thing this gap doubted. It also prices the split the framework exists to make:
+of the 9.3 points between the pipeline and perfect, **7.0 are the streaming design's own** and 2.3
+are the model's ceiling on this audio.
+
+**G3 (residual) — the SEAM DROP half.** The duplication half is closed: chunk overlap was being
+counted as reference content (122 words, 3.2% on the youtube control), understating recall by that
+much; `dedupe_seams` removes it. What remains is the opposite error — a word LOST at a cut is
+invisible without a second reference built with different cut points, so the reference's own recall
+is still unbounded from below.
+
+**G3 (residual, older note) — chunking is still unvalidated.** Nothing verifies the single-pass reference is better than
+the live transcript; recall may be measuring agreement, not truth. 60s windows with 3s overlap can still both duplicate at seams
+(inflating the reference) and drop words at them; the calibration above bounds the total error but
+does not isolate the seams.
 
 **G4 — CLOSED (#848).** The corpus exists: `$VEXA_CORPUS/<platform>/<slug>/` with a session, a
 `baseline.json` recording every metric at promotion time, a `manifest.json` pinning provenance, and

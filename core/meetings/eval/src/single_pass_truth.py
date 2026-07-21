@@ -98,6 +98,31 @@ def transcribe(wav: bytes, url: str, token: str, model: str, lang: str) -> str:
         return (json.loads(r.read()).get("text") or "").strip()
 
 
+def dedupe_seams(parts):
+    """Join chunk transcripts, dropping the text the OVERLAP transcribed twice.
+
+    Chunks are cut with OVERLAP_SEC of shared audio so a word split by the cut still appears — but
+    that same audio is then transcribed in both chunks, so the seam text lands twice. Measured on
+    the youtube control: 122 words (3.2% of the reference) sat inside a duplicated region, and every
+    one of them counts as a miss against a live transcript that correctly said it once. Recall was
+    understated by up to that much.
+
+    The fix is local to the seam: for each join, find the longest suffix of the accumulated text
+    that also opens the next chunk, and drop it once."""
+    out = words(parts[0]) if parts else []
+    for nxt in parts[1:]:
+        w = words(nxt)
+        # The overlap is a few seconds of speech — cap the search well above that, not at the whole
+        # chunk, so an ordinary repeated phrase mid-chunk is never mistaken for a seam.
+        best = 0
+        for k in range(min(60, len(out), len(w)), 3, -1):
+            if out[-k:] == w[:k]:
+                best = k
+                break
+        out.extend(w[best:])
+    return " ".join(out)
+
+
 def words(s):
     return re.findall(r"[\w']+", (s or "").lower())
 
@@ -165,6 +190,10 @@ def main():
     ap.add_argument("--out", help="write the reference text here")
     ap.add_argument("--reference", help="reuse a previously written reference instead of re-running STT")
     ap.add_argument("--json", help="also write the score block here (for baseline.json)")
+    ap.add_argument("--chunk-offset-sec", type=float, default=0.0,
+                    help="shift every chunk boundary by this much. A word DROPPED at a cut is invisible "
+                         "in one reference; building a second with different cuts makes it visible as a "
+                         "word present there and absent here (G3's remaining half).")
     args = ap.parse_args()
 
     url = os.environ.get("TRANSCRIPTION_SERVICE_URL")
@@ -196,14 +225,20 @@ def main():
     step = int((CHUNK_SEC - OVERLAP_SEC) * SR) * 4
     size = int(CHUNK_SEC * SR) * 4
     parts = []
-    for off in range(0, len(pcm), step):
+    start = int(args.chunk_offset_sec * SR) * 4
+    if start:
+        head = pcm[:start]
+        if len(head) >= SR * 4:
+            parts.append(transcribe(wav_bytes(head), url, token, args.model, args.lang))
+            print(f"  [   0.0s] offset head, {len(words(parts[-1])):4d} words")
+    for off in range(start, len(pcm), step):
         chunk = pcm[off:off + size]
         if len(chunk) < SR * 4:      # < 1s tail, nothing to transcribe
             break
         t = transcribe(wav_bytes(chunk), url, token, args.model, args.lang)
         parts.append(t)
         print(f"  [{off / 4 / SR:6.1f}s] {len(words(t)):4d} words")
-    ref = " ".join(parts)
+    ref = dedupe_seams(parts)
     ref_w = words(ref)
     print(f"\nREFERENCE (single pass): {len(ref_w)} words · {len(ref_w) / audio_sec * 60:.0f} wpm over the delivered audio")
     if args.out:
