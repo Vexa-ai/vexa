@@ -275,12 +275,19 @@ export class ClusterNameBinder {
     let best: { name: string; ms: number; supportMs: number; inSpanMs: number; lastStart: number } | null = null;
     let totalSupportMs = 0;
     let totalInSpanMs = 0;
+    for (const [name, a] of agg) { totalSupportMs += a.supportMs; totalInSpanMs += a.inSpanMs; }
+    // Winner selection prefers IN-SPAN evidence: the name that actually lit during
+    // the commit beats the name whose support piled up in the ±slack (the lagging
+    // previous speaker's heartbeat slices — on the botsig9 red those were chosen as
+    // best with inSpanMs=0 and then rejected at confidence 0.00, #868). Only when
+    // NOBODY lit in-span (pure hint lag) does slack support choose, as before.
+    const rank = totalInSpanMs > 0
+      ? (a: { inSpanMs: number }) => a.inSpanMs
+      : (a: { supportMs: number }) => a.supportMs;
     for (const [name, a] of agg) {
-      totalSupportMs += a.supportMs;
-      totalInSpanMs += a.inSpanMs;
       if (!best) { best = { name, ...a }; continue; }
-      if (a.supportMs > best.supportMs + RECENCY_TIE_MS) best = { name, ...a };
-      else if (a.supportMs >= best.supportMs - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
+      if (rank(a) > rank(best) + RECENCY_TIE_MS) best = { name, ...a };
+      else if (rank(a) >= rank(best) - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
     }
     if (!best) return { result: null, reject: 'no-hint-overlap', candidates: agg.size, flickerSkipped };
     const coverage = Math.min(1, best.supportMs / commitDur);
