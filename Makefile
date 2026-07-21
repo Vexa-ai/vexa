@@ -1,7 +1,7 @@
 # =============================================================================
 # Vexa open-core — top-level deploy entrypoint (Docker Compose)
 # =============================================================================
-.PHONY: all up dev down bot lite probe login help
+.PHONY: all up dev down bot lite probe login release-retag help
 
 SURFACE ?= compose
 
@@ -35,3 +35,6 @@ login:               ## provision an authenticated-bot session — sign in once,
 
 down:                ## stop the compose stack
 	@$(MAKE) --no-print-directory -C deploy/compose down
+
+release-retag:       ## move an existing release tag to origin/main's head, guarded (VERSION=… EXPECT=<sha> [CONFIRM=1]) — see scripts/release-retag.sh
+	@./scripts/release-retag.sh

@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|all]
+ *                                lite-makefile|page-bricks|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -1034,7 +1034,43 @@ function gateLiteMakefile() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:page-bricks (#583, the #576 rot class) — the page-side capture-brick build list lives ONCE,
+// in core/meetings/services/bot/page-bricks.list; both image builds (the bot Dockerfile and
+// deploy/lite/Dockerfile.lite) read it at build time. The gate holds the seam: every listed brick
+// is a real workspace package with a build script, both Dockerfiles reference the list, and
+// neither reintroduces an inline `--filter` copy of a listed brick. Green-on-empty if the list
+// is absent.
+function gatePageBricks() {
+  const listFile = join(ROOT, "core", "meetings", "services", "bot", "page-bricks.list");
+  if (!existsSync(listFile)) { console.log("  ✓ gate:page-bricks — no page-bricks.list (green-on-empty)"); return true; }
+  const bricks = readFileSync(listFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  const errs = [];
+  if (!bricks.length) errs.push("page-bricks.list exists but lists no packages");
+  const pkgNames = new Map(packageDirs().map((d) => {
+    try { return [JSON.parse(readFileSync(join(d, "package.json"), "utf8")).name, d]; } catch { return [null, d]; }
+  }));
+  for (const b of bricks) {
+    const dir = pkgNames.get(b);
+    if (!dir) { errs.push(`${b} is listed but no workspace package has that name`); continue; }
+    let pkg; try { pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")); } catch { pkg = {}; }
+    if (!pkg.scripts?.build) errs.push(`${b} (${rel(dir)}) has no build script — the Dockerfile pre-build would no-op`);
+  }
+  for (const df of ["core/meetings/services/bot/Dockerfile", "deploy/lite/Dockerfile.lite"]) {
+    const p = join(ROOT, ...df.split("/"));
+    if (!existsSync(p)) continue;
+    const text = readFileSync(p, "utf8");
+    if (!text.includes("page-bricks.list"))
+      errs.push(`${df} does not read page-bricks.list — the brick pre-build list has forked from the single source`);
+    for (const b of bricks)
+      if (new RegExp(`--filter\\s+"?${b.replace("/", "\\/")}"?(?!\\.)`).test(text))
+        errs.push(`${df} inlines --filter ${b} — brick filters belong in page-bricks.list only`);
+  }
+  if (errs.length) return fail(["page-bricks (#583, the #576 rot class):", ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:page-bricks — ${bricks.length} bricks single-sourced in page-bricks.list; both Dockerfiles read it, no inline copies`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "page-bricks": gatePageBricks, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
