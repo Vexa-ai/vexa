@@ -57,7 +57,11 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
   if (zoomMatch) {
     const passcodeMatch = trimmed.match(/[?&]pwd=([^&]+)/i);
     const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
-    return { platform: "zoom", meetingId: zoomMatch[1], passcode };
+    // Preserve original URL — the API requires meeting_url for zoom/jitsi joins,
+    // and the submit path only forwards request.meeting_url when originalUrl is
+    // present (mirrors the Teams branch above).
+    const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+    return { platform: "zoom", meetingId: zoomMatch[1], passcode, originalUrl };
   }
 
   // Zoom meeting ID (9-11 digits)

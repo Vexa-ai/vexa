@@ -46,6 +46,19 @@ describe("parseMeetingInput", () => {
       expect(r?.passcode).toBe("secret");
     });
 
+    it("returns originalUrl for a zoom URL so meeting_url is forwarded (#897)", () => {
+      const url = "https://zoom.us/j/85173157171?pwd=secret";
+      const r = parseMeetingInput(url);
+      expect(r?.platform).toBe("zoom");
+      expect(r?.originalUrl).toBe(url);
+    });
+
+    it("does not set originalUrl for a bare zoom meeting ID (no URL to forward)", () => {
+      const r = parseMeetingInput("851731571");
+      expect(r?.platform).toBe("zoom");
+      expect(r?.originalUrl).toBeUndefined();
+    });
+
     it("parses subdomain zoom URL", () => {
       const r = parseMeetingInput("https://us05web.zoom.us/j/85173157171");
       expect(r?.platform).toBe("zoom");
