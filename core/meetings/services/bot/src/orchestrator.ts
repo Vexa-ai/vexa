@@ -91,11 +91,23 @@ export interface RunOptions {
   maxActiveMs?: number;
 }
 
+/** Required ports — missing any of these used to surface as a raw TypeError deep in `run()`. */
+const REQUIRED_PORTS = ['lifecycle', 'join', 'pipeline', 'acts', 'aloneness'] as const;
+
+function assertRequiredPorts(deps: OrchestratorDeps): void {
+  for (const name of REQUIRED_PORTS) {
+    if (deps[name] == null) {
+      throw new Error(`orchestrator: required port '${name}' is missing`);
+    }
+  }
+}
+
 /**
  * Build the meeting orchestrator. Returns `run()` (drives the machine to a terminal state)
  * and `handle(act)` (the acts.v1 entrypoint the ActsSource adapter — or a test — feeds).
  */
 export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
+  assertRequiredPorts(deps);
   const base: { connection_id: string; container_id?: string } = {
     connection_id: inv.connectionId ?? '',
     ...(inv.container_name ? { container_id: inv.container_name } : {}),

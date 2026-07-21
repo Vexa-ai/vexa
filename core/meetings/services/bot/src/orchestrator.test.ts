@@ -19,8 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, AlonenessSource, TranscriptSink, PrimaryReachability } from './ports.js';
+import type { JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
+import { noopAloneness, controlledAloneness, noopPipeline, noopActs } from './test-doubles.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -49,17 +50,6 @@ const recordingSink = (): LifecycleSink & { readonly events: LifecycleEvent[] } 
   const events: LifecycleEvent[] = [];
   return { events, async emit(e: LifecycleEvent) { events.push(e); } };
 };
-const noopPipeline = (): Pipeline & { started: boolean } => {
-  const p = { started: false, async start() { p.started = true; }, async stop() { p.started = false; } };
-  return p;
-};
-const noopActs = (ref?: (fire: (a: { action: 'leave' }) => void) => void): ActsSource => ({
-  subscribe(handler) { ref?.((a) => void handler(a)); return () => { /* */ }; },
-});
-const noopAloneness = (): AlonenessSource => ({ onAlone() { return () => { /* */ }; } });
-const controlledAloneness = (ref: (fire: () => void) => void, onStop?: () => void): AlonenessSource => ({
-  onAlone(callback) { ref(callback); return () => onStop?.(); },
-});
 const mockJoin = (outcome: JoinOutcome, onRemovalRef?: (fire: () => void) => void): JoinDriver => ({
   async join(report) { await report('awaiting_admission'); if (outcome === 'admitted') await report('active'); return outcome; },
   onRemoval(cb) { onRemovalRef?.(cb); return () => { /* */ }; },
@@ -421,6 +411,26 @@ async function main(): Promise<void> {
     const res = await runP;
     check('gate reachable: proceeded to completed', res.status === 'completed', JSON.stringify(res));
     check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
+  }
+
+  // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──
+  {
+    let threw: unknown;
+    try {
+      createOrchestrator(inv(), {
+        lifecycle: recordingSink(),
+        join: mockJoin('admitted'),
+        pipeline: noopPipeline(),
+        acts: noopActs(),
+        // deliberately omit aloneness
+      } as Parameters<typeof createOrchestrator>[1]);
+    } catch (e) {
+      threw = e;
+    }
+    const msg = threw instanceof Error ? threw.message : String(threw);
+    check('missing port: throws', threw instanceof Error, msg);
+    check('missing port: names the port', /required port 'aloneness' is missing/.test(msg), msg);
+    check('missing port: not a raw property TypeError', !/Cannot read properties of undefined/.test(msg), msg);
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }
