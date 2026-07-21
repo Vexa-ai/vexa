@@ -986,6 +986,54 @@ class SqlAlchemyTranscriptStore:
             view = _find_processed_view(m.data, view_id)
             return view.get("source_cursor") if view else None
 
+    async def meetings_needing_summary(self, *, limit: int) -> list[dict]:
+        """WP-M12 candidates: terminal ZAKI meetings owning >=1 non-empty transcript row and no
+        ``data.summary`` yet. Privacy-withdrawn rows are excluded here only as an optimization —
+        ``write_summary``'s barrier is the authority."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                self._statement(
+                    "SELECT m.id, m.user_id FROM meetings m "
+                    "WHERE m.status = 'completed' "
+                    "AND m.data ? 'zaki_capture' "
+                    "AND NOT (m.data ? 'summary') "
+                    "AND EXISTS (SELECT 1 FROM transcriptions t "
+                    "            WHERE t.meeting_id = m.id AND t.text ~ '[^[:space:]]') "
+                    "ORDER BY m.id ASC LIMIT :limit"
+                ),
+                {"limit": int(limit)},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
+    async def write_summary(self, meeting_id: int, summary: dict) -> None:
+        """Set ``data['summary']`` under the shared meeting-write barrier — the same
+        lock + refusal discipline every transcript-derived mutation uses, so a durable
+        privacy withdrawal wins against a late summary."""
+        async with self._session_factory() as db:
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_xact_lock_shared(:lock_namespace, :meeting_id)"
+                ),
+                {"lock_namespace": MEETING_WRITE_LOCK_NAMESPACE, "meeting_id": int(meeting_id)},
+            )
+            result = await db.execute(
+                self._statement("SELECT data FROM meetings WHERE id = :meeting_id FOR UPDATE"),
+                {"meeting_id": int(meeting_id)},
+            )
+            row = result.mappings().first()
+            data = row["data"] if row and isinstance(row["data"], dict) else {}
+            if row is None or transcript_writes_refused(data):
+                raise TranscriptWriteRefused("meeting is not writable")
+            updated = dict(data)
+            updated["summary"] = dict(summary)
+            await db.execute(
+                self._statement(
+                    "UPDATE meetings SET data = CAST(:data AS jsonb) WHERE id = :meeting_id"
+                ),
+                {"meeting_id": int(meeting_id), "data": json.dumps(updated, sort_keys=True)},
+            )
+            await db.commit()
+
     async def merge_processed_view(
         self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
     ) -> None:

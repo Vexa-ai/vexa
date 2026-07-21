@@ -117,6 +117,44 @@
    "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
   },
   {
+   "key": "SUMMARY_MODEL",
+   "class": "defaulted",
+   "default": "(unset \u2014 the summarizer worker stays OFF)",
+   "description": "chat-completions model id for the post-meeting summary generator; setting it ENABLES the summarizer loop (terminal ZAKI meetings with transcripts and no summary get minutes-the-document). Uses the STT backend URL/token unless SUMMARY_SERVICE_URL/TOKEN override.",
+   "targets": [
+    "compose",
+    "lite"
+   ]
+  },
+  {
+   "key": "SUMMARY_SERVICE_URL",
+   "class": "defaulted",
+   "default": "(unset \u2014 falls back to TRANSCRIPTION_SERVICE_URL)",
+   "description": "OpenAI-compatible base URL the summarizer posts /v1/chat/completions to",
+   "targets": [
+    "compose",
+    "lite"
+   ]
+  },
+  {
+   "key": "SUMMARY_SERVICE_TOKEN",
+   "class": "defaulted",
+   "secret": true,
+   "default": "(unset \u2014 falls back to TRANSCRIPTION_SERVICE_TOKEN)",
+   "description": "bearer token for the summary backend",
+   "targets": [
+    "compose",
+    "lite"
+   ]
+  },
+  {
+   "key": "SUMMARY_INTERVAL_S",
+   "class": "defaulted",
+   "default": "60",
+   "description": "summarizer sweep cadence in seconds \u2014 operator-tunable loop cadence like its db-writer sibling",
+   "targets": []
+  },
+  {
    "key": "TRANSCRIPTION_MODEL",
    "class": "defaulted",
    "default": "(unset — the whisper client sends whisper-1)",

@@ -675,6 +675,33 @@ class InMemoryTranscriptStore:
         view = _find_processed_view(m["data"], view_id)
         return view.get("source_cursor") if view else None
 
+    async def meetings_needing_summary(self, *, limit: int) -> list[dict]:
+        out = []
+        for mid, m in sorted(self._meetings.items()):
+            data = m.get("data") or {}
+            has_text = any(
+                (seg.get("text") or "").strip() for seg in (m.get("segments") or {}).values()
+            )
+            if (
+                m.get("status") == "completed"
+                and "zaki_capture" in data
+                and "summary" not in data
+                and has_text
+            ):
+                out.append({"id": mid, "user_id": m.get("user_id")})
+            if len(out) >= limit:
+                break
+        return out
+
+    async def write_summary(self, meeting_id, summary: dict) -> None:
+        from ..meeting_writes import transcript_writes_refused
+        from .ports import TranscriptWriteRefused
+
+        m = self._row_or_placeholder(meeting_id)
+        if transcript_writes_refused(m.get("data")):
+            raise TranscriptWriteRefused("meeting is not writable")
+        m["data"] = {**(m.get("data") or {}), "summary": dict(summary)}
+
     async def merge_processed_view(
         self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
     ) -> None:

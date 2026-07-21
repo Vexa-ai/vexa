@@ -311,6 +311,9 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
+      - SUMMARY_MODEL=${SUMMARY_MODEL:-}
+      - SUMMARY_SERVICE_URL=${SUMMARY_SERVICE_URL:-}
+      - SUMMARY_SERVICE_TOKEN=${SUMMARY_SERVICE_TOKEN:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.

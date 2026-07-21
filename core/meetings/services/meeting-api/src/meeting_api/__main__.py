@@ -408,6 +408,32 @@ def _attach_background_loops(
             ticks["db-writer"] = _time.monotonic()  # #527: alive this iteration
             await asyncio.sleep(db_writer_interval)
 
+    async def _summarizer_loop() -> None:
+        # WP-M12: the post-meeting summary generator — OFF unless SUMMARY_MODEL is set.
+        # Terminal ZAKI meetings with transcripts and no summary get minutes-the-document,
+        # written under the shared meeting-write barrier (privacy withdrawal wins).
+        model = (os.getenv("SUMMARY_MODEL") or "").strip()
+        if not model or not hasattr(transcript_store, "write_summary"):
+            return
+        base = (os.getenv("SUMMARY_SERVICE_URL") or os.getenv("TRANSCRIPTION_SERVICE_URL") or "").strip()
+        token = (os.getenv("SUMMARY_SERVICE_TOKEN") or os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or "").strip()
+        if not base:
+            log.warning("SUMMARY_MODEL set but no summary/transcription backend URL — summarizer off")
+            return
+        from .collector.summarizer import openai_chat_llm, summarize_tick
+
+        llm = openai_chat_llm(base, token, model)
+        interval = float(os.getenv("SUMMARY_INTERVAL_S", "60"))
+        while True:
+            try:
+                await summarize_tick(transcript_store, llm, model=model)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("summarizer tick failed")
+            ticks["summarizer"] = _time.monotonic()
+            await asyncio.sleep(interval)
+
     async def _webhook_drain_loop() -> None:
         import httpx
 
@@ -669,6 +695,7 @@ def _attach_background_loops(
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_zaki_control_callback_loop(), name="zaki-control-callback"),
             asyncio.create_task(_zaki_ttl_loop(), name="zaki-ttl"),
+            asyncio.create_task(_summarizer_loop(), name="summarizer"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:
