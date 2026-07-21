@@ -36,10 +36,10 @@ def _conforms_invocation(obj: dict) -> None:
     ).validate(obj)
 
 
-def test_registry_resolves_meeting_bot_and_agent():
+def test_registry_resolves_control_plane_profiles():
     reg = default_registry()
-    assert set(reg.names()) == {"meeting-bot", "agent"}
-    for name in ("meeting-bot", "agent"):
+    assert set(reg.names()) == {"meeting-bot", "browser-session", "agent"}
+    for name in ("meeting-bot", "browser-session", "agent"):
         runnable = reg.resolve(name)
         assert isinstance(runnable, Runnable)
     # The agent carries an explicit launch argv; the meeting-bot deliberately carries NO command so
@@ -47,6 +47,19 @@ def test_registry_resolves_meeting_bot_and_agent():
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
     assert reg.resolve("meeting-bot").command is None
     assert reg.resolve("does-not-exist") is None
+
+
+def test_registry_resolves_browser_session_profile(monkeypatch):
+    """#816: the browser-session profile — a persistent human-driven Chromium (noVNC 6080 / CDP 9223),
+    NOT a meeting bot. Same ${BROWSER_IMAGE} (the VNC/CDP stack ships in it), no command (the image
+    entrypoint switches on BOT_MODE=browser_session), externally-managed lifetime (idle_timeout 0)."""
+    monkeypatch.setenv("BROWSER_IMAGE", "registry.example.com/vexa-bot:0.12")
+    reg = default_registry()
+    prof = reg.get("browser-session")
+    assert prof is not None, "browser-session profile must be registered"
+    assert prof.runnable.image == "registry.example.com/vexa-bot:0.12"
+    assert prof.runnable.command is None
+    assert prof.idle_timeout_sec == 0  # managed externally (meeting-api create/DELETE)
 
 
 def test_meeting_bot_uses_browser_image_from_env(monkeypatch):

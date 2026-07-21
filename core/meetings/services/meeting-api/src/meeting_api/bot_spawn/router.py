@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import uuid
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -32,6 +33,7 @@ from .ports import (
     SpawnFailed,
     TranscriptionNotConfigured,
 )
+from .browser_session import request_browser_session
 from .invocation import SPAWNABLE_PLATFORMS
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
@@ -260,6 +262,42 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         if meeting_url is not None:
             meeting_url = _validate_meeting_url(meeting_url)
         passcode = body.get("passcode")
+        # ── browser_session (#816): a session addresses ITSELF ──────────────────────────────────
+        # api.v1 seals `browser_session` in the Platform enum with native_meeting_id AND meeting_url
+        # both optional, because a browser session has no external meeting to join — it IS the
+        # session. The server mints the address the caller cannot supply (`bs-<hex>` + an unguessable
+        # session_token) and the row is ACTIVE immediately. This is a DISTINCT runtime workload
+        # (profile "browser-session"), NOT a meeting bot, so it is handled HERE — before the
+        # meeting-bot guards (required-fields, SPAWNABLE_PLATFORMS, constructibility) that all assume
+        # a meeting address. Supplying a native_meeting_id or meeting_url alongside it is a
+        # contradiction (a session has no address to give), refused typed. This carves the one
+        # platform that legitimately has no meeting address while keeping #794's typed 422 for real
+        # meetings (a google_meet/zoom/… with no URL/id) fully intact — the negative control.
+        if platform == "browser_session":
+            if native_meeting_id or meeting_url:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "browser_session addresses itself — do not supply native_meeting_id or "
+                        "meeting_url; the server mints the session id"
+                    ),
+                )
+            minted_id = f"bs-{uuid.uuid4().hex[:8]}"
+            try:
+                meeting = await request_browser_session(
+                    repo,
+                    runtime,
+                    user_id=user_id,
+                    native_meeting_id=minted_id,
+                    max_concurrent=max_concurrent,
+                )
+            except (MaxBotsExceeded, QuotaExceeded) as e:
+                raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
+            except SpawnFailed as e:
+                raise HTTPException(
+                    status_code=502, detail=str(e) or "Failed to start browser session workload"
+                )
+            return JSONResponse(status_code=201, content=meeting)
         # api.v1 promise: a meeting_url provided WITHOUT native_meeting_id is parsed to extract
         # platform, native_meeting_id, and passcode (collector.meeting_link — the same parser the
         # planned-meeting routes use). An underivable URL is a typed 422, NEVER a persisted ''
@@ -318,11 +356,12 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                     detail="'native_meeting_id' contains control characters",
                 )
         # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
-        # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
-        # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
-        # sailed past the constructibility guard below, wrote its `requested` meeting row, and then
-        # died inside build_invocation's schema validation: a 500, plus an ORPHANED active row that
-        # 409s the user's retry on the dedup guard. The refusal names the real state of the world.
+        # write. Without this, a platform outside the sealed invocation.v1 enum sailed past the
+        # constructibility guard below, wrote its `requested` meeting row, and then died inside
+        # build_invocation's schema validation: a 500, plus an ORPHANED active row that 409s the
+        # user's retry on the dedup guard. The refusal names the real state of the world.
+        # (`browser_session` is in api.v1's WIDER enum but is NOT a meeting bot — it is handled by
+        # its own spawn branch above and never reaches here.)
         if platform not in SPAWNABLE_PLATFORMS:
             supported = ", ".join(sorted(SPAWNABLE_PLATFORMS))
             raise HTTPException(
@@ -330,12 +369,6 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 detail=(
                     f"platform '{platform}' cannot be spawned as a meeting bot — supported: "
                     f"{supported}"
-                    + (
-                        ". browser_session is a provisioning workload, not a meeting bot; its "
-                        "0.12 runtime path is not yet restored (tracked in "
-                        "https://github.com/Vexa-ai/vexa/issues/816)"
-                        if platform == "browser_session" else ""
-                    )
                 ),
             )
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
