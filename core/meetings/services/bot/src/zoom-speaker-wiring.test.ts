@@ -78,6 +78,8 @@ check('bundle: window.VexaBrowserUtils.createZoomSpeakers is exported (RED at ba
 const page = {
   async exposeFunction(name: string, fn: unknown): Promise<void> { g[name] = fn; },
   async evaluate(fn: (arg: never) => unknown, arg?: unknown): Promise<unknown> { return fn(arg as never); },
+  on() { /* no-op: framenavigated re-arm not driven by this test */ },
+  mainFrame() { return {}; },
 } as never;
 
 // ── Node side: the pipeline seam the hints must reach ──
