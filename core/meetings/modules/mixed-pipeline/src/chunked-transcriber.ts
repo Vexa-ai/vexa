@@ -214,6 +214,13 @@ const REASSERT_UNBLOCK_COUNT = 2;
  *  testimony about it. Two heartbeats plus slack; past this, the room has moved
  *  on and the hold stands. */
 const REASSERT_WINDOW_MS = 8000;
+/** A held turn is adjudicated by the SWEEP once its re-assertion window has
+ *  passed: if the held-back name's total lit time around the turn reaches this,
+ *  it was a speaker (heartbeats total seconds), not a tile flip (one short
+ *  slice) — the vetoed match stands and the turn repaints. */
+const REAL_SPEAKER_LIT_MS = 2000;
+/** Audio-time cadence for the held-turn sweep. */
+const SWEEP_EVERY_MS = 1000;
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -241,6 +248,7 @@ export class ChunkedTranscriber {
   private queue: Array<SegItem | 'tick'> = [];
   /** Timestamp of the freshest audio in the ring (the live edge). */
   private latestAudioMs = 0;
+  private lastSweepMs = 0;
   private pumping = false;
   private lastConfirmedText = '';
   /** Audio-time end of the last processed commit — used to detect the silence
@@ -329,6 +337,10 @@ export class ChunkedTranscriber {
     if (this.disposed) return;
     if (this.firstAudioMs === null) this.firstAudioMs = tsMs;
     this.latestAudioMs = Math.max(this.latestAudioMs, tsMs + (pcm.length / SAMPLE_RATE) * 1000);
+    if (this.latestAudioMs - this.lastSweepMs >= SWEEP_EVERY_MS) {
+      this.lastSweepMs = this.latestAudioMs;
+      this.sweepHeld(this.latestAudioMs);
+    }
     this.ring.push({ pcm, tMs: tsMs });
     this.ringMs += (pcm.length / SAMPLE_RATE) * 1000;
     while (this.ring.length > 0 && this.ringMs > RING_MS) {
@@ -400,6 +412,36 @@ export class ChunkedTranscriber {
     report();
   }
 
+  /** THE SWEEP (audio-clock driven, and once more at dispose): adjudicate every
+   *  held or unnamed turn whose re-assertion window has closed, against the
+   *  hints ALREADY recorded. A hold must not depend on a future hint — under
+   *  hint-leads-turn interleaving there is none — and it must not be a life
+   *  sentence: the binder match the hold vetoed either stands (the name shows
+   *  real lit time around the turn) or the turn stays provisional. */
+  private sweepHeld(nowMs: number): void {
+    if (this.unresolved.length === 0) return;
+    const still: UnresolvedTurn[] = [];
+    for (const u of this.unresolved) {
+      if (nowMs < u.t1 + REASSERT_WINDOW_MS) { still.push(u); continue; }
+      const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (!m) { still.push(u); continue; }
+      const blocked = u.blockedNames;
+      if (blocked?.has(m.name)) {
+        const lit = this.binder.litMsAround(m.name, u.t0 - REASSERT_WINDOW_MS, u.t1 + REASSERT_WINDOW_MS);
+        if (lit >= REAL_SPEAKER_LIT_MS) {
+          blocked.delete(m.name);
+          this.log(`[ChunkedTranscriber] sweep adjudicated ${u.clusterId} → "${m.name}" (lit ${Math.round(lit)}ms around the turn — a speaker, not a flip)`);
+          this.claimTurn(u.clusterId, m.name);
+          continue;
+        }
+        still.push(u);   // one short slice — the flip suspicion stands
+        continue;
+      }
+      this.claimTurn(u.clusterId, m.name);   // ordinary late window-match, no hold involved
+    }
+    this.unresolved = still;
+  }
+
   /** Late-box claim: repaint a provisional turn's published segments under `name`
    *  (the speaker whose box just lit). Same path as a binder rename. */
   private claimTurn(clusterId: string, name: string): void {
@@ -429,6 +471,9 @@ export class ChunkedTranscriber {
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
     await this.pump(true);
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
+    // Final adjudication: every held turn gets its sweep verdict from the full
+    // hint log before the session ends — a hold is never left undecided.
+    this.sweepHeld(Infinity);
     try { this.segmenter?.reset(); } catch { /* best effort */ }
   }
 
