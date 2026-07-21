@@ -609,6 +609,7 @@ class SqlAlchemyTranscriptStore:
                     WHEN jsonb_typeof(m.data->'zaki_capture') = 'object'
                     THEN jsonb_build_object(
                         'state', m.data->'zaki_capture'->'state',
+                        'withdrawal_reason', m.data->'zaki_capture'->'withdrawal_reason',
                         'bot_name', m.data->'zaki_capture'->'bot_name',
                         'tenant_attested', m.data->'zaki_capture'->'tenant_attested',
                         'tenant_attested_at', m.data->'zaki_capture'->'tenant_attested_at',

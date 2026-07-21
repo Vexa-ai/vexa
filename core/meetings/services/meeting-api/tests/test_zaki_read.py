@@ -830,3 +830,43 @@ def test_explicitly_disabled_read_scope_returns_scope_disabled(route: str):
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "scope_disabled"
+
+
+def test_index_lists_ordinarily_stopped_meetings_but_hides_privacy_withdrawals():
+    """The archive must OUTLIVE the capture (owner round-5): stopping tombstones the
+    authority (state=withdrawn, reason=capture_stopped) — requiring state=='authorized'
+    made every successfully-captured meeting VANISH from the index at stop, while failed
+    never-stopped meetings kept showing. A privacy tombstone (consent_withdrawn, or any
+    unknown reason: fail closed) still hides the meeting."""
+    stopped = _meeting_data()
+    stopped["zaki_capture"] = {
+        **stopped["zaki_capture"],
+        "state": "withdrawn",
+        "withdrawal_reason": "capture_stopped",
+        "withdrawn_at": "2026-07-16T10:10:00+00:00",
+    }
+    withdrawn = _meeting_data()
+    withdrawn["zaki_capture"] = {
+        **withdrawn["zaki_capture"],
+        "state": "withdrawn",
+        "withdrawal_reason": "consent_withdrawn",
+        "withdrawn_at": "2026-07-16T10:10:00+00:00",
+    }
+    store = InMemoryTranscriptStore()
+    for mid, native, data in ((41, "stopped-native", stopped), (42, "withdrawn-native", withdrawn)):
+        store.seed_meeting(
+            meeting_id=mid, user_id=USER_ID, platform="google_meet",
+            native_meeting_id=native, status="completed",
+            start_time="2026-07-16T09:00:00+00:00", end_time="2026-07-16T10:00:00+00:00",
+            created_at="2026-07-16T08:59:00+00:00", updated_at="2026-07-16T10:10:00+00:00",
+            data=data, segments=_segments(),
+        )
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/index?limit=50", headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["items"]]
+    assert any(i.startswith("meeting:41") or i == "meeting:41" for i in ids), ids
+    assert not any("42" in i for i in ids), ids

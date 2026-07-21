@@ -105,8 +105,8 @@ def _read_index_control_metadata(data: dict) -> dict:
     projected = {key: data[key] for key in ("title", "name") if key in data}
     field_sets = {
         "zaki_capture": (
-            "state", "bot_name", "tenant_attested", "tenant_attested_at",
-            "tenant_policy_version",
+            "state", "withdrawal_reason", "bot_name", "tenant_attested",
+            "tenant_attested_at", "tenant_policy_version",
         ),
         "zaki_read": ("enabled",),
         "zaki_retention": ("state", "expired_scopes", "scope_expiries"),

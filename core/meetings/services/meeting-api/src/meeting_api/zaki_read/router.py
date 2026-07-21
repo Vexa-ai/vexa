@@ -129,9 +129,20 @@ def _capture_notice(data: dict, now: datetime) -> dict | None:
         return None
     attested_at = _parse_time(capture.get("tenant_attested_at"))
     policy_version = capture.get("tenant_policy_version")
+    # The archive must OUTLIVE the capture: stopping tombstones the authority
+    # (state=withdrawn, reason=capture_stopped) so no future bot rides the old
+    # grant — but the attested consent that covered the recording stays true.
+    # Requiring state=="authorized" here meant every successfully-captured
+    # meeting VANISHED from the index at stop, while failed (never-stopped)
+    # meetings kept showing — the archive could only ever list failures. A
+    # privacy tombstone (consent_withdrawn / unknown reasons) still hides.
+    state = capture.get("state")
+    ended_ordinarily = (
+        state == "withdrawn" and capture.get("withdrawal_reason") == "capture_stopped"
+    )
     if (
         read_scope.get("enabled") is not True
-        or capture.get("state") != "authorized"
+        or (state != "authorized" and not ended_ordinarily)
         or capture.get("bot_name") != ZAKI_NOTETAKER_NAME
         or capture.get("tenant_attested") is not True
         or attested_at is None
