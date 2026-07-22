@@ -146,5 +146,14 @@ export { AdmissionError } from "./shared/admission";
 export type { AdmissionOutcome } from "./shared/admission";
 export { AuthSessionError } from "./googlemeet/join";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
+// The Teams anonymous-join origin guard. A meetup-join redirected to the Microsoft sign-in host
+// terminates the join THERE with `TeamsJoinRedirectError` — deliberately not an AdmissionError, so
+// the orchestrator's join catch carries its `reasonCode` into the terminal event's reason text
+// instead of the sealed enum flattening it into a nameless admission timeout. See auth-redirect.ts.
+export {
+  TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT, TEAMS_OFF_MEETING_ORIGIN,
+  isMicrosoftLoginUrl, isTeamsMeetingUrl,
+} from "./msteams/auth-redirect";
+export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
