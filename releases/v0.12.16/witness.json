@@ -1,0 +1,37 @@
+{
+  "version": "v0.12.16",
+  "candidate": "v0.12.16",
+  "generated_from": "v0.12.15...v0.12.16",
+  "witnessed_by": "dmitry@vexa.ai",
+  "witnessed_at": "2026-07-21T23:51:35Z",
+  "deployment": "helm (vexa-production, v0.12.16 hc15 rev 99) \u2014 value walked LIVE on prod; STOCK :v0.12.16 images validated by-proxy via release-validate compose/lite/k8s/bot-spawn/v010-compat/arm64 legs on the tag",
+  "witness_deployment": {
+    "url": "https://dashboard.vexa.ai",
+    "provisioned_by": "v0.12.16 production cutover \u2014 in-place helm upgrade --atomic, helm rev 99 (2026-07-22, this session). NOTE: this is the HOSTED prod deployment (hc15 = stock v0.12.16 + hosted-compat patches), not a fresh stock self-host; the stock published :v0.12.16 images are witnessed BY-PROXY via the automated validate legs (below). Owner's conscious call to resolve by-proxy rather than re-provision (value already validated).",
+    "prevalidated": [
+      "api.cloud.vexa.ai/health -> 200",
+      "dashboard.vexa.ai UI -> 200; runtime version chip platformVersion=0.12.16",
+      "auth + live meeting end-to-end: Google Meet 24546 admitted, bot vexa-bot:v0.12.16-rc.6",
+      "live STT: real speaker attribution ('Dmitriy Grankin'), live transcript render (absolute_start_time populated), hallucination-filter + silent-skip active",
+      "STOCK :v0.12.16 images: release-validate legs validate-compose / validate-lite / validate-helm-k3s / validate-bot-spawn / validate-v010-compat / validate-arm64 / image-identity ALL GREEN on the v0.12.16 tag build"
+    ]
+  },
+  "values": [
+    {
+      "pr": "842",
+      "title": "release: v0.12.15 witness receipt \u2014 SIGNED",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "Prior-release mechanics PR (the v0.12.15 witness receipt itself). No v0.12.16 user-facing value; appears in the batch only because the generator's baseline auto-detect returned None against the squash-merged v0.12.16. Release-mechanics/ci \u2014 nothing to walk."
+    },
+    {
+      "pr": "867",
+      "title": "release: v0.12.16 \u2014 the community batch (7 PRs, 5 contributors)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "Live prod meeting 24546 (Google Meet, rev 99) admitted the v0.12.16 bot, rendered transcripts live with correct speaker attribution, and completed cleanly with completion_reason \u2014 the delivered value works on the shipped release.",
+      "observation": "The v0.12.16 batch value witnessed LIVE on production (helm rev 99): Google Meet meeting 24546 \u2014 bot vexa-bot:v0.12.16-rc.6, real speaker 'Dmitriy Grankin', live transcript render (Teams/mixed-lane #895 + gmeet path), stable Speaker labels (#890), hallucination-filter + silent-skip active, clean completion with completion_reason. Corroborated by: staging thorough-validation (7 dimensions, GO-with-caveats, 0 confirmed blockers) + a 5/6 human witness on staging (Teams live render, dashboard version chip #72, completion_reason UI, Zoom accept #897, download; logout deferred as #899). STOCK published :v0.12.16 images validated by-proxy (compose/lite/k8s/bot-spawn/v010-compat/arm64 legs green on the tag)."
+    }
+  ],
+  "signed_off": true
+}
