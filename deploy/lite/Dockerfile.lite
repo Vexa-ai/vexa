@@ -61,21 +61,56 @@ COPY clients/terminal/ ./
 RUN npm run build && npm prune --omit=dev
 
 # -----------------------------------------------------------------------------
+# Stage 2c: valkey-builder — build valkey-server + valkey-cli from source on the SAME jammy glibc
+# as the final stage. Valkey (Linux Foundation BSD-3 fork of Redis 7.2.4) gives XAUTOCLAIM parity
+# with compose/helm and keeps Lite off BOTH ends of the #653 gap: jammy apt's stale redis 6.0.16
+# (no XAUTOCLAIM — the v0.12.5 witness root) AND source-available Redis ≥7.4 (RSALv2/SSPLv1). Built
+# from the pinned git tag, so: no external apt-repo trust (the issue verified redis's apt license
+# metadata is wrong), and no glibc mismatch — an alpine/musl binary can't run on this glibc base.
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS valkey-builder
+ARG VALKEY_VERSION=8.1.9
+# Pinned SHA-256 of the tag tarball (supply-chain, production-grade R16): the build verifies the bytes,
+# not just the version. `sha256sum -c` fails LOUD on any mismatch — a tampered or drifted tarball stops
+# the build rather than baking silently. Update this hash in lockstep whenever VALKEY_VERSION changes.
+ARG VALKEY_SHA256=f7e927534aaeb3a5f4410375c3e6f2f0c1b9257db8bc573e68f9e2dbb11344f4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://github.com/valkey-io/valkey/archive/refs/tags/${VALKEY_VERSION}.tar.gz" -o /tmp/valkey.tar.gz \
+ && echo "${VALKEY_SHA256}  /tmp/valkey.tar.gz" | sha256sum -c - \
+ && mkdir -p /tmp/valkey && tar -xzf /tmp/valkey.tar.gz -C /tmp/valkey --strip-components=1 \
+ && make -C /tmp/valkey -j"$(nproc)" BUILD_TLS=no \
+ && make -C /tmp/valkey install PREFIX=/opt/valkey \
+ && cp /tmp/valkey/COPYING /valkey-COPYING \
+ && /opt/valkey/bin/valkey-server --version \
+ && /opt/valkey/bin/valkey-cli --version
+
+# -----------------------------------------------------------------------------
 # Stage 3: final — assemble the all-in-one runtime image on the same Playwright base.
 # -----------------------------------------------------------------------------
 FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System stack: Python (the 5 services) · supervisor · redis · X11/audio (Xvfb/fluxbox/pulse) ·
+# System stack: Python (the 5 services) · supervisor · X11/audio (Xvfb/fluxbox/pulse) ·
 # noVNC (browser view) · postgres client (pg_isready) · git (agent governance ops).
+# The cache/stream store is Valkey, copied from valkey-builder below — NOT jammy apt's redis-server
+# (6.0.16, no XAUTOCLAIM, the #653 parity gap).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev build-essential \
-      supervisor redis-server postgresql-client \
+      supervisor postgresql-client \
       xvfb fluxbox x11vnc novnc python3-websockify \
       pulseaudio xdotool xclip socat ffmpeg libsndfile1 \
       curl git ca-certificates \
  && usermod -aG pulse-access root 2>/dev/null || true \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Valkey 8.1.9 (BSD-3) — the internal cache/stream store, glibc-matched from valkey-builder. Ships
+# valkey-server + valkey-cli on PATH (supervisord runs valkey-server; healthchecks use valkey-cli),
+# with the license notice traveling next to the bytes (THIRD_PARTY_LICENSES.md, per-release SBOM).
+COPY --from=valkey-builder /opt/valkey/bin/valkey-server /opt/valkey/bin/valkey-cli /usr/local/bin/
+COPY --from=valkey-builder /valkey-COPYING /usr/local/share/valkey/LICENSE
+RUN valkey-server --version && command -v valkey-cli
 
 # uv (the per-service venvs are resolved from each service's own pyproject + uv.lock).
 RUN pip3 install --no-cache-dir uv==0.9.22

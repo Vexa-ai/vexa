@@ -1,7 +1,7 @@
 # deploy — the v0.12 container composition (Compose)
 
 Brings up the whole v0.12 control plane as one ordered, health-gated stack: the infra
-(`postgres:17` · `redis:7` · `minio` + `minio-init`) and the four long-running Python
+(`postgres:17` · `valkey:8` · `minio` + `minio-init`) and the four long-running Python
 services — **admin-api · runtime · agent-api · meeting-api · gateway** — each building its own
 slim `uv` image, plus the dev hot-reload overlay and the dashboard overlay. This is the
 *composition* layer (it owns no service code); it also owns the **`execution-targets.v1`**
@@ -13,7 +13,7 @@ resolves against in planning, before execution (ADR-0020).
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | spawns-over | the 4 core services + dashboard | `<service>/Dockerfile` build + `python -m <pkg>` | container images, env wiring, ordered health-gated bring-up |
-| spawns-over | infra | `redis:7-alpine` · `postgres:17-alpine` · `minio` + `minio/mc` | the backing stores every service `depends_on: service_healthy` |
+| spawns-over | infra | `valkey/valkey:8-alpine` · `postgres:17-alpine` · `minio` + `minio/mc` | the backing stores every service `depends_on: service_healthy` |
 | spawns-over | bot | `runtime` → `/var/run/docker.sock`, `BROWSER_IMAGE=vexaai/vexa-bot:v012` | on-demand per-meeting bot container (published image, never built here) |
 | produces | `scripts/gates.mjs` (`gate:execution-env`) + planning preflight | `execution-targets.v1` JSON (`deploy/execution-targets.json`, gitignored) | the resolved targets[]/resources[] registry; `secret_ref` references only (P14) |
 | calls | host secret store | `secret_ref: vexa-secrets:<path>` / `env:<NAME>` | references to credentials — never inline secret values |

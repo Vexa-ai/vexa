@@ -365,34 +365,188 @@ function gateEvalBaseline() {
 // built-in licence index (no added dependency to vet — itself a P17 win). Cat A (permissive) passes;
 // Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
 // any unclassified licence fail the build. B is checked before X so LGPL never trips the GPL match.
+// FINOS licence classifier (ADR-0004), shared by gate:licenses (npm/py deps) and gate:image-licenses
+// (baked apt packages + pinned container images). B is tested before X so LGPL never trips the GPL
+// match. Cat X is where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653 keeps out of our images.
+const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i, /OR CC0-1\.0/];
+const LICENSE_B = [/LGPL/i, /^MPL/i, /^EPL/i];                                    // weak copyleft — needs a logged exception
+const LICENSE_X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
+// → "A" (permissive, passes) | "B" (weak-copyleft, needs a logged exception) | "X" (forbidden) | "?" (unclassified)
+function classifyLicense(lic) {
+  if (LICENSE_A.some((re) => re.test(lic))) return "A";
+  if (LICENSE_B.some((re) => re.test(lic))) return "B";
+  if (LICENSE_X.some((re) => re.test(lic))) return "X";
+  return "?";
+}
+
 function gateLicenses() {
   let raw;
   try { raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString(); }
   catch (e) { raw = (e.stdout || "").toString(); }
   if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
   let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
-  const A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i, /OR CC0-1\.0/];
-  const B = [/LGPL/i, /^MPL/i, /^EPL/i];                                          // weak copyleft — needs a logged exception
-  const X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/];
   const exFile = join(ROOT, "license-exceptions.json");
   const exceptions = existsSync(exFile) ? (JSON.parse(readFileSync(exFile, "utf8")).categoryB || []) : [];
   const excepted = (name) => exceptions.some((e) => name === e.package || name.startsWith(e.package));
   const bad = [], flagged = [];
   for (const [lic, pkgs] of Object.entries(data)) {
     const names = pkgs.map((p) => p.name);
-    if (A.some((re) => re.test(lic))) continue;
-    if (B.some((re) => re.test(lic))) {
+    const cat = classifyLicense(lic);
+    if (cat === "A") continue;
+    if (cat === "B") {
       const unlisted = names.filter((n) => !excepted(n));
       if (unlisted.length) bad.push(`Cat-B ${lic} needs an entry in license-exceptions.json: ${unlisted.join(", ")}`);
       else flagged.push(`${lic} (${names.join(", ")})`);
       continue;
     }
-    if (X.some((re) => re.test(lic))) { bad.push(`FORBIDDEN (Cat X) ${lic}: ${names.join(", ")} — replace this dependency`); continue; }
+    if (cat === "X") { bad.push(`FORBIDDEN (Cat X) ${lic}: ${names.join(", ")} — replace this dependency`); continue; }
     bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
   }
   if (bad.length) return fail(bad);
   const total = Object.values(data).reduce((n, p) => n + p.length, 0);
   console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} Cat-B by exception: ${flagged.join("; ")}` : ""})`);
+  return true;
+}
+
+// gate:image-licenses (P17, #653) — the packaging-side complement to gate:licenses. That gate scans the
+// npm/py DEPENDENCY tree; it is blind to two license surfaces the project actually ships, the class the
+// #653 audit exposed — "the thing we ship is not the thing the gate checks":
+//   (1) third-party container images our deploy surfaces PIN (compose/helm `image:` refs) — user-pulled
+//       sidecars. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
+//       an un-audited component" hole); a non-permissive licence (e.g. a source-available Redis ≥7.4
+//       RSALv2/SSPL, or AGPL MinIO) requires a logged `reason`, so it is a reviewed decision, never silent.
+//   (2) components BAKED INTO a published vexaai/* image (`bundled`) — redistribution, so strict: Cat A
+//       (or Cat-B with a reason); Cat X always fails. This is the rung that keeps source-available Redis
+//       out of the Apache-2.0 Lite image. Plus a concrete guard: Lite must not `apt install redis-server`
+//       (jammy's 6.0.16 — the parity trap #653 moved off of; use the Valkey source-build).
+// System apt tools (ffmpeg/x11vnc/pulseaudio …) are mere-aggregation in a container image, not code we
+// link or redistribute as our own — out of scope here, tracked by the SBOM, not license-gated.
+function gateImageLicenses() {
+  const manFile = join(ROOT, "image-licenses.json");
+  if (!existsSync(manFile)) { console.log("  ✓ gate:image-licenses — no manifest yet (green-on-empty)"); return true; }
+  const man = JSON.parse(readFileSync(manFile, "utf8"));
+  const declaredImages = new Map((man.images || []).map((e) => [e.name, e]));
+  const bad = [], flagged = [];
+
+  // (1) third-party `image:` pins in compose + helm values AND helm templates (a literal `image:` in a
+  //     template — e.g. the minio-init Job — is a real pin the gate must see; `{{ … }}` refs are skipped
+  //     below). Skip our own vexaai/* images — those are built here, not third-party redistributables.
+  const chartDir = join(ROOT, "deploy", "helm", "charts", "vexa");
+  const tplDir = join(chartDir, "templates");
+  const deployFiles = [
+    join(ROOT, "deploy", "compose", "docker-compose.yml"),
+    ...(existsSync(chartDir) ? readdirSync(chartDir).filter((f) => /^values.*\.yaml$/.test(f)).map((f) => join(chartDir, f)) : []),
+    ...(existsSync(tplDir) ? readdirSync(tplDir).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(tplDir, f)) : []),
+  ].filter(existsSync);
+  const foundImages = new Map();   // name → ref (first sighting)
+  for (const f of deployFiles)
+    // same-line values only ([ \t]*, never \s* which would cross a newline into a structured
+    // `image:\n  repository:` block — those are first-party app images, correctly skipped). The value
+    // may carry `${VAR:-default}` interpolation ⇒ capture the whole token (no `{}` exclusion) and resolve.
+    for (const m of readFileSync(f, "utf8").matchAll(/^[ \t]*image:[ \t]*["']?([^\s"']+)/gm)) {
+      let ref = m[1];
+      if (ref.includes("{{")) continue;                                          // helm template expression
+      ref = ref.replace(/\$\{[^:}]*:-([^}]+)\}/g, "$1");                         // ${VAR:-default} → the default image
+      if (ref.includes("$")) continue;                                          // unresolved ${VAR} → env-only, unauditable
+      if (ref.startsWith("vexaai/")) continue;                                   // first-party (built here)
+      const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");       // strip digest / :tag, keep registry/name
+      if (!foundImages.has(name)) foundImages.set(name, ref);
+    }
+  for (const [name, ref] of foundImages) {
+    const e = declaredImages.get(name);
+    if (!e) { bad.push(`undeclared pinned image "${ref}" — add it to image-licenses.json (images[]) with its SPDX licence`); continue; }
+    const cat = classifyLicense(e.license);
+    if (cat === "?") bad.push(`image "${name}": unclassified licence "${e.license}" — classify it or replace the image`);
+    else if (cat === "A") { /* clean */ }
+    else if (!e.reason) bad.push(`image "${name}" is ${e.license} (Cat ${cat}) but has no \`reason\` — a non-permissive pinned image must carry a logged rationale (why it's acceptable / not redistributed)`);
+    else flagged.push(`${name} (${e.license}, Cat ${cat}: ${e.reason.slice(0, 48)}…)`);
+  }
+
+  // (2) bundled components baked into a published image — strict (redistribution).
+  for (const e of (man.bundled || [])) {
+    const cat = classifyLicense(e.license);
+    if (cat === "X") bad.push(`FORBIDDEN (Cat X) bundled "${e.name}": ${e.license} — a source-available/non-OSS component cannot ship inside ${e.artifact || "a vexaai/* image"} (#653)`);
+    else if (cat === "?") bad.push(`bundled "${e.name}": unclassified licence "${e.license}" — classify it`);
+    else if (cat === "B" && !e.reason) bad.push(`bundled "${e.name}" is Cat-B (${e.license}) with no \`reason\``);
+    else if (cat !== "A") flagged.push(`bundled ${e.name} (${e.license})`);
+  }
+
+  // (3) concrete #653 guard — the Lite parity trap: apt-installed redis-server (jammy 6.0.16, no XAUTOCLAIM).
+  const lite = join(ROOT, "deploy", "lite", "Dockerfile.lite");
+  // `[^&]*?` scopes the match to the install statement's package list (it terminates at the first `&&`),
+  // so a comment MENTIONING redis-server later in the file never trips the guard — only a real package does.
+  // `apt(?:-get)?` covers both the `apt-get install` and the bare `apt install` forms.
+  if (existsSync(lite) && /\bapt(?:-get)? install\b[^&]*?\bredis-server\b/.test(readFileSync(lite, "utf8")))
+    bad.push("Lite bakes `apt install redis-server` (jammy 6.0.16 — no XAUTOCLAIM, the #653 parity trap). Use the Valkey source-build stage (BSD-3, XAUTOCLAIM) instead.");
+
+  if (bad.length) return fail(bad);
+  console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
+  return true;
+}
+
+// gate:runtime-parity (P17, #653 · catches the #636/#637 class) — asserts the cache/stream commands
+// the CODE calls are supported by the engine version EVERY deploy surface pins. #636 shipped because
+// Lite's jammy apt redis (6.0.16) lacks XAUTOCLAIM while the collector calls it: code assumed a backend
+// capability the shipped backend lacked. This gate closes that rung with no human in the loop.
+//   used commands  ← grep core/** for `.<cmd>(` against the floor table below
+//   surface version← compose/helm `image:` pins + Lite (apt redis-server ⇒ jammy 6.0; else ARG VALKEY_VERSION)
+//   assert         ← every surface's redis-equivalent command era ≥ the highest used command's floor
+// Floors are the Redis version each command shipped in (Valkey ≥7.2 implements the whole surface we use).
+const COMMAND_FLOORS = {                                                          // command → [major, minor] introduced
+  xadd: [5, 0], xreadgroup: [5, 0], xack: [5, 0], xpending: [5, 0], xtrim: [5, 0], xlen: [5, 0],
+  xclaim: [5, 0], xread: [5, 0], xrange: [5, 0], xinfo: [5, 0], xautoclaim: [6, 2],   // XAUTOCLAIM is the load-bearing floor (#636)
+  zadd: [1, 2], zrange: [1, 2], zrangebyscore: [1, 2], zrem: [1, 2],
+  lpush: [1, 0], rpush: [1, 0], brpop: [2, 0], blpop: [2, 0], sadd: [1, 0], smembers: [1, 0],
+  publish: [2, 0], subscribe: [2, 0], hset: [2, 0], setex: [2, 0], expire: [1, 0],
+};
+const verNum = ([maj, min]) => maj * 100 + min;
+const verStr = (n) => `${Math.floor(n / 100)}.${n % 100}`;                        // 602 → "6.2" (major.minor encoding)
+// the Redis command-set version a pinned surface supports. Valkey ≥7.2 forked Redis 7.2.4 and carries
+// the full command surface we use (incl XAUTOCLAIM) → treat as Redis 7.4-equivalent; stock Redis → itself.
+function redisCommandEra(engine, ver) {
+  if (engine === "valkey") return verNum(ver[0] > 7 || (ver[0] === 7 && ver[1] >= 2) ? [7, 4] : ver);
+  return verNum(ver);
+}
+const parseTag = (tag) => { const p = tag.replace(/-alpine$/, "").split("."); return [parseInt(p[0], 10) || 0, parseInt(p[1], 10) || 0]; };
+function gateRuntimeParity() {
+  const compose = join(ROOT, "deploy", "compose", "docker-compose.yml");
+  const values = join(ROOT, "deploy", "helm", "charts", "vexa", "values.yaml");
+  const lite = join(ROOT, "deploy", "lite", "Dockerfile.lite");
+  if (![compose, values, lite].some(existsSync)) { console.log("  ✓ gate:runtime-parity — no deploy surfaces yet (green-on-empty)"); return true; }
+
+  // used commands: grep the Python core for `.<cmd>(` against the floor table
+  const used = new Set();
+  try {
+    const hits = execSync(`grep -rhoiE "\\.(${Object.keys(COMMAND_FLOORS).join("|")})\\(" core --include="*.py"`, { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString();
+    for (const m of hits.matchAll(/\.([a-z]+)\(/gi)) if (COMMAND_FLOORS[m[1].toLowerCase()]) used.add(m[1].toLowerCase());
+  } catch { /* grep exit 1 = no matches: no commands used, gate is vacuously green below */ }
+  if (!used.size) { console.log("  ✓ gate:runtime-parity — no cache/stream commands called by core yet (green-on-empty)"); return true; }
+  const floorCmd = [...used].reduce((a, c) => verNum(COMMAND_FLOORS[c]) > verNum(COMMAND_FLOORS[a]) ? c : a);
+  const floor = verNum(COMMAND_FLOORS[floorCmd]);
+
+  // each surface's pinned engine + version
+  const surfaces = [];
+  const imgOf = (file, label) => {
+    if (!existsSync(file)) return;
+    const m = readFileSync(file, "utf8").match(/image:\s*["']?(valkey\/valkey|redis):([\w.-]+)/);
+    if (m) surfaces.push({ label, engine: m[1] === "redis" ? "redis" : "valkey", ver: parseTag(m[2]), ref: `${m[1]}:${m[2]}` });
+  };
+  imgOf(compose, "compose");
+  imgOf(values, "helm");
+  if (existsSync(lite)) {
+    const txt = readFileSync(lite, "utf8");
+    if (/\bapt(?:-get)? install\b[^&]*?\bredis-server\b/.test(txt)) surfaces.push({ label: "lite", engine: "redis", ver: [6, 0], ref: "apt redis-server (jammy 6.0.16)" });
+    else { const a = txt.match(/ARG VALKEY_VERSION=([\d.]+)/); if (a) { const p = a[1].split("."); surfaces.push({ label: "lite", engine: "valkey", ver: [parseInt(p[0], 10), parseInt(p[1], 10) || 0], ref: `valkey ${a[1]} (source build)` }); } }
+  }
+  if (!surfaces.length) return fail(["gate:runtime-parity — no cache engine pin found on any deploy surface (compose/helm image: or Lite ARG VALKEY_VERSION)"]);
+
+  const bad = [];
+  for (const s of surfaces) {
+    const era = redisCommandEra(s.engine, s.ver);
+    if (era < floor) bad.push(`${s.label} pins ${s.ref} (Redis-command era ${verStr(era)}) but core calls ${floorCmd.toUpperCase()} (needs ≥ ${verStr(floor)}) — the #636 class: code assumes a backend capability this surface lacks`);
+  }
+  if (bad.length) return fail(bad);
+  console.log(`  ✓ gate:runtime-parity — ${surfaces.length} surface(s) [${surfaces.map((s) => s.label).join(", ")}] support all ${used.size} used command(s); floor ${floorCmd.toUpperCase()} needs ≥ ${verStr(floor)}`);
   return true;
 }
 
@@ -1034,7 +1188,7 @@ function gateLiteMakefile() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
