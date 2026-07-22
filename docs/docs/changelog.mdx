@@ -572,6 +572,27 @@ probe), not inferred from planning docs.
   (`payment_required`, HTTP 402, "Insufficient balance…") and one count per kind, so a storm of
   per-chunk failures becomes one honest summary rather than a flood.
 
+- **Meeting timestamps serialize as UTC (#860).** `created_at` / `start_time` / `end_time` left the
+  API as naive datetimes, so clients parsed server-local wall time as their own local time and
+  rendered meetings hours off. Every meeting timestamp now carries the `Z` suffix, so standard
+  client parsing lands on the correct local time.
+
+- **Bring-your-own STT endpoint, documented (#537).** Any OpenAI-compatible transcription endpoint
+  can serve as the backend via `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN`; the
+  contract (request shape, auth, response fields) is now written down. See
+  [Custom STT endpoints](/how-to/custom-stt). The FunASR/SenseVoice example is
+  community-contributed and not yet independently validated (#863).
+
+- **Fixed:** Teams transcripts no longer show a new fake speaker per line. Unattributed turns on the
+  mixed lane (Teams/Zoom) now carry the stable "Speaker" label instead of leaking the internal
+  `seg_N` cluster id, so per-speaker consumers group them as one speaker; late attribution still
+  repaints by segment id. ([#890](https://github.com/Vexa-ai/vexa/issues/890))
+
+- **Fixed:** Teams/Zoom live transcripts now paint in real time on the dashboard instead of only
+  after a reload. The bot's mixed-lane segment mapper wasn't stamping `absolute_start_time`, so the
+  live renderer (which keys on it) skipped every pending draft; a prior producer-stamp fix had
+  covered only Google Meet. ([#895](https://github.com/Vexa-ai/vexa/issues/895))
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
