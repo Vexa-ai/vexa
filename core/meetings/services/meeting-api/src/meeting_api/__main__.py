@@ -245,6 +245,11 @@ def _attach_background_loops(
     db_writer_interval = float(
         os.getenv("DB_WRITER_INTERVAL_S", os.getenv("BACKGROUND_TASK_INTERVAL", "10"))
     )
+    # #893: the self-healing keyspace SCAN is OFF the 10s hot path. The active_meetings set is
+    # authoritative in steady state, so a tick sweeps the set alone; the O(keyspace) scan that
+    # self-heals a set/hash divergence runs only on startup + every this-many seconds. The per-tick
+    # scan saturated redis and starved /health, restarting healthy pods.
+    db_writer_reconcile_interval = float(os.getenv("DB_WRITER_RECONCILE_INTERVAL_S", "300"))
     # Stop-reconcile backstop: a meeting whose bot was told to leave but never sent its own terminal
     # callback would stay `stopping` forever. After a grace window, complete it through the same
     # lifecycle callback the bot uses — so the FSM, webhook, and ws status frame all fire identically.
@@ -319,16 +324,25 @@ def _attach_background_loops(
         if not hasattr(transcript_store, "upsert_segments"):
             return  # a store without a durable sink (bare fake) — nothing to flush into
 
-        async def _tick():
-            await db_writer_tick(redis_client, transcript_store)
+        # #893: reconcile (the O(keyspace) self-healing scan) only on the FIRST tick — catch any
+        # mid-upgrade orphan hash on boot — then at most every db_writer_reconcile_interval seconds.
+        # Every other tick sweeps the authoritative active_meetings set alone, no scan.
+        last_reconcile = [0.0]  # 0 ⇒ the first tick reconciles
+
+        async def _tick(reconcile: bool):
+            await db_writer_tick(redis_client, transcript_store, reconcile=reconcile)
 
         while True:
+            now = _time.monotonic()
+            do_reconcile = (now - last_reconcile[0]) >= db_writer_reconcile_interval
             try:
-                await _guarded("db-writer", _tick)  # #637: one flush per interval across replicas
+                await _guarded("db-writer", lambda: _tick(do_reconcile))  # #637: one flush/interval
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("db-writer tick failed")
+            if do_reconcile:
+                last_reconcile[0] = now  # bound the scan cadence per replica, run or guarded-skip
             ticks["db-writer"] = _time.monotonic()  # #527: alive this iteration
             await asyncio.sleep(db_writer_interval)
 
