@@ -13,6 +13,11 @@
  *               ▼
  *           TURN — opened on speech start / speaker change, closed on speaker
  *               change / speech end / overlap edge / TURN_MAX_MS roll / dispose.
+ *               COVERAGE IS CONTIGUOUS: a turn begins where the last one ended,
+ *               so a boundary the model never emits (its stream has multi-second
+ *               recall gaps over continuous speech) delays words, never deletes
+ *               them. The cut says WHERE the speaker changed; it does not get to
+ *               say which audio exists.
  *               ▼
  *           CONTINUOUS CONFIRMATION (LocalAgreement-2, shared @vexa/transcribe-
  *           buffer): every commit resubmits the turn's UNCONFIRMED window
@@ -90,6 +95,11 @@ const CONFIRM_TTL_MS = 2500;
 /** Don't bother Whisper with unconfirmed windows shorter than this unless
  *  the turn is closing. */
 const MIN_SUBMIT_MS = 800;
+/** How far a newly-opened turn may reach back to pick up audio no turn covered (see
+ *  openTurnApply). Bounds what a genuinely long silence can hand Whisper in one call — its
+ *  input window is 30s, and a span past that is truncated with its timestamps still claiming
+ *  the whole reach. */
+const COVERAGE_BACKFILL_MAX_MS = 20_000;
 /** Time-based resubmission cadence for the OPEN turn (the bot's
  *  submitInterval): pending refreshes and LocalAgreement stability build at
  *  this pace instead of waiting for the next boundary (which can be 10s away
@@ -186,6 +196,10 @@ interface Turn {
   pendingName: string | null;
   /** Last unconfirmed tail — promoted if the closing pass returns nothing. */
   pendingTail: ChunkSegment[];
+  /** Exclusive upper bound of the segment ids this turn has ever published under. A pass that
+   *  segments into fewer pieces than the draft it replaces leaves the ids above it stranded in
+   *  the consumer's store; this is what says which those are. */
+  draftedUpToSeq: number;
   /** Sticky speaker: set once this turn resolves to a REAL name. While null the turn
    *  is UNATTRIBUTED and stays eligible for (re)attribution/claim/priority; once set,
    *  the name is locked so later hints (incl. brief "hmm" flickers) can't flip the
@@ -614,11 +628,23 @@ export class ChunkedTranscriber {
           this.log(`[ChunkedTranscriber] ${tag} failed: ${e?.message}`);
         }
       }
-      if ((closeAtEnd || this.disposed) && this.turn) {
-        const t = this.turn;
-        this.turn = null;
-        await this.submitTurn(t, true).catch((e: any) =>
-          this.log(`[ChunkedTranscriber] turn close failed: ${e?.message}`));
+      if (closeAtEnd || this.disposed) {
+        // Session end leaves nothing uncovered. If the cut source closed the last turn and never
+        // re-opened, everything spoken since that close is still sitting in the ring unsubmitted —
+        // the same coverage gap openTurnApply folds away mid-session, at the one instant no later
+        // boundary can arrive to do it.
+        let last = this.turn;
+        if (!last && this.latestAudioMs - this.confirmedHighWaterMs >= MIN_SUBMIT_MS) {
+          try {
+            last = await this.openTurnApply({ t0: this.confirmedHighWaterMs, segId: `seg_${this.segCounter++}` });
+            last.t1 = this.latestAudioMs;
+          } catch (e: any) { this.log(`[ChunkedTranscriber] final coverage turn failed: ${e?.message}`); }
+        }
+        if (last) {
+          this.turn = null;
+          await this.submitTurn(last, true).catch((e: any) =>
+            this.log(`[ChunkedTranscriber] turn close failed: ${e?.message}`));
+        }
       }
     } finally {
       this.pumping = false;
@@ -631,21 +657,32 @@ export class ChunkedTranscriber {
   /** Open a new segmentation turn. Closes any still-open turn first (defensive —
    *  a 'close' normally precedes, but flicker can skip it). Does NOT submit —
    *  the pump submits the open turn once per drain batch (and ticks resubmit). */
-  private async openTurnApply(item: { t0: number; segId: string }): Promise<void> {
+  private async openTurnApply(item: { t0: number; segId: string }): Promise<Turn> {
     this.commitCounter++;
     if (this.turn) { const prev = this.turn; this.turn = null; await this.submitTurn(prev, true); }
-    const t0 = Math.max(item.t0, this.confirmedHighWaterMs);
-    // Real silence since the last turn → reset the in-memory prompt so the new
-    // utterance starts clean (no inherited context, no silence-hallucination loop).
-    if (this.lastAudioEndMs > 0 && t0 - this.lastAudioEndMs >= SILENCE_PROMPT_RESET_MS) {
+    // CONTIGUOUS COVERAGE. A turn begins where the last one ended, not where the cut says. The
+    // boundary stream answers "where did the speaker change" — it does not get to answer "which
+    // audio exists". A close whose re-open never fires leaves a span no turn covers, and audio
+    // there is ringed, fed to the model, and never submitted: words the room said that the
+    // transcript can never contain. Starting at the coverage mark folds that span into this
+    // turn's first window instead, and is the same clamp as before when there is no gap (a
+    // flicker opening INSIDE confirmed audio still starts at the high-water, never re-transcribing
+    // it). COVERAGE_BACKFILL_MAX_MS bounds how far back a genuine long silence may reach.
+    const covered = this.confirmedHighWaterMs;
+    const t0 = covered > 0 ? Math.max(covered, item.t0 - COVERAGE_BACKFILL_MAX_MS) : item.t0;
+    // Real silence since the last turn → reset the in-memory prompt so the new utterance starts
+    // clean (no inherited context, no silence-hallucination loop). Judged on the BOUNDARY's own
+    // instant: that is when speech resumed, and it is unaffected by how far the span back-extends.
+    if (this.lastAudioEndMs > 0 && item.t0 - this.lastAudioEndMs >= SILENCE_PROMPT_RESET_MS) {
       this.lastConfirmedText = '';
     }
     this.turn = {
       clusterId: item.segId, turnId: this.turnCounter++,
       t0, t1: t0, confirmedUpToMs: t0,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
-      lastVoicedWallMs: Date.now(), resolvedName: null,
+      draftedUpToSeq: 0, lastVoicedWallMs: Date.now(), resolvedName: null,
     };
+    return this.turn;
   }
 
   /** Close the open turn at a boundary: everything confirms (last chance). */
@@ -683,17 +720,25 @@ export class ChunkedTranscriber {
     // timestamps still clip to publishEnd (the committed speech boundary).
     const publishEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
     const spanEnd = closing ? Math.max(publishEnd, turn.contextEndMs ?? publishEnd) : publishEnd;
+    // THE SUBMIT NARRATION. Every audio-time span this turn asks about, and the reason any of them
+    // produces no text, on one grep-able line each. Without it a hole in the transcript cannot be
+    // told apart from audio that was never submitted, and both were guessed at.
+    const narrate = (verdict: string): void =>
+      this.log(`[submit] turn=${turn.turnId} span=[${Math.round(spanStart)},${Math.round(spanEnd)}] `
+        + `${((spanEnd - spanStart) / 1000).toFixed(2)}s closing=${closing ? 1 : 0} ${verdict}`);
     if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
+      narrate('SKIP too-short');
       if (closing) await this.closeOut(turn);
       return;
     }
     // No new audio since the last pass — an identical window returns
     // identical text and confirms nothing; don't waste the call.
-    if (!closing && spanEnd - turn.lastSubmitEndMs < 500) return;
+    if (!closing && spanEnd - turn.lastSubmitEndMs < 500) { narrate('SKIP no-new-audio'); return; }
     turn.lastSubmitEndMs = spanEnd;
 
     const { pcm, spans } = this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
+      narrate(`SKIP rms=${rms(pcm).toFixed(4)} samples=${pcm.length}`);
       if (closing) await this.closeOut(turn);
       return;
     }
@@ -708,6 +753,7 @@ export class ChunkedTranscriber {
     }
     const gated = result ? this.applyGates(result, spanEnd - spanStart) : null;
     if (!gated || gated.length === 0) {
+      narrate(result ? `DROP gated text=${JSON.stringify((result.text || '').slice(0, 40))}` : 'DROP stt-failed');
       if (closing) await this.closeOut(turn);
       return;
     }
@@ -720,13 +766,7 @@ export class ChunkedTranscriber {
       const startMs = this.wallTimeAt(spans, ws.start || 0, spanStart);
       const rawEndMs = this.wallTimeAt(spans, ws.end || 0, spanStart, 'end');
       const endMs = Math.min(publishEnd, rawEndMs || publishEnd) || publishEnd;
-      return {
-        text: ws.text.trim(),
-        startMs,
-        endMs,
-        language: lang,
-        relEnd: Math.max(0, (endMs - spanStart) / 1000),
-      };
+      return { text: ws.text.trim(), startMs, endMs, language: lang };
     }).filter(s => {
       if (!s.text) return false;
       // The trailing STT context pad is for recognition only — drop anything that
@@ -740,6 +780,7 @@ export class ChunkedTranscriber {
       return true;
     });
     if (mapped.length === 0) {
+      narrate(`DROP all-filtered raw=${JSON.stringify(gated.map(g => g.text).join(' ').slice(0, 60))}`);
       if (closing) await this.closeOut(turn);
       return;
     }
@@ -751,6 +792,7 @@ export class ChunkedTranscriber {
     const agreement = localAgreement(mapped, turn.history, spanEnd, closing);
     const confirmCount = agreement.confirmCount;
     turn.history = agreement.history;
+    narrate(`OK confirm=${confirmCount}/${mapped.length} text=${JSON.stringify(mapped.map(m => m.text).join(' ').slice(0, 80))}`);
 
     const name = this.resolveName(turn);
     if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
@@ -768,11 +810,16 @@ export class ChunkedTranscriber {
       text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
       segmentId: `turn:${turn.turnId}:${turn.seq + i}`,
     }));
+    // Whisper re-segments as the window grows, so a pass can produce FEWER pieces than the draft
+    // it replaces — and the ids above it are then never written again. The reader keeps a
+    // half-sentence sitting beside its own confirmation forever. Clear those ids the way the
+    // per-channel lane finalizes its drafts: an empty-text row drops the draft (transcript.v1).
+    const stale = this.staleDrafts(turn, turn.seq + (closing ? 0 : tail.length), lang, spanStart);
 
     if (confirmCount > 0) {
       // ONE bundle: confirmed + surviving tail. Splitting them deletes the
       // client's pending block for seconds (the "vanishing transcript" bug).
-      this.cb.publish(name, confirmed, closing ? [] : tail);
+      this.cb.publish(name, confirmed, closing ? stale : [...tail, ...stale]);
       this.rememberPublishedSpeaker(name, confirmed[confirmed.length - 1]?.endMs);
       turn.allConfirmed.push(...confirmed);
       // Track per-key so a later name change repaints these in place.
@@ -780,7 +827,7 @@ export class ChunkedTranscriber {
       if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
       cs.push(...confirmed);
       this.clusterName.set(turn.clusterId, name);
-      turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
+      turn.confirmedUpToMs = mapped[confirmCount - 1].endMs;
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
       const txt = confirmed.map(s => s.text).join(' ');
       this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
@@ -788,9 +835,9 @@ export class ChunkedTranscriber {
       turn.pendingTail = closing ? [] : tail;
     } else if (!closing) {
       turn.pendingTail = tail;
-      if (tail.length > 0) {
-        turn.pendingName = name;
-        this.cb.publishPending(name, tail);
+      if (tail.length > 0 || stale.length > 0) {
+        if (tail.length > 0) turn.pendingName = name;
+        this.cb.publishPending(name, [...tail, ...stale]);
       } else if (turn.pendingName) {
         this.cb.clearPending(turn.pendingName);
         turn.pendingName = null;
@@ -800,6 +847,25 @@ export class ChunkedTranscriber {
     if (closing) {
       await this.closeOut(turn);
     }
+  }
+
+  /**
+   * Empty-text rows for every segment id this turn published above `writtenTo`, and the new
+   * high-water of ids it has ever used.
+   *
+   * The consumer upserts on segment_id, so an id that is written once and never again keeps
+   * whatever it last said. A draft split into three pieces whose confirmation comes back as one
+   * therefore leaves two orphan half-sentences beside the whole one — the reader sees the text
+   * twice, and no amount of correct confirming removes it. An empty-text row drops the draft
+   * (transcript.v1's draft contract), which is the same instrument the per-channel lane uses.
+   */
+  private staleDrafts(turn: Turn, writtenTo: number, language: string, atMs: number): ChunkSegment[] {
+    const out: ChunkSegment[] = [];
+    for (let s = writtenTo; s < turn.draftedUpToSeq; s++) {
+      out.push({ text: '', startMs: atMs, endMs: atMs, language, segmentId: `turn:${turn.turnId}:${s}` });
+    }
+    turn.draftedUpToSeq = writtenTo;
+    return out;
   }
 
   /** Turn epilogue: promote a lost tail if the closing pass yielded nothing,
