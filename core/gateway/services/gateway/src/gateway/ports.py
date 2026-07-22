@@ -16,7 +16,7 @@ downstream, FakeRedis). Both satisfy these Protocols structurally — no inherit
 """
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
+from typing import Any, AsyncContextManager, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
 class AuthUnavailable(Exception):
@@ -73,6 +73,26 @@ class DownstreamResponse(Protocol):
 
 
 @runtime_checkable
+class StreamedResponse(Protocol):
+    """A downstream response whose HEAD is readable BEFORE its body is consumed.
+
+    The buffered ``DownstreamResponse`` above cannot express a long-lived stream: reading
+    ``.content`` means waiting for the body to end, and an MCP SSE stream ends when the client
+    goes away. This shape is what a relay needs — the status + headers first (so the gateway can
+    answer the caller immediately, and carry the upstream's verdict VERBATIM), then the bytes as
+    they arrive.
+    """
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def headers(self) -> Any: ...
+
+    def aiter_bytes(self) -> AsyncIterator[bytes]: ...
+
+
+@runtime_checkable
 class DownstreamClient(Protocol):
     """Forward an HTTP request to a downstream service (meeting-api / transcription-collector)
     and return its response. Mirrors the ``client.request(...)`` call in ``main.forward_request``.
@@ -100,7 +120,33 @@ class DownstreamClient(Protocol):
     ) -> AsyncIterator[bytes]:
         """Forward a request and yield the downstream response body as it arrives (the SSE path —
         agent chat). An async generator: ``async for chunk in downstream.stream(...)``. Used so a
-        streamed turn is relayed token-by-token instead of buffered."""
+        streamed turn is relayed token-by-token instead of buffered.
+
+        This is the BYTE RELAY: the caller mints its own response envelope (the agent routes know
+        they are SSE and say so). When the upstream's own status/headers must reach the caller,
+        use ``open_stream`` instead."""
+        ...
+
+    def open_stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[dict] = None,
+        params: Optional[dict] = None,
+        content: Optional[bytes] = None,
+    ) -> AsyncContextManager[StreamedResponse]:
+        """Open a streaming downstream request and expose its HEAD before the body is read::
+
+            async with downstream.open_stream("GET", url, headers=h) as resp:
+                resp.status_code, resp.headers          # the upstream's verdict, carried verbatim
+                async for chunk in resp.aiter_bytes():  # relayed as they arrive
+
+        The MCP streamable-HTTP leg rides this: its ``GET /mcp`` answer may be an SSE stream, a
+        JSON error, or a session-handshake refusal, and the gateway must relay whichever it is
+        without buffering (a silent SSE stream never completes) and without rewriting the status.
+        Transport failures on the OPEN (unreachable / connect timeout) raise, so the app can type
+        them 502/504 exactly as the buffered forward does."""
         ...
 
 

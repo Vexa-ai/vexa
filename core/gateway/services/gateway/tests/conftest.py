@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 # fastapi-guard: keep it installed (so the integration is exercised) but in-memory and with
@@ -89,6 +90,25 @@ class FakeDownstream:
                      "params": params, "content": content}
         for chunk in self._stream_chunks:
             yield chunk
+
+    @asynccontextmanager
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+        """The head-aware streaming forward (``ports.StreamedResponse``): status + headers first,
+        then the canned chunks. Used by the relay leg (MCP), where the upstream's own verdict must
+        reach the caller instead of a gateway-minted envelope."""
+        self.last = {"method": method, "url": url, "headers": headers or {},
+                     "params": params, "content": content}
+        chunks = self._stream_chunks
+
+        class _Streamed:
+            status_code = self.status_code
+            headers = {"content-type": self._content_type, **self._extra_headers}
+
+            async def aiter_bytes(_self):
+                for chunk in chunks:
+                    yield chunk
+
+        yield _Streamed()
 
 
 class FakePubSub:
