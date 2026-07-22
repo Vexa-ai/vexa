@@ -201,6 +201,16 @@ class InMemoryMeetingRepo:
         row["bot_container_id"] = bot_container_id
         return dict(row)
 
+    async def fail_meeting(self, *, meeting_id, reason, failure_stage="requested") -> Optional[dict]:
+        row = self._meetings.get(meeting_id)
+        if row is None:
+            return None
+        row["status"] = "failed"
+        row["data"]["failure_stage"] = failure_stage
+        row["data"]["failure_reason"] = reason
+        row["data"]["completion_reason"] = "start_failed"
+        return dict(row)
+
     async def get_status_by_session(self, *, session_uid) -> Optional[str]:
         sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
         if sess is None:
@@ -299,9 +309,15 @@ class FakeRuntimeClient:
     """A ``RuntimeClient`` that records the spec and returns a synthetic ``workloadId``."""
 
     def __init__(self, *, quota_exceeded: bool = False, fail: bool = False,
+                 dead_on_arrival: bool = False,
                  workloads: Optional[dict[str, dict]] = None):
         self._quota_exceeded = quota_exceeded
         self._fail = fail
+        # dead_on_arrival models a kernel that (against #718 C1) still answers 201 but with a workload
+        # that never started (state=stopped/start_failed). The HTTP adapter's body-state check (C2)
+        # must catch it, so the FAKE returns that shape verbatim rather than raising — the belt of the
+        # belt-and-suspenders defense the adapter owns.
+        self._dead_on_arrival = dead_on_arrival
         self.specs: list[dict] = []  # every spawned spec, for assertions
         self.deleted: list[str] = []  # workload ids torn down (ROB3 compensation), for assertions
         # Liveness map for the reconcile sweep: workload_id -> status dict ({"state": ...}). A workload
@@ -315,6 +331,8 @@ class FakeRuntimeClient:
             raise QuotaExceeded("owner quota exceeded")
         if self._fail:
             raise SpawnFailed("kernel could not start the workload")
+        if self._dead_on_arrival:
+            return {"workloadId": spec["workloadId"], "state": "stopped", "stopReason": "start_failed"}
         return {"workloadId": spec["workloadId"], "state": "starting"}
 
     async def delete_workload(self, workload_id: str) -> None:
