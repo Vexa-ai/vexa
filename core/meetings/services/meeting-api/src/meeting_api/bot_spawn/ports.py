@@ -260,3 +260,29 @@ class DuplicateMeeting(Exception):
     Raised by ``MeetingRepo.create_meeting_guarded`` (the atomic dedup) — either because the in-txn
     dedup query found an active row, or because the unique partial index on active rows rejected the
     concurrent insert (the DB-level backstop). Re-exported from ``service`` for the router's mapping."""
+
+
+# Statuses in which the bot has NOT yet reached the meeting. Their row goes quiet by DESIGN — a bot
+# parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
+# lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
+PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+def reconcile_grace_for_status(
+    status: Optional[str],
+    stop_grace: float,
+    active_grace: float,
+    preactive_grace: Optional[float] = None,
+) -> float:
+    """The reconcile window a stale row is measured against — the ONE definition both the SQL adapter
+    and the in-memory fake read, so the two listings can never drift.
+
+      * ``stopping``   → ``stop_grace``      (a stop was requested: clear it fast)
+      * PRE-ACTIVE     → ``preactive_grace`` (must OUTLAST the lobby budget we issued — #862)
+      * everything else→ ``active_grace``    (a bot-present row: a longer idle before we look)
+    """
+    if status == "stopping":
+        return stop_grace
+    if status in PRE_ACTIVE_MEETING_STATUSES:
+        return active_grace if preactive_grace is None else preactive_grace
+    return active_grace

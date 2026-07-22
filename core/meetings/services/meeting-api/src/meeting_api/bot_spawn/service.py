@@ -45,7 +45,15 @@ from .ports import (
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
-__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting"]
+__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting", "LOBBY_BUDGET_MS"]
+
+# The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
+# .waitingRoomTimeout``): how long the bot may sit in a lobby, silently polling, before it gives up
+# and reports its own ``awaiting_admission_timeout``. It is a DEADLINE WE WROTE, so every window the
+# control plane measures a not-yet-admitted bot against must outlast it — the reconcile sweep derives
+# its pre-active grace from this constant (``lifecycle.reconcile.default_preactive_grace``) rather
+# than carrying a second, independently-drifting number (#862).
+LOBBY_BUDGET_MS = 600_000
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
@@ -387,7 +395,7 @@ async def request_bot(
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
-        automatic_leave=automatic_leave or {"waitingRoomTimeout": 600_000},
+        automatic_leave=automatic_leave or {"waitingRoomTimeout": LOBBY_BUDGET_MS},
     )
 
     # 5. Spawn over runtime.v1.
