@@ -303,6 +303,13 @@
    "targets": []
   },
   {
+   "key": "DB_WRITER_RECONCILE_INTERVAL_S",
+   "class": "defaulted",
+   "default": "300",
+   "description": "how often (seconds) the db-writer runs its self-healing O(keyspace) meeting:*:segments SCAN — startup + every this-many seconds, off the DB_WRITER_INTERVAL_S hot path. The active_meetings set is authoritative in steady state; the per-tick scan saturated redis and starved /health, restarting healthy pods (#893)",
+   "targets": []
+  },
+  {
    "key": "IMMUTABILITY_THRESHOLD",
    "class": "defaulted",
    "default": "30",
