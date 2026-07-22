@@ -32,10 +32,14 @@ KEYCHAIN_REFRESH = ('security find-generic-password -s "Claude Code-credentials"
                     "> ~/.claude/.credentials.json")
 
 _TIMEOUT = 8.0
+# The audio round-trip probe transcribes a real ~1s clip — give the model time to answer.
+_STT_PROBE_TIMEOUT = 20.0
 
 # (status, body_text) — injectable for tests; None body on network failure.
 HttpPost = Callable[[str, dict, dict], tuple[int, str]]
 HttpGet = Callable[[str, dict], tuple[int, str]]
+# (endpoint, token) → (status, body_text) for the STT audio round-trip — injectable for tests.
+TranscribeProbe = Callable[[str, str], tuple[int, str]]
 
 
 def _post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
@@ -148,48 +152,99 @@ def run_models_test(config: dict, env: Optional[dict] = None,
 
 # ── transcription ─────────────────────────────────────────────────────────────────────────────
 
-def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get) -> dict:
-    """A real authenticated probe of the effective STT backend: GET ``{base}/balance`` with the
-    token. Grades the answers the 2026-07-09 402 saga taught us to distinguish."""
+# The OpenAI-compatible transcriptions path every consumer agrees on. Appended only when the
+# configured URL does not already carry it — the one rule shared with the config.v1 probe
+# (deploy/contracts/config.v1/preflight.py:probe_url), the bot's client, and the dictation route.
+_STT_PATH = "/v1/audio/transcriptions"
+
+def _transcribe_probe(endpoint: str, token: str) -> tuple:
+    """POST the shared audio probe body — the same request the boot preflight makes."""
+    from control_plane.config_preflight import audio_probe_body
+
+    content_type, body = audio_probe_body()
+    req = urllib.request.Request(
+        endpoint, data=body, method="POST",
+        headers={"Content-Type": content_type, "Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=_STT_PROBE_TIMEOUT) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def _verify_transcribes(base: str, token: str, source: str, probe: TranscribeProbe,
+                        account: str = "") -> dict:
+    """Grade the backend by the ONE question the operator is actually asking: will a bot get a
+    transcript out of this? Answered by sending real audio — the same request a bot's first chunk
+    makes, and the same body the boot preflight sends.
+
+    An EMPTY body cannot answer it: a metered backend answers an empty POST the same way whether
+    the credential is funded or worthless, which is how a token that 402s every segment of every
+    meeting used to test green here. Nor can the account's balance answer it — a billing-exempt
+    account reports 0.0 minutes and transcribes perfectly, so a balance threshold condemns the
+    working credential and clears nothing. Sending audio makes the verdict independent of whose
+    token it is, so no account identity is named anywhere in this codebase."""
+    endpoint = base if base.endswith(_STT_PATH) else base + _STT_PATH
+    who = f" ({account})" if account else ""
+    try:
+        status, body = probe(endpoint, token)
+    except Exception as exc:
+        return _result(False, f"Backend unreachable: {exc}", source=source)
+    if status in (401, 403):
+        return _result(False, f"Token REJECTED by {endpoint} (HTTP {status}).", source=source,
+                       status=status)
+    if status == 402:
+        detail = (body or "").strip()[:160]
+        return _result(False, f"Token is valid{who} but cannot pay for transcription (HTTP 402) — "
+                              f"every segment will fail and meetings will complete with NO "
+                              f"transcript. Top up the account or use a token that can transcribe."
+                              + (f" Backend said: {detail}" if detail else ""),
+                       source=source, status=status, account=account or None)
+    if status == 404:
+        return _result(False, f"No transcriptions endpoint at {endpoint} (HTTP 404) — check the "
+                              "URL shape; some gateways also answer 404 for a rejected key.",
+                       source=source, status=status)
+    if status >= 500:
+        return _result(False, f"Backend error at {endpoint} (HTTP {status}).", source=source,
+                       status=status)
+    return _result(True, f"OK — {endpoint} transcribed the probe clip{who} (HTTP {status}).",
+                   source=source, status=status, account=account or None)
+
+
+def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get,
+                           probe: TranscribeProbe = _transcribe_probe) -> dict:
+    """A real round-trip test of the effective STT backend: transcribe a ~1s probe clip with the
+    configured token — the same request (and the same probe body) a bot's first chunk and the boot
+    preflight make, so the wizard can never green what the deployment refuses.
+
+    The endpoint's own answer is the verdict. Neither of the two indirect oracles survives contact
+    with reality: an empty-body POST is answered identically for a funded and a worthless
+    credential, and ``balance_minutes`` reads 0.0 for a billing-exempt account that transcribes
+    perfectly — the 2026-07-19 recurrence was exactly a zero-balance token probing green while a
+    zero-balance *exempt* token did the actual work. Sending audio asks the real question and keeps
+    every account identity out of this codebase. ``/balance`` is still consulted first, but only to
+    NAME the account in the verdict (a courtesy, never the oracle)."""
     base = (url or "").strip().rstrip("/")
     if not base:
         return _result(False, "No transcription backend configured at any level "
                               "(user, global, or deployment env).", source=source)
-    # Bots post to {url}/v1/audio/transcriptions — strip the path for the account probe.
+    # Bots post to {url}/v1/audio/transcriptions — strip the path for the account lookup.
+    probe_base = base
     for suffix in ("/v1/audio/transcriptions", "/v1/audio", "/v1"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
+        if probe_base.endswith(suffix):
+            probe_base = probe_base[: -len(suffix)]
             break
     if not token:
-        return _result(False, f"Backend {base} configured but NO token set ({source}).",
+        return _result(False, f"Backend {probe_base} configured but NO token set ({source}).",
                        source=source)
+    account = ""
     try:
-        status, body = get(f"{base}/balance", {"X-API-Key": token})
-    except Exception as exc:
-        return _result(False, f"Backend unreachable: {exc}", source=source)
-    if status in (401, 403):
-        return _result(False, f"Token REJECTED by {base} (HTTP {status}).", source=source,
-                       status=status)
-    if status == 404:
-        # Not a vexa transcription gateway (no /balance) — reachable is all we can attest.
-        return _result(True, f"Backend {base} reachable; no /balance endpoint, so the token "
-                             "was not verified (non-Vexa gateway?).", source=source,
-                       status=status, unverified=True)
-    if status != 200:
-        return _result(False, f"Backend answered HTTP {status}.", source=source, status=status)
-    try:
-        acct = json.loads(body)
-    except ValueError:
-        acct = {}
-    email = acct.get("email") or "?"
-    balance = acct.get("balance_minutes")
-    if email == "internal@vexa.ai":
-        return _result(True, f"OK — internal service token at {base} (billing-exempt).",
-                       source=source, account=email)
-    if isinstance(balance, (int, float)) and balance <= 0:
-        return _result(False, f"Token valid ({email}) but balance is {balance:g} minutes — "
-                              "every segment will fail 402 payment_required. Top up or switch "
-                              "the token.", source=source, account=email, balance=balance)
-    return _result(True, f"OK — {email}, {balance:g} minutes remaining." if isinstance(
-        balance, (int, float)) else f"OK — {email}.", source=source, account=email,
-        balance=balance)
+        status, body = get(f"{probe_base}/balance", {"X-API-Key": token})
+        if status == 200:
+            try:
+                account = (json.loads(body) or {}).get("email") or ""
+            except ValueError:
+                account = ""
+    except Exception:
+        pass  # no /balance ⇒ not a Vexa gateway; the round-trip below is the oracle either way
+    return _verify_transcribes(base, token, source, probe, account)

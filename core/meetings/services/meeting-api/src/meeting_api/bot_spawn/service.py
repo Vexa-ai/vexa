@@ -27,6 +27,7 @@ import os
 import uuid
 from typing import Any, Optional
 
+from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
 from .env_flags import env_flag
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
@@ -49,6 +50,11 @@ __all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting"]
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
 _TERMINAL_STATUSES = ("completed", "failed")
+
+# How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
+# declared ttl_s: past it the cache holds no actionable opinion, so a spawn proceeds rather than
+# blocking on a verdict that predates the operator's fix.
+_STT_VERDICT_MAX_AGE_S = 60.0
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
 # NO jitsi template: a jitsi room name is scoped to a DEPLOYMENT (meet.jit.si is only the public
@@ -139,6 +145,7 @@ async def request_bot(
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
     transcribe_enabled: bool = True,
+    automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
@@ -192,6 +199,30 @@ async def request_bot(
             "no transcription backend configured — set it in Settings or environment variables "
             "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
         )
+    # 1b-ii. SET-but-MISCONFIGURED is the other half of the same gate (#511 C3): a URL/token that is
+    #     present but rejected (or points at a 404) used to spawn a bot that joined, captured, and
+    #     transcribed NOTHING. Refuse it here, with the probe's own named reason, before the DB
+    #     write. Three bounds keep the refusal honest:
+    #       * CACHED verdicts only (boot preflight seeds them, /health refreshes them per ttl) — no
+    #         probe I/O rides the spawn path;
+    #       * CONFIG faults only — a `unreachable` verdict is the endpoint being down, and refusing
+    #         on it would make every spawn fail for a minute whenever STT restarts. The bot's own
+    #         client retries; a wrong URL never heals by itself. Only the latter is ours to refuse;
+    #       * the ENV backend only — the verdict describes that endpoint, so a Settings-configured
+    #         backend (a different endpoint) must never be blocked by the env one's health.
+    if transcribe_enabled and not configured.get("url"):
+        verdict = cached_probe_verdict("stt", max_age_s=_STT_VERDICT_MAX_AGE_S)
+        if verdict is not None and verdict.get("kind") in CONFIG_FAULT_KINDS:
+            log_event(
+                "bot_spawn_stt_backend_unhealthy", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"reason": verdict.get("reason"), "status": verdict.get("status")},
+            )
+            raise TranscriptionNotConfigured(
+                f"the configured transcription backend is not working: {verdict.get('reason')} — "
+                f"fix TRANSCRIPTION_SERVICE_URL / TRANSCRIPTION_SERVICE_TOKEN; this re-tests within "
+                f"{int(_STT_VERDICT_MAX_AGE_S)}s, or call /health?force=1 to re-probe now"
+            )
 
     # 1c. Authenticated-bot mode (#724, deployment-scoped knob — Q1-A): when BOT_AUTHENTICATED is
     #     set, EVERY spawn carries the sealed invocation.v1 auth block, so the bot restores the
@@ -353,9 +384,10 @@ async def request_bot(
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
-        # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
-        # fail the meeting; everyoneLeftTimeout matches the O6 config.
-        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
+        # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
+        # silence-window module default applies (the lobby window stays forgiving for
+        # human-in-the-loop dashboard joins).
+        automatic_leave=automatic_leave or {"waitingRoomTimeout": 600_000},
     )
 
     # 5. Spawn over runtime.v1.

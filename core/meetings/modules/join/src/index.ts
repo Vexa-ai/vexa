@@ -119,10 +119,17 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForJitsiMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
-  } else {
+  } else if (platform === "google_meet") {
     await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
     admitted = await waitForGoogleMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
+  } else {
+    // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
+    // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
+    // minutes later with misattributed selector errors instead of naming the real problem here.
+    throw new Error(
+      `Unsupported platform '${platform}' — this join layer drives google_meet, teams, zoom, jitsi`,
     );
   }
 

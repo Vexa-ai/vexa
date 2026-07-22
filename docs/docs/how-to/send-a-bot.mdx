@@ -126,6 +126,30 @@ the call as your Google account. If the profile is signed out (session expired, 
 bot **refuses to join** with an `auth_session_missing` error — it never silently degrades to an anonymous
 join. Re-authenticate the browser profile and retry.
 
+## When the bot leaves on its own
+
+An active bot leaves after it receives no remote microphone audio for **10 minutes** and the meeting
+finishes as `completed(left_alone)`. The same rule covers an empty room and a room containing only silent
+notetakers: it listens to the remote-audio signal and does not identify participants by name. Bot-generated
+speech is not part of that signal.
+
+Set a per-meeting window with `automatic_leave.max_time_left_alone` (milliseconds):
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "platform":"google_meet",
+    "native_meeting_id":"abc-defg-hij",
+    "automatic_leave":{"max_time_left_alone":300000}
+  }'
+```
+
+An explicit stop still leaves immediately. Removal by the meeting host finishes as `evicted`, and the
+four-hour active-phase cap remains a backstop. A participant who stays but says nothing for the entire
+silence window will also be left; increase the window when silent attendance is expected. Self-hosters can
+change the deployment fallback with `BOT_ALONE_SILENCE_WINDOW_MS`; an explicit per-meeting value wins.
+
 ## Next
 
 The transcript compiles into your [workspace](/concepts#workspace), where agents act on it. Turn that into

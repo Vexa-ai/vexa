@@ -6,9 +6,11 @@ morning load (the 2026-07-15 hosted read outage). ``data`` is not part of the se
 ``MeetingResponse`` schema; the list now returns only the sealed scalar metadata, bounded by a
 default page size, and a caller fetches one meeting's ``data`` on demand (``GET /meetings/{id}``).
 
-The fix is gated on a ``list_view`` flag so the internal callers that REUSE ``list_meetings`` to
-enumerate a user's meetings (``GET /meetings/{id}`` filter, ``GET /bots/status``, calendar sync) are
-unchanged — full ``data``, no default cap. These tests pin both halves.
+The projection is gated per caller, on what that caller actually renders. ``list_view`` marks the
+paginated list endpoints; ``slim`` marks a non-list caller that renders none of the heavy keys either
+(``GET /bots/status`` — #803, where materializing full ``data`` for a running-bots badge cost 180 MB
+on one production account and OOM-killed the pod). Only a caller that genuinely needs every key —
+``GET /meetings/{id}``, calendar sync, reconciliation — leaves both off. These tests pin each half.
 
 Drives the SHIPPED meeting-api handlers over the in-memory fakes (TestClient, offline) and the store
 directly. The fake mirrors the real ``SqlAlchemyTranscriptStore`` (both share
@@ -143,3 +145,161 @@ async def test_internal_path_is_unbounded_and_keeps_data():
     rows = await store.list_meetings(USER)    # list_view=False (default) → plain list, no cap
     assert isinstance(rows, list) and len(rows) == DEFAULT_LIST_LIMIT + 10   # NOT capped to 50
     assert all("data" in r for r in rows)     # full data retained for internal reuse
+
+
+# ── #803 · /bots/status is filtered and projected IN THE STORE, not in the route ─────────────────
+# The running-bots badge used to read the caller's ENTIRE history with full `data` and filter in
+# Python. On a production account that is 4,896 meetings / 180 MB — 144 MB of it `bot_logs`, which
+# no endpoint renders. Four concurrent polls demanded ~740 MB transiently; the pod OOM-killed at
+# 1 Gi. Both halves of the fix are load-bearing: the status filter bounds the ROWS, the projection
+# bounds each row, and stuck non-terminal rows (98 in production) mean the filter alone is not a cap.
+
+
+_TERMINAL = ("completed", "failed")
+_RUNNING = ("requested", "joining", "awaiting_admission", "active", "stopping")
+
+
+def _seed_history(store, *, running=_RUNNING, terminal_count=40):
+    """A realistic account: a few live meetings buried in a long terminal history, every row heavy."""
+    for i in range(terminal_count):
+        store.seed_meeting(
+            user_id=USER, platform="google_meet", native_meeting_id=f"old-{i:04d}",
+            status=_TERMINAL[i % len(_TERMINAL)],
+            created_at=f"2026-06-01T{i // 60:02d}:{i % 60:02d}:00Z", data=dict(HEAVY_DATA),
+        )
+    for i, st in enumerate(running):
+        store.seed_meeting(
+            user_id=USER, platform="google_meet", native_meeting_id=f"live-{i}", status=st,
+            created_at=f"2026-06-20T00:{i:02d}:00Z", data=dict(HEAVY_DATA),
+        )
+
+
+def test_bots_status_returns_only_running_and_never_reads_terminal_history():
+    store = InMemoryTranscriptStore()
+    _seed_history(store)
+    r = _client(store).get("/bots/status", headers=HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == len(_RUNNING)
+    assert {m["status"] for m in body["running"]} == set(_RUNNING)
+    assert all(m["native_meeting_id"].startswith("live-") for m in body["running"]), (
+        "a terminal meeting reached the running-bots badge"
+    )
+
+
+def test_bots_status_rows_carry_no_heavy_data():
+    """The badge renders a count and a status. Shipping `bot_logs`/`speaker_events` with it was pure
+    cost — the bytes are never rendered by any caller of this endpoint."""
+    store = InMemoryTranscriptStore()
+    _seed_history(store)
+    r = _client(store).get("/bots/status", headers=HEADERS)
+    for row in r.json()["running"]:
+        for heavy in HEAVY_KEYS:
+            assert heavy not in row["data"], f"/bots/status still ships heavy key {heavy!r}"
+        # the light metadata a caller may legitimately show survives
+        assert row["data"].get("title") == "Weekly sync"
+    assert len(r.content) < 20_000, f"/bots/status response too large: {len(r.content)} bytes"
+
+
+def test_bots_status_asks_the_store_for_the_filter_rather_than_filtering_after():
+    """The point of introduction: the ROUTE must not receive the terminal rows at all. Pinning the
+    store call is what keeps the filter from silently drifting back into Python, where it would
+    still produce a correct response while reading the whole account."""
+    store = InMemoryTranscriptStore()
+    _seed_history(store)
+    seen = {}
+    original = store.list_meetings
+
+    async def spy(user_id, **kw):
+        seen.update(kw)
+        rows = await original(user_id, **kw)
+        seen["returned"] = len(rows)
+        return rows
+
+    store.list_meetings = spy
+    r = _client(store).get("/bots/status", headers=HEADERS)
+    assert r.status_code == 200
+    assert set(seen.get("status") or ()) == set(_RUNNING), (
+        f"the status filter did not reach the store: {seen.get('status')!r}"
+    )
+    assert seen.get("slim") is True, "the projection did not reach the store"
+    assert seen["returned"] == len(_RUNNING), (
+        f"the store handed the route {seen['returned']} rows for {len(_RUNNING)} running bots — "
+        f"the terminal history is still being read"
+    )
+
+
+def test_get_meeting_by_id_is_constrained_in_the_store():
+    """Same defect, smaller blast radius: the detail route enumerated the whole account to find one
+    row. It must ask for the row — while still returning FULL data, and still refusing a non-owner."""
+    store = InMemoryTranscriptStore()
+    _seed_history(store)
+    mid = _seed_heavy(store, nid="detail-1")
+    seen = {}
+    original = store.list_meetings
+
+    async def spy(user_id, **kw):
+        seen.update(kw)
+        rows = await original(user_id, **kw)
+        seen["returned"] = len(rows)
+        return rows
+
+    store.list_meetings = spy
+    r = _client(store).get(f"/meetings/{mid}", headers=HEADERS)
+    assert r.status_code == 200
+    assert seen.get("meeting_id") == mid, "the id filter did not reach the store"
+    assert seen["returned"] == 1, f"the detail route read {seen['returned']} rows to return one"
+    # the detail view is exactly where full `data` still belongs
+    assert "speaker_events" in r.json()["data"] and "bot_logs" in r.json()["data"]
+
+
+def test_get_meeting_by_id_still_refuses_a_non_owner():
+    """No-regression on the security property: constraining by id must not bypass the access union."""
+    store = InMemoryTranscriptStore()
+    mid = _seed_heavy(store, nid="private-1")
+    r = _client(store).get(f"/meetings/{mid}", headers={"x-user-id": "999"})
+    assert r.status_code == 404, "a non-owner must not read another user's meeting"
+
+
+# ── the sealed api.v1 MeetingResponse hoists completion_reason/failure_stage from `data` ────────────
+# MeetingResponse declares `completion_reason` and `failure_stage` at TOP LEVEL, but their values
+# live in the `data` jsonb (the lifecycle FSM writes them there). The list projection strips `data`
+# down to light keys — so unless the row hoists them like `_meeting_projection_from_row` does, the
+# sealed fields are dead. This pins the hoist on both the list row and the detail row.
+
+def test_list_row_hoists_completion_reason_and_failure_stage():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-1", status="completed",
+        data={"completion_reason": "left_alone", "failure_stage": "post_active"},
+    )
+    r = _client(store).get("/meetings", headers=HEADERS)
+    assert r.status_code == 200
+    (row,) = r.json()["meetings"]
+    # the sealed top-level fields carry the values that live in `data`…
+    assert row["completion_reason"] == "left_alone"
+    assert row["failure_stage"] == "post_active"
+
+
+def test_detail_row_hoists_completion_reason_and_failure_stage():
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-2", status="failed",
+        data={"completion_reason": "left_alone", "failure_stage": "joining"},
+    )
+    r = _client(store).get(f"/meetings/{mid}", headers=HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["completion_reason"] == "left_alone"
+    assert body["failure_stage"] == "joining"
+
+
+def test_row_completion_fields_are_none_when_absent_from_data():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-3", status="active",
+        data={"title": "no terminal fields here"},
+    )
+    (row,) = _client(store).get("/meetings", headers=HEADERS).json()["meetings"]
+    assert row["completion_reason"] is None
+    assert row["failure_stage"] is None

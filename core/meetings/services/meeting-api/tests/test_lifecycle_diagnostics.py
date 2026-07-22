@@ -197,3 +197,59 @@ def test_bot_logs_trimmed_oldest_first():
     assert len(kept) < len(lines)
     assert kept[-1] == lines[-1]  # newest survives
     assert kept[0] != lines[0]    # oldest dropped
+
+
+# ── the DEGRADED meeting: completed, but with no transcript and a reason why ────────────────────
+# A backend that refuses every chunk used to produce a meeting indistinguishable from a silent
+# room: the bot's faults were typed and attributed all the way to its composition root and then
+# died in a console.error. The bot now counts them and reports once on the terminal event; this
+# asserts the control plane PERSISTS that instead of accepting-and-dropping it (an additive field
+# on lifecycle.v1, which is additionalProperties: true).
+
+_STT_FAULT = {
+    "kinds": [
+        {"kind": "payment_required", "count": 18, "status": 402,
+         "detail": "Insufficient balance. Available: 0.00 minutes",
+         "first_at": "2026-07-19T12:00:00.000Z"},
+    ],
+    "total": 18,
+}
+
+
+def test_degraded_meeting_persists_why_the_transcript_is_empty():
+    terminal = {
+        "connection_id": "sess-uid", "status": "completed", "exit_code": 0,
+        "completion_reason": "stopped",
+        "reason": "stt_degraded: payment_required×18",
+        "stt_fault": _STT_FAULT,
+    }
+    # The degraded terminal event is still a CONFORMING lifecycle.v1 event (the field is additive).
+    conforms(terminal, "LifecycleEvent")
+
+    client, app, deliveries = _client()
+    final = _drive(client, JOINING, ACTIVE, terminal)[-1]
+
+    # It completes normally — a dead STT degrades the VALUE, it does not fail the meeting.
+    assert final["meeting_status"] == "completed"
+    assert final["completion_reason"] == "stopped"
+
+    # …and the meeting now says WHY it has no transcript, in the backend's own words.
+    persisted = final["data"]["stt_fault"]
+    assert persisted["total"] == 18
+    assert persisted["kinds"][0]["kind"] == "payment_required"
+    assert persisted["kinds"][0]["status"] == 402
+    assert "Insufficient balance" in persisted["kinds"][0]["detail"]
+
+    # The webhook carries the same attribution — an integrator sees it without polling.
+    status_hooks = [d for d in deliveries if d["event_type"] == "meeting.status_change"]
+    assert status_hooks[-1]["data"]["meeting"]["data"]["stt_fault"]["total"] == 18
+
+
+def test_healthy_meeting_carries_no_stt_fault():
+    """Negative control: the field appears ONLY when something actually degraded."""
+    client, app, deliveries = _client()
+    final = _drive(client, JOINING, ACTIVE, {
+        "connection_id": "sess-uid", "status": "completed", "exit_code": 0,
+        "completion_reason": "stopped",
+    })[-1]
+    assert "stt_fault" not in final["data"]

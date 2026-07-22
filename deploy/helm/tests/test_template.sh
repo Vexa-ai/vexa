@@ -164,4 +164,26 @@ else
   echo "  FAIL: agent-api did not take RollingUpdate under ReadWriteMany workspace"; fail=1
 fi
 
+# #813 — the deprecated dashboard is a strictly OPT-IN component: absent from the default render
+# (the counts above must never silently grow by it), present with its Deployment + Service when
+# enabled, and pinned to its OWN tag (never global.imageTag — it is not part of the release set).
+if grep -q 'app.kubernetes.io/component: dashboard' <<< "$RENDER"; then
+  echo "  FAIL: dashboard rendered in the DEFAULT (disabled) state"; fail=1
+else
+  echo "  OK: dashboard absent by default (deprecated, opt-in only)"
+fi
+RENDER_DASH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set dashboard.enabled=true --set global.imageTag=vSHOULD-NOT-APPLY)"
+dash_count="$(grep -c 'app.kubernetes.io/component: dashboard' <<< "$RENDER_DASH" || true)"
+if [ "$dash_count" -ge 3 ]; then
+  echo "  OK: dashboard.enabled=true renders its Deployment + Service ($dash_count)"
+else
+  echo "  FAIL: dashboard.enabled=true rendered $dash_count component labels (want >=3)"; fail=1
+fi
+if grep -q 'image: "vexaai/dashboard:vSHOULD-NOT-APPLY"' <<< "$RENDER_DASH"; then
+  echo "  FAIL: dashboard image followed global.imageTag — it must stay on its own pinned tag"; fail=1
+else
+  echo "  OK: dashboard image ignores global.imageTag (own pinned tag)"
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

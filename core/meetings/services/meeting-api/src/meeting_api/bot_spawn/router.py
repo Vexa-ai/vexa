@@ -32,7 +32,14 @@ from .ports import (
     SpawnFailed,
     TranscriptionNotConfigured,
 )
+from .invocation import SPAWNABLE_PLATFORMS
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
+
+#: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
+#: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
+#: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
+NATIVE_MEETING_ID_MAX_LEN = 255
+
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
@@ -74,6 +81,46 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
         if v in ("false", "0", "no", "off", ""):
             return False
     raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
+
+
+def _resolve_automatic_leave(value: Optional[object]) -> dict:
+    """Translate the public snake_case timeout names into invocation.v1's camelCase shape.
+
+    Admission keeps its deployment default. The active-phase silence timeout is omitted when the
+    caller does not set it, allowing the bot module's configurable ten-minute default to apply.
+    """
+    if value is None:
+        return {"waitingRoomTimeout": 600_000}
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail="automatic_leave must be an object")
+
+    allowed = {
+        "max_bot_time", "max_wait_for_admission", "max_time_left_alone",
+        "no_one_joined_timeout", "waiting_room_timeout", "everyone_left_timeout",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"automatic_leave has unknown field(s): {', '.join(unknown)}")
+
+    def timeout(primary: str, legacy: Optional[str] = None) -> Optional[int]:
+        raw = value.get(primary)
+        if raw is None and legacy is not None:
+            raw = value.get(legacy)
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise HTTPException(status_code=422, detail=f"automatic_leave.{primary} must be a positive integer")
+        return raw
+
+    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or 600_000
+    resolved = {"waitingRoomTimeout": waiting_room}
+    no_one_joined = timeout("no_one_joined_timeout")
+    everyone_left = timeout("max_time_left_alone", "everyone_left_timeout")
+    if no_one_joined is not None:
+        resolved["noOneJoinedTimeout"] = no_one_joined
+    if everyone_left is not None:
+        resolved["everyoneLeftTimeout"] = everyone_left
+    return resolved
 
 
 def _validate_meeting_url(url: object) -> str:
@@ -247,6 +294,50 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 status_code=422,
                 detail="'platform' and 'native_meeting_id' (or 'meeting_url') are required",
             )
+        # Bound the id to what the column can hold, HERE — not at the INSERT. `meetings
+        # .platform_specific_id` is varchar(255); an over-long or NUL-bearing id used to travel the
+        # whole spawn path and die on asyncpg's StringDataRightTruncationError — a 500 roughly 5.6s
+        # in, while every other malformed field is refused at this boundary with a typed 422 (#843).
+        # Applied after URL-derivation so a derived id is bounded too.
+        #
+        # Length and control bytes ONLY. The id's SHAPE is deliberately not validated: ids that look
+        # wrong do join (a bare-numeric Teams id transcribed a real meeting in production), so a
+        # format rule would refuse working meetings while fixing nothing.
+        if native_meeting_id:
+            if len(native_meeting_id) > NATIVE_MEETING_ID_MAX_LEN:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"'native_meeting_id' is {len(native_meeting_id)} characters; "
+                        f"the maximum is {NATIVE_MEETING_ID_MAX_LEN}"
+                    ),
+                )
+            if any(ch == "\x7f" or ch < " " for ch in native_meeting_id):
+                raise HTTPException(
+                    status_code=422,
+                    detail="'native_meeting_id' contains control characters",
+                )
+        # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
+        # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
+        # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
+        # sailed past the constructibility guard below, wrote its `requested` meeting row, and then
+        # died inside build_invocation's schema validation: a 500, plus an ORPHANED active row that
+        # 409s the user's retry on the dedup guard. The refusal names the real state of the world.
+        if platform not in SPAWNABLE_PLATFORMS:
+            supported = ", ".join(sorted(SPAWNABLE_PLATFORMS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"platform '{platform}' cannot be spawned as a meeting bot — supported: "
+                    f"{supported}"
+                    + (
+                        ". browser_session is a provisioning workload, not a meeting bot; its "
+                        "0.12 runtime path is not yet restored (tracked in "
+                        "https://github.com/Vexa-ai/vexa/issues/816)"
+                        if platform == "browser_session" else ""
+                    )
+                ),
+            )
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
@@ -278,6 +369,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
                 transcribe_enabled=transcribe_enabled,
+                automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.

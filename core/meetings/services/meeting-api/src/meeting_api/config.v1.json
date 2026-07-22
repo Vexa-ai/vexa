@@ -506,8 +506,8 @@
    "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s) — bots must opt out explicitly (transcribe_enabled=false / TRANSCRIBE_ENABLED=false) to spawn capture-only",
    "probe": {
     "kind": "http",
-    "timeout_s": 2,
-    "ttl_s": 60,
+    "timeout_s": 15,
+    "ttl_s": 900,
     "http": {
      "method": "POST",
      "url_key": "TRANSCRIPTION_SERVICE_URL",
@@ -516,6 +516,13 @@
      "unauthorized_statuses": [
       401,
       403
+     ],
+     "invalid_statuses": [
+      404
+     ],
+     "payload": "audio",
+     "exhausted_statuses": [
+      402
      ]
     }
    }

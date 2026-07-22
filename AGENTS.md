@@ -75,8 +75,21 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
 - **Discord is the working channel** — blockers, steering, quick questions live there while you
   work. One rule keeps the record honest: **anything decided lands back on the issue**, or it
   didn't happen. The issue is the source of truth; Discord is the speed.
-- **One worktree per session** (`git worktree add ../vexa-<slug> -b <your-branch>`). Never two
-  sessions on one tree; never adopt another session's uncommitted files — surface them.
+- **Your own worktree BEFORE your first edit — always.** A session's opening move on any work
+  that will touch files is `git worktree add ../vexa-<slug> -b <your-branch>`; only then edit.
+  You do not own `main`, the primary checkout, or any tree you did not create this session —
+  even when the change "belongs on" a branch that lives there. Two tells that you are about to
+  trespass, and the remedy for each:
+  - `git worktree add` says the branch is **"already used by worktree …"** — that tree is
+    another session's checkout, not an invitation. Branch FROM that ref into a fresh worktree
+    of your own (`git worktree add ../vexa-<slug> -b <your-branch> <their-branch>`) and build
+    on it there; coordinate the eventual merge on the issue, never in their tree.
+  - `git status` in a tree you're about to edit shows **uncommitted files you didn't write** —
+    stop, surface them, move to your own worktree. Never adopt, commit, or clean another
+    session's uncommitted state.
+  One worktree per session, one session per worktree — no exceptions for "just one file",
+  docs, or governance edits (this rule was added from a session that edited another agent's
+  checkout after seeing the first tell).
 - **Never fan two parallel agents onto the same hot file — write your own file, or sequence.**
   Parallel PRs that all append to one file's tail collide on the same last line even when the
   additions don't interact — the v0.12.9 batch paid 5 manual conflict-resolution cycles to exactly

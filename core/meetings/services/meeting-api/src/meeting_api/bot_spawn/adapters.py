@@ -24,6 +24,19 @@ from .ports import (
 )
 
 
+def _iso_utc(dt) -> Optional[str]:
+    """Serialize a datetime as an unambiguous UTC ISO-8601 string (``…Z``).
+
+    The meeting time columns are naive but hold UTC (the DB session is UTC). Emitting a bare
+    ``isoformat()`` yields a zone-less string that a browser's ``new Date()`` parses as LOCAL —
+    so the value renders offset by the viewer's UTC offset. Stamping UTC makes clients localize it.
+    """
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
 def _row_to_dict(m) -> dict:
     return {
         "id": m.id,
@@ -33,11 +46,11 @@ def _row_to_dict(m) -> dict:
         "platform_specific_id": m.platform_specific_id,
         "status": m.status,
         "bot_container_id": m.bot_container_id,
-        "start_time": m.start_time.isoformat() if m.start_time else None,
-        "end_time": m.end_time.isoformat() if m.end_time else None,
+        "start_time": _iso_utc(m.start_time),
+        "end_time": _iso_utc(m.end_time),
         "data": m.data if isinstance(m.data, dict) else {},
-        "created_at": m.created_at.isoformat() if m.created_at else None,
-        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+        "created_at": _iso_utc(m.created_at),
+        "updated_at": _iso_utc(m.updated_at),
     }
 
 
@@ -145,7 +158,11 @@ class SqlAlchemyMeetingRepo:
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         """The meeting + latest session for a workload id — used by the runtime callback (CC5) to drive a
         synthetic ``failed`` for a workload that died before the bot reported. ``{meeting_id, status,
-        session_uid}`` or ``None``."""
+        session_uid, stop_requested}`` or ``None``.
+
+        ``stop_requested`` carries the user's intent so the synthetic terminal can tell a bot the USER
+        abandoned from one that timed out on its own — the two earn different completion reasons, and
+        only the latter may be retried."""
         from sqlalchemy import select
 
         from ..sessions.models import Meeting, MeetingSession
@@ -153,12 +170,14 @@ class SqlAlchemyMeetingRepo:
         async with self._session_factory() as db:
             row = (
                 await db.execute(
-                    select(Meeting.id, Meeting.status).where(Meeting.bot_container_id == bot_container_id)
+                    select(Meeting.id, Meeting.status, Meeting.data).where(
+                        Meeting.bot_container_id == bot_container_id
+                    )
                 )
             ).first()
             if row is None:
                 return None
-            mid, status = row
+            mid, status, data = row
             sid = (
                 await db.execute(
                     select(MeetingSession.session_uid)
@@ -166,7 +185,12 @@ class SqlAlchemyMeetingRepo:
                     .order_by(MeetingSession.id.desc())
                 )
             ).scalars().first()
-            return {"meeting_id": mid, "status": status, "session_uid": sid}
+            return {
+                "meeting_id": mid,
+                "status": status,
+                "session_uid": sid,
+                "stop_requested": bool((data or {}).get("stop_requested")),
+            }
 
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None

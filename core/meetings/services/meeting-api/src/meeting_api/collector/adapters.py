@@ -59,6 +59,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _iso_utc(dt) -> Optional[str]:
+    """UTC ISO-8601 (``…Z``) for a naive-or-aware datetime. The meeting time columns are naive but
+    hold UTC (the DB session is UTC); a bare ``isoformat()`` is zone-less, so a browser's ``new Date()``
+    parses it as LOCAL and renders it offset by the viewer's UTC offset. Stamping UTC fixes that."""
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
 def _expired(iso: Optional[str]) -> bool:
     """True if the ISO-8601 timestamp is in the past (None = never expires)."""
     if not iso:
@@ -200,11 +210,11 @@ def _fill_absolute_times(segments: list, base) -> None:
         except (TypeError, ValueError):
             continue
         if st >= _EPOCH_THRESHOLD_S:
-            s["absolute_start_time"] = datetime.fromtimestamp(st, timezone.utc).isoformat()
-            s["absolute_end_time"] = datetime.fromtimestamp(en, timezone.utc).isoformat()
+            s["absolute_start_time"] = _iso_utc(datetime.fromtimestamp(st, timezone.utc))
+            s["absolute_end_time"] = _iso_utc(datetime.fromtimestamp(en, timezone.utc))
         elif base is not None:
-            s["absolute_start_time"] = (base + timedelta(seconds=st)).isoformat()
-            s["absolute_end_time"] = (base + timedelta(seconds=en)).isoformat()
+            s["absolute_start_time"] = _iso_utc(base + timedelta(seconds=st))
+            s["absolute_end_time"] = _iso_utc(base + timedelta(seconds=en))
 
 
 def _segment_to_api(seg: dict) -> dict:
@@ -350,8 +360,8 @@ class SqlAlchemyTranscriptStore:
             "native_meeting_id": snap["platform_specific_id"],
             "constructed_meeting_url": (data.get("constructed_meeting_url")),
             "status": snap["status"],
-            "start_time": snap["start_time"].isoformat() if snap["start_time"] else None,
-            "end_time": snap["end_time"].isoformat() if snap["end_time"] else None,
+            "start_time": _iso_utc(snap["start_time"]),
+            "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
             "data": data,
@@ -409,7 +419,8 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
         from sqlalchemy import cast, func, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
@@ -441,7 +452,20 @@ class SqlAlchemyTranscriptStore:
             def _branch(cond):
                 s = select(Meeting.id).where(cond)
                 if status:
-                    s = s.where(Meeting.status == status)
+                    # A sequence selects a SET of statuses in SQL (`/bots/status` wants the five
+                    # non-terminal ones). Filtering here instead of in Python is the difference
+                    # between reading a caller's handful of live meetings and reading their entire
+                    # history — see the `slim=` note below (#803).
+                    s = s.where(
+                        Meeting.status.in_(tuple(status))
+                        if isinstance(status, (list, tuple, set, frozenset))
+                        else Meeting.status == status
+                    )
+                if meeting_id is not None:
+                    # Detail-by-id: constrain in SQL rather than enumerating the account and
+                    # filtering in Python. The access union still decides WHETHER the caller may
+                    # see it, so ownership/share semantics are unchanged.
+                    s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
                 if fetch_bound is not None:
@@ -488,16 +512,26 @@ class SqlAlchemyTranscriptStore:
                     if isinstance(m.data, dict) else None,
                     "status": m.status,
                     "bot_container_id": m.bot_container_id,
-                    "start_time": m.start_time.isoformat() if m.start_time else None,
-                    "end_time": m.end_time.isoformat() if m.end_time else None,
+                    "start_time": _iso_utc(m.start_time),
+                    "end_time": _iso_utc(m.end_time),
+                    # api.v1 MeetingResponse declares these at top level; the values live in `data`
+                    # (hoisted the same way as `_meeting_projection_from_row` in app.py).
+                    "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
+                    "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    "created_at": _iso_utc(m.created_at),
+                    "updated_at": _iso_utc(m.updated_at),
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
                     # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
-                    # (title/docs/flags). Internal callers (get-by-id, /bots/status, calendar sync) get
-                    # full `data`, so the detail view and reconciliation are unchanged.
-                    "data": project_list_data(m.data) if list_view else (m.data if isinstance(m.data, dict) else {}),
+                    # (title/docs/flags).
+                    # #803: `slim` extends the SAME projection to a non-list caller that renders none
+                    # of the heavy keys either. `/bots/status` powers a running-bots badge, yet it
+                    # materialized every byte of `data` — 180 MB for one production account, 144 MB of
+                    # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
+                    # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
+                    # (the detail view, calendar sync, reconciliation) leave both flags off.
+                    "data": project_list_data(m.data) if (list_view or slim)
+                    else (m.data if isinstance(m.data, dict) else {}),
                 }
                 return row
 
@@ -845,12 +879,12 @@ class SqlAlchemyTranscriptStore:
             if isinstance(m.data, dict) else None,
             "status": m.status,
             "bot_container_id": m.bot_container_id,
-            "start_time": m.start_time.isoformat() if m.start_time else None,
-            "end_time": m.end_time.isoformat() if m.end_time else None,
+            "start_time": _iso_utc(m.start_time),
+            "end_time": _iso_utc(m.end_time),
             "data": m.data if isinstance(m.data, dict) else {},
             "shared": False,
-            "created_at": m.created_at.isoformat() if m.created_at else None,
-            "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+            "created_at": _iso_utc(m.created_at),
+            "updated_at": _iso_utc(m.updated_at),
         }
 
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,

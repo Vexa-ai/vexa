@@ -71,10 +71,11 @@ up:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
 	$(COMPOSE) pull
-	@_tag=$$(grep -E '^IMAGE_TAG=' .env | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
+	@_tag=$$(grep -E '^IMAGE_TAG=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
 	 echo "→ pulling spawn-time images (agent-worker is a build-only compose profile pull skips)"; \
 	 docker pull "vexaai/v012-agent-worker:$$_tag"; \
 	 _bi=$$(grep -E '^BROWSER_IMAGE=' .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
+	 _bi=$$(printf '%s' "$$_bi" | sed "s/\$${IMAGE_TAG}/$$_tag/; s/\$$IMAGE_TAG/$$_tag/"); \
 	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
 	$(COMPOSE) up -d --no-build
 	@$(MAKE) --no-print-directory _bot_check

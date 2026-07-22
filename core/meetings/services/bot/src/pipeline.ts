@@ -132,17 +132,29 @@ function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => 
 
 /** A ChunkSegment (mixed lane) → the bot's transcript.v1 segment. The mixed lane publishes
  *  per-speaker bundles (confirmed + pending); we map each to a segment carrying `speaker` and
- *  `completed`. Audio-time is ms there → seconds here (transcript.v1 timing is seconds). */
+ *  `completed`. Audio-time is ms there → seconds here (transcript.v1 timing is seconds).
+ *
+ *  Stamp the canonical ISO `absolute_start_time` HERE, exactly as `toBotSegment` does for the
+ *  gmeet lane — the mixed lane's `startMs`/`endMs` are epoch milliseconds (wall clock), so
+ *  `startMs/1000` is epoch seconds. Without it the live `:mutable` bundle carries a null
+ *  absolute_start_time and the dashboard renderer SKIPS every pending draft (it keys on absolute
+ *  time), so Teams/Zoom transcripts only appeared after a reload (the REST read re-derives it). */
 function chunkToBotSegment(speaker: string, c: ChunkSegment, completed: boolean): TranscriptSegment {
   return {
     segment_id: c.segmentId,
-    speaker,
+    // Provisional cluster ids (seg_N) are an internal key, never a display name; while
+    // unattributed, emit the stable 'Speaker' label the gmeet lane uses (gmeet-pipeline.ts:52)
+    // so per-speaker consumers group as one speaker, not hundreds; late attribution still
+    // repaints by segment_id.
+    speaker: /^seg_\d+$/.test(speaker) ? 'Speaker' : speaker,
     speaker_key: c.segmentId,
     text: c.text,
     start: c.startMs / 1000,
     end: c.endMs / 1000,
     language: c.language,
     completed,
+    absolute_start_time: isoFromEpochSeconds(c.startMs / 1000),
+    absolute_end_time: isoFromEpochSeconds(c.endMs / 1000),
     source: 'merged',
   };
 }

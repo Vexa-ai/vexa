@@ -30,9 +30,12 @@ import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
-import { createBotPipeline, createLivePipeline, serr, type BotPipeline } from './pipeline.js';
+import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
+import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
@@ -79,19 +82,16 @@ function meetingChannelId(inv: Invocation): string | number {
  *
  *  `orchestrator.run({ maxActiveMs })` is a HARD ceiling on the active phase that resolves to
  *  `completed(max_bot_time_exceeded)` — a backstop so a bot can never live forever (the granular
- *  empty-room / waiting-room timeouts that map to left_alone/startup_alone are driven by the
- *  Pipeline/JoinDriver in 2b). This is a GENEROUS backstop (default 4h, override with
- *  BOT_MAX_ACTIVE_MS in ms) — the granular empty-room / waiting-room timeouts drive every NORMAL exit
- *  well before this fires. We floor it at max(everyoneLeft, noOneJoined, waitingRoom) + 60s margin so
- *  the backstop can never undercut those granular timeouts. */
+ *  silence timeout that maps to left_alone is driven by the injected AlonenessSource). This is a
+ *  GENEROUS backstop (default 4h, override with BOT_MAX_ACTIVE_MS in ms). We floor it at the largest
+ *  configured lifecycle timeout + 60s so it cannot undercut a more specific lifecycle verdict. */
 const DEFAULT_MAX_ACTIVE_MS = 4 * 60 * 60 * 1000; // 4 hours
-function deriveMaxActiveMs(inv: Invocation, env: NodeJS.ProcessEnv = process.env): number {
+function deriveMaxActiveMs(inv: Invocation, everyoneLeftMs: number, env: NodeJS.ProcessEnv = process.env): number {
   const al = inv.automaticLeave ?? {};
-  const everyoneLeft = al.everyoneLeftTimeout ?? 120_000;
   const noOneJoined = al.noOneJoinedTimeout ?? 600_000;
   const waitingRoom = al.waitingRoomTimeout ?? 300_000;
   const MARGIN_MS = 60_000; // give the granular timeouts room to fire first
-  const floor = Math.max(everyoneLeft, noOneJoined, waitingRoom) + MARGIN_MS;
+  const floor = Math.max(everyoneLeftMs, noOneJoined, waitingRoom) + MARGIN_MS;
   const override = Number(env.BOT_MAX_ACTIVE_MS);
   const cap = Number.isFinite(override) && override > 0 ? override : DEFAULT_MAX_ACTIVE_MS;
   return Math.max(cap, floor);
@@ -189,13 +189,35 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
+  // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
+  // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
+  // enables it without a control plane (the local hot-loop path).
+  const signalRecorder: CaptureSignalRecorder | null =
+    (inv.captureSignalEnabled ?? env.VEXA_CAPTURE_SIGNAL === '1')
+      ? createCaptureSignalRecorder(inv)
+      : null;
+  if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
+  // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
+  const sttFaults = createSttFaultReporter();
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
+  const remoteAudioActivity = createRemoteAudioActivityTap();
+  const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
+  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs });
+  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
-    botPipeline = createBotPipeline(inv, transcript, { config: speakerStreamConfig, onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
+    botPipeline = createBotPipeline(inv, transcript, {
+      // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
+      config: speakerStreamConfig,
+      // Every STT fault is counted and carried out on the terminal lifecycle event (see
+      // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
+      onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
+    });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran
@@ -226,7 +248,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, undefined, publishChat),   // on the live meeting page
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {
@@ -255,8 +277,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     join,
     pipeline,
     acts,
+    aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
+    degraded: () => sttFaults.report(),
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
@@ -266,7 +290,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // exit code on BOTH orphaned bots). Wire before run(); release the listeners after.
   const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
   try {
-    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv) });
+    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv, aloneSilenceWindowMs, env) });
     return result.exitCode;
   } finally {
     releaseSignals();
@@ -275,6 +299,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
     // path that skipped the orchestrator's teardown. (#593)
     await pipeline.stop().catch(() => { /* best-effort */ });
+    await signalRecorder?.close().catch(() => { /* best-effort */ });
     if (session) await session.close().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the
     // exit code; they may never have connected if redis was unreachable).

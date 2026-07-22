@@ -236,8 +236,12 @@ def build_router(
         platform: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(user_id, platform=platform)
-        running = [m for m in meetings if m.get("status") in _RUNNING_STATUSES]
+        # Filtered + projected IN SQL (#803). Reading the caller's whole history and filtering here
+        # meant a running-bots badge materialized every meeting they ever had, with full `data` —
+        # hundreds of MB for a heavy account, and an OOM under concurrent polls.
+        running = await store.list_meetings(
+            user_id, status=_RUNNING_STATUSES, platform=platform, slim=True,
+        )
         log_event(
             "bots_status", audience="user", span="bots.status",
             user_id=user_id, fields={"running": len(running)},
@@ -250,7 +254,9 @@ def build_router(
         })
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
-    # Reuses list_meetings + filters by id (owner-scoped, so a non-owner can't read another's meeting). ---
+    # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's
+    # meeting — but one row is read instead of the caller's entire history (#803). Full `data` is
+    # retained: this IS the detail view. ---
     @router.get("/meetings/{meeting_id}")
     async def get_meeting(
         request: Request,
@@ -258,7 +264,7 @@ def build_router(
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(user_id)
+        meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
