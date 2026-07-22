@@ -16,10 +16,10 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
+import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
-import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
+import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
+import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
 import { noopAloneness, controlledAloneness, noopPipeline, noopActs } from './test-doubles.js';
 
@@ -280,6 +280,38 @@ async function main(): Promise<void> {
     check('withdraw: terminal failed(awaiting_admission / stopped), exit 0', res.status === 'failed' && res.exitCode === 0 && last(lc.events).failure_stage === 'awaiting_admission' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
     check('withdraw: sequence legal + conforms', allLegal(seq(lc.events)) && allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
     check('withdraw: did NOT SIGKILL-orphan — the run resolved on its own (no watchdog needed)', true);
+  }
+
+  // ── #889: a `leave` ACT delivered while BLOCKED in the lobby (awaiting_admission) → WITHDRAW ──
+  // The canonical user Stop is a `leave` command on the bot's command channel (meeting-api's stop.py
+  // publishes `bot_commands:meeting:{id}` `{action:leave}`). The orchestrator used to subscribe to
+  // acts only AFTER admission, so a `leave` arriving while the bot was still knocking in the lobby was
+  // never heard (redis pub/sub has no backlog) — and handle()'s `leave` routed to the ACTIVE-phase end
+  // (signalEnd), not the pre-active abort. Net: the bot kept "asking to join" after Stop (#889). This
+  // asserts (a) the acts subscription is live DURING the lobby and (b) a lobby `leave` withdraws.
+  {
+    const lc = recordingSink();
+    const { driver, calls } = lobbyBlockingJoin();
+    let fireLeave: (a: Act) => void = () => {};
+    let subscribed = false;
+    const acts: ActsSource = {
+      subscribe(handler) { subscribed = true; fireLeave = (a) => void handler(a); return () => { /* */ }; },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: driver, pipeline: noopPipeline(), acts, aloneness: noopAloneness() });
+    const runP = o.run();
+    await new Promise((r) => setTimeout(r, 10));   // let the machine reach awaiting_admission + subscribe
+    check('#889: acts subscribed DURING the lobby (before admission)', subscribed, `subscribed=${subscribed}`);
+    fireLeave({ action: 'leave' });
+    // Bound the wait: with the bug the run never resolves (the leave is dropped) — the sentinel proves it.
+    const res = await Promise.race<MeetingResult>([
+      runP,
+      new Promise<MeetingResult>((r) => setTimeout(() => r({ exitCode: -1, status: 'joining' as BotStatus }), 500)),
+    ]);
+    check('#889: lobby leave act → withdraw invoked exactly once', calls.withdraw === 1, `withdraw=${calls.withdraw}`);
+    check('#889: withdraw reason forwarded (stopped)', calls.withdrawReason === 'stopped', calls.withdrawReason);
+    check('#889: terminal failed(awaiting_admission / stopped), exit 0', res.status === 'failed' && res.exitCode === 0 && last(lc.events).failure_stage === 'awaiting_admission' && last(lc.events).completion_reason === 'stopped', JSON.stringify(res) + ' / ' + JSON.stringify(last(lc.events)));
+    check('#889: never reached active (withdrew from the lobby)', !seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
+    check('#889: sequence legal + conforms', allLegal(seq(lc.events)) && allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
   }
 
   // ── Bug 2 (invariant): stop() while ACTIVE still uses the existing active-leave path, NOT withdraw ──

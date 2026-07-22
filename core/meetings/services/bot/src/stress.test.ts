@@ -9,7 +9,7 @@
  * Run: npx tsx src/stress.test.ts
  */
 import { createOrchestrator } from './orchestrator.js';
-import { canTransition, type BotStatus, type LifecycleEvent } from './contracts.js';
+import { canTransition, type Act, type BotStatus, type LifecycleEvent } from './contracts.js';
 import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource } from './ports.js';
 import type { Invocation } from './config.js';
 import { noopAloneness, noopPipeline, noopActs } from './test-doubles.js';
@@ -30,11 +30,14 @@ const sink = (): LifecycleSink & { readonly events: LifecycleEvent[] } => {
   const events: LifecycleEvent[] = [];
   return { events, async emit(e: LifecycleEvent) { events.push(e); } };
 };
-// The orchestrator subscribes to acts AFTER it reaches active — so an acts source that fires on
-// subscribe delivers its acts during the active phase (when the handler is wired). `nLeaves` floods.
-const leavesOnSubscribe = (n: number): ActsSource => ({
-  subscribe(handler) { for (let i = 0; i < n; i++) void handler({ action: 'leave' }); return () => { /* */ }; },
-});
+// The orchestrator subscribes to acts DURING the lobby now (before admission, #889), so acts can
+// arrive in ANY phase. This double CAPTURES the handler and lets the driver fire a flood at a chosen
+// phase (from inside join(), after it has reported the phase it wants to stress).
+const capturingActs = () => {
+  let handler: (a: Act) => void = () => { /* */ };
+  const acts: ActsSource = { subscribe(h) { handler = (a) => void h(a); return () => { /* */ }; } };
+  return { acts, flood: (n: number) => { for (let i = 0; i < n; i++) handler({ action: 'leave' }); } };
+};
 const noActs = noopActs();
 const noAloneness = noopAloneness();
 
@@ -45,26 +48,57 @@ const allLegal = (e: LifecycleEvent[]) =>
 async function main(): Promise<void> {
   console.log('\n=== bot orchestrator stress (shake) ===');
 
-  // ── (1) act flood: 200 concurrent `leave` acts → exactly ONE clean terminal ──
+  // ── (1) ACTIVE-phase act flood: 200 concurrent `leave` acts after admission → ONE clean completed ──
   {
     const lc = sink();
-    const o = createOrchestrator(inv(), {
-      lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: leavesOnSubscribe(200), aloneness: noAloneness,
-    });
-    const res = await o.run();  // 200 leave acts flood in on subscribe (during active)
+    const { acts, flood } = capturingActs();
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); flood(200); return 'admitted' as JoinOutcome; },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { /* */ },
+      async withdraw() { /* */ },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts, aloneness: noAloneness });
+    const res = await o.run();  // 200 leave acts flood in during the active phase
     check('act-flood: completed(stopped)', res.status === 'completed' && res.completionReason === 'stopped');
     check('act-flood: EXACTLY one terminal (no double-terminal under 200 leaves)', terminals(lc.events).length === 1,
       `got ${terminals(lc.events).length}`);
     check('act-flood: every event legal', allLegal(lc.events));
   }
 
+  // ── (1b) LOBBY-phase act flood (#889): 200 `leave` acts while still knocking → ONE clean WITHDRAW ──
+  // The lobby `leave` (meeting-api's stop command) now aborts the join under load: the first leave
+  // withdraws (once — the abort resolver is one-shot), the other 199 are no-ops, and the bot terminates
+  // failed(awaiting_admission / stopped) with EXACTLY one terminal. No double-withdraw, no hang.
+  {
+    const lc = sink();
+    const { acts, flood } = capturingActs();
+    let withdrew = 0;
+    const lobbyJoin: JoinDriver = {
+      // Reach the lobby, flood, then block (the real lobby never resolves on its own) — the flood aborts it.
+      async join(report) { await report('awaiting_admission'); flood(200); return new Promise<JoinOutcome>(() => { /* never */ }); },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { /* */ },
+      async withdraw() { withdrew++; },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: lobbyJoin, pipeline: noopPipeline(), acts, aloneness: noAloneness });
+    const res = await o.run();
+    check('lobby-flood: failed(stopped) via withdraw', res.status === 'failed' && res.completionReason === 'stopped');
+    check('lobby-flood: withdraw invoked EXACTLY once (200 leaves are idempotent)', withdrew === 1, `withdrew=${withdrew}`);
+    check('lobby-flood: exactly one terminal', terminals(lc.events).length === 1, `got ${terminals(lc.events).length}`);
+    check('lobby-flood: never reached active', !lc.events.some((e) => e.status === 'active'));
+    check('lobby-flood: every event legal', allLegal(lc.events));
+  }
+
   // ── (2) report flood: 500 rapid status reports serialise and still reach active → completed ──
   {
     const lc = sink();
+    const { acts, flood } = capturingActs();
     const floodJoin: JoinDriver = {
       async join(report) {
         for (let i = 0; i < 500; i++) void report('awaiting_admission');  // fire-and-forget flood
         await report('active');
+        flood(1);   // one leave AFTER active ends the run so we can assert it reached active + completed
         return 'admitted' as JoinOutcome;
       },
       onRemoval() { return () => { /* */ }; },
@@ -72,7 +106,7 @@ async function main(): Promise<void> {
       async withdraw() { /* */ },
     };
     const o = createOrchestrator(inv(), {
-      lifecycle: lc, join: floodJoin, pipeline: noopPipeline(), acts: leavesOnSubscribe(1), aloneness: noAloneness,
+      lifecycle: lc, join: floodJoin, pipeline: noopPipeline(), acts, aloneness: noAloneness,
     });
     const res = await o.run();
     check('report-flood: reached a clean completed', res.status === 'completed');
@@ -104,15 +138,6 @@ async function main(): Promise<void> {
     ? '\n✅ bot orchestrator stress: floods + failure-under-load stay legal, single-terminal, no ghost'
     : `\n❌ ${failed} stress check(s) failed`);
   if (failed > 0) process.exit(1);
-}
-
-function mockJoin(outcome: JoinOutcome): JoinDriver {
-  return {
-    async join(report) { await report('awaiting_admission'); if (outcome === 'admitted') await report('active'); return outcome; },
-    onRemoval() { return () => { /* */ }; },
-    async leave() { /* */ },
-    async withdraw() { /* */ },
-  };
 }
 
 void main();
