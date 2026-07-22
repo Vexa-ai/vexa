@@ -154,10 +154,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   let signalAbort: ((r: CompletionReason) => void) | null = null;
   const aborted = new Promise<CompletionReason>((res) => { signalAbort = res; });
 
-  // acts.v1 dispatch. `leave` ends the run; reconfigure + voice acts are handled by the
-  // live pipeline adapter (no-op for the machine; voice agent is DEFERRED this increment).
+  // acts.v1 dispatch. A `leave` command routes through `stop()` — the SAME phase-aware decision the
+  // SIGTERM seam uses — so a Stop is honored NO MATTER the phase it arrives in: ACTIVE ⇒ graceful
+  // leave; PRE-ACTIVE (still knocking in the lobby) ⇒ abort the join → WITHDRAW the ask-to-join
+  // request (#889). Routing `leave` straight to `signalEnd` used to only end the ACTIVE phase, so a
+  // lobby `leave` did nothing. reconfigure + voice acts are handled by the live pipeline adapter
+  // (no-op for the machine; voice agent is DEFERRED this increment).
   async function handle(act: Act): Promise<void> {
-    if (act.action === 'leave') signalEnd?.('stopped');
+    if (act.action === 'leave') stop('stopped');
   }
 
   async function run(opts: RunOptions = {}): Promise<MeetingResult> {
@@ -205,6 +209,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       });
       return reportChain;
     };
+    // Subscribe to the command bus BEFORE the join race (#889). A user Stop is delivered as a `leave`
+    // command on the bot's channel; when it arrives while the bot is still knocking in the lobby, the
+    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
+    // through stop() → the pre-active abort race → withdraw. Subscribing only AFTER admission (the old
+    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
+    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
+    const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
     try {
       // Race the (possibly long, lobby-blocked) join against a pre-active abort. A stop/SIGTERM in the
@@ -229,22 +240,25 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           failure_stage: stage, completion_reason: 'stopped',
           reason: 'stopped while awaiting admission (withdrew the join request)', exit_code: 0,
         });
+        unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
       outcome = raced.outcome;
       await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
+      unsubscribe();
       await emit('failed', { failure_stage: 'joining', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     if (outcome !== 'admitted') {
       const reason = OUTCOME_FAIL[outcome];
+      unsubscribe();
       await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: reason };
     }
     if (cur !== 'active') await emit('active');   // the join driver may already have reported active
 
-    // ── active: start the engine, wire removal + acts + the optional time cap ──
+    // ── active: start the engine, wire removal + aloneness + the optional time cap (acts already subscribed) ──
     try {
       await deps.pipeline.start();
     } catch (e) {
@@ -252,12 +266,12 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // strand a ghost participant. Best-effort; never masks the failure.
       deps.recording?.close(recordingKey);
       await deps.join.leave('pipeline_start_failed').catch(() => { /* best-effort */ });
+      unsubscribe();
       await emit('failed', { failure_stage: 'active', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     const stopRemoval = deps.join.onRemoval(() => signalEnd?.('evicted'));
     const stopAloneness = deps.aloneness.onAlone(() => signalEnd?.('left_alone'));
-    const unsubscribe = deps.acts.subscribe(handle);
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
       : null;
