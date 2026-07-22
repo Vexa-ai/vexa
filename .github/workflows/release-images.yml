@@ -239,7 +239,10 @@ jobs:
         with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
       # Tolerate minor lockfile drift, exactly as the image builds do (Dockerfiles install with
       # --frozen-lockfile=false) — the SBOM must reflect the same tree the images were built from.
-      - run: pnpm install --frozen-lockfile=false
+      # --ignore-scripts: the SBOM reads dependency METADATA (pnpm's licence index + lockfiles),
+      # never postinstall artifacts — and postinstalls are where concurrent onnxruntime-node
+      # versions race over one /tmp extraction dir and kill the install.
+      - run: pnpm install --frozen-lockfile=false --ignore-scripts
       - name: Generate SPDX SBOM
         run: node scripts/sbom.mjs --version "$VERSION" --output "$SBOM_FILE"
       - name: Sanity-check the SBOM (SPDX-2.3, carries the baked model + a populated dep tree)
