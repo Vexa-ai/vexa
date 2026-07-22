@@ -115,6 +115,11 @@ async function main(): Promise<void> {
     check('join-error: failed / exit 1', res.status === 'failed' && res.exitCode === 1);
     check('join-error: failure_stage=joining', last(lc.events).failure_stage === 'joining');
     check('join-error: completion_reason=join_failure', last(lc.events).completion_reason === 'join_failure');
+    // The thrown message is the ONLY channel a join-phase cause has to `last_error`: the sealed
+    // CompletionReason enum cannot name platform-specific causes, so a typed brick throw (e.g.
+    // @vexa/join's TeamsJoinRedirectError, #915) carries its discriminator in this text.
+    check('join-error: the thrown reason text reaches the terminal event',
+      String(last(lc.events).reason ?? '').includes('navigation failed'));
     check('join-error: no active emitted', !seq(lc.events).includes('active'));
     check('join-error: events conform', allConform(lc.events));
   }
