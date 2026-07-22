@@ -47,7 +47,25 @@ fwd vexa-platform-transcription-gateway $P_STT   8084
 fwd vexa-platform-vexa-meeting-api      $P_MAPI  8080
 
 echo "▶ asking meeting-api to mint a real invocation"
-NATIVE=$(printf '%s' "$MEETING_URL" | sed -E 's#.*/meet/([^?]+).*#\1#; s#.*/([a-z-]+)$#\1#')
+# The native id is the meeting's IDENTITY, not its URL. Get this wrong and the record still
+# spawns and still transcribes, but the dashboard builds /transcripts/<platform>/<native> from
+# it — a native id carrying "https://" and slashes makes that URL malformed, the client's fetch
+# throws, and the page renders "This page couldn't load" over a perfectly healthy meeting.
+NATIVE=$(python3 - "$PLATFORM" "$MEETING_URL" <<'PY'
+import re, sys
+from urllib.parse import urlparse
+platform, url = sys.argv[1], sys.argv[2]
+path = urlparse(url).path.strip('/')
+if platform == 'teams':
+    m = re.search(r'meetup-join/([^/?]+)', url) or re.search(r'/meet/([^/?]+)', url)
+    out = m.group(1) if m else path
+else:                       # jitsi room name · gmeet code · zoom id — the last path segment
+    out = path.split('/')[-1]
+if not out or '/' in out:
+    sys.exit(f'cannot derive a native meeting id from {url!r}')
+print(out)
+PY
+) || { echo "✗ $NATIVE" >&2; exit 1; }
 SPAWN=$(curl -s --max-time 40 -X POST "$API/bots" -H "X-API-Key: $(cat "$KEYFILE")" \
   -H 'Content-Type: application/json' \
   -d "{\"platform\":\"$PLATFORM\",\"native_meeting_id\":\"$NATIVE\",\"meeting_url\":\"$MEETING_URL\",\"bot_name\":\"Vexa HotLocal\"}")
