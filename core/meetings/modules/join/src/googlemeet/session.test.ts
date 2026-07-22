@@ -51,13 +51,28 @@ function mockPage(visible: string[]) {
     waitForTimeout: async () => {},
     fill: async () => {},
     mouse: { move: async () => {} },
+    url: () => 'https://meet.google.com/abc-defg-hij',
+    // The lobby-CTA resolvers read the observed locale for the failure
+    // diagnostic and run the structural scan through evaluateHandle; neither
+    // resolves anything on this fixture, which is driven purely by `visible`.
+    evaluate: async () => ({ lang: 'en', nav: 'en-US' }),
+    evaluateHandle: async () => ({
+      getProperty: async (k: string) => ({
+        jsonValue: async () => (k === 'labels' ? [] : null),
+        asElement: () => null,
+      }),
+      dispose: async () => {},
+    }),
     waitForSelector: (sel: string, _opts?: any) =>
       visible.includes(sel)
         ? Promise.resolve(handle(sel))
         : Promise.reject(new Error(`mock: ${sel} not on page`)),
     $: async (sel: string) => (visible.includes(sel) ? handle(sel) : null),
     locator: (sel: string) => ({
-      first: () => ({ isVisible: async () => visible.includes(sel) }),
+      first: () => ({
+        isVisible: async () => visible.includes(sel),
+        elementHandle: async () => (visible.includes(sel) ? handle(sel) : null),
+      }),
     }),
   };
   return page;
