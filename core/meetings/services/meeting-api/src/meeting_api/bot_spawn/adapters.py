@@ -24,6 +24,20 @@ from .ports import (
 )
 
 
+def _reason(resp) -> str:
+    """The kernel's error reason from a non-201 runtime.v1 response — its ``{detail}`` (the sealed
+    contract defines no error shape, so the API uses FastAPI's default), falling back to the raw body
+    text. Lets the meeting-api 502 name WHY the spawn failed (e.g. the absent image) instead of a bare
+    status code (#718)."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict) and body.get("detail"):
+            return str(body["detail"])
+    except Exception:  # noqa: BLE001 — a non-JSON error body falls back to text
+        pass
+    return (getattr(resp, "text", "") or "").strip() or f"HTTP {resp.status_code}"
+
+
 def _iso_utc(dt) -> Optional[str]:
     """Serialize a datetime as an unambiguous UTC ISO-8601 string (``…Z``).
 
@@ -548,6 +562,39 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def fail_meeting(self, *, meeting_id, reason, failure_stage="requested") -> Optional[dict]:
+        """Mark a meeting ``failed`` BY ID (no session needed) — the spawn-time failure path (#718).
+
+        A workload dead on arrival (kernel ``start_failed``) is refused BEFORE the ``MeetingSession``
+        exists, so the session-keyed ``update_meeting_status`` cannot reach the row; this fails it
+        directly, stamping the reason into ``data`` so ``GET /meetings`` and the terminal show WHY
+        instead of leaving a ``requested`` row for the 5-minute reaper to flip reason-less. Row-locked;
+        a missing row is a no-op."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == meeting_id).with_for_update())
+            ).scalars().first()
+            if m is None:
+                return None
+            m.status = "failed"
+            merged = dict(m.data) if isinstance(m.data, dict) else {}
+            merged["failure_stage"] = failure_stage
+            merged["failure_reason"] = reason
+            merged["completion_reason"] = "start_failed"
+            m.data = merged
+            flag_modified(m, "data")
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            if m.end_time is None:
+                m.end_time = now
+            await db.commit()
+            await db.refresh(m)
+            return _row_to_dict(m)
+
 
 class HttpRuntimeClient:
     """``RuntimeClient`` over the runtime.v1 HTTP kernel (``POST /workloads``). 429 → QuotaExceeded;
@@ -562,8 +609,19 @@ class HttpRuntimeClient:
         if resp.status_code == 429:
             raise QuotaExceeded("runtime kernel: owner quota exceeded")
         if resp.status_code != 201:
-            raise SpawnFailed(f"runtime kernel returned {resp.status_code}")
-        return resp.json()
+            # Carry the kernel's own reason (its {detail}) so the 502 the user sees NAMES the cause
+            # — e.g. "No such image: …" for an absent bot image (#718 C1 → C2).
+            raise SpawnFailed(f"runtime kernel returned {resp.status_code}: {_reason(resp)}")
+        body = resp.json()
+        # Belt-and-suspenders (#718 C2): even a 201 must be a workload that actually STARTED. A kernel
+        # that answers 201 with a dead body (state=stopped/destroyed, e.g. start_failed) is dead on
+        # arrival — refuse it here too, so the adapter never trusts any kernel version's optimism.
+        state = body.get("state")
+        if state in ("stopped", "destroyed"):
+            raise SpawnFailed(
+                f"workload dead on spawn: {body.get('stopReason') or state}"
+            )
+        return body
 
     async def delete_workload(self, workload_id: str) -> None:
         """Tear down a workload (``DELETE /workloads/{id}``) — teardown must be CONFIRMED.

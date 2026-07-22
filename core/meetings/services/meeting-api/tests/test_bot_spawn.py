@@ -155,6 +155,45 @@ async def test_request_bot_quota_propagates(monkeypatch):
                           native_meeting_id="x", redis_url="r", token_secret=SECRET)
 
 
+# ── #718: a workload DEAD AT START is refused, the row is failed with the reason, no `requested` lingers
+async def test_request_bot_dead_on_arrival_fails_the_row(monkeypatch):
+    """C2: the kernel answers 201 but with a workload that never started (state=stopped/start_failed).
+    ``create_workload`` catches the dead body → ``SpawnFailed``; ``request_bot`` marks the meeting
+    row ``failed`` with the reason so NO ``requested`` row remains, and creates no session.
+
+    Negative control (the bug): before the fix the dead 201 sailed through, the row stayed
+    ``requested``, and the reaper flipped it reason-less 5 minutes later."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient(dead_on_arrival=True)
+    with pytest.raises(SpawnFailed) as ei:
+        await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                          native_meeting_id="dead", redis_url="r", token_secret=SECRET)
+    assert "start_failed" in str(ei.value)
+    # exactly one row, and it is FAILED with the reason — not a lingering `requested`.
+    rows = list(repo._meetings.values())
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "failed"
+    assert row["data"]["completion_reason"] == "start_failed"
+    assert "start_failed" in row["data"]["failure_reason"]
+    assert repo.sessions == [], "no MeetingSession for a workload that never started"
+
+
+async def test_request_bot_spawnfailed_fails_the_row(monkeypatch):
+    """The same row-failing discipline on the runtime-error path (create_workload raises SpawnFailed,
+    e.g. a non-201 from the kernel): the row is failed, not left ``requested``."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient(fail=True)
+    with pytest.raises(SpawnFailed):
+        await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                          native_meeting_id="boom", redis_url="r", token_secret=SECRET)
+    assert list(repo._meetings.values())[0]["status"] == "failed"
+
+
 # ── route: POST /bots maps outcomes onto HTTP status ─────────────────────────────────────────────
 
 def _client(repo=None, runtime=None):
@@ -262,6 +301,22 @@ def test_post_bots_429_on_quota(monkeypatch):
     r = client.post("/bots", headers=HEADERS,
                     json={"platform": "google_meet", "native_meeting_id": "x"})
     assert r.status_code == 429
+
+
+def test_post_bots_502_when_workload_dead_on_arrival(monkeypatch):
+    """Route level (#718 A1): a workload dead at start → POST /bots is 502 naming the reason, and the
+    meeting row is ``failed`` (NOT a lingering ``requested`` that would 409 the user's retry)."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient(dead_on_arrival=True)
+    client = _client(repo, runtime)
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": "google_meet", "native_meeting_id": "dead-201"})
+    assert r.status_code == 502, f"a dead-at-start spawn must not 201; got {r.status_code}"
+    assert "start_failed" in r.json()["detail"]
+    rows = list(repo._meetings.values())
+    assert len(rows) == 1 and rows[0]["status"] == "failed"
 
 
 def test_post_bots_401_without_identity(monkeypatch):

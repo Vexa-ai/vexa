@@ -108,6 +108,16 @@ class MeetingRepo(Protocol):
         """Record the kernel-assigned workload id/name on the meeting and return the updated row."""
         ...
 
+    async def fail_meeting(
+        self, *, meeting_id: int, reason: str, failure_stage: str = "requested"
+    ) -> Optional[dict]:
+        """Mark a meeting ``failed`` BY ID (no session_uid), stamping ``reason``/``failure_stage`` into
+        ``meeting.data`` — the spawn-time failure path (#718). A workload dead on arrival is refused
+        BEFORE the ``MeetingSession`` exists, so the session-keyed ``update_meeting_status`` cannot
+        reach the row; this fails it directly so no ``requested`` row lingers for the reaper to flip
+        reason-less. Returns the updated row (or ``None`` for an unknown id)."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 

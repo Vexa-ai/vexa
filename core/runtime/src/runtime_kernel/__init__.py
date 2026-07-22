@@ -1,5 +1,5 @@
 """The runtime kernel — implements runtime.v1 (spawn/execute workloads through the lifecycle)."""
-from .kernel import Runtime, QuotaExceeded
+from .kernel import Runtime, QuotaExceeded, StartFailed
 from .models import WorkloadSpec, WorkloadStatus, RuntimeEvent, RuntimeState, StopReason, BackendKind
 from .profiles import Runnable, Profile, ProfileRegistry, default_registry
 from .process_backend import ProcessBackend
@@ -22,7 +22,7 @@ from .callbacks import (
 )
 
 __all__ = [
-    "Runtime", "QuotaExceeded",
+    "Runtime", "QuotaExceeded", "StartFailed",
     "Runnable", "Profile", "ProfileRegistry", "default_registry",
     "ProcessBackend", "DockerBackend", "K8sBackend",
     "WorkloadSpec", "WorkloadStatus", "RuntimeEvent",

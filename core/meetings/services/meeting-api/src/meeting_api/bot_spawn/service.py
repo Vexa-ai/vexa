@@ -398,16 +398,38 @@ async def request_bot(
     )
     try:
         result = await runtime.create_workload(spec)
+        # Defense in depth at the service/port seam (#718 C2): the adapter already refuses a dead
+        # spawn (non-201, or a 201 whose body is state=stopped/destroyed), but the service must not
+        # trust ANY port's optimism either — a returned non-live state is a spawn failure here too, so
+        # no code path proceeds to a 201 over a workload that never came up.
+        spawned_state = result.get("state")
+        if spawned_state in ("stopped", "destroyed"):
+            raise SpawnFailed(f"workload dead on spawn: {result.get('stopReason') or spawned_state}")
     except QuotaExceeded:
         log_event(
             "bot_spawn_quota_exceeded", audience="user", level="warning",
             span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
         )
         raise
-    except SpawnFailed:
+    except SpawnFailed as e:
+        # No workload came up. Mark the just-inserted meeting row `failed` with the reason so no
+        # `requested` row lingers for the 5-minute reaper to flip reason-less (#718): the failure and
+        # its cause are on the row NOW, and POST /bots answers 502 with the same reason. The row is
+        # failed BY ID — the MeetingSession is not created until after a successful spawn, so the
+        # session-keyed update_meeting_status cannot reach it yet.
+        reason = str(e) or "bot workload failed to start"
+        try:
+            await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
+        except Exception as fail_err:  # noqa: BLE001 — failing the row is best-effort; never mask the spawn error
+            log_event(
+                "bot_spawn_fail_row_error", audience="system", level="error",
+                span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"error": str(fail_err)},
+            )
         log_event(
             "bot_spawn_failed", audience="system", level="error",
             span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+            fields={"reason": reason},
         )
         raise
 
