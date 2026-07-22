@@ -270,28 +270,57 @@ export const googleRemovalIndicators: string[] = [
 
 // Google Meet UI interaction selectors.
 //
-// Locale-agnostic FIRST (structure / jsname / role), then English text as a
-// fallback. The English-literal `text()="Ask to join"` / has-text locators only
-// match an English UI, so a Hungarian (or any non-English) Meet lobby never
-// found the join button — the bot sat in the lobby until manual_leave
-// (prod ids 13951 13952 14018 14153). The primary admission CTA in the Meet
-// lobby is the last/right-most jsname-tagged <button> in the lobby controls;
-// it carries a jsname and is the only enabled <button> with non-icon text.
+// ORDER IS AUTHORITATIVE: join.ts resolves these lists top-down on every poll,
+// so an earlier entry always beats a later one on the same DOM.
+//
+// The first entry is the locale-agnostic one; the English literals follow. The
+// `text()="Ask to join"` / has-text locators only match an English UI, so a
+// Hungarian (or any non-English) Meet lobby cannot be joined by them alone
+// (prod ids 13951 13952 14018 14153).
+//
+// COVERAGE LIMIT — read before adding to this list: the structural entry can
+// only see a lobby whose CTA carries NO accessible label. `:not([aria-label])`
+// is load-bearing (the lobby's aria-labelled 3-dot menu is otherwise a
+// `button[jsname]` with a span, and the humanized click lands on the menu), but
+// it also blinds this list to a lobby whose CTA IS aria-labelled — which is the
+// shape reported in #846 (prod meetings 24337, 24339: the full list exhausted
+// its 60s budget). Attribute presence cannot express "the button with a real
+// text label", so that case is closed in join.ts by `findLobbyPrimaryCta` — a
+// structural scan that discriminates on non-icon label text and refuses to
+// click unless exactly one candidate exists. Widen there, not here.
 export const googleJoinButtonSelectors: string[] = [
-  // Locale-agnostic: a real <button> carrying Google's jsname token whose label
-  // text is non-empty (excludes icon-only mic/camera toggles which have no text
-  // node). Matches "Ask to join"/"Join now"/localized equivalents alike.
+  // Locale-agnostic: a real <button> carrying Google's jsname token, a text span
+  // and no accessible label. Matches "Ask to join"/"Join now"/localized alike.
   'button[jsname]:not([aria-label]):has(span)',
-  // NB: must exclude [aria-label] — the lobby 3-dot "more options" menu is also a
-  // div[jscontroller] button[jsname] with a span; without this filter it matched
-  // FIRST and the humanized click landed on the menu, never "Ask to join".
-  'div[jscontroller] button[jsname]:not([aria-label]):has(span)',
   // English fallbacks (kept for resilience on English UIs).
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
   'button:has-text("Join")'
 ];
+
+// Icon-glyph descendants of a lobby <button>. A button containing any of these
+// is an icon affordance (mic / camera / 3-dot menu / "cast this meeting" /
+// "use a phone for audio"), never the primary admission CTA — Meet renders that
+// one as text only. Consumed by `findLobbyPrimaryCta` in join.ts, which runs in
+// BROWSER CONTEXT through document.querySelector, so every entry must be plain
+// CSS (declared in browserContextSelectorArrays below; the validity gate
+// CSS-parses it). Material icons carry their glyph name as a TEXT node
+// ("mic_off", "more_vert"), so excluding these elements is what keeps an
+// icon-only button from reading as a text-labelled one.
+export const googleLobbyIconGlyphSelectors: string[] = [
+  'i',
+  'svg',
+  'img',
+  '[class*="material-icons"]',
+  '[class*="material-symbols"]',
+  '[data-icon-name]'
+];
+
+// A primary CTA label is a couple of words in any language ("Ask to join",
+// "Kérvényezés a csatlakozásra", "参加をリクエスト"). Anything longer is prose —
+// a disclosure/consent paragraph rendered as a button — and is not a CTA.
+export const googleLobbyCtaMaxLabelChars = 48;
 
 export const googleCameraButtonSelectors: string[] = [
   '[aria-label*="Turn off camera"]',
@@ -322,14 +351,12 @@ export const googleNameInputSelectors: string[] = [
 ];
 
 // Authenticated-lobby primary CTA — "Join now" / "Switch here" / "Ask to join"
-// or any localized equivalent. Locale-agnostic structural selectors FIRST
-// (the English-literal failure class of ids 13951/13952/14018/14153 above):
-// the CTA is the jsname-tagged <button> with a text span and no aria-label,
-// which excludes the icon-only mic/camera toggles and the aria-labelled
-// 3-dot menu. English text kept as last-resort fallbacks only.
+// or any localized equivalent. Same shape and same coverage limit as
+// googleJoinButtonSelectors above: the locale-agnostic entry is first, the
+// English text is a fallback, and an aria-labelled CTA on a non-English lobby
+// is reached by join.ts's `findLobbyPrimaryCta` scan rather than by this list.
 export const googleAuthJoinCtaSelectors: string[] = [
   'button[jsname]:not([aria-label]):has(span)',
-  'div[jscontroller] button[jsname]:not([aria-label]):has(span)',
   // English fallbacks.
   'button:has-text("Join now")',
   'button:has-text("Switch here")',
@@ -441,5 +468,8 @@ export const googlePeopleButtonSelectors: string[] = [
 // ship green as a dead selector. Entries may be plain CSS strings or
 // BrowserContextButtonMatcher objects (`css` field parsed as CSS; `text`
 // fields are raw strings, not selectors).
-export const browserContextSelectorArrays: string[] = ['googleLeaveButtonMatchers'];
+export const browserContextSelectorArrays: string[] = [
+  'googleLeaveButtonMatchers',
+  'googleLobbyIconGlyphSelectors',
+];
 
