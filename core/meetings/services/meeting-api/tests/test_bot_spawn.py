@@ -614,15 +614,54 @@ def test_native_meeting_id_with_nul_byte_is_422_not_500(monkeypatch):
 
 
 def test_native_meeting_id_bounds_do_not_validate_SHAPE(monkeypatch):
-    """NEGATIVE CONTROL — the guard bounds length/bytes ONLY, never the id's shape.
+    """NEGATIVE CONTROL — the guard bounds length/bytes and URL-structural chars ONLY, never the
+    id's SEMANTIC shape.
 
     Production evidence: a bare-numeric Teams id (the dial-in kind) transcribed a real meeting
     (24368, 67 segments) while another of the SAME shape failed. Shape does not predict success,
-    so a format rule would refuse working meetings. These must all still spawn."""
+    so a format rule would refuse working meetings. The Teams thread-id form
+    (`19:…@thread.v2` — `: @ . _ -`) and Meet dash-codes must all still spawn; only URL-structural
+    chars are refused (see #892 test below)."""
     monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
-    for odd_but_legal in ("474226440982", "abc-defg-hij", "x", "A" * 255, "id with spaces"):
+    for odd_but_legal in (
+        "474226440982", "abc-defg-hij", "x", "A" * 255,
+        "19:meeting_AbC-dEf_123@thread.v2",  # Teams thread id: `:@._-` must survive the #892 guard
+    ):
         repo = InMemoryMeetingRepo()
         r = _client(repo).post("/bots", headers=HEADERS, json={
             "platform": "google_meet", "native_meeting_id": odd_but_legal,
         })
         assert r.status_code == 201, f"{odd_but_legal!r} was refused: {r.status_code} {r.text}"
+
+
+def test_native_meeting_id_with_url_chars_is_422_not_join_failure(monkeypatch):
+    """#892: a `native_meeting_id` carrying URL-structural chars (a Teams passcode left on the id,
+    `397421056486982?p=X8hc…`) is short and control-free, so it passed the #843/#855 length+control
+    guards, then string-interpolated into `construct_meeting_url` to build a broken join URL
+    (`…/l/meetup-join/…982?p=X8hc…` → join_failure) and stored an unfindable `platform_specific_id`.
+    It must be refused HERE, typed 422, naming the fix, and write NO row."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    # The reproduced value from the issue, plus one per URL-structural class + a literal space.
+    for bad_id in (
+        "397421056486982?p=X8hcQVTnGNpGelJLSv",  # the reproduced Teams-passcode case
+        "abc?def", "abc&def", "abc=def", "abc/def", "abc#def", "abc def",
+    ):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={
+            "platform": "teams", "native_meeting_id": bad_id,
+        })
+        assert r.status_code == 422, f"{bad_id!r} expected typed 422, got {r.status_code} {r.text}"
+        detail = r.json()["detail"]
+        assert "native_meeting_id" in detail and "passcode" in detail, (
+            f"the refusal must name the id and the fix, got: {detail}"
+        )
+        assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+
+    # POSITIVE CONTROL — the bare id + a separate passcode still spawns (the meeting-13564 pattern:
+    # pass the passcode in its own field, not glued onto the id).
+    repo = InMemoryMeetingRepo()
+    ok = _client(repo).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": "397421056486982",
+        "passcode": "X8hcQVTnGNpGelJLSv",
+    })
+    assert ok.status_code == 201, f"bare id + separate passcode was refused: {ok.text}"
