@@ -21,6 +21,7 @@ from .ports import (
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
+    reconcile_grace_for_status,
 )
 
 
@@ -320,7 +321,7 @@ class SqlAlchemyMeetingRepo:
         return [(mid, sid, bcid) for mid, (sid, bcid) in out.items()]
 
     async def list_stale_nonterminal(
-        self, *, stop_grace: float, active_grace: float
+        self, *, stop_grace: float, active_grace: float, preactive_grace: Optional[float] = None
     ) -> list[tuple[int, str, str, Optional[str], bool]]:
         """Meetings stuck in ANY non-terminal status whose row has gone quiet past its grace window —
         a bot that exited (or vanished) without ever sending its terminal lifecycle callback leaves the
@@ -329,8 +330,10 @@ class SqlAlchemyMeetingRepo:
         CANDIDATE signal only — the sweep additionally gates the active-reap on runtime workload
         liveness (see ``reconcile.py``), because a silent-but-live bot stops bumping ``updated_at``.
 
-        Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast),
-        everything else uses ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
+        Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast), a
+        PRE-ACTIVE row (`requested`/`joining`/`awaiting_admission` — the bot has not reached the
+        meeting yet, and holds the lobby budget the control plane handed it) uses ``preactive_grace``,
+        everything else ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
         reaped). Returns ``[(meeting_id, status, session_uid, bot_container_id, stop_requested), …]`` with
         the LATEST session_uid per meeting (mirrors ``list_stale_stopping``)."""
         from datetime import datetime, timezone
@@ -358,7 +361,7 @@ class SqlAlchemyMeetingRepo:
             if mid in out or upd is None or not sid:
                 continue
             u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
-            grace = stop_grace if status == "stopping" else active_grace
+            grace = reconcile_grace_for_status(status, stop_grace, active_grace, preactive_grace)
             if (now - u).total_seconds() >= grace:
                 stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))
                 out[mid] = (status, sid, bcid, stop_req)

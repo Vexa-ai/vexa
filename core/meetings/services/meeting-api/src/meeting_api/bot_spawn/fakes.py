@@ -24,6 +24,7 @@ from .ports import (
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
+    reconcile_grace_for_status,
 )
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
@@ -262,12 +263,13 @@ class InMemoryMeetingRepo:
         )
 
     async def list_stale_nonterminal(
-        self, *, stop_grace: float, active_grace: float
+        self, *, stop_grace: float, active_grace: float, preactive_grace: Optional[float] = None
     ) -> list:
         """In-memory mirror of the SQL adapter's general reconcile query. A row is stale once its age
-        (now - ``updated_at``) passes its per-status grace (``stopping`` → stop_grace, else
-        active_grace). Rows carry a static created/updated timestamp, so a test sets ``updated_at`` (or
-        leaves it in the past) to mark a row stale; a row whose ``updated_at`` is recent is NOT listed."""
+        (now - ``updated_at``) passes its per-status grace (``reconcile_grace_for_status`` — the SAME
+        policy the SQL adapter reads, so the two listings cannot drift). Rows carry a static created/
+        updated timestamp, so a test sets ``updated_at`` (or leaves it in the past) to mark a row
+        stale; a row whose ``updated_at`` is recent is NOT listed."""
         from datetime import datetime, timezone
 
         non_terminal = {
@@ -292,7 +294,9 @@ class InMemoryMeetingRepo:
                 continue
             if u.tzinfo is None:
                 u = u.replace(tzinfo=timezone.utc)
-            grace = stop_grace if row["status"] == "stopping" else active_grace
+            grace = reconcile_grace_for_status(
+                row["status"], stop_grace, active_grace, preactive_grace
+            )
             if (now - u).total_seconds() < grace:
                 continue
             stop_req = bool(row.get("data", {}).get("stop_requested"))

@@ -366,6 +366,13 @@
    "targets": []
   },
   {
+   "key": "RECONCILE_PREACTIVE_GRACE_S",
+   "class": "defaulted",
+   "default": "660",
+   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — derived from the lobby budget the spawn issues (waitingRoomTimeout 600s) plus headroom, so the control plane is never less patient than the deadline it handed the bot (#862)",
+   "targets": []
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",
