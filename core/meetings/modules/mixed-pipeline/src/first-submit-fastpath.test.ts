@@ -50,8 +50,8 @@ async function main(): Promise<void> {
   });
 
   // This is NOT the first turn (the first turn back-extends to session start, which would inflate
-  // the opening window and mask the tick wait). Open + immediately close a warm-up turn at t=0 so the
-  // turn under test starts from a settled coverage mark, exactly as a mid-meeting handover does.
+  // the opening window and mask the tick wait). A real speaker handover closes the warm-up turn and
+  // opens the turn under test at t=1s, exactly as a mid-meeting handover does.
   const frame = (fromSec: number, durSec: number): void => {
     const a = new Float32Array(Math.round(SR * durSec)); a.fill(0.12);
     tc.feedAudio(a, fromSec * 1000);
@@ -59,13 +59,12 @@ async function main(): Promise<void> {
   emit({ kind: 'silence→speaker', tMs: 0, confidence: 0.9 });
   frame(0, 1.0);
   await sleep(1300);
-  emit({ kind: 'speaker→silence', tMs: 1000, confidence: 0.9 });
+  emit({ kind: 'speaker→speaker', tMs: 1000, confidence: 0.9 });
   await sleep(300);
 
-  // THE TURN UNDER TEST. Open at t=1.0s; feed exactly one MIN_SUBMIT-sized window (0.9s) and stop.
-  // Record how large the FIRST window submitted for THIS turn is.
+  // THE TURN UNDER TEST is already open at t=1.0s. Feed exactly one MIN_SUBMIT-sized window
+  // (0.9s) and stop. Record how large the FIRST window submitted for THIS turn is.
   const before = submittedSpansSec.length;
-  emit({ kind: 'silence→speaker', tMs: 1000, confidence: 0.9 });
   // Let the open's own (once-per-drain) submit run against an EMPTY window first — exactly as a live
   // handover behaves, where the new turn's audio arrives over the following seconds, not all at the
   // boundary instant. Without this settle the open's submit grabs the frame through a microtask gap
