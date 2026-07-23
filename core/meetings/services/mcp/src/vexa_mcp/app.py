@@ -3,7 +3,9 @@
 Port of 0.10.6 ``services/mcp/main.py`` reduced to the tools whose REST routes EXIST on
 the v0.12 public API (the gateway — ``core/gateway/services/gateway/src/gateway/app.py``).
 Every tool is a thin FastAPI route; ``FastApiMCP`` derives the MCP tool surface from them
-and mounts the streamable-HTTP MCP transport at ``/mcp``.
+and mounts the streamable-HTTP MCP transport at ``/mcp``. The mount uses an ASGI
+passthrough so a sessioned ``GET /mcp`` can start its SSE response immediately
+(#921) — fastapi-mcp's buffered adapter never completes for an open EventSource.
 
 Auth: the caller's credential (``Authorization: Bearer <key>`` / raw ``Authorization`` /
 ``X-API-Key``) is treated as the Vexa API key and forwarded to the gateway as ``X-API-Key``
@@ -27,6 +29,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
+from .streamable_http import install_streaming_http_transport
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
 
@@ -339,5 +342,8 @@ def create_app(
         return get_prompt_result(name, arguments)
 
     mcp.mount_http()
+    # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE
+    # stream and never completes that buffer — install a passthrough (#921).
+    install_streaming_http_transport(mcp)
     app.state.mcp = mcp
     return app
