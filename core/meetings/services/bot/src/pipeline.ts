@@ -110,20 +110,50 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
   };
 }
 
+interface PublishTracker {
+  publish(segment: TranscriptSegment): void;
+  drain(): Promise<void>;
+}
+
+/** Track the async transcript egress behind each lane's synchronous callback surface. Teardown
+ * drains this set, so a final lane flush reaches Redis before lifecycle truth says completed. */
+function createPublishTracker(
+  publish: TranscriptSink['publish'],
+  onError?: (e: unknown) => void,
+): PublishTracker {
+  const inflight = new Set<Promise<void>>();
+  const reportError = (error: unknown): void => {
+    try {
+      (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(error);
+    } catch { /* error reporting cannot break teardown */ }
+  };
+  return {
+    publish(segment) {
+      const pending = Promise.resolve()
+        .then(() => publish(segment))
+        .catch(reportError);
+      inflight.add(pending);
+      void pending.then(
+        () => inflight.delete(pending),
+        () => inflight.delete(pending),
+      );
+    },
+    async drain() {
+      while (inflight.size) await Promise.all([...inflight]);
+    },
+  };
+}
+
 /**
  * The sink ADAPTER — the load-bearing reconciliation. The lane emits via `segment` (confirmed),
  * `draft` (live partial, completed:false), `finalize` (session end); the bot's port is a single
  * `publish(segment)`. We forward BOTH `segment` and `draft` to publish (the bot's transcript.v1
  * egress carries `completed` to distinguish confirmed from draft) and treat `finalize` as a
  * no-op at this seam (the bot signals end-of-session via lifecycle.v1, not the transcript stream).
- * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
- * rejection rather than letting it escape the lane's emit path.
  */
-function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => void): LaneTranscriptSink {
+function laneSink(egress: PublishTracker): LaneTranscriptSink {
   const forward = (seg: LaneSegment): void => {
-    void publish(toBotSegment(seg)).catch((e) => {
-      (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(e);
-    });
+    egress.publish(toBotSegment(seg));
   };
   return {
     segment: forward,
@@ -169,10 +199,11 @@ function createGmeetBotPipeline(
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const egress = createPublishTracker(sink.publish.bind(sink), onError);
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(egress), config, onError });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
-    async stop() { await lane.dispose(); },
+    async stop() { await lane.dispose(); await egress.drain(); },
     feedAudio: (channel, glowName, pcm, tsMs) => lane.feedAudio(channel, glowName, pcm, tsMs),
     feedMixedAudio() { /* not the gmeet lane */ },
     recordHint() { /* not the gmeet lane */ },
@@ -198,12 +229,11 @@ function createMixedBotPipeline(
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
   const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
+  const egress = createPublishTracker(sink.publish.bind(sink), onError);
 
   const publish = (speaker: string, segs: ChunkSegment[], completed: boolean): void => {
     for (const c of segs) {
-      void sink.publish(chunkToBotSegment(speaker, c, completed)).catch((e) => {
-        (onError ?? ((err) => console.error(`[bot] pipeline(mixed): publish rejected: ${String(err)}`)))(e);
-      });
+      egress.publish(chunkToBotSegment(speaker, c, completed));
     }
   };
 
@@ -247,7 +277,7 @@ function createMixedBotPipeline(
 
   return {
     async start() { await ensure(); },
-    async stop() { if (transcriber) await transcriber.dispose(); },
+    async stop() { if (transcriber) await transcriber.dispose(); await egress.drain(); },
     feedAudio() { /* not the mixed lane (mixed has no per-channel glow) */ },
     feedMixedAudio: (pcm, tsMs) => { transcriber?.feedAudio(pcm, tsMs); },
     // C1 hop 3 + C2: count the arrival, forward under the platform's TRUE kind.
@@ -302,7 +332,16 @@ export function createBotPipeline(
 }
 
 /** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */
-export type LiveStage = 'capture-start' | 'recording-start' | 'engine-start';
+export type LiveStartStage = 'capture-start' | 'recording-start' | 'engine-start';
+export type LiveTeardownStage = 'capture-stop' | 'recording-finalize' | 'engine-stop';
+export type LiveStage = LiveStartStage | LiveTeardownStage;
+export type LiveStagePhase = 'started' | 'finished';
+
+export const DEFAULT_LIVE_TEARDOWN_TIMEOUT_MS: Readonly<Record<LiveTeardownStage, number>> = {
+  'capture-stop': 2_000,
+  'recording-finalize': 6_000,
+  'engine-stop': 6_000,
+};
 
 /**
  * Serialize a thrown value for a LOG LINE (#593 A1). Prefer the stack (names the throwing frame),
@@ -326,6 +365,12 @@ export interface LivePipelineDeps {
   engine: Pipeline;
   /** Loud fault sink — which stage failed + the raw error (wired to console.error(serr) + publishFault). */
   onFault: (stage: LiveStage, e: unknown) => void;
+  /** Teardown breadcrumbs. A started stage emits either finished or onFault, so a stuck stage is
+   *  named without a debugger. Telemetry is best-effort and may not break the data path. */
+  onStage?: (stage: LiveTeardownStage, phase: LiveStagePhase, elapsedMs: number) => void;
+  /** Per-stage teardown deadlines. Capture closes ingress first; recording and engine then share
+   *  the remaining wall-clock window in parallel. */
+  teardownTimeoutMs?: Partial<Record<LiveTeardownStage, number>>;
   /** Bounded retry for engine start (the pyannote model load). Default 3 attempts, 2s apart. */
   retry?: { attempts: number; delayMs: number };
 }
@@ -347,14 +392,60 @@ export interface LivePipelineDeps {
  * thunks to the live page.
  */
 export function createLivePipeline(deps: LivePipelineDeps): Pipeline {
-  const { startCapture, startRecording, engine, onFault } = deps;
+  const { startCapture, startRecording, engine, onFault, onStage } = deps;
   const maxAttempts = Math.max(1, deps.retry?.attempts ?? 3);
   const delayMs = Math.max(0, deps.retry?.delayMs ?? 2000);
 
   let stopCapture: (() => Promise<void>) | null = null;
   let stopRecording: (() => Promise<void>) | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let engineStartPromise: Promise<void> | null = null;
   let stopped = false;
+  let stopPromise: Promise<void> | null = null;
+
+  const reportFault = (stage: LiveStage, e: unknown): void => {
+    try { onFault(stage, e); } catch { /* telemetry must never break lifecycle */ }
+  };
+  const reportStage = (stage: LiveTeardownStage, phase: LiveStagePhase, elapsedMs: number): void => {
+    try { onStage?.(stage, phase, elapsedMs); } catch { /* telemetry must never break lifecycle */ }
+  };
+  const stageTimeoutMs = (stage: LiveTeardownStage): number => {
+    const configured = deps.teardownTimeoutMs?.[stage];
+    return Number.isFinite(configured) && (configured ?? 0) > 0
+      ? configured as number
+      : DEFAULT_LIVE_TEARDOWN_TIMEOUT_MS[stage];
+  };
+  const runTeardownStage = async (
+    stage: LiveTeardownStage,
+    operation: (() => Promise<void>) | null,
+  ): Promise<void> => {
+    if (!operation) return;
+    const startedAt = Date.now();
+    const timeoutMs = stageTimeoutMs(stage);
+    reportStage(stage, 'started', 0);
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const settled = Promise.resolve()
+      .then(operation)
+      .then(
+        () => ({ kind: 'finished' as const }),
+        (error: unknown) => ({ kind: 'fault' as const, error }),
+      );
+    const deadline = new Promise<{ kind: 'timeout' }>((resolve) => {
+      timer = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
+    });
+    const outcome = await Promise.race([settled, deadline]);
+    if (timer) clearTimeout(timer);
+    const elapsedMs = Date.now() - startedAt;
+
+    if (outcome.kind === 'finished') {
+      reportStage(stage, 'finished', elapsedMs);
+    } else if (outcome.kind === 'fault') {
+      reportFault(stage, outcome.error);
+    } else {
+      reportFault(stage, new Error(`${stage} timed out after ${timeoutMs}ms`));
+    }
+  };
 
   // Engine start with bounded background retry: the FIRST attempt is awaited by start() (so start()
   // resolves promptly — the bot is already seated); later attempts fire on a timer without ever
@@ -363,34 +454,60 @@ export function createLivePipeline(deps: LivePipelineDeps): Pipeline {
     try {
       await engine.start();
     } catch (e) {
-      onFault('engine-start', e);
+      reportFault('engine-start', e);
       if (stopped || attempt >= maxAttempts) return;   // give up (already published loud); bot STAYS
-      retryTimer = setTimeout(() => { retryTimer = null; void tryEngineStart(attempt + 1); }, delayMs);
+      retryTimer = setTimeout(() => { retryTimer = null; void launchEngineStart(attempt + 1); }, delayMs);
     }
+  };
+  const launchEngineStart = (attempt: number): Promise<void> => {
+    const pending = tryEngineStart(attempt);
+    engineStartPromise = pending;
+    void pending.then(
+      () => { if (engineStartPromise === pending) engineStartPromise = null; },
+      () => { if (engineStartPromise === pending) engineStartPromise = null; },
+    );
+    return pending;
   };
 
   return {
     async start(): Promise<void> {
       // capture-start — best-effort (a page media Event / exposeFunction reject must not evict).
       try { stopCapture = await startCapture(); }
-      catch (e) { onFault('capture-start', e); }
+      catch (e) { reportFault('capture-start', e); }
       // recording-start — best-effort.
       if (startRecording) {
         try { stopRecording = await startRecording(); }
-        catch (e) { onFault('recording-start', e); }
+        catch (e) { reportFault('recording-start', e); }
       }
       // engine-start — non-fatal degrade + bounded retry (the pyannote model load; #593 root cause).
-      await tryEngineStart(1);
+      await launchEngineStart(1);
       // NOTHING rethrows ⇒ the orchestrator never sees a pipeline.start() throw ⇒ no self-evict.
     },
-    async stop(): Promise<void> {
+    stop(): Promise<void> {
+      // The orchestrator owns normal stop, and index.ts calls stop again in finally. If an outer
+      // deadline fires while a teardown operation is still pending, a second independent stop
+      // would otherwise overlap stages or hang again. One cached promise makes teardown single-flight.
+      if (stopPromise) return stopPromise;
       stopped = true;
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       const sc = stopCapture; stopCapture = null;
-      if (sc) await sc().catch(() => { /* best-effort — page may be closing */ });
       const sr = stopRecording; stopRecording = null;
-      if (sr) await sr().catch(() => { /* best-effort — flush the final chunk → master assembly */ });
-      await engine.stop().catch(() => { /* best-effort; idempotent across double-stop */ });
+      stopPromise = (async () => {
+        // Stop ingress first. Once capture's Node-side gate closes, recording finalization and
+        // transcript-engine disposal are independent and may consume their budgets in parallel.
+        await runTeardownStage('capture-stop', sc);
+        await Promise.all([
+          runTeardownStage('recording-finalize', sr),
+          runTeardownStage('engine-stop', async () => {
+            // A background retry may already be creating the transcriber. Let that attempt settle,
+            // then stop the resulting engine; otherwise a late success can resurrect it after teardown.
+            const starting = engineStartPromise;
+            if (starting) await starting;
+            await engine.stop();
+          }),
+        ]);
+      })();
+      return stopPromise;
     },
   };
 }
