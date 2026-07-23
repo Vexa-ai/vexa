@@ -76,9 +76,23 @@ const BUFFER_SAMPLES = 4096;
 const REPORT_EVERY = 100;
 
 
+/**
+ * Frame-END time on a monotonic sample clock anchored to epoch ONCE.
+ *
+ * `anchorMs` is epoch-ms of the sample clock's zero (set at the first delivered buffer); a frame's
+ * stamp is the epoch time of its LAST sample: `anchorMs + deliveredSamplesInclusive/SR*1000`, where
+ * `deliveredSamplesInclusive` already counts this frame's samples. Because every stamp derives from
+ * the cumulative sample count and a single epoch anchor, callback jitter — a burst of buffers
+ * delivered back-to-back after a stall — cannot cluster the timestamps: they stay exactly one frame
+ * apart on the audio timeline. This is the capture clock the pipeline's CLOCK CONTRACT requires.
+ */
+export function sampleClockStampMs(anchorMs: number, deliveredSamplesInclusive: number, sr: number): number {
+  return anchorMs + (deliveredSamplesInclusive / sr) * 1000;
+}
+
 export async function createMixedAudioCapture(
   stream: MediaStream,
-  onPcm: (pcm: Float32Array) => void,
+  onPcm: (pcm: Float32Array, tsMs: number) => void,
   opts: MixedAudioOptions = {},
 ): Promise<MixedAudioCapture> {
   const SR = opts.sampleRate ?? 16000;
@@ -93,6 +107,11 @@ export async function createMixedAudioCapture(
   // Samples, not buffer counts: the engine chooses the buffer length, so counting what actually
   // arrived is the only figure that stays true if it ever chooses differently.
   let seen = 0, emitted = 0, deliveredSamples = 0, gatedSamples = 0, ctxStart = -1;
+  // Epoch-ms of the sample clock's zero — set ONCE at the first delivered buffer, then every frame's
+  // stamp is derived from the cumulative sample count off this anchor (see sampleClockStampMs). The
+  // clock advances on EVERY buffer seen (deliveredSamples counts gated buffers too), so a gated
+  // buffer moves time forward without emitting — no frame ever carries an arrival-clustered stamp.
+  let anchorMs = -1;
   const stats = (): MixedAudioStats => {
     const deliveredSec = deliveredSamples / SR;
     const renderedSec = ctxStart < 0 ? 0 : ctx.currentTime - ctxStart;
@@ -108,14 +127,19 @@ export async function createMixedAudioCapture(
     // The context clock at the FIRST buffer is the zero, less that buffer's own span: everything
     // before it is graph startup, not loss.
     if (ctxStart < 0) ctxStart = ctx.currentTime - input.length / SR;
+    // The epoch anchor is the sample clock's zero: this first buffer's samples belong BEFORE now, so
+    // now less that buffer's own span is where the clock began.
+    if (anchorMs < 0) anchorMs = Date.now() - (input.length / SR) * 1000;
     seen++;
     deliveredSamples += input.length;
+    // Frame-END time on the sample clock — advances with the buffer whether or not it is emitted.
+    const tsMs = sampleClockStampMs(anchorMs, deliveredSamples, SR);
     let maxVal = 0;
     for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
     // A NON-POSITIVE threshold disables gating outright, digital silence included. Testing
     // `maxVal > 0` would still drop an all-zero buffer — and an all-zero buffer is precisely what a
     // codec's silence suppression emits, so that is the case a threshold of zero must let through.
-    if (SILENCE <= 0 || maxVal > SILENCE) { emitted++; onPcm(new Float32Array(input)); }   // copy — the buffer is reused
+    if (SILENCE <= 0 || maxVal > SILENCE) { emitted++; onPcm(new Float32Array(input), tsMs); }   // copy — the buffer is reused
     else gatedSamples += input.length;
     if (seen % REPORT_EVERY === 0) {
       const s = stats();

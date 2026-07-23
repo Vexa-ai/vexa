@@ -7,6 +7,6 @@
  * Recording (the meeting mix → recording.v1) is a separate, platform-agnostic
  * concern — see `@vexa/record-chunker` (createRecordingTap), not here.
  */
-export { createMixedAudioCapture } from './mixed-audio.js';
+export { createMixedAudioCapture, sampleClockStampMs } from './mixed-audio.js';
 export type { MixedAudioCapture, MixedAudioOptions, MixedAudioStats } from './mixed-audio.js';
 export { installRemoteAudioHook } from './webrtc-audio-hook.js';
