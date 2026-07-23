@@ -4,8 +4,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/vexa-hot-bot-shutdown-test.XXXXXX")
 LAUNCHER_PID=
+FORWARD_PID=
 
 cleanup() {
+  if [ -n "$FORWARD_PID" ]; then
+    kill -KILL "$FORWARD_PID" 2>/dev/null || true
+  fi
   if [ -n "$LAUNCHER_PID" ]; then
     kill -KILL "$LAUNCHER_PID" 2>/dev/null || true
   fi
@@ -32,18 +36,36 @@ run_signal_case() {
   local script_copy="$TMP_ROOT/hot-bot-$signal.sh"
   local bot_log="$TMP_ROOT/bot-$signal.log"
   local launcher_log="$TMP_ROOT/launcher-$signal.log"
+  local forward_pid_file="$TMP_ROOT/forward-$signal.pid"
   cp "$HERE/hot-bot.sh" "$script_copy"
 
   # Start the launcher as a fresh process-group leader, matching a foreground terminal job.
-  # Sending its group INT/TERM below is the deterministic equivalent of terminal delivery.
+  # It sources the real helpers, starts a forward surrogate through the same isolation seam as
+  # kubectl, then runs the bot surrogate. Group INT/TERM is terminal delivery, deterministically.
   python3 -c '
 import os, signal, sys
 os.setpgrp()
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.signal(signal.SIGTERM, signal.SIG_DFL)
 os.execvp(sys.argv[1], sys.argv[1:])
-' bash "$script_copy" --_run-logged-worker "$bot_log" \
-    node -e '
+' bash -c '
+      source "$1"
+      shift
+      start_isolated_background forward_pid node -e "$1"
+      shift
+      printf "%s\n" "$forward_pid" >"$1"
+      disown "$forward_pid" 2>/dev/null || true
+      shift
+      run_logged_worker "$@"
+    ' _ "$script_copy" '
+      process.on("SIGINT", () => console.log("FORWARD-UNEXPECTED-INT"));
+      process.on("SIGTERM", () => {
+        console.log("FORWARD-CLEANUP");
+        process.exit(0);
+      });
+      console.log("FORWARD-READY " + process.pid);
+      setInterval(() => {}, 1000);
+    ' "$forward_pid_file" "$bot_log" node -e '
       let terms = 0;
       process.on("SIGINT", () => console.log("WORKER-UNEXPECTED-INT"));
       process.on("SIGTERM", () => {
@@ -59,6 +81,8 @@ os.execvp(sys.argv[1], sys.argv[1:])
     ' >"$launcher_log" 2>&1 &
   LAUNCHER_PID=$!
   wait_for_ready "$bot_log"
+  FORWARD_PID=$(cat "$forward_pid_file")
+  kill -0 "$FORWARD_PID" 2>/dev/null || fail "$signal forward surrogate was not alive"
 
   # Mutate the on-disk source while its worker is active. A parsed main() is insulated: the
   # running invocation must drain once, not jump into new bytes or re-enter the launch tail.
@@ -82,6 +106,20 @@ os.execvp(sys.argv[1], sys.argv[1:])
     || fail "$signal returned before final lifecycle output drained"
   ! grep -q 'SOURCE-MUTATION-EXECUTED' "$launcher_log" \
     || fail "$signal execution re-entered mutated source"
+  kill -0 "$FORWARD_PID" 2>/dev/null \
+    || fail "$signal terminal signal killed the isolated forward during bot drain"
+  ! grep -q '^FORWARD-UNEXPECTED-INT$' "$launcher_log" \
+    || fail "$signal leaked terminal INT to the isolated forward"
+
+  # Successful hot-bot forwards are intentionally reusable. The test owns this surrogate and
+  # therefore cleans that exact PID explicitly after proving it outlived the bot launcher.
+  kill -TERM "$FORWARD_PID"
+  for _ in $(seq 1 100); do
+    kill -0 "$FORWARD_PID" 2>/dev/null || break
+    sleep 0.02
+  done
+  ! kill -0 "$FORWARD_PID" 2>/dev/null || fail "$signal forward did not stop on explicit cleanup"
+  FORWARD_PID=
 }
 
 run_signal_case INT
@@ -89,8 +127,8 @@ run_signal_case TERM
 
 NORMAL_LOG="$TMP_ROOT/bot-normal.log"
 set +e
-bash "$HERE/hot-bot.sh" --_run-logged-worker "$NORMAL_LOG" \
-  node -e 'console.log("WORKER-NORMAL-EXIT"); process.exit(7)'
+bash -c 'source "$1"; shift; run_logged_worker "$@"' _ \
+  "$HERE/hot-bot.sh" "$NORMAL_LOG" node -e 'console.log("WORKER-NORMAL-EXIT"); process.exit(7)'
 NORMAL_STATUS=$?
 set -e
 [ "$NORMAL_STATUS" -eq 7 ] || fail "normal worker exit changed: got $NORMAL_STATUS, expected 7"
