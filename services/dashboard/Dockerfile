@@ -1,19 +1,19 @@
 # Build stage
 FROM node:20-alpine AS builder
 
-WORKDIR /app
+WORKDIR /workspace/services/dashboard
 
 # Copy transcript-rendering built package
-COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
-COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+COPY packages/transcript-rendering/package.json /workspace/packages/transcript-rendering/package.json
+COPY packages/transcript-rendering/dist/ /workspace/packages/transcript-rendering/dist/
 
-# Install dependencies (package.json only — no lockfile, to avoid path mismatch after sed)
-COPY services/dashboard/package.json ./
-RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json && \
-    npm install --ignore-scripts
+# Install the exact dependency graph committed with the dashboard. The package
+# is copied to the same relative location expected by the manifests.
+COPY services/dashboard/package.json services/dashboard/package-lock.json ./
+RUN npm ci --ignore-scripts
 # Ensure transcript-rendering is physically copied (not symlinked)
 RUN rm -rf node_modules/@vexaai/transcript-rendering && \
-    cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+    cp -r /workspace/packages/transcript-rendering node_modules/@vexaai/transcript-rendering
 
 # Copy source code
 COPY services/dashboard/src ./src
@@ -51,9 +51,9 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /workspace/services/dashboard/public ./public
+COPY --from=builder --chown=nextjs:nodejs /workspace/services/dashboard/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /workspace/services/dashboard/.next/static ./.next/static
 COPY --chown=nextjs:nodejs services/dashboard/docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
