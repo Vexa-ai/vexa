@@ -49,10 +49,12 @@ ids, set the exact served name.
 ## Example: FunASR or SenseVoice
 
 <Note>
-**Community-contributed and unwitnessed.** The contract above is verified against Vexa's own STT
-client. This example is not: no Vexa maintainer has run Vexa against a FunASR or SenseVoice gateway,
-so the language-quality claim below is the contributor's, not a tested guarantee. Independent
-validation is tracked in [#863](https://github.com/Vexa-ai/vexa/issues/863) — reports welcome.
+**Client path validated; complete meeting deployment still needs a witness.** Vexa's actual
+`TranscriptionClient` has been run against the FunASR 1.3.26 OpenAI-compatible server with
+SenseVoice on CPU. Chinese, English, Cantonese, Japanese, Korean, and concatenated Chinese-English
+samples all produced non-empty transcripts, verbose segments, and duration metadata. A bot-in-meeting
+run and the `platform_settings` override path remain unwitnessed and are tracked in
+[#863](https://github.com/Vexa-ai/vexa/issues/863).
 </Note>
 
 Self-hosted FunASR/SenseVoice gateways are reported to be a good fit when you need local Chinese,
@@ -64,7 +66,7 @@ Run or deploy a gateway that accepts:
 curl -sS http://<stt-host>:8000/v1/audio/transcriptions \
   -H "Authorization: Bearer <token-if-required>" \
   -F file=@sample.wav \
-  -F model=FunAudioLLM/SenseVoiceSmall \
+  -F model=sensevoice \
   -F language=zh
 ```
 
@@ -73,11 +75,20 @@ Then point Vexa at the same host:
 ```bash
 TRANSCRIPTION_SERVICE_URL=http://<stt-host>:8000
 TRANSCRIPTION_SERVICE_TOKEN=<token-if-required>
-TRANSCRIPTION_MODEL=FunAudioLLM/SenseVoiceSmall
+TRANSCRIPTION_MODEL=sensevoice
 ```
 
-For Fun-ASR-Nano or other FunASR checkpoints, set `TRANSCRIPTION_MODEL` to the model id your gateway
-expects, for example `FunAudioLLM/Fun-ASR-Nano-2512`.
+The official `funasr-server --model sensevoice` exposes `sensevoice` as its served model id. A Hub
+checkpoint path such as `FunAudioLLM/SenseVoiceSmall` is not automatically an API model id; verify
+the names exposed by your gateway's `GET /v1/models` route. The official Fun-ASR-Nano server uses
+`fun-asr-nano`. Other gateways may expose different names.
+
+<Warning>
+FunASR 1.3.26 transcribes all five languages correctly, but when `language` is omitted it reports
+`language: "zh"` for every verbose response. Pin the meeting language when accurate metadata matters.
+The upstream fix is tracked in
+[modelscope/FunASR#3400](https://github.com/modelscope/FunASR/pull/3400).
+</Warning>
 
 <Note>
 Vexa treats the STT service as a network dependency. Put the ASR runtime on a GPU box if needed, and
