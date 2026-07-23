@@ -340,21 +340,35 @@ export async function startCaptureBridge(
     return out;
   };
 
+  // A capture frame carries its OWN capture-time stamp (mixed-capture-core's sample clock; the gmeet
+  // producer's page-side epoch). There is no fallback: a missing/non-finite tsMs on a deterministic
+  // data path is a systematic producer fault, not a flaky isolated one, and substituting a plausible
+  // Date.now() here is exactly what mislabelled pyannote boundaries by ~9 s for six releases. So a
+  // frame without a capture stamp is DROPPED and the fault is surfaced loudly + counted (P18) — the
+  // bot must be SEEN failing, never limp along stamping arrival time onto real audio.
+  let captureTsFaults = 0;
+  const captureTsFault = (where: string): void => {
+    captureTsFaults++;
+    if (captureTsFaults === 1 || captureTsFaults % 100 === 0) {
+      console.error(`[capture] FAULT frame without capture ts — dropped (${captureTsFaults}) [${where}]`);
+    }
+  };
+
   const onPerSpeakerAudio = (speakerIndex: number, samples: number[] | string, tsMs?: number): void => {
+    if (typeof tsMs !== 'number' || !Number.isFinite(tsMs)) { captureTsFault(mixed ? 'mixed' : 'gmeet'); return; }
     const pcm = decodePcm(samples);
-    const ts = tsMs ?? Date.now();
     observeRemoteAudio(pcm);
-    tee(speakerIndex, pcm, ts);                                 // O-TEL-1: tap BEFORE the pipeline
-    if (mixed) pipeline.feedMixedAudio(pcm, ts);
-    else pipeline.feedAudio(speakerIndex, undefined, pcm, ts); // glow name is bound page-side in the v1 producer; channel index here
+    tee(speakerIndex, pcm, tsMs);                               // O-TEL-1: tap BEFORE the pipeline
+    if (mixed) pipeline.feedMixedAudio(pcm, tsMs);
+    else pipeline.feedAudio(speakerIndex, undefined, pcm, tsMs); // glow name is bound page-side in the v1 producer; channel index here
   };
   // gmeet: the v1 producer stamps the glow name page-side; this named variant carries it through.
   const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[] | string, tsMs?: number): void => {
+    if (typeof tsMs !== 'number' || !Number.isFinite(tsMs)) { captureTsFault('gmeet-named'); return; }
     const pcm = decodePcm(samples);
-    const ts = tsMs ?? Date.now();
     observeRemoteAudio(pcm);
-    tee(channel, pcm, ts, glowName);                            // O-TEL-1: tap BEFORE the pipeline
-    pipeline.feedAudio(channel, glowName, pcm, ts);
+    tee(channel, pcm, tsMs, glowName);                          // O-TEL-1: tap BEFORE the pipeline
+    pipeline.feedAudio(channel, glowName, pcm, tsMs);
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
   // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
@@ -439,8 +453,11 @@ export async function startCaptureBridge(
           // The gmeet lane has always logged its seen/emitted counters; this lane never did.
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(
             w.__vexaMixDest.stream,
-            // base64, not Array.from: a decimal number[] is 5x the raw bytes over this hop.
-            (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, w.__vexaB64(pcm)),
+            // base64, not Array.from: a decimal number[] is 5x the raw bytes over this hop. tsMs is
+            // the frame's CAPTURE time on the sample clock (mixed-capture-core) — it crosses with the
+            // audio so the pipeline stamps the domain the CLOCK CONTRACT requires, never the hop's
+            // arrival time.
+            (pcm: Float32Array, tsMs: number) => w.__vexaPerSpeakerAudioData(0, w.__vexaB64(pcm), tsMs),
             { log: (m: string) => w.logBot?.('[mixed] ' + m) },
           ))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })

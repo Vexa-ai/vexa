@@ -74,9 +74,11 @@ async function main(): Promise<void> {
     // The REAL bridge over a stub pipeline capturing what crosses the boundary.
     const hints: { name: string; tMs: number; isEnd?: boolean }[] = [];
     const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
+    const mixedFrames: { len: number; tsMs: number }[] = [];
     const pipeline: BotPipeline = {
       async start() { /* stub */ }, async stop() { /* stub */ },
-      feedAudio() { /* stub */ }, feedMixedAudio() { /* stub */ },
+      feedAudio() { /* stub */ },
+      feedMixedAudio(pcm, tsMs) { mixedFrames.push({ len: pcm.length, tsMs }); },
       recordHint(name, tMs, isEnd) { hintCounters.received++; hints.push({ name, tMs, isEnd }); },
       hintCounters,
     };
@@ -116,6 +118,29 @@ async function main(): Promise<void> {
     check('bot self-name and the signal-less 1:1 tile emit NO hints',
       !hints.some((h) => h.name.includes('Vexa') || h.name === 'Bob OneToOne'), JSON.stringify(hints));
     check('pipeline-received counter moved with the arrivals', hintCounters.received === hints.length && hintCounters.received > 0, JSON.stringify(hintCounters));
+
+    // ── 4) the CAPTURE-TS boundary: the frame's own capture time crosses, or the frame is dropped ──
+    // The mixed lane's audio front door is __vexaPerSpeakerAudioData(0, b64, tsMs). A frame WITH a
+    // capture stamp must reach feedMixedAudio carrying that EXACT ts (no arrival re-stamp); a frame
+    // WITHOUT one must be dropped, surfaced as a loud fault, and never reach the pipeline.
+    const capFaults: string[] = [];
+    const realErr = console.error;
+    console.error = (...a: unknown[]) => { const m = a.join(' '); if (m.includes('[capture] FAULT')) capFaults.push(m); realErr(...a); };
+    // A tiny 4-sample PCM as base64 (16 bytes) — content is irrelevant, only the ts path is under test.
+    const b64 = Buffer.from(new Float32Array([0.1, 0.2, 0.3, 0.4]).buffer).toString('base64');
+    const CAPTURE_TS = 1_700_000_000_123;   // a fixed epoch ms, unmistakably not Date.now()
+    const beforeFrames = mixedFrames.length;
+    await page.evaluate(([s, ts]) => (globalThis as any).__vexaPerSpeakerAudioData(0, s, ts), [b64, CAPTURE_TS] as [string, number]);
+    await page.evaluate((s) => (globalThis as any).__vexaPerSpeakerAudioData(0, s), b64);   // no tsMs → dropped
+    await sleep(100);
+    console.error = realErr;
+    const stamped = mixedFrames.slice(beforeFrames);
+    check('a mixed frame WITH a capture ts reaches feedMixedAudio with that exact ts',
+      stamped.length === 1 && stamped[0].tsMs === CAPTURE_TS && stamped[0].len === 4, JSON.stringify(stamped));
+    check('a mixed frame WITHOUT a capture ts is dropped — nothing extra reached the pipeline',
+      mixedFrames.length === beforeFrames + 1, JSON.stringify(mixedFrames.slice(beforeFrames)));
+    check('the dropped frame surfaced a loud capture fault (counter incremented)',
+      capFaults.length === 1 && capFaults[0].includes('dropped (1)'), JSON.stringify(capFaults));
   } finally {
     await context.close().catch(() => { /* best-effort */ });
     rmSync(dataDir, { recursive: true, force: true });
