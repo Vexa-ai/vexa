@@ -103,8 +103,10 @@ export const vexaAPI = {
     nativeId: string,
     meetingId?: string
   ): Promise<{ meeting: Meeting; segments: TranscriptSegment[]; recordings: RecordingData[] }> {
-    const params = meetingId ? `?meeting_id=${meetingId}` : "";
-    const response = await fetch(withBasePath(`/api/vexa/transcripts/${platform}/${nativeId}${params}`));
+    const transcriptPath = meetingId
+      ? `/api/vexa/transcripts/by-id/${encodeURIComponent(meetingId)}`
+      : `/api/vexa/transcripts/${platform}/${nativeId}`;
+    const response = await fetch(withBasePath(transcriptPath));
     interface RawSegment {
       start: number;
       end: number;
