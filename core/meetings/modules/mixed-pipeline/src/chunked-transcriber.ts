@@ -86,6 +86,10 @@ const TURN_MAX_MS = 28_000;
  *  phones/words survive, while clipping published timestamps to the committed
  *  speech boundary. Speaker→speaker cuts get no pad: attribution wins there. */
 const SILENCE_CLOSE_CONTEXT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SILENCE_CLOSE_CONTEXT_MS) || 350);
+/** A speech-end close immediately after another accepted cut is boundary churn,
+ * not enough evidence to end the new turn. Real speaker changes and overlap
+ * edges remain hard cuts regardless of their spacing. */
+const EARLY_SILENCE_CLOSE_MS = 2000;
 /** TTL idle-finalize: if the open turn has unconfirmed pending and no VOICED update
  *  has arrived for this long (speaker paused / segmenter didn't fire a close on
  *  continuous live-mixed audio), commit the pending now instead of waiting. Pairs
@@ -276,6 +280,11 @@ export class ChunkedTranscriber {
   private commitCounter = 0;
   private turnCounter = 0;
   private disposed = false;
+  /** Boundary time of the prior cut accepted into the turn lifecycle. */
+  private lastAcceptedBoundaryMs = -Infinity;
+  /** An early close leaves the turn open. A prompt complementary onset is
+   *  therefore a resume, not a second open/cut of that same turn. */
+  private ignoredSilenceCloseMs: number | null = null;
 
   /** The open turn. */
   private turn: Turn | null = null;
@@ -515,17 +524,38 @@ export class ChunkedTranscriber {
    *  state stays single-threaded under the pump lock. */
   private handleBoundary(ev: BoundaryEvent): void {
     if (this.disposed) return;
+    const sincePriorCutMs = ev.tMs - this.lastAcceptedBoundaryMs;
+    if (ev.kind === 'speaker→silence' && sincePriorCutMs < EARLY_SILENCE_CLOSE_MS) {
+      this.ignoredSilenceCloseMs = ev.tMs;
+      this.log(`[boundary] ignore early speaker→silence at ${Math.round(ev.tMs)}ms `
+        + `(${Math.round(sincePriorCutMs)}ms after prior cut)`);
+      return;
+    }
     switch (ev.kind) {
-      case 'silence→speaker':
+      case 'silence→speaker': {
+        const resumeGapMs = this.ignoredSilenceCloseMs === null
+          ? Infinity
+          : ev.tMs - this.ignoredSilenceCloseMs;
+        this.ignoredSilenceCloseMs = null;
+        this.lastAcceptedBoundaryMs = Math.max(this.lastAcceptedBoundaryMs, ev.tMs);
+        if (resumeGapMs >= 0 && resumeGapMs < EARLY_SILENCE_CLOSE_MS) {
+          this.log(`[boundary] keep turn open across ${Math.round(resumeGapMs)}ms silence wobble`);
+          break;
+        }
         this.openTurn(ev.tMs);
         break;
+      }
       case 'speaker→speaker':
       case 'overlap-onset':
       case 'overlap-offset':
+        this.ignoredSilenceCloseMs = null;
+        this.lastAcceptedBoundaryMs = Math.max(this.lastAcceptedBoundaryMs, ev.tMs);
         this.closeTurn(ev.tMs);   // hard-split at the change / overlap edge
         this.openTurn(ev.tMs);
         break;
       case 'speaker→silence':
+        this.ignoredSilenceCloseMs = null;
+        this.lastAcceptedBoundaryMs = Math.max(this.lastAcceptedBoundaryMs, ev.tMs);
         this.closeTurn(ev.tMs, SILENCE_CLOSE_CONTEXT_MS);
         break;
     }
@@ -657,6 +687,11 @@ export class ChunkedTranscriber {
           } catch (e: any) { this.log(`[ChunkedTranscriber] final coverage turn failed: ${e?.message}`); }
         }
         if (last) {
+          // Session end is itself the final boundary. An earlier model close may
+          // have been ignored, so carry the open turn through the last captured
+          // sample before the closing submission.
+          last.t1 = Math.max(last.t1, this.latestAudioMs);
+          this.lastAudioEndMs = Math.max(this.lastAudioEndMs, last.t1);
           this.turn = null;
           await this.submitTurn(last, true).catch((e: any) =>
             this.log(`[ChunkedTranscriber] turn close failed: ${e?.message}`));
