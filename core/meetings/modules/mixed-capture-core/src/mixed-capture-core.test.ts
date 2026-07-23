@@ -127,6 +127,43 @@ const fire = (samples: Float32Array) => {
   cap.stop();
 }
 
+// ── capture-time stamp: the SAMPLE clock, not the arrival clock ───────────────
+// Every emitted frame carries its own capture time, derived from the cumulative sample count off a
+// single epoch anchor. This is the CLOCK CONTRACT the pipeline requires: a burst of buffers handed
+// over back-to-back after a stall must still be stamped one frame apart on the audio timeline, never
+// clustered at their arrival instant (the defect that stamped pyannote boundaries ~9 s late).
+{
+  const SR = 16000, BUF = 4096, FRAME_MS = (BUF / SR) * 1000;   // 256 ms
+  ctxClock = 0;
+  const stamps: number[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (_pcm, tsMs) => stamps.push(tsMs),
+    { sampleRate: SR, silenceThreshold: 0, replay: false });
+  // Fire four buffers with NO delay between them — arrival-clustered. The sample clock must ignore
+  // that and space the stamps exactly one frame apart.
+  for (let i = 0; i < 4; i++) fire(new Float32Array(BUF).fill(0.5));
+  check('burst-delivered frames get a stamp each', stamps.length === 4);
+  const d1 = stamps[1] - stamps[0], d2 = stamps[2] - stamps[1], d3 = stamps[3] - stamps[2];
+  check('consecutive stamps are exactly one frame (256 ms) apart, not arrival-clustered',
+    Math.abs(d1 - FRAME_MS) < 1e-6 && Math.abs(d2 - FRAME_MS) < 1e-6 && Math.abs(d3 - FRAME_MS) < 1e-6);
+  cap.stop();
+}
+{
+  // A GATED buffer emits nothing but must still advance the clock — otherwise the frame after a
+  // silence would be stamped as if the silence never happened, collapsing the timeline.
+  const SR = 16000, BUF = 4096, FRAME_MS = (BUF / SR) * 1000;
+  ctxClock = 0;
+  const stamps: number[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (_pcm, tsMs) => stamps.push(tsMs),
+    { sampleRate: SR, silenceThreshold: 0.01, replay: false });
+  fire(new Float32Array(BUF).fill(0.5));    // emitted
+  fire(new Float32Array(BUF).fill(0.001));  // gated — no emit, but time advances
+  fire(new Float32Array(BUF).fill(0.5));    // emitted
+  check('the gated buffer emits nothing (two stamps for three buffers)', stamps.length === 2);
+  check('the gated buffer advanced the clock — the two emitted stamps are two frames apart',
+    Math.abs((stamps[1] - stamps[0]) - 2 * FRAME_MS) < 1e-6);
+  cap.stop();
+}
+
 // ── installRemoteAudioHook contract: no RTCPeerConnection → no-op false ─────────
 {
   g.window = {};
