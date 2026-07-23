@@ -90,29 +90,33 @@ RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
 
 # ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
 #    that service's Dockerfile (uv sync --frozen + the production-only ASGI/DB extras). ────────────
+#    `--python 3.12` pins the interpreter to match every compose image's `FROM python:3.12-slim`.
+#    The jammy base ships only system python3.10 (< requires-python >=3.11), so an unpinned
+#    `uv venv` would auto-download the newest managed CPython (3.14) — whose stack fails at boot
+#    (SQLAlchemy's psycopg dialect import). Pinning keeps Lite on the same interpreter as compose/helm.
 # admin-api
 COPY core/identity/services/admin-api/pyproject.toml core/identity/services/admin-api/uv.lock /tmp/admin/
-RUN cd /tmp/admin && uv venv /opt/venvs/admin \
+RUN cd /tmp/admin && uv venv --python 3.12 /opt/venvs/admin \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project \
  && uv pip install --python /opt/venvs/admin/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0"
 # runtime
 COPY core/runtime/pyproject.toml core/runtime/uv.lock /tmp/runtime/
-RUN cd /tmp/runtime && uv venv /opt/venvs/runtime \
+RUN cd /tmp/runtime && uv venv --python 3.12 /opt/venvs/runtime \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project --no-dev \
  && uv pip install --python /opt/venvs/runtime/bin/python "uvicorn[standard]==0.34.0"
 # meeting-api
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock /tmp/meeting/
-RUN cd /tmp/meeting && uv venv /opt/venvs/meeting \
+RUN cd /tmp/meeting && uv venv --python 3.12 /opt/venvs/meeting \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting uv sync --frozen --no-install-project \
  && uv pip install --python /opt/venvs/meeting/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0" "boto3==1.35.0"
 # gateway
 COPY core/gateway/services/gateway/pyproject.toml core/gateway/services/gateway/uv.lock /tmp/gateway/
-RUN cd /tmp/gateway && uv venv /opt/venvs/gateway \
+RUN cd /tmp/gateway && uv venv --python 3.12 /opt/venvs/gateway \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway uv sync --frozen --no-install-project \
  && uv pip install --python /opt/venvs/gateway/bin/python "uvicorn[standard]==0.34.0" "redis==5.2.1"
 # agent (control-plane group ⇒ fastapi/uvicorn; base deps cover the worker too)
 COPY core/agent/pyproject.toml core/agent/uv.lock /tmp/agent/
-RUN cd /tmp/agent && uv venv /opt/venvs/agent \
+RUN cd /tmp/agent && uv venv --python 3.12 /opt/venvs/agent \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/agent uv sync --frozen --no-install-project --no-default-groups --group control-plane
 RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent
 
