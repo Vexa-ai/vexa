@@ -20,6 +20,7 @@ set -uo pipefail
 
 PLATFORM="${1:?platform (teams|google_meet|zoom|jitsi)}"
 MEETING_URL="${2:?meeting url}"
+BOT_NAME="${HOT_BOT_NAME:-Vexa HotLocal}"
 NS=vexa-staging
 API="${VEXA_API:-https://api.staging.vexa.ai}"
 DASH="${VEXA_DASHBOARD:-https://dashboard.staging.vexa.ai}"
@@ -68,7 +69,7 @@ PY
 ) || { echo "✗ $NATIVE" >&2; exit 1; }
 SPAWN=$(curl -s --max-time 40 -X POST "$API/bots" -H "X-API-Key: $(cat "$KEYFILE")" \
   -H 'Content-Type: application/json' \
-  -d "{\"platform\":\"$PLATFORM\",\"native_meeting_id\":\"$NATIVE\",\"meeting_url\":\"$MEETING_URL\",\"bot_name\":\"Vexa HotLocal\"}")
+  -d "{\"platform\":\"$PLATFORM\",\"native_meeting_id\":\"$NATIVE\",\"meeting_url\":\"$MEETING_URL\",\"bot_name\":\"$BOT_NAME\"}")
 MEETING_ID=$(printf '%s' "$SPAWN" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')
 POD=$(printf '%s' "$SPAWN" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("bot_container_id",""))')
 [ -n "$MEETING_ID" ] && [ -n "$POD" ] || { echo "✗ spawn failed: $SPAWN" >&2; exit 1; }
@@ -91,7 +92,8 @@ import sys, json
 inv = json.load(sys.stdin)
 sub = {'vexa-platform-vexa-redis:6379': '127.0.0.1:$P_REDIS',
        'vexa-platform-transcription-gateway:8084': '127.0.0.1:$P_STT',
-       'vexa-platform-vexa-meeting-api:8080': '127.0.0.1:$P_MAPI'}
+       'vexa-platform-vexa-meeting-api:8080': '127.0.0.1:$P_MAPI',
+       'meeting-api:8080': '127.0.0.1:$P_MAPI'}
 def fix(v):
     if isinstance(v, str):
         for a, b in sub.items(): v = v.replace(a, b).replace(a.split(':')[0] + '.$NS.svc.cluster.local:' + a.split(':')[1], b)
