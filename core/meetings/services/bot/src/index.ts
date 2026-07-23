@@ -23,7 +23,15 @@
  * lazy redis connect.
  */
 import { createClient } from 'redis';
-import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
+import {
+  loadInvocation,
+  InvocationError,
+  EvalBrowserRuntimeConfigError,
+  evalBrowserRuntimeConfigFromEnv,
+  speakerStreamConfigFromEnv,
+  type EvalBrowserRuntimeConfig,
+  type Invocation,
+} from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
@@ -147,10 +155,12 @@ async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number> {
   // ── validate config (P14: fail fast) ──
   let inv: Invocation;
+  let browserRuntime: EvalBrowserRuntimeConfig;
   try {
     inv = loadInvocation(env);
+    browserRuntime = evalBrowserRuntimeConfigFromEnv(env);
   } catch (e) {
-    if (e instanceof InvocationError) {
+    if (e instanceof InvocationError || e instanceof EvalBrowserRuntimeConfigError) {
       // No valid connection_id to attribute the failure to → emit a best-effort terminal
       // event and exit non-zero. We have no validated callbackUrl yet, so this goes to the
       // console sink. (The live HTTP sink would POST validation_error once a URL is known.)
@@ -208,7 +218,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
-    session = await launchBrowser(inv);                                   // L4 (O6/VM)
+    session = await launchBrowser(inv, browserRuntime);                    // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
     botPipeline = createBotPipeline(inv, transcript, {
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
