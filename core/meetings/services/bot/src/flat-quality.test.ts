@@ -140,6 +140,7 @@ async function main(): Promise<void> {
   const client = new TranscriptionClient({ serviceUrl: TX_URL, apiToken: process.env.TX_TOKEN, model: TX_MODEL, sampleRate: SR });
 
   let sttCalls = 0, sttFails = 0, sttWords = 0;
+  let fatalSttError: Error | null = null;
   /** Every submission's span, in seconds of audio handed to STT — the knob under test. */
   const submitSpans: number[] = [];
   const submitLog: Array<{ n: number; sec: number; text: string }> = [];
@@ -189,7 +190,13 @@ async function main(): Promise<void> {
         sttWords += wordsOf(r.text).length;
         submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: (r.text || '').trim().slice(0, 120) });
         return r;
-      } catch (e) { sttFails++; sttRttMs.push(Date.now() - sent); submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: '<FAILED>' }); throw e; }
+      } catch (e) {
+        sttFails++;
+        fatalSttError ??= e as Error;
+        sttRttMs.push(Date.now() - sent);
+        submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: '<FAILED>' });
+        throw e;
+      }
     },
     // Names are ignored on purpose: a flat mix has no speaker dimension. Both callbacks write the
     // same rows a reader ends up with — a draft and its confirmation share an id and self-replace.
@@ -221,6 +228,13 @@ async function main(): Promise<void> {
   const t0Wall = Date.now();
   const base = t0Wall;
   for (let off = 0; off < audio.length; off += FRAME_SAMPLES) {
+    // ChunkedTranscriber deliberately survives an individual backend error in production. This
+    // instrument cannot: once the real STT leg is red, every later score is invalid and waiting
+    // through the rest of a long fixture only produces a convincing green-on-empty report.
+    if (fatalSttError) {
+      await tc.dispose();
+      throw new Error(`flat quality invalid: STT failed after ${sttCalls} call(s) — ${fatalSttError.message}`);
+    }
     const frame = audio.subarray(off, Math.min(audio.length, off + FRAME_SAMPLES));
     // A capture frame is delivered when its audio has been CAPTURED — at the END of the span it
     // covers. Pacing to its start hands the lane audio that has not been spoken yet.
@@ -303,6 +317,12 @@ async function main(): Promise<void> {
     budgetAgreePassesSec: Number(agreeMed.toFixed(2)),     // first draft → confirm (extra passes)
   };
 
+  const invalidReasons = [
+    sttFails > 0 ? `${sttFails}/${sttCalls} STT calls failed` : '',
+    sttCalls === 0 ? 'the pipeline made no STT calls' : '',
+    goldenWords.length > 0 && hypWords.length === 0 ? 'the golden has speech but the hypothesis is empty' : '',
+  ].filter(Boolean);
+
   console.log(`\n── SCORECARD ────────────────────────────────────────────────`);
   console.log(`  WER                      ${(metrics.wer * 100).toFixed(1)}%`);
   console.log(`  CER                      ${(metrics.cer * 100).toFixed(1)}%`);
@@ -341,6 +361,10 @@ async function main(): Promise<void> {
 
   console.log('\n--- transcript ---');
   for (const r of rows) console.log(`  [${((r.startMs - base) / 1000).toFixed(2)}-${((r.endMs - base) / 1000).toFixed(2)}] ${r.completed ? ' ' : '~'} ${r.text}`);
+  if (invalidReasons.length) {
+    console.error(`\n❌ flat quality INVALID — ${invalidReasons.join('; ')}`);
+    process.exitCode = 1;
+  }
 }
 
 void main();
