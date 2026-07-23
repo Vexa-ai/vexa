@@ -97,7 +97,14 @@ export interface RunOptions {
   /** A hard cap on the active phase (ms). Resolves the run with max_bot_time_exceeded.
    *  Defaults to off (0) — the live composition root derives it from automaticLeave. */
   maxActiveMs?: number;
+  /** Maximum time the active-phase pipeline may hold terminal lifecycle truth during teardown.
+   *  The live pipeline has tighter per-stage bounds; this outer guard also covers injected and
+   *  future Pipeline implementations that never resolve stop(). */
+  pipelineStopTimeoutMs?: number;
 }
+
+export const DEFAULT_PIPELINE_STOP_TIMEOUT_MS = 9_000;
+export const PLATFORM_LEAVE_TIMEOUT_MS = 8_000;
 
 /** Required ports — missing any of these used to surface as a raw TypeError deep in `run()`. */
 const REQUIRED_PORTS = ['lifecycle', 'join', 'pipeline', 'acts', 'aloneness'] as const;
@@ -107,6 +114,36 @@ function assertRequiredPorts(deps: OrchestratorDeps): void {
     if (deps[name] == null) {
       throw new Error(`orchestrator: required port '${name}' is missing`);
     }
+  }
+}
+
+/** Best-effort does not mean unbounded. A teardown promise may keep running after the deadline,
+ *  but it has rejection handlers attached and can no longer withhold the typed terminal event. */
+async function stopPipelineWithin(pipeline: Pipeline, timeoutMs: number): Promise<void> {
+  const boundedMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_PIPELINE_STOP_TIMEOUT_MS;
+  console.error(`[bot] orchestrator: pipeline-stop started (deadline=${boundedMs}ms)`);
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const settled = Promise.resolve()
+    .then(() => pipeline.stop())
+    .then(
+      () => ({ kind: 'finished' as const }),
+      (error: unknown) => ({ kind: 'fault' as const, error }),
+    );
+  const deadline = new Promise<{ kind: 'timeout' }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'timeout' }), boundedMs);
+  });
+  const outcome = await Promise.race([settled, deadline]);
+  if (timer) clearTimeout(timer);
+
+  if (outcome.kind === 'finished') {
+    console.error('[bot] orchestrator: pipeline-stop finished');
+  } else if (outcome.kind === 'fault') {
+    console.error(`[bot] orchestrator: pipeline-stop fault (continuing terminal path): ${String(outcome.error)}`);
+  } else {
+    console.error(`[bot] orchestrator: pipeline-stop timed out after ${boundedMs}ms (continuing terminal path)`);
   }
 }
 
@@ -299,14 +336,18 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     unsubscribe();
     stopAloneness();
     stopRemoval();
-    await deps.pipeline.stop().catch(() => { /* best-effort */ });
-    deps.recording?.close(recordingKey);
+    await stopPipelineWithin(deps.pipeline, opts.pipelineStopTimeoutMs ?? DEFAULT_PIPELINE_STOP_TIMEOUT_MS);
+    try {
+      deps.recording?.close(recordingKey);
+    } catch (e) {
+      console.error(`[bot] orchestrator: recording-close fault (continuing terminal path): ${String(e)}`);
+    }
     // Bound the leave: a hung platform leave (e.g. a slow Zoom web-client teardown) must not stall
     // the disposable worker past its SIGKILL grace — that would cut off the recording-master
     // assembly + the `completed` callback flush. Best-effort, raced against an 8s cap.
     await Promise.race([
       deps.join.leave(reason).catch(() => { /* best-effort */ }),
-      new Promise<void>((resolve) => setTimeout(resolve, 8000)),
+      new Promise<void>((resolve) => setTimeout(resolve, PLATFORM_LEAVE_TIMEOUT_MS)),
     ]);
 
     console.error(`[bot] orchestrator: emitting completed (reason=${reason}, from=${cur})`);

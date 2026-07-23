@@ -97,24 +97,71 @@ async function main(): Promise<void> {
     check('fallback: final is isFinal=true, 0 bytes, seq after the last part (2)',
       !!fin && fin.isFinal && fin.len === 0 && fin.seq === 2, JSON.stringify(fin));
     sink.close('google_meet/m4');   // idempotent
+    sink.chunk('google_meet/m4', 3, true, 'webm', new Uint8Array(0)); // late page callback
     await flush();
-    check('fallback: fires at most once (second close is a no-op)',
-      seen.filter((s) => s.isFinal).length === 1, String(seen.filter((s) => s.isFinal).length));
+    check('fallback: fires at most once (second close and late page final are no-ops)',
+      seen.filter((s) => s.isFinal).length === 1 && seen.length === 3, JSON.stringify(seen));
   }
 
-  // ── 5) close() AFTER a real final → no extra fallback (no double final) ──────────────────────
+  // ── 5) async data encode may finish after final → retain the late lower-seq data chunk ───────
   {
     const { seen, upload } = fakeUploader();
     const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
     sink.chunk('google_meet/m5', 0, false, 'webm', new Uint8Array([1]));
-    sink.chunk('google_meet/m5', 1, true, 'webm', new Uint8Array(0));
-    sink.close('google_meet/m5');
+    sink.chunk('google_meet/m5', 2, true, 'webm', new Uint8Array(0));
+    sink.chunk('google_meet/m5', 1, false, 'webm', new Uint8Array([2, 3])); // dataavailable encode completed late
+    sink.chunk('google_meet/m5', 3, true, 'webm', new Uint8Array(0));       // duplicate final stays suppressed
+    await flush();
+    check('final-overtake: legitimate late data survives while duplicate final is suppressed',
+      seen.map((s) => `${s.seq}:${s.isFinal ? 'final' : 'data'}`).join(',') === '0:data,2:final,1:data',
+      JSON.stringify(seen));
+  }
+
+  // ── 6) close() AFTER a real final → no extra fallback (no double final) ──────────────────────
+  {
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    sink.chunk('google_meet/m6', 0, false, 'webm', new Uint8Array([1]));
+    sink.chunk('google_meet/m6', 1, true, 'webm', new Uint8Array(0));
+    sink.close('google_meet/m6');
     await flush();
     check('no-double-final: a real final was sent → close adds nothing',
       seen.filter((s) => s.isFinal).length === 1 && seen.length === 2, JSON.stringify(seen));
   }
 
-  // ── 6) close() on a never-fed session is a no-op (no phantom recording) ──────────────────────
+  // ── 7) drain() waits for the serialized upload tail ───────────────────────────────────────────
+  {
+    let releaseUpload: () => void = () => {};
+    const uploadTail = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: async () => uploadTail });
+    sink.chunk('google_meet/m7', 0, false, 'webm', new Uint8Array([1]));
+    let drained = false;
+    const drainP = sink.drain().then(() => { drained = true; });
+    await flush();
+    check('drain: remains pending while an accepted upload is pending', !drained);
+    releaseUpload();
+    await drainP;
+    check('drain: resolves after the upload tail settles', drained);
+
+    let releaseFinal: () => void = () => {};
+    const finalTail = new Promise<void>((resolve) => { releaseFinal = resolve; });
+    const fallback = createBotRecordingSink({
+      inv: inv(),
+      uploadChunk: async (_seq, isFinal) => { if (isFinal) await finalTail; },
+    });
+    fallback.chunk('google_meet/m7-fallback', 0, false, 'webm', new Uint8Array([1]));
+    await fallback.drain();
+    fallback.close('google_meet/m7-fallback');
+    let fallbackDrained = false;
+    const fallbackDrainP = fallback.drain().then(() => { fallbackDrained = true; });
+    await flush();
+    check('drain: fallback final remains part of the upload tail', !fallbackDrained);
+    releaseFinal();
+    await fallbackDrainP;
+    check('drain: resolves after the fallback final upload settles', fallbackDrained);
+  }
+
+  // ── 8) close() on a never-fed session is a no-op (no phantom recording) ──────────────────────
   {
     const { seen, upload } = fakeUploader();
     const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
@@ -123,7 +170,7 @@ async function main(): Promise<void> {
     check('empty session: close is a no-op (no upload)', seen.length === 0, String(seen.length));
   }
 
-  // ── 7) the DEFAULT uploader on the real RecordingService HTTP wire: session_uid == connectionId ──
+  // ── 9) the DEFAULT uploader on the real RecordingService HTTP wire: session_uid == connectionId ──
   {
     interface Wire { session_uid?: string; chunk_seq?: number; is_final?: boolean; format?: string; size?: number }
     const wire: Wire[] = [];

@@ -103,7 +103,6 @@ async function main(): Promise<void> {
     await sleep(900);   // 200ms hysteresis + 300ms debounce + margin
     await page.evaluate(`document.getElementById('alice-outline').classList.remove('vdi-frame-occlusion')`);
     await sleep(900);
-    await stop();
 
     // ── 3) the assertions: hints crossed with name, epoch clock, order ──
     check('page-side watcher started (hop 1 visible in page logs)', pageLogs.some((l) => l.includes('[TeamsSpeakers]')), JSON.stringify(pageLogs.slice(0, 3)));
@@ -141,6 +140,52 @@ async function main(): Promise<void> {
       mixedFrames.length === beforeFrames + 1, JSON.stringify(mixedFrames.slice(beforeFrames)));
     check('the dropped frame surfaced a loud capture fault (counter incremented)',
       capFaults.length === 1 && capFaults[0].includes('dropped (1)'), JSON.stringify(capFaults));
+
+    // #934: stop closes Node ingress synchronously. Exposed callbacks may still exist while the
+    // page-side stop is unwinding, but they cannot feed a disposed engine or advance hints.
+    await stop();
+    const framesAfterStop = mixedFrames.length;
+    const hintsAfterStop = hints.length;
+    await page.evaluate(([s, ts]) => (globalThis as any).__vexaPerSpeakerAudioData(0, s, ts), [b64, CAPTURE_TS + 1] as [string, number]);
+    await page.evaluate(() => (globalThis as any).__vexaSpeakerHint('Late Speaker', Date.now(), false));
+    await sleep(50);
+    check('#934 teardown: late page audio is refused after the ingress gate closes',
+      mixedFrames.length === framesAfterStop, JSON.stringify(mixedFrames.slice(framesAfterStop)));
+    check('#934 teardown: late page speaker hints are refused after the ingress gate closes',
+      hints.length === hintsAfterStop && !hints.some((h) => h.name === 'Late Speaker'), JSON.stringify(hints.slice(hintsAfterStop)));
+
+    // A mixed capture factory may still be resolving when teardown starts. The page-side stop flag
+    // must prevent that late object from starting after capture-stop has already finished.
+    const racePage = await context.newPage();
+    await racePage.setContent(FIXTURE);
+    await racePage.addScriptTag({ path: BUNDLE });
+    await racePage.evaluate('globalThis.__name = globalThis.__name || ((t, v) => t);');
+    await racePage.evaluate(() => {
+      const w = globalThis as any;
+      const ctx = new w.AudioContext({ sampleRate: 16000 });
+      const destination = ctx.createMediaStreamDestination();
+      w.__raceAudioContext = ctx;
+      w.__vexaCapturedRemoteAudioStreams = [destination.stream];
+      w.__raceCaptureStarted = 0;
+      w.__raceCaptureStopped = 0;
+      w.VexaBrowserUtils.createMixedAudioCapture = () => new Promise((resolve) => {
+        w.__resolveRaceCapture = () => resolve({
+          async start() { w.__raceCaptureStarted++; },
+          async stop() { w.__raceCaptureStopped++; },
+        });
+      });
+    });
+    const raceStop = await startCaptureBridge(racePage, inv, pipeline);
+    await raceStop();
+    await racePage.evaluate(() => (globalThis as any).__resolveRaceCapture());
+    await sleep(20);
+    const raceCounts = await racePage.evaluate(() => ({
+      started: (globalThis as any).__raceCaptureStarted,
+      stopped: (globalThis as any).__raceCaptureStopped,
+    }));
+    check('#934 teardown: a capture created after stop is disposed without ever starting',
+      raceCounts.started === 0 && raceCounts.stopped === 1, JSON.stringify(raceCounts));
+    await racePage.close();
   } finally {
     await context.close().catch(() => { /* best-effort */ });
     rmSync(dataDir, { recursive: true, force: true });

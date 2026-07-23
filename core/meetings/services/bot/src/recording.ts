@@ -39,6 +39,8 @@ import type { RecordingSink } from './ports.js';
 export interface BotRecordingSink extends RecordingSink {
   /** One recording.v1 chunk for `key`: monotonic seq, the COMPLETED-signal flag, format, bytes. */
   chunk(key: string, seq: number, isFinal: boolean, format: RecordingMasterFormat, bytes: Uint8Array): void;
+  /** Wait until every chunk accepted so far has finished its serialized upload attempt. */
+  drain(): Promise<void>;
 }
 
 /** Deliver ONE recording.v1 chunk. The default uploads to inv.recordingUploadUrl via
@@ -98,13 +100,23 @@ export function createBotRecordingSink(opts: RecordingSinkOptions): BotRecording
   };
 
   return {
-    chunk: (_key, seq, isFinal, format, bytes) => { enqueue(seq, isFinal, format, bytes); },
+    chunk: (_key, seq, isFinal, format, bytes) => {
+      // MediaRecorder encodes dataavailable asynchronously, so the final callback can overtake a
+      // legitimate lower-sequence data chunk. Suppress only duplicate final signals; late data must
+      // still reach the server, whose completed state is sticky and whose reader rebuilds from new
+      // chunks.
+      if (isFinal && finalSent) return;
+      enqueue(seq, isFinal, format, bytes);
+    },
     close: (_key) => {
       // Final-signal FALLBACK: if the live Stop race dropped the trailing is_final chunk, send one
       // empty is_final so the server flips the recording COMPLETED. No-op for a never-fed session
       // (no phantom recording), and at most once (a real is_final already set finalSent).
       if (!anyChunk || finalSent) return;
       enqueue(maxSeq + 1, true, lastFormat, new Uint8Array(0));
+    },
+    async drain() {
+      await queue;
     },
   };
 }

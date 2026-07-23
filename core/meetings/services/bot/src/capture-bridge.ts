@@ -331,6 +331,11 @@ export async function startCaptureBridge(
   const mixed = isMixedLanePlatform(inv.platform);
   const jitsi = inv.platform === 'jitsi';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
+  // Teardown closes this Node-side ingress gate synchronously, before any page.evaluate can hang.
+  // Exposed page callbacks may outlive their browser producer briefly; after the gate closes they
+  // cannot feed a disposing/disposed engine or extend aloneness.
+  let acceptingIngress = true;
+  let stopping = false;
 
   // ── O-TEL-1 raw-signal tap (a DUAL-sink) ──────────────────────────────────────────────────
   // When a TelemetrySink is wired, tee each raw frame to it BEFORE the pipeline consumes it, so a
@@ -371,6 +376,7 @@ export async function startCaptureBridge(
   };
 
   const onPerSpeakerAudio = (speakerIndex: number, samples: number[] | string, tsMs?: number): void => {
+    if (!acceptingIngress) return;
     if (typeof tsMs !== 'number' || !Number.isFinite(tsMs)) { captureTsFault(mixed ? 'mixed' : 'gmeet'); return; }
     const pcm = decodePcm(samples);
     observeRemoteAudio(pcm);
@@ -380,6 +386,7 @@ export async function startCaptureBridge(
   };
   // gmeet: the v1 producer stamps the glow name page-side; this named variant carries it through.
   const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[] | string, tsMs?: number): void => {
+    if (!acceptingIngress) return;
     if (typeof tsMs !== 'number' || !Number.isFinite(tsMs)) { captureTsFault('gmeet-named'); return; }
     const pcm = decodePcm(samples);
     observeRemoteAudio(pcm);
@@ -388,7 +395,10 @@ export async function startCaptureBridge(
   };
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
   // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
-  const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
+  const { sink: acceptSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
+  const onSpeakerHint = (name: string, tMs?: number, isEnd?: boolean): void => {
+    if (acceptingIngress) acceptSpeakerHint(name, tMs, isEnd);
+  };
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
@@ -413,11 +423,14 @@ export async function startCaptureBridge(
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
-  await page.exposeFunction('__vexaRemoteAudioReady', (): void => activity?.ready()).catch((e: Error) => {
+  await page.exposeFunction('__vexaRemoteAudioReady', (): void => {
+    if (acceptingIngress) activity?.ready();
+  }).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
+    if (!acceptingIngress) return;
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
   }).catch(() => { /* optional */ });
 
@@ -425,8 +438,11 @@ export async function startCaptureBridge(
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
   // Factored so a navigation can re-run it — see the re-arm below.
-  const setup = (): Promise<void> => page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  const setup = (): Promise<void> => {
+    if (stopping) return Promise.resolve();
+    return page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
+    if (w.__vexaCaptureStopping) return;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
@@ -445,6 +461,7 @@ export async function startCaptureBridge(
       };
 
       const setupMix = (): void => {
+        if (w.__vexaCaptureStopping) return;
         const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
         if (!streams.length) return;
         if (!w.__vexaMixCtx) {
@@ -476,8 +493,19 @@ export async function startCaptureBridge(
             (pcm: Float32Array, tsMs: number) => w.__vexaPerSpeakerAudioData(0, w.__vexaB64(pcm), tsMs),
             { log: (m: string) => w.logBot?.('[mixed] ' + m) },
           ))
-            .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
-            .then(async () => {
+            .then(async (cap: any) => {
+              w.__vexaMixedCapture = cap;
+              if (w.__vexaCaptureStopping) {
+                await cap?.stop?.();
+                w.__vexaMixedCapture = null;
+                return;
+              }
+              await cap?.start?.();
+              if (w.__vexaCaptureStopping) {
+                await cap?.stop?.();
+                w.__vexaMixedCapture = null;
+                return;
+              }
               await w.__vexaRemoteAudioReady?.();
               w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');
             })
@@ -562,9 +590,14 @@ export async function startCaptureBridge(
         },
       });
       await w.__vexaGmeetCapture.start();
+      if (w.__vexaCaptureStopping) {
+        await w.__vexaGmeetCapture.stop?.();
+        return;
+      }
       await w.__vexaRemoteAudioReady?.();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName });
+    }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName });
+  };
 
   await setup().catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
@@ -580,6 +613,7 @@ export async function startCaptureBridge(
   // Re-running the setup is safe: every branch is guarded on its own `w.__vexa*` handle, and a
   // fresh document has a fresh window, so this installs one watcher per document and never two.
   const rearm = (): void => {
+    if (stopping) return;
     void setup().catch(() => { /* a navigation mid-setup is not worth failing the bot over */ });
   };
   page.on('framenavigated', (frame) => {
@@ -588,20 +622,41 @@ export async function startCaptureBridge(
 
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
+    if (stopping) return;
+    stopping = true;
+    acceptingIngress = false;
     if (countersTimer) clearInterval(countersTimer);
     activity?.unavailable();
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       const w = (globalThis as any) as Record<string, any>;
-      try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
-      try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
-      try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
-      try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
-      try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
-      try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
-      try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
-      try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
-      try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* best-effort */ }
-    }).catch(() => { /* page already gone */ });
+      w.__vexaCaptureStopping = true;
+      const faults: string[] = [];
+      const attempt = async (name: string, operation: () => unknown): Promise<void> => {
+        try { await operation(); } catch (error) { faults.push(`${name}: ${String(error)}`); }
+      };
+      await attempt('gmeet-capture', () => w.__vexaGmeetCapture?.stop?.());
+      await attempt('teams-speakers', () => w.__vexaTeamsSpeakers?.destroy?.());
+      w.__vexaTeamsSpeakers = null;
+      await attempt('jitsi-speakers', () => w.__vexaJitsiSpeakers?.destroy?.());
+      w.__vexaJitsiSpeakers = null;
+      await attempt('jitsi-chat', () => w.__vexaJitsiChat?.destroy?.());
+      w.__vexaJitsiChat = null;
+      await attempt('zoom-speakers', () => w.__vexaZoomSpeakers?.destroy?.());
+      w.__vexaZoomSpeakers = null;
+      await attempt('mixed-rescan', () => {
+        if (w.__vexaMixRescan) (globalThis as any).clearInterval(w.__vexaMixRescan);
+        w.__vexaMixRescan = null;
+      });
+      await attempt('mixed-capture', () =>
+        w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function'
+          ? w.__vexaMixedCapture.stop()
+          : undefined);
+      await attempt('mixed-context', () => w.__vexaMixCtx?.close?.());
+      await attempt('gmeet-speakers', () => w.__vexaGmeetSpeakers?.destroy?.());
+      if (faults.length) throw new Error(`capture teardown faults: ${faults.join('; ')}`);
+    }).catch((error) => {
+      if (!page.isClosed()) throw error;
+    });
   };
 }
 
@@ -653,10 +708,20 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {
-    await page.evaluate(async () => {
-      const w = (globalThis as any) as Record<string, any>;
-      try { await w.__vexaRecordingTap?.stop?.(); } catch { /* best-effort */ }
-    }).catch(() => { /* page already gone */ });
+    let stopError: unknown;
+    try {
+      await page.evaluate(async () => {
+        const w = (globalThis as any) as Record<string, any>;
+        await w.__vexaRecordingTap?.stop?.();
+      });
+    } catch (error) {
+      if (!page.isClosed()) stopError = error;
+    }
+    // The page normally emits its own final marker. close() is the idempotent fallback when it
+    // does not; queue it before drain so lifecycle terminal truth cannot overtake that upload.
+    recording.close(key);
+    await recording.drain();
+    if (stopError) throw stopError;
   };
 }
 

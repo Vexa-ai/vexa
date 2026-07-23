@@ -30,6 +30,17 @@ class FakeBlob {
   }
 }
 
+class DelayedBlob {
+  private releaseBuffer: (value: ArrayBuffer) => void = () => {};
+  readonly buffer = new Promise<ArrayBuffer>((resolve) => { this.releaseBuffer = resolve; });
+  constructor(private bytes: Uint8Array) {}
+  get size() { return this.bytes.length; }
+  async arrayBuffer(): Promise<ArrayBuffer> { return this.buffer; }
+  release(): void {
+    this.releaseBuffer(this.bytes.buffer.slice(this.bytes.byteOffset, this.bytes.byteOffset + this.bytes.byteLength));
+  }
+}
+
 /** A fake MediaRecorder that lets the test fire ondataavailable / stop on demand. */
 class FakeMediaRecorder {
   static isTypeSupported(mime: string) { return mime === 'audio/webm;codecs=opus'; }
@@ -97,6 +108,29 @@ async function main() {
     if (cF.chunkSeq !== 2) fails.push(`final seq=${cF.chunkSeq} (want 2)`);
     if (!cF.isFinal) fails.push('final chunk isFinal=false (want true)');
     if (cF.base64 !== '') fails.push(`final chunk body=${JSON.stringify(cF.base64)} (want empty)`);
+  }
+
+  // The browser does not await an async EventTarget listener. A dataavailable encode still pending
+  // when onstop fires must finish before the final marker is emitted.
+  const overtaking: RecordingChunk[] = [];
+  const ordered = new MediaRecorderChunker({
+    stream: {} as any,
+    onChunk: async (c) => { overtaking.push(c); return true; },
+  });
+  await ordered.start();
+  const orderedRecorder = ordered.getMediaRecorder() as unknown as FakeMediaRecorder;
+  const delayed = new DelayedBlob(new Uint8Array([4, 5, 6]));
+  orderedRecorder.ondataavailable?.({ data: delayed });
+  let orderedStopped = false;
+  const orderedStopP = ordered.stop().then(() => { orderedStopped = true; });
+  await new Promise((r) => setTimeout(r, 5));
+  if (orderedStopped || overtaking.some((c) => c.isFinal)) {
+    fails.push('stop emitted final before the pending dataavailable encode settled');
+  }
+  delayed.release();
+  await orderedStopP;
+  if (overtaking.map((c) => `${c.chunkSeq}:${c.isFinal}`).join(',') !== '0:false,1:true') {
+    fails.push(`pending data/final order=${JSON.stringify(overtaking)} (want data seq0 then final seq1)`);
   }
 
   console.log(`chunks: ${JSON.stringify(got.map((c) => ({ seq: c.chunkSeq, final: c.isFinal, bytes: decode(c.base64).length })))}`);

@@ -16,10 +16,17 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
+import {
+  createOrchestrator,
+  CONTROL_PLANE_UNREACHABLE,
+  CONTROL_PLANE_UNREACHABLE_EXIT,
+  DEFAULT_PIPELINE_STOP_TIMEOUT_MS,
+  PLATFORM_LEAVE_TIMEOUT_MS,
+  type MeetingResult,
+} from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
+import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, Pipeline, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
 import { noopAloneness, controlledAloneness, noopPipeline, noopActs } from './test-doubles.js';
 
@@ -219,6 +226,106 @@ async function main(): Promise<void> {
     check('aloneness: every lifecycle event conforms', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
     check('aloneness: double verdict and removal race emit one terminal', terminals.length === 1, JSON.stringify(terminals));
     check('aloneness: teardown stops the source', stopped === 1, `stops=${stopped}`);
+  }
+
+  // ── #934: a never-resolving pipeline stop cannot withhold terminal truth ──
+  {
+    const lc = recordingSink();
+    let fireAlone: () => void = () => {};
+    let pipelineStops = 0;
+    let recordingCloses = 0;
+    let leaves = 0;
+    const pipe: Pipeline = {
+      async start() { /* */ },
+      async stop() { pipelineStops++; return new Promise<void>(() => { /* never resolves */ }); },
+    };
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { leaves++; },
+      async withdraw() { /* */ },
+    };
+    const timeoutLogs: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      const line = args.map(String).join(' ');
+      if (line.includes('pipeline-stop timed out')) timeoutLogs.push(line);
+      realError(...args);
+    };
+    const o = createOrchestrator(inv(), {
+      lifecycle: lc,
+      join,
+      pipeline: pipe,
+      acts: noopActs(),
+      aloneness: controlledAloneness((fire) => { fireAlone = fire; }),
+      recording: { close() { recordingCloses++; } },
+    });
+    const startedAt = Date.now();
+    const runP = o.run({ pipelineStopTimeoutMs: 20 });
+    setTimeout(() => fireAlone(), 5);
+    const res = await Promise.race([
+      runP,
+      new Promise<MeetingResult>((resolve) =>
+        setTimeout(() => resolve({ exitCode: -1, status: 'active' }), 300)),
+    ]);
+    console.error = realError;
+    const terminals = lc.events.filter((event) => event.status === 'completed' || event.status === 'failed');
+    check('#934: hung pipeline still completes left_alone within the declared bound',
+      res.status === 'completed' && res.completionReason === 'left_alone' && Date.now() - startedAt < 250,
+      JSON.stringify(res));
+    check('#934: the timed-out stage is named loudly', timeoutLogs.length === 1, JSON.stringify(timeoutLogs));
+    check('#934: pipeline stop attempted once; recording fallback and leave still ran once',
+      pipelineStops === 1 && recordingCloses === 1 && leaves === 1,
+      `pipelineStops=${pipelineStops} recordingCloses=${recordingCloses} leaves=${leaves}`);
+    check('#934: exactly one typed terminal emitted after the timeout',
+      terminals.length === 1 && allConform(lc.events), JSON.stringify(terminals));
+    check('#934: the declared pre-terminal teardown bound is pipeline 9s + platform leave 8s',
+      DEFAULT_PIPELINE_STOP_TIMEOUT_MS === 9_000 && PLATFORM_LEAVE_TIMEOUT_MS === 8_000,
+      `${DEFAULT_PIPELINE_STOP_TIMEOUT_MS}+${PLATFORM_LEAVE_TIMEOUT_MS}`);
+  }
+
+  // ── #934 A4: the normal path preserves tail flushes before terminal truth ──
+  {
+    const events: LifecycleEvent[] = [];
+    const order: string[] = [];
+    const lifecycle: LifecycleSink = {
+      async emit(event) {
+        events.push(event);
+        if (event.status === 'completed' || event.status === 'failed') order.push('terminal');
+      },
+    };
+    let fireAlone: () => void = () => {};
+    const pipeline: Pipeline = {
+      async start() { /* */ },
+      async stop() {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        order.push('transcript-tail');
+      },
+    };
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { order.push('leave'); },
+      async withdraw() { /* */ },
+    };
+    const orchestrator = createOrchestrator(inv(), {
+      lifecycle,
+      join,
+      pipeline,
+      acts: noopActs(),
+      aloneness: controlledAloneness((fire) => { fireAlone = fire; }),
+      recording: { close() { order.push('recording-final'); } },
+    });
+    const runP = orchestrator.run();
+    setTimeout(() => fireAlone(), 5);
+    const res = await runP;
+    const terminals = events.filter((event) => event.status === 'completed' || event.status === 'failed');
+    check('#934 negative control: transcript tail and recording final precede the terminal',
+      JSON.stringify(order) === JSON.stringify(['transcript-tail', 'recording-final', 'leave', 'terminal']),
+      JSON.stringify(order));
+    check('#934 negative control: normal teardown still emits exactly one completed(left_alone)',
+      res.status === 'completed' && last(events).completion_reason === 'left_alone' && terminals.length === 1,
+      JSON.stringify(terminals));
   }
 
   // ── a fake transcript.v1 segment routes through the pipeline → TranscriptSink ──
