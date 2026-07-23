@@ -118,7 +118,14 @@ function check(name: string, ok: boolean, detail = '') {
 
   console.log('\n=== #757 — detection is structural: non-English lobby fixtures ===');
   console.log(`  (structural CTA selectors: ${CTA_STRUCTURAL.length}, structural probe selectors: ${PROBE_STRUCTURAL.length})`);
-  check('the CTA array leads with structural selectors', CTA_STRUCTURAL.length > 0 && !isEnglishLiteral(googleAuthJoinCtaSelectors[0]));
+  // #856 reorder: exact English text leads (correct by construction once the UI
+  // locale is pinned); the structural backstop is retained but LAST. The array
+  // must still CONTAIN a structural selector so signed-out detection never fails
+  // open on a lobby whose CTA the English literals miss.
+  check('the CTA array retains a structural backstop, placed LAST (#856 order)',
+    CTA_STRUCTURAL.length > 0
+    && isEnglishLiteral(googleAuthJoinCtaSelectors[0])
+    && !isEnglishLiteral(googleAuthJoinCtaSelectors[googleAuthJoinCtaSelectors.length - 1]));
   check('the probe array leads with structural selectors', PROBE_STRUCTURAL.length > 0 && !isEnglishLiteral(googleSignedOutLobbyProbeSelectors[0]));
 
   // 3. Signed-out NON-ENGLISH lobby: every English-literal selector misses;

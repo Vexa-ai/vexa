@@ -13,6 +13,7 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
+import { resolveBotUiLocale } from "../browser-args";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -57,7 +58,11 @@ const CTA_SCAN_EVERY_POLLS = 5;
  *  a half-built lobby can momentarily expose exactly one text button that is
  *  not the CTA, and the scan's whole safety argument is uniqueness. */
 const CTA_SCAN_GRACE_MS = 8000;
-/** Reported in place of a selector string when the structural scan wins. */
+/** Origin tag for the structural scan. DIAGNOSTIC-ONLY: the scan never clicks or
+ *  returns a handle to the join flow (owner ruling on #856/#917). It is retained
+ *  purely to (a) record candidate labels for the failure diagnostic and (b) emit
+ *  a telemetry line when it WOULD have uniquely resolved a lobby the selectors
+ *  could not — the evidence a future re-promotion would need. */
 export const STRUCTURAL_CTA_ORIGIN = "structural:lobby-primary-cta";
 
 /** Result of the browser-context lobby scan. `el` is non-null ONLY when exactly
@@ -229,14 +234,23 @@ export async function waitForAnySelector(
 }
 
 /**
- * Resolve the Meet lobby's primary admission CTA: the ordered selector list
- * first, then — once the lobby has settled — the locale-agnostic structural scan
- * (findLobbyPrimaryCta) as the backstop for a lobby the selector list cannot
- * express, i.e. a non-English CTA that carries an accessible label (#846).
+ * Resolve the Meet lobby's primary admission CTA by the ordered selector list.
  *
- * The selector list is re-checked BEFORE the scan on every poll, so a lobby any
- * selector can name is still resolved by that selector and the scan never gets
- * to overrule it. Both share the one budget; neither shortens the other.
+ * The structural scan (findLobbyPrimaryCta) still runs on its cadence, but it is
+ * DIAGNOSTIC-ONLY (owner ruling on #856/#917): it NEVER returns a handle and the
+ * join flow never clicks its element. Two reasons it was demoted from backstop to
+ * diagnostic: (1) its uniqueness guard protects against ambiguity but not against
+ * a unique-but-WRONG button, and it was only ever proven on fabricated jsdom
+ * fixtures; (2) the real fix for the non-English lobby is #856 — the browser UI
+ * locale is now pinned, so Meet renders English by construction and the exact
+ * selectors above resolve it deterministically.
+ *
+ * What the scan is kept for: (a) its candidate labels feed the failure diagnostic
+ * (so a total miss still records every visible text button), and (b) when it WOULD
+ * have uniquely resolved a lobby that the selector list could not, it logs a
+ * telemetry line — that is the only evidence a future re-promotion could stand on
+ * (does a real non-English lobby exist where the scan uniquely wins?). It does not
+ * shorten or lengthen the selector budget.
  */
 export async function waitForLobbyCta(
   page: Page,
@@ -259,9 +273,14 @@ export async function waitForLobbyCta(
     if (Date.now() - started >= graceMs && polls % CTA_SCAN_EVERY_POLLS === 0) {
       const scan = await scanLobbyPrimaryCta(page);
       lastLabels = scan.labels;
+      // Diagnostic-only: the scan is NOT allowed to resolve the CTA. If it would
+      // have uniquely picked a button the selector list has not matched this poll,
+      // record that as telemetry — prod evidence for whether a real non-English
+      // lobby exists where re-promoting the scan would help. We do NOT click it,
+      // and we dispose the handle so nothing downstream can.
       if (scan.handle) {
-        log(`Located ${label} via ${STRUCTURAL_CTA_ORIGIN} (label: "${scan.labels[0]}")`);
-        return { handle: scan.handle, selector: STRUCTURAL_CTA_ORIGIN };
+        log(`structural scan candidate (diagnostic-only): "${scan.labels[0]}"`);
+        try { await scan.handle.dispose(); } catch { /* best-effort */ }
       }
     }
     polls++;
@@ -271,13 +290,34 @@ export async function waitForLobbyCta(
   throw new Error(await describeSelectorMiss(page, selectors, timeoutMs, label, lastLabels));
 }
 
+/**
+ * Append `?hl=<lang>` to the Meet URL so the lobby renders in the pinned UI
+ * language (#856). This is the lever that matters specifically on the
+ * BOT_AUTHENTICATED path: a signed-in Google account's own language preference
+ * otherwise wins over the browser's --lang/context locale. `hl` takes the bare
+ * language subtag (en-US → en). An existing `hl` on the caller's URL is
+ * preserved (never overridden). A malformed URL is returned unchanged.
+ */
+export function withPinnedMeetLocale(meetingUrl: string, locale: string): string {
+  const hl = (locale.split("-")[0] || locale).trim();
+  if (!hl) return meetingUrl;
+  try {
+    const u = new URL(meetingUrl);
+    if (!u.searchParams.has("hl")) u.searchParams.set("hl", hl);
+    return u.toString();
+  } catch {
+    return meetingUrl;
+  }
+}
+
 export async function joinGoogleMeeting(
   page: Page,
   meetingUrl: string,
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
-  await page.goto(meetingUrl, { waitUntil: "domcontentloaded" });
+  const navUrl = withPinnedMeetLocale(meetingUrl, resolveBotUiLocale());
+  await page.goto(navUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
   // Take screenshot after navigation
@@ -291,6 +331,11 @@ export async function joinGoogleMeeting(
 
   // Brief wait for page elements to settle (networkidle already ensures page loaded)
   await page.waitForTimeout(1000);
+
+  // Record the resolved UI locale on the SUCCESS path too (#856): the locale used
+  // to be invisible until a failure. observedPageContext reads navigator.language
+  // and <html lang> — with the pin in place these should read en-US / en.
+  log(`Lobby locale (#856): ${await observedPageContext(page)}`);
 
   // --- Humanized input layer (defeats Google Meet input-authenticity detection) ---
   const uiMode = resolveUiInteractionMode(botConfig);
@@ -373,10 +418,10 @@ export async function joinGoogleMeeting(
     // Authenticated lobby: one primary CTA — "Join now" (standard join),
     // "Switch here" (same account already in the call) or "Ask to join"
     // (host approval required) — or any localized equivalent. The CTA is
-    // located structurally (googleAuthJoinCtaSelectors, locale-agnostic first,
-    // then findLobbyPrimaryCta), so the branch works on non-English lobbies;
-    // waitForLobbyCta fails LOUD (screenshot + selector list + observed locale)
-    // if no CTA appears.
+    // located by the ordered selector list (googleAuthJoinCtaSelectors, exact
+    // text first now the UI locale is pinned — #856). The structural scan runs
+    // diagnostic-only and never clicks; waitForLobbyCta fails LOUD (screenshot +
+    // selector list + observed locale) if no CTA appears.
     const { handle: ctaHandle, selector: ctaSelector } = await waitForLobbyCta(
       page,
       googleAuthJoinCtaSelectors,

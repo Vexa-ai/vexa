@@ -150,19 +150,22 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
       path.join(__dirname, "..", "selectors.ts"),
       "utf-8"
     );
-    // (a) join button: a locale-agnostic structural selector precedes the
-    // English text selector, so a Hungarian "Kérvényezés a csatlakozásra"
-    // button (no English text) still matches by jsname/structure.
+    // (a) join button: #856 reorder — the EXACT English text selector precedes the
+    // broad structural entry, which is retained LAST as a locale-agnostic backstop.
+    // Ordered resolution makes list position authoritative, and with the UI locale
+    // pinned the English text is correct by construction; the broad entry must only
+    // win when nothing exact matches (it can otherwise pick a wrong jsname+span
+    // button early in DOM order). Match the selector *literals* in the array, not
+    // the prose comment (which mentions both).
     const joinBlock = selectorsSrc.slice(
-      selectorsSrc.indexOf("googleJoinButtonSelectors"),
-      selectorsSrc.indexOf("googleCameraButtonSelectors")
+      selectorsSrc.indexOf("export const googleJoinButtonSelectors"),
+      selectorsSrc.indexOf("googleLobbyIconGlyphSelectors")
     );
-    const joinJsnameIdx = joinBlock.indexOf("button[jsname]");
-    // Match the English *selector literals* (not the prose comment, which also
-    // mentions the English text).
+    const joinStructuralIdx = joinBlock.indexOf("'button[jsname]:not([aria-label]):has(span)'");
     const joinEnglishIdx = joinBlock.indexOf("has-text(\"Ask to join\")");
-    assert(joinJsnameIdx >= 0, "join selectors include a locale-agnostic jsname/structure selector");
-    assert(joinJsnameIdx < joinEnglishIdx, "locale-agnostic join selector precedes the English-text fallback");
+    assert(joinStructuralIdx >= 0, "join selectors retain the locale-agnostic structural backstop");
+    assert(joinEnglishIdx >= 0 && joinEnglishIdx < joinStructuralIdx,
+      "exact English-text join selector precedes the broad structural backstop (#856 order)");
 
     // (b) name field: structural input selector precedes the English aria-label.
     const nameBlock = selectorsSrc.slice(
@@ -195,9 +198,13 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
       text: "",
       children: [],
     };
-    const firstJoinSel = googleJoinButtonSelectors[0];
+    // #856: the join list now leads with EXACT English text, so the Hungarian
+    // button is caught by the structural BACKSTOP (last entry), not [0]. That
+    // backstop is diagnostic-only in prod, but it must still structurally match a
+    // localized CTA — the property this row pins.
+    const structuralJoinSel = googleJoinButtonSelectors[googleJoinButtonSelectors.length - 1];
     const firstNameSel = googleNameInputSelectors[0];
-    assert(matchesSelector(huJoinBtn, firstJoinSel), `hu join button matches locale-agnostic selector '${firstJoinSel}'`);
+    assert(matchesSelector(huJoinBtn, structuralJoinSel), `hu join button matches the structural backstop '${structuralJoinSel}'`);
     assert(matchesSelector(huNameInput, firstNameSel), `hu name input matches locale-agnostic selector '${firstNameSel}'`);
     // Negative control: the English-text selector must NOT match the hu button.
     assert(!matchesSelector(huJoinBtn, 'button:has-text("Ask to join")'), "English-text selector does NOT match the hu join button (the regression)");
