@@ -245,10 +245,10 @@ const isCta = (el: Element | null) => el !== null && el.getAttribute('data-cta')
       'en lobby, aria-labelled CTA: resolved by the English literal — the entry production wins on 7/7');
   }
 
-  console.log('\n=== 2. findLobbyPrimaryCta closes it — locale-agnostically, on the CTA itself ===');
+  console.log('\n=== 2. findLobbyPrimaryCta unit — the pure scan still discriminates (diagnostic-only in prod, #856) ===');
   {
     const hu = scan(HU_LABELLED_CTA);
-    assert(isCta(hu.el), 'hu lobby, aria-labelled CTA: the scan resolves the CTA (red→green for #846 A1)');
+    assert(isCta(hu.el), 'hu lobby, aria-labelled CTA: the scan uniquely identifies the CTA element (pure function)');
     assert(hu.labels.length === 1 && hu.labels[0] === HU.ctaText,
       `exactly one candidate, and it is the CTA label ("${hu.labels[0]}")`);
 
@@ -312,32 +312,56 @@ const isCta = (el: Element | null) => el !== null && el.getAttribute('data-cta')
       'a lobby of icon buttons only → no candidates at all (the scan is not a catch-all)');
   }
 
-  console.log('\n=== 4. Ordered resolution — the selector list is honoured top-down ===');
+  console.log('\n=== 4. Ordered resolution — EXACT text wins over the broad structural entry ===');
   {
-    // Both the structural entry and the English literal are "visible" here. The
-    // resolver must return the EARLIER one deterministically; the previous
-    // parallel race made this a coin flip, which is how a broad entry can beat a
-    // precise one (#600's failure class).
-    const both = [googleJoinButtonSelectors[0], '//button[.//span[text()="Ask to join"]]'];
+    const exactSelector = '//button[.//span[text()="Ask to join"]]';
+    const broadSelector = 'button[jsname]:not([aria-label]):has(span)';
+    // #856 ordering: the exact text selector is FIRST in googleJoinButtonSelectors
+    // and the broad structural entry is LAST. When both are visible, ordered
+    // resolution must return the EXACT one — the pin makes the English text
+    // correct by construction, and the broad entry (which can match a wrong
+    // jsname+span button early in DOM order) must only win when nothing exact does.
+    assert(googleJoinButtonSelectors[0] === exactSelector,
+      'the exact "Ask to join" selector is FIRST in the list (#856 reorder)');
+    assert(googleJoinButtonSelectors[googleJoinButtonSelectors.length - 1] === broadSelector,
+      'the broad structural entry is LAST in the list (#856 reorder)');
+
+    const both = [exactSelector, broadSelector];
     const hit = await waitForAnySelector(mockPage({ visible: both }) as any, googleJoinButtonSelectors, 5000, 'join button');
-    assert(hit.selector === googleJoinButtonSelectors[0],
-      `earlier selector wins when several match ("${hit.selector}")`);
+    assert(hit.selector === exactSelector,
+      `exact text beats the broad structural entry when both match ("${hit.selector}")`);
 
-    // And a later entry still wins when it is the only match.
-    const late = await waitForAnySelector(
-      mockPage({ visible: ['button:has-text("Join now")'] }) as any, googleJoinButtonSelectors, 5000, 'join button');
-    assert(late.selector === 'button:has-text("Join now")', 'a later-only match is still resolved');
+    // The broad entry still wins when it is the ONLY match (last-resort backstop).
+    const broadOnly = await waitForAnySelector(
+      mockPage({ visible: [broadSelector] }) as any, googleJoinButtonSelectors, 5000, 'join button');
+    assert(broadOnly.selector === broadSelector, 'the broad structural entry is still resolved when it is the only match');
+  }
 
-    // The selector list is checked BEFORE the scan on every poll, so the scan
-    // cannot overrule a lobby the list can name.
+  console.log('\n=== 5. The structural scan is DIAGNOSTIC-ONLY — it never returns/clicks a CTA (#856 owner ruling) ===');
+  {
+    // The selector list names this lobby → resolved by the selector, not the scan.
     const listWins = await waitForLobbyCta(
       mockPage({ visible: ['button:has-text("Ask to join")'], scanLabels: ['Ask to join'], scanHits: true }) as any,
       googleJoinButtonSelectors, 5000, 'join button');
-    assert(listWins.selector === 'button:has-text("Ask to join")',
-      'the structural scan never overrules a selector the list can name');
+    assert(listWins.selector === 'button:has-text("Ask to join")' && listWins.selector !== STRUCTURAL_CTA_ORIGIN,
+      'a lobby the list can name is resolved by the selector, never by the scan');
+
+    // The selector list MISSES but the scan WOULD uniquely resolve a button. Under
+    // #917 this returned the scan's handle; demoted, waitForLobbyCta must NOT
+    // return it — it runs the budget out and throws, recording the scan's labels.
+    let message = '';
+    let returned: any = null;
+    try {
+      returned = await waitForLobbyCta(
+        mockPage({ visible: [], scanLabels: ['Kérvényezés a csatlakozásra'], scanHits: true, lang: 'hu', nav: 'hu-HU' }) as any,
+        googleJoinButtonSelectors, 900, 'join button');
+    } catch (e: any) { message = String(e?.message || e); }
+    assert(returned === null, 'a unique scan hit is NOT returned as the CTA (diagnostic-only; the scan cannot click)');
+    assert(/Could not locate join button/.test(message) && /Kérvényezés/.test(message),
+      'the scan candidate label is recorded in the loud miss (evidence for a future re-promotion)');
   }
 
-  console.log('\n=== 5. A total miss is diagnosable from last_error alone (#846 A4) ===');
+  console.log('\n=== 6. A total miss is diagnosable from last_error alone (#846 A4) ===');
   {
     let message = '';
     try {

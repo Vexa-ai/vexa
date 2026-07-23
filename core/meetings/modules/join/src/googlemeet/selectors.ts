@@ -282,21 +282,31 @@ export const googleRemovalIndicators: string[] = [
 // only see a lobby whose CTA carries NO accessible label. `:not([aria-label])`
 // is load-bearing (the lobby's aria-labelled 3-dot menu is otherwise a
 // `button[jsname]` with a span, and the humanized click lands on the menu), but
-// it also blinds this list to a lobby whose CTA IS aria-labelled — which is the
-// shape reported in #846 (prod meetings 24337, 24339: the full list exhausted
-// its 60s budget). Attribute presence cannot express "the button with a real
-// text label", so that case is closed in join.ts by `findLobbyPrimaryCta` — a
-// structural scan that discriminates on non-icon label text and refuses to
-// click unless exactly one candidate exists. Widen there, not here.
+// it also blinds this list to a lobby whose CTA IS aria-labelled. That shape is
+// NOT closed by widening this list; the real fix is #856 — the browser's UI
+// locale is now pinned (`--lang=en-US`, context `locale`), so Meet renders the
+// English lobby by construction and the exact-text entries below are correct,
+// not lucky. `findLobbyPrimaryCta` in join.ts still scans, but only as a
+// diagnostic (it never clicks) — see its docs.
+//
+// ORDERING IS AUTHORITATIVE: `waitForAnySelector` resolves this list top-down on
+// every poll (ordered, not raced), so list position decides which control wins.
+// The EXACT text selectors come FIRST and the broad structural
+// `button[jsname]:not([aria-label]):has(span)` entry comes LAST — deliberately
+// inverting #917's ordering. With the locale pinned, the exact English match is
+// the right control; the broad entry can match a wrong jsname+span button that
+// happens to sit earlier in DOM order, so it must only win when nothing exact
+// does. Do NOT move the structural entry up, and do NOT delete it (it is the
+// last-resort locale-agnostic backstop).
 export const googleJoinButtonSelectors: string[] = [
-  // Locale-agnostic: a real <button> carrying Google's jsname token, a text span
-  // and no accessible label. Matches "Ask to join"/"Join now"/localized alike.
-  'button[jsname]:not([aria-label]):has(span)',
-  // English fallbacks (kept for resilience on English UIs).
+  // Exact text FIRST — correct by construction now the UI locale is pinned (#856).
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
-  'button:has-text("Join")'
+  'button:has-text("Join")',
+  // Broad structural backstop LAST: a real <button> with Google's jsname token, a
+  // text span and no accessible label. Only wins if no exact selector matches.
+  'button[jsname]:not([aria-label]):has(span)'
 ];
 
 // Icon-glyph descendants of a lobby <button>. A button containing any of these
@@ -350,17 +360,20 @@ export const googleNameInputSelectors: string[] = [
   'input[placeholder*="Name"]'
 ];
 
-// Authenticated-lobby primary CTA — "Join now" / "Switch here" / "Ask to join"
-// or any localized equivalent. Same shape and same coverage limit as
-// googleJoinButtonSelectors above: the locale-agnostic entry is first, the
-// English text is a fallback, and an aria-labelled CTA on a non-English lobby
-// is reached by join.ts's `findLobbyPrimaryCta` scan rather than by this list.
+// Authenticated-lobby primary CTA — "Join now" / "Switch here" / "Ask to join".
+// Same ordering rule as googleJoinButtonSelectors above: ordered resolution makes
+// list position authoritative, so the EXACT text selectors come FIRST and the
+// broad structural `button[jsname]:not([aria-label]):has(span)` entry comes LAST.
+// With the UI locale pinned (#856) the English text is correct by construction;
+// the broad entry is only the last-resort backstop and must not beat an exact
+// match. `findLobbyPrimaryCta` scans here too, diagnostic-only (never clicks).
 export const googleAuthJoinCtaSelectors: string[] = [
-  'button[jsname]:not([aria-label]):has(span)',
-  // English fallbacks.
+  // Exact text FIRST.
   'button:has-text("Join now")',
   'button:has-text("Switch here")',
-  'button:has-text("Ask to join")'
+  'button:has-text("Ask to join")',
+  // Broad structural backstop LAST.
+  'button[jsname]:not([aria-label]):has(span)'
 ];
 
 // Signed-out guard probe (authenticated mode): a guest lobby renders a name
