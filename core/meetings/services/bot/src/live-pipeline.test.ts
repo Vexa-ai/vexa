@@ -91,11 +91,13 @@ async function main(): Promise<void> {
   // 4) happy path → no faults; stop() tears down capture + recording + engine.
   {
     const faults: LiveStage[] = [];
+    const stages: string[] = [];
     const capSpy: Spy = { started: 0, stopped: 0 };
     const recSpy: Spy = { started: 0, stopped: 0 };
     const engine = fakeEngine();
     const live = createLivePipeline({
       startCapture: okThunk(capSpy), startRecording: okThunk(recSpy), engine, onFault: (s) => faults.push(s),
+      onStage: (stage, phase) => stages.push(`${stage}:${phase}`),
     });
     await live.start();
     check('happy: no faults', faults.length === 0, faults.join(','));
@@ -104,6 +106,10 @@ async function main(): Promise<void> {
     check('happy: stop tore down capture', capSpy.stopped === 1);
     check('happy: stop tore down recording', recSpy.stopped === 1);
     check('happy: stop stopped engine', engine.stops === 1);
+    check('happy: every teardown stage exposes started→finished telemetry',
+      ['capture-stop', 'recording-finalize', 'engine-stop'].every((stage) =>
+        stages.includes(`${stage}:started`) && stages.includes(`${stage}:finished`)),
+      stages.join(','));
   }
 
   // 5) engine retry: fails once then succeeds → self-heals in the background without evicting.
@@ -140,6 +146,72 @@ async function main(): Promise<void> {
     check('serr: Error → includes message', serr(e).includes('config.json not found'));
     check('serr: Error → includes a stack frame', /\bat\b/.test(serr(e)));
     check('serr: bare object → NOT flattened to [object …]', !serr({ isTrusted: true }).includes('[object'));
+  }
+
+  // 8) #934: teardown is bounded, names the timed-out stage, and is single-flight.
+  {
+    const never = (): Promise<void> => new Promise(() => { /* never resolves */ });
+    const faults: { stage: LiveStage; detail: string }[] = [];
+    const stages: string[] = [];
+    const engine: Pipeline = { async start() { /* */ }, async stop() { await never(); } };
+    const live = createLivePipeline({
+      startCapture: async () => never,
+      startRecording: async () => never,
+      engine,
+      onFault: (stage, e) => faults.push({ stage, detail: String(e) }),
+      onStage: (stage, phase) => stages.push(`${stage}:${phase}`),
+      teardownTimeoutMs: { 'capture-stop': 5, 'recording-finalize': 5, 'engine-stop': 5 },
+    });
+    await live.start();
+    const startedAt = Date.now();
+    const first = live.stop();
+    const second = live.stop();
+    check('#934 stop: repeated calls share the exact same in-flight promise', first === second);
+    await first;
+    check('#934 stop: all hung stages are bounded', Date.now() - startedAt < 150, `${Date.now() - startedAt}ms`);
+    check('#934 stop: capture timeout is named before recording/engine teardown begins',
+      faults[0]?.stage === 'capture-stop' &&
+      stages.indexOf('capture-stop:started') < stages.indexOf('recording-finalize:started'),
+      `faults=${JSON.stringify(faults)} stages=${stages.join(',')}`);
+    check('#934 stop: recording-finalize and engine-stop faults are named independently',
+      faults.some((f) => f.stage === 'recording-finalize' && f.detail.includes('timed out')) &&
+      faults.some((f) => f.stage === 'engine-stop' && f.detail.includes('timed out')),
+      JSON.stringify(faults));
+  }
+
+  // 9) #934: a retry already creating the engine cannot come alive after stop.
+  {
+    let starts = 0;
+    let releaseRetry: () => void = () => {};
+    const retryPending = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    const events: string[] = [];
+    const engine: Pipeline = {
+      async start() {
+        starts++;
+        events.push(`start-${starts}`);
+        if (starts === 1) throw new Error('first start failed');
+        await retryPending;
+        events.push('retry-started');
+      },
+      async stop() { events.push('engine-stopped'); },
+    };
+    const live = createLivePipeline({
+      startCapture: okThunk({ started: 0, stopped: 0 }),
+      engine,
+      onFault: () => {},
+      retry: { attempts: 2, delayMs: 1 },
+      teardownTimeoutMs: { 'engine-stop': 100 },
+    });
+    await live.start();
+    for (let i = 0; i < 20 && starts < 2; i++) await tick(1);
+    const stopP = live.stop();
+    await tick(5);
+    check('#934 retry-stop: teardown waits for the in-flight engine retry', !events.includes('engine-stopped'), events.join(','));
+    releaseRetry();
+    await stopP;
+    check('#934 retry-stop: late engine success is stopped before teardown resolves',
+      events.indexOf('retry-started') < events.indexOf('engine-stopped'),
+      events.join(','));
   }
 
   console.log(failed === 0 ? '\n✅ live-pipeline: all passed' : `\n❌ live-pipeline: ${failed} failed`);

@@ -198,6 +198,42 @@ async function main(): Promise<void> {
       JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
   }
 
+  // ── 6) teardown drains the async transcript egress tail before it resolves (#934 A4) ─────────
+  {
+    let releasePublish: () => void = () => {};
+    const publishTail = new Promise<void>((resolve) => { releasePublish = resolve; });
+    let publishStarted = false;
+    const sink: TranscriptSink = {
+      async publish() {
+        publishStarted = true;
+        await publishTail;
+      },
+    };
+    const factory = async (callbacks: ChunkedTranscriberCallbacks) => ({
+      feedAudio() { /* stub */ },
+      recordHint() { /* stub */ },
+      async dispose() {
+        callbacks.publish('Alice', [{
+          text: 'closing words',
+          startMs: 1_000,
+          endMs: 2_000,
+          language: 'en',
+          segmentId: 'turn:tail:0',
+        }], []);
+      },
+    });
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
+    await pipe.start();
+    let stopped = false;
+    const stopP = pipe.stop().then(() => { stopped = true; });
+    await sleep(5);
+    check('teardown tail: final transcript publish started', publishStarted);
+    check('teardown tail: stop remains pending while transcript egress is pending', !stopped);
+    releasePublish();
+    await stopP;
+    check('teardown tail: stop resolves after transcript egress settles', stopped);
+  }
+
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ pipeline (L3): capture→lane→stt→bot.TranscriptSink.publish emits schema-valid, correctly-attributed transcript.v1 segments (real gmeet lane · mock stt · capturing sink).');
 }

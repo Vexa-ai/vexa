@@ -267,7 +267,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {
-        console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
+        console.error(`[bot] live-pipeline: ${stage} fault: ${serr(e)}`);
+      },
+      onStage: (stage, phase, elapsedMs) => {
+        console.error(`[bot] live-pipeline: ${stage} ${phase} (elapsed=${elapsedMs}ms)`);
       },
     });
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
