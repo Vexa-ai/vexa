@@ -142,6 +142,31 @@ async function main(): Promise<void> {
     check('timeout: completion_reason=awaiting_admission_timeout', last(lc.events).completion_reason === 'awaiting_admission_timeout');
   }
 
+  // ── #926: a non-admitted terminal ALWAYS carries a human `reason` text ──
+  // Prod signature: a Zoom bot exited code 1 with reason:None because the non-admitted branch
+  // emitted completion_reason but no `reason`, so meeting-api synthesized "Bot exited with code 1;
+  // reason: None". RED before the fix (reason was undefined); GREEN after.
+  {
+    // (a) driver carries its own cause (the AdmissionError message path) → it survives to the row.
+    const lc = recordingSink();
+    const carryingJoin: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); return { outcome: 'auth_missing', reason: 'auth_required: meeting host restricted entry to authenticated Zoom users' }; },
+      onRemoval() { return () => { /* */ }; }, async leave() { /* */ }, async withdraw() { /* */ },
+    };
+    const res = await createOrchestrator(inv({ platform: 'zoom' }), { lifecycle: lc, join: carryingJoin, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    const t = last(lc.events);
+    check('reasonless#926: exit 1', res.exitCode === 1);
+    check('reasonless#926: completion_reason=auth_session_missing', t.completion_reason === 'auth_session_missing');
+    check('reasonless#926: reason text is NON-NULL (carried from driver)', typeof t.reason === 'string' && t.reason.includes('auth_required'));
+    check('reasonless#926: events conform', allConform(lc.events));
+
+    // (b) bare enum (no driver message) → orchestrator STILL stamps a derived reason (never null).
+    const lc2 = recordingSink();
+    await createOrchestrator(inv(), { lifecycle: lc2, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    const t2 = last(lc2.events);
+    check('reasonless#926: bare enum still gets a non-null reason', typeof t2.reason === 'string' && t2.reason.length > 0);
+  }
+
   // ── pipeline.start throws → failed(active/...) ──
   {
     const lc = recordingSink();

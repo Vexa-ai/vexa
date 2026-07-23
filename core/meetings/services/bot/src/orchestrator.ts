@@ -26,6 +26,7 @@ import {
 import type {
   JoinDriver,
   JoinOutcome,
+  JoinResult,
   Pipeline,
   LifecycleSink,
   ActsSource,
@@ -74,6 +75,13 @@ export interface MeetingResult {
   exitCode: number;
   status: BotStatus;
   completionReason?: CompletionReason;
+}
+
+/** Normalize a driver's join return — a bare `JoinOutcome` or a `JoinResult` — into `{ outcome,
+ *  reason? }` so the orchestrator has ONE shape to reason about (and the reason text, when the
+ *  driver supplied one, survives to the terminal lifecycle row). */
+function normalizeJoin(r: JoinOutcome | JoinResult): JoinResult {
+  return typeof r === 'string' ? { outcome: r } : r;
 }
 
 /** Map a non-admitted join verdict to the terminal completion_reason. */
@@ -217,13 +225,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
     const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
+    let joinReason: string | undefined;
     try {
       // Race the (possibly long, lobby-blocked) join against a pre-active abort. A stop/SIGTERM in the
       // waiting room resolves `aborted` → we stop waiting, WITHDRAW the join request, and terminate —
       // rather than SIGKILLing a bot that is still asking to join (the waiting-room orphan). The race
       // yields a tagged result so the abort branch narrows cleanly (no symbol-vs-JoinOutcome union).
-      const raced = await Promise.race<{ aborted: false; outcome: JoinOutcome } | { aborted: true }>([
-        deps.join.join(report).then((o) => ({ aborted: false as const, outcome: o })),
+      const raced = await Promise.race<{ aborted: false; result: JoinResult } | { aborted: true }>([
+        deps.join.join(report).then((o) => ({ aborted: false as const, result: normalizeJoin(o) })),
         aborted.then(() => ({ aborted: true as const })),
       ]);
       if (raced.aborted) {
@@ -243,7 +252,8 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
-      outcome = raced.outcome;
+      outcome = raced.result.outcome;
+      joinReason = raced.result.reason;
       await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
       unsubscribe();
@@ -253,7 +263,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (outcome !== 'admitted') {
       const reason = OUTCOME_FAIL[outcome];
       unsubscribe();
-      await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, exit_code: 1 });
+      // ALWAYS stamp a human `reason` text (#926). A non-admitted verdict carries a completion_reason
+      // enum, but the terminal row also needs the human cause or meeting-api synthesizes the
+      // uninformative "Bot exited with code 1; reason: None". Prefer the driver's own message
+      // (the AdmissionError text — e.g. the Zoom "auth_required" / "host not started" cause); fall
+      // back to a derived line so NO reasonless terminal can ever leave this branch.
+      const reasonText = joinReason ?? `join ended without admission: ${outcome} → ${reason}`;
+      await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, reason: reasonText, exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: reason };
     }
     if (cur !== 'active') await emit('active');   // the join driver may already have reported active
