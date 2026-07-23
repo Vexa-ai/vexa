@@ -18,6 +18,38 @@
 # meeting token and an STT token — it is written to a 0600 file and never echoed.
 set -uo pipefail
 
+derive_native() {
+  python3 - "$1" "$2" <<'PY'
+import re, sys
+from urllib.parse import urlparse
+platform, url = sys.argv[1], sys.argv[2]
+path = urlparse(url).path
+if platform == 'teams':
+    m = re.search(r'meetup-join/([^/?]+)', url) or re.search(r'/meet/([^/?]+)', url)
+    out = m.group(1) if m else path.strip('/')
+elif platform == 'zoom':
+    patterns = (
+        r'/wc/(\d+)/join(?:/|$)',
+        r'/wc/join/(\d+)(?:/|$)',
+        r'/(?:j|w)/(\d+)(?:/|$)',
+    )
+    match = next((m for pattern in patterns if (m := re.search(pattern, path))), None)
+    out = match.group(1) if match else ''
+else:                       # jitsi room name · gmeet code — the last path segment
+    out = path.strip('/').split('/')[-1]
+if not out or '/' in out:
+    sys.exit(f'cannot derive a native meeting id from {url!r}')
+print(out)
+PY
+}
+
+# Parser-only mode keeps native-id regressions off the network and out of real meetings.
+if [[ "${1:-}" == "--derive-native" ]]; then
+  [ "$#" -eq 3 ] || { echo "usage: $0 --derive-native <platform> <meeting-url>" >&2; exit 2; }
+  derive_native "$2" "$3"
+  exit
+fi
+
 PLATFORM="${1:?platform (teams|google_meet|zoom|jitsi)}"
 MEETING_URL="${2:?meeting url}"
 BOT_NAME="${HOT_BOT_NAME:-Vexa HotLocal}"
@@ -52,21 +84,7 @@ echo "▶ asking meeting-api to mint a real invocation"
 # spawns and still transcribes, but the dashboard builds /transcripts/<platform>/<native> from
 # it — a native id carrying "https://" and slashes makes that URL malformed, the client's fetch
 # throws, and the page renders "This page couldn't load" over a perfectly healthy meeting.
-NATIVE=$(python3 - "$PLATFORM" "$MEETING_URL" <<'PY'
-import re, sys
-from urllib.parse import urlparse
-platform, url = sys.argv[1], sys.argv[2]
-path = urlparse(url).path.strip('/')
-if platform == 'teams':
-    m = re.search(r'meetup-join/([^/?]+)', url) or re.search(r'/meet/([^/?]+)', url)
-    out = m.group(1) if m else path
-else:                       # jitsi room name · gmeet code · zoom id — the last path segment
-    out = path.split('/')[-1]
-if not out or '/' in out:
-    sys.exit(f'cannot derive a native meeting id from {url!r}')
-print(out)
-PY
-) || { echo "✗ $NATIVE" >&2; exit 1; }
+NATIVE=$(derive_native "$PLATFORM" "$MEETING_URL") || { echo "✗ $NATIVE" >&2; exit 1; }
 SPAWN=$(curl -s --max-time 40 -X POST "$API/bots" -H "X-API-Key: $(cat "$KEYFILE")" \
   -H 'Content-Type: application/json' \
   -d "{\"platform\":\"$PLATFORM\",\"native_meeting_id\":\"$NATIVE\",\"meeting_url\":\"$MEETING_URL\",\"bot_name\":\"$BOT_NAME\"}")
