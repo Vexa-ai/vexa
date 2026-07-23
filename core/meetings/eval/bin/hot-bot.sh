@@ -43,11 +43,90 @@ print(out)
 PY
 }
 
+run_logged_worker() {
+  local log_file=$1
+  shift
+  [ "$#" -gt 0 ] || { echo "run_logged_worker: worker command required" >&2; return 2; }
+
+  # Keep node as a directly-addressable child while tee remains a passive drain. A foreground
+  # `node | tee` makes Ctrl-C interrupt the pipeline leader before node's bounded SIGTERM leave
+  # can finish, which strands the exact meeting row in Active. The FIFO gives each process one
+  # unambiguous PID: signals go ONLY to the worker; tee reads through EOF after the worker exits.
+  local pipe_dir output_pipe tee_pid worker_pid worker_status tee_status
+  local stop_requested=0 worker_running=1
+  pipe_dir=$(mktemp -d "${TMPDIR:-/tmp}/vexa-hot-bot-output.XXXXXX") || return 1
+  output_pipe="$pipe_dir/bot-output"
+  mkfifo "$output_pipe" || { rmdir "$pipe_dir"; return 1; }
+
+  # Put both asynchronous children outside the launcher's foreground process group. Terminal
+  # Ctrl-C then reaches this trap alone; node receives the one translated SIGTERM below, while
+  # tee is not interrupted before it can drain the lifecycle tail.
+  local monitor_was_on=0
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
+  tee "$log_file" <"$output_pipe" &
+  tee_pid=$!
+  "$@" >"$output_pipe" 2>&1 &
+  worker_pid=$!
+  [ "$monitor_was_on" -eq 1 ] || set +m
+
+  request_stop() {
+    # Both INT and TERM mean the bot's supported graceful stop. Forward exactly once to the
+    # captured child PID—never a process group, name match, or subsequently reused PID.
+    if [ "$worker_running" -eq 1 ] && [ "$stop_requested" -eq 0 ]; then
+      stop_requested=1
+      echo "[hot-bot] stop requested — waiting for bot's graceful SIGTERM drain" >&2
+      kill -TERM "$worker_pid" 2>/dev/null || true
+    fi
+  }
+  trap request_stop INT TERM
+
+  # A trap interrupts wait with 128+signal while the child is still draining. Keep waiting until
+  # the exact child is gone, then wait once more to recover its stored final status race-free.
+  while kill -0 "$worker_pid" 2>/dev/null; do
+    wait "$worker_pid"
+  done
+  wait "$worker_pid"
+  worker_status=$?
+  worker_running=0
+
+  # The writer has closed the FIFO; let tee publish every final lifecycle breadcrumb before exit.
+  while kill -0 "$tee_pid" 2>/dev/null; do
+    wait "$tee_pid"
+  done
+  wait "$tee_pid"
+  tee_status=$?
+  trap - INT TERM
+
+  rm -f "$output_pipe"
+  rmdir "$pipe_dir"
+
+  # Preserve pipefail's useful status shape: a logging failure wins; otherwise return node's code.
+  [ "$tee_status" -eq 0 ] || return "$tee_status"
+  return "$worker_status"
+}
+
+# Parse the complete operational body before executing it. Bash otherwise reads a script
+# incrementally from disk; editing hot-bot.sh during a live witness can move its file offset into
+# a different command and re-enter the build/run tail with an already-completed invocation.
+main() {
 # Parser-only mode keeps native-id regressions off the network and out of real meetings.
 if [[ "${1:-}" == "--derive-native" ]]; then
   [ "$#" -eq 3 ] || { echo "usage: $0 --derive-native <platform> <meeting-url>" >&2; exit 2; }
   derive_native "$2" "$3"
-  exit
+  return
+fi
+
+# Private, non-network seam for the launcher regression test.
+if [[ "${1:-}" == "--_run-logged-worker" ]]; then
+  [ "$#" -ge 3 ] || {
+    echo "usage: $0 --_run-logged-worker <log-file> <command> [args...]" >&2
+    return 2
+  }
+  local worker_log=$2
+  shift 2
+  run_logged_worker "$worker_log" "$@"
+  return $?
 fi
 
 PLATFORM="${1:?platform (teams|google_meet|zoom|jitsi)}"
@@ -146,7 +225,15 @@ BUNDLE="$BOT/dist/browser-utils.global.js"
 [ -s "$BUNDLE" ] || { echo "✗ bundle missing at $BUNDLE" >&2; exit 1; }
 echo "  ✓ dist/ + $(wc -c <"$BUNDLE" | tr -d ' ')-byte page bundle"
 
-cd "$BOT" && VEXA_BOT_CONFIG="$(cat "$RUN/invocation.json")" \
-  VEXA_CAPTURE_SIGNAL_DIR="$RUN/capture" \
-  VEXA_BROWSER_UTILS_PATH="$BUNDLE" \
-  node dist/index.js 2>&1 | tee "$RUN/bot.log"
+cd "$BOT" || return 1
+start_bot_worker() {
+  export VEXA_BOT_CONFIG
+  VEXA_BOT_CONFIG=$(cat "$RUN/invocation.json")
+  export VEXA_CAPTURE_SIGNAL_DIR="$RUN/capture"
+  export VEXA_BROWSER_UTILS_PATH="$BUNDLE"
+  exec node dist/index.js
+}
+run_logged_worker "$RUN/bot.log" start_bot_worker
+}
+
+main "$@"
