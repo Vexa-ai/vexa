@@ -43,6 +43,22 @@ print(out)
 PY
 }
 
+start_isolated_background() {
+  local pid_var=$1
+  shift
+  [ "$#" -gt 0 ] || { echo "start_isolated_background: command required" >&2; return 2; }
+
+  # Terminal INT/TERM belongs to the launcher. Give long-lived helpers their own process group so
+  # Ctrl-C cannot silently tear down a forward the bot still needs during its graceful drain.
+  local monitor_was_on=0 spawned_pid
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
+  "$@" &
+  spawned_pid=$!
+  [ "$monitor_was_on" -eq 1 ] || set +m
+  printf -v "$pid_var" '%s' "$spawned_pid"
+}
+
 run_logged_worker() {
   local log_file=$1
   shift
@@ -117,18 +133,6 @@ if [[ "${1:-}" == "--derive-native" ]]; then
   return
 fi
 
-# Private, non-network seam for the launcher regression test.
-if [[ "${1:-}" == "--_run-logged-worker" ]]; then
-  [ "$#" -ge 3 ] || {
-    echo "usage: $0 --_run-logged-worker <log-file> <command> [args...]" >&2
-    return 2
-  }
-  local worker_log=$2
-  shift 2
-  run_logged_worker "$worker_log" "$@"
-  return $?
-fi
-
 PLATFORM="${1:?platform (teams|google_meet|zoom|jitsi)}"
 MEETING_URL="${2:?meeting url}"
 BOT_NAME="${HOT_BOT_NAME:-Vexa HotLocal}"
@@ -146,10 +150,22 @@ P_REDIS=16379; P_STT=18500; P_MAPI=18080
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/vexa-platform.yaml}"
 
 fwd() {  # svc local remote — idempotent; a live forward is reused
-  local svc=$1 lp=$2 rp=$3
+  local svc=$1 lp=$2 rp=$3 forward_pid
   if nc -z 127.0.0.1 "$lp" 2>/dev/null; then echo "  ✓ :$lp already forwarded ($svc)"; return; fi
-  kubectl -n $NS port-forward "svc/$svc" "$lp:$rp" >>"$RUN/portforward.log" 2>&1 &
-  for _ in $(seq 1 40); do nc -z 127.0.0.1 "$lp" 2>/dev/null && { echo "  ✓ :$lp → $svc:$rp"; return; }; sleep 0.25; done
+  start_isolated_background forward_pid \
+    kubectl -n "$NS" port-forward "svc/$svc" "$lp:$rp" >>"$RUN/portforward.log" 2>&1
+  for _ in $(seq 1 40); do
+    if nc -z 127.0.0.1 "$lp" 2>/dev/null; then
+      # This harness intentionally leaves successful forwards reusable by the next hot run.
+      disown "$forward_pid" 2>/dev/null || true
+      echo "  ✓ :$lp → $svc:$rp"
+      return
+    fi
+    kill -0 "$forward_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -TERM "$forward_pid" 2>/dev/null || true
+  wait "$forward_pid" 2>/dev/null || true
   echo "  ✗ could not forward $svc:$rp → :$lp — see $RUN/portforward.log" >&2; exit 1
 }
 
@@ -236,4 +252,6 @@ start_bot_worker() {
 run_logged_worker "$RUN/bot.log" start_bot_worker
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
