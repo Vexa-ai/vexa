@@ -10,7 +10,14 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv } from './config.js';
+import {
+  parseInvocation,
+  loadInvocation,
+  InvocationError,
+  EvalBrowserRuntimeConfigError,
+  evalBrowserRuntimeConfigFromEnv,
+  speakerStreamConfigFromEnv,
+} from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_DIR = join(HERE, '..', '..', '..', 'contracts', 'invocation.v1', 'golden');
@@ -53,6 +60,25 @@ for (const g of goldens) {
   const minimal = readFileSync(join(GOLDEN_DIR, 'Invocation.minimal.json'), 'utf8');
   const inv = loadInvocation({ VEXA_BOT_CONFIG: minimal } as NodeJS.ProcessEnv);
   check('loadInvocation reads VEXA_BOT_CONFIG', inv.botName === 'Vexa', inv.botName);
+}
+
+// ── primitive eval-only browser runtime config (outside invocation.v1 by design) ──
+{
+  check('eval browser unset → pinned Playwright runtime',
+    evalBrowserRuntimeConfigFromEnv({} as NodeJS.ProcessEnv).executablePath === undefined);
+  check('eval browser blank → pinned Playwright runtime',
+    evalBrowserRuntimeConfigFromEnv({ VEXA_EVAL_BROWSER_EXECUTABLE_PATH: '  ' } as NodeJS.ProcessEnv).executablePath === undefined);
+  const injectedPath = '/controlled/chrome';
+  const config = evalBrowserRuntimeConfigFromEnv(
+    { VEXA_EVAL_BROWSER_EXECUTABLE_PATH: injectedPath } as NodeJS.ProcessEnv,
+    (path) => { if (path !== injectedPath) throw new Error('wrong injected path'); },
+  );
+  check('injected env value is honored verbatim', config.executablePath === injectedPath, String(config.executablePath));
+  check('invalid eval browser path fails boot validation',
+    throws(() => evalBrowserRuntimeConfigFromEnv(
+      { VEXA_EVAL_BROWSER_EXECUTABLE_PATH: '/missing/chrome' } as NodeJS.ProcessEnv,
+      () => { throw new Error('not executable'); },
+    )) instanceof EvalBrowserRuntimeConfigError);
 }
 
 // ── fail-fast (P14) ──

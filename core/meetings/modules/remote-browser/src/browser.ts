@@ -21,20 +21,29 @@ export interface LaunchPersistentOptions {
    *  context. Defaults to BOT_UI_LOCALE (env), else en-US. Keeps the page-level
    *  locale byte-identical to the --lang launch flag the caller passes in args. */
   locale?: string;
+  /** Explicit browser binary for a controlled runtime A/B; omitted in normal product launches. */
+  executablePath?: string;
+}
+
+/** Launch-option assembly keeps the eval runtime seam unit-provable without opening a
+ * browser, while launchPersistentBrowser remains the single persistent-context front door. */
+export function persistentContextOptions(opts: LaunchPersistentOptions) {
+  const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
+  return {
+    headless: opts.headless ?? false,
+    executablePath: opts.executablePath,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: opts.args,
+    viewport: null,
+    locale,
+  };
 }
 
 export async function launchPersistentBrowser(
   opts: LaunchPersistentOptions,
 ): Promise<{ context: BrowserContext; page: Page }> {
   const dataDir = opts.dataDir ?? BROWSER_DATA_DIR;
-  const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
-  const context = await chromium.launchPersistentContext(dataDir, {
-    headless: opts.headless ?? false,
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: opts.args,
-    viewport: null,
-    locale,
-  });
+  const context = await chromium.launchPersistentContext(dataDir, persistentContextOptions(opts));
   const pages = context.pages();
   const page = pages.length > 0 ? pages[0] : await context.newPage();
   return { context: context as BrowserContext, page: page as Page };

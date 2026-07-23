@@ -12,7 +12,9 @@
 # (VEXA_BOT_CONFIG, invocation.v1 / ADR-0002). We let it spawn normally, LIFT that payload
 # off the pod, delete the pod, rewrite only the in-cluster hostnames to local forwards, and
 # run the same bytes locally. Nothing about the config is hand-rolled, so a hot run and a
-# deployed run differ in exactly one variable: which machine executes the TypeScript.
+# deployed run normally differs in exactly one variable: which machine executes the TypeScript.
+# A controlled browser-runtime A/B is an explicit second variable; when selected, this harness
+# validates and records the executable path + reported version in the run provenance.
 #
 # SECURITY: this points a local process at STAGING. Never prod. The invocation carries a
 # meeting token and an STT token — it is written to a 0600 file and never echoed.
@@ -40,6 +42,39 @@ else:                       # jitsi room name · gmeet code — the last path se
 if not out or '/' in out:
     sys.exit(f'cannot derive a native meeting id from {url!r}')
 print(out)
+PY
+}
+
+validate_eval_browser_runtime() {
+  EVAL_BROWSER_PATH="${VEXA_EVAL_BROWSER_EXECUTABLE_PATH:-}"
+  EVAL_BROWSER_VERSION=
+  if [ -z "$EVAL_BROWSER_PATH" ]; then
+    return
+  fi
+  [ -x "$EVAL_BROWSER_PATH" ] || {
+    echo "✗ VEXA_EVAL_BROWSER_EXECUTABLE_PATH is not executable: $EVAL_BROWSER_PATH" >&2
+    return 2
+  }
+  EVAL_BROWSER_VERSION=$("$EVAL_BROWSER_PATH" --version 2>&1) || {
+    echo "✗ selected browser could not report its version: $EVAL_BROWSER_PATH" >&2
+    return 2
+  }
+}
+
+write_browser_runtime_provenance() {
+  local out=$1
+  python3 - "$out" "$EVAL_BROWSER_PATH" "$EVAL_BROWSER_VERSION" <<'PY'
+import json, sys
+out, path, version = sys.argv[1:]
+payload = {
+    "mode": "explicit-eval-override" if path else "playwright-pinned-default",
+    "override_env": "VEXA_EVAL_BROWSER_EXECUTABLE_PATH",
+    "executable_path": path or None,
+    "reported_version": version or None,
+}
+with open(out, "w") as f:
+    json.dump(payload, f, indent=2)
+    f.write("\n")
 PY
 }
 
@@ -135,6 +170,7 @@ fi
 
 PLATFORM="${1:?platform (teams|google_meet|zoom|jitsi)}"
 MEETING_URL="${2:?meeting url}"
+validate_eval_browser_runtime || exit $?
 BOT_NAME="${HOT_BOT_NAME:-Vexa HotLocal}"
 NS=vexa-staging
 API="${VEXA_API:-https://api.staging.vexa.ai}"
@@ -144,6 +180,11 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"             # core/meetings
 BOT="$HERE/services/bot"
 RUN="${HOT_BOT_RUN:-$HOME/vexa-test-rig/hot-bot/$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$RUN"; chmod 700 "$RUN"
+write_browser_runtime_provenance "$RUN/browser-runtime.json" \
+  || { echo "✗ browser runtime provenance write failed" >&2; exit 1; }
+if [ -n "$EVAL_BROWSER_PATH" ]; then
+  echo "  browser A/B: $EVAL_BROWSER_VERSION · $EVAL_BROWSER_PATH"
+fi
 
 # Local ports for the cluster-internal deps the bot writes to.
 P_REDIS=16379; P_STT=18500; P_MAPI=18080

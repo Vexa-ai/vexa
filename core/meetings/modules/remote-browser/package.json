@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/auth.smoke.test.ts && tsx src/session-store.test.ts",
+    "test": "tsx src/browser.test.ts && tsx src/auth.smoke.test.ts && tsx src/session-store.test.ts",
     "check:isolation": "node scripts/check-isolation.js",
     "login": "tsx src/provision-cli.ts"
   },
