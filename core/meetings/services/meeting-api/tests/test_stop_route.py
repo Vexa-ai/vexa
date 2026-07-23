@@ -13,7 +13,7 @@ import json
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app
-from meeting_api.bot_spawn.fakes import InMemoryMeetingRepo
+from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
 
@@ -92,6 +92,32 @@ def test_stop_still_moves_a_live_bot_to_stopping():
         assert r.status_code == 200, r.text
         latest = asyncio.run(repo.find_latest(7, "google_meet", f"live-{stage}"))
         assert latest["status"] == "stopping"
+
+
+# ── #816: stopping a browser_session is a DIRECT, zero-delay teardown ────────────────────────────
+
+
+def test_delete_browser_session_tears_down_directly_and_completes():
+    """A browser session has no leave-command consumer and no join lifecycle: DELETE tears its
+    workload down immediately (zero stop delay) and completes the row — it does NOT publish a `leave`
+    command that would leave the container running until reconcile."""
+    repo, pub, rt = InMemoryMeetingRepo(), InMemoryCommandPublisher(), FakeRuntimeClient()
+    app = create_app(meeting_repo=repo, command_publisher=pub, runtime=rt)
+    m = _seed(repo, user_id=7, platform="browser_session", native="bs-abc123", status="active")
+    asyncio.run(repo.set_bot_container(meeting_id=m["id"], bot_container_id="bs-workload-1"))
+
+    r = TestClient(app).delete("/bots/browser_session/bs-abc123", headers={"x-user-id": "7"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "stopping"
+
+    # The workload was torn down directly — NOT left to a leave command no session subscribes to.
+    assert rt.deleted == ["bs-workload-1"], rt.deleted
+    assert not pub.published, f"a browser session must not publish a leave command: {pub.published}"
+
+    # The row is terminal (completed), attributed to the user stop.
+    latest = asyncio.run(repo.find_latest(7, "browser_session", "bs-abc123"))
+    assert latest["status"] == "completed", latest["status"]
+    assert latest["data"].get("stop_requested") is True
 
 
 def test_delete_bots_404_when_no_active_meeting():

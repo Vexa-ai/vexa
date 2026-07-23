@@ -603,38 +603,77 @@ def test_post_bots_explicit_native_id_unchanged_by_url(monkeypatch):
     assert repo._meetings[1]["native_meeting_id"] == "xyz-explicit-id"
 
 
-# ── #816 hardening: a non-spawnable platform is refused typed, BEFORE any DB write ──────────────
-# api.v1 seals MORE platforms than invocation.v1 (`browser_session` — a provisioning workload, not
-# a meeting bot). With a meeting_url attached, such a request used to pass the constructibility
-# guard, WRITE its `requested` row, then die inside build_invocation's sealed-schema validation:
-# a 500 plus an orphaned active row that 409'd the user's retry on the dedup guard.
+# ── #816: browser_session is a first-class capability — the server mints its address ─────────────
+# api.v1 seals `browser_session` in the Platform enum with native_meeting_id AND meeting_url both
+# optional, because a session has no meeting to address. `POST /bots {"platform":"browser_session"}`
+# is a valid request the core completes by minting `bs-<hex>` + an unguessable session_token, spawns
+# a `browser-session` runtime workload (NOT a meeting bot), and returns an ACTIVE row.
 
 
-def test_browser_session_with_url_is_422_and_writes_no_row(monkeypatch):
+def test_browser_session_mints_active_row_201(monkeypatch):
+    """The restored capability: a bare browser_session request → 201, ACTIVE, `bs-<hex>` id + a
+    session_token in data. No URL, no id supplied — the server mints the whole address (#816 acc. row 2)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
+    body = r.json()
+    assert body["platform"] == "browser_session"
+    assert body["status"] == "active", f"a browser session is live immediately, got {body['status']}"
+    assert str(body["native_meeting_id"]).startswith("bs-"), body["native_meeting_id"]
+    assert body["data"]["session_token"], "an unguessable session_token must be minted + returned"
+    assert body["bot_container_id"], "the kernel workload id must be written back"
+    # The row is persisted ACTIVE.
+    assert repo._meetings[body["id"]]["status"] == "active"
+
+
+def test_browser_session_spawns_browser_profile_workload(monkeypatch):
+    """The spawn is a runtime.v1 WorkloadSpec with profile `browser-session` (NOT meeting-bot) and
+    BOT_MODE=browser_session, carrying the per-user userdata prefix. It rides AROUND build_invocation
+    (no invocation.v1 Invocation — a session has no meetingUrl)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post("/bots", headers=HEADERS, json={"platform": "browser_session"})
+    assert r.status_code == 201, r.text
+    assert len(runtime.specs) == 1, runtime.specs
+    spec = runtime.specs[0]
+    assert spec["profile"] == "browser-session", spec["profile"]
+    assert spec["env"]["BOT_MODE"] == "browser_session"
+    conforms_workload_spec(spec)  # the spec is sealed-schema valid
+    cfg = json.loads(spec["env"]["VEXA_BOT_CONFIG"])
+    assert cfg["mode"] == "browser_session"
+    assert cfg["userdataS3Path"] == f"users/{USER}/browser-userdata", cfg
+    assert cfg["session_token"], "the session config carries the capability token"
+
+
+def test_browser_session_rejects_supplied_address_422(monkeypatch):
+    """A session addresses ITSELF: supplying native_meeting_id or meeting_url is a contradiction,
+    refused typed BEFORE any DB write. (This is the seam #829 previously refused wholesale.)"""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    for extra in ({"native_meeting_id": "bs-deadbeef"},
+                  {"meeting_url": "https://internal.example/browser-session"}):
+        repo = InMemoryMeetingRepo()
+        r = _client(repo).post("/bots", headers=HEADERS, json={"platform": "browser_session", **extra})
+        assert r.status_code == 422, f"{extra}: {r.status_code} {r.text}"
+        assert "addresses itself" in r.json()["detail"], r.json()
+        assert repo._meetings == {}, f"{extra}: refused request wrote a row: {repo._meetings}"
+
+
+def test_real_meeting_without_url_or_id_still_422(monkeypatch):
+    """NEGATIVE CONTROL (#794's guarantee intact): the browser_session carve-out does NOT loosen
+    real meetings — a google_meet with neither native_meeting_id nor meeting_url is still 422, no row."""
     monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     repo = InMemoryMeetingRepo()
-    r = _client(repo).post("/bots", headers=HEADERS, json={
-        "platform": "browser_session",
-        "native_meeting_id": "bs-deadbeef",
-        "meeting_url": "https://internal.example/browser-session",
-    })
+    r = _client(repo).post("/bots", headers=HEADERS, json={"platform": "google_meet"})
     assert r.status_code == 422, f"{r.status_code} {r.text}"
-    detail = r.json()["detail"]
-    assert "browser_session" in detail and "816" in detail, (
-        f"the refusal must name the tracked restoration, got: {detail}"
-    )
-    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
-
-    # And the retry is NOT poisoned: an ordinary meeting on the same repo still spawns.
-    ok = _client(repo).post("/bots", headers=HEADERS, json={
-        "platform": "google_meet", "native_meeting_id": "after-refusal",
-    })
-    assert ok.status_code == 201, ok.text
+    assert "required" in r.json()["detail"]
+    assert repo._meetings == {}
 
 
-def test_spawnable_platforms_is_the_sealed_invocation_enum():
-    """SSOT: the router's refusal set is READ from the sealed invocation.v1 schema, so it can
-    never drift from what build_invocation will actually accept."""
+def test_browser_session_not_in_spawnable_invocation_enum():
+    """SSOT: browser_session is NOT a meeting-bot platform — it is NOT in the sealed invocation.v1
+    Platform enum (build_invocation would reject it). It is served by its OWN spawn branch, never
+    build_invocation. The meeting-bot refusal set is still read from the schema, so it can't drift."""
     from meeting_api.bot_spawn.invocation import SPAWNABLE_PLATFORMS, _INVOCATION_SCHEMA
 
     assert SPAWNABLE_PLATFORMS == frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])

@@ -129,6 +129,25 @@ def default_registry() -> ProfileRegistry:
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
             ),
+            # Browser session — a persistent, human-driven Chromium the user reaches over noVNC
+            # (port 6080) and Playwright reaches over CDP (port 9223), NOT a meeting bot. It carries
+            # no invocation.v1 Invocation (a session has no meeting to address, #816); its config
+            # arrives as one env var VEXA_BOT_CONFIG built by meeting-api's browser_session seam,
+            # with BOT_MODE=browser_session selecting the image's session entrypoint. Same
+            # `${BROWSER_IMAGE}` as the meeting bot (the VNC/CDP stack already ships in it). Lifetime
+            # is managed externally (meeting-api owns create+DELETE), so idle_timeout is 0 —
+            # enforcement skips it, exactly like meeting-bot. The 6080/9223 port EXPOSURE is the
+            # backend's concern (address discovery, kernel.py ports={}); the profile only names HOW
+            # to run the kind.
+            "browser-session": Profile(
+                name="browser-session",
+                runnable=Runnable(
+                    image=browser_image,
+                    command=None,
+                ),
+                idle_timeout_sec=0,  # 0 ⇒ managed externally (meeting-api create/DELETE); enforcement skips it
+                base_env=bot_tuning_env,
+            ),
             # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
             # unit:<id>:out, serves unit:<id>:in until idle. Continuity is the session file in the

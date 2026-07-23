@@ -106,6 +106,31 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         meeting_id = meeting["id"]
         status = meeting.get("status")
         bot_container_id = meeting.get("bot_container_id")
+        # A browser session has NO leave-command consumer and NO join lifecycle to finalize (#816): it
+        # is a persistent workload the user closes. Stop is DIRECT and immediate — tear the workload
+        # down now (zero stop delay, mirroring 0.10) and mark the meeting `completed`, rather than
+        # publishing a `leave` command no browser-session container subscribes to (which would leave it
+        # running until the reconcile sweep). Idempotent: the `stop_requested` guard above already
+        # short-circuits a redelivered DELETE.
+        if platform == "browser_session":
+            sessions = await repo.list_sessions(meeting_id=meeting_id)
+            if sessions:
+                await repo.update_meeting_status(
+                    session_uid=sessions[-1],
+                    status="completed",
+                    completion_reason="user_requested",
+                    data={"stop_requested": True},
+                )
+            if runtime is not None and bot_container_id:
+                try:
+                    await runtime.delete_workload(bot_container_id)
+                except Exception as e:  # noqa: BLE001 — teardown is best-effort; the reconcile loop backstops
+                    _log_stop_teardown_failed(meeting_id, bot_container_id, e)
+            return {
+                "status": "stopping",
+                "meeting_id": meeting_id,
+                "native_meeting_id": native_meeting_id,
+            }
         # Mark stop-requested, keyed by the latest session so the exit classifier reads the user-intent
         # signal. Best-effort: an unknown session no-ops.
         #
