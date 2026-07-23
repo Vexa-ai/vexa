@@ -187,6 +187,11 @@ interface Turn {
   seq: number;
   /** Live edge of the last submission — ticks skip when no new audio. */
   lastSubmitEndMs: number;
+  /** Has this turn ever sent a real submission? Until it has, the first window is
+   *  released as soon as MIN_SUBMIT_MS accrues (the first-submit fast path) instead
+   *  of waiting a full SUBMIT_TICK_MS — a per-turn wait handover churn pays on EVERY
+   *  turn, so it dominates the mixed lane's draft latency, not just the first turn. */
+  firstSubmitDone: boolean;
   /** Wall-clock of the last VOICED submission (text produced). The TTL idle-finalize
    *  commits the pending if no voiced update arrives within CONFIRM_TTL_MS. */
   lastVoicedWallMs: number;
@@ -334,6 +339,17 @@ export class ChunkedTranscriber {
       // what we have by closing the turn, instead of holding it for the 3rd pass.
       if (t.turn.pendingTail.length > 0 && Date.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
         t.queue.push({ kind: 'close', t1: t.latestAudioMs });
+        void t.pump();
+        return;
+      }
+      // FIRST-SUBMIT FAST PATH (port of the gmeet lane's #851 fix b). A turn that has
+      // never submitted otherwise waits a whole SUBMIT_TICK_MS for its first window —
+      // dead air before any draft, on top of the STT round-trip. Handover churn opens a
+      // new turn constantly, so this wait is paid per turn, not once. Release the first
+      // window the moment MIN_SUBMIT_MS of audio has accrued; the too-short / RMS gates in
+      // submitTurn stay authoritative, so a near-silent opener is still skipped there.
+      if (!t.turn.firstSubmitDone && t.latestAudioMs - t.turn.confirmedUpToMs >= MIN_SUBMIT_MS) {
+        t.queue.push('tick');
         void t.pump();
         return;
       }
@@ -679,7 +695,7 @@ export class ChunkedTranscriber {
     this.turn = {
       clusterId: item.segId, turnId: this.turnCounter++,
       t0, t1: t0, confirmedUpToMs: t0,
-      history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
+      history: [], seq: 0, lastSubmitEndMs: 0, firstSubmitDone: false, allConfirmed: [], pendingName: null, pendingTail: [],
       draftedUpToSeq: 0, lastVoicedWallMs: Date.now(), resolvedName: null,
     };
     return this.turn;
@@ -735,6 +751,9 @@ export class ChunkedTranscriber {
     // identical text and confirms nothing; don't waste the call.
     if (!closing && spanEnd - turn.lastSubmitEndMs < 500) { narrate('SKIP no-new-audio'); return; }
     turn.lastSubmitEndMs = spanEnd;
+    // A real submission is now proceeding (past the too-short/no-new-audio gates): the
+    // first-submit fast path has fired for this turn and must not re-fire on the 1s heartbeat.
+    turn.firstSubmitDone = true;
 
     const { pcm, spans } = this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
