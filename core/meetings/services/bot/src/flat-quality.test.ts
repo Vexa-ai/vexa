@@ -148,6 +148,33 @@ async function main(): Promise<void> {
   /** The consumer's view: upsert by segment_id, last write wins. */
   const store = new Map<string, { text: string; startMs: number; endMs: number; completed: boolean }>();
 
+  // ── LATENCY INSTRUMENT ────────────────────────────────────────────────────────────────────────
+  // The feed is anchored to wall-clock (base = Date.now() at t0), and a segment's audio-time endMs is
+  // `base + audio_offset_ms` — so endMs IS the wall instant that end-of-speech audio was captured.
+  // time-to-draft   = firstPublishWall − endMs   (a reader first sees these words)
+  // time-to-confirm = confirmWall      − endMs   (the words stop moving)
+  // Both are only meaningful at SPEED=1 (below the timers run in real seconds while the audio clock is
+  // compressed — the two diverge and a latency in audio-seconds is not a latency the user feels).
+  interface SegLatency { endMs: number; firstDraftWall: number | null; confirmWall: number | null }
+  const seg = new Map<string, SegLatency>();
+  const noteDraft = (id: string, endMs: number, text: string): void => {
+    if (!text.trim()) return;                       // empty-text rows are stale-draft drops, not a draft
+    const e = seg.get(id) ?? { endMs, firstDraftWall: null, confirmWall: null };
+    e.endMs = endMs;
+    if (e.firstDraftWall === null) e.firstDraftWall = Date.now();
+    seg.set(id, e);
+  };
+  const noteConfirm = (id: string, endMs: number, text: string): void => {
+    if (!text.trim()) return;
+    const e = seg.get(id) ?? { endMs, firstDraftWall: null, confirmWall: null };
+    e.endMs = endMs;
+    if (e.firstDraftWall === null) e.firstDraftWall = Date.now();   // confirm-only (short turn) is also its first paint
+    if (e.confirmWall === null) e.confirmWall = Date.now();
+    seg.set(id, e);
+  };
+  /** Every STT round-trip's wall duration (the (b) bucket of the draft budget). */
+  const sttRttMs: number[] = [];
+
   let emitBoundary!: (ev: BoundaryEvent) => void;
   const tc = await ChunkedTranscriber.create({
     language: LANG,
@@ -155,21 +182,23 @@ async function main(): Promise<void> {
       sttCalls++;
       const sec = pcm.length / SR;
       submitSpans.push(sec);
+      const sent = Date.now();
       try {
         const r = await client.transcribe(pcm, LANG, prompt);
+        sttRttMs.push(Date.now() - sent);
         sttWords += wordsOf(r.text).length;
         submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: (r.text || '').trim().slice(0, 120) });
         return r;
-      } catch (e) { sttFails++; submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: '<FAILED>' }); throw e; }
+      } catch (e) { sttFails++; sttRttMs.push(Date.now() - sent); submitLog.push({ n: sttCalls, sec: Number(sec.toFixed(2)), text: '<FAILED>' }); throw e; }
     },
     // Names are ignored on purpose: a flat mix has no speaker dimension. Both callbacks write the
     // same rows a reader ends up with — a draft and its confirmation share an id and self-replace.
     publish: (_speaker, confirmed, pending) => {
-      for (const c of confirmed) store.set(c.segmentId, { text: c.text, startMs: c.startMs, endMs: c.endMs, completed: true });
-      for (const p of pending) store.set(p.segmentId, { text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false });
+      for (const c of confirmed) { store.set(c.segmentId, { text: c.text, startMs: c.startMs, endMs: c.endMs, completed: true }); noteConfirm(c.segmentId, c.endMs, c.text); }
+      for (const p of pending) { store.set(p.segmentId, { text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false }); noteDraft(p.segmentId, p.endMs, p.text); }
     },
     publishPending: (_speaker, segments) => {
-      for (const s of segments) store.set(s.segmentId, { text: s.text, startMs: s.startMs, endMs: s.endMs, completed: false });
+      for (const s of segments) { store.set(s.segmentId, { text: s.text, startMs: s.startMs, endMs: s.endMs, completed: false }); noteDraft(s.segmentId, s.endMs, s.text); }
     },
     clearPending: () => { /* the bot's transcript.v1 egress is append-only; drafts self-replace by id */ },
     rename: () => { /* attribution is not this instrument's question */ },
@@ -218,6 +247,19 @@ async function main(): Promise<void> {
   const spans = submitSpans.slice().sort((a, b) => a - b);
   const fragmentation = golden.turns ? rows.length / golden.turns.length : null;
 
+  // ── Latency distributions (seconds), only meaningful at SPEED=1 ────────────────────────────────
+  const draftLat = [...seg.values()].filter((s) => s.firstDraftWall !== null)
+    .map((s) => (s.firstDraftWall! - s.endMs) / 1000).sort((a, b) => a - b);
+  const confirmLat = [...seg.values()].filter((s) => s.confirmWall !== null)
+    .map((s) => (s.confirmWall! - s.endMs) / 1000).sort((a, b) => a - b);
+  const rtt = sttRttMs.slice().sort((a, b) => a - b).map((m) => m / 1000);
+  // Per-stage draft budget (medians). draft = (audio-end → covering submit sent) + RTT + plumbing.
+  // RTT is measured directly; the residual is the tick-wait/accumulation bucket the nominal terms
+  // don't name. confirm−draft is the extra LocalAgreement passes (each ≈ one SUBMIT_TICK cadence).
+  const draftMed = quantile(draftLat, 0.5), confirmMed = quantile(confirmLat, 0.5), rttMed = quantile(rtt, 0.5);
+  const residualMed = draftMed - rttMed;             // audio-end → submit-sent (tick wait) + plumbing
+  const agreeMed = confirmMed - draftMed;            // extra stability passes after first draft
+
   const metrics = {
     fixture: WAV, golden: GOLDEN, sttUrl: TX_URL, sttModel: TX_MODEL, speed: SPEED,
     audioSec: Number(audioSec.toFixed(1)),
@@ -242,6 +284,23 @@ async function main(): Promise<void> {
     submitUnder1sPct: Number((spans.filter((d) => d < 1).length / Math.max(1, spans.length)).toFixed(3)),
 
     cutsEmitted: cuts.length,
+
+    // Latency (s) — SPEED=1 only. Segments carrying a draft / a confirm.
+    latencySpeed1: SPEED === 1,
+    draftSegs: draftLat.length,
+    confirmSegs: confirmLat.length,
+    toDraftMedianSec: Number(draftMed.toFixed(2)),
+    toDraftP90Sec: Number(quantile(draftLat, 0.9).toFixed(2)),
+    toDraftMaxSec: Number((draftLat[draftLat.length - 1] ?? 0).toFixed(2)),
+    toConfirmMedianSec: Number(confirmMed.toFixed(2)),
+    toConfirmP90Sec: Number(quantile(confirmLat, 0.9).toFixed(2)),
+    toConfirmMaxSec: Number((confirmLat[confirmLat.length - 1] ?? 0).toFixed(2)),
+    // Per-stage draft budget (medians, s)
+    sttRttMedianSec: Number(rttMed.toFixed(2)),
+    sttRttP90Sec: Number(quantile(rtt, 0.9).toFixed(2)),
+    budgetSubmitWaitSec: Number(residualMed.toFixed(2)),   // audio-end → covering submit sent (+plumbing)
+    budgetSttRttSec: Number(rttMed.toFixed(2)),            // submit → STT response
+    budgetAgreePassesSec: Number(agreeMed.toFixed(2)),     // first draft → confirm (extra passes)
   };
 
   console.log(`\n── SCORECARD ────────────────────────────────────────────────`);
@@ -254,6 +313,12 @@ async function main(): Promise<void> {
   console.log(`  STT submit span          mean ${metrics.submitMeanSec}s · median ${metrics.submitMedianSec}s · p10 ${metrics.submitP10Sec}s`);
   console.log(`  submit spans under 1s    ${(metrics.submitUnder1sPct * 100).toFixed(0)}%`);
   console.log(`  stt calls                ${sttCalls} (${sttFails} failed) · segmenter cuts ${cuts.length}`);
+  console.log(`── LATENCY ${SPEED === 1 ? '' : '(SPEED>1 — NOT comparable to production)'} ────────────────────────────────`);
+  console.log(`  time-to-draft            median ${metrics.toDraftMedianSec}s · p90 ${metrics.toDraftP90Sec}s · max ${metrics.toDraftMaxSec}s  (${metrics.draftSegs} segs)`);
+  console.log(`  time-to-confirm          median ${metrics.toConfirmMedianSec}s · p90 ${metrics.toConfirmP90Sec}s · max ${metrics.toConfirmMaxSec}s  (${metrics.confirmSegs} segs)`);
+  console.log(`  STT round-trip           median ${metrics.sttRttMedianSec}s · p90 ${metrics.sttRttP90Sec}s`);
+  console.log(`  draft budget (median)    submit-wait ${metrics.budgetSubmitWaitSec}s + STT-RTT ${metrics.budgetSttRttSec}s ≈ draft ${metrics.toDraftMedianSec}s`);
+  console.log(`  confirm budget (median)  draft ${metrics.toDraftMedianSec}s + agreement-passes ${metrics.budgetAgreePassesSec}s ≈ confirm ${metrics.toConfirmMedianSec}s`);
   console.log(`─────────────────────────────────────────────────────────────`);
 
   if (process.env.METRICS_JSON) {
