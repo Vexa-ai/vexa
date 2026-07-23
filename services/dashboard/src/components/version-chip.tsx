@@ -1,14 +1,10 @@
 /**
- * <VersionChip /> — small, discoverable label disclosing what version this
- * dashboard fronts. Two identities, both truthful:
- *   - the PLATFORM release it pairs with (runtime-configured via
- *     PLATFORM_VERSION → /api/config → `platformVersion` prop); and
- *   - its own UI build (build-time truth from release-version.generated.json).
+ * <VersionChip /> — small, discoverable label for the Vexa product version
+ * this dashboard fronts. Hosted deployments provide that identity at runtime
+ * through PLATFORM_VERSION → /api/config → `platformVersion`.
  *
- * When `platformVersion` is provided (hosted deploys where the UI build fronts
- * a newer platform), the chip shows "v0.12.16 · UI 0.10.6.3" — platform
- * prominent, UI build as provenance. When it is absent (OSS self-host where
- * UI == release), the chip falls back to the UI build alone, unchanged.
+ * When `platformVersion` is absent, the chip falls back to the build-time
+ * release identity used by OSS self-hosted deployments.
  *
  * Mirror of services/webapp's component, intentionally kept simple so it
  * can stay in sync without sharing a package.
@@ -32,7 +28,7 @@ export function VersionChip({
   /** Runtime platform release this build fronts. null → UI-build-only. */
   platformVersion?: string | null;
 }) {
-  const url = releaseUrl(RELEASE.version);
+  const url = releaseUrl(platformVersion || RELEASE.version);
   const { label, title } = versionChipText({
     uiVersion: RELEASE.version,
     releaseDate: RELEASE.releaseDate,
