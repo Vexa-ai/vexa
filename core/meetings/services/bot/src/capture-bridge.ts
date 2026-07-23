@@ -167,6 +167,12 @@ export interface BrowserSession {
   close(): Promise<void>;
 }
 
+/** Browser runtime policy is supplied by the composition root. Product launches pass the empty
+ * shape; the hot eval loop may inject one executablePath for a controlled runtime A/B. */
+export interface BrowserLaunchOptions {
+  executablePath?: string;
+}
+
 /**
  * Launch the browser the bot joins through. Authenticated bots restore the persistent profile
  * from S3 first (so they join as a signed-in user); guest bots launch a fresh persistent context.
@@ -174,7 +180,10 @@ export interface BrowserSession {
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
-export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
+export async function launchBrowser(
+  inv: Invocation,
+  options: BrowserLaunchOptions = {},
+): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
   // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
@@ -198,7 +207,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
   const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
-  const { context, page } = await launchPersistentBrowser({ dataDir, args });
+  if (options.executablePath) {
+    console.log(`[bot] eval browser executable override → ${options.executablePath}`);
+  }
+  const { context, page } = await launchPersistentBrowser({
+    dataDir,
+    args,
+    executablePath: options.executablePath,
+  });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);

@@ -17,7 +17,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { Ajv, ValidateFunction } from 'ajv';
 import addFormatsDefault from 'ajv-formats';
-import { readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync } from 'node:fs';
 
 // verbatimModuleSyntax (tsconfig.base): the CJS default export of ajv-formats isn't
 // synthesized as callable, so bind its call signature explicitly. Runtime is unchanged.
@@ -97,6 +97,38 @@ export class InvocationError extends Error {
     super(message);
     this.name = 'InvocationError';
   }
+}
+
+/** Primitive, eval-only boot config. It deliberately stays outside invocation.v1: choosing a
+ * local browser binary is harness policy, not a product/control-plane contract. */
+export interface EvalBrowserRuntimeConfig {
+  executablePath?: string;
+}
+
+export class EvalBrowserRuntimeConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EvalBrowserRuntimeConfigError';
+  }
+}
+
+/** Resolve the optional hot-loop browser A/B at the composition boundary. An explicit path must
+ * be executable; a typo fails before the bot performs meeting work instead of degrading into a
+ * misleading join failure. Unset/blank preserves Playwright's pinned Chromium. */
+export function evalBrowserRuntimeConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  assertExecutable: (path: string) => void = (path) => accessSync(path, constants.X_OK),
+): EvalBrowserRuntimeConfig {
+  const executablePath = env.VEXA_EVAL_BROWSER_EXECUTABLE_PATH?.trim();
+  if (!executablePath) return {};
+  try {
+    assertExecutable(executablePath);
+  } catch (error) {
+    throw new EvalBrowserRuntimeConfigError(
+      `VEXA_EVAL_BROWSER_EXECUTABLE_PATH must name an executable file: ${executablePath} (${(error as Error).message})`,
+    );
+  }
+  return { executablePath };
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
