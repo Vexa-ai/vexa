@@ -283,6 +283,10 @@ jobs:
       # the runtime's presence check finds it and this leg exercises the published worker bytes.
       - name: Pre-pull the published agent-worker image
         run: docker pull "vexaai/v012-agent-worker:$VERSION"
+      # The always-on wizard flow spawns a bot through the same socket API. Docker create does not
+      # implicit-pull, so seed the published bot image before the flow exercises those bytes.
+      - name: Pre-pull the published bot image
+        run: docker pull "vexaai/vexa-bot:$VERSION"
       - name: stack-test (always-on subset) from published images
         working-directory: deploy/compose
         env:
