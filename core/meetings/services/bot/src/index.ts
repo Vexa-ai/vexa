@@ -41,6 +41,7 @@ import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { directorySignalCustody, isSignalCustodyError } from './telemetry-custody.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
@@ -202,11 +203,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
   // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
   // enables it without a control plane (the local hot-loop path).
+  const custodyDir = env.VEXA_CAPTURE_SIGNAL_CUSTODY_DIR?.trim();
   const signalRecorder: CaptureSignalRecorder | null =
     (inv.captureSignalEnabled ?? env.VEXA_CAPTURE_SIGNAL === '1')
-      ? createCaptureSignalRecorder(inv)
+      ? createCaptureSignalRecorder(inv, {
+          dir: env.VEXA_CAPTURE_SIGNAL_DIR?.trim() || undefined,
+          custody: custodyDir ? directorySignalCustody(custodyDir) : undefined,
+        })
       : null;
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  if (signalRecorder && custodyDir) console.log(`[bot] capture-signal custody → ${custodyDir}`);
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
   const sttFaults = createSttFaultReporter();
@@ -317,7 +323,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
     // path that skipped the orchestrator's teardown. (#593)
     await pipeline.stop().catch(() => { /* best-effort */ });
-    await signalRecorder?.close().catch(() => { /* best-effort */ });
+    await signalRecorder?.close().catch((error) => {
+      if (isSignalCustodyError(error)) {
+        console.error(`[bot] capture-signal custody fault source=${error.source} kind=${error.kind}: ${error.message}`);
+      } else {
+        console.error(`[bot] capture-signal close fault: ${String(error)}`);
+      }
+    });
     if (session) await session.close().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the
     // exit code; they may never have connected if redis was unreachable).

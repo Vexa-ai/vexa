@@ -157,6 +157,31 @@ run_logged_worker() {
   return "$worker_status"
 }
 
+require_custody_admission() {
+  local custody_root=$1
+  shift
+  [ "$#" -gt 0 ] || {
+    echo "CUSTODY_ADMISSION_RED source=hot-bot kind=missing-verifier" >&2
+    return 4
+  }
+  local admission_status=0
+  "$@" "$custody_root" || admission_status=$?
+  if [ "$admission_status" -ne 0 ]; then
+    echo "CUSTODY_ADMISSION_RED source=hot-bot kind=non-admissible status=$admission_status root=$custody_root" >&2
+    return 4
+  fi
+  return 0
+}
+
+require_fresh_custody_root() {
+  local custody_root=$1
+  if [ -e "$custody_root" ]; then
+    echo "CUSTODY_ADMISSION_RED source=hot-bot kind=stale-custody-root root=$custody_root" >&2
+    return 4
+  fi
+  return 0
+}
+
 # Parse the complete operational body before executing it. Bash otherwise reads a script
 # incrementally from disk; editing hot-bot.sh during a live witness can move its file offset into
 # a different command and re-enter the build/run tail with an already-completed invocation.
@@ -180,6 +205,7 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"             # core/meetings
 BOT="$HERE/services/bot"
 RUN="${HOT_BOT_RUN:-$HOME/vexa-test-rig/hot-bot/$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$RUN"; chmod 700 "$RUN"
+require_fresh_custody_root "$RUN/custody" || exit 4
 write_browser_runtime_provenance "$RUN/browser-runtime.json" \
   || { echo "✗ browser runtime provenance write failed" >&2; exit 1; }
 if [ -n "$EVAL_BROWSER_PATH" ]; then
@@ -287,10 +313,24 @@ start_bot_worker() {
   export VEXA_BOT_CONFIG
   VEXA_BOT_CONFIG=$(cat "$RUN/invocation.json")
   export VEXA_CAPTURE_SIGNAL_DIR="$RUN/capture"
+  # #956 C1: finalize outside worker-local staging so a captured session has a
+  # content-addressed receipt before the process is allowed to disappear.
+  export VEXA_CAPTURE_SIGNAL_CUSTODY_DIR="$RUN/custody"
   export VEXA_BROWSER_UTILS_PATH="$BUNDLE"
   exec node dist/index.js
 }
-run_logged_worker "$RUN/bot.log" start_bot_worker
+local worker_status=0
+run_logged_worker "$RUN/bot.log" start_bot_worker || worker_status=$?
+
+# Product teardown stays best-effort, but this fixture-producing harness has a
+# stricter bar: after the worker is gone, a fresh process must load the persisted
+# receipt and validate every record plus the digest. A missing/corrupt receipt is
+# an evidence-admission RED even when the meeting itself exited successfully.
+require_custody_admission \
+  "$RUN/custody" \
+  node "$BOT/dist/custody-admission.js" \
+  || return 4
+return "$worker_status"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

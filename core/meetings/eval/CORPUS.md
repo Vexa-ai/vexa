@@ -16,6 +16,33 @@ $VEXA_CORPUS/<platform>/<slug>/          # default ~/vexa-test-rig/fixtures
   transcript.json                        the live transcript that reference was scored against
 ```
 
+### Admission starts before worker deletion
+
+A bot-side fixture is admitted only after its completed `captured-signal.v1` bytes cross the
+ephemeral-worker boundary. Set `VEXA_CAPTURE_SIGNAL_CUSTODY_DIR` to storage mounted outside the
+worker lifetime; the recorder stages under `VEXA_CAPTURE_SIGNAL_DIR`, then finalizes:
+
+```
+<64-hex-sha256>/session.captured-signal.jsonl
+<64-hex-sha256>/receipt.json
+```
+
+The returned `captured-signal-custody-receipt` pins the digest, byte count, record count, and
+deterministic key. Repeating the same bytes is idempotent and returns the same receipt. Fixture
+admission must read the object independently after worker staging is deleted. A missing source
+is `captured-signal-custody/missing-source`; a truncated or count-mismatched source is
+`captured-signal-custody/incomplete-source`. Neither is a product-quality verdict: it is a
+harness RED, and the meeting must not be treated as a replay fixture.
+
+`hot-bot.sh` enforces that postcondition after the product worker exits: a fresh process must find
+exactly one persisted receipt and validate the receipt, every JSONL record against the
+`captured-signal.v1` schema, the byte count, and the digest. Missing, incomplete, or corrupt
+custody prints `CUSTODY_ADMISSION_RED` and exits the evidence harness non-zero even when the
+meeting worker itself ended normally. This does not change the product bot's best-effort
+telemetry teardown semantics; it changes only whether the eval run is admitted as evidence.
+The harness also refuses a pre-existing custody root before launch, so an old receipt cannot
+satisfy the current run's admission gate.
+
 ## The two commands
 
 ```bash
