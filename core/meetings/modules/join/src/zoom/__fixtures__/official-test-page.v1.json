@@ -1,0 +1,21 @@
+{
+  "schema": "zoom-official-test-page.v1",
+  "url": "https://zoom.us/test",
+  "purpose": "native_stock_image_negative_control",
+  "expectedPage": {
+    "title": "Join a Test Meeting | Zoom",
+    "mediaDevices": true
+  },
+  "participantTraffic": "forbidden",
+  "profilePolicy": "fresh_ephemeral",
+  "cleanup": {
+    "context": "closed",
+    "profileDirectory": "removed",
+    "browserProcess": "absent"
+  },
+  "doesNotProve": [
+    "protected_room_admission",
+    "captcha_bypass",
+    "universal_unsigned_zoom_admission"
+  ]
+}

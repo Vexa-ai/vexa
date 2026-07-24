@@ -1,0 +1,129 @@
+{
+  "schema": "zoom-browser-product-contract.v1",
+  "unsignedZoomStockBrowser": {
+    "driver": {
+      "package": "playwright",
+      "version": "1.61.1"
+    },
+    "browser": {
+      "engine": "firefox",
+      "version": "151.0",
+      "playwrightRevision": "1532",
+      "artifactPath": "/ms-playwright/firefox-1532"
+    },
+    "profilePolicy": "fresh_ephemeral",
+    "stockEvidenceEligible": true
+  },
+  "selectionMatrix": [
+    {
+      "case": "unsigned_zoom_stock",
+      "input": {
+        "platform": "zoom",
+        "authenticated": false
+      },
+      "expected": {
+        "engine": "firefox",
+        "runtime": "unsigned_zoom_stock",
+        "profilePolicy": "fresh_ephemeral",
+        "stockEvidenceEligible": true
+      }
+    },
+    {
+      "case": "authenticated_zoom",
+      "input": {
+        "platform": "zoom",
+        "authenticated": true
+      },
+      "expected": {
+        "engine": "chromium",
+        "runtime": "existing",
+        "profilePolicy": "authenticated_persistent",
+        "stockEvidenceEligible": false
+      }
+    },
+    {
+      "case": "google_meet",
+      "input": {
+        "platform": "google_meet",
+        "authenticated": false
+      },
+      "expected": {
+        "engine": "chromium",
+        "runtime": "existing",
+        "profilePolicy": "existing",
+        "stockEvidenceEligible": false
+      }
+    },
+    {
+      "case": "teams",
+      "input": {
+        "platform": "teams",
+        "authenticated": false
+      },
+      "expected": {
+        "engine": "chromium",
+        "runtime": "existing",
+        "profilePolicy": "existing",
+        "stockEvidenceEligible": false
+      }
+    },
+    {
+      "case": "jitsi",
+      "input": {
+        "platform": "jitsi",
+        "authenticated": false
+      },
+      "expected": {
+        "engine": "chromium",
+        "runtime": "existing",
+        "profilePolicy": "existing",
+        "stockEvidenceEligible": false
+      }
+    },
+    {
+      "case": "operator_override",
+      "input": {
+        "platform": "zoom",
+        "authenticated": false,
+        "executablePath": "/operator/browser"
+      },
+      "expected": {
+        "engine": "operator",
+        "runtime": "operator_override",
+        "profilePolicy": "fresh_ephemeral",
+        "stockEvidenceEligible": false,
+        "executablePath": "/operator/browser"
+      }
+    }
+  ],
+  "artifactCustody": {
+    "copyOnly": "/ms-playwright/firefox-1532",
+    "researchArm64SourceImage": "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e",
+    "requiredNativeEvidence": [
+      "bot_linux_amd64",
+      "lite_linux_amd64",
+      "lite_linux_arm64"
+    ],
+    "requiredNotices": [
+      "MPL-2.0",
+      "firefox_embedded_third_party_inventory"
+    ],
+    "requiredNestedComponents": [
+      "liblgpllibs.so"
+    ],
+    "forbiddenArtifacts": [
+      {
+        "product": "chrome-for-testing",
+        "version": "149.0.7827.55",
+        "playwrightRevision": "1228",
+        "path": "/ms-playwright/chromium-1228"
+      },
+      {
+        "product": "chrome-headless-shell-for-testing",
+        "version": "149.0.7827.55",
+        "playwrightRevision": "1228",
+        "path": "/ms-playwright/chromium_headless_shell-1228"
+      }
+    ]
+  }
+}
