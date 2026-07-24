@@ -1,0 +1,7 @@
+{"type":"captured_signal_header","v":1,"platform":"jitsi","native_meeting_id":"authored-m1-stale-heartbeat","language":"en","lane":"mixed","sample_rate":16000,"started_at":"2024-06-10T06:13:20.000Z"}
+{"type":"hint","t":1718000000000,"name":"Anna","lane":"mixed"}
+{"type":"boundary","tMs":1718000005000,"kind":"speaker→speaker","confidence":1}
+{"type":"hint","t":1718000005200,"name":"Anna","lane":"mixed"}
+{"type":"boundary","tMs":1718000007000,"kind":"speaker→silence","confidence":1}
+{"type":"hint","t":1718000007803,"name":"Anna","isEnd":true,"lane":"mixed"}
+{"type":"hint","t":1718000007803,"name":"Boris","lane":"mixed"}
