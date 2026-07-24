@@ -415,6 +415,42 @@ assert.equal(
   'provisional-cluster-id',
 );
 
+// An end token for a name that never owned the current global state is corrupt
+// custody, not signal progress. It cannot provide the missing post-turn
+// watermark that would otherwise authorize the preceding Boris transition.
+const mismatchedEndCallbacks: string[] = [];
+const mismatchedEnd = new ClusterNameBinder({
+  onLateResolve: (_clusterId, name) => mismatchedEndCallbacks.push(name),
+});
+mismatchedEnd.recordHint({
+  name: 'Anna',
+  tMs: onset - 5000,
+  kind: 'jitsi-dominant',
+});
+registerAndSeal(mismatchedEnd, [longTurn]);
+mismatchedEnd.recordHint({
+  name: 'Anna',
+  tMs: correctStart,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+mismatchedEnd.recordHint({
+  name: 'Boris',
+  tMs: correctStart,
+  kind: 'jitsi-dominant',
+});
+const beforeMismatchedEnd = mismatchedEnd.resolve(longTurn);
+mismatchedEnd.recordHint({
+  name: 'Charlie',
+  tMs: onset + 8000,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+const afterMismatchedEnd = mismatchedEnd.resolve(longTurn);
+assert.equal(beforeMismatchedEnd.source, 'provisional-cluster-id');
+assert.equal(afterMismatchedEnd.source, 'provisional-cluster-id');
+assert.deepEqual(mismatchedEndCallbacks, []);
+
 // C-self is a real resume: a prior closed turn, silence, then a new acoustic
 // turn with an explicit Anna end→start transition. With both turns in one
 // unresolved signal epoch, the conservative result is unknown—not a fabricated
@@ -596,6 +632,8 @@ const causalGreen =
   && afterOutOfOrderHeartbeat.speakerName === 'Boris'
   && contradictoryResult.source === 'provisional-cluster-id'
   && lateOutgoingAfterTransitionResult.source === 'provisional-cluster-id'
+  && beforeMismatchedEnd.source === 'provisional-cluster-id'
+  && afterMismatchedEnd.source === 'provisional-cluster-id'
   && resumeResult.source === 'provisional-cluster-id'
   && lateABefore.source === 'provisional-cluster-id'
   && lateAStillUnsealed.source === 'provisional-cluster-id'
@@ -621,6 +659,7 @@ console.log(
   + `stale_heartbeat=${afterOutOfOrderHeartbeat.speakerName} `
   + `late_distinct=${contradictoryResult.speakerName} `
   + `late_outgoing=${lateOutgoingAfterTransitionResult.speakerName} `
+  + `mismatched_end=${beforeMismatchedEnd.speakerName}->${afterMismatchedEnd.speakerName} `
   + `resume=${resumeResult.speakerName} `
   + `late_registration=${lateABefore.speakerName},${lateAAfter.speakerName},${lateBAfter.speakerName} `
   + `sealed_unique=${uniqueBeforeSeal.speakerName}->${uniqueAfterSeal.speakerName}`

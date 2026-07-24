@@ -167,10 +167,11 @@ async function runAuthoredTurn(
     transcriber.recordHint('Anna', 'jitsi-dominant', ONSET_MS + 2700);
     transcriber.recordHint('Boris', 'jitsi-dominant', ONSET_MS + 7000);
     assert.equal(renames.length, 1);
-    // A distinct late identity proves ordered custody was incomplete. Repaint
-    // the already-published stable id to provisional, never to Charlie.
-    transcriber.recordHint('Charlie', 'jitsi-dominant', ONSET_MS + 2700);
-    transcriber.recordHint('Charlie', 'jitsi-dominant', ONSET_MS + 2600);
+    // An end token for an identity that never owned the current global state
+    // proves ordered custody was incomplete. Repaint the already-published
+    // stable id to provisional, never to Charlie; a repeat is idempotent.
+    transcriber.recordHint('Charlie', 'jitsi-dominant', ONSET_MS + 9000, true);
+    transcriber.recordHint('Charlie', 'jitsi-dominant', ONSET_MS + 10_000, true);
   }
   await transcriber.dispose();
 
@@ -378,7 +379,7 @@ console.log(
   + `full_explain=${fullExplain.speakerName}/${fullExplain.source}/${fullExplain.confidence.toFixed(3)} `
   + `writes=${writeSummary} renames=${renameSummary} `
   + `no_progress=${noProgressNames.join(',') || 'none'} `
-  + `late_contradiction=${invalidated.renames.map((rename) =>
+  + `mismatched_end=${invalidated.renames.map((rename) =>
     `${rename.oldSpeaker}->${rename.newSpeaker}`).join(',')} `
   + `post_end_repair=${postEndRepair.map((rename) =>
     `${rename.oldSpeaker}->${rename.newSpeaker}`).join(',') || 'none'}`,

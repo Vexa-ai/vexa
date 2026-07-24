@@ -405,11 +405,17 @@ export class ClusterNameBinder {
     state.observations++;
 
     if (ev.isEnd) {
-      if (!ev.name || state.currentName === ev.name || state.lastName === ev.name) {
-        state.currentName = null;
-        state.ended = true;
-        state.lastEndMs = ev.tMs;
+      // An end token is valid only for the currently observed global state.
+      // Silently accepting an unknown/duplicate end would let a corrupt record
+      // advance the watermark and authorize an otherwise unfinalized name.
+      if (!ev.name || state.currentName !== ev.name) {
+        state.orderAmbiguous = true;
+        this.invalidateExclusiveAttributions();
+        return;
       }
+      state.currentName = null;
+      state.ended = true;
+      state.lastEndMs = ev.tMs;
       return;
     }
 
