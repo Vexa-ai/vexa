@@ -1,0 +1,40 @@
+name: Test Dashboard
+
+on:
+  push:
+    branches: [main, feature/*, dev]
+    paths:
+      - 'services/dashboard/**'
+      - '.github/workflows/test-dashboard.yml'
+  pull_request:
+    paths:
+      - 'services/dashboard/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/dashboard
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: services/dashboard/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate release version
+        run: npm run generate-release-version
+      # The platform table is `satisfies Record<Platform, PlatformConfig>`, so a
+      # platform added to the union without a config fails here, not in a browser.
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Run tests
+        run: npm test

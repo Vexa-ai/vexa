@@ -49,12 +49,13 @@ import { ErrorState } from "@/components/ui/error-state";
 import { TranscriptViewer } from "@/components/transcript/transcript-viewer";
 import { BotStatusIndicator, BotFailedIndicator } from "@/components/meetings/bot-status-indicator";
 import { WsEventLog, RestTranscriptsPreview, RestRecordingsPreview } from "@/components/meetings/ws-event-log";
+import { PlatformIcon } from "@/components/meetings/platform-icon";
 // ChatPanel removed — chat messages now render inline in TranscriptViewer
 import { AIChatPanel } from "@/components/ai";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
-import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
+import { getPlatformConfig, getDetailedStatus } from "@/types/vexa";
 import type { MeetingStatus, Meeting, RecordingData } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
@@ -910,7 +911,7 @@ export default function MeetingDetailPage() {
     return <MeetingDetailSkeleton />;
   }
 
-  const platformConfig = PLATFORM_CONFIG[currentMeeting.platform];
+  const platformConfig = getPlatformConfig(currentMeeting.platform);
   const statusConfig = getDetailedStatus(currentMeeting.status, currentMeeting.data);
 
   // Safety check: ensure statusConfig is always defined
@@ -1986,16 +1987,10 @@ export default function MeetingDetailPage() {
               {/* Platform & Meeting ID */}
               <div className="flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg flex items-center justify-center overflow-hidden bg-background">
-                  <Image
-                    src={currentMeeting.platform === "google_meet"
-                      ? "/icons/icons8-google-meet-96.png"
-                      : currentMeeting.platform === "teams"
-                      ? "/icons/icons8-teams-96.png"
-                      : "/icons/icons8-zoom-96.png"}
-                    alt={platformConfig.name}
-                    width={32}
-                    height={32}
-                    className="object-contain"
+                  <PlatformIcon
+                    platform={currentMeeting.platform}
+                    size={32}
+                    className="h-8 w-8 object-contain text-muted-foreground"
                   />
                 </div>
                 <div>
