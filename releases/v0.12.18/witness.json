@@ -4,15 +4,16 @@
   "generated_from": "v0.12.16...v0.12.18 (21 value PRs carried by the reviewed release integration)",
   "witnessed_by": "Dmitry Grankin",
   "witnessed_at": "2026-07-24",
-  "deployment": "hosted Helm stage and production candidate, exact same-byte stable map; bot sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+  "deployment": "hosted stage2 Helm witness retained as historical evidence; packet3 Bot sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47 awaits fresh stage and production execution witness",
   "witness_deployment": {
     "url": "https://dashboard.staging.vexa.ai/meetings/13626",
     "provisioned_by": "v0.12.18 stage revisions 65 through 77 and production revisions 100 through 103, guarded ordered Helm rollout",
     "prevalidated": [
-      "release-validate run 30036135103: image identity, Compose, Lite, Helm, bot spawn, v0.10 compatibility, and native arm64 green",
+      "release-validate run 30036135103: base-eight image identity, Compose, Lite, Helm, bot spawn, v0.10 compatibility, and native arm64 green",
+      "bounded packet3 run 30068779645: authenticated 12-tag ABSENT preflight, Bot validation, Lite amd64, Lite native arm64, SBOM, and exact descriptor receipt green; stable publication skipped",
       "stage storm held twice with no v0.12.18 blocker",
       "stage meeting 13626: 420-second lobby survival, admission, live transcript, typed stop, durable transcript, recording flush",
-      "stage meeting 13633 and production meeting 24740 ran bot sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+      "stage meeting 13633 and production meeting 24740 ran the superseded stage2 bot sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae; they do not witness packet3",
       "production revision 103: 14/14 Deployments Ready, live-bot continuity, shared transcription counters 22 to 22"
     ]
   },
@@ -170,5 +171,5 @@
       "evidence": "exact-head Zoom and shared non-admitted terminal fixtures; original external Zoom failure did not recur live"
     }
   ],
-  "signed_off": true
+  "signed_off": false
 }

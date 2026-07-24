@@ -96,8 +96,8 @@ not rebuilt after the witness.
 | `vexaai/v012-gateway` | `sha256:4b9bd9d6d33f4f2ec8df0b9530b02942482c0399ec71f39722fb06f48aae55df` |
 | `vexaai/v012-mcp` | `sha256:72158d83293ce48c1cfd5c9bd8e2762e72a2da63d962fdbdbf7fe9b09daa8755` |
 | `vexaai/v012-terminal` | `sha256:a668ad43e225364422b225939fad057bff33db8b5bb3d6c341e1b625c5bde008` |
-| `vexaai/vexa-bot` | `sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae` |
-| `vexaai/vexa-lite` | `sha256:2d5c11d0fd4a194ce1085ac8624ed84116dd13c29b608cc8dac1b295979b3fb9` |
+| `vexaai/vexa-bot` | `sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47` |
+| `vexaai/vexa-lite` | `sha256:5d0b6f865afe726109bb326361b917a3d9f762d64abbeea0826744134162d051` |
 
 Hosted production directly held the admin API, runtime, meeting API, gateway,
 and bot bytes. Agent worker, agent API, MCP, Terminal, and Lite are proven by
@@ -132,7 +132,7 @@ Redis, Postgres, and Kubernetes evidence.
 | # | Guarantee | Evidence |
 |---|---|---|
 | 1 | Users pull the bytes that were proved | exact candidate map; stable alias digest equality |
-| 2 | Compose, Lite, and Helm install paths work to their declared scope | [published-candidate validation](https://github.com/Vexa-ai/vexa/actions/runs/30036135103) |
+| 2 | Compose, Lite, and Helm install paths work to their declared scope | [base-eight published-candidate validation](https://github.com/Vexa-ai/vexa/actions/runs/30036135103) plus [bounded packet3 Bot/Lite validation](https://github.com/Vexa-ai/vexa/actions/runs/30068779645) |
 | 3 | Real audio produces speaker-attributed words | hosted stage and production human witness; standalone wav→words remains unclaimed |
 | 4 | Fresh empty VM works | not claimed; no fresh-VM leg was run |
 | 5 | Existing behavior remains covered | v0.10 compatibility, bot-spawn, Compose, Lite, Helm, and arm64 validation |

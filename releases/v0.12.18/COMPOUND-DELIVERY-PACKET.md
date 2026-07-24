@@ -36,21 +36,29 @@ Current production is deliberately held at Helm revision `103`:
 - shared transcription: public health `200`, primary `false`, Cloudflare
   fallback functional, direct BBB not exercised, retained counters `22 → 22`.
 
-The final production leg changes one object only:
+The two remaining production legs are isolated and ordered:
 
-- `Deployment/vexa-platform-webapp`;
+- leg 5 changes only `Deployment/vexa-platform-webapp`;
+- leg 6 changes only `Deployment/vexa-platform-vexa-runtime`, updating
+  `BROWSER_IMAGE` for future spawns without replacing any existing meeting
+  Pod;
+- exact platform candidate head submitted for independent review:
+  `3005386d1deb19feaec1b3f3fbdfdaaa573d04f3`;
 - deployment-input fingerprint:
-  `sha256:e142bdac05f825e2fe036726bd0abe6d948c2fd69d01056fb9e1dbe4d825f78c`;
+  `sha256:f07b72cb1ad55b9fa376d56d311b03e3ad48a3a4e0142066e89ca5b67f7bee69`;
 - image index:
   `sha256:4da42b396623bfe863c207a01f7175773a441b1c4bc70b4d342189fb205aa741`;
 - production amd64 manifest:
   `sha256:297fc3cb778a39e293255222a932647c57f6b591e2032428c16c6789b55b5b44`;
 - source revision:
   `67a39b7e366fd6aa794ee3134c3aadd925b8d9bc`;
-- object additions/deletions: `0/0`.
+- future-spawn Bot descriptor:
+  `sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47`;
+- object additions/deletions: `0/0` across both legs.
 
-Rollback after a failed final leg is Helm revision `103`, with the manifest and
-values hashes above. The whole-release emergency anchor remains revision `99`:
+Rollback before either remaining leg is Helm revision `103`, with the manifest
+and values hashes above. After each green leg, that revision becomes the nearer
+rollback anchor. The whole-release emergency anchor remains revision `99`:
 
 - manifest:
   `7c5739b83a06f798f6a59b7da38a827f34406cff4bcfcce97cff383b775e3110`;
@@ -64,22 +72,35 @@ The exact public tag target is the reviewed merge of this integration into
 merge exists. No earlier RC, candidate-build, validation, or preparation SHA
 is the public tag target.
 
-The image build and source-tag identities remain deliberately distinct:
+The image build and source-tag identities remain deliberately distinct. Eight
+frozen descriptors use the original candidate:
 
-- witnessed image build source:
+- base-eight image build source:
   `6b40fd49f9785c0b43ba28fe17e53753d96ff6da`;
-- corrected validation source:
+- base-eight corrected validation source:
   `a4560ec8da1cd8aa3d8b9c91cde0af9352857f5a`;
-- build run:
+- base-eight build run:
   <https://github.com/Vexa-ai/vexa/actions/runs/30033899550>;
-- green published-candidate validation:
+- base-eight published-candidate validation:
   <https://github.com/Vexa-ai/vexa/actions/runs/30036135103>.
 
-`release/candidate-image-map.mjs check-source-inputs` proves that every path
-copied by the ten release Dockerfiles is tree-identical between the build
-source and the public tag target. A difference is a new candidate and blocks
-aliasing. Documentation, workflow, receipt, and release-governance changes do
-not enter an image.
+Bot and Lite use the bounded packet3 replacement run:
+
+- source and validation SHA:
+  `084cf51e7c83d12812b64307261ff21d4f92a96e`;
+- run:
+  <https://github.com/Vexa-ai/vexa/actions/runs/30068779645>;
+- preflight artifact: all ten abandoned packet2 tags plus both packet3 targets
+  returned conclusive authenticated `ABSENT` before any build;
+- only Bot and Lite built; their dedicated Bot, Lite amd64, and native arm64
+  validation lanes and descriptor receipt are green; stable publication was
+  skipped.
+
+`release/candidate-image-map.mjs check-source-inputs` proves, row by row, that
+every path copied by each release Dockerfile is tree-identical between that
+row's build source and the public tag target. A difference is a new candidate
+and blocks aliasing. Documentation, workflow, receipt, and
+release-governance changes do not enter an image.
 
 For each frozen top-level descriptor, `candidate-images.json` also records the
 selected `linux/amd64` and (where published) `linux/arm64` child manifests and
@@ -102,8 +123,13 @@ claimed as hosted-production workloads.
 
 ## Release population
 
-The closed v0.12.18 milestone contains 24 issues. Three are v0.12.16 carry-ins
-and are not new v0.12.18 value: `#798`, `#864`, and `#895`.
+Milestone `#30` is open as `v0.12.18 — compound delivery pending`. Its 21
+shipped-value issues are open with exactly `state: awaiting-evaluation`;
+publication close-back is forbidden until the exact public tag, ten stable
+aliases, GitHub Release, validation, and credit receipt exist. The five closed
+milestone objects are the three v0.12.16 carry-ins `#798`, `#864`, and `#895`,
+plus merged PR objects `#885` and `#894`; they are not evidence that the
+compound delivery is complete.
 
 The v0.12.18 value population is:
 
@@ -116,7 +142,6 @@ The v0.12.18 value population is:
 | #803 | #903 | close-back with bounded-capture claim only |
 | #809 | #906 | close-back |
 | #840 | #918 | close-back; live denial witness |
-| #841 | #904 | keep open; core ledger ships, dashboard consumer remains v0.12.20 |
 | #846 | #917 + #932 | close-back; English path only, structural scan diagnostic |
 | #856 | #932 | close-back; deterministic English locale |
 | #862 | #919 | close-back; 420-second lobby witness |
@@ -142,7 +167,8 @@ the v0.12.19 train.
 Explicit survivors:
 
 - `#839` — host-visible Meet lobby withdrawal;
-- `#841` — hosted dashboard Delivery History consumer;
+- `#841` — hosted dashboard Delivery History consumer, currently routed to
+  v0.12.20;
 - `#934` — unbounded teardown after silence verdict;
 - `#935` — stale replica terminal-truth corruption;
 - `#937` — hosted Jitsi meeting detail rendering.
@@ -167,7 +193,11 @@ After the final production leg:
 2. the public badge contains `v0.12.18` and no `v0.12.16` or UI sub-version;
 3. the public GitHub fact contains `2.6k+` and no `2.2k+`;
 4. the running webapp imageID is the approved amd64 manifest;
-5. all 14 Deployments remain Ready and every pre-existing bot continuity row
+5. Runtime's `BROWSER_IMAGE` is the approved packet3 Bot descriptor;
+6. a new controlled production Bot runs that exact digest, admits, transcribes,
+   completes with typed durable truth, flushes recording/transcript data, and
+   exits cleanly;
+7. all 14 Deployments remain Ready and every pre-existing bot continuity row
    is unchanged.
 
 After OSS publication:
