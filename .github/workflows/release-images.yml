@@ -78,6 +78,11 @@ jobs:
           echo "✓ Docker Hub credentials configured"
 
       - uses: actions/checkout@v4
+        with:
+          # Candidate provenance compares against the witnessed build commit. A
+          # depth-1 checkout makes that commit unknowable and must never widen
+          # into a fresh all-image build.
+          fetch-depth: 0
 
       - name: Resolve + cross-check the release version
         id: version

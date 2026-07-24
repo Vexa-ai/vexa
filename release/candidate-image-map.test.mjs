@@ -182,6 +182,10 @@ test("release-images consumes the planner's dynamic matrix instead of a literal 
   );
   assert.match(
     workflow,
+    /Candidate provenance compares against the witnessed build commit[\s\S]*fetch-depth: 0/,
+  );
+  assert.match(
+    workflow,
     /needs\.preflight\.outputs\.build_bot == 'true'/,
   );
   assert.match(
