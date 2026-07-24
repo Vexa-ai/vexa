@@ -123,42 +123,19 @@ jobs:
           if [ "$BARE" != "$BASE" ]; then PRE=true; else PRE=false; fi
           { echo "version=$VERSION"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
           echo "✓ validating published set $VERSION (prerelease=$PRE)"
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Every published manifest resolves and carries required platforms
+      - uses: actions/checkout@v4
+      - name: Registry validator controls
+        run: node --test scripts/registry-candidate-validate.test.mjs
+      - name: Every frozen descriptor resolves through authenticated registry reads
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # `imagetools inspect` prints no Platform line for classic-driver (schema-v2)
-          # manifests even when the registry descriptor says linux/amd64 — the bot image
-          # is built on the classic driver by design, so read the registry descriptor
-          # instead; it is authoritative for both manifest shapes.
-          for img in $ALL_IMAGES; do
-            echo "== $img:$VERSION"
-            # NOTE: a `IMG=... cmd | python3` prefix binds the var only to the first
-            # pipeline command — python3 would KeyError. Export it instead.
-            export IMG="$img"
-            docker manifest inspect -v "$img:$VERSION" | python3 -c "
-          import os, sys, json
-          img = os.environ['IMG']
-          d = json.load(sys.stdin)
-          items = d if isinstance(d, list) else [d]
-          plats = {(m.get('Descriptor', {}).get('platform', {}).get('os'),
-                    m.get('Descriptor', {}).get('platform', {}).get('architecture'))
-                   for m in items}
-          required = {('linux', 'amd64')}
-          if img != 'vexaai/vexa-bot':
-            required.add(('linux', 'arm64'))
-          missing = required - plats
-          if missing:
-            print(f'missing platforms: {sorted(missing)}', file=sys.stderr)
-            sys.exit(1)
-          " || { echo "::error ::$img:$VERSION missing required platform manifest(s) — is the set published?"; exit 1; }
-          done
-          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present with required platforms"
+          node scripts/registry-candidate-validate.mjs \
+            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --tag "$VERSION"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
