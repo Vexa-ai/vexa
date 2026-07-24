@@ -1,19 +1,19 @@
 # Build stage
 FROM node:20-alpine AS builder
 
-WORKDIR /app
+WORKDIR /workspace/services/dashboard
 
-# Copy transcript-rendering built package
-COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
-COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+# Preserve the repository-relative file dependency path used by package-lock.json.
+COPY packages/transcript-rendering/package.json /workspace/packages/transcript-rendering/package.json
+COPY packages/transcript-rendering/dist/ /workspace/packages/transcript-rendering/dist/
 
-# Install dependencies (package.json only — no lockfile, to avoid path mismatch after sed)
-COPY services/dashboard/package.json ./
-RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json && \
-    npm install --ignore-scripts
+# Install the exact reviewed dependency graph.
+COPY services/dashboard/package.json ./package.json
+COPY services/dashboard/package-lock.json ./package-lock.json
+RUN npm ci --ignore-scripts
 # Ensure transcript-rendering is physically copied (not symlinked)
 RUN rm -rf node_modules/@vexaai/transcript-rendering && \
-    cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+    cp -r /workspace/packages/transcript-rendering node_modules/@vexaai/transcript-rendering
 
 # Copy source code
 COPY services/dashboard/src ./src
@@ -21,8 +21,8 @@ COPY services/dashboard/public ./public
 COPY services/dashboard/scripts ./scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
 COPY services/dashboard/components.json ./
-COPY VERSION /repo/VERSION
-COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
+COPY VERSION /workspace/VERSION
+COPY deploy/helm/charts/vexa/Chart.yaml /workspace/deploy/helm/charts/vexa/Chart.yaml
 
 # Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
 #
@@ -36,7 +36,7 @@ ARG VEXA_API_URL
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 ENV VEXA_API_URL=$VEXA_API_URL
-ENV VEXA_REPO_ROOT=/repo
+ENV VEXA_REPO_ROOT=/workspace
 
 # Build application (npm prebuild → generate-release-version.js → next build)
 RUN npm run build && npm run assert-release-version
@@ -51,9 +51,9 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /workspace/services/dashboard/public ./public
+COPY --from=builder --chown=nextjs:nodejs /workspace/services/dashboard/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /workspace/services/dashboard/.next/static ./.next/static
 COPY --chown=nextjs:nodejs services/dashboard/docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
