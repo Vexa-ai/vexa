@@ -13,10 +13,12 @@ The approval receipt outside this repository must bind:
 - `releases/v0.12.18/RELEASE-NOTES.md`;
 - the canonical biz ownership readback and the Kubernetes Lease readback.
 
-No component is independently “delivered.” The boundary becomes complete only
-after the final production leg holds green and the exact pre-approved OSS tag,
-stable aliases, moving aliases, GitHub Release, and issue close-backs all read
-back.
+Production delivery already holds green at revision 103. The founder's
+2026-07-24 ruling decouples OSS publication from post-deploy platform
+credential remediation #125: the public boundary completes when the exact
+approved OSS tag, stable aliases, moving aliases, GitHub Release, and issue
+close-backs all read back. No image rebuild or additional production/stage
+mutation is authorized by that ruling.
 
 ## Production anchor
 
@@ -36,7 +38,8 @@ Current production is deliberately held at Helm revision `103`:
 - shared transcription: public health `200`, primary `false`, Cloudflare
   fallback functional, direct BBB not exercised, retained counters `22 → 22`.
 
-The two remaining production legs are isolated and ordered:
+Two production legs were prepared but remain deliberately unexecuted and are
+not prerequisites for the approved OSS publication:
 
 - leg 5 changes only `Deployment/vexa-platform-webapp`;
 - leg 6 changes only `Deployment/vexa-platform-vexa-runtime`, updating
@@ -52,7 +55,7 @@ The two remaining production legs are isolated and ordered:
   `sha256:297fc3cb778a39e293255222a932647c57f6b591e2032428c16c6789b55b5b44`;
 - source revision:
   `67a39b7e366fd6aa794ee3134c3aadd925b8d9bc`;
-- future-spawn Bot descriptor:
+- prepared future-spawn Bot descriptor:
   `sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47`;
 - object additions/deletions: `0/0` across both legs.
 
@@ -123,8 +126,9 @@ claimed as hosted-production workloads.
 
 ## Release population
 
-Milestone `#30` is open as `v0.12.18 — compound delivery pending`. Its 21
-shipped-value issues are open with exactly `state: awaiting-evaluation`;
+Milestone `#30` is open as `v0.12.18 — compound delivery pending`. Its 22
+shipped-value issues (the 21-PR value map plus inherited #890) are open with
+exactly `state: awaiting-evaluation`;
 publication close-back is forbidden until the exact public tag, ten stable
 aliases, GitHub Release, validation, and credit receipt exist. The five closed
 milestone objects are the three v0.12.16 carry-ins `#798`, `#864`, and `#895`,
@@ -158,11 +162,9 @@ The v0.12.18 value population is:
 | #927 | #931 | close-back; reporter credit to Valerie Phoenix |
 
 Additional custody row: `#890` is inherited implementation on the v0.12.18
-source line, not a v0.12.19 delta. It remains open in milestone `#32` only
-until this exact public tag, Release, validation, and credit receipt exist.
-The publication close-back removes it from `v0.12.19 — next`, records the
-v0.12.18 delivery evidence, and closes it. It must not be claimed or closed by
-the v0.12.19 train.
+source line, not a v0.12.19 delta. It is now open in milestone `#30` with the
+other v0.12.18 values. Publication records the v0.12.18 delivery evidence and
+closes it; it must not be claimed or closed by the v0.12.19 train.
 
 Explicit survivors:
 
@@ -172,6 +174,9 @@ Explicit survivors:
 - `#934` — unbounded teardown after silence verdict;
 - `#935` — stale replica terminal-truth corruption;
 - `#937` — hosted Jitsi meeting detail rendering.
+- `#942` — hosted Account/API-key compatibility incident, carried by
+  `Vexa-ai/vexa-platform#127`; it is not part of the delivered/closing OSS
+  population. `#941` is its closed duplicate.
 
 Credits:
 
@@ -187,18 +192,18 @@ witness are stated as such.
 
 ## Customer-facing readback oracle
 
-After the final production leg:
+Accepted production readback:
 
-1. `https://vexa.ai` and `/api/version` return `200`;
-2. the public badge contains `v0.12.18` and no `v0.12.16` or UI sub-version;
-3. the public GitHub fact contains `2.6k+` and no `2.2k+`;
-4. the running webapp imageID is the approved amd64 manifest;
-5. Runtime's `BROWSER_IMAGE` is the approved packet3 Bot descriptor;
-6. a new controlled production Bot runs that exact digest, admits, transcribes,
-   completes with typed durable truth, flushes recording/transcript data, and
-   exits cleanly;
-7. all 14 Deployments remain Ready and every pre-existing bot continuity row
-   is unchanged.
+1. production revision 103 holds all 14 Deployments Ready;
+2. admin API, runtime, meeting API, and gateway run the candidate-map
+   descriptors;
+3. production meetings 24740/24741 ran the stage2 Bot digest, admitted,
+   transcribed, and completed; they do not witness packet3;
+4. pre-existing bot continuity remained unchanged;
+5. hosted Account/API-key incident #942 remains open and routed to
+   `vexa-platform#127`; OSS publication does not claim it fixed;
+6. the public marketing badge/webapp leg and Runtime packet3 leg remain
+   unexecuted platform work and are not OSS publication evidence.
 
 After OSS publication:
 
@@ -225,7 +230,10 @@ Its `ownership.yaml` is byte-identical to the original atomic handoff
 owner `df04a7fd-b154-4c88-889c-7fd31bd06bc8` and release `0.12.18`, matching
 the operational production Lease.
 
-The lifecycle delivery receipt is created only after this packet's public
-source SHA, digests, notes, population, and current dual-custody readback are
-frozen. It begins in `prod_live_oss_pending`; only the final all-readback
-commit may flip it to `prod_delivery_complete`.
+The founder value sign is committed in `witness.json` and binds same-byte OSS
+publication to this frozen candidate tuple. The lifecycle delivery receipt is
+created only after this packet's public source SHA, digests, notes, population,
+and current dual-custody readback are frozen. It begins in
+`prod_live_oss_pending`; only the final all-readback commit may flip it to
+`prod_delivery_complete`. Post-deploy credential remediation #125 and hosted
+incident #942 remain open survivors and do not change that OSS receipt.

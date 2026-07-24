@@ -82,9 +82,13 @@ Behavior refinements to note:
 
 ## Artifact identity
 
-The stable tags are same-byte aliases of the release candidate that passed
-published-image validation and the hosted stage/production witness. They were
-not rebuilt after the witness.
+The stable tags are same-byte aliases of frozen release candidates; they were
+not rebuilt after validation. Production revision 103 and meetings 24740/24741
+witnessed the stage2 Bot at
+`sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae`.
+The public Bot below is the packet3 replacement: its runtime inputs are
+tree-identical to the tagged source and its image/Compose validation passed,
+but it was **not** deployed or human-witnessed on hosted stage or production.
 
 | image | `:v0.12.18` digest |
 |---|---|
@@ -99,10 +103,11 @@ not rebuilt after the witness.
 | `vexaai/vexa-bot` | `sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47` |
 | `vexaai/vexa-lite` | `sha256:5d0b6f865afe726109bb326361b917a3d9f762d64abbeea0826744134162d051` |
 
-Hosted production directly held the admin API, runtime, meeting API, gateway,
-and bot bytes. Agent worker, agent API, MCP, Terminal, and Lite are proven by
-the published-candidate validation run; they are not claimed as hosted
-production workloads.
+Hosted production directly held the listed admin API, runtime, meeting API,
+and gateway bytes. It held the stage2 Bot digest recorded above, not the
+packet3 public Bot digest. Agent worker, agent API, MCP, Terminal, packet3 Bot,
+and Lite are proven by published-candidate validation; they are not claimed as
+hosted production workloads.
 
 ## Known boundaries
 
@@ -115,6 +120,10 @@ production workloads.
   remains deferred.
 - Hosted transcription currently has a functional Cloudflare fallback, while
   primary health remains false and direct BBB was not exercised.
+- Hosted Account/API-key management currently has a webapp-to-Admin-API
+  compatibility incident ([#942](https://github.com/Vexa-ai/vexa/issues/942),
+  platform carry [vexa-platform#127](https://github.com/Vexa-ai/vexa-platform/issues/127)).
+  It is not delivered or closed by this OSS release.
 
 ## Credits
 
@@ -137,7 +146,7 @@ Redis, Postgres, and Kubernetes evidence.
 | 4 | Fresh empty VM works | not claimed; no fresh-VM leg was run |
 | 5 | Existing behavior remains covered | v0.10 compatibility, bot-spawn, Compose, Lite, Helm, and arm64 validation |
 | 6 | Each image contains what its name promises | image-identity validation |
-| 7 | A human witnessed the assembled value | hosted stage witness plus production meetings 24740/24741 |
-| 8 | Every batch change has acceptance evidence | 21-PR value map and exact-head checks |
+| 7 | A human witnessed the hosted value | stage2 hosted witness plus production meetings 24740/24741; packet3 Bot is validation-only |
+| 8 | Every batch change has acceptance evidence | 21-PR value map plus inherited #890 and exact-head checks |
 | 9 | Notes state coverage boundaries | this document |
 | 10 | Moving pointers change only after validation | release value/witness gates plus the `release-promote` environment |
