@@ -1,26 +1,16 @@
 /**
- * #797 RED — a real Teams voice-outline transition whose display name cannot
- * be resolved must remain unknown, but it must not disappear silently.
- *
- * This test is intentionally excluded from the package's green suite until
- * the producer exposes the typed observation it requires.
+ * A real Teams voice-outline transition whose display name cannot be resolved
+ * remains unknown and emits one typed producer observation instead of
+ * disappearing silently.
  *
  * Run:
- *   pnpm --filter @vexa/teams-capture exec tsx src/teams-name-unresolved.red.test.ts
+ *   pnpm --filter @vexa/teams-capture exec tsx src/teams-name-unresolved.test.ts
  */
 import {
   createTeamsSpeakers,
+  type TeamsNameUnresolvedObservation,
   type TeamsSpeakersOptions,
 } from './msteams-speakers.js';
-
-interface NameUnresolvedObservation {
-  type: 'name-unresolved';
-  platform: 'teams';
-  signal: 'dom-outline';
-  participantId: string;
-  isEnd: boolean;
-  tMs: number;
-}
 
 const VOICE_OUTLINE = '[data-tid="voice-level-stream-outline"]';
 const PARTICIPANT_ID = 'fixture-participant-a';
@@ -85,11 +75,11 @@ globalObject.document = {
 };
 
 const hints: Array<{ name: string; id: string; isEnd: boolean }> = [];
-const observations: NameUnresolvedObservation[] = [];
+const observations: TeamsNameUnresolvedObservation[] = [];
 const logs: string[] = [];
 
 const options: TeamsSpeakersOptions & {
-  onNameUnresolved: (observation: NameUnresolvedObservation) => void;
+  onNameUnresolved: (observation: TeamsNameUnresolvedObservation) => void;
 } = {
   debounceMs: 0,
   log: (message) => logs.push(message),
@@ -126,6 +116,7 @@ if (
   observation.type !== 'name-unresolved'
   || observation.platform !== 'teams'
   || observation.signal !== 'dom-outline'
+  || observation.reason !== 'resolver-empty'
   || observation.participantId !== PARTICIPANT_ID
   || observation.isEnd
   || !Number.isFinite(observation.tMs)
