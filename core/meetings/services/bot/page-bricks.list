@@ -1,0 +1,12 @@
+# Page-side capture bricks — browser bundles, NOT bot node deps (gate:isolation), so the
+# `@vexa/bot...` selector never pulls them; they must be built BEFORE the bot build emits
+# window.VexaBrowserUtils. The ONE source of truth for that pre-build list: both image builds
+# (core/meetings/services/bot/Dockerfile and deploy/lite/Dockerfile.lite) read this file, and
+# gate:page-bricks holds the copies to it (#583, the #576 rot class). One package name per line.
+@vexa/capture-codec
+@vexa/gmeet-capture
+@vexa/mixed-capture-core
+@vexa/record-chunker
+@vexa/jitsi-capture
+@vexa/teams-capture
+@vexa/zoom-capture
