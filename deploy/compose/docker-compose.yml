@@ -1,6 +1,6 @@
 name: vexa-v012
 # v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
-# postgres:17 + redis:7 + minio + minio-init infra, then the four long-running Python services —
+# postgres:17 + valkey:8 + minio + minio-init infra, then the four long-running Python services —
 # admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
 # Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
 # `condition: service_healthy` so the bring-up is ordered + observable.
@@ -11,10 +11,13 @@ name: vexa-v012
 services:
   # ─── Infrastructure ───────────────────────────────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # Valkey (Linux Foundation BSD-3 fork of Redis 7.2.4): parity with the Lite witness surface
+    # and off source-available Redis ≥7.4 (RSALv2/SSPLv1). Wire-compatible (RESP) — the service
+    # name, REDIS_URL, and every consumer stay put; only the engine changes (#653).
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5

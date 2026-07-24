@@ -1,9 +1,10 @@
-"""O-STACK-2 — Redis backing-stack eval (testcontainers-redis).
+"""O-STACK-2 — Valkey backing-stack eval (testcontainers).
 
-Exercises each usage class from `services/redis.md` against an ephemeral Redis, asserting the
-REAL patterns work end-to-end:
+Runs against an ephemeral **Valkey** (the engine every surface ships, #653), asserting the REAL
+usage patterns work end-to-end on the store we deploy:
 
   Stream     XADD → XREADGROUP → XACK   — transcription_segments (consumer group collector_group)
+  Reclaim    XAUTOCLAIM                 — orphan-drain on the same stream (the #636 command; absent on Redis < 6.2)
   Pub/Sub    PUBLISH → SUBSCRIBE        — tc:meeting:*, bot_commands:meeting:*, meeting:*:status
   List queue LPUSH → BRPOP              — webhook_retry_queue
   Sorted set ZADD → ZRANGEBYSCORE       — speaker_events:{session_uid} (scheduler/score-ordered)
@@ -54,6 +55,28 @@ def test_stream_xadd_xreadgroup_xack(redis_client):
     # XACK — message acknowledged, pending drains.
     acked = r.xack(STREAM, GROUP, got_id)
     assert acked == 1
+    assert r.xpending(STREAM, GROUP)["pending"] == 0
+
+
+def test_stream_xautoclaim_reclaims_orphans(redis_client):
+    """The orphan-reclaim path (#636): XAUTOCLAIM must exist and drain a pending entry from a dead
+    consumer to a survivor. This is the exact command jammy's Redis 6.0.16 lacked — asserting it
+    against the shipped Valkey engine is what makes the eval witness the store users run (#653)."""
+    r = redis_client
+    r.delete(STREAM)
+    r.xgroup_create(STREAM, GROUP, id="0", mkstream=True)
+    msg_id = r.xadd(STREAM, {"payload": json.dumps({"uid": "orphan"})})
+
+    # "dead" consumer reads the message but never acks — it stays pending, owned by the dead consumer.
+    r.xreadgroup(GROUP, "consumer-dead", {STREAM: ">"}, count=10)
+    assert r.xpending(STREAM, GROUP)["pending"] == 1
+
+    # XAUTOCLAIM (min-idle 0) transfers the orphan to the survivor — the reclaim the collector runs.
+    cursor, claimed, _deleted = r.xautoclaim(STREAM, GROUP, "consumer-survivor", min_idle_time=0, start_id="0")
+    assert any(cid == msg_id for cid, _fields in claimed), "XAUTOCLAIM did not reclaim the orphaned entry"
+
+    # The survivor now owns it; ack drains the group to empty.
+    assert r.xack(STREAM, GROUP, msg_id) == 1
     assert r.xpending(STREAM, GROUP)["pending"] == 0
 
 

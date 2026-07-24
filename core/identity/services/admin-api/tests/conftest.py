@@ -40,13 +40,19 @@ def pg_async_url(pg_url):
 
 @pytest.fixture(scope="session")
 def redis_client():
-    """Ephemeral Redis → a connected redis-py client. Session-scoped."""
+    """Ephemeral Valkey → a connected redis-py client. Session-scoped.
+
+    Valkey (BSD-3 fork of Redis 7.2.4) is the engine we ship on every surface (#653); the eval runs
+    against it, not stock Redis, so the stack it witnesses matches what users deploy. RedisContainer
+    waits via a redis-py TCP PING (RESP), not an in-container `redis-cli`, so the Valkey image — which
+    ships `valkey-cli`, not `redis-cli` — is a clean drop-in.
+    """
     if not _docker_ok():
         pytest.skip("docker daemon not available")
     import redis as redis_lib
     from testcontainers.redis import RedisContainer
 
-    with RedisContainer("redis:7-alpine") as rc:
+    with RedisContainer("valkey/valkey:8-alpine") as rc:
         host = rc.get_container_host_ip()
         port = int(rc.get_exposed_port(6379))
         client = redis_lib.Redis(host=host, port=port, decode_responses=True)

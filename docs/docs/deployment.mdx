@@ -46,7 +46,7 @@ terminal web workbench at `http://localhost:13000`.
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
 | **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
-| redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+| redis (Valkey) · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
 meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them. The
