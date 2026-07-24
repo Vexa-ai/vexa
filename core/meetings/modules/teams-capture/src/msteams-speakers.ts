@@ -60,6 +60,21 @@ export const teamsMeetingContainerSelectors: string[] = [
 ];
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
+const TEAMS_CONTROL_LABELS = new Set([
+  'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
+  'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
+  'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
+  'mute', 'unmute',
+].map(value => value.replace(/[_\s-]+/g, ' ')));
+const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+
+function isTeamsDisplayNameCandidate(value: string): boolean {
+  const candidate = value.trim();
+  if (candidate.length <= 1 || candidate.length >= 50) return false;
+  const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
+  return !TEAMS_CONTROL_LABELS.has(normalized)
+    && !TEAMS_TIMER_LABEL.test(normalized);
+}
 
 export interface TeamsSpeakerIdentity {
   id: string;
@@ -139,11 +154,6 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   function extractName(element: HTMLElement): string {
-    const forbidden = [
-      'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
-      'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
-      'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
-    ];
     for (const selector of teamsNameSelectors) {
       const nameElement = element.querySelector(selector) as HTMLElement | null;
       if (!nameElement) continue;
@@ -153,15 +163,16 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         nameElement.getAttribute('aria-label');
       if (!nameText || !nameText.trim()) continue;
       nameText = nameText.trim();
-      if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
-      if (nameText.length > 1 && nameText.length < 50) return nameText;
+      // Control labels are rejected as whole normalized tokens. Substring
+      // matching would erase real names such as Michael and Micah.
+      if (isTeamsDisplayNameCandidate(nameText)) return nameText;
     }
     const ariaLabel = element.getAttribute('aria-label');
     if (ariaLabel && ariaLabel.includes('name')) {
       const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
       if (m && m[1]) {
         const nameText = m[1].trim();
-        if (nameText.length > 1 && nameText.length < 50) return nameText;
+        if (isTeamsDisplayNameCandidate(nameText)) return nameText;
       }
     }
     return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
