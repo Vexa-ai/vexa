@@ -210,4 +210,7 @@ if (
 }
 
 watcher.destroy();
-console.log('C797_GREEN: unresolved Teams identity stayed unknown; bootstrap, edges, heartbeat, and late-name repair are pinned');
+console.log(
+  'C797_GREEN unresolved_closures=1 orphan_named_ends=0 '
+  + 'heartbeat_named_starts=1 named_ends=1',
+);

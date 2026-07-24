@@ -239,39 +239,63 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   // identity failure, and a 2s heartbeat is not a fresh edge. A real unresolved
   // start opens the episode; its unresolved end closes it.
   const unresolvedEpisodes = new Set<string>();
+  // A named END is admissible only after this producer actually emitted the
+  // matching named START (either on the edge or as a speaking heartbeat).
+  const namedEpisodes = new Set<string>();
   let destroyed = false;
+
+  function emitUnresolved(edge: 'start' | 'end', identity: Identity): void {
+    if (edge === 'start') {
+      namedEpisodes.delete(identity.id);
+      unresolvedEpisodes.add(identity.id);
+    }
+    else unresolvedEpisodes.delete(identity.id);
+    const observation: TeamsNameUnresolvedObservation = {
+      type: 'name-unresolved',
+      platform: 'teams',
+      signal: 'dom-outline',
+      reason: 'resolver-empty',
+      edge,
+      tMs: Date.now(),
+    };
+    try {
+      opts.onNameUnresolved?.(observation);
+    } catch {
+      log(`[TeamsSpeakers] name-unresolved-delivery-failed edge=${edge}`);
+    }
+    log(
+      `[TeamsSpeakers] name-unresolved reason=${observation.reason} ` +
+      `signal=${observation.signal} edge=${edge}`,
+    );
+  }
+
+  function emitNamedStart(identity: Identity): void {
+    unresolvedEpisodes.delete(identity.id);
+    opts.onSpeaking(identity.name, identity.id, false, Date.now());
+    namedEpisodes.add(identity.id);
+  }
 
   function emit(state: SpeakingState, identity: Identity): void {
     if (state === 'unknown' || destroyed) return;
+    const edge = state === 'speaking' ? 'start' : 'end';
+    // Identity painting after an unresolved START is not retrospective named
+    // testimony. Unless a named START was emitted, close the typed episode.
+    if (edge === 'end' && unresolvedEpisodes.has(identity.id)) {
+      emitUnresolved('end', identity);
+      return;
+    }
     if (!identity.name) identity.name = extractName(identity.element);
     if (!identity.name) {
-      const edge = state === 'speaking' ? 'start' : 'end';
-      if (edge === 'end' && !unresolvedEpisodes.has(identity.id)) return;
-      if (edge === 'start') unresolvedEpisodes.add(identity.id);
-      else unresolvedEpisodes.delete(identity.id);
-      const observation: TeamsNameUnresolvedObservation = {
-        type: 'name-unresolved',
-        platform: 'teams',
-        signal: 'dom-outline',
-        reason: 'resolver-empty',
-        edge,
-        tMs: Date.now(),
-      };
-      try {
-        opts.onNameUnresolved?.(observation);
-      } catch {
-        log(`[TeamsSpeakers] name-unresolved-delivery-failed edge=${edge}`);
-      }
-      log(
-        `[TeamsSpeakers] name-unresolved reason=${observation.reason} ` +
-        `signal=${observation.signal} edge=${edge}`,
-      );
+      if (edge === 'end') return;
+      emitUnresolved('start', identity);
       return;   // unresolved name stays unknown; never emit a nameless/GUID hint
     }
     unresolvedEpisodes.delete(identity.id);
     if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
+    if (edge === 'end' && !namedEpisodes.delete(identity.id)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
-    opts.onSpeaking(identity.name, identity.id, state !== 'speaking', Date.now());
+    if (edge === 'start') emitNamedStart(identity);
+    else opts.onSpeaking(identity.name, identity.id, true, Date.now());
   }
 
   function checkAndEmit(identity: Identity): void {
@@ -394,8 +418,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         if (ident.id !== id) continue;
         if (!ident.name) ident.name = extractName(ident.element);   // name may have rendered since
         if (ident.name) {
-          unresolvedEpisodes.delete(ident.id);
-          opts.onSpeaking(ident.name, ident.id, false, Date.now());
+          emitNamedStart(ident);
         }
         break;
       }
@@ -425,6 +448,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       states.clear();
       speakingStates.clear();
       unresolvedEpisodes.clear();
+      namedEpisodes.clear();
       cache.clear();
     },
   };
