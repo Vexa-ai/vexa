@@ -661,6 +661,8 @@ export async function startCaptureBridge(
             selfName: botName,
             log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
             onSpeakerChange: onActive,
+            onNameUnresolved: (observation: unknown) =>
+              w.__vexaNameUnresolved?.(observation),
           });
         }
       }

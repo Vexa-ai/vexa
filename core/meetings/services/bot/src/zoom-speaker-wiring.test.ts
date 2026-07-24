@@ -56,6 +56,7 @@ const tile = (name: string) =>
   ]);
 let root = new El(['body']);
 const setSpeaker = (name: string | null): void => { root = new El(['body'], name ? [tile(name)] : []); };
+const setEmptyActive = (): void => { root = new El(['body'], [tile('')]); };
 
 // ── Page-context shims on the REAL globalThis (the fake page.evaluate runs in-process) ──
 const g = globalThis as unknown as Record<string, unknown>;
@@ -92,6 +93,13 @@ const pipeline: BotPipeline = {
   recordHint: (name, tMs, isEnd) => hints.push({ name, tMs, isEnd: !!isEnd }),
 };
 const inv = { platform: 'zoom', botName: 'Vexa Bot', connectionId: 'test' } as unknown as Invocation;
+const producerObservations: string[] = [];
+const realWarn = console.warn;
+console.warn = (...args: unknown[]) => {
+  const message = args.map(String).join(' ');
+  if (message.includes('[bot] name-unresolved')) producerObservations.push(message);
+  realWarn(...args);
+};
 
 const t0 = Date.now();
 const stop = await startCaptureBridge(page, inv, pipeline);
@@ -122,7 +130,26 @@ setSpeaker('Dave'); tick(1);    // back before confirm
 check('boundary: a single-poll flicker (Eve) never crosses', !hints.slice(before).some((h) => h.name === 'Eve'),
   JSON.stringify(hints.slice(before)));
 
+// An active container with an empty footer crosses only the independent
+// diagnostic boundary after two polls. It never fabricates a blank start.
+const beforeUnresolvedHints = hints.length;
+setEmptyActive();
+tick(2);
+check('boundary: confirmed empty footer crosses as one sanitized Zoom observation',
+  producerObservations.length === 1
+  && producerObservations[0].includes('platform=zoom')
+  && producerObservations[0].includes('reason=footer-empty')
+  && !producerObservations[0].includes('edge='),
+  JSON.stringify(producerObservations));
+check('boundary: unresolved Zoom identity never crosses as a blank speaker start',
+  !hints.slice(beforeUnresolvedHints).some((hint) => !hint.isEnd || hint.name === ''),
+  JSON.stringify(hints.slice(beforeUnresolvedHints)));
+tick(20);
+check('boundary: held empty footer does not repeat the diagnostic',
+  producerObservations.length === 1, JSON.stringify(producerObservations));
+
 await stop();
+console.warn = realWarn;
 (g as any).setInterval = realSetInterval;
 (g as any).clearInterval = realClearInterval;
 
