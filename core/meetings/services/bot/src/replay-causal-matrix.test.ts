@@ -618,6 +618,16 @@ async function main(): Promise<void> {
     const directJitsi = admittedFixtures.find((fixture) => fixture.id === 'direct/jitsi');
     assert(directTeams);
     assert(directJitsi);
+    assert.equal(
+      directTeams.scenario.turns.length,
+      8,
+      'direct Teams acceptance requires exactly eight authored turns',
+    );
+    assert.equal(
+      directJitsi.scenario.turns.length,
+      8,
+      'direct Jitsi acceptance requires exactly eight authored turns',
+    );
 
     const scores = new Map<string, ReplayScore>();
     for (const fixture of admittedFixtures) {
@@ -735,8 +745,8 @@ async function main(): Promise<void> {
       const identity = pipelineIdentityScore(fixture, pipelineRun1);
       assert.equal(
         pipelineRun1.rows.length,
-        fixture.scenario.turns.length,
-        `${fixture.id}: pipeline replay must cover every authored turn exactly once`,
+        8,
+        `${fixture.id}: direct pipeline acceptance requires exactly eight rows`,
       );
       assert.equal(identity.unmatched, 0, `${fixture.id}: pipeline emitted an untimed row`);
       assert.equal(
@@ -757,12 +767,17 @@ async function main(): Promise<void> {
         `${fixture.id}: direct pipeline identity/coverage floor drifted`,
       );
       if (fixture.platform === 'teams') {
-        assert.equal(identity.correct, fixture.scenario.turns.length);
+        assert.equal(identity.correct, 8, 'direct Teams requires exactly eight correct rows');
         assert.equal(identity.unknown, 0);
         assert.deepEqual(pipelineRun1.renames, []);
       } else {
-        assert.equal(identity.correct, fixture.scenario.turns.length - 1);
-        assert.equal(identity.unknown, 1);
+        assert.equal(identity.correct, 7, 'direct Jitsi requires exactly seven correct rows');
+        assert.equal(identity.unknown, 1, 'direct Jitsi requires exactly one baseline unknown');
+        assert.equal(
+          pipelineRun1.renames.length,
+          7,
+          'direct Jitsi requires exactly seven stable-id repaints',
+        );
         assert.deepEqual(
           pipelineRun1.renames,
           fixture.scenario.turns.slice(1).map((turn, index) => ({
