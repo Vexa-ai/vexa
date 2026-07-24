@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth-utils", () => ({
-  getAuthenticatedUserEmail: vi.fn().mockResolvedValue("person@example.com"),
+  getAuthenticatedUserIdentity: vi.fn().mockResolvedValue({
+    userId: 41,
+    email: "person@example.com",
+  }),
   getAuthenticatedUserId: vi.fn().mockResolvedValue("41"),
 }));
 
@@ -30,21 +33,13 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
     delete process.env.VEXA_ADMIN_API_KEY;
   });
 
-  it("resolves the authenticated email, then lists secret-free token metadata", async () => {
+  it("lists secret-free token metadata for the token-bound user ID", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url = String(input);
         calls.push({ url, init });
-        if (url === `${ADMIN_URL}/admin/users/email/person%40example.com`) {
-          return jsonResponse({
-            id: 41,
-            email: "person@example.com",
-            name: "Person",
-            max_concurrent_bots: 3,
-          });
-        }
         if (url === `${ADMIN_URL}/admin/users/41/tokens`) {
           return jsonResponse([
             {
@@ -57,10 +52,6 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
               expires_at: null,
             },
           ]);
-        }
-        // Exact stock behavior: user-by-id is not a route.
-        if (url === `${ADMIN_URL}/admin/users/41`) {
-          return jsonResponse({ detail: "Not Found" }, 404);
         }
         throw new Error(`unexpected request: ${url}`);
       })
@@ -82,69 +73,18 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
       ],
     });
     expect(calls.map((call) => call.url)).toEqual([
-      `${ADMIN_URL}/admin/users/email/person%40example.com`,
       `${ADMIN_URL}/admin/users/41/tokens`,
     ]);
     expect(JSON.stringify(calls)).not.toContain("vxa_");
   });
 
-  it("upserts a newly authenticated account only after the supported email lookup returns 404", async () => {
+  it("mints with exactly the stock-supported JSON fields", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url = String(input);
         calls.push({ url, init });
-        if (url === `${ADMIN_URL}/admin/users/email/person%40example.com`) {
-          return jsonResponse({ detail: "User not found" }, 404);
-        }
-        if (url === `${ADMIN_URL}/admin/users`) {
-          return jsonResponse(
-            {
-              id: 41,
-              email: "person@example.com",
-              name: null,
-              max_concurrent_bots: 3,
-            },
-            201
-          );
-        }
-        if (url === `${ADMIN_URL}/admin/users/41/tokens`) {
-          return jsonResponse([]);
-        }
-        throw new Error(`unexpected request: ${url}`);
-      })
-    );
-
-    const response = await GET();
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ keys: [] });
-    expect(calls.map((call) => call.url)).toEqual([
-      `${ADMIN_URL}/admin/users/email/person%40example.com`,
-      `${ADMIN_URL}/admin/users`,
-      `${ADMIN_URL}/admin/users/41/tokens`,
-    ]);
-    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
-      email: "person@example.com",
-    });
-  });
-
-  it("mints with only stock-supported JSON fields and never forwards client identity", async () => {
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url = String(input);
-        calls.push({ url, init });
-        if (url === `${ADMIN_URL}/admin/users/email/person%40example.com`) {
-          return jsonResponse({
-            id: 41,
-            email: "person@example.com",
-            name: "Person",
-            max_concurrent_bots: 3,
-          });
-        }
         if (url === `${ADMIN_URL}/admin/users/41/tokens`) {
           return jsonResponse(
             {
@@ -165,9 +105,7 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: "attacker@example.net",
-          userId: "999",
-          scopes: "bot,tx",
+          scopes: ["bot", "tx"],
           name: "automation",
           expires_in: 3600,
         }),
@@ -181,29 +119,48 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
       scopes: ["bot", "tx"],
     });
     expect(calls.map((call) => call.url)).toEqual([
-      `${ADMIN_URL}/admin/users/email/person%40example.com`,
       `${ADMIN_URL}/admin/users/41/tokens`,
     ]);
-    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       scopes: ["bot", "tx"],
       name: "automation",
       expires_in: 3600,
     });
   });
 
+  it.each([
+    ["email", { scopes: ["bot"], email: "attacker@example.net" }],
+    ["userId", { scopes: ["bot"], userId: "999" }],
+    ["scope alias", { scope: ["bot"] }],
+    ["string scopes", { scopes: "bot,tx" }],
+    ["non-string scope", { scopes: ["bot", 7] }],
+    ["non-string name", { scopes: ["bot"], name: 7 }],
+    ["string expiration", { scopes: ["bot"], expires_in: "3600" }],
+    ["non-positive expiration", { scopes: ["bot"], expires_in: 0 }],
+    ["unknown field", { scopes: ["bot"], unexpected: true }],
+  ])("rejects %s before any Admin request", async (_case, body) => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await POST(
+      new NextRequest("http://dashboard.test/api/profile/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("preserves a structured FastAPI 422 as a typed actionable response", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const url = String(input);
-        if (url.includes("/admin/users/email/")) {
-          return jsonResponse({
-            id: 41,
-            email: "person@example.com",
-            name: "Person",
-            max_concurrent_bots: 3,
-          });
-        }
+      vi.fn(async () => {
         return jsonResponse(
           {
             detail: [
@@ -224,7 +181,7 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
       new NextRequest("http://dashboard.test/api/profile/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scopes: "bot", name: "automation" }),
+        body: JSON.stringify({ scopes: ["bot"], name: "automation" }),
       })
     );
 
@@ -246,16 +203,7 @@ describe("hosted Account adapter against the stock v0.12.18 Admin API contract",
     ];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const url = String(input);
-        if (url.includes("/admin/users/email/")) {
-          return jsonResponse({
-            id: 41,
-            email: "person@example.com",
-            name: "Person",
-            max_concurrent_bots: 3,
-          });
-        }
+      vi.fn(async () => {
         return jsonResponse(
           {
             id: 8,

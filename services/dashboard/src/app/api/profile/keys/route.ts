@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthenticatedUserEmail } from "@/lib/auth-utils";
+import { getAuthenticatedUserIdentity } from "@/lib/auth-utils";
 import {
   HostedAdminError,
   listHostedTokens,
   mintHostedToken,
-  resolveHostedUser,
   type HostedAdminConfig,
-  type HostedMintInput,
 } from "@/lib/hosted-account-admin";
 
 const getAdminConfig = () => {
@@ -64,14 +62,13 @@ export async function GET() {
     );
   }
 
-  const email = await getAuthenticatedUserEmail();
-  if (!email) {
+  const identity = await getAuthenticatedUserIdentity();
+  if (!identity) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   try {
-    const user = await resolveHostedUser(config, email);
-    const keys = await listHostedTokens(config, user.id);
+    const keys = await listHostedTokens(config, identity.userId);
     return NextResponse.json({ keys });
   } catch (error) {
     return errorResponse(error);
@@ -95,15 +92,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const email = await getAuthenticatedUserEmail();
-  if (!email) {
+  const identity = await getAuthenticatedUserIdentity();
+  if (!identity) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   try {
-    const body = await request.json() as HostedMintInput;
-    const user = await resolveHostedUser(config, email);
-    const data = await mintHostedToken(config, user.id, body);
+    const body: unknown = await request.json();
+    const data = await mintHostedToken(config, identity.userId, body);
     return NextResponse.json(data, { status: 201 });
   } catch (error) {
     return errorResponse(error);

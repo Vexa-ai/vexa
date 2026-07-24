@@ -13,13 +13,6 @@ export interface HostedAdminConfig {
   fetcher?: typeof fetch;
 }
 
-export interface HostedUser {
-  id: number;
-  email: string;
-  name?: string | null;
-  max_concurrent_bots: number;
-}
-
 export interface HostedTokenMetadata {
   id: string;
   scopes: string[];
@@ -37,10 +30,9 @@ export interface HostedMintedToken {
 }
 
 export interface HostedMintInput {
-  scopes?: unknown;
-  scope?: unknown;
-  name?: unknown;
-  expires_in?: unknown;
+  scopes: string[];
+  name?: string;
+  expires_in?: number;
 }
 
 export class HostedAdminError extends Error {
@@ -176,29 +168,6 @@ async function adminRequest<T>(
   return { data: await response.json() as T, status: response.status };
 }
 
-export async function resolveHostedUser(
-  config: HostedAdminConfig,
-  email: string
-): Promise<HostedUser> {
-  try {
-    return (
-      await adminRequest<HostedUser>(
-        config,
-        `/admin/users/email/${encodeURIComponent(email)}`
-      )
-    ).data;
-  } catch (error) {
-    if (!(error instanceof HostedAdminError) || error.status !== 404) throw error;
-  }
-
-  return (
-    await adminRequest<HostedUser>(config, "/admin/users", {
-      method: "POST",
-      body: JSON.stringify({ email }),
-    })
-  ).data;
-}
-
 export async function listHostedTokens(
   config: HostedAdminConfig,
   userId: number
@@ -223,56 +192,60 @@ export async function listHostedTokens(
   }));
 }
 
-function normalizeScopes(input: HostedMintInput): string[] {
-  const raw = input.scopes ?? input.scope;
-  const values = Array.isArray(raw)
-    ? raw
-    : typeof raw === "string"
-      ? raw.split(",")
-      : [];
-  const scopes = values
-    .filter((value): value is string => typeof value === "string")
+function validationError(message: string): never {
+  throw new HostedAdminError(422, "VALIDATION_ERROR", message);
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return Boolean(input) && typeof input === "object" && !Array.isArray(input);
+}
+
+function normalizeScopes(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.some((value) => typeof value !== "string")) {
+    validationError("Scopes must be an array of strings.");
+  }
+
+  const scopes = raw
     .map((value) => value.trim())
     .filter(Boolean);
 
   if (scopes.length === 0 || scopes.some((scope) => !VALID_SCOPES.has(scope))) {
-    throw new HostedAdminError(
-      422,
-      "VALIDATION_ERROR",
-      "Choose at least one valid API-key scope."
-    );
+    validationError("Choose at least one valid API-key scope.");
   }
   return [...new Set(scopes)];
 }
 
-export function supportedMintBody(input: HostedMintInput): {
-  scopes: string[];
-  name?: string;
-  expires_in?: number;
-} {
-  const body: {
-    scopes: string[];
-    name?: string;
-    expires_in?: number;
-  } = { scopes: normalizeScopes(input) };
+export function supportedMintBody(input: unknown): HostedMintInput {
+  if (!isRecord(input)) {
+    validationError("The API-key request must be a JSON object.");
+  }
 
-  if (typeof input.name === "string" && input.name.trim()) {
+  const supported = new Set(["scopes", "name", "expires_in"]);
+  const unknownFields = Object.keys(input).filter((key) => !supported.has(key));
+  if (unknownFields.length > 0) {
+    validationError(
+      `Unsupported API-key request field: ${unknownFields.sort().join(", ")}.`
+    );
+  }
+
+  const body: HostedMintInput = { scopes: normalizeScopes(input.scopes) };
+
+  if (input.name !== undefined) {
+    if (typeof input.name !== "string") {
+      validationError("Name must be a string.");
+    }
     body.name = input.name.trim();
   }
 
-  if (input.expires_in !== undefined && input.expires_in !== null) {
-    const expiresIn =
-      typeof input.expires_in === "number"
-        ? input.expires_in
-        : Number(input.expires_in);
-    if (!Number.isInteger(expiresIn) || expiresIn <= 0) {
-      throw new HostedAdminError(
-        422,
-        "VALIDATION_ERROR",
-        "Expiration must be a positive number of seconds."
-      );
+  if (input.expires_in !== undefined) {
+    if (
+      typeof input.expires_in !== "number" ||
+      !Number.isSafeInteger(input.expires_in) ||
+      input.expires_in <= 0
+    ) {
+      validationError("Expiration must be a positive integer of seconds.");
     }
-    body.expires_in = expiresIn;
+    body.expires_in = input.expires_in;
   }
 
   return body;
@@ -281,7 +254,7 @@ export function supportedMintBody(input: HostedMintInput): {
 export async function mintHostedToken(
   config: HostedAdminConfig,
   userId: number,
-  input: HostedMintInput
+  input: unknown
 ): Promise<HostedMintedToken> {
   return (
     await adminRequest<HostedMintedToken>(
