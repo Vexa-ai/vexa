@@ -157,8 +157,7 @@ export type ProducerNameUnresolvedObservation =
       platform: 'teams';
       signal: 'dom-outline';
       reason: 'resolver-empty';
-      participantId: string;
-      isEnd: boolean;
+      edge: 'start' | 'end';
       tMs: number;
     }
   | {
@@ -166,7 +165,6 @@ export type ProducerNameUnresolvedObservation =
       platform: 'zoom';
       signal: 'dom-active';
       reason: 'footer-empty' | 'footer-absent' | 'read-fault';
-      isEnd: boolean;
       tMs: number;
     };
 
@@ -196,8 +194,7 @@ export function makeNameUnresolvedSink(
         && observation.platform === 'teams'
         && observation.signal === 'dom-outline'
         && observation.reason === 'resolver-empty'
-        && typeof observation.participantId === 'string'
-        && observation.participantId.length > 0;
+        && (observation.edge === 'start' || observation.edge === 'end');
       const validZoom = observation?.type === 'name-unresolved'
         && observation.platform === 'zoom'
         && observation.signal === 'dom-active'
@@ -208,9 +205,9 @@ export function makeNameUnresolvedSink(
         );
       if (
         (!validTeams && !validZoom)
-        || typeof observation?.isEnd !== 'boolean'
         || typeof observation?.tMs !== 'number'
         || !Number.isFinite(observation.tMs)
+        || observation.tMs < 1_000_000_000_000
       ) {
         counts.invalid++;
         warn(`[bot] producer-observation-invalid count=${counts.invalid}`);
@@ -222,7 +219,8 @@ export function makeNameUnresolvedSink(
       else counts.zoom++;
       warn(
         `[bot] name-unresolved platform=${observation.platform} signal=${observation.signal} ` +
-        `reason=${observation.reason} edge=${observation.isEnd ? 'end' : 'start'} total=${counts.total}`,
+        `reason=${observation.reason}` +
+        `${validTeams ? ` edge=${observation.edge}` : ''} total=${counts.total}`,
       );
     },
   };
@@ -511,7 +509,9 @@ export async function startCaptureBridge(
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
-  await page.exposeFunction('__vexaNameUnresolved', onNameUnresolved).catch(() => { /* optional */ });
+  await page.exposeFunction('__vexaNameUnresolved', onNameUnresolved).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   await page.exposeFunction('__vexaRemoteAudioReady', (): void => {
     if (acceptingIngress) activity?.ready();
   }).catch((e: Error) => {

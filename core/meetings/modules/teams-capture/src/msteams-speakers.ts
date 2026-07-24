@@ -74,8 +74,7 @@ export interface TeamsNameUnresolvedObservation {
   platform: 'teams';
   signal: 'dom-outline';
   reason: 'resolver-empty';
-  participantId: string;
-  isEnd: boolean;
+  edge: 'start' | 'end';
   tMs: number;
 }
 
@@ -91,6 +90,9 @@ export interface TeamsSpeakersOptions {
   log?: (msg: string) => void;
   /** Debounce for state-change emission (ms). Default 300 — matches the bot. */
   debounceMs?: number;
+  /** Heartbeat interval (ms). Default 2000; exposed so deterministic producer
+   * validators can advance this contract without wall-clock sleeps. */
+  heartbeatMs?: number;
 }
 
 export interface TeamsSpeakers {
@@ -105,6 +107,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
   const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
+  const heartbeatMs = opts.heartbeatMs ?? 2000;
 
   interface Identity { id: string; name: string; element: HTMLElement }
 
@@ -221,28 +224,40 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const observers = new Map<HTMLElement, MutationObserver[]>();
   const rafHandles = new Map<string, number>();
   const speakingStates = new Map<string, SpeakingState>();
+  // One diagnostic episode per participant: a bootstrap-silent tile is not an
+  // identity failure, and a 2s heartbeat is not a fresh edge. A real unresolved
+  // start opens the episode; its unresolved end closes it.
+  const unresolvedEpisodes = new Set<string>();
   let destroyed = false;
 
   function emit(state: SpeakingState, identity: Identity): void {
     if (state === 'unknown' || destroyed) return;
+    if (!identity.name) identity.name = extractName(identity.element);
     if (!identity.name) {
-      const isEnd = state !== 'speaking';
+      const edge = state === 'speaking' ? 'start' : 'end';
+      if (edge === 'end' && !unresolvedEpisodes.has(identity.id)) return;
+      if (edge === 'start') unresolvedEpisodes.add(identity.id);
+      else unresolvedEpisodes.delete(identity.id);
       const observation: TeamsNameUnresolvedObservation = {
         type: 'name-unresolved',
         platform: 'teams',
         signal: 'dom-outline',
         reason: 'resolver-empty',
-        participantId: identity.id,
-        isEnd,
+        edge,
         tMs: Date.now(),
       };
-      try { opts.onNameUnresolved?.(observation); } catch { /* diagnostics never break capture */ }
+      try {
+        opts.onNameUnresolved?.(observation);
+      } catch {
+        log(`[TeamsSpeakers] name-unresolved-delivery-failed edge=${edge}`);
+      }
       log(
         `[TeamsSpeakers] name-unresolved reason=${observation.reason} ` +
-        `signal=${observation.signal} edge=${isEnd ? 'end' : 'start'}`,
+        `signal=${observation.signal} edge=${edge}`,
       );
       return;   // unresolved name stays unknown; never emit a nameless/GUID hint
     }
+    unresolvedEpisodes.delete(identity.id);
     if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     opts.onSpeaking(identity.name, identity.id, state !== 'speaking', Date.now());
@@ -367,11 +382,14 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       for (const ident of cache.values()) {
         if (ident.id !== id) continue;
         if (!ident.name) ident.name = extractName(ident.element);   // name may have rendered since
-        if (ident.name) opts.onSpeaking(ident.name, ident.id, false, Date.now());
+        if (ident.name) {
+          unresolvedEpisodes.delete(ident.id);
+          opts.onSpeaking(ident.name, ident.id, false, Date.now());
+        }
         break;
       }
     }
-  }, 2000) as unknown as number;
+  }, heartbeatMs) as unknown as number;
 
   return {
     getSpeaking(): string[] {
@@ -395,6 +413,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       debounceTimers.clear();
       states.clear();
       speakingStates.clear();
+      unresolvedEpisodes.clear();
       cache.clear();
     },
   };

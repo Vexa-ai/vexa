@@ -48,6 +48,11 @@ const FIXTURE = `<!doctype html><html><body>
   <div data-tid="participant-tile" id="bob-tile">
     <span title="Bob OneToOne">Bob OneToOne</span>
   </div>
+  <!-- A real speaking signal with no resolvable display name must stay out of
+       the hint stream while crossing the independent fail-loud boundary. -->
+  <div data-tid="participant-unresolved-tile" id="unresolved-tile" data-participant-id="fixture-unresolved">
+    <div data-tid="voice-level-stream-outline" class="vdi-frame-occlusion"></div>
+  </div>
 </body></html>`;
 
 async function main(): Promise<void> {
@@ -60,6 +65,7 @@ async function main(): Promise<void> {
   const dataDir = mkdtempSync(join(tmpdir(), 'vexa-boundary-'));
   let context: BrowserContext;
   let page;
+  const realWarn = console.warn;
   try {
     ({ context, page } = await launchPersistentBrowser({ dataDir, args: ['--no-sandbox', '--mute-audio'], headless: true }));
   } catch (e) {
@@ -70,6 +76,12 @@ async function main(): Promise<void> {
     await context.addInitScript({ path: BUNDLE });
     const pageLogs: string[] = [];
     await context.exposeFunction('logBot', (m: string) => pageLogs.push(String(m)));
+    const producerObservations: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      const message = args.map(String).join(' ');
+      if (message.includes('[bot] name-unresolved')) producerObservations.push(message);
+      realWarn(...args);
+    };
 
     // The REAL bridge over a stub pipeline capturing what crosses the boundary.
     const hints: { name: string; tMs: number; isEnd?: boolean }[] = [];
@@ -116,6 +128,18 @@ async function main(): Promise<void> {
     check('hint tMs is epoch ms (same clock domain as audio)', alice.every((h) => Math.abs(h.tMs - Date.now()) < 60_000), JSON.stringify(alice.map((h) => h.tMs)));
     check('bot self-name and the signal-less 1:1 tile emit NO hints',
       !hints.some((h) => h.name.includes('Vexa') || h.name === 'Bob OneToOne'), JSON.stringify(hints));
+    check('an unresolved outlined tile emits no fabricated hint',
+      !hints.some((h) => h.name === '' || h.name === 'fixture-unresolved'), JSON.stringify(hints));
+    check('the unresolved observation crossed page→Node on the required typed boundary',
+      producerObservations.some((message) =>
+        message.includes('platform=teams')
+        && message.includes('signal=dom-outline')
+        && message.includes('reason=resolver-empty')
+        && message.includes('edge=start')),
+      JSON.stringify(producerObservations));
+    check('Node telemetry does not contain the participant id',
+      producerObservations.every((message) => !message.includes('fixture-unresolved')),
+      JSON.stringify(producerObservations));
     check('pipeline-received counter moved with the arrivals', hintCounters.received === hints.length && hintCounters.received > 0, JSON.stringify(hintCounters));
 
     // ── 4) the CAPTURE-TS boundary: the frame's own capture time crosses, or the frame is dropped ──
@@ -144,6 +168,7 @@ async function main(): Promise<void> {
     // #934: stop closes Node ingress synchronously. Exposed callbacks may still exist while the
     // page-side stop is unwinding, but they cannot feed a disposed engine or advance hints.
     await stop();
+    console.warn = realWarn;
     const framesAfterStop = mixedFrames.length;
     const hintsAfterStop = hints.length;
     await page.evaluate(([s, ts]) => (globalThis as any).__vexaPerSpeakerAudioData(0, s, ts), [b64, CAPTURE_TS + 1] as [string, number]);
@@ -187,6 +212,9 @@ async function main(): Promise<void> {
       raceCounts.started === 0 && raceCounts.stopped === 1, JSON.stringify(raceCounts));
     await racePage.close();
   } finally {
+    // A failed assertion or setup path must not leak the test's console hook.
+    // Assigning the original method again is harmless after the normal restore.
+    if (typeof realWarn === 'function') console.warn = realWarn;
     await context.close().catch(() => { /* best-effort */ });
     rmSync(dataDir, { recursive: true, force: true });
   }
