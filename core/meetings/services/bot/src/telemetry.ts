@@ -20,6 +20,11 @@ import { join } from 'node:path';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import { rmsOf } from './capture-bridge.js';
 import type { BoundaryRecord, CapturedFrame, HintEvent, TelemetrySink } from './ports.js';
+import {
+  SignalCustodyError,
+  type CaptureSignalCustodyReceipt,
+  type SignalCustody,
+} from './telemetry-custody.js';
 
 /** Where a session's JSONL lines land. append() receives whole lines (newline-terminated). */
 export interface SignalWriter {
@@ -39,8 +44,9 @@ export interface CaptureSignalRecorder {
   sink: TelemetrySink;
   /** The session file path (file writer) or logical key. */
   path: string;
-  /** Flush any buffered frames and stop the flush timer. Idempotent; never throws. */
-  close(): Promise<void>;
+  /** Flush, finalize optional durable custody, and return its deterministic receipt.
+   * Idempotent. Without custody, returns null. Custody admission failures are typed. */
+  close(): Promise<CaptureSignalCustodyReceipt | null>;
 }
 
 export interface RecorderOptions {
@@ -48,6 +54,8 @@ export interface RecorderOptions {
   dir?: string;
   /** Inject a writer (S3 adapter / test spy). Overrides `dir`. */
   writer?: SignalWriter;
+  /** Finalize the completed local file outside the worker lifetime. */
+  custody?: SignalCustody;
   /** Flush cadence + buffer cap — tuned so a crash loses at most ~flushMs of signal. */
   flushMs?: number;
   maxBufferBytes?: number;
@@ -128,11 +136,15 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   const headerLine = JSON.stringify(sessionHeader(inv, startedAt)) + '\n';
   let writer: SignalWriter | null = null;
   let flushing: Promise<void> = Promise.resolve();
+  let faults = 0;
   try {
     if (opts.writer) {
       writer = opts.writer;
       // Chain the header into the flush sequence so it always precedes frame lines.
-      flushing = writer.append(headerLine).catch((e) => log(`header write failed: ${String(e)}`));
+      flushing = writer.append(headerLine).catch((e) => {
+        faults++;
+        log(`header write failed: ${String(e)}`);
+      });
     } else {
       mkdirSync(dir, { recursive: true });
       // Header lands synchronously so even a zero-frame session leaves an attributable file.
@@ -148,7 +160,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   let buf: string[] = [];
   let bufBytes = 0;
   let seq = 0;
-  let faults = 0;
+  let frames = 0;
   const maxBuffer = opts.maxBufferBytes ?? DEFAULT_MAX_BUFFER;
 
   const flush = (): Promise<void> => {
@@ -204,6 +216,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
           rms: frame.rms ?? rmsOf(new Float32Array(Buffer.from(frame.pcm, 'base64').buffer)),
         };
         seq = full.seq + 1;
+        frames++;
         const line = JSON.stringify(full) + '\n';
         buf.push(line);
         bufBytes += line.length;
@@ -212,21 +225,45 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
     },
   };
 
-  let closed = false;
+  let closePromise: Promise<CaptureSignalCustodyReceipt | null> | null = null;
+  const closeOnce = async (): Promise<CaptureSignalCustodyReceipt | null> => {
+    if (timer) clearInterval(timer);
+    try {
+      await flush();
+      await writer?.end();
+    } catch (error) {
+      faults++;
+      log(`close failed: ${String(error)}`);
+    }
+    log(`staging closed: ${path} (${frames} frames, ${hints} hints, ${boundaries} cuts)`);
+
+    if (!opts.custody) return null;
+    if (opts.writer) {
+      throw new SignalCustodyError(
+        'incomplete-source',
+        'incomplete-source: durable custody requires the recorder local staging file, not an opaque writer',
+      );
+    }
+    if (!writer || faults > 0) {
+      throw new SignalCustodyError(
+        'incomplete-source',
+        `incomplete-source: recorder has ${faults} write fault(s) and cannot issue a complete custody receipt`,
+      );
+    }
+    const receipt = await opts.custody.admit({
+      sourcePath: path,
+      expectedRecords: 1 + frames + hints + boundaries,
+    });
+    log(`custody admitted: ${receipt.key} (${receipt.bytes} bytes, ${receipt.records} records)`);
+    return receipt;
+  };
+
   return {
     sink,
     path,
-    async close(): Promise<void> {
-      if (closed) return;
-      closed = true;
-      if (timer) clearInterval(timer);
-      try {
-        await flush();
-        await writer?.end();
-        log(`session written: ${path} (${seq} frames, ${hints} hints, ${boundaries} cuts)`);
-      } catch (e) {
-        log(`close failed: ${String(e)}`);
-      }
+    close(): Promise<CaptureSignalCustodyReceipt | null> {
+      closePromise ??= closeOnce();
+      return closePromise;
     },
   };
 }

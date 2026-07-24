@@ -1039,6 +1039,32 @@
    ]
   },
   {
+   "unique-id": "captured-signal-corpus",
+   "node-type": "data-asset",
+   "name": "captured-signal evidence corpus",
+   "description": "content-addressed completed captured-signal.v1 sessions and deterministic custody receipts, written outside the ephemeral bot worker before teardown",
+   "controls": {
+    "ownership": {
+     "description": "bot is the only writer",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "bot"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "stage": "telemetry-evidence"
+    }
+   ]
+  },
+  {
    "unique-id": "runtime",
    "node-type": "service",
    "name": "runtime",
@@ -1299,7 +1325,8 @@
       "bot-commands",
       "segments-table",
       "recording-blob",
-      "userdata-blob"
+      "userdata-blob",
+      "captured-signal-corpus"
      ]
     }
    }
@@ -1544,6 +1571,25 @@
      }
     }
    },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "bot-writes-captured-signal",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "bot"
+     },
+     "destination": {
+      "node": "captured-signal-corpus"
+     }
+    }
+   },
+   "description": "publish a completed session and its receipt before ephemeral worker teardown",
    "metadata": [
     {
      "access": "write"

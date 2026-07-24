@@ -20,6 +20,7 @@ composition root (`src/index.ts`).
 | publishes | gateway → dashboard | redis pub/sub `tc:meeting:{id}:mutable` | live mutable `transcript.v1` segment |
 | produces | meeting-api | HTTP POST → `inv.meetingApiCallbackUrl` | `lifecycle.v1` status events (retry/backoff) |
 | produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
+| produces | fixture corpus | optional `SignalCustody` → independently mounted store | completed `captured-signal.v1` + deterministic custody receipt |
 | consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
 
 ### Pre-join reachability gate (#530)
@@ -56,7 +57,8 @@ Unit/integration: `pnpm test` (chained `tsx` runs — no build step). Levels:
 #530 reachability gate (both-channels-down ⇒ no join, exit 3, `control_plane_unreachable`; either-channel
 up ⇒ proceed) · **L3** transport adapters (lifecycle-http `emitReachable` reachability verdict ·
 transcript-redis · acts-redis), pipeline lane, recording
-assembler, replay tape. **L4** (browser/capture/speak/upload legs) runs via the standalone harness in
+assembler, replay tape, and the custody gate (`telemetry-custody.test.ts`: delete worker staging,
+then independently read identical bytes by digest). **L4** (browser/capture/speak/upload legs) runs via the standalone harness in
 [`eval/`](./eval): `make -C eval run MEETING=<id>` drives a live Meet with synthetic speakers and an
 autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-test).
 
@@ -68,4 +70,5 @@ autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-
 - ✅ delivered — `lifecycle.v1` HTTP callback (retry/backoff, never crashes the bot)
 - ✅ delivered — `acts.v1` ingress (redis subscriber; unknown acts dropped, never thrown)
 - ✅ delivered — recording assembler core (webm/wav/seq, L2/L3)
+- ✅ delivered — offline/eval captured-signal custody seam (idempotent receipt; typed missing/incomplete admission; deployed runtimes must supply independently mounted storage)
 - 🟡 partial — browser join + capture + recording-upload + speak (wired; L4-gated, proven on VM via `eval/`, not unit tests)

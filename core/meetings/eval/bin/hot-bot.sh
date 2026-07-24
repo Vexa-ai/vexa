@@ -287,6 +287,9 @@ start_bot_worker() {
   export VEXA_BOT_CONFIG
   VEXA_BOT_CONFIG=$(cat "$RUN/invocation.json")
   export VEXA_CAPTURE_SIGNAL_DIR="$RUN/capture"
+  # #956 C1: finalize outside worker-local staging so a captured session has a
+  # content-addressed receipt before the process is allowed to disappear.
+  export VEXA_CAPTURE_SIGNAL_CUSTODY_DIR="$RUN/custody"
   export VEXA_BROWSER_UTILS_PATH="$BUNDLE"
   exec node dist/index.js
 }
