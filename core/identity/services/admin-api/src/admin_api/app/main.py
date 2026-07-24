@@ -12,17 +12,19 @@ exercises:
   email, plus webhook_url/secret/events from user.data; rejects expired tokens; bumps
   last_used_at; FAILS CLOSED when INTERNAL_API_SECRET is unset (503) and on a bad secret (403).
 
-  Token mint: scoped {bot,tx,browser}, optional multi-scope `?scopes=bot,tx`, optional expiry
-  `?expires_in=<sec>`; an invalid scope → 422.
+  Token mint: scoped {bot,tx,browser}. Scopes via JSON body `{"scopes":["bot","tx"]}` or
+  query `?scopes=bot,tx` / `?scope=bot` (body wins when present). Optional `name` /
+  `expires_in` in body or query; an invalid scope → 422. A JSON body with unknown fields
+  is refused (422) — never silently dropped (#922).
 """
 import hmac
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +96,19 @@ class TokenResponse(BaseModel):
     scopes: List[str]
 
     model_config = {"from_attributes": True}
+
+
+class TokenCreate(BaseModel):
+    """Mint request body — scopes/name/expires_in may also arrive as query params (compat).
+
+    ``extra='forbid'`` so a caller who sends an unsupported field gets a loud 422 instead of
+    a silent drop that mints the wrong token (#922).
+    """
+    scopes: Optional[List[str]] = None
+    name: Optional[str] = None
+    expires_in: Optional[int] = Field(default=None, gt=0)
+
+    model_config = {"extra": "forbid"}
 
 
 class TokenInfo(BaseModel):
@@ -253,26 +268,40 @@ def create_app() -> FastAPI:
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])
-    async def create_token_for_user(user_id: int, scope: str = "bot",
-                                    scopes: Optional[str] = None,
-                                    name: Optional[str] = None,
-                                    expires_in: Optional[int] = None,
-                                    db: AsyncSession = Depends(get_db)):
+    async def create_token_for_user(
+        user_id: int,
+        body: TokenCreate = Body(default_factory=TokenCreate),
+        scope: str = Query("bot"),
+        scopes: Optional[str] = Query(None),
+        name: Optional[str] = Query(None),
+        expires_in: Optional[int] = Query(None),
+        db: AsyncSession = Depends(get_db),
+    ):
         user = await db.get(User, user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        scope_list = ([s.strip() for s in scopes.split(",") if s.strip()]
-                      if scopes is not None else [scope])
+        # Body scopes win when present — a JSON mint must not silently fall through to ["bot"] (#922).
+        if body.scopes is not None:
+            scope_list = [s.strip() for s in body.scopes if s and s.strip()]
+        elif scopes is not None:
+            scope_list = [s.strip() for s in scopes.split(",") if s.strip()]
+        else:
+            scope_list = [scope]
+        if not scope_list:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="scopes must not be empty")
         invalid = [s for s in scope_list if s not in VALID_SCOPES]
         if invalid:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"Invalid scope(s): {invalid}. Valid: {sorted(VALID_SCOPES)}")
+        token_name = body.name if body.name is not None else name
+        token_expires_in = body.expires_in if body.expires_in is not None else expires_in
         token_value = generate_prefixed_token(scope_list[0])
         expires_at = None
-        if expires_in is not None and expires_in > 0:
-            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        if token_expires_in is not None and token_expires_in > 0:
+            expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
         tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
-                       name=name, created_at=datetime.utcnow(), expires_at=expires_at)
+                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at)
         db.add(tok)
         await db.commit()
         await db.refresh(tok)

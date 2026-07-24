@@ -40,6 +40,7 @@ flowchart LR
   mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
+  gateway -->|"HTTPS"| mcp
   gateway -->|"HTTPS"| admin_api
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway

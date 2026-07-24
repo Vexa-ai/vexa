@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.16 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.18 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.15`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.18`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -592,6 +592,161 @@ probe), not inferred from planning docs.
   after a reload. The bot's mixed-lane segment mapper wasn't stamping `absolute_start_time`, so the
   live renderer (which keys on it) skipped every pending draft; a prior producer-stamp fix had
   covered only Google Meet. ([#895](https://github.com/Vexa-ai/vexa/issues/895))
+
+- **Docs: default bot spawn requires STT and refuses loud; capture-only is explicit (#532).** Quickstart, README, deployment, API, and how-to pages no longer claim that missing transcription silently yields an empty transcript. They document `transcribe_enabled` / `TRANSCRIBE_ENABLED` and the real 503 detail. See [Configuration](/configuration#transcription-stt) and [Send a bot](/how-to/send-a-bot#capture-only-no-stt).
+
+- **Teams: a benign alert no longer evicts a just-joined bot (#600).** The Teams removal monitor
+  matched a generic `[role="alert"]` (plus `[role="alertdialog"]`, `.error-message`,
+  `.connection-error`, `.meeting-error`), so a transient toast or the post-join AV-confirmation modal
+  could trip a false removal ~1.5s after admission and self-leave with `completed(evicted)` and no
+  transcript. The removal signal is now the removal/"meeting ended" text only.
+
+- **A bot that fails to start now surfaces the failure instead of a false success (#718).** When the
+  runtime cannot start a bot workload (e.g. the bot image is absent), `POST /bots` returns `502` with
+  the reason (the missing image is named) and the meeting is marked `failed` on the spot — no more a
+  `201` over a workload that never came up, followed by five silent minutes and a reason-less
+  `failed`. The runtime kernel answers the spawn honestly (non-201 + `workload_spawn_failed`), the
+  meeting-api refuses the dead spawn at both the runtime seam and the service, and `make dev` now
+  exits non-zero naming an unpulled bot image even when an earlier build step fails.
+
+- **MCP clients connect through the gateway front door, and the SSE stream stays open (#795).** The
+  gateway now fronts the MCP streamable-HTTP transport at `/mcp`: `POST` (messages) forwards
+  buffered as before, and `GET` — the server→client SSE stream — is **relayed** on a dedicated
+  streaming client with no read deadline, because a stream that is silent is a stream with nothing
+  to push. Buffering that leg is what made a healthy stream look like a dead upstream: the proxy
+  waited on the next body read, hit its 30-second read timeout, and answered a `503` the MCP
+  service never saw (8 of 14 stream-open attempts in a 15-minute hosted window, while `POST` was
+  116/116 healthy on the same client). Point your MCP client at your Vexa API host — `mcp-remote
+  https://<your-api-host>/mcp --header "Authorization: Bearer $VEXA_API_KEY"` — instead of the
+  MCP service's own port. The gateway carries the upstream's status, content type and
+  `mcp-session-id` verbatim; it never rewrites an MCP answer.
+
+- **The meeting-api webhook-envelope introspection capture is bounded
+  (#803).** The production app previously retained every lifecycle envelope
+  in an unbounded in-process list; it now keeps a capped recent-history ring
+  while preserving the eval seam. The point-of-introduction regression is
+  covered on the exact PR head. The release's fresh production RSS readback
+  is the remaining evidence for the broad “no continuing climb” claim.
+
+- **A Redis outage no longer becomes a full core-API outage (#809).** meeting-api reports Redis honestly on `/health` — a new `pipeline.redis_reachable` component surfaces `false` during an outage while the shared probe stays `200`, so readiness holds and Postgres-backed reads (`GET /meetings`, durable `GET /transcripts`) keep serving. The genuinely Redis-dependent stop path (`DELETE /bots`) now fails narrowly with `503` (retryable, the stop is already recorded and reconciles when Redis returns) instead of an opaque `500`, and a returning Redis is picked up without a restart. Prevents the 2026-07-19 incident where a wedged Redis volume CrashLooped all replicas even though Postgres was healthy.
+
+- **Google Meet: a host denial now ends the meeting instead of hanging forever (#840).** Meet loads
+  reCAPTCHA Enterprise invisibly on every join, so a background captcha frame sat on the denial
+  screen too — the bot read it as bot-detection, logged "staying for manual/agent solve" every two
+  seconds, and the meeting stayed `awaiting_admission` until the 10-minute lobby timeout (which is
+  retried, so a host who said no could be knocked on again). An explicit denial ("denied your
+  request", "weren't allowed to join", …) now wins over any captcha on the page, only a *visible*
+  challenge widget counts as a real captcha, and the stay-for-solve wait is bounded at two minutes.
+  A denied bot reports `failed / awaiting_admission_rejected` — permanent, no re-knock.
+
+- **Webhooks gain a queryable, secret-safe delivery ledger API (#841 core
+  half).** Core records recent per-user delivery outcomes (`delivered |
+  queued | suppressed | blocked | failed`) and serves them at
+  `GET /user/webhook/deliveries`, carrying only the target host — never the
+  webhook URL or signing secret. The hosted dashboard does not read this
+  ledger yet; its real Delivery History consumer remains open in v0.12.20.
+
+- **Google Meet lobby language is deterministic and locator failures are
+  diagnosable (#846, #856).** The bot pins the browser UI to English by
+  default and records the resolved URL, page language, and visible button
+  labels when the CTA cannot be found. The broad structural CTA scan is
+  diagnostic-only and never clicks. The English path passed live; arbitrary
+  non-English joining is not claimed.
+
+- **Pin the bot browser's UI locale so Google Meet renders English by construction (#856).** The
+  bot never told its browser what language to be, so Meet localised from `Accept-Language` or IP
+  geolocation and served non-English lobbies on EU/other egress — the root cause of the
+  join-button-not-found class (#846). The browser now launches with `--lang` / `--accept-lang`, a
+  Playwright context `locale`, and `?hl=` on the Meet URL, all driven by a `BOT_UI_LOCALE` knob
+  (default `en-US`). The resolved locale (`navigator.language`, `<html lang>`) is now logged at
+  lobby time and recorded in `last_error` on failure, so it is never invisible again. The #917
+  structural CTA scan is demoted to diagnostic-only (it records candidate labels and telemetry but
+  never clicks), and the lobby selector lists now put exact-text entries first with the broad
+  structural entry last as a locale-agnostic backstop.
+
+- **A bot waiting in a Google Meet lobby is no longer killed at 5 minutes (#862).** The bot is handed
+  a 10-minute waiting-room budget, but it reports `awaiting_admission` once and then waits silently —
+  so the reconcile sweep, which only checked whether the workload was alive for bots already *in* the
+  meeting, force-deleted healthy bots at 300s of legitimate quiet, seconds before hosts who admit at
+  4–5 minutes let them in. The liveness check now covers the whole pre-admission span, and the sweep's
+  patience for a not-yet-admitted bot is derived from the budget it issued, so it can never be shorter.
+- **A bot that never reached the meeting now reports why, and is retried (#862).** When the runtime
+  confirms a pre-admission workload really is gone, the meeting is attributed to the stage it died in
+  (`awaiting_admission_timeout` / `join_failure`) with the runtime's own evidence — workload state and
+  exit code — instead of the catch-all `left_alone`. `left_alone` counts as a normal ending, so it also
+  suppressed the automatic re-join; these reasons are retryable, and the re-spawn happens again.
+
+- **Bot test doubles: shared `noopAloneness` (+ siblings) and named missing-port errors (#865).** Pure L2 scaffolding — no user-facing behaviour change. Stops every new orchestrator construction site rediscovering the required `aloneness` seam by crashing with a raw TypeError.
+
+- **Google Meet Stop during `awaiting_admission` now reaches the pre-active
+  withdraw path and cleans up the workload (#889).** The bot subscribes to
+  leave commands before the join race and routes Stop through its
+  phase-aware abort instead of dropping the pub/sub message. The release
+  witness still found that Meet's host-side knock prompt can persist after
+  cleanup; visible prompt withdrawal remains #839.
+
+- **`POST /bots` rejects a `native_meeting_id` carrying URL characters (#892).** A meeting id
+  with `?`, `#`, `&`, `=`, `/`, or a space (e.g. a Teams passcode accidentally left on the id,
+  `397421056486982?p=…`) now returns a typed `422` at intake instead of building a broken join URL
+  and storing an unfindable record. Pass any passcode in the `passcode` field, or supply the full
+  `meeting_url`. Bare ids across platforms (Meet dash-codes, Zoom digits, Teams `19:…@thread.v2`)
+  are unaffected.
+
+- **Meeting-api removes the O(keyspace) Redis SCAN from the ten-second
+  db-writer hot loop (#893).** Steady-state ticks use the authoritative
+  `active_meetings` set; the self-healing scan runs only on startup and at
+  `DB_WRITER_RECONCILE_INTERVAL_S` (default 300s). Exact-head tests prove the
+  scheduling boundary. The fresh production saturation/readiness readback
+  remains the release-level proof for the original live failure shape.
+
+- **Helm migrations Job now honors `global.imageTag` (#900).** A pinned-tag deploy with
+  `migrations.enabled=true` previously ran the schema-convergence Job from the rolling `v012`
+  image instead of the deployed release tag — a schema/code skew risk. The Job now resolves its
+  tag with the same precedence the component Deployments use (`global.imageTag` wins, falling back
+  to the `migrations`/`meetingApi` image tag). See [Kubernetes deployment](/deployment-kubernetes).
+
+- **admin-api retries the initial DB connect on cold start (#901).** On a boot where Postgres DNS
+  isn't resolvable yet, admin-api used to throw `socket.gaierror` and exit immediately, relying on
+  the k8s restart loop (a transient RED an operator would see). It now retries the first connect
+  with bounded exponential backoff (env-tunable via `DB_CONNECT_MAX_ATTEMPTS` /
+  `DB_CONNECT_BASE_DELAY` / `DB_CONNECT_MAX_DELAY`), then fails loud once the bound is exhausted.
+
+- **Teams login redirects fail fast with a typed cause instead of an
+  admission timeout (#915).** A navigation to
+  `login.microsoftonline.com` now terminates with
+  `teams_auth_redirect: … (url=…)`, carried into `last_error`, rather than
+  spending about 75 seconds searching a login page for meeting controls.
+  The exact-head redirect fixture is green; this external redirect did not
+  recur during the release witness and is not claimed as live-reproduced.
+
+- **MCP sessioned GET /mcp starts its SSE stream (#921).** A `GET /mcp` with a valid
+  `mcp-session-id` now emits `text/event-stream` headers promptly (and sse-starlette's
+  keep-alive ping on an idle stream). fastapi-mcp's buffered HTTP adapter had swallowed
+  the open SSE response so the server→client channel never opened. Sessionless GET still
+  returns MCP's own 400.
+
+- **Admin token mint honors JSON `scopes` (and refuses unknown body fields) (#922).**
+  `POST /admin/users/{id}/tokens` with `{"scopes":["bot","tx"]}` now mints those scopes instead of
+  silently falling through to `["bot"]`. Query `?scopes=` / `?scope=` still work; unsupported body
+  fields return `422`. See [Authentication](/authentication).
+
+- **A non-admitted bot death carries a human-readable cause instead of
+  `reason: None` (#926).** The typed admission error now crosses the join
+  driver and terminal callback, with a derived fallback so the branch cannot
+  emit a reasonless failure. Exact-head fixtures cover Zoom and the shared
+  non-admitted path. The original external Zoom failure did not recur during
+  the release witness and is not claimed as live-reproduced.
+
+- **Vexa Lite pins its service interpreters to Python 3.12, so admin-api boots again (#927).** The
+  single-container Lite image builds each service venv with `uv venv` on a Playwright/jammy base
+  whose only system Python is 3.10 — below `requires-python >=3.11`. An unpinned `uv venv` therefore
+  auto-downloaded the newest managed CPython (3.14), on which the frozen async-Postgres stack fails
+  (asyncpg's C extension will not build under 3.14; SQLAlchemy's psycopg dialect import crashes at
+  startup), so `admin-api` entered a supervisor FATAL loop and API-key provisioning silently no-oped
+  — the gateway then answered every request with `Authentication temporarily unavailable`. All five
+  Lite venvs (admin-api, runtime, meeting-api, gateway, agent) now pass `--python 3.12`, matching the
+  `FROM python:3.12-slim` every compose image (and helm, which ships those images) already pinned.
+  Compose and helm never shared the exposure.
 
 ## Versioning
 

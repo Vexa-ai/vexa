@@ -186,4 +186,16 @@ else
   echo "  OK: dashboard image ignores global.imageTag (own pinned tag)"
 fi
 
+# #900 — the migrations Job must follow global.imageTag (it runs release code against the
+# schema; a rolling-v012 image on a pinned deploy is a schema/code skew). Opposite of the
+# dashboard: here global.imageTag MUST win over the meetingApi/migrations fallback tag.
+MIG_IMG="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set migrations.enabled=true --set global.imageTag=vMIGRATE \
+  --show-only templates/job-migrations.yaml | grep -E '^\s+image:')"
+if grep -qE ':vMIGRATE"?$' <<< "$MIG_IMG"; then
+  echo "  OK: migrations Job honors global.imageTag (pinned release image)"
+else
+  echo "  FAIL: migrations Job ignored global.imageTag — schema/code skew risk (#900): $MIG_IMG"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

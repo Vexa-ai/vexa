@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import AsyncExitStack
 from typing import Dict, List, Optional, Set, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
@@ -79,6 +80,14 @@ _DEFAULT_AGENT_API_URL = "http://agent-api"
 # The identity control plane (admin-api): the self-serve /user/webhook config lives there
 # (writes to user.data JSONB — the same blob /internal/validate reads the webhook config from).
 _DEFAULT_ADMIN_API_URL = "http://admin-api"
+# The MCP service (streamable-HTTP transport at ``/mcp``). Fronted at the gateway edge so an MCP
+# client points at the SAME authenticated front door as every other Vexa client.
+_DEFAULT_MCP_URL = "http://mcp:8010"
+
+# Response headers the MCP streamable-HTTP transport is CARRIED BY — not hop-by-hop, not optional.
+# ``mcp-session-id`` is minted by the server on initialize and echoed by the client on every later
+# request; drop it at the edge and the session can never be bound. Passed through on BOTH legs.
+_MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
 
 def _required_scopes(path: str) -> Optional[Set[str]]:
@@ -96,6 +105,7 @@ def create_app(
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
     agent_api_url: str = _DEFAULT_AGENT_API_URL,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
+    mcp_url: str = _DEFAULT_MCP_URL,
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -143,8 +153,11 @@ def create_app(
     # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
     # the caller is rejected (fail-closed). This is the ONE place the key → user resolution and the
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
-    async def _authorize(method: str, request: Request):
-        client_key = request.headers.get("x-api-key")
+    async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None):
+        # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
+        # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
+        # scope check and the identity injection below are the same for every route.
+        client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
             return None, Response(
@@ -246,8 +259,8 @@ def create_app(
         return headers, None
 
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request) -> Response:
-        headers, error = await _authorize(method, request)
+    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None) -> Response:
+        headers, error = await _authorize(method, request, api_key=api_key)
         if error is not None:
             return error
 
@@ -291,9 +304,11 @@ def create_app(
         # violation and abort — breaking recording playback (<audio>/<video> Range streaming).
         # Length/encoding headers are intentionally NOT copied: Starlette recomputes
         # Content-Length from the (already httpx-decoded) body; a stale one would corrupt it.
+        # ``mcp-session-id``/``mcp-protocol-version`` join them for the same reason: they are the
+        # MCP transport's session binding, and a forward that eats them breaks the handshake.
         passthrough = {
             k: resp_headers[k]
-            for k in ("content-range", "accept-ranges", "content-disposition")
+            for k in ("content-range", "accept-ranges", "content-disposition") + _MCP_HEADERS
             if k in resp_headers
         }
         return Response(
@@ -467,6 +482,15 @@ def create_app(
     async def get_user_webhook(request: Request):
         return await _forward("GET", _admin("/user/webhook"), request)
 
+    # #841: the per-user webhook DELIVERY HISTORY — the queryable record of real delivery outcomes
+    # (the user-facing completion of #815→#817). Unlike the config above (identity-owned, admin-api),
+    # the deliveries live in meeting-api (the dispatcher that records each outcome), so this forwards
+    # THERE. No ROUTE_SCOPES entry (any valid key reads its own history, parity with /user/webhook);
+    # the shared auth prep injects X-User-Id so meeting-api scopes the read to the owner.
+    @app.get("/user/webhook/deliveries")
+    async def get_user_webhook_deliveries(request: Request):
+        return await _forward("GET", _meeting("/webhooks/deliveries"), request)
+
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
     # The ICS URL is a secret — admin-api masks it on every read-back. No ROUTE_SCOPES entry
     # (any valid key manages its own calendar), parity with the webhook self-serve. ----
@@ -531,6 +555,63 @@ def create_app(
 
         return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
 
+    # The RELAY forward: like _forward_stream, the body is streamed and never buffered — but the
+    # UPSTREAM's own head is carried through (status + content-type + the transport headers named
+    # in _MCP_HEADERS) instead of the gateway minting an SSE envelope of its own. A route uses this
+    # when the upstream, not the gateway, decides what the answer is: the MCP streamable-HTTP leg
+    # answers an SSE stream, a JSON error, or a session-handshake refusal over the SAME GET, and
+    # the gateway must not decide which by rewriting it (#698 fail-loud: no laundered statuses).
+    #
+    # The open is awaited BEFORE the response is returned so a transport failure is typed exactly
+    # as the buffered forward types it (504 slow / 502 unreachable) — never a blanket 503. Only
+    # after a head is in hand does the body iterator take over; the exit stack keeps the downstream
+    # stream open for its life and closes it when the client goes away.
+    async def _forward_stream_verbatim(
+        method: str, url: str, request: Request, *, api_key: Optional[str] = None
+    ) -> Response:
+        headers, error = await _authorize(method, request, api_key=api_key)
+        if error is not None:
+            return error
+        content = await request.body()
+        params = dict(request.query_params) or None
+
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(
+                downstream.open_stream(method, url, headers=headers, params=params, content=content)
+            )
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": "upstream timeout"}),
+                            status_code=504, media_type="application/json")
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
+                            status_code=502, media_type="application/json")
+
+        log_event(
+            "downstream_stream_opened",
+            audience="system",
+            level="debug",
+            span="proxy",
+            fields={"method": method, "path": url, "downstream_status": upstream.status_code},
+        )
+
+        async def body():
+            async with stack:  # closes the downstream stream when the client disconnects
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+
+        up_headers = upstream.headers
+        media_type = up_headers.get("content-type") or "application/json"
+        relayed = {k: up_headers[k] for k in _MCP_HEADERS if k in up_headers}
+        # Never let an intermediary buffer a relayed stream into uselessness.
+        relayed.setdefault("Cache-Control", "no-cache")
+        relayed.setdefault("X-Accel-Buffering", "no")
+        return StreamingResponse(
+            body(), status_code=upstream.status_code, media_type=media_type, headers=relayed
+        )
+
     # The agent domain lives under the canonical /agent/* prefix (peer to the meetings domain). The SSE
     # routes (chat turn · live meeting feed) are STREAMED and declared BEFORE the catch-all so they win;
     # everything else (sessions · history · routines · workspace tree/file/git/upload · models) is
@@ -547,6 +628,59 @@ def create_app(
     @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def agent_proxy(path: str, request: Request):
         return await _forward(request.method, _agent(path), request)
+
+    # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
+    # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:
+    #   POST /mcp — a message. Short request/response JSON → the buffered forward, verbatim.
+    #   GET  /mcp — the server→client SSE stream. It sends its headers and then IDLES until the
+    #               server has something to push, so it MUST be relayed, never buffered: a buffered
+    #               forward waits on the next body read of a healthy-but-silent stream, hits its
+    #               read timeout, and answers a gateway-manufactured 5xx the MCP service never sees
+    #               (#795 — 8 × 503 on GET at the edge, 0 at the service, POST 116/116 fine).
+    # The two legs are therefore declared separately: GET streams, everything else buffers.
+    def _mcp(path: str) -> str:
+        return f"{mcp_url}{path}"
+
+    def _mcp_key(request: Request) -> Optional[str]:
+        """The caller's Vexa API key, from whichever carrier the MCP transport used.
+
+        MCP clients send the credential as ``Authorization: Bearer <key>`` (mcp-remote, the desktop
+        connectors) — that is the transport's contract, and adapting it belongs at the client
+        boundary, i.e. here at the edge. ``x-api-key`` (every other Vexa client) wins when both are
+        present; a raw ``Authorization: <key>`` with no scheme is the key itself (0.10 parity, and
+        the same three carriers the MCP service's own parser accepts). Beyond this point the key is
+        the SAME string every other forward resolves, through the SAME authorizer.
+        """
+        header_key = (request.headers.get("x-api-key") or "").strip()
+        if header_key:
+            return header_key
+        auth = (request.headers.get("authorization") or "").strip()
+        if not auth:
+            return None
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() == "bearer":
+            return token.strip() or None
+        return auth
+
+    @app.get("/mcp")
+    async def mcp_stream(request: Request):
+        return await _forward_stream_verbatim("GET", _mcp("/mcp"), request, api_key=_mcp_key(request))
+
+    @app.get("/mcp/{path:path}")
+    async def mcp_stream_path(path: str, request: Request):
+        return await _forward_stream_verbatim(
+            "GET", _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
+        )
+
+    @app.api_route("/mcp", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def mcp_message(request: Request):
+        return await _forward(request.method, _mcp("/mcp"), request, api_key=_mcp_key(request))
+
+    @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def mcp_message_path(path: str, request: Request):
+        return await _forward(
+            request.method, _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
+        )
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")

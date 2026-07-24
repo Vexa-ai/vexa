@@ -15,7 +15,7 @@ import {
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
 import type { Invocation } from './config.js';
-import type { JoinDriver, JoinOutcome } from './ports.js';
+import type { JoinDriver, JoinOutcome, JoinResult } from './ports.js';
 
 /**
  * Map @vexa/join's typed AdmissionError `outcome` → a JoinOutcome (G1).
@@ -59,7 +59,7 @@ function joinPlatform(p: string): JoinPlatform {
 export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver {
   const platform = joinPlatform(inv.platform);
   return {
-    async join(report): Promise<JoinOutcome> {
+    async join(report): Promise<JoinResult> {
       let r;
       try {
         r = await joinMeeting(page, {
@@ -73,14 +73,18 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
         });
       } catch (e) {
         // A TYPED admission verdict (denial/lobby_timeout/join_failure) → map its outcome so the
-        // control plane records the truth, not a generic retried `join_failure` (G1). A genuinely
-        // unexpected throw (browser crash, navigation error) is NOT an AdmissionError → re-raise so
-        // the orchestrator classifies it as a transient join_failure.
-        if (e instanceof AdmissionError) return admissionOutcomeToJoinOutcome(e.outcome);
+        // control plane records the truth, not a generic retried `join_failure` (G1). CARRY the
+        // AdmissionError's own message as the reason text (#926) — that's the real Zoom cause
+        // ("auth_required: …", "host did not start …") the terminal lifecycle row would otherwise
+        // lose, leaving meeting-api to synthesize "reason: None". A genuinely unexpected throw
+        // (browser crash, navigation error) is NOT an AdmissionError → re-raise so the orchestrator
+        // classifies it as a transient join_failure (and stamps `reason: String(e)` itself).
+        if (e instanceof AdmissionError) return { outcome: admissionOutcomeToJoinOutcome(e.outcome), reason: e.message };
         throw e;
       }
-      if (r.admitted) { await report('active'); return 'admitted'; }
-      return (r.state === 'blocked' || r.state === 'needs_human_help') ? 'blocked' : 'rejected';
+      if (r.admitted) { await report('active'); return { outcome: 'admitted' }; }
+      const outcome: JoinOutcome = (r.state === 'blocked' || r.state === 'needs_human_help') ? 'blocked' : 'rejected';
+      return { outcome, reason: `join ended in state '${r.state}' without admission` };
     },
     onRemoval(cb) {
       if (platform === 'teams') return startTeamsRemovalMonitor(page, cb);

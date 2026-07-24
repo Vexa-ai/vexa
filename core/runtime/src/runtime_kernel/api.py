@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .callbacks import CallbackQueue
-from .kernel import QuotaExceeded, Runtime
+from .kernel import QuotaExceeded, Runtime, StartFailed
 from .models import RuntimeEvent, StopReason, WorkloadSpec
 from .obs import TraceMiddleware, log_event
 from .scheduler import Scheduler
@@ -106,7 +106,9 @@ def create_app(
     def create(spec: WorkloadSpec):
         try:
             status = rt.create(spec)
-            # SYSTEM event: a workload was spawned for the calling control-plane request.
+            # SYSTEM event: a workload was spawned for the calling control-plane request. Only logged
+            # on the success path — a workload that failed to START raises StartFailed below, so
+            # `workload_spawned` never fires over a dead workload (#718).
             log_event(
                 "workload_spawned",
                 audience="system",
@@ -114,6 +116,19 @@ def create_app(
                 fields={"workload_id": spec.workloadId, "profile": spec.profile},
             )
             return dump(status)
+        except StartFailed as e:
+            # The backend could not start the workload (e.g. the image is absent). The kernel already
+            # recorded the honest stopped/start_failed status + emitted its event; answer a non-201
+            # that NAMES the cause (the existing {detail} error convention — no runtime.v1 shape is
+            # sealed for errors, same as the 429/400 branches below) so no caller reads a false 201.
+            log_event(
+                "workload_spawn_failed",
+                audience="system",
+                level="error",
+                span="workloads.create",
+                fields={"workload_id": spec.workloadId, "profile": spec.profile, "error": str(e)},
+            )
+            raise HTTPException(status_code=502, detail=str(e))
         except QuotaExceeded as e:
             log_event(
                 "workload_quota_exceeded",
