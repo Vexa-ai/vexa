@@ -88,6 +88,64 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
   ],
 };
 
+export const BUILD_MATRIX_BY_IMAGE = {
+  "vexaai/v012-admin-api": {
+    name: "admin-api",
+    image: "vexaai/v012-admin-api",
+    context: "core/identity/services/admin-api",
+    dockerfile: "core/identity/services/admin-api/Dockerfile",
+  },
+  "vexaai/v012-runtime": {
+    name: "runtime",
+    image: "vexaai/v012-runtime",
+    context: "core/runtime",
+    dockerfile: "core/runtime/Dockerfile",
+  },
+  "vexaai/v012-agent-worker": {
+    name: "agent-worker",
+    image: "vexaai/v012-agent-worker",
+    context: ".",
+    dockerfile: "core/agent/worker/Dockerfile",
+  },
+  "vexaai/v012-agent-api": {
+    name: "agent-api",
+    image: "vexaai/v012-agent-api",
+    context: ".",
+    dockerfile: "core/agent/services/agent-api/Dockerfile",
+  },
+  "vexaai/v012-meeting-api": {
+    name: "meeting-api",
+    image: "vexaai/v012-meeting-api",
+    context: ".",
+    dockerfile: "core/meetings/services/meeting-api/Dockerfile",
+  },
+  "vexaai/v012-gateway": {
+    name: "gateway",
+    image: "vexaai/v012-gateway",
+    context: "core/gateway/services/gateway",
+    dockerfile: "core/gateway/services/gateway/Dockerfile",
+  },
+  "vexaai/v012-mcp": {
+    name: "mcp",
+    image: "vexaai/v012-mcp",
+    context: "core/meetings/services/mcp",
+    dockerfile: "core/meetings/services/mcp/Dockerfile",
+  },
+  "vexaai/v012-terminal": {
+    name: "terminal",
+    image: "vexaai/v012-terminal",
+    context: "clients/terminal",
+    dockerfile: "clients/terminal/Dockerfile",
+  },
+  "vexaai/vexa-lite": {
+    name: "lite",
+    image: "vexaai/vexa-lite",
+    context: ".",
+    dockerfile: "deploy/lite/Dockerfile.lite",
+    free_disk: true,
+  },
+};
+
 export const RUNTIME_INPUT_PATHS = [
   ...new Set(Object.values(RUNTIME_INPUTS_BY_IMAGE).flat()),
 ].sort();
@@ -246,6 +304,64 @@ export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
   });
 }
 
+export function candidateChangedImages(doc, head = "HEAD", cwd = process.cwd()) {
+  return REQUIRED_IMAGES.filter((image) => {
+    const row = doc.images[image];
+    const buildSource = row.build_source || doc.build_source;
+    return runtimeInputDriftForPaths(
+      buildSource,
+      head,
+      RUNTIME_INPUTS_BY_IMAGE[image],
+      cwd,
+    ).length > 0;
+  });
+}
+
+export function candidateBuildPlanFromChangedImages(doc, changedImages) {
+  const changed = [...new Set(changedImages)];
+  const unknown = changed.filter((image) => !REQUIRED_IMAGES.includes(image));
+  if (unknown.length > 0) fail(`build plan contains unknown image(s): ${unknown.join(", ")}`);
+
+  const botLite = ["vexaai/vexa-bot", "vexaai/vexa-lite"];
+  const exactBotLite =
+    changed.length === botLite.length &&
+    botLite.every((image) => changed.includes(image));
+  const exactFull =
+    changed.length === REQUIRED_IMAGES.length &&
+    REQUIRED_IMAGES.every((image) => changed.includes(image));
+
+  if (!exactBotLite && !exactFull) {
+    fail(
+      "unsupported partial candidate build; only the independently validated " +
+      `Bot+Lite delta is allowed (changed: ${changed.join(", ") || "none"})`,
+    );
+  }
+
+  const selected = exactFull ? REQUIRED_IMAGES : botLite;
+  return {
+    mode: exactFull ? "full" : "bot-lite-delta",
+    changed_images: selected,
+    build_matrix: selected
+      .filter((image) => image !== "vexaai/vexa-bot")
+      .map((image) => BUILD_MATRIX_BY_IMAGE[image]),
+    build_bot: selected.includes("vexaai/vexa-bot"),
+    base_candidate_tag: doc?.candidate_tag || null,
+  };
+}
+
+export function candidateBuildPlan(doc, head = "HEAD", cwd = process.cwd()) {
+  if (!doc) {
+    return candidateBuildPlanFromChangedImages(
+      null,
+      REQUIRED_IMAGES,
+    );
+  }
+  return candidateBuildPlanFromChangedImages(
+    doc,
+    candidateChangedImages(doc, head, cwd),
+  );
+}
+
 function loadMap(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -253,7 +369,7 @@ function loadMap(path) {
 function usage() {
   console.error(
     "usage: candidate-image-map.mjs " +
-    "<check|emit-tsv|emit-platform-tsv|check-source-inputs> " +
+    "<check|emit-tsv|emit-platform-tsv|check-source-inputs|emit-build-plan> " +
     "<map.json> [expected-version|head]",
   );
   process.exit(2);
@@ -262,13 +378,17 @@ function usage() {
 function main(argv) {
   const [command, path, arg] = argv;
   if (!command || !path) usage();
-  const doc = validateCandidateMap(loadMap(path), command === "check" ? arg : undefined);
+  const doc = path === "-"
+    ? null
+    : validateCandidateMap(loadMap(path), command === "check" ? arg : undefined);
 
   if (command === "check") {
+    if (!doc) usage();
     console.log(`✓ ${doc.release}: exact ten-image candidate map is well formed`);
     return;
   }
   if (command === "emit-tsv") {
+    if (!doc) usage();
     for (const image of REQUIRED_IMAGES) {
       const row = doc.images[image];
       console.log(`${image}\t${row.digest}\t${row.candidate_tag || doc.candidate_tag}`);
@@ -276,6 +396,7 @@ function main(argv) {
     return;
   }
   if (command === "emit-platform-tsv") {
+    if (!doc) usage();
     for (const image of REQUIRED_IMAGES) {
       const row = doc.images[image];
       for (const platform of row.platforms) {
@@ -294,11 +415,16 @@ function main(argv) {
     return;
   }
   if (command === "check-source-inputs") {
+    if (!doc) usage();
     const drift = candidateInputDrift(doc, arg || "HEAD");
     assertNoRuntimeInputDrift(drift);
     console.log(
       `✓ every image input is tree-identical to its witnessed build source → ${arg || "HEAD"}`,
     );
+    return;
+  }
+  if (command === "emit-build-plan") {
+    console.log(JSON.stringify(candidateBuildPlan(doc, arg || "HEAD")));
     return;
   }
   usage();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,8 +8,11 @@ import test from "node:test";
 import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
+  BUILD_MATRIX_BY_IMAGE,
   RUNTIME_INPUTS_BY_IMAGE,
   assertNoRuntimeInputDrift,
+  candidateBuildPlan,
+  candidateBuildPlanFromChangedImages,
   candidateInputDrift,
   validateCandidateMap,
 } from "./candidate-image-map.mjs";
@@ -144,6 +147,71 @@ test("a root .dockerignore-only change invalidates every affected candidate", (t
     "vexaai/v012-meeting-api: .dockerignore",
     "vexaai/vexa-bot: .dockerignore",
   ]);
+});
+
+test("the replacement build plan is bounded to Bot and Lite", () => {
+  const doc = validMap();
+  const plan = candidateBuildPlanFromChangedImages(doc, [
+    "vexaai/vexa-bot",
+    "vexaai/vexa-lite",
+  ]);
+  assert.equal(plan.mode, "bot-lite-delta");
+  assert.deepEqual(plan.changed_images, [
+    "vexaai/vexa-bot",
+    "vexaai/vexa-lite",
+  ]);
+  assert.deepEqual(plan.build_matrix.map(({ image }) => image), [
+    "vexaai/vexa-lite",
+  ]);
+  assert.equal(plan.build_bot, true);
+  assert.equal(plan.base_candidate_tag, doc.candidate_tag);
+});
+
+test("release-images consumes the planner's dynamic matrix instead of a literal fan-out", () => {
+  assert.deepEqual(
+    Object.keys(BUILD_MATRIX_BY_IMAGE),
+    REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
+  );
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release-images.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /include: \$\{\{ fromJSON\(needs\.preflight\.outputs\.build_matrix\) \}\}/,
+  );
+  assert.match(
+    workflow,
+    /needs\.preflight\.outputs\.build_bot == 'true'/,
+  );
+  assert.match(
+    workflow,
+    /needs\.preflight\.outputs\.build_mode == 'bot-lite-delta'/,
+  );
+});
+
+test("a partial build cannot silently widen beyond the validated Bot+Lite path", () => {
+  const doc = validMap();
+  assert.throws(
+    () => candidateBuildPlanFromChangedImages(doc, ["vexaai/vexa-bot"]),
+    /unsupported partial candidate build/,
+  );
+  assert.throws(
+    () => candidateBuildPlanFromChangedImages(doc, [
+      "vexaai/vexa-bot",
+      "vexaai/v012-runtime",
+    ]),
+    /unsupported partial candidate build/,
+  );
+});
+
+test("a release with no prior candidate map retains the full ten-image plan", () => {
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.mode, "full");
+  assert.equal(plan.changed_images.length, REQUIRED_IMAGES.length);
+  assert.equal(plan.build_matrix.length, REQUIRED_IMAGES.length - 1);
+  assert.equal(plan.build_bot, true);
+  assert.equal(plan.base_candidate_tag, null);
 });
 
 test("refuses any runtime-input drift", () => {
