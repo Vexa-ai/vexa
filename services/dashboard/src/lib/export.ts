@@ -1,4 +1,5 @@
 import type { Meeting, TranscriptSegment } from "@/types/vexa";
+import { getPlatformConfig } from "@/types/vexa";
 import { format } from "date-fns";
 import { parseUTCTimestamp } from "@/lib/utils";
 
@@ -47,7 +48,7 @@ export function exportToTxt(meeting: Meeting, segments: TranscriptSegment[]): st
   output += "=".repeat(60) + "\n\n";
 
   output += `Meeting ID: ${meeting.platform_specific_id}\n`;
-  output += `Platform: ${meeting.platform === "google_meet" ? "Google Meet" : "Microsoft Teams"}\n`;
+  output += `Platform: ${getPlatformConfig(meeting.platform).name}\n`;
 
   if (meeting.start_time) {
     output += `Date: ${format(parseUTCTimestamp(meeting.start_time), "PPPp")}\n`;
