@@ -37,6 +37,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { ChunkedTranscriber, PyannoteSegmenter, type BoundaryEvent, type BoundarySource } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
+import { hintKindForPlatform } from './pipeline.js';
 
 const FIXTURE = process.env.QUALITY_MIXED_FIXTURE;
 if (!FIXTURE) throw new Error('QUALITY_MIXED_FIXTURE is required (a recorded captured-signal.v1 session)');
@@ -57,12 +58,15 @@ interface Frame { seq: number; ts: number; pcm: string; pcm_len: number }
 interface Hint { type: 'hint'; t: number; name: string; isEnd?: boolean }
 interface Cut { type: 'boundary'; kind: string; tMs: number; confidence?: number }
 
-function load(path: string): { frames: Frame[]; hints: Hint[]; cuts: Cut[] } {
+function load(path: string): { platform: string; frames: Frame[]; hints: Hint[]; cuts: Cut[] } {
   const raw = path.endsWith('.gz') ? gunzipSync(readFileSync(path)).toString('utf8') : readFileSync(path, 'utf8');
   const lines = raw.split('\n').filter(Boolean);
-  if (JSON.parse(lines[0]).type !== 'captured_signal_header') throw new Error('not a captured-signal.v1 session');
+  const header = JSON.parse(lines[0]) as { type?: string; platform?: string };
+  if (header.type !== 'captured_signal_header') throw new Error('not a captured-signal.v1 session');
+  if (!header.platform) throw new Error('captured-signal.v1 header has no platform');
   const recs = lines.slice(1).map((l) => JSON.parse(l));
   return {
+    platform: header.platform,
     frames: recs.filter((r) => r.type !== 'hint' && r.type !== 'boundary'),
     hints: recs.filter((r) => r.type === 'hint'),
     cuts: recs.filter((r) => r.type === 'boundary'),
@@ -75,7 +79,7 @@ const framePcm = (f: Frame): Float32Array => {
 };
 
 async function main(): Promise<void> {
-  const { frames, hints, cuts } = load(FIXTURE!);
+  const { platform, frames, hints, cuts } = load(FIXTURE!);
   // No recorded cuts means the fixture came from upstream of the pipeline (a desktop tape), so the
   // segmenter has to be real or there is nothing to segment with. REAL_SEGMENTER forces it either
   // way, for comparing the model's cuts against production's on a fixture that has both.
@@ -222,7 +226,12 @@ async function main(): Promise<void> {
       emitBoundary({ kind: ev.cut.kind as BoundaryEvent['kind'], tMs: ev.cut.tMs, confidence: ev.cut.confidence ?? 0.9 });
       lastCutMs = ev.cut.tMs; cutsEmitted++;
     } else if (ev.hint) {
-      tc.recordHint(ev.hint.name, 'dom-active', ev.hint.t, ev.hint.isEnd);
+      tc.recordHint(
+        ev.hint.name,
+        hintKindForPlatform(platform),
+        ev.hint.t,
+        ev.hint.isEnd,
+      );
     } else if (ev.frame) {
       tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
       // Yield between frames. feedAudio is synchronous, so a tight loop feeds the WHOLE session

@@ -180,6 +180,9 @@ interface Turn {
   /** The per-turn segmentation id — the namer's key (no clustering). */
   clusterId: string;
   turnId: number;
+  /** Boundary producer's acoustic onset. Unlike `t0`, this is never moved
+   *  backward by coverage recovery and is the causal-registration instant. */
+  acousticOnsetMs: number;
   t0: number;
   /** Latest committed end (audio ms). */
   t1: number;
@@ -395,6 +398,7 @@ export class ChunkedTranscriber {
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
     if (!name) return;
+    const exclusiveTrailing = kind === 'jitsi-dominant';
     // Hint-hop instrument: did this hint find a turn RIGHT NOW? Emitted once per
     // start-hint at every exit below (end-hints close windows, they don't bind).
     let matchedNow = false;
@@ -409,20 +413,34 @@ export class ChunkedTranscriber {
     // brief flicker hint can't flip an already-correct pending. Priority for the
     // unattributed, NOT for pending that's already attributed.
     if (this.turn && !this.turn.resolvedName && (this.turn.pendingTail.length > 0 || this.turn.allConfirmed.length > 0)) {
-      this.resolveName(this.turn);
+      this.resolveName(this.turn, false);
     }
     if (this.turn?.resolvedName === name) matchedNow = true;   // named (now or already) the open turn
     if (this.unresolved.length === 0) { report(); return; }
-    // Two passes for turns that committed before their hint arrived:
+    // Legacy Zoom/Teams passes for turns that committed before their hint arrived:
     //  1. window-match — a hint whose lag-shifted window overlaps the turn names it
     //     (re-resolve casts the vote → onClusterRename repaints). Preferred.
     //  2. late-box claim — if STILL unnamed and the turn ended within CLAIM_WINDOW_MS
     //     before this hint, it's the gap the late active-speaker box left, so it's
     //     THIS speaker's: claim it. Bounded so it can't reach a prior speaker's tail;
     //     only fills provisional gaps, never overwrites a resolved name. (Skip on isEnd.)
+    // Jitsi bypasses both: only its globally unique transition resolver may claim.
     const claimFrom = isEnd ? Infinity : tMs - CLAIM_WINDOW_MS;
     const still: UnresolvedTurn[] = [];
     for (const u of this.unresolved) {
+      if (exclusiveTrailing) {
+        const result = this.binder.resolve(
+          { clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 },
+          { recordVote: false, finalized: true },
+        );
+        if (result.source === 'exclusive-transition') {
+          this.binder.confirmExclusiveAttribution(u.clusterId, result.speakerName);
+          matchedNow = true;
+          continue;
+        }
+        still.push(u);
+        continue;
+      }
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
       if (!isEnd && blocked.has(name) && tMs - u.t1 <= REASSERT_WINDOW_MS) {
@@ -459,8 +477,21 @@ export class ChunkedTranscriber {
    *  real lit time around the turn) or the turn stays provisional. */
   private sweepHeld(nowMs: number): void {
     if (this.unresolved.length === 0) return;
+    const exclusiveTrailing = this.binder.hasHintKind('jitsi-dominant');
     const still: UnresolvedTurn[] = [];
     for (const u of this.unresolved) {
+      if (exclusiveTrailing) {
+        const result = this.binder.resolve(
+          { clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 },
+          { recordVote: false, finalized: true },
+        );
+        if (result.source === 'exclusive-transition') {
+          this.binder.confirmExclusiveAttribution(u.clusterId, result.speakerName);
+          continue;
+        }
+        still.push(u);
+        continue;
+      }
       if (nowMs < u.t1 + REASSERT_WINDOW_MS) { still.push(u); continue; }
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
       if (!m) { still.push(u); continue; }
@@ -693,6 +724,7 @@ export class ChunkedTranscriber {
           last.t1 = Math.max(last.t1, this.latestAudioMs);
           this.lastAudioEndMs = Math.max(this.lastAudioEndMs, last.t1);
           this.turn = null;
+          this.sealClosedTurn(last);
           await this.submitTurn(last, true).catch((e: any) =>
             this.log(`[ChunkedTranscriber] turn close failed: ${e?.message}`));
         }
@@ -710,7 +742,23 @@ export class ChunkedTranscriber {
    *  the pump submits the open turn once per drain batch (and ticks resubmit). */
   private async openTurnApply(item: { t0: number; segId: string }): Promise<Turn> {
     this.commitCounter++;
-    if (this.turn) { const prev = this.turn; this.turn = null; await this.submitTurn(prev, true); }
+    if (this.turn) {
+      const prev = this.turn;
+      this.turn = null;
+      prev.t1 = Math.max(
+        prev.confirmedUpToMs,
+        Math.min(item.t0, this.latestAudioMs || item.t0),
+      );
+      this.lastAudioEndMs = Math.max(this.lastAudioEndMs, prev.t1);
+      this.sealClosedTurn(prev);
+      await this.submitTurn(prev, true);
+    }
+    // A new acoustic boundary seals the no-turn/silence interval before it.
+    // Re-adjudicate older provisional turns before registering the new turn at
+    // this exact boundary, so a trailing transition during silence can repair
+    // the preceding turn without borrowing the resumed speaker.
+    this.binder.sealAcousticThrough(item.t0);
+    this.sweepHeld(item.t0);
     // CONTIGUOUS COVERAGE. A turn begins where the last one ended, not where the cut says. The
     // boundary stream answers "where did the speaker change" — it does not get to answer "which
     // audio exists". A close whose re-open never fires leaves a span no turn covers, and audio
@@ -729,10 +777,16 @@ export class ChunkedTranscriber {
     }
     this.turn = {
       clusterId: item.segId, turnId: this.turnCounter++,
+      acousticOnsetMs: item.t0,
       t0, t1: t0, confirmedUpToMs: t0,
       history: [], seq: 0, lastSubmitEndMs: 0, firstSubmitDone: false, allConfirmed: [], pendingName: null, pendingTail: [],
       draftedUpToSeq: 0, lastVoicedWallMs: Date.now(), resolvedName: null,
     };
+    this.binder.registerAcousticTurn({
+      clusterId: item.segId,
+      tStartMs: item.t0,
+      tEndMs: item.t0,
+    }, false);
     return this.turn;
   }
 
@@ -747,7 +801,20 @@ export class ChunkedTranscriber {
     }
     this.lastAudioEndMs = Math.max(this.lastAudioEndMs, t.t1);
     this.turn = null;
+    this.sealClosedTurn(t);
     await this.submitTurn(t, true);
+  }
+
+  /** Boundary custody is independent of Whisper. Register and seal the closed
+   *  acoustic interval before awaiting STT so a trailing identity event can
+   *  only adjudicate against the complete turn set for that interval. */
+  private sealClosedTurn(turn: Turn): void {
+    this.binder.registerAcousticTurn({
+      clusterId: turn.clusterId,
+      tStartMs: turn.acousticOnsetMs,
+      tEndMs: turn.t1,
+    }, true);
+    this.binder.sealAcousticThrough(turn.t1);
   }
 
   /** One submission of the turn's unconfirmed window. While the turn is open,
@@ -848,7 +915,7 @@ export class ChunkedTranscriber {
     turn.history = agreement.history;
     narrate(`OK confirm=${confirmCount}/${mapped.length} text=${JSON.stringify(mapped.map(m => m.text).join(' ').slice(0, 80))}`);
 
-    const name = this.resolveName(turn);
+    const name = this.resolveName(turn, closing);
     if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
 
     const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
@@ -930,7 +997,7 @@ export class ChunkedTranscriber {
     this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.t1, turn.confirmedUpToMs);
     if (turn.seq === 0 && turn.allConfirmed.length === 0 && turn.pendingTail.length > 0) {
       // Closing pass produced nothing but drafts existed — never lose a turn.
-      const name = this.resolveName(turn);
+      const name = this.resolveName(turn, true);
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
       this.cb.publish(name, promoted, []);
       this.rememberPublishedSpeaker(name, promoted[promoted.length - 1]?.endMs);
@@ -947,11 +1014,11 @@ export class ChunkedTranscriber {
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);
-    // Register a name vote for the closed turn. If no hint overlaps yet
+    // Register a name vote for the closed turn. If no admissible hint exists yet
     // (provisional), queue it for re-resolve when a later hint arrives.
     if (turn.allConfirmed.length > 0) {
       if (turn.resolvedName) return;
-      const name = this.resolveName(turn);
+      const name = this.resolveName(turn, true);
       if (name === turn.clusterId) {
         this.unresolved.push({ clusterId: turn.clusterId, t0: turn.t0, t1: turn.t1, blockedNames: turn.blockedNames });
         if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
@@ -959,18 +1026,20 @@ export class ChunkedTranscriber {
     }
   }
 
-  private resolveName(turn: Turn): string {
+  private resolveName(turn: Turn, finalized = false): string {
     // STICKY ATTRIBUTION. Once a turn has resolved to a real speaker, lock it: later
     // hints (a brief "hmm" box-flicker, the other speaker's lag-shifted overlap) must
     // NOT flip an already-attributed turn's pending. Priority/claim is for the
     // UNATTRIBUTED, never for the attributed. While unattributed we keep resolving:
     // window-match (lag-corrected overlap) casts the per-key vote; the first REAL
     // result locks the name (and onLateResolve → onClusterRename paints it in).
+    // Exclusive Jitsi results stay provisional while open and until their
+    // globally unique transition custody plus both watermarks are final.
     if (turn.resolvedName) return turn.resolvedName;
     const commit = { clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 };
     // recordVote:false — we only commit a vote once the result survives the
     // short-UI-switch guard below, so a held-provisional bad hint never votes.
-    const r = this.binder.resolve(commit, { recordVote: false });
+    const r = this.binder.resolve(commit, { recordVote: false, finalized });
     if (r.source !== 'provisional-cluster-id' && this.shouldDeferShortUiSwitch(turn, r.speakerName, r.source)) {
       // A brief isolated tile flip to a NEW name right after a different speaker:
       // hold provisional and block that name from a later claim/rename.
@@ -980,8 +1049,17 @@ export class ChunkedTranscriber {
       return turn.clusterId;
     }
     if (r.source !== 'provisional-cluster-id') {
-      this.binder.recordClusterVote(turn.clusterId, r.speakerName);
+      if (r.source === 'exclusive-transition') {
+        this.binder.confirmExclusiveAttribution(turn.clusterId, r.speakerName);
+      } else {
+        this.binder.recordClusterVote(turn.clusterId, r.speakerName);
+      }
       turn.resolvedName = r.speakerName;
+    } else if (this.binder.hasHintKind('jitsi-dominant')) {
+      this.log(
+        `[binder-pending] ${turn.clusterId} [${Math.round(turn.t0)},${Math.round(turn.t1)}] `
+        + `reason=exclusive-transition-not-admissible finalized=${finalized ? 1 : 0}`,
+      );
     } else {
       const d = this.binder.explainMatch(commit);
       const b = d.best ? ` best=${d.best.name} support=${Math.round(d.best.supportMs)}ms cov=${d.best.coverage.toFixed(2)} conf=${d.best.confidence.toFixed(2)}` : '';

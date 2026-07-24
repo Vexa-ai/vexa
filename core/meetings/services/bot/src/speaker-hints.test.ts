@@ -3,7 +3,8 @@
  *
  * Pins the seams #498 names:
  *   • C2 kind fidelity: the platform's TRUE hint kind reaches the transcriber —
- *     'dom-outline' for Teams, 'dom-active' for Zoom AND jitsi (observed via an
+ *     'dom-outline' for Teams, 'dom-active' for Zoom, and the exclusive ordered
+ *     'jitsi-dominant' signal for Jitsi (observed via an
  *     injected MixedTranscriberFactory at the exact recordHint seam);
  *   • C1 counters: received advances per hint; matched/missed advance on the
  *     transcriber's onHintOutcome; a hint with no overlapping turn counts missed;
@@ -57,8 +58,8 @@ async function main(): Promise<void> {
   console.log('C2 — platform hint kind reaches the transcriber');
   check("hintKindForPlatform('teams') == 'dom-outline'", hintKindForPlatform('teams') === 'dom-outline');
   check("hintKindForPlatform('zoom') == 'dom-active'", hintKindForPlatform('zoom') === 'dom-active');
-  check("hintKindForPlatform('jitsi') == 'dom-active' (jitsi lane preserved)", hintKindForPlatform('jitsi') === 'dom-active');
-  for (const [platform, kind] of [['teams', 'dom-outline'], ['zoom', 'dom-active'], ['jitsi', 'dom-active']] as const) {
+  check("hintKindForPlatform('jitsi') == 'jitsi-dominant'", hintKindForPlatform('jitsi') === 'jitsi-dominant');
+  for (const [platform, kind] of [['teams', 'dom-outline'], ['zoom', 'dom-active'], ['jitsi', 'jitsi-dominant']] as const) {
     const spy = spyFactory();
     const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
     await pipe.start();

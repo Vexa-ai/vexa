@@ -22,27 +22,33 @@ differently: **gmeet 1.000** (named at capture, nothing to get wrong) against **
 clean hint stream — and **0.478** when the hint stream names the wrong person a third of the time.
 The mixed lane's attribution is only ever as good as its hints.
 
-Speaker attribution is platform-specific **only at the source** (glow names / DOM hints); the
-binding logic is shared. One mixed-core fix lands on jitsi + teams + zoom + youtube at once;
-per-platform work reduces to (a) capture delivery, (b) hint quality.
+Speaker attribution preserves platform semantics from source through binding. The mixed core owns
+the shared causal invariant, but each producer retains its testimony class: Teams outlines may
+overlap per participant, Zoom has one debounced active tile, and Jitsi reports one smoothed global
+dominant-speaker order.
 
 ## Speaker attribution — one engine, four thin adapters
 
 ```
-zoom-speakers.ts    ─┐ 'dom-active'
-jitsi-speakers.ts   ─┤ 'dom-active'   ─▶ ClusterNameBinder ─▶ ChunkedTranscriber
-msteams-speakers.ts ─┘ 'dom-outline'     (THE binding logic:   (turns · publish · repaint)
-                                          vote · claim window ·
-gmeet-speakers.ts   ──── per-channel glow  blocked names)
+zoom-speakers.ts    ─── 'dom-active'       exclusive-trailing* ─┐
+jitsi-speakers.ts   ─── 'jitsi-dominant'   ordered tokens     ─┼▶ ClusterNameBinder ─▶ ChunkedTranscriber
+msteams-speakers.ts ─── 'dom-outline'      concurrent         ─┘   (turns · publish · repaint)
+                                                                   (unknown until admissible)
+gmeet-speakers.ts   ──── per-channel glow
                          (gmeet lane: bound at CAPTURE, no binder)
 ```
 
 `ClusterNameBinder` converges two unreliable signals: the diarizer says WHEN the speaker changed
-(provisional cluster ids), the platform UI says WHO around a wall-clock time. Per-platform variation
-is only the hint stream (`hintKindForPlatform`: teams → `dom-outline`, else `dom-active`) and the DOM
-read. Each adapter is THE shared implementation for its platform, used by BOTH the bot and the
-extension. **Therefore validating the binder on ONE mixed platform validates it for all of them**;
-what stays platform-specific is hint quality (selector rot, lag, null gaps).
+(provisional cluster ids), the platform UI says WHO under a producer-specific timing contract.
+`hintKindForPlatform` keeps those contracts distinct: Teams → `dom-outline`, Zoom → `dom-active`,
+Jitsi → `jitsi-dominant`. Each adapter is THE shared implementation for its platform, used by BOTH
+the bot and the extension. Binder changes therefore require platform-specific replay falsifiers;
+one platform's green is not evidence for another producer's semantics.
+
+`*` Zoom remains on the legacy `dom-active` window binder in this bounded #956
+car; #797 owns its producer-envelope conversion. Calling the producer
+exclusive-trailing records the observed contract, not completion of that
+deferred implementation.
 
 ### Its own stage chain
 
