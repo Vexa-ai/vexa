@@ -66,12 +66,28 @@ export interface TeamsSpeakerIdentity {
   name: string;
 }
 
+/** A Teams voice-outline edge that was observed but could not safely become a
+ * speaker hint because the tile's display name was unresolved. This is a
+ * producer observation, not a hint: consumers must never infer a name from it. */
+export interface TeamsNameUnresolvedObservation {
+  type: 'name-unresolved';
+  platform: 'teams';
+  signal: 'dom-outline';
+  reason: 'resolver-empty';
+  participantId: string;
+  isEnd: boolean;
+  tMs: number;
+}
+
 export interface TeamsSpeakersOptions {
   /** Local participant / bot display name — its tiles are never reported. */
   selfName?: string;
   /** Debounced speaking state change: isEnd=false → started speaking,
    *  isEnd=true → stopped. tMs = wall-clock at emit. */
   onSpeaking: (name: string, id: string, isEnd: boolean, tMs: number) => void;
+  /** Fail-loud producer observation emitted before an unresolved-name edge is
+   * withheld from the hint stream. It contains no DOM text or display name. */
+  onNameUnresolved?: (observation: TeamsNameUnresolvedObservation) => void;
   log?: (msg: string) => void;
   /** Debounce for state-change emission (ms). Default 300 — matches the bot. */
   debounceMs?: number;
@@ -209,7 +225,24 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
 
   function emit(state: SpeakingState, identity: Identity): void {
     if (state === 'unknown' || destroyed) return;
-    if (!identity.name) return;   // unresolved name → don't emit a nameless/GUID hint
+    if (!identity.name) {
+      const isEnd = state !== 'speaking';
+      const observation: TeamsNameUnresolvedObservation = {
+        type: 'name-unresolved',
+        platform: 'teams',
+        signal: 'dom-outline',
+        reason: 'resolver-empty',
+        participantId: identity.id,
+        isEnd,
+        tMs: Date.now(),
+      };
+      try { opts.onNameUnresolved?.(observation); } catch { /* diagnostics never break capture */ }
+      log(
+        `[TeamsSpeakers] name-unresolved reason=${observation.reason} ` +
+        `signal=${observation.signal} edge=${isEnd ? 'end' : 'start'}`,
+      );
+      return;   // unresolved name stays unknown; never emit a nameless/GUID hint
+    }
     if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     opts.onSpeaking(identity.name, identity.id, state !== 'speaking', Date.now());

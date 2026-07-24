@@ -14,6 +14,11 @@ export {
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
 } from './msteams-speakers.js';
-export type { TeamsSpeakers, TeamsSpeakersOptions, TeamsSpeakerIdentity } from './msteams-speakers.js';
+export type {
+  TeamsSpeakers,
+  TeamsSpeakersOptions,
+  TeamsSpeakerIdentity,
+  TeamsNameUnresolvedObservation,
+} from './msteams-speakers.js';
 export { createTeamsChat } from './teams-chat.js';
 export type { TeamsChat, TeamsChatMessage } from './teams-chat.js';
