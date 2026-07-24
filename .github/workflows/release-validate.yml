@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      validation_leg:
+        description: "Validation scope: all, or compose for an isolated harness rerun"
+        required: false
+        default: all
+        type: string
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -66,6 +71,14 @@ on:
         required: false
         default: false
         type: boolean
+      validation_leg:
+        description: "Validation scope"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - compose
 
 permissions:
   contents: read
@@ -155,6 +168,7 @@ jobs:
   # Runs in PARALLEL with the validate legs; it gates promote, not the validate signal.
   image-identity:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -263,6 +277,7 @@ jobs:
   # the working tree.
   validate-compose:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' || inputs.validation_leg == 'compose' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -278,15 +293,44 @@ jobs:
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
         run: cp deploy/compose/.env.example deploy/compose/.env
+      # Runtime uses the Docker Engine create API with pull disabled. Prove the daemon contract
+      # red→green here, then leave the exact published bot bytes resident for stack-test.
+      - name: Prove and preload the published bot image for runtime spawn
+        env:
+          BOT_REF: vexaai/vexa-bot:${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          RED_NAME="vexa-bot-preload-red-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          GREEN_NAME="vexa-bot-preload-green-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$RED_NAME" "$GREEN_NAME" >/dev/null 2>&1 || true' EXIT
+
+          # RED: an absent image plus Docker create --pull=never is the exact 404 class that
+          # validate-compose previously observed through runtime.
+          docker image rm -f "$BOT_REF" >/dev/null 2>&1 || true
+          if docker create --pull=never --name "$RED_NAME" "$BOT_REF" \
+              >/tmp/vexa-bot-preload-red.out 2>/tmp/vexa-bot-preload-red.err; then
+            echo "::error title=bot-preload-red::Docker create unexpectedly succeeded without a local $BOT_REF"
+            exit 1
+          fi
+          grep -Eq 'No such image|not found locally' /tmp/vexa-bot-preload-red.err \
+            || { cat /tmp/vexa-bot-preload-red.err; echo "::error title=bot-preload-red::expected the absent-image 404 class"; exit 1; }
+          echo "✓ red control: Docker create cannot spawn absent $BOT_REF with pull disabled"
+
+          # GREEN: pull once, create with pull still disabled, and assert Docker attached the
+          # container to the exact local image ID resolved from the published reference.
+          docker pull "$BOT_REF"
+          EXPECTED_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$BOT_REF")"
+          REPO_DIGEST="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BOT_REF")"
+          GREEN_CID="$(docker create --pull=never --name "$GREEN_NAME" "$BOT_REF")"
+          ACTUAL_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$GREEN_CID")"
+          test "$ACTUAL_IMAGE_ID" = "$EXPECTED_IMAGE_ID" \
+            || { echo "::error title=bot-preload-green::spawn imageID $ACTUAL_IMAGE_ID != pulled imageID $EXPECTED_IMAGE_ID"; exit 1; }
+          echo "✓ green control: $REPO_DIGEST preloaded; Docker create used imageID $ACTUAL_IMAGE_ID"
       # The compose agent-worker service is a build-only profile — `up`/`pull` skip it, and the
       # runtime spawns workers through the docker socket API. Pre-pull the PUBLISHED worker image so
       # the runtime's presence check finds it and this leg exercises the published worker bytes.
       - name: Pre-pull the published agent-worker image
         run: docker pull "vexaai/v012-agent-worker:$VERSION"
-      # The always-on wizard flow spawns a bot through the same socket API. Docker create does not
-      # implicit-pull, so seed the published bot image before the flow exercises those bytes.
-      - name: Pre-pull the published bot image
-        run: docker pull "vexaai/vexa-bot:$VERSION"
       - name: stack-test (always-on subset) from published images
         working-directory: deploy/compose
         env:
@@ -302,6 +346,7 @@ jobs:
 
   validate-mock-fsm:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -340,6 +385,7 @@ jobs:
   # failure (a compat surface regressing, or a recorded break silently un-breaking) turns this red.
   validate-v010-compat:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -376,6 +422,7 @@ jobs:
 
   validate-bot-spawn:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -413,6 +460,7 @@ jobs:
 
   validate-lite:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -472,6 +520,7 @@ jobs:
   # (concurrent-bots needs the bot image). Gates promote + guarantees with the amd64 legs.
   validate-arm64:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -550,6 +599,7 @@ jobs:
 
   validate-helm-k3s:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
