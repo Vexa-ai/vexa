@@ -4,7 +4,8 @@
  * Like Zoom/Teams, Jitsi delivers one mixed audio stream (captured by
  * @vexa/mixed-capture-core); this module provides the WHO + chat signals:
  *   - createJitsiSpeakers: watches the app's dominant-speaker state (redux
- *     primary, DOM fallback) → a mixed-capture.v1 `hint` (kind 'dom-active').
+ *     primary, DOM fallback) → an exclusive mixed-capture.v1 hint stream,
+ *     bound downstream as kind 'jitsi-dominant'.
  *   - createJitsiChat: reads conference chat (redux primary — the panel need
  *     not be open; DOM fallback) + sendJitsiChatMessage over the app's own API.
  */

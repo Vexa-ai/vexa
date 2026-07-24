@@ -23,7 +23,7 @@ export interface MeetingEvent {
   ts: number;                 // CAPTURE epoch ms
   speaker?: string;           // active-speaker name / chat sender display name
   text?: string;              // caption / segment / chat text
-  detail?: Record<string, unknown>; // active-speaker → {hint:'dom-active'|'dom-outline'|'caption', isEnd, index}
+  detail?: Record<string, unknown>; // active-speaker → {hint:'dom-active'|'jitsi-dominant'|'dom-outline'|'caption', isEnd, index}
 }
 
 // ── capture.v1 MODEL — this brick is the capture.v1 contract: model + serialization. ──

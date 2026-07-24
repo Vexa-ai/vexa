@@ -41,13 +41,14 @@ import type { Pipeline, TranscriptSink } from './ports.js';
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
 export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
 
-/** Each platform's TRUE hint kind — the binder's lag correction is per-kind
- *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
- *  Teams' voice-level outline is 'dom-outline'; Zoom's active-speaker DOM poll and
- *  jitsi's dominant-speaker signal ride 'dom-active'. Bound once at wiring time —
- *  the page-side watcher and the transcriber never renegotiate it. */
+/** Each platform's TRUE hint kind must survive the bot's wiring. Teams exposes
+ *  concurrent per-participant outlines; Zoom exposes one debounced DOM tile;
+ *  Jitsi exposes one smoothed global dominant-speaker state. Jitsi therefore
+ *  uses an ordered transition contract, never Zoom's lag/window envelope. */
 export function hintKindForPlatform(platform: Platform | string): HintKind {
-  return platform === 'teams' ? 'dom-outline' : 'dom-active';
+  if (platform === 'teams') return 'dom-outline';
+  if (platform === 'jitsi') return 'jitsi-dominant';
+  return 'dom-active';
 }
 
 /** Cumulative hint-hop counters (the C1 instrument): how many hints crossed into the

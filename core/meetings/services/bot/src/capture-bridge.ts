@@ -531,8 +531,9 @@ export async function startCaptureBridge(
       }
       if (isJitsi) {
         // Jitsi contributes the WHO + chat signals the mixed audio can't carry:
-        // dominant-speaker changes name the pyannote clusters ('dom-active' hints),
-        // and chat messages cross to the Node side as transcript `chat` segments.
+        // its smoothed global dominant-speaker stream crosses unchanged; pipeline
+        // wiring binds it as the exclusive `jitsi-dominant` contract. Chat messages
+        // cross to the Node side as transcript `chat` segments.
         if (w.VexaBrowserUtils?.createJitsiSpeakers && !w.__vexaJitsiSpeakers) {
           w.__vexaJitsiSpeakers = w.VexaBrowserUtils.createJitsiSpeakers({
             selfName: botName,

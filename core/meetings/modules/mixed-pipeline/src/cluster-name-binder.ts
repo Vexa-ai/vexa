@@ -8,6 +8,9 @@
  *      one or more HINT streams, each with its own latency and failure modes:
  *        - 'dom-active'  : Zoom active-speaker DOM poll   (~250 ms lag, null
  *                          gaps between speakers, selector rot)
+ *        - 'jitsi-dominant': Jitsi's exclusive, smoothed global dominant-speaker
+ *                          state. Same-name repeats are liveness heartbeats; only
+ *                          an ordered state transition is identity testimony.
  *        - 'caption'     : Teams caption events           (~500–1500 ms lag,
  *                          flicker, absent when captions are off)
  *        - 'dom-outline' : Teams voice-outline transitions (~200 ms lag,
@@ -25,18 +28,22 @@
  *      speakerManager.updateSpeakerName(clusterId, realName) and the already-
  *      published segments self-correct (stable segment_id + collector UPSERT).
  *
- * Hint turn model: a hint event marks the START of that name's turn; the turn
- * ends at the next hint of the same kind (any name), at an explicit end event
- * (`isEnd`), or after MAX_TURN_MS. This is exactly the caption-log model from
- * the pack, applied uniformly to every hint kind.
+ * Zoom/caption/Teams hints use the overlap model below. Jitsi is deliberately
+ * separate: its global dominant-speaker signal testifies to ORDER, not acoustic
+ * onset time, so it is bound by ordered transition tokens and never enters the
+ * overlap log.
  */
 
-export type HintKind = 'dom-active' | 'caption' | 'dom-outline';
+export type HintKind = 'dom-active' | 'jitsi-dominant' | 'caption' | 'dom-outline';
 
 /** Per-kind lag: how far the UI signal trails the actual audio (ms). Hint
  *  timestamps are shifted back by this amount before matching. */
 const KIND_LAG_MS: Record<HintKind, number> = {
   'dom-active': 250,
+  // Exclusive Jitsi transitions are ordinal testimony. This value is not used
+  // for matching, but keeping it explicit prevents accidental fallback to the
+  // Zoom envelope if a caller overrides kind lags.
+  'jitsi-dominant': 0,
   'caption': 1000,
   'dom-outline': 200,
 };
@@ -101,7 +108,7 @@ export interface CommitInfo {
 export interface ResolvedAttribution {
   /** Real display name, or the cluster id itself (provisional). */
   speakerName: string;
-  source: 'window-match' | 'cluster-vote' | 'provisional-cluster-id';
+  source: 'window-match' | 'exclusive-transition' | 'cluster-vote' | 'provisional-cluster-id';
   /** 1.0-ish for unambiguous window matches; lower for vote majorities; 0 provisional. */
   confidence: number;
 }
@@ -120,6 +127,9 @@ export interface ClusterNameBinderConfig {
 
 export interface ResolveOptions {
   recordVote?: boolean;
+  /** Whether the acoustic turn's end is final. Exclusive-trailing testimony
+   *  never names an open turn, even when its current tEnd happens to equal tStart. */
+  finalized?: boolean;
 }
 
 /** Why a window-match returned null (or that it didn't) — per-commit, for the
@@ -144,19 +154,70 @@ interface HintTurn {
   tEndMs?: number;
 }
 
+interface RegisteredAcousticTurn {
+  clusterId: string;
+  tStartMs: number;
+  tEndMs?: number;
+}
+
+interface ExclusiveTransition {
+  id: number;
+  fromName: string;
+  toName: string;
+  /** Start of this signal epoch: the preceding distinct observation. */
+  epochStartMs: number;
+  /** Observation time of this distinct transition. */
+  observedAtMs: number;
+}
+
+interface JitsiDominantState {
+  currentName: string | null;
+  lastName: string | null;
+  ended: boolean;
+  lastEndMs: number;
+  lastTransitionMs: number;
+  observedThroughMs: number;
+  observations: number;
+  nextTransitionId: number;
+  transitions: ExclusiveTransition[];
+  /** False once transition custody was compacted. Missing history can only
+   *  reduce attribution to unknown; it may never manufacture uniqueness. */
+  historyComplete: boolean;
+  /** A late distinct observation contradicts the ordered producer contract.
+   *  Stale same-state/outgoing heartbeats are harmless and do not set this. */
+  orderAmbiguous: boolean;
+}
+
 export class ClusterNameBinder {
   private readonly lag: Record<HintKind, number>;
   private readonly matchToleranceMs: number;
   private readonly hintLogLimit: number;
-  /** Fires on EVERY accepted (hysteresis-cleared) cluster-name change — the
-   *  caller repaints that cluster's pending + published segments. Settable post-
-   *  construction (the host wires it after creating the binder as a field). */
+  /** Fires on EVERY accepted cluster-attribution change, including a causal
+   *  invalidation back to the provisional cluster id. The caller repaints that
+   *  cluster's pending + published segments. Settable post-construction (the
+   *  host wires it after creating the binder as a field). */
   onLateResolve?: (clusterId: string, resolvedName: string) => void;
 
   /** Per-kind turn logs (append-only, trimmed to hintLogLimit). */
   private turns = new Map<HintKind, HintTurn[]>();
+  /** Acoustic turns are registered independently of hint arrival. Jitsi
+   *  transition admission is computed over the whole retained turn set: one
+   *  transition may claim exactly one ordinal turn, and one turn may be
+   *  claimed by exactly one transition. */
+  private acousticTurns = new Map<string, RegisteredAcousticTurn>();
+  /** Acoustic registration watermark. A closed turn is not admissible until
+   *  the boundary producer has sealed its complete interval. */
+  private acousticSealedThroughMs = -Infinity;
+  /** Compaction or a registration behind the sealed watermark destroys the
+   *  proof of global uniqueness. The session then remains fail-closed. */
+  private acousticHistoryComplete = true;
+  private acousticOrderAmbiguous = false;
+  private jitsiDominant: JitsiDominantState | null = null;
 
   private clusterLastResolvedName = new Map<string, string>();
+  /** Names admitted specifically through exclusive-transition custody. These
+   *  are the only attributions revoked if later custody proves incomplete. */
+  private exclusiveAttributions = new Map<string, string>();
   private clusterVoteHistory = new Map<string, Map<string, number>>();
 
   constructor(cfg: ClusterNameBinderConfig = {}) {
@@ -173,6 +234,10 @@ export class ClusterNameBinder {
    *  or overlap. Stopped speakers fall away via `isEnd` or OPEN_TURN_GRACE_MS. */
   recordHint(ev: HintEvent): void {
     if (!ev.name && !ev.isEnd) return;
+    if (ev.kind === 'jitsi-dominant') {
+      this.recordJitsiDominant(ev);
+      return;
+    }
     let log = this.turns.get(ev.kind);
     if (!log) { log = []; this.turns.set(ev.kind, log); }
     const t = ev.tMs - this.lag[ev.kind];
@@ -199,6 +264,21 @@ export class ClusterNameBinder {
   /** Resolve a diarizer commit to its final speaker name. */
   resolve(commit: CommitInfo, opts: ResolveOptions = {}): ResolvedAttribution {
     const recordVote = opts.recordVote ?? true;
+    const finalized = opts.finalized ?? true;
+    if (this.jitsiDominant) {
+      const exclusive = this.resolveJitsiDominant(commit, finalized);
+      if (exclusive) {
+        if (recordVote) this.confirmExclusiveAttribution(commit.clusterId, exclusive.name);
+        return {
+          speakerName: exclusive.name,
+          source: 'exclusive-transition',
+          confidence: 1,
+        };
+      }
+      // Once this session carries Jitsi's exclusive signal, overlap and cluster
+      // majority are causally inadmissible fallbacks. Unknown is the result.
+      return { speakerName: commit.clusterId, source: 'provisional-cluster-id', confidence: 0 };
+    }
     const winnerByOverlap = this.windowMatch(commit);
     if (winnerByOverlap) {
       if (recordVote) this.recordClusterVote(commit.clusterId, winnerByOverlap.name);
@@ -211,8 +291,244 @@ export class ClusterNameBinder {
     return { speakerName: commit.clusterId, source: 'provisional-cluster-id', confidence: 0 };
   }
 
+  /** True once the Jitsi-exclusive contract is active for this binder. */
+  hasHintKind(kind: HintKind): boolean {
+    return kind === 'jitsi-dominant'
+      ? this.jitsiDominant !== null
+      : (this.turns.get(kind)?.length ?? 0) > 0;
+  }
+
+  /** Register an acoustic turn independently of STT completion. Callers seal
+   *  the boundary timeline with `sealAcousticThrough` only after every turn
+   *  starting before that instant has been registered. */
+  registerAcousticTurn(commit: CommitInfo, finalized = false): void {
+    let turn = this.acousticTurns.get(commit.clusterId);
+    if (!turn) {
+      if (commit.tStartMs < this.acousticSealedThroughMs) {
+        this.acousticOrderAmbiguous = true;
+      }
+      turn = {
+        clusterId: commit.clusterId,
+        tStartMs: commit.tStartMs,
+      };
+      this.acousticTurns.set(commit.clusterId, turn);
+    } else {
+      const earlierStart = Math.min(turn.tStartMs, commit.tStartMs);
+      if (earlierStart < turn.tStartMs && earlierStart < this.acousticSealedThroughMs) {
+        this.acousticOrderAmbiguous = true;
+      }
+      turn.tStartMs = earlierStart;
+    }
+    if (finalized) {
+      if (
+        turn.tEndMs !== undefined
+        && turn.tEndMs !== commit.tEndMs
+        && Math.min(turn.tEndMs, commit.tEndMs) < this.acousticSealedThroughMs
+      ) {
+        this.acousticOrderAmbiguous = true;
+      }
+      turn.tEndMs = turn.tEndMs === undefined
+        ? commit.tEndMs
+        : Math.max(turn.tEndMs, commit.tEndMs);
+    }
+
+    if (this.acousticTurns.size > this.hintLogLimit) {
+      this.acousticHistoryComplete = false;
+      for (const [clusterId] of this.acousticTurns) {
+        this.acousticTurns.delete(clusterId);
+        if (this.acousticTurns.size <= this.hintLogLimit) break;
+      }
+    }
+    if (!this.acousticHistoryComplete || this.acousticOrderAmbiguous) {
+      this.invalidateExclusiveAttributions();
+    }
+  }
+
+  /** Advance the acoustic registration watermark. This is boundary custody,
+   *  not a timing heuristic: all turns before `tMs` must already be present. */
+  sealAcousticThrough(tMs: number): void {
+    if (tMs < this.acousticSealedThroughMs) {
+      this.acousticOrderAmbiguous = true;
+      this.invalidateExclusiveAttributions();
+      return;
+    }
+    this.acousticSealedThroughMs = tMs;
+  }
+
+  private recordJitsiDominant(ev: HintEvent): void {
+    let state = this.jitsiDominant;
+    if (!state) {
+      state = {
+        currentName: null,
+        lastName: null,
+        ended: false,
+        lastEndMs: -Infinity,
+        lastTransitionMs: -Infinity,
+        observedThroughMs: -Infinity,
+        observations: 0,
+        nextTransitionId: 0,
+        transitions: [],
+        historyComplete: true,
+        orderAmbiguous: false,
+      };
+      this.jitsiDominant = state;
+    }
+
+    // A delayed re-observation of the current or just-outgoing state is a stale
+    // heartbeat and carries no new identity testimony. Any other late distinct
+    // record contradicts the producer's ordered stream, so attribution fails
+    // closed for the session.
+    if (ev.tMs < state.observedThroughMs) {
+      const latestTransition = state.transitions[state.transitions.length - 1];
+      const harmlessHeartbeat = !ev.isEnd && (
+        ev.name === state.currentName
+        || (
+          state.ended
+          && ev.name === state.lastName
+          && ev.tMs >= state.lastTransitionMs
+          && ev.tMs < state.lastEndMs
+        )
+        || (
+          latestTransition?.fromName === ev.name
+          && ev.tMs >= latestTransition.epochStartMs
+          && ev.tMs < latestTransition.observedAtMs
+        )
+      );
+      if (!harmlessHeartbeat) {
+        state.orderAmbiguous = true;
+        this.invalidateExclusiveAttributions();
+      }
+      state.observations++;
+      return;
+    }
+    state.observedThroughMs = Math.max(state.observedThroughMs, ev.tMs);
+    state.observations++;
+
+    if (ev.isEnd) {
+      if (!ev.name || state.currentName === ev.name || state.lastName === ev.name) {
+        state.currentName = null;
+        state.ended = true;
+        state.lastEndMs = ev.tMs;
+      }
+      return;
+    }
+
+    if (state.lastName === null) {
+      // The first observation establishes the current baseline. It cannot name
+      // an earlier acoustic turn because no preceding ordered transition exists.
+      state.currentName = ev.name;
+      state.lastName = ev.name;
+      state.ended = false;
+      state.lastTransitionMs = ev.tMs;
+      return;
+    }
+
+    if (!state.ended && state.currentName === ev.name) {
+      // Same global state, re-observed: liveness only. Crucially, this does not
+      // mint a fresh start or alter the signal epoch.
+      return;
+    }
+
+    state.transitions.push({
+      id: state.nextTransitionId++,
+      fromName: state.lastName,
+      toName: ev.name,
+      epochStartMs: state.lastTransitionMs,
+      observedAtMs: ev.tMs,
+    });
+    if (state.transitions.length > this.hintLogLimit) {
+      state.historyComplete = false;
+      state.transitions.splice(0, state.transitions.length - this.hintLogLimit);
+      this.invalidateExclusiveAttributions();
+    }
+    state.currentName = ev.name;
+    state.lastName = ev.name;
+    state.ended = false;
+    state.lastTransitionMs = ev.tMs;
+  }
+
+  private resolveJitsiDominant(
+    commit: CommitInfo,
+    finalized: boolean,
+  ): { name: string } | null {
+    if (!finalized) return null;
+    const state = this.jitsiDominant;
+    const turn = this.acousticTurns.get(commit.clusterId);
+    if (
+      !state
+      || !turn
+      || turn.tEndMs === undefined
+      || !state.historyComplete
+      || state.orderAmbiguous
+      || !this.acousticHistoryComplete
+      || this.acousticOrderAmbiguous
+    ) return null;
+    const turnEndMs = turn.tEndMs;
+    if (this.acousticSealedThroughMs < turnEndMs) return null;
+    if (state.observedThroughMs <= turnEndMs) return null;
+
+    // A trailing exclusive transition testifies only to an ordering boundary,
+    // not to an onset timestamp. Admission is globally one-to-one over complete
+    // retained custody:
+    //   - acoustic registration is sealed beyond the transition observation;
+    //   - exactly one turn started after the prior signal epoch and no later
+    //     than this transition;
+    //   - exactly one transition can claim this turn.
+    // Repeated heartbeats never enter `transitions`, so quantity cannot create
+    // confidence. The rule is lag-independent: a transition after acoustic end
+    // can repair the turn once the acoustic producer seals through that token.
+    const associated = state.transitions.filter((transition) => {
+      if (this.acousticSealedThroughMs <= transition.observedAtMs) return false;
+      const candidateTurns = [...this.acousticTurns.values()].filter((candidate) =>
+        candidate.tStartMs > transition.epochStartMs
+        && candidate.tStartMs <= transition.observedAtMs);
+      return candidateTurns.length === 1
+        && candidateTurns[0].clusterId === turn.clusterId;
+    });
+    if (associated.length !== 1) return null;
+    const transition = associated[0];
+
+    // A signal that changes identity twice while one acoustic turn is open is
+    // internally contradictory for a single-name turn, even if only the first
+    // token has one ordinal candidate.
+    const transitionsInsideTurn = state.transitions.filter((candidate) =>
+      candidate.observedAtMs >= turn.tStartMs
+      && candidate.observedAtMs < turnEndMs);
+    if (
+      transitionsInsideTurn.length > 1
+      || (
+        transitionsInsideTurn.length === 1
+        && transitionsInsideTurn[0].id !== transition.id
+      )
+    ) return null;
+    return { name: transition.toName };
+  }
+
   recordClusterVote(clusterId: string, speakerName: string): void {
     this.updateClusterVote(clusterId, speakerName);
+  }
+
+  /** Commit one causally admitted exclusive transition. This bypasses quantity
+   *  voting and hysteresis: globally one-to-one transition custody is the
+   *  authority, not the number of heartbeats or prior window matches. */
+  confirmExclusiveAttribution(clusterId: string, speakerName: string): void {
+    this.exclusiveAttributions.set(clusterId, speakerName);
+    const previous = this.clusterLastResolvedName.get(clusterId);
+    if (previous === speakerName) return;
+    this.clusterLastResolvedName.set(clusterId, speakerName);
+    this.onLateResolve?.(clusterId, speakerName);
+  }
+
+  /** Once retained causal custody is contradicted or compacted, every name it
+   *  authorized becomes unknown again. Repaint through the existing stable-id
+   *  callback; deleting first makes repeated contradictions idempotent. */
+  private invalidateExclusiveAttributions(): void {
+    const invalidated = [...this.exclusiveAttributions.keys()];
+    this.exclusiveAttributions.clear();
+    for (const clusterId of invalidated) {
+      this.clusterLastResolvedName.delete(clusterId);
+      this.onLateResolve?.(clusterId, clusterId);
+    }
   }
 
   /** Pure window-match — the name lit DURING the commit window (with confidence),
@@ -379,6 +695,7 @@ export class ClusterNameBinder {
   stats(): { hintTurns: Record<string, number>; clustersWithVotes: number; resolvedClusters: number } {
     const hintTurns: Record<string, number> = {};
     for (const [kind, log] of this.turns) hintTurns[kind] = log.length;
+    if (this.jitsiDominant) hintTurns['jitsi-dominant'] = this.jitsiDominant.observations;
     return {
       hintTurns,
       clustersWithVotes: this.clusterVoteHistory.size,
@@ -388,7 +705,13 @@ export class ClusterNameBinder {
 
   reset(): void {
     this.turns.clear();
+    this.acousticTurns.clear();
+    this.acousticSealedThroughMs = -Infinity;
+    this.acousticHistoryComplete = true;
+    this.acousticOrderAmbiguous = false;
+    this.jitsiDominant = null;
     this.clusterLastResolvedName.clear();
+    this.exclusiveAttributions.clear();
     this.clusterVoteHistory.clear();
   }
 }

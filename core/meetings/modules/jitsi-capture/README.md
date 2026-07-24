@@ -8,9 +8,9 @@ and chat — no audio of its own:
 
 - `createJitsiSpeakers` — watches the app's own dominant-speaker state (`APP.store` redux — what
   jitsi's UI renders from; `.dominant-speaker` tile DOM fallback for builds that strip the global) and
-  emits speaking start/stop per participant → a `mixed-capture.v1` **hint** (kind `dom-active`). A ~2 s
-  heartbeat re-asserts the still-dominant speaker so a consumer that started mid-turn learns who's
-  talking without waiting for the next transition. This module OWNS the jitsi selector arrays.
+  emits one exclusive global state transition → a `mixed-capture.v1` **hint** (bound downstream as
+  kind `jitsi-dominant`). A ~2 s same-name heartbeat reports only that no transition was detected;
+  it is liveness, not fresh acoustic-onset testimony. This module OWNS the jitsi selector arrays.
 - `createJitsiChat` — reads the conference chat (redux-primary, so the panel need **not** be open; DOM
   fallback otherwise); emits each new message as `{ sender, text }`.
 - `sendJitsiChatMessage` — posts into the conference chat via the app's own `sendTextMessage` API.

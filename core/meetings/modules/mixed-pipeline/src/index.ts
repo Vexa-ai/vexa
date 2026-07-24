@@ -8,12 +8,14 @@
  *        └─ ClusterNameBinder        the namer — hints by time window, no clustering
  *   ─► transcript.v1 (named segments + drafts via the publish/pending sink)
  *
- * Names come purely from time-windowed hints (`recordHint`); the per-turn
- * segmentation id is the key. There is NO speaker clustering.
+ * Names come purely from platform hints (`recordHint`) under their producer
+ * contract: concurrent participant evidence for Teams, a legacy `dom-active`
+ * window path for Zoom pending #797, and ordered transition custody for Jitsi.
+ * The per-turn segmentation id is the key. There is NO speaker clustering.
  */
 export { ChunkedTranscriber } from './chunked-transcriber.js';
 export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource } from './chunked-transcriber.js';
 export { PyannoteSegmenter } from './pyannote-segmenter.js';
 export type { BoundaryEvent, PyannoteSegmenterConfig } from './pyannote-segmenter.js';
 export { ClusterNameBinder } from './cluster-name-binder.js';
-export type { HintKind, HintEvent } from './cluster-name-binder.js';
+export type { CommitInfo, HintKind, HintEvent } from './cluster-name-binder.js';
