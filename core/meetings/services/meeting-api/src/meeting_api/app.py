@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -233,8 +234,16 @@ def create_app(
     app.state.delivery_ledger = delivery_ledger
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
-                     delivery_ledger)
+    _mount_lifecycle(
+        app,
+        sink,
+        meeting_repo,
+        webhook_sink,
+        redis,
+        transcript_finalizer,
+        delivery_ledger,
+        runtime,
+    )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
@@ -319,6 +328,7 @@ def _mount_lifecycle(
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
+    runtime: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -464,6 +474,59 @@ def _mount_lifecycle(
             except Exception as e:  # noqa: BLE001 — persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
+        # #839 PRE-ACTIVE WITHDRAWAL ORDERING. A bot may earn this acknowledgement only after its
+        # platform cancellation/page close completed. Persist the typed acknowledgement through an
+        # atomic pending→completed compare-and-set, then and only then ask runtime to delete the
+        # workload. The timeout path races on the same durable CAS; exactly one winner deletes.
+        withdrawal = body.get("withdrawal")
+        if (
+            isinstance(withdrawal, dict)
+            and withdrawal.get("status") == "completed"
+            and connection_id
+            and hasattr(meeting_repo, "finalize_withdrawal")
+        ):
+            try:
+                acknowledged_row = await meeting_repo.finalize_withdrawal(
+                    session_uid=connection_id,
+                    expected_status="pending",
+                    outcome={
+                        **withdrawal,
+                        "acknowledged_at": datetime.now(timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — no persistence means no delete
+                acknowledged_row = None
+                log_event(
+                    "withdrawal_ack_persist_failed",
+                    audience="system",
+                    level="error",
+                    span="lifecycle.callback",
+                    fields={
+                        "meeting_id": meeting_row.get("id")
+                        if isinstance(meeting_row, dict) else None,
+                        "error": str(e),
+                    },
+                )
+            if isinstance(acknowledged_row, dict):
+                meeting_row = acknowledged_row
+                workload_id = acknowledged_row.get("bot_container_id")
+                if runtime is not None and workload_id:
+                    try:
+                        await runtime.delete_workload(workload_id)
+                    except Exception as e:  # noqa: BLE001 — ack stays durable; reconcile owns retry
+                        log_event(
+                            "withdrawal_ack_teardown_failed",
+                            audience="system",
+                            level="warning",
+                            span="lifecycle.callback",
+                            fields={
+                                "meeting_id": acknowledged_row.get("id"),
+                                "workload_id": workload_id,
+                                "error": str(e),
+                            },
+                        )
         # COMPLETION FINALIZATION — the moment the FSM lands on a terminal status, flush the
         # meeting's remaining live redis segments to the durable store (threshold 0: the mutable
         # tail included, no more updates are coming) and persist the processed doc into
@@ -576,7 +639,6 @@ def _mount_lifecycle(
             meeting_id = meeting_row.get("id")
             if meeting_id is not None:
                 import json as _json
-                from datetime import datetime, timezone
 
                 frame = {
                     "type": "meeting.status",

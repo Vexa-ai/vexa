@@ -8,7 +8,7 @@
  * Run: tsx src/join-driver.test.ts
  */
 import { AdmissionError, AuthSessionError, TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT } from '@vexa/join';
-import { admissionOutcomeToJoinOutcome } from './join-driver.js';
+import { admissionOutcomeToJoinOutcome, createBrowserJoinDriver } from './join-driver.js';
 import type { JoinOutcome } from './ports.js';
 
 let passed = 0, failed = 0;
@@ -58,6 +58,24 @@ check('TeamsJoinRedirectError is NOT an AdmissionError (driver re-raises → mes
   !(teamsRedirect instanceof AdmissionError));
 check('TeamsJoinRedirectError carries the typed reasonCode in its message',
   teamsRedirect.message.startsWith(`${TEAMS_AUTH_REDIRECT}:`));
+
+let pageClosed = false;
+const page = {
+  isClosed: () => pageClosed,
+  close: async () => { pageClosed = true; },
+};
+const driver = createBrowserJoinDriver(page as never, {
+  platform: 'google_meet',
+  meetingUrl: 'https://meet.google.com/abc-defg-hij',
+  botName: 'Vexa',
+  redisUrl: 'redis://redis:6379',
+  connectionId: 'sess-withdraw',
+  nativeMeetingId: 'abc-defg-hij',
+} as never);
+const withdrawal = await driver.withdraw('stopped');
+check('withdraw closes the pre-join page', pageClosed);
+check('withdraw returns evidence only after page close',
+  withdrawal?.cancelAttempted === true && withdrawal.pageClosed === true);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

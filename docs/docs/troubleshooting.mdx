@@ -19,7 +19,10 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Bad meeting id** — `native_meeting_id` is the id *inside* the join URL (e.g. `abc-defg-hij`), not the
   whole URL. Wrong platform value also fails: use `google_meet`, `zoom`, or `teams`.
 - **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
-  it. Admit it like any guest.
+  it. Admit it like any guest. If you stop it instead, the host-visible knock should disappear
+  within 10 seconds. A retained `meeting.data.withdrawal.status: timed_out` means Vexa did not
+  receive durable cancellation/page-close proof and used the bounded capacity fallback; inspect
+  the bot's terminal logs rather than treating that outcome as graceful success.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 

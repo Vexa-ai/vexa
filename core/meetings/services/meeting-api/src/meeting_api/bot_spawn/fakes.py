@@ -253,6 +253,19 @@ class InMemoryMeetingRepo:
             row["data"][k] = v
         return dict(row)
 
+    async def finalize_withdrawal(self, *, session_uid, expected_status, outcome) -> Optional[dict]:
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None:
+            return None
+        current = row.get("data", {}).get("withdrawal")
+        if not isinstance(current, dict) or current.get("status") != expected_status:
+            return None
+        row["data"]["withdrawal"] = {**current, **dict(outcome)}
+        return dict(row)
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         return sum(
             1 for m in self._meetings.values()

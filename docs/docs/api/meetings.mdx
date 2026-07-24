@@ -261,6 +261,14 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
 
+For a bot already waiting in the lobby, Stop is ordered as
+`leave command → cancel/page close → durable withdrawal acknowledgement → worker deletion`.
+The host-visible knock has a 10-second disappearance objective. A missing acknowledgement is
+persisted as `meeting.data.withdrawal.status: timed_out` before the capacity fallback deletes the
+worker within 25 seconds; it is not classified as graceful success. Stops before the bot confirms
+its command subscription use direct teardown, while admitted bots keep the normal leave and
+recording-finalization path.
+
 ```bash Running bots — GET /bots/status
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 ```
