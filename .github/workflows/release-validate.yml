@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      promote_repository:
+        description: "Alias all frozen repositories, or one exact owner/name repair target"
+        required: false
+        default: all
+        type: string
       validation_leg:
         description: "Validation scope: all, or compose for an isolated harness rerun"
         required: false
@@ -71,6 +76,23 @@ on:
         required: false
         default: false
         type: boolean
+      promote_repository:
+        description: "Alias scope"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - vexaai/v012-admin-api
+          - vexaai/v012-runtime
+          - vexaai/v012-agent-worker
+          - vexaai/v012-agent-api
+          - vexaai/v012-meeting-api
+          - vexaai/v012-gateway
+          - vexaai/v012-mcp
+          - vexaai/v012-terminal
+          - vexaai/vexa-bot
+          - vexaai/vexa-lite
       validation_leg:
         description: "Validation scope"
         required: false
@@ -786,29 +808,50 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
       PROMOTE_LATEST: ${{ inputs.promote_latest == true }}
+      PROMOTE_REPOSITORY: ${{ inputs.promote_repository }}
+      EXPECTED_MAP_SHA256: 80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
     steps:
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Promote :v012 (and :latest only when explicitly requested)
+      - uses: actions/checkout@v4
+      - name: Manifest-preserving promotion and exact readback
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           move() {
-            local dst="$1:$2" src="$1:$VERSION"
-            case "$dst" in
+            local image="$1" target="$2"
+            case "$image:$target" in
               vexaai/vexa-bot:dev|vexaai/vexa-bot:latest|*:dev)
-                echo "::error ::constitutional guard: refusing to move $dst (vexa-bot:{dev,latest} belong to the 0.10 line; :dev is never moved by release CI)"
+                echo "::error ::constitutional guard: refusing to move $image:$target (vexa-bot:{dev,latest} belong to the 0.10 line; :dev is never moved by release CI)"
                 exit 1;;
             esac
-            echo "→ $dst ⇐ $src"
-            docker buildx imagetools create -t "$dst" "$src"
+            local unchanged=()
+            if [ "$target" = "v012" ] && [ "$PROMOTE_LATEST" != "true" ]; then
+              unchanged=(--assert-unchanged-tag latest)
+            fi
+            node scripts/registry-manifest-alias.mjs \
+              --candidate-map "releases/$VERSION/candidate-images.json" \
+              --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+              --repository "$image" \
+              --source-tag "$VERSION" \
+              --target-tag "$target" \
+              "${unchanged[@]}"
           }
-          for img in $ALL_IMAGES; do
+
+          if [ "$PROMOTE_REPOSITORY" = "all" ]; then
+            images="$ALL_IMAGES"
+          elif grep -Fxq "$PROMOTE_REPOSITORY" < <(tr ' ' '\n' <<<"$ALL_IMAGES"); then
+            images="$PROMOTE_REPOSITORY"
+          else
+            echo "::error ::$PROMOTE_REPOSITORY is not a frozen release repository"
+            exit 1
+          fi
+
+          for img in $images; do
             move "$img" v012
           done
           if [ "$PROMOTE_LATEST" = "true" ]; then
-            for img in $ALL_IMAGES; do
+            for img in $images; do
               if [ "$img" = "vexaai/vexa-bot" ]; then
                 echo "· skipping vexaai/vexa-bot:latest (constitutional guard — 0.10 line)"
                 continue
@@ -818,3 +861,11 @@ jobs:
           else
             echo "· :latest untouched (promote_latest not requested)"
           fi
+
+          node scripts/registry-candidate-validate.mjs \
+            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --tag v012 \
+            --expected-map-stable-tag "$VERSION" \
+            --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+            --expected-top-descriptors 10 \
+            --expected-platform-identities 19

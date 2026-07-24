@@ -190,10 +190,18 @@ export function validateManifestIdentity({ repository, expected, topDigest, mani
   return { platforms: platformDescriptors.size, attestations: attestations.length };
 }
 
-async function bearerToken({ fetchImpl, authBase, service, repository, username, password }) {
+async function bearerToken({
+  fetchImpl,
+  authBase,
+  service,
+  repository,
+  username,
+  password,
+  actions = "pull",
+}) {
   const url = new URL("/token", authBase);
   url.searchParams.set("service", service);
-  url.searchParams.set("scope", `repository:${repository}:pull`);
+  url.searchParams.set("scope", `repository:${repository}:${actions}`);
   const response = await request(
     fetchImpl,
     url,
@@ -221,9 +229,155 @@ async function registryManifest({ fetchImpl, registryBase, repository, reference
   };
 }
 
+async function rawRegistryManifest({ fetchImpl, registryBase, repository, reference, token }) {
+  const url = new URL(`/v2/${repository}/manifests/${reference}`, registryBase);
+  const response = await request(
+    fetchImpl,
+    url,
+    { headers: { authorization: `Bearer ${token}`, accept: ACCEPT } },
+    `${repository}@${reference}: manifest read`,
+  );
+  return {
+    digest: response.headers.get("docker-content-digest"),
+    mediaType: response.headers.get("content-type")?.split(";")[0],
+    bytes: Buffer.from(await response.arrayBuffer()),
+  };
+}
+
+async function putRegistryManifest({
+  fetchImpl,
+  registryBase,
+  repository,
+  reference,
+  token,
+  mediaType,
+  bytes,
+}) {
+  const url = new URL(`/v2/${repository}/manifests/${reference}`, registryBase);
+  const response = await request(
+    fetchImpl,
+    url,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": mediaType,
+        "content-length": String(bytes.length),
+      },
+      body: bytes,
+    },
+    `${repository}:${reference}: manifest alias write`,
+  );
+  return response.headers.get("docker-content-digest");
+}
+
+export async function aliasManifest({
+  repository,
+  sourceReference,
+  targetReference,
+  expectedDigest,
+  unchangedReference,
+  username,
+  password,
+  fetchImpl = fetch,
+  authBase = "https://auth.docker.io",
+  registryBase = "https://registry-1.docker.io",
+  service = "registry.docker.io",
+}) {
+  if (!username || !password) {
+    throw new RegistryValidationError("auth", "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required");
+  }
+  identity(repository && !repository.startsWith("docker.io/"), "repository must be in owner/name form");
+  identity(sourceReference && targetReference, "source and target references are required");
+
+  const token = await bearerToken({
+    fetchImpl,
+    authBase,
+    service,
+    repository,
+    username,
+    password,
+    actions: "pull,push",
+  });
+  const source = await rawRegistryManifest({
+    fetchImpl,
+    registryBase,
+    repository,
+    reference: sourceReference,
+    token,
+  });
+  identity(
+    source.digest === expectedDigest,
+    `${repository}:${sourceReference}: source top descriptor mismatch (expected ${expectedDigest}, actual ${source.digest || "<missing>"})`,
+  );
+  identity(source.mediaType && ACCEPT.includes(source.mediaType), `${repository}:${sourceReference}: unsupported media type ${source.mediaType || "<missing>"}`);
+
+  let unchanged;
+  if (unchangedReference) {
+    unchanged = await rawRegistryManifest({
+      fetchImpl,
+      registryBase,
+      repository,
+      reference: unchangedReference,
+      token,
+    });
+  }
+
+  const writtenDigest = await putRegistryManifest({
+    fetchImpl,
+    registryBase,
+    repository,
+    reference: targetReference,
+    token,
+    mediaType: source.mediaType,
+    bytes: source.bytes,
+  });
+  identity(
+    writtenDigest === expectedDigest,
+    `${repository}:${targetReference}: alias write digest mismatch (expected ${expectedDigest}, actual ${writtenDigest || "<missing>"})`,
+  );
+
+  const target = await rawRegistryManifest({
+    fetchImpl,
+    registryBase,
+    repository,
+    reference: targetReference,
+    token,
+  });
+  identity(
+    target.digest === expectedDigest,
+    `${repository}:${targetReference}: alias readback mismatch (expected ${expectedDigest}, actual ${target.digest || "<missing>"})`,
+  );
+  identity(
+    target.mediaType === source.mediaType && target.bytes.equals(source.bytes),
+    `${repository}:${targetReference}: alias readback bytes or media type differ from ${sourceReference}`,
+  );
+
+  if (unchangedReference) {
+    const readback = await rawRegistryManifest({
+      fetchImpl,
+      registryBase,
+      repository,
+      reference: unchangedReference,
+      token,
+    });
+    identity(
+      readback.digest === unchanged.digest,
+      `${repository}:${unchangedReference}: negative-control descriptor moved (before ${unchanged.digest}, after ${readback.digest || "<missing>"})`,
+    );
+  }
+
+  return {
+    sourceDigest: source.digest,
+    targetDigest: target.digest,
+    unchangedDigest: unchanged?.digest,
+  };
+}
+
 export async function validateCandidateMap({
   candidateMap,
   tag,
+  expectedStableTag = tag,
   username,
   password,
   fetchImpl = fetch,
@@ -236,7 +390,10 @@ export async function validateCandidateMap({
   if (!username || !password) {
     throw new RegistryValidationError("auth", "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required");
   }
-  identity(candidateMap.stable_tag === tag, `candidate map stable_tag ${candidateMap.stable_tag} does not match ${tag}`);
+  identity(
+    candidateMap.stable_tag === expectedStableTag,
+    `candidate map stable_tag ${candidateMap.stable_tag} does not match frozen source ${expectedStableTag}`,
+  );
 
   let topDescriptors = 0;
   let platformIdentities = 0;
@@ -313,6 +470,7 @@ function parseArgs(argv) {
     const key = argv[index];
     if (key === "--candidate-map") result.candidateMap = argv[++index];
     else if (key === "--tag") result.tag = argv[++index];
+    else if (key === "--expected-map-stable-tag") result.expectedStableTag = argv[++index];
     else if (key === "--expected-map-sha256") result.expectedMapHash = argv[++index];
     else if (key === "--expected-top-descriptors") result.expectedTopDescriptors = Number(argv[++index]);
     else if (key === "--expected-platform-identities") result.expectedPlatformIdentities = Number(argv[++index]);
@@ -341,6 +499,7 @@ async function main() {
   const counts = await validateCandidateMap({
     candidateMap,
     tag: args.tag,
+    expectedStableTag: args.expectedStableTag ?? args.tag,
     username: process.env.DOCKERHUB_USERNAME,
     password: process.env.DOCKERHUB_TOKEN,
     expectedTopDescriptors: args.expectedTopDescriptors,
