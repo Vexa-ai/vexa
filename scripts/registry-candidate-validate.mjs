@@ -377,6 +377,7 @@ export async function aliasManifest({
 export async function validateCandidateMap({
   candidateMap,
   tag,
+  expectedStableTag = tag,
   username,
   password,
   fetchImpl = fetch,
@@ -389,7 +390,10 @@ export async function validateCandidateMap({
   if (!username || !password) {
     throw new RegistryValidationError("auth", "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required");
   }
-  identity(candidateMap.stable_tag === tag, `candidate map stable_tag ${candidateMap.stable_tag} does not match ${tag}`);
+  identity(
+    candidateMap.stable_tag === expectedStableTag,
+    `candidate map stable_tag ${candidateMap.stable_tag} does not match frozen source ${expectedStableTag}`,
+  );
 
   let topDescriptors = 0;
   let platformIdentities = 0;
@@ -466,6 +470,7 @@ function parseArgs(argv) {
     const key = argv[index];
     if (key === "--candidate-map") result.candidateMap = argv[++index];
     else if (key === "--tag") result.tag = argv[++index];
+    else if (key === "--expected-map-stable-tag") result.expectedStableTag = argv[++index];
     else if (key === "--expected-map-sha256") result.expectedMapHash = argv[++index];
     else if (key === "--expected-top-descriptors") result.expectedTopDescriptors = Number(argv[++index]);
     else if (key === "--expected-platform-identities") result.expectedPlatformIdentities = Number(argv[++index]);
@@ -494,6 +499,7 @@ async function main() {
   const counts = await validateCandidateMap({
     candidateMap,
     tag: args.tag,
+    expectedStableTag: args.expectedStableTag ?? args.tag,
     username: process.env.DOCKERHUB_USERNAME,
     password: process.env.DOCKERHUB_TOKEN,
     expectedTopDescriptors: args.expectedTopDescriptors,

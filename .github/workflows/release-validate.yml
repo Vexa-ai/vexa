@@ -865,6 +865,7 @@ jobs:
           node scripts/registry-candidate-validate.mjs \
             --candidate-map "releases/$VERSION/candidate-images.json" \
             --tag v012 \
+            --expected-map-stable-tag "$VERSION" \
             --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
             --expected-top-descriptors 10 \
             --expected-platform-identities 19

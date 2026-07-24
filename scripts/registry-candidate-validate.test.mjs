@@ -147,6 +147,52 @@ test("injected HTTP 429 is quota, never platform/identity", async () => {
   );
 });
 
+test("moving alias readback uses the frozen source tag without weakening map identity", async () => {
+  const value = fixture();
+  const fetchImpl = async (url) => {
+    if (String(url).includes("/token")) return response(200, { token: "scoped-token" });
+    const childDigest = value.expected.platform_manifests["linux/amd64"].manifest_digest;
+    if (String(url).endsWith(childDigest)) {
+      return response(200, value.children.get(childDigest), {
+        "docker-content-digest": childDigest,
+      });
+    }
+    return response(200, value.top, {
+      "docker-content-digest": value.expected.digest,
+    });
+  };
+  const counts = await validateCandidateMap({
+    candidateMap: oneImageMap(),
+    tag: "v012",
+    expectedStableTag: "v0.12.18",
+    username: "user",
+    password: "token",
+    fetchImpl,
+  });
+  assert.deepEqual(counts, {
+    topDescriptors: 1,
+    platformIdentities: 1,
+    attestationIdentities: 1,
+  });
+
+  await assert.rejects(
+    validateCandidateMap({
+      candidateMap: oneImageMap(),
+      tag: "v012",
+      expectedStableTag: "v0.12.19",
+      username: "user",
+      password: "token",
+      fetchImpl: async () => {
+        throw new Error("must stop before network");
+      },
+    }),
+    (error) =>
+      error instanceof RegistryValidationError &&
+      error.kind === "identity" &&
+      error.message.includes("does not match frozen source v0.12.19"),
+  );
+});
+
 test("injected HTTP 401 is auth", async () => {
   await assert.rejects(
     validateCandidateMap({
