@@ -160,9 +160,11 @@ test("the replacement build plan is bounded to Bot and Lite", () => {
     "vexaai/vexa-bot",
     "vexaai/vexa-lite",
   ]);
-  assert.deepEqual(plan.build_matrix.map(({ image }) => image), [
-    "vexaai/vexa-lite",
+  assert.deepEqual(plan.build_matrix.map(({ repository }) => repository), [
+    "vexa-lite",
   ]);
+  assert.equal(plan.build_matrix[0].use_registry_cache, false);
+  assert.equal(JSON.stringify(plan.build_matrix).includes("vexaai"), false);
   assert.equal(plan.build_bot, true);
   assert.equal(plan.base_candidate_tag, doc.candidate_tag);
 });
@@ -192,6 +194,14 @@ test("release-images consumes the planner's dynamic matrix instead of a literal 
     workflow,
     /needs\.preflight\.outputs\.build_mode == 'bot-lite-delta'/,
   );
+  assert.match(
+    workflow,
+    /node release\/dockerhub-tag-audit\.mjs[\s\S]*--target "\$VERSION"/,
+  );
+  assert.doesNotMatch(
+    workflow.match(/outputs:[\s\S]*?steps:\n/)?.[0] ?? "",
+    /changed_images/,
+  );
 });
 
 test("a partial build cannot silently widen beyond the validated Bot+Lite path", () => {
@@ -214,6 +224,7 @@ test("a release with no prior candidate map retains the full ten-image plan", ()
   assert.equal(plan.mode, "full");
   assert.equal(plan.changed_images.length, REQUIRED_IMAGES.length);
   assert.equal(plan.build_matrix.length, REQUIRED_IMAGES.length - 1);
+  assert.ok(plan.build_matrix.every(({ use_registry_cache }) => use_registry_cache));
   assert.equal(plan.build_bot, true);
   assert.equal(plan.base_candidate_tag, null);
 });

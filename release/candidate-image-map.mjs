@@ -91,55 +91,55 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
 export const BUILD_MATRIX_BY_IMAGE = {
   "vexaai/v012-admin-api": {
     name: "admin-api",
-    image: "vexaai/v012-admin-api",
+    repository: "v012-admin-api",
     context: "core/identity/services/admin-api",
     dockerfile: "core/identity/services/admin-api/Dockerfile",
   },
   "vexaai/v012-runtime": {
     name: "runtime",
-    image: "vexaai/v012-runtime",
+    repository: "v012-runtime",
     context: "core/runtime",
     dockerfile: "core/runtime/Dockerfile",
   },
   "vexaai/v012-agent-worker": {
     name: "agent-worker",
-    image: "vexaai/v012-agent-worker",
+    repository: "v012-agent-worker",
     context: ".",
     dockerfile: "core/agent/worker/Dockerfile",
   },
   "vexaai/v012-agent-api": {
     name: "agent-api",
-    image: "vexaai/v012-agent-api",
+    repository: "v012-agent-api",
     context: ".",
     dockerfile: "core/agent/services/agent-api/Dockerfile",
   },
   "vexaai/v012-meeting-api": {
     name: "meeting-api",
-    image: "vexaai/v012-meeting-api",
+    repository: "v012-meeting-api",
     context: ".",
     dockerfile: "core/meetings/services/meeting-api/Dockerfile",
   },
   "vexaai/v012-gateway": {
     name: "gateway",
-    image: "vexaai/v012-gateway",
+    repository: "v012-gateway",
     context: "core/gateway/services/gateway",
     dockerfile: "core/gateway/services/gateway/Dockerfile",
   },
   "vexaai/v012-mcp": {
     name: "mcp",
-    image: "vexaai/v012-mcp",
+    repository: "v012-mcp",
     context: "core/meetings/services/mcp",
     dockerfile: "core/meetings/services/mcp/Dockerfile",
   },
   "vexaai/v012-terminal": {
     name: "terminal",
-    image: "vexaai/v012-terminal",
+    repository: "v012-terminal",
     context: "clients/terminal",
     dockerfile: "clients/terminal/Dockerfile",
   },
   "vexaai/vexa-lite": {
     name: "lite",
-    image: "vexaai/vexa-lite",
+    repository: "vexa-lite",
     context: ".",
     dockerfile: "deploy/lite/Dockerfile.lite",
     free_disk: true,
@@ -343,7 +343,10 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
     changed_images: selected,
     build_matrix: selected
       .filter((image) => image !== "vexaai/vexa-bot")
-      .map((image) => BUILD_MATRIX_BY_IMAGE[image]),
+      .map((image) => ({
+        ...BUILD_MATRIX_BY_IMAGE[image],
+        use_registry_cache: exactFull,
+      })),
     build_bot: selected.includes("vexaai/vexa-bot"),
     base_candidate_tag: doc?.candidate_tag || null,
   };

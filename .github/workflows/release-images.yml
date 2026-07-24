@@ -63,7 +63,6 @@ jobs:
       build_mode: ${{ steps.build_plan.outputs.build_mode }}
       build_matrix: ${{ steps.build_plan.outputs.build_matrix }}
       build_bot: ${{ steps.build_plan.outputs.build_bot }}
-      changed_images: ${{ steps.build_plan.outputs.changed_images }}
       base_candidate_tag: ${{ steps.build_plan.outputs.base_candidate_tag }}
     steps:
       - name: Docker Hub credentials present?
@@ -153,84 +152,22 @@ jobs:
             echo "build_mode=$(jq -r '.mode' <<<"$PLAN")"
             echo "build_matrix=$(jq -c '.build_matrix' <<<"$PLAN")"
             echo "build_bot=$(jq -r '.build_bot' <<<"$PLAN")"
-            echo "changed_images=$(jq -c '.changed_images' <<<"$PLAN")"
             echo "base_candidate_tag=$(jq -r '.base_candidate_tag // ""' <<<"$PLAN")"
           } >> "$GITHUB_OUTPUT"
           echo "✓ build plan: $PLAN"
-
-      - name: Authenticate for bounded candidate-tag audit
-        if: steps.build_plan.outputs.build_mode == 'bot-lite-delta'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Audit the cancelled attempt and refuse target-tag collisions
         if: steps.build_plan.outputs.build_mode == 'bot-lite-delta'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p release-audit
-          AUDIT="release-audit/candidate-tag-audit.tsv"
-          : > "$AUDIT"
-
-          [[ "$VERSION" =~ ^(.+\.packet)([0-9]+)$ ]] || {
-            echo "::error ::Bot+Lite delta tags must end in .packetN so the prior attempt is auditable"
-            exit 1
-          }
-          N="${BASH_REMATCH[2]}"
-          [ "$N" -gt 1 ] || {
-            echo "::error ::Bot+Lite delta requires a prior .packetN attempt to audit"
-            exit 1
-          }
-          PREVIOUS="${BASH_REMATCH[1]}$((N - 1))"
-
-          audit_absent() {
-            local ref="$1" raw err
-            err="$(mktemp)"
-            if raw="$(docker buildx imagetools inspect "$ref" --format '{{json .}}' 2>"$err")"; then
-              printf 'EXISTS\t%s\t%s\n' "$ref" "$(jq -r '.manifest.digest' <<<"$raw")" |
-                tee -a "$AUDIT"
-              rm -f "$err"
-              return 1
-            fi
-            if grep -Eqi 'manifest unknown|no such manifest|not found' "$err"; then
-              printf 'ABSENT\t%s\n' "$ref" | tee -a "$AUDIT"
-              rm -f "$err"
-              return 0
-            fi
-            echo "::error ::registry readback for $ref was inconclusive"
-            sed 's/^/  /' "$err"
-            rm -f "$err"
-            return 2
-          }
-
-          ALL_IMAGES=(
-            vexaai/v012-admin-api
-            vexaai/v012-runtime
-            vexaai/v012-agent-worker
-            vexaai/v012-agent-api
-            vexaai/v012-meeting-api
-            vexaai/v012-gateway
-            vexaai/v012-mcp
-            vexaai/v012-terminal
-            vexaai/vexa-bot
-            vexaai/vexa-lite
-          )
-          for image in "${ALL_IMAGES[@]}"; do
-            audit_absent "$image:$PREVIOUS" || {
-              echo "::error ::cancelled attempt $PREVIOUS is not proven empty; stop before a retry"
-              exit 1
-            }
-          done
-          for image in vexaai/vexa-bot vexaai/vexa-lite; do
-            audit_absent "$image:$VERSION" || {
-              echo "::error ::target candidate tag already exists or could not be proven absent"
-              exit 1
-            }
-          done
-          echo "✓ authenticated registry audit: prior attempt and target Bot/Lite refs are absent"
+          node release/dockerhub-tag-audit.mjs \
+            --target "$VERSION" \
+            --output release-audit/candidate-tag-audit.tsv
 
       - name: Preserve the authenticated candidate-tag audit
         if: always() && steps.build_plan.outputs.build_mode == 'bot-lite-delta'
@@ -291,10 +228,10 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ matrix.image }}:${{ needs.preflight.outputs.version }}
+          tags: vexaai/${{ matrix.repository }}:${{ needs.preflight.outputs.version }}
           build-args: ${{ matrix.build_args }}
-          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
-          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+          cache-from: ${{ matrix.use_registry_cache && format('type=registry,ref=vexaai/{0}:buildcache', matrix.repository) || '' }}
+          cache-to: ${{ matrix.use_registry_cache && format('type=registry,ref=vexaai/{0}:buildcache,mode=max', matrix.repository) || '' }}
 
   # The bot builds FROM the locally-built vexa/meet-join-env:dev base image, which the buildx
   # docker-container driver cannot see — so this job stays on the classic docker driver
@@ -326,12 +263,22 @@ jobs:
             -t vexa/meet-join-env:dev \
             core/meetings/modules/join
       - name: Build + push vexaai/vexa-bot
+        env:
+          BUILD_MODE: ${{ needs.preflight.outputs.build_mode }}
         run: |
-          # --cache-from tolerates the ref not existing yet (first release run).
+          set -euo pipefail
+          CACHE_ARGS=()
+          if [ "$BUILD_MODE" != "bot-lite-delta" ]; then
+            CACHE_ARGS=(
+              --build-arg BUILDKIT_INLINE_CACHE=1
+              --cache-from "vexaai/vexa-bot:v012"
+            )
+          fi
+          # Full builds may reuse the stable cache; replacement candidates do not
+          # spend pull quota or trust mutable cache state from that repository.
           DOCKER_BUILDKIT=1 docker build \
             -f core/meetings/services/bot/Dockerfile \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --cache-from "vexaai/vexa-bot:v012" \
+            "${CACHE_ARGS[@]}" \
             -t "vexaai/vexa-bot:$VERSION" \
             .
           docker push "vexaai/vexa-bot:$VERSION"
@@ -505,10 +452,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
       - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Bot has the promised identity
         run: |
           set -euo pipefail
@@ -559,10 +502,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Lite has the promised identity and offline model
         run: |
           set -euo pipefail
@@ -615,10 +554,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Published Lite is native arm64 content
         run: |
           set -euo pipefail
@@ -680,10 +615,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Read back immutable Bot and Lite identities
         run: |
           set -euo pipefail
