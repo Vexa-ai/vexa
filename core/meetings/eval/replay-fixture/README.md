@@ -65,3 +65,34 @@ if you regenerate it:
 - **A realistic first turn.** Cut too tight (≤1s of leading audio) and the pipeline's
   short-UI-switch guard correctly rejects the opening name as a spurious tile flip, so the turn
   replays as `seg_0` — a fixture artifact, not a bug.
+
+## `causal-speaker-matrix/manifest.json` — #956 C3 cross-platform custody
+
+The manifest pins eleven deterministic, generated `captured-signal.v1` views by the exact C1
+custody receipt over their uncompressed JSONL bytes:
+
+- Teams and Jitsi views of one authored source for direct handover, `+2s` silence, `-0.6s`
+  overlap, three speakers, and single-speaker resume;
+- one Zoom direct-handover non-regression view. Other Zoom cases remain producer-owned by #797.
+
+For each scenario, [`causal-speaker-matrix.ts`](../src/causal-speaker-matrix.ts) authors one PCM16
+WAV, truth JSONL, and stable timeline. Platform views reuse byte-identical frame and boundary
+records; only the header and post-producer hint stream differ. The WAV/truth/timeline digests and
+each tape's C1 receipt are immutable in the manifest.
+
+[`replay-causal-matrix.test.ts`](../../services/bot/src/replay-causal-matrix.test.ts) renders each
+view into a simulated worker path, admits it through `directorySignalCustody`, deletes the worker,
+then loads and reads it with a fresh custody adapter before replay. Missing, truncated,
+schema-invalid, changed, or receipt-drifting inputs stay RED. The scorer reports
+the authored post-producer hint schedule (onset→hint-start, end→hint-end, and stale outgoing
+overlap) alongside correct/unknown/invented identity counts. These are fixture inputs, not measured
+field latency. C-null, cross-platform C-swap, `+5s` delay, heartbeat-only, mismatched-end, and
+producer-kind controls prevent both fabrication and the trivial always-unknown answer.
+
+```bash
+pnpm --filter @vexa/mixed-pipeline test
+pnpm --filter @vexa/bot replay
+```
+
+This is post-producer, offline attribution evidence. It does not prove Teams/Zoom DOM extraction,
+ASR content, field latency, or live behavior.

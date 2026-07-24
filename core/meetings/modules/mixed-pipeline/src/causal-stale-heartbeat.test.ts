@@ -617,6 +617,188 @@ const behindSealResult = behindSeal.resolve(lateA);
 assert.equal(behindSealResult.source, 'provisional-cluster-id');
 assert.deepEqual(behindSealCallbacks, ['Boris', lateA.clusterId]);
 
+// A prefix can be valid and already published before a later sealed transition
+// proves the global alignment impossible. That zero-candidate tail must revoke
+// the earlier name through the stable-id repaint callback.
+const alignmentCallbacks: string[] = [];
+const alignmentRevoke = new ClusterNameBinder({
+  onLateResolve: (clusterId, name) =>
+    alignmentCallbacks.push(`${clusterId}->${name}`),
+});
+const alignmentTurn = {
+  clusterId: 'seg_alignment_revoke',
+  tStartMs: onset + 1000,
+  tEndMs: onset + 2000,
+};
+alignmentRevoke.recordHint({
+  name: 'Anna',
+  tMs: onset,
+  kind: 'jitsi-dominant',
+});
+alignmentRevoke.registerAcousticTurn(alignmentTurn, true);
+alignmentRevoke.recordHint({
+  name: 'Anna',
+  tMs: onset + 3000,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+alignmentRevoke.recordHint({
+  name: 'Boris',
+  tMs: onset + 3000,
+  kind: 'jitsi-dominant',
+});
+alignmentRevoke.sealAcousticThrough(onset + 3001);
+const alignmentBeforeTail = alignmentRevoke.resolve(alignmentTurn);
+assert.equal(alignmentBeforeTail.speakerName, 'Boris');
+assert.deepEqual(alignmentCallbacks, [`${alignmentTurn.clusterId}->Boris`]);
+alignmentRevoke.recordHint({
+  name: 'Boris',
+  tMs: onset + 5000,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+alignmentRevoke.recordHint({
+  name: 'Charlie',
+  tMs: onset + 5000,
+  kind: 'jitsi-dominant',
+});
+alignmentRevoke.sealAcousticThrough(onset + 5001);
+const alignmentAfterTail = alignmentRevoke.resolve(alignmentTurn);
+assert.equal(alignmentAfterTail.source, 'provisional-cluster-id');
+assert.deepEqual(alignmentCallbacks, [
+  `${alignmentTurn.clusterId}->Boris`,
+  `${alignmentTurn.clusterId}->${alignmentTurn.clusterId}`,
+]);
+
+// An acoustic tail with no distinct identity transition stays unknown without
+// erasing the one uniquely aligned transition that precedes it.
+const untransitionedTail = new ClusterNameBinder({});
+const tailTurns = [
+  { clusterId: 'seg_tail_0', tStartMs: onset, tEndMs: onset + 2000 },
+  { clusterId: 'seg_tail_1', tStartMs: onset + 3000, tEndMs: onset + 5000 },
+  { clusterId: 'seg_tail_2', tStartMs: onset + 6000, tEndMs: onset + 8000 },
+];
+for (const turn of tailTurns) untransitionedTail.registerAcousticTurn(turn, true);
+untransitionedTail.recordHint({
+  name: 'Anna',
+  tMs: onset + 200,
+  kind: 'jitsi-dominant',
+});
+untransitionedTail.recordHint({
+  name: 'Anna',
+  tMs: onset + 5803,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+untransitionedTail.recordHint({
+  name: 'Boris',
+  tMs: onset + 5803,
+  kind: 'jitsi-dominant',
+});
+progress(untransitionedTail, 'Boris', onset + 9000);
+untransitionedTail.sealAcousticThrough(onset + 9001);
+const tailResults = tailTurns.map((turn) =>
+  untransitionedTail.resolve(turn, { recordVote: false }));
+assert.equal(tailResults[0].source, 'provisional-cluster-id');
+assert.equal(tailResults[1].speakerName, 'Boris');
+assert.equal(tailResults[2].source, 'provisional-cluster-id');
+
+// C3 C-delay sequence falsifier: local one-token uniqueness is not enough.
+// Moving the complete exclusive stream +5s places its baseline after two
+// acoustic starts. Later transition epochs each contain one start again, but
+// accepting those tokens would silently reacquire one turn out of phase and
+// assign every alternating name to the wrong person. An ambiguous prefix makes
+// the entire retained alignment unknown; no later token may self-reacquire.
+const phaseSlip = new ClusterNameBinder({});
+const phaseTurns = Array.from({ length: 8 }, (_, index) => ({
+  clusterId: `seg_phase_${index}`,
+  tStartMs: onset + index * 4000,
+  tEndMs: onset + (index + 1) * 4000,
+}));
+for (const turn of phaseTurns) phaseSlip.registerAcousticTurn(turn, true);
+phaseSlip.recordHint({
+  name: 'Anna',
+  tMs: onset + 5200,
+  kind: 'jitsi-dominant',
+});
+let phaseName = 'Anna';
+for (let index = 1; index < phaseTurns.length; index++) {
+  const nextName = index % 2 === 0 ? 'Anna' : 'Boris';
+  const transitionAt = phaseTurns[index].tStartMs + 7803;
+  phaseSlip.recordHint({
+    name: phaseName,
+    tMs: transitionAt,
+    kind: 'jitsi-dominant',
+    isEnd: true,
+  });
+  phaseSlip.recordHint({
+    name: nextName,
+    tMs: transitionAt,
+    kind: 'jitsi-dominant',
+  });
+  phaseName = nextName;
+}
+phaseSlip.recordHint({
+  name: phaseName,
+  tMs: phaseTurns[phaseTurns.length - 1].tEndMs + 6000,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+phaseSlip.sealAcousticThrough(
+  phaseTurns[phaseTurns.length - 1].tEndMs + 6001,
+);
+const phaseSlipResults = phaseTurns.map((turn) =>
+  phaseSlip.resolve(turn, { recordVote: false }));
+assert(
+  phaseSlipResults.every((result) => result.source === 'provisional-cluster-id'),
+  `ambiguous +5s prefix must stay unknown: ${JSON.stringify(phaseSlipResults)}`,
+);
+
+// A baseline delayed by only +1s still falls within the single initial turn.
+// The baseline remains unknown, while every later one-to-one transition stays
+// admissible. This pins the conservative prefix guard's recall boundary.
+const singlePrefix = new ClusterNameBinder({});
+for (const turn of phaseTurns) singlePrefix.registerAcousticTurn(turn, true);
+singlePrefix.recordHint({
+  name: 'Anna',
+  tMs: onset + 1200,
+  kind: 'jitsi-dominant',
+});
+let singlePrefixName = 'Anna';
+for (let index = 1; index < phaseTurns.length; index++) {
+  const nextName = index % 2 === 0 ? 'Anna' : 'Boris';
+  const transitionAt = phaseTurns[index].tStartMs + 3803;
+  singlePrefix.recordHint({
+    name: singlePrefixName,
+    tMs: transitionAt,
+    kind: 'jitsi-dominant',
+    isEnd: true,
+  });
+  singlePrefix.recordHint({
+    name: nextName,
+    tMs: transitionAt,
+    kind: 'jitsi-dominant',
+  });
+  singlePrefixName = nextName;
+}
+singlePrefix.recordHint({
+  name: singlePrefixName,
+  tMs: phaseTurns[phaseTurns.length - 1].tEndMs + 1000,
+  kind: 'jitsi-dominant',
+  isEnd: true,
+});
+singlePrefix.sealAcousticThrough(
+  phaseTurns[phaseTurns.length - 1].tEndMs + 1001,
+);
+const singlePrefixResults = phaseTurns.map((turn) =>
+  singlePrefix.resolve(turn, { recordVote: false }));
+assert.equal(singlePrefixResults[0].source, 'provisional-cluster-id');
+assert(
+  singlePrefixResults.slice(1).every((result, index) =>
+    result.speakerName === (index % 2 === 0 ? 'Boris' : 'Anna')),
+  `single-prefix alignment drifted: ${JSON.stringify(singlePrefixResults)}`,
+);
+
 const causalGreen =
   beforeAdvance.source === 'provisional-cluster-id'
   && afterAdvance.speakerName === 'Boris'
@@ -643,7 +825,15 @@ const causalGreen =
   && uniqueAfterSeal.speakerName === 'Boris'
   && uniqueAfterContradiction.source === 'provisional-cluster-id'
   && behindSealBeforeContradiction.speakerName === 'Boris'
-  && behindSealResult.source === 'provisional-cluster-id';
+  && behindSealResult.source === 'provisional-cluster-id'
+  && alignmentBeforeTail.speakerName === 'Boris'
+  && alignmentAfterTail.source === 'provisional-cluster-id'
+  && tailResults[1].speakerName === 'Boris'
+  && tailResults[2].source === 'provisional-cluster-id'
+  && phaseSlipResults.every((result) => result.source === 'provisional-cluster-id')
+  && singlePrefixResults[0].source === 'provisional-cluster-id'
+  && singlePrefixResults.slice(1).every((result) =>
+    result.source === 'exclusive-transition');
 
 console.log(
   `M1_CAUSAL_${causalGreen ? 'GREEN' : 'RED'} `
@@ -664,6 +854,10 @@ console.log(
   + `late_registration=${lateABefore.speakerName},${lateAAfter.speakerName},${lateBAfter.speakerName} `
   + `sealed_unique=${uniqueBeforeSeal.speakerName}->${uniqueAfterSeal.speakerName}`
   + `->${uniqueAfterContradiction.speakerName} `
+  + `alignment_revoke=${alignmentBeforeTail.speakerName}->${alignmentAfterTail.speakerName} `
+  + `untransitioned_tail=${tailResults.map((result) => result.speakerName).join(',')} `
+  + `phase_slip=${phaseSlipResults.map((result) => result.speakerName).join(',')} `
+  + `single_prefix=${singlePrefixResults.map((result) => result.speakerName).join(',')} `
   + 'expected_short_turn=unknown->Boris',
 );
 
