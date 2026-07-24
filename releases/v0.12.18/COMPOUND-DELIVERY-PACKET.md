@@ -43,9 +43,9 @@ The two remaining production legs are isolated and ordered:
   `BROWSER_IMAGE` for future spawns without replacing any existing meeting
   Pod;
 - exact platform candidate head submitted for independent review:
-  `4bfc37c5470bb394834be92714a30c1513f2e5d6`;
+  `b30f5d5fcafb1e12ba75e8449e82879de475055f`;
 - deployment-input fingerprint:
-  `sha256:0588c0b3bbc5265b8990a7ffe9834305738ddf06217bc836db6248927b7649ae`;
+  `sha256:23617eb740568821c4440f6dd11e1de52fb6324dc0b7a3f9b4fce5a8f4162fa8`;
 - image index:
   `sha256:4da42b396623bfe863c207a01f7175773a441b1c4bc70b4d342189fb205aa741`;
 - production amd64 manifest:
