@@ -1,7 +1,7 @@
 # deploy/compose — the v0.12 control-plane stack (P4)
 
 `docker-compose.yml` brings up the v0.12 control plane: the infra (`postgres:17-alpine`,
-`redis:7-alpine`, `minio` + `minio-init`) and the long-running services below, each building its own
+`valkey/valkey:8-alpine`, `minio` + `minio-init`) and the long-running services below, each building its own
 slim image from `<service>/Dockerfile`:
 
 | service      | build context                          | host port | entrypoint                         |

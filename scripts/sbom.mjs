@@ -159,6 +159,20 @@ const BAKED_MODEL = {
   comment: "Baked into vexaai/vexa-bot + vexaai/vexa-lite at /opt/hf-cache; loaded offline by the mixed (Zoom/Teams) diarization lane. Notice: /opt/hf-cache/LICENSE.pyannote-segmentation-3.0 + repo THIRD_PARTY_LICENSES.md.",
 };
 
+// Valkey — the cache/stream engine BAKED into vexaai/vexa-lite (source-build, Dockerfile.lite
+// valkey-builder). Like the model, it is bytes CONTAINED in the published image, not a source
+// dependency, so gate:licenses never sees it — gate:image-licenses (bundled[]) audits it and this
+// records it in the SBOM. BSD-3 (Category A), clean to redistribute (#653).
+const BAKED_VALKEY = {
+  eco: "github", name: "valkey", version: "8.1.9",
+  licenseDeclared: "BSD-3-Clause", licenseConcluded: "BSD-3-Clause",
+  copyrightText: "Copyright (c) 2024-present, Valkey contributors",
+  downloadLocation: "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.9.tar.gz",
+  purl: "pkg:github/valkey-io/valkey@8.1.9",
+  supplier: "Organization: Valkey (Linux Foundation)",
+  comment: "Source-built (BUILD_TLS=no) into vexaai/vexa-lite; valkey-server + valkey-cli at /usr/local/bin, notice at /usr/local/share/valkey/LICENSE. compose/helm pin valkey/valkey:8-alpine (user-pulled, in image-licenses.json). #653.",
+};
+
 // ── assemble the SPDX 2.3 document ──────────────────────────────────────────────
 function pkgObject(p, id) {
   const externalRefs = p.purl ? [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: p.purl }] : [];
@@ -201,6 +215,10 @@ const modelId = spdxId("Package", "hf", "pyannote-segmentation-3.0");
 packages.push(pkgObject(BAKED_MODEL, modelId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: modelId, relationshipType: "CONTAINS" });
 
+const valkeyId = spdxId("Package", "github", "valkey", "8.1.9");
+packages.push(pkgObject(BAKED_VALKEY, valkeyId));
+relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: valkeyId, relationshipType: "CONTAINS" });
+
 for (const d of deps) {
   const id = spdxId("Package", d.eco, d.name, d.version);
   packages.push(pkgObject(d, id));
@@ -216,7 +234,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), baked model weights=1 (fully specified). Non-dependency baked artifacts (model weights) sit outside gate:licenses; see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,
