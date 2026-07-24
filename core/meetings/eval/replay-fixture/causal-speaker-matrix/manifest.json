@@ -1,0 +1,228 @@
+{
+  "type": "causal-speaker-replay-matrix",
+  "v": 1,
+  "base": "a56b9a2651f5112e3c5b74442c614e6af84de3b3",
+  "digestDomain": "uncompressed-captured-signal-jsonl",
+  "fixtures": [
+    {
+      "id": "direct/teams",
+      "platform": "teams",
+      "scenario": "direct",
+      "source": {
+        "wavSha256": "f189bc1ae9878351a0566d40fde4e3dbb5e9ee4ebe29c8989d1668dc5c021926",
+        "truthSha256": "1fb93b5b18ea18c747709799c535dff455d35264b52553868bb5c5fa7ab94d82",
+        "timelineSha256": "73807d3e55d40809e62cfd6c784be11b6cfe347e752347f5a830055975931c1a"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "d9f70bfc1b7adf8e7d31749174727699fe719b4a07e51233b429f548ce945385",
+        "bytes": 3003856,
+        "records": 174,
+        "key": "d9f70bfc1b7adf8e7d31749174727699fe719b4a07e51233b429f548ce945385/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "direct/jitsi",
+      "platform": "jitsi",
+      "scenario": "direct",
+      "source": {
+        "wavSha256": "f189bc1ae9878351a0566d40fde4e3dbb5e9ee4ebe29c8989d1668dc5c021926",
+        "truthSha256": "1fb93b5b18ea18c747709799c535dff455d35264b52553868bb5c5fa7ab94d82",
+        "timelineSha256": "73807d3e55d40809e62cfd6c784be11b6cfe347e752347f5a830055975931c1a"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "fefc1d00b1ae9edb35f7f955a12a3408cb58f6268bfd10d0097fd071e3d9b453",
+        "bytes": 3003807,
+        "records": 173,
+        "key": "fefc1d00b1ae9edb35f7f955a12a3408cb58f6268bfd10d0097fd071e3d9b453/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "direct/zoom",
+      "platform": "zoom",
+      "scenario": "direct",
+      "source": {
+        "wavSha256": "f189bc1ae9878351a0566d40fde4e3dbb5e9ee4ebe29c8989d1668dc5c021926",
+        "truthSha256": "1fb93b5b18ea18c747709799c535dff455d35264b52553868bb5c5fa7ab94d82",
+        "timelineSha256": "73807d3e55d40809e62cfd6c784be11b6cfe347e752347f5a830055975931c1a"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "e746b4b9be995ee05219c8b2b23e6a5421d430f87acf77f1949b9cc6eee093ef",
+        "bytes": 3003854,
+        "records": 174,
+        "key": "e746b4b9be995ee05219c8b2b23e6a5421d430f87acf77f1949b9cc6eee093ef/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "silence/teams",
+      "platform": "teams",
+      "scenario": "silence",
+      "source": {
+        "wavSha256": "0b66f4c3283c3900ae873ee645b93e946e2aeb5383ac08240543764303482d1d",
+        "truthSha256": "71b4ebad157cf6b91be85ae7705326f4acdf63bcd59f5a85939585d46bbe0782",
+        "timelineSha256": "836161d8784d6370333f47290958946fedea149fa471e0d15eac6b242286e5ee"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "d7a94ee75888b387ae4d369a06b3dcb1f0b6581f5c879248cd8f3073523ac2a2",
+        "bytes": 4204679,
+        "records": 237,
+        "key": "d7a94ee75888b387ae4d369a06b3dcb1f0b6581f5c879248cd8f3073523ac2a2/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "silence/jitsi",
+      "platform": "jitsi",
+      "scenario": "silence",
+      "source": {
+        "wavSha256": "0b66f4c3283c3900ae873ee645b93e946e2aeb5383ac08240543764303482d1d",
+        "truthSha256": "71b4ebad157cf6b91be85ae7705326f4acdf63bcd59f5a85939585d46bbe0782",
+        "timelineSha256": "836161d8784d6370333f47290958946fedea149fa471e0d15eac6b242286e5ee"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "b5a60558fbead845d9ec1488db17e13adb36fe9d98942b95396da66e6fda95ae",
+        "bytes": 4204630,
+        "records": 236,
+        "key": "b5a60558fbead845d9ec1488db17e13adb36fe9d98942b95396da66e6fda95ae/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "overlap/teams",
+      "platform": "teams",
+      "scenario": "overlap",
+      "source": {
+        "wavSha256": "b349b834afc1bdbe138bc03cf7ea3a67f2341806dfcfa937c9a08a3561ed5725",
+        "truthSha256": "7773bca00045ba0ff0afe0cfc1cd1fbe3f42b9b09c6aec59d3c824fd1a4ffced",
+        "timelineSha256": "bc04cab97e4025fc228f52f20d7cfabae36225349377b5185113f02d2023b4f5"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "b81044725e68d939315ee8954f156dc8ebecd72bcc9fe5f30e92a2c2a646c3af",
+        "bytes": 2644239,
+        "records": 165,
+        "key": "b81044725e68d939315ee8954f156dc8ebecd72bcc9fe5f30e92a2c2a646c3af/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "overlap/jitsi",
+      "platform": "jitsi",
+      "scenario": "overlap",
+      "source": {
+        "wavSha256": "b349b834afc1bdbe138bc03cf7ea3a67f2341806dfcfa937c9a08a3561ed5725",
+        "truthSha256": "7773bca00045ba0ff0afe0cfc1cd1fbe3f42b9b09c6aec59d3c824fd1a4ffced",
+        "timelineSha256": "bc04cab97e4025fc228f52f20d7cfabae36225349377b5185113f02d2023b4f5"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "439e5759a6c7823cfb2f137d9eb00ac9f4bbc6f7f0df8e8983ffb14a4e1b05a3",
+        "bytes": 2644190,
+        "records": 164,
+        "key": "439e5759a6c7823cfb2f137d9eb00ac9f4bbc6f7f0df8e8983ffb14a4e1b05a3/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "three-speaker/teams",
+      "platform": "teams",
+      "scenario": "three-speaker",
+      "source": {
+        "wavSha256": "c5552cecc4d7ad1396951b8c40dc4251a018aa86f89c893f1adf22622143b677",
+        "truthSha256": "d8e2cf6b5a30a0398ef628ebd76cec8cbe717dc6dd0b71ff24bdc986d9b1ff03",
+        "timelineSha256": "760e7c2d1bcb2a138d088409eaa161824d8e2ed2cb59db631fa6c6d5c674432d"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "91ae059c0fead09a249e8de55ff81153a02d12ad412578497536ef447bcf57f0",
+        "bytes": 3003872,
+        "records": 174,
+        "key": "91ae059c0fead09a249e8de55ff81153a02d12ad412578497536ef447bcf57f0/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "three-speaker/jitsi",
+      "platform": "jitsi",
+      "scenario": "three-speaker",
+      "source": {
+        "wavSha256": "c5552cecc4d7ad1396951b8c40dc4251a018aa86f89c893f1adf22622143b677",
+        "truthSha256": "d8e2cf6b5a30a0398ef628ebd76cec8cbe717dc6dd0b71ff24bdc986d9b1ff03",
+        "timelineSha256": "760e7c2d1bcb2a138d088409eaa161824d8e2ed2cb59db631fa6c6d5c674432d"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "40bb59f5af34b5ddf316d512add1d955f43f1a7b5bfdb80b8352977d5e52b3b8",
+        "bytes": 3003823,
+        "records": 173,
+        "key": "40bb59f5af34b5ddf316d512add1d955f43f1a7b5bfdb80b8352977d5e52b3b8/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "self-resume/teams",
+      "platform": "teams",
+      "scenario": "self-resume",
+      "source": {
+        "wavSha256": "0e6c0f7489d2438e8d35fd03d7c8342b5078b2e02c7e37ec39a2e1b6531c1e3c",
+        "truthSha256": "6287a32aaeef37be3f7e5b222abce96ae848aae43d49226017c3ca00718f420d",
+        "timelineSha256": "20afd236825f72a18dcccff8b3de045847259b927bc2ffcbe7e48ff94c82fc20"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "17e66f5b4e5160950be0c5b2427b9c2b7bc37ae8a3cb8db5da36a6eaffaf7f5a",
+        "bytes": 1115577,
+        "records": 63,
+        "key": "17e66f5b4e5160950be0c5b2427b9c2b7bc37ae8a3cb8db5da36a6eaffaf7f5a/session.captured-signal.jsonl"
+      }
+    },
+    {
+      "id": "self-resume/jitsi",
+      "platform": "jitsi",
+      "scenario": "self-resume",
+      "source": {
+        "wavSha256": "0e6c0f7489d2438e8d35fd03d7c8342b5078b2e02c7e37ec39a2e1b6531c1e3c",
+        "truthSha256": "6287a32aaeef37be3f7e5b222abce96ae848aae43d49226017c3ca00718f420d",
+        "timelineSha256": "20afd236825f72a18dcccff8b3de045847259b927bc2ffcbe7e48ff94c82fc20"
+      },
+      "receipt": {
+        "type": "captured-signal-custody-receipt",
+        "v": 1,
+        "complete": true,
+        "algorithm": "sha256",
+        "digest": "700f3a0ab6a3c15cccd96f288104713aba9815e134d0a6cf2b9abc639fe02d21",
+        "bytes": 1115420,
+        "records": 60,
+        "key": "700f3a0ab6a3c15cccd96f288104713aba9815e134d0a6cf2b9abc639fe02d21/session.captured-signal.jsonl"
+      }
+    }
+  ]
+}

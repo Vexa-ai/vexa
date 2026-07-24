@@ -473,6 +473,16 @@ export class ClusterNameBinder {
     if (this.acousticSealedThroughMs < turnEndMs) return null;
     if (state.observedThroughMs <= turnEndMs) return null;
 
+    const alignment = this.jitsiTransitionAlignment(state);
+    if (alignment === null) {
+      // A missing/ambiguous prefix cannot be repaired by independently matching
+      // later tokens. Doing so can reacquire one turn out of phase and assign a
+      // perfectly ordered sequence to the adjacent wrong speakers.
+      state.orderAmbiguous = true;
+      this.invalidateExclusiveAttributions();
+      return null;
+    }
+
     // A trailing exclusive transition testifies only to an ordering boundary,
     // not to an onset timestamp. Admission is globally one-to-one over complete
     // retained custody:
@@ -483,14 +493,8 @@ export class ClusterNameBinder {
     // Repeated heartbeats never enter `transitions`, so quantity cannot create
     // confidence. The rule is lag-independent: a transition after acoustic end
     // can repair the turn once the acoustic producer seals through that token.
-    const associated = state.transitions.filter((transition) => {
-      if (this.acousticSealedThroughMs <= transition.observedAtMs) return false;
-      const candidateTurns = [...this.acousticTurns.values()].filter((candidate) =>
-        candidate.tStartMs > transition.epochStartMs
-        && candidate.tStartMs <= transition.observedAtMs);
-      return candidateTurns.length === 1
-        && candidateTurns[0].clusterId === turn.clusterId;
-    });
+    const associated = state.transitions.filter((transition) =>
+      alignment.get(transition.id) === turn.clusterId);
     if (associated.length !== 1) return null;
     const transition = associated[0];
 
@@ -508,6 +512,47 @@ export class ClusterNameBinder {
       )
     ) return null;
     return { name: transition.toName };
+  }
+
+  /**
+   * Prove one alignment for the complete sealed prefix of the exclusive stream.
+   *
+   * Per-transition uniqueness is insufficient: after a delayed or missing
+   * prefix, later epochs may each contain one acoustic start again while every
+   * token is shifted onto the adjacent turn. The baseline may precede all
+   * retained turns or fall inside the one initially-unnameable turn. Every
+   * sealed transition after it must then claim exactly one new turn, and no turn
+   * may be claimed twice. Any gap/multiplicity makes the whole prefix unknown.
+   */
+  private jitsiTransitionAlignment(
+    state: JitsiDominantState,
+  ): Map<number, string> | null {
+    const sealedTransitions = state.transitions.filter(
+      (transition) => this.acousticSealedThroughMs > transition.observedAtMs,
+    );
+    if (sealedTransitions.length === 0) return new Map();
+
+    const turns = [...this.acousticTurns.values()]
+      .sort((left, right) =>
+        left.tStartMs - right.tStartMs
+        || left.clusterId.localeCompare(right.clusterId));
+    const baselineMs = sealedTransitions[0].epochStartMs;
+    const prefixTurns = turns.filter((turn) => turn.tStartMs <= baselineMs);
+    if (prefixTurns.length > 1) return null;
+
+    const alignment = new Map<number, string>();
+    const claimedTurns = new Set<string>();
+    for (const transition of sealedTransitions) {
+      const candidates = turns.filter((turn) =>
+        turn.tStartMs > transition.epochStartMs
+        && turn.tStartMs <= transition.observedAtMs);
+      if (candidates.length !== 1) return null;
+      const clusterId = candidates[0].clusterId;
+      if (claimedTurns.has(clusterId)) return null;
+      claimedTurns.add(clusterId);
+      alignment.set(transition.id, clusterId);
+    }
+    return alignment;
   }
 
   recordClusterVote(clusterId: string, speakerName: string): void {
