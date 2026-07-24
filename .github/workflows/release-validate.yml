@@ -133,9 +133,23 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
+          case "$VERSION" in
+            v0.12.18)
+              EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
+              EXPECTED_TOP_DESCRIPTORS=10
+              EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            *)
+              echo "::error ::$VERSION has no reviewed, packet-bound candidate-map identity"
+              exit 1
+              ;;
+          esac
           node scripts/registry-candidate-validate.mjs \
             --candidate-map "releases/$VERSION/candidate-images.json" \
-            --tag "$VERSION"
+            --tag "$VERSION" \
+            --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+            --expected-top-descriptors "$EXPECTED_TOP_DESCRIPTORS" \
+            --expected-platform-identities "$EXPECTED_PLATFORM_IDENTITIES"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its

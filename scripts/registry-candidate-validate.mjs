@@ -69,6 +69,16 @@ function identity(condition, message, details = {}) {
   }
 }
 
+export function verifyCandidateMapHash(raw, expectedHash) {
+  const actualHash = createHash("sha256").update(raw).digest("hex");
+  identity(
+    actualHash === expectedHash,
+    `candidate map hash mismatch (expected sha256:${expectedHash}, actual sha256:${actualHash})`,
+    { expected: `sha256:${expectedHash}`, actual: `sha256:${actualHash}`, level: "candidate-map" },
+  );
+  return actualHash;
+}
+
 function platformKey(platform) {
   return `${platform?.os ?? ""}/${platform?.architecture ?? ""}`;
 }
@@ -220,6 +230,8 @@ export async function validateCandidateMap({
   authBase = "https://auth.docker.io",
   registryBase = "https://registry-1.docker.io",
   service = "registry.docker.io",
+  expectedTopDescriptors,
+  expectedPlatformIdentities,
 }) {
   if (!username || !password) {
     throw new RegistryValidationError("auth", "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required");
@@ -277,6 +289,21 @@ export async function validateCandidateMap({
     console.log(`✓ ${repository}:${tag} ${expected.digest}`);
   }
 
+  if (expectedTopDescriptors !== undefined) {
+    identity(
+      topDescriptors === expectedTopDescriptors,
+      `candidate population mismatch (expected ${expectedTopDescriptors} top descriptors, actual ${topDescriptors})`,
+      { expected: expectedTopDescriptors, actual: topDescriptors, level: "population" },
+    );
+  }
+  if (expectedPlatformIdentities !== undefined) {
+    identity(
+      platformIdentities === expectedPlatformIdentities,
+      `candidate population mismatch (expected ${expectedPlatformIdentities} platform identities, actual ${platformIdentities})`,
+      { expected: expectedPlatformIdentities, actual: platformIdentities, level: "population" },
+    );
+  }
+
   return { topDescriptors, platformIdentities, attestationIdentities };
 }
 
@@ -286,10 +313,22 @@ function parseArgs(argv) {
     const key = argv[index];
     if (key === "--candidate-map") result.candidateMap = argv[++index];
     else if (key === "--tag") result.tag = argv[++index];
+    else if (key === "--expected-map-sha256") result.expectedMapHash = argv[++index];
+    else if (key === "--expected-top-descriptors") result.expectedTopDescriptors = Number(argv[++index]);
+    else if (key === "--expected-platform-identities") result.expectedPlatformIdentities = Number(argv[++index]);
     else throw new Error(`unknown argument: ${key}`);
   }
-  if (!result.candidateMap || !result.tag) {
-    throw new Error("usage: registry-candidate-validate.mjs --candidate-map <file> --tag <vX.Y.Z>");
+  if (
+    !result.candidateMap ||
+    !result.tag ||
+    !/^[0-9a-f]{64}$/.test(result.expectedMapHash ?? "") ||
+    !Number.isInteger(result.expectedTopDescriptors) ||
+    !Number.isInteger(result.expectedPlatformIdentities)
+  ) {
+    throw new Error(
+      "usage: registry-candidate-validate.mjs --candidate-map <file> --tag <vX.Y.Z> " +
+        "--expected-map-sha256 <64-hex> --expected-top-descriptors <n> --expected-platform-identities <n>",
+    );
   }
   return result;
 }
@@ -297,13 +336,15 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const raw = await readFile(args.candidateMap);
+  const mapHash = verifyCandidateMapHash(raw, args.expectedMapHash);
   const candidateMap = JSON.parse(raw);
-  const mapHash = createHash("sha256").update(raw).digest("hex");
   const counts = await validateCandidateMap({
     candidateMap,
     tag: args.tag,
     username: process.env.DOCKERHUB_USERNAME,
     password: process.env.DOCKERHUB_TOKEN,
+    expectedTopDescriptors: args.expectedTopDescriptors,
+    expectedPlatformIdentities: args.expectedPlatformIdentities,
   });
   console.log(
     `✓ authenticated candidate-map validation: ${counts.topDescriptors} top descriptors, ` +

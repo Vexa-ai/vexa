@@ -5,9 +5,22 @@ import {
   RegistryValidationError,
   validateCandidateMap,
   validateManifestIdentity,
+  verifyCandidateMapHash,
 } from "./registry-candidate-validate.mjs";
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
+
+test("frozen map hash accepts exact bytes and rejects altered or truncated bytes", () => {
+  const raw = Buffer.from('{"images":{"vexaai/vexa-lite":{}}}\n');
+  const hash = "1887b0e9d312f64c21e46b0bf45d3cff9504fd9042a1a29463e14230d520add3";
+  assert.equal(verifyCandidateMapHash(raw, hash), hash);
+  for (const changed of [Buffer.from('{"images":{}}\n'), raw.subarray(0, raw.length - 2)]) {
+    assert.throws(
+      () => verifyCandidateMapHash(changed, hash),
+      (error) => error instanceof RegistryValidationError && error.kind === "identity",
+    );
+  }
+});
 
 function fixture() {
   const platform = digest("2");
