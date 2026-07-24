@@ -57,8 +57,10 @@ Unit/integration: `pnpm test` (chained `tsx` runs — no build step). Levels:
 #530 reachability gate (both-channels-down ⇒ no join, exit 3, `control_plane_unreachable`; either-channel
 up ⇒ proceed) · **L3** transport adapters (lifecycle-http `emitReachable` reachability verdict ·
 transcript-redis · acts-redis), pipeline lane, recording
-assembler, replay tape, and the custody gate (`telemetry-custody.test.ts`: delete worker staging,
-then independently read identical bytes by digest). **L4** (browser/capture/speak/upload legs) runs via the standalone harness in
+assembler, replay tape, and the custody gates (`telemetry-custody.test.ts`: schema-validate every
+record, delete worker staging, then independently read identical bytes by digest;
+`hot-bot-custody.test.sh`: missing/incomplete/corrupt evidence cannot be admitted). **L4**
+(browser/capture/speak/upload legs) runs via the standalone harness in
 [`eval/`](./eval): `make -C eval run MEETING=<id>` drives a live Meet with synthetic speakers and an
 autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-test).
 

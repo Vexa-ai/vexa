@@ -17,6 +17,7 @@ import {
   SignalCustodyError,
   directorySignalCustody,
 } from './telemetry-custody.js';
+import { admitCustodyEvidence } from './custody-admission.js';
 
 const invocation = {
   platform: 'jitsi',
@@ -99,6 +100,8 @@ try {
   const independentlyRead = await freshReader.read(durableReceipt);
   assert.equal(createHash('sha256').update(independentlyRead).digest('hex'), receipt.digest);
   assert.equal(independentlyRead.byteLength, receipt.bytes);
+  const admittedReceipt = await admitCustodyEvidence(custodyRoot);
+  assert.deepEqual(admittedReceipt, receipt, 'eval admission independently verifies the persisted session');
 
   // A second recorder with byte-identical input admits to the same key and
   // returns a byte-identical receipt rather than creating a duplicate object.
@@ -129,8 +132,63 @@ try {
     'incomplete-source',
   );
 
+  // Exact reviewer falsifier: valid JSON and the expected count are not enough.
+  // The second line must be one of the captured-signal.v1 record shapes.
+  const schemaInvalid = join(scratch, 'schema-invalid-second-record.captured-signal.jsonl');
+  const validHeader = redBytes.toString('utf8').split('\n')[0];
+  writeFileSync(
+    schemaInvalid,
+    `${validHeader}\n{"type":"not-a-captured-signal-record","payload":"corrupt-semantic-record"}\n`,
+    'utf8',
+  );
+  assert.equal(
+    await typedKind(() => custody.admit({ sourcePath: schemaInvalid, expectedRecords: 2 })),
+    'incomplete-source',
+  );
+  console.log('SCHEMA_INVALID_SECOND_RECORD rejected kind=incomplete-source record=2');
+
+  // Every persisted failure stays typed, including a non-directory target,
+  // malformed receipt JSON values, semantic object corruption, and absence.
+  const blockedRoot = join(scratch, 'blocked-root');
+  writeFileSync(blockedRoot, 'not a directory', 'utf8');
+  assert.equal(
+    await typedKind(() => directorySignalCustody(join(blockedRoot, 'child')).admit({
+      sourcePath: retryRecorder.path,
+      expectedRecords: 2,
+    })),
+    'io-fault',
+  );
+
+  const receiptPath = join(custodyRoot, receipt.digest, 'receipt.json');
+  const objectPath = join(custodyRoot, receipt.key);
+  const receiptBytes = readFileSync(receiptPath);
+
+  writeFileSync(receiptPath, 'null\n', 'utf8');
+  assert.equal(
+    await typedKind(() => admitCustodyEvidence(custodyRoot)),
+    'stored-object-incomplete',
+  );
+  writeFileSync(receiptPath, receiptBytes);
+
+  writeFileSync(objectPath, readFileSync(schemaInvalid));
+  assert.equal(
+    await typedKind(() => admitCustodyEvidence(custodyRoot)),
+    'stored-object-incomplete',
+  );
+  writeFileSync(objectPath, independentlyRead);
+
+  rmSync(objectPath);
+  assert.equal(
+    await typedKind(() => admitCustodyEvidence(custodyRoot)),
+    'stored-object-missing',
+  );
+  writeFileSync(objectPath, independentlyRead);
+  assert.deepEqual(await admitCustodyEvidence(custodyRoot), receipt);
+
   console.log(
-    `GREEN receipt=${JSON.stringify(receipt)} after_worker_delete.local_exists=false independent_readback=true idempotent=true missing=missing-source incomplete=incomplete-source`,
+    `GREEN receipt=${JSON.stringify(receipt)} after_worker_delete.local_exists=false independent_readback=true `
+    + 'eval_admitted=true schema_invalid=incomplete-source idempotent=true '
+    + 'missing=missing-source incomplete=incomplete-source corrupt=stored-object-incomplete',
   );
 } finally {
   rmSync(scratch, { recursive: true, force: true });
