@@ -19,11 +19,13 @@ class FakeElement {
   readonly dataset: Record<string, string> = {};
   readonly isConnected = true;
   parentElement: FakeElement | null = null;
+  private nameSurface: FakeElement | null = null;
 
   constructor(
     readonly tagName: string,
     private readonly attrs: Record<string, string> = {},
     private readonly voiceOutline: FakeElement | null = null,
+    readonly textContent = '',
   ) {}
 
   get classList(): { contains(name: string): boolean } {
@@ -35,8 +37,18 @@ class FakeElement {
     return this.attrs[name] ?? null;
   }
 
+  setClass(value: string): void {
+    this.attrs.class = value;
+  }
+
+  setNameSurface(value: FakeElement): void {
+    this.nameSurface = value;
+  }
+
   querySelector(selector: string): FakeElement | null {
-    return selector === VOICE_OUTLINE ? this.voiceOutline : null;
+    if (selector === VOICE_OUTLINE) return this.voiceOutline;
+    if (selector === 'span[title]') return this.nameSurface;
+    return null;
   }
 
   querySelectorAll(): FakeElement[] {
@@ -57,7 +69,16 @@ const tile = new FakeElement('DIV', {
   class: 'fixture-participant-tile',
 }, voice);
 voice.parentElement = tile;
+const silentVoice = new FakeElement('DIV', {
+  'data-tid': 'voice-level-stream-outline',
+});
+const silentTile = new FakeElement('DIV', {
+  'data-participant-id': 'fixture-silent-unresolved',
+  class: 'fixture-participant-tile',
+}, silentVoice);
+silentVoice.parentElement = silentTile;
 const body = new FakeElement('BODY');
+const rafCallbacks: Array<() => void> = [];
 
 const globalObject = globalThis as typeof globalThis & Record<string, unknown>;
 globalObject.HTMLElement = FakeElement;
@@ -65,13 +86,16 @@ globalObject.MutationObserver = class {
   observe(): void {}
   disconnect(): void {}
 };
-globalObject.requestAnimationFrame = () => 1;
+globalObject.requestAnimationFrame = (callback: () => void) => {
+  rafCallbacks.push(callback);
+  return rafCallbacks.length;
+};
 globalObject.cancelAnimationFrame = () => {};
 globalObject.document = {
   body,
   querySelector: (selector: string) => selector === '[role="main"]' ? body : null,
   querySelectorAll: (selector: string) =>
-    selector === '[data-tid*="participant"]' ? [tile] : [],
+    selector === '[data-tid*="participant"]' ? [tile, silentTile] : [],
 };
 
 const hints: Array<{ name: string; id: string; isEnd: boolean }> = [];
@@ -82,13 +106,14 @@ const options: TeamsSpeakersOptions & {
   onNameUnresolved: (observation: TeamsNameUnresolvedObservation) => void;
 } = {
   debounceMs: 0,
+  heartbeatMs: 20,
   log: (message) => logs.push(message),
   onSpeaking: (name, id, isEnd) => hints.push({ name, id, isEnd }),
   onNameUnresolved: (observation) => observations.push(observation),
 };
 
 const watcher = createTeamsSpeakers(options);
-await new Promise((resolve) => setTimeout(resolve, 10));
+await new Promise((resolve) => setTimeout(resolve, 70));
 
 const current = {
   speaking: watcher.getSpeaking(),
@@ -96,7 +121,6 @@ const current = {
   observations,
   logs,
 };
-watcher.destroy();
 console.log(`C797_CURRENT=${JSON.stringify(current)}`);
 
 if (current.speaking.length !== 1 || current.speaking[0] !== '') {
@@ -110,6 +134,9 @@ if (observations.length !== 1) {
     `C797_RED: expected exactly one typed name-unresolved observation, received ${observations.length}`,
   );
 }
+if (observations.some((item) => item.edge === 'end')) {
+  throw new Error('C797_CARDINALITY_RED: a bootstrap-silent tile emitted a false unresolved END');
+}
 
 const [observation] = observations;
 if (
@@ -117,11 +144,38 @@ if (
   || observation.platform !== 'teams'
   || observation.signal !== 'dom-outline'
   || observation.reason !== 'resolver-empty'
-  || observation.participantId !== PARTICIPANT_ID
-  || observation.isEnd
+  || observation.edge !== 'start'
   || !Number.isFinite(observation.tMs)
+  || observation.tMs < 1_000_000_000_000
 ) {
   throw new Error(`C797_CONTRACT_RED: malformed observation ${JSON.stringify(observation)}`);
 }
 
-console.log('C797_GREEN: unresolved Teams identity stayed unknown and emitted one typed observation');
+// A held unresolved outline remains one episode: its 20ms test heartbeat does
+// not manufacture repeated observations. A real end edge closes it exactly once.
+await new Promise((resolve) => setTimeout(resolve, 220));
+voice.setClass('');
+const pendingRaf = rafCallbacks.splice(0);
+for (const callback of pendingRaf) callback();
+await new Promise((resolve) => setTimeout(resolve, 20));
+if (observations.length !== 2 || observations[1]?.edge !== 'end') {
+  throw new Error(`C797_CARDINALITY_RED: expected one start and one end, got ${JSON.stringify(observations)}`);
+}
+
+// A later-rendered name is recovered by the real Teams heartbeat and becomes a
+// normal named start. The unresolved episode is not repeated or promoted.
+voice.setClass('vdi-frame-occlusion');
+tile.setNameSurface(new FakeElement('SPAN', { title: 'Alpha Example' }, null, 'Alpha Example'));
+await new Promise((resolve) => setTimeout(resolve, 240));
+const nextRaf = rafCallbacks.splice(0);
+for (const callback of nextRaf) callback();
+await new Promise((resolve) => setTimeout(resolve, 60));
+if (!hints.some((hint) => hint.name === 'Alpha Example' && hint.isEnd === false)) {
+  throw new Error(`C797_REPAIR_RED: late-rendered name did not recover on heartbeat: ${JSON.stringify(hints)}`);
+}
+if (observations.length !== 2) {
+  throw new Error(`C797_HEARTBEAT_RED: heartbeat duplicated unresolved observations: ${JSON.stringify(observations)}`);
+}
+
+watcher.destroy();
+console.log('C797_GREEN: unresolved Teams identity stayed unknown; bootstrap, edges, heartbeat, and late-name repair are pinned');

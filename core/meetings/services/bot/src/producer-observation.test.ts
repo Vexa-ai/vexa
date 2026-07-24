@@ -21,9 +21,9 @@ observations.sink({
   platform: 'teams',
   signal: 'dom-outline',
   reason: 'resolver-empty',
-  participantId: 'participant-secret-123',
-  isEnd: false,
-  tMs: 1000,
+  edge: 'start',
+  tMs: 1_700_000_000_000,
+  participantId: 'unexpected-extra-field',
 });
 
 let counts = observations.counters();
@@ -36,8 +36,8 @@ ok(
   'the observation is reported on the Node-side telemetry channel',
 );
 ok(
-  logs.every((message) => !message.includes('participant-secret-123')),
-  'telemetry never logs the participant id',
+  logs.every((message) => !message.includes('unexpected-extra-field')),
+  'sanitized Node telemetry never logs arbitrary producer fields',
 );
 
 observations.sink({
@@ -45,9 +45,8 @@ observations.sink({
   platform: 'teams',
   signal: 'dom-active',
   reason: 'resolver-empty',
-  participantId: 'fixture-a',
-  isEnd: false,
-  tMs: 1001,
+  edge: 'start',
+  tMs: 1_700_000_000_001,
 });
 
 counts = observations.counters();
