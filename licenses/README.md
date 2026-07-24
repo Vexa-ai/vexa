@@ -10,6 +10,13 @@ Each file here is copied into the image next to the artifact it covers (e.g.
 [`THIRD_PARTY_LICENSES.md`](../THIRD_PARTY_LICENSES.md) manifest and the per-release SPDX
 SBOM ([`scripts/sbom.mjs`](../scripts/sbom.mjs)).
 
+Firefox is the exception to the standalone-file shape: its MPL text and complete third-party
+inventory already travel inside the selected browser payload at
+`omni.ja!/chrome/toolkit/content/global/license.html`. The packaging authority records that
+embedded file's exact size and SHA-256 in
+[`image-licenses.json`](../image-licenses.json); duplicating an extracted copy here would create
+a second, drift-prone notice source.
+
 | File | Artifact | Licence |
 | --- | --- | --- |
 | `onnx-community-pyannote-segmentation-3.0.LICENSE.txt` | `onnx-community/pyannote-segmentation-3.0` (mixed-lane diarization weights) | MIT |

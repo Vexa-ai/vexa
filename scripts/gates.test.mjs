@@ -172,6 +172,95 @@ test("image-licenses vacuity: the committed tree (Valkey everywhere) is green", 
   assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
 });
 
+test("image-licenses declares the prepared Firefox copy-only custody contract", () => {
+  const manifest = JSON.parse(readFileSync(join(ROOT, IMG_MANIFEST), "utf8"));
+  const firefox = manifest.browserArtifacts?.find((entry) => entry.name === "firefox");
+  assert(firefox, "FIREFOX_CUSTODY_RED: image-licenses.json has no Firefox artifact authority");
+  assert.deepEqual(
+    {
+      version: firefox.version,
+      playwrightRevision: firefox.playwrightRevision,
+      artifactPath: firefox.artifactPath,
+      sourceImage: firefox.sourceImage,
+      sourceRetrieval: firefox.sourceRetrieval,
+    },
+    {
+      version: "151.0",
+      playwrightRevision: "1532",
+      artifactPath: "/ms-playwright/firefox-1532",
+      sourceImage:
+        "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e",
+      sourceRetrieval: "https://archive.mozilla.org/pub/firefox/releases/151.0/source/",
+    },
+  );
+});
+
+test("image-licenses audits the declared Firefox artifact authority", () => {
+  const r = runGate("image-licenses");
+  assert.equal(r.green, true, `the prepared Firefox custody contract is invalid:\n${r.out}`);
+  assert.match(
+    r.out,
+    /1 browser artifact/,
+    "FIREFOX_GATE_RED: gate:image-licenses ignores browserArtifacts",
+  );
+});
+
+test("image-licenses RED: Firefox source-image provenance drift is rejected", () => {
+  const original =
+    "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e";
+  const drifted =
+    "mcr.microsoft.com/playwright@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const r = withEdited(IMG_MANIFEST, original, drifted, () => runGate("image-licenses"));
+  assert.equal(r.green, false, "Firefox source-image provenance drift false-greened");
+  assert.match(r.out, /source-image provenance/i);
+});
+
+test("image-licenses RED: copyOnly cannot select a forbidden CfT 1228 path", () => {
+  const r = withEdited(
+    IMG_MANIFEST,
+    '"copyOnly": "/ms-playwright/firefox-1532"',
+    '"copyOnly": "/ms-playwright/chromium-1228"',
+    () => runGate("image-licenses"),
+  );
+  assert.equal(r.green, false, "a forbidden CfT 1228 copyOnly path false-greened");
+  assert.match(r.out, /copyOnly/i);
+  assert.match(r.out, /chromium-1228/);
+});
+
+test("image-licenses RED: both complete forbidden CfT tuples are pinned", () => {
+  const r = withEdited(
+    IMG_MANIFEST,
+    '"playwrightRevision": "1228",\n          "path": "/ms-playwright/chromium_headless_shell-1228"',
+    '"playwrightRevision": "1532",\n          "path": "/ms-playwright/firefox-1532"',
+    () => runGate("image-licenses"),
+  );
+  assert.equal(r.green, false, "forbidden CfT tuple drift false-greened");
+  assert.match(r.out, /forbidden.*CfT/i);
+});
+
+test("image-licenses RED: Firefox embedded notice identity is fail-closed", () => {
+  const r = withEdited(
+    IMG_MANIFEST,
+    "276c0a63176234c8aa3108e415a9e336c590ecf600bc24af7d6809d5af75436e",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    () => runGate("image-licenses"),
+  );
+  assert.equal(r.green, false, "Firefox embedded notice hash drift false-greened");
+  assert.match(r.out, /notice/i);
+});
+
+test("image-licenses RED: nested LGPL library needs an isolated Cat-B disposition", () => {
+  const r = withEdited(
+    IMG_MANIFEST,
+    '"linkage": "separate-dynamic-library"',
+    '"linkage": "static"',
+    () => runGate("image-licenses"),
+  );
+  assert.equal(r.green, false, "a statically linked LGPL browser component false-greened");
+  assert.match(r.out, /Cat-B|LGPL/);
+  assert.match(r.out, /liblgpllibs\.so/);
+});
+
 test("image-licenses RED: an undeclared pinned image (a stray redis:7.4) reds", () => {
   // redis:7.4 is exactly the source-available (RSALv2/SSPL) engine #653 keeps out; undeclared ⇒ loud red.
   const r = withEdited(COMPOSE, "image: valkey/valkey:8-alpine", "image: redis:7.4-alpine",

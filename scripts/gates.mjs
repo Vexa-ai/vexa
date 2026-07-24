@@ -515,7 +515,114 @@ function gateImageLicenses() {
     else if (cat !== "A") flagged.push(`bundled ${e.name} (${e.license})`);
   }
 
-  // (3) concrete #653 guard — the Lite parity trap: apt-installed redis-server (jammy 6.0.16, no XAUTOCLAIM).
+  // (3) selected browser payloads. These are copy-only artifacts whose driver licence does not cover
+  // the browser bytes. Bind the exact browser identity, source provenance, travelling notices,
+  // separately loaded weak-copyleft components, and the artifacts that must not cross into the image.
+  const browserArtifacts = man.browserArtifacts || [];
+  const firefox = browserArtifacts.find((entry) => entry.name === "firefox");
+  const expectedFirefoxSource =
+    "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e";
+  const expectedNotices = [
+    {
+      name: "MPL-2.0",
+      path: "omni.ja!/chrome/toolkit/content/global/license.html",
+    },
+    {
+      name: "firefox_embedded_third_party_inventory",
+      path: "omni.ja!/chrome/toolkit/content/global/license.html",
+      bytes: 308060,
+      sha256: "276c0a63176234c8aa3108e415a9e336c590ecf600bc24af7d6809d5af75436e",
+    },
+  ];
+  const expectedNested = [
+    {
+      name: "liblgpllibs.so",
+      path: "/ms-playwright/firefox-1532/firefox/liblgpllibs.so",
+      sha256: "e09a057e89519b24f1dd8c26b29df9175c3233b86d8102ad9e13c2e9041acc66",
+      license: "LGPL-2.1-or-later",
+      linkage: "separate-dynamic-library",
+      modified: false,
+    },
+  ];
+  const expectedForbidden = [
+    {
+      product: "chrome-for-testing",
+      version: "149.0.7827.55",
+      playwrightRevision: "1228",
+      path: "/ms-playwright/chromium-1228",
+    },
+    {
+      product: "chrome-headless-shell-for-testing",
+      version: "149.0.7827.55",
+      playwrightRevision: "1228",
+      path: "/ms-playwright/chromium_headless_shell-1228",
+    },
+  ];
+
+  if (!firefox) {
+    bad.push('browser artifact authority is missing selected "firefox"');
+  } else {
+    if (
+      firefox.version !== "151.0" ||
+      firefox.playwrightRevision !== "1532" ||
+      firefox.artifactPath !== "/ms-playwright/firefox-1532" ||
+      firefox.copyOnly !== firefox.artifactPath ||
+      firefox.driver?.name !== "playwright" ||
+      firefox.driver?.version !== "1.61.1" ||
+      firefox.driver?.license !== "Apache-2.0"
+    ) {
+      bad.push(
+        `Firefox copyOnly identity must be Playwright 1.61.1 / Firefox 151 rev1532 at /ms-playwright/firefox-1532; got copyOnly=${firefox.copyOnly || "<missing>"}`,
+      );
+    }
+    if (
+      firefox.sourceImage !== expectedFirefoxSource ||
+      firefox.sourceRetrieval !== "https://archive.mozilla.org/pub/firefox/releases/151.0/source/" ||
+      firefox.sourceArchitecture !== "linux/arm64" ||
+      firefox.researchBuildId !== "20260611122632"
+    ) {
+      bad.push("Firefox source-image provenance must match the prepared arm64 digest and BuildID");
+    }
+
+    const firefoxCat = classifyLicense(firefox.license || "");
+    if (firefoxCat !== "B" || !firefox.reason) {
+      bad.push(`Firefox MPL custody must be a reasoned Cat-B disposition; got ${firefox.license || "<missing>"}`);
+    }
+    if (JSON.stringify(firefox.requiredNotices) !== JSON.stringify(expectedNotices)) {
+      bad.push("Firefox required notice identity must bind MPL-2.0 and the exact embedded third-party inventory");
+    }
+
+    const nestedComparable = (firefox.nestedComponents || []).map(
+      ({ name, path, sha256, license, linkage, modified }) =>
+        ({ name, path, sha256, license, linkage, modified }),
+    );
+    if (JSON.stringify(nestedComparable) !== JSON.stringify(expectedNested)) {
+      bad.push("Firefox nested Cat-B inventory must bind the unmodified separate liblgpllibs.so identity");
+    }
+    for (const component of firefox.nestedComponents || []) {
+      const cat = classifyLicense(component.license || "");
+      if (
+        cat !== "B" ||
+        !component.reason ||
+        component.linkage !== "separate-dynamic-library" ||
+        component.modified !== false
+      ) {
+        bad.push(
+          `nested Firefox component "${component.name || "<missing>"}" (${component.license || "<missing>"}) must carry a reasoned, unmodified, separate-dynamic-library Cat-B disposition`,
+        );
+      }
+    }
+
+    if (JSON.stringify(firefox.forbiddenArtifacts) !== JSON.stringify(expectedForbidden)) {
+      bad.push("Firefox forbidden CfT inventory must bind both complete Chrome-for-Testing 149/rev1228 tuples");
+    }
+    const forbiddenPaths = new Set(expectedForbidden.map((entry) => entry.path));
+    if (forbiddenPaths.has(firefox.copyOnly)) {
+      bad.push(`Firefox copyOnly selects forbidden CfT artifact ${firefox.copyOnly}`);
+    }
+  }
+
+  // (4) concrete #653 guard — the Lite parity trap: apt-installed redis-server (jammy 6.0.16, no XAUTOCLAIM).
   const lite = join(ROOT, "deploy", "lite", "Dockerfile.lite");
   // `[^&]*?` scopes the match to the install statement's package list (it terminates at the first `&&`),
   // so a comment MENTIONING redis-server later in the file never trips the guard — only a real package does.
@@ -524,7 +631,7 @@ function gateImageLicenses() {
     bad.push("Lite bakes `apt install redis-server` (jammy 6.0.16 — no XAUTOCLAIM, the #653 parity trap). Use the Valkey source-build stage (BSD-3, XAUTOCLAIM) instead.");
 
   if (bad.length) return fail(bad);
-  console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
+  console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) + ${browserArtifacts.length} browser artifact(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
   return true;
 }
 

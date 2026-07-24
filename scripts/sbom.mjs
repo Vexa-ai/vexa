@@ -6,7 +6,7 @@
  * `gate:licenses` (scripts/gates.mjs) PROVES the npm tree is licence-clean but
  * emits no artifact, and it never sees non-dependency bytes baked into the images
  * (model weights). This script is the emit side + the packaging complement: it
- * inventories four sources into one SPDX document —
+ * inventories five sources into one SPDX document —
  *
  *   1. npm deps   — `pnpm licenses list --json` (the same index gate:licenses uses):
  *                   name · version · declared licence, one SPDX package per version.
@@ -21,6 +21,10 @@
  *                   vexaai/vexa-bot + vexaai/vexa-lite at /opt/hf-cache. Fully
  *                   specified (licence + copyright + download location). Mirrors
  *                   THIRD_PARTY_LICENSES.md; the piece gate:licenses cannot see.
+ *   5. browser payload — the copy-only Firefox artifact declared by
+ *                   image-licenses.json, plus its separately loaded LGPL child.
+ *                   The relationship graph records root CONTAINS Firefox and
+ *                   Firefox CONTAINS each nested component.
  *
  * The npm and pip sources are best-effort: a missing pnpm index or absent uv.locks
  * degrade to a WARNING on stderr, never a hard failure — the document always emits
@@ -215,6 +219,51 @@ const BAKED_VALKEY = {
   comment: "Source-built (BUILD_TLS=no) into vexaai/vexa-lite; valkey-server + valkey-cli at /usr/local/bin, notice at /usr/local/share/valkey/LICENSE. compose/helm pin valkey/valkey:8-alpine (user-pulled, in image-licenses.json). #653.",
 };
 
+// Browser payloads are governed by image-licenses.json because Playwright's Apache licence covers
+// the driver, not the browser bytes it downloads. gate:image-licenses validates the exact identity,
+// provenance, travelling notices, Cat-B isolation, and forbidden artifacts before this emitter
+// turns the same authority into SPDX packages and nested CONTAINS relationships.
+function browserArtifactPackages() {
+  const manifestPath = join(ROOT, "image-licenses.json");
+  if (!existsSync(manifestPath)) return [];
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  return (manifest.browserArtifacts || []).map((browser) => ({
+    package: {
+      eco: "generic",
+      name: browser.name,
+      version: browser.version,
+      licenseDeclared: browser.license,
+      licenseConcluded: browser.license,
+      copyrightText: "NOASSERTION",
+      downloadLocation: browser.sourceRetrieval || "NOASSERTION",
+      purl: `pkg:generic/${browser.name}@${browser.version}`,
+      supplier: browser.name === "firefox" ? "Organization: Mozilla" : undefined,
+      comment: [
+        `Copy-only artifact ${browser.artifactPath} from ${browser.sourceImage}.`,
+        `Playwright revision ${browser.playwrightRevision}; research BuildID ${browser.researchBuildId}.`,
+        `Required notices: ${(browser.requiredNotices || []).map((notice) => notice.path).join(", ")}.`,
+        "Final native-image identity remains a separate release proof.",
+      ].join(" "),
+    },
+    nested: (browser.nestedComponents || []).map((component) => ({
+      eco: "generic",
+      name: component.name,
+      version: browser.version,
+      licenseDeclared: component.license,
+      licenseConcluded: component.license,
+      copyrightText: "NOASSERTION",
+      downloadLocation: "NOASSERTION",
+      purl: `pkg:generic/${browser.name}-${component.name}@${browser.version}`,
+      supplier: browser.name === "firefox" ? "Organization: Mozilla" : undefined,
+      comment: [
+        `${component.path}; sha256:${component.sha256}.`,
+        `Linkage=${component.linkage}; modified=${component.modified}.`,
+        component.reason,
+      ].join(" "),
+    })),
+  }));
+}
+
 // ── assemble the SPDX 2.3 document ──────────────────────────────────────────────
 function pkgObject(p, id) {
   const externalRefs = p.purl ? [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: p.purl }] : [];
@@ -237,6 +286,7 @@ function pkgObject(p, id) {
 const npm = npmPackages();
 const pip = pipPackages();
 const liteApt = liteAptPackages();
+const browserArtifacts = browserArtifactPackages();
 const deps = [...npm, ...pip].sort((a, b) => (a.eco + a.name + a.version).localeCompare(b.eco + b.name + b.version));
 
 const ROOT_ID = "SPDXRef-Package-vexa";
@@ -262,6 +312,36 @@ const valkeyId = spdxId("Package", "github", "valkey", "8.1.9");
 packages.push(pkgObject(BAKED_VALKEY, valkeyId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: valkeyId, relationshipType: "CONTAINS" });
 
+for (const browser of browserArtifacts) {
+  const browserId = spdxId(
+    "Package",
+    browser.package.eco,
+    browser.package.name,
+    browser.package.version,
+  );
+  packages.push(pkgObject(browser.package, browserId));
+  relationships.push({
+    spdxElementId: ROOT_ID,
+    relatedSpdxElement: browserId,
+    relationshipType: "CONTAINS",
+  });
+  for (const component of browser.nested) {
+    const componentId = spdxId(
+      "Package",
+      component.eco,
+      browser.package.name,
+      component.name,
+      component.version,
+    );
+    packages.push(pkgObject(component, componentId));
+    relationships.push({
+      spdxElementId: browserId,
+      relatedSpdxElement: componentId,
+      relationshipType: "CONTAINS",
+    });
+  }
+}
+
 for (const apt of liteApt) {
   const id = spdxId("Package", apt.eco, apt.name, apt.version);
   packages.push(pkgObject(apt, id));
@@ -283,7 +363,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified), browser artifacts=${browserArtifacts.length} (${browserArtifacts.reduce((count, browser) => count + browser.nested.length, 0)} nested components). Non-dependency baked/browser artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,
@@ -292,7 +372,7 @@ const doc = {
 const json = JSON.stringify(doc, null, 2) + "\n";
 if (OUTPUT) {
   writeFileSync(OUTPUT, json);
-  console.error(`[sbom] wrote ${OUTPUT} — ${packages.length} packages (root + 2 baked + ${liteApt.length} Lite apt + ${deps.length} deps: ${npm.length} npm, ${pip.length} pip)`);
+  console.error(`[sbom] wrote ${OUTPUT} — ${packages.length} packages (root + 2 baked + ${browserArtifacts.length} browser + ${browserArtifacts.reduce((count, browser) => count + browser.nested.length, 0)} browser-nested + ${liteApt.length} Lite apt + ${deps.length} deps: ${npm.length} npm, ${pip.length} pip)`);
 } else {
   process.stdout.write(json);
 }

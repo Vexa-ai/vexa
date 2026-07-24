@@ -58,3 +58,28 @@ test("a newly declared Lite final-stage apt package is automatically inventoried
   const doc = emitSbom(edited);
   assert(packageNamed(doc, "review-apt-probe"));
 });
+
+test("Firefox and its isolated LGPL library are nested in the emitted SPDX", () => {
+  const doc = emitSbom();
+  const firefox = packageNamed(doc, "firefox");
+  assert(firefox, "FIREFOX_SBOM_RED: Firefox is absent from the emitted SPDX");
+  assert.equal(firefox.versionInfo, "151.0");
+  assert.equal(firefox.licenseDeclared, "MPL-2.0");
+
+  const lgpl = packageNamed(doc, "liblgpllibs.so");
+  assert(lgpl, "FIREFOX_SBOM_RED: liblgpllibs.so is absent from the emitted SPDX");
+  assert.equal(lgpl.licenseDeclared, "LGPL-2.1-or-later");
+
+  assert(doc.relationships.some(
+    (edge) =>
+      edge.spdxElementId === "SPDXRef-Package-vexa" &&
+      edge.relatedSpdxElement === firefox.SPDXID &&
+      edge.relationshipType === "CONTAINS",
+  ), "root package does not CONTAIN Firefox");
+  assert(doc.relationships.some(
+    (edge) =>
+      edge.spdxElementId === firefox.SPDXID &&
+      edge.relatedSpdxElement === lgpl.SPDXID &&
+      edge.relationshipType === "CONTAINS",
+  ), "Firefox does not CONTAIN liblgpllibs.so");
+});

@@ -1,5 +1,5 @@
 {
-  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, or Lite Dockerfile FROM surfaces (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution — Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
+  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, or Lite Dockerfile FROM surfaces; `bundled` = components baked INTO a published vexaai/* image; `browserArtifacts` = the selected copy-only browser payload, its provenance/notices/nested weak-copyleft components, and exact forbidden browser payloads. `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
   "images": [
     {
       "name": "mcr.microsoft.com/playwright",
@@ -45,6 +45,63 @@
       "artifact": "vexaai/vexa-lite",
       "how": "source-build from the pinned git tag 8.1.9 (deploy/lite/Dockerfile.lite valkey-builder stage); valkey-server + valkey-cli copied into the final image, COPYING preserved at /usr/local/share/valkey/LICENSE",
       "reason": "XAUTOCLAIM parity with compose/helm and off BOTH jammy apt's stale Redis 6.0.16 (no XAUTOCLAIM) and source-available Redis ≥7.4 (RSALv2/SSPLv1). BSD-3 is Category A — clean to redistribute (#653)."
+    }
+  ],
+  "browserArtifacts": [
+    {
+      "name": "firefox",
+      "version": "151.0",
+      "playwrightRevision": "1532",
+      "artifactPath": "/ms-playwright/firefox-1532",
+      "copyOnly": "/ms-playwright/firefox-1532",
+      "driver": {
+        "name": "playwright",
+        "version": "1.61.1",
+        "license": "Apache-2.0"
+      },
+      "sourceImage": "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e",
+      "sourceRetrieval": "https://archive.mozilla.org/pub/firefox/releases/151.0/source/",
+      "sourceArchitecture": "linux/arm64",
+      "researchBuildId": "20260611122632",
+      "license": "MPL-2.0",
+      "reason": "Firefox is copied unmodified as a separately identifiable browser payload. MPL-2.0 applies to the Firefox files, not to Vexa source; the source-retrieval and embedded notice references travel with the payload.",
+      "requiredNotices": [
+        {
+          "name": "MPL-2.0",
+          "path": "omni.ja!/chrome/toolkit/content/global/license.html"
+        },
+        {
+          "name": "firefox_embedded_third_party_inventory",
+          "path": "omni.ja!/chrome/toolkit/content/global/license.html",
+          "bytes": 308060,
+          "sha256": "276c0a63176234c8aa3108e415a9e336c590ecf600bc24af7d6809d5af75436e"
+        }
+      ],
+      "nestedComponents": [
+        {
+          "name": "liblgpllibs.so",
+          "path": "/ms-playwright/firefox-1532/firefox/liblgpllibs.so",
+          "sha256": "e09a057e89519b24f1dd8c26b29df9175c3233b86d8102ad9e13c2e9041acc66",
+          "license": "LGPL-2.1-or-later",
+          "linkage": "separate-dynamic-library",
+          "modified": false,
+          "reason": "Unmodified, separately shipped and dynamically loaded Firefox runtime library; never statically linked into Vexa. Category-B redistribution remains confined to this named component."
+        }
+      ],
+      "forbiddenArtifacts": [
+        {
+          "product": "chrome-for-testing",
+          "version": "149.0.7827.55",
+          "playwrightRevision": "1228",
+          "path": "/ms-playwright/chromium-1228"
+        },
+        {
+          "product": "chrome-headless-shell-for-testing",
+          "version": "149.0.7827.55",
+          "playwrightRevision": "1228",
+          "path": "/ms-playwright/chromium_headless_shell-1228"
+        }
+      ]
     }
   ]
 }

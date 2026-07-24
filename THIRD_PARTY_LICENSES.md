@@ -17,6 +17,33 @@ That is a source-level inventory: Docker source does not resolve Ubuntu package 
 package licences, so those fields are emitted as `NOASSERTION` until an image-level scanner
 enriches them. Builder-stage packages that do not cross into the final image are excluded.
 
+## Selected copy-only browser payload
+
+The unsigned-Zoom browser candidate is the unmodified Firefox payload matched to Playwright
+`1.61.1`: Firefox `151.0`, Playwright revision `1532`, artifact path
+`/ms-playwright/firefox-1532`. The packaging authority is
+[`image-licenses.json`](image-licenses.json), which binds:
+
+- the researched Linux/arm64 source image digest and Firefox BuildID;
+- the Firefox 151 source-retrieval directory required for MPL executable-form distribution;
+- `copyOnly` to the matched Firefox artifact path;
+- the embedded MPL/third-party inventory at
+  `omni.ja!/chrome/toolkit/content/global/license.html` by byte count and SHA-256;
+- the separately shipped, dynamically loaded `liblgpllibs.so` by path and SHA-256; and
+- both complete Chrome-for-Testing `149.0.7827.55` / revision `1228` tuples as forbidden
+  artifacts.
+
+Firefox is MPL-2.0. The named `liblgpllibs.so` child is LGPL-2.1-or-later and remains an
+unmodified, separate dynamic library rather than being statically linked into Vexa. These are
+Category-B dispositions under P17: their reasons and isolation facts live beside the artifact
+identity in `image-licenses.json`, and `gate:image-licenses` fails closed if they drift. The
+per-release SPDX represents the containment honestly as Vexa `CONTAINS` Firefox and Firefox
+`CONTAINS` `liblgpllibs.so`.
+
+This source inventory does **not** prove that a final native image contains the selected bytes
+or notices, nor that a browser launches or joins a meeting. Those remain later native-image and
+live acceptance rows.
+
 ## Baked service binaries
 
 | Artifact | Version | License | Source | Baked into | In-image path |
