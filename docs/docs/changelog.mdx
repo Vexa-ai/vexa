@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.18 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.19 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.18`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.19`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -747,6 +747,263 @@ probe), not inferred from planning docs.
   Lite venvs (admin-api, runtime, meeting-api, gateway, agent) now pass `--python 3.12`, matching the
   `FROM python:3.12-slim` every compose image (and helm, which ships those images) already pinned.
   Compose and helm never shared the exposure.
+
+### Fixed
+
+- **Mixed lane (Zoom · Teams · Jitsi): the transcript no longer loses whole sentences between
+  segmenter cuts.** The cut source closes a turn on `speaker→silence`, and its complementary
+  re-open does not always fire — on a 267.7 s reference mix, 19.5 s of the 167.5 s of speech sat in
+  a span no turn covered, was ringed, and was never sent to STT. A turn now begins where the last
+  one ended, so a boundary the model never emits delays words instead of deleting them. Measured
+  on that fixture with real STT: WER 34.0% → 11.5%, CER 27.0% → 8.1%, words produced 92% → 95% of
+  the golden.
+- **Mixed lane: a re-segmenting confirmation no longer leaves an orphan half-sentence in the
+  store.** Whisper answers with one sentence where the previous pass gave two; the ids it no
+  longer writes are now retired with an empty-text draft row instead of standing beside their own
+  confirmation forever.
+
+### Added
+
+- `core/meetings/services/bot/src/flat-quality.test.ts` (`npm run quality:flat`) — a flat WAV plus
+  a golden text file in, a scorecard out (WER · CER · segments per golden turn · segment duration ·
+  STT submit-span distribution), on the real pyannote cut source, real STT, and a real-time feed.
+
+- **The replay harness gains a mixed-lane attribution oracle and a latency instrument.** A
+  recorded Zoom/Teams/Jitsi session now replays through the real mixed pipeline to deterministic,
+  hint-derived speaker names (`gate:replay` covers it) — the lane where the attribution bugs live
+  previously had no offline oracle at all. A separate opt-in `replay:paced` harness feeds a
+  recorded session at speaking rate and reports a speech→transcript latency profile, because the
+  batch harnesses structurally cannot measure latency: the pipeline's submit/confirm cadence is
+  wall-clock, so batch-fed audio makes every confirmation look instantaneous. The paced number is
+  an instrument and a regression comparator, not yet a validated budget.
+
+### Fixed
+- **gmeet: a turn that ends while STT is behind no longer publishes a stale draft as the whole turn.**
+  At end-of-stream (bot leaving, meeting ending, channel rotation) the lane emitted the last Whisper
+  draft and reset — discarding audio newer than that draft, while stamping the emitted segment with
+  the buffer's full extent. A turn whose draft covered its first seconds went out as a full-length,
+  plausible-looking segment with most of its words missing, and nothing downstream reported a gap.
+  The untranscribed audio is now submitted (or deferred to the in-flight response) first; the draft
+  remains the fallback for an empty or hallucinated final response, so a turn is still never lost.
+
+### Added
+- **A transcript QUALITY oracle** — `core/meetings/eval/src/speech_fixture.py` builds a
+  `captured-signal.v1` session out of real speech whose text is known, and
+  `core/meetings/services/bot/src/quality.test.ts` replays it through the real gmeet lane against
+  real STT and scores recall / precision / fragmentation / attribution against that truth. Every
+  prior replay harness ran on a mock transcribe returning canned text, so none of them could see a
+  transcript that was structurally perfect and substantively wrong. Not in the default chain and
+  gates nothing by default: it needs a live STT endpoint and is not deterministic.
+
+### Fixed
+- **The capture-signal recorder is reachable by an operator.** It shipped in 0.12.15 with the bot
+  honouring `captureSignalEnabled`, but nothing ever set the field: `POST /bots` didn't know the
+  option existed and no deploy surface exposed it, so in every real deployment the feature was
+  dead code. A new deployment-scoped `CAPTURE_SIGNAL_ENABLED` (compose + helm, **off by default**)
+  now flows knob → invocation.v1 → bot, so a failed meeting can be replayed offline instead of
+  being irreproducible. Off by default on purpose: it persists raw meeting audio, a stronger
+  retention claim than a transcript, so enabling it is an explicit operator decision.
+
+### Added
+- **The transcription improvement framework (#847)** — `core/meetings/eval/FRAMEWORK.md`: one
+  invariant metric set (capture duty cycle · single-pass-reference recall · attribution ·
+  integrity · shape · latency), two loops (external human witness with auto-recorded tapes;
+  internal fixture replay with the real segmenter), and the contract that every defect is
+  attributed to one pipeline stage by recorded evidence and every fix is red→green on a fixture
+  from a real session. New instruments: `eval/src/tape-to-signal.mjs` (desktop tape →
+  captured-signal.v1 — the bridge between the loops), `eval/src/single_pass_truth.py`
+  (same-audio same-model single-pass reference that separates our streaming loss from the model's
+  ceiling), a desktop STT tap (`VEXA_STT_TAP=1`), and the desktop now runs the SHIPPED lane
+  cadence (`BOT_SPEAKER_*`, production defaults) instead of a private one.
+
+### Fixed
+- extension README claimed "Google-Meet-only by design" — the code detects and captures
+  gmeet, YouTube, Zoom and Teams tabs (`src/meeting.ts`); the README now states the real
+  platform matrix and which lane each feeds.
+
+### Fixed / Added
+
+**A witnessed session now stays witnessed.** Recorded sessions become corpus entries — the signal
+plus the numbers it produced at the time — so a defect fixed once keeps a test that fails when it
+comes back. `eval/src/promote-fixture.mjs` makes an entry from a desktop tape or a bot's
+captured-signal session; `eval/src/score-fixture.mjs` re-measures it and fails on drift. The index
+is `eval/CORPUS.md`; the audio stays out of the repo.
+
+The mixed lane's quality harness now models the CONSUMER — every published segment and every
+pending tail upserted by `segment_id`, last write wins — which is the only place a draft-identity
+defect is visible, and it runs the real segmenter on fixtures that carry no recorded cuts.
+
+### Fixed
+
+**A fixture can no longer be promoted against the wrong meeting's transcript.** `promote-fixture`
+refuses a `--transcript` whose `native_meeting_id` differs from the session's, and refuses an empty
+one. Pairing them by hand produced two confident wrong conclusions in a single day — a live
+transcript from one Zoom call scored against a replay of another, and a reference scored against a
+store that had restarted.
+
+### Added
+
+**Speaker attribution is scored without anyone labelling a meeting.** Four signals from the
+pipeline's own outputs — words published under a provisional cluster id, the binder's per-hint
+matched/missed verdict, turns whose name changed its mind, and published speakers against hinted
+names — now ride in the lane block of every corpus entry, so an attribution regression fails
+`score-fixture` the same way a duplicated sentence does.
+
+### Added
+
+**Speaker attribution can be scored for correctness without a meeting.** `speech_fixture.py --lane
+mixed` builds a multi-speaker session from known-text TTS clips with the names withheld from the
+audio and delivered as a DOM hint stream — with dials for how late the UI notices a speaker, how
+often it says nothing, and how often it says the wrong name. `TRUTH_JSON=` then scores the published
+transcript against who actually spoke, so "is the name right?" is a command rather than a meeting.
+
+### Fixed
+
+**The speaker-cardinality signal weights by how long each name was lit.** It compared distinct hint
+names against distinct published speakers with no weighting, so a cough, a "yeah", or a poll landing
+on the wrong tile made someone a participant the transcript then appeared to lose. On a real Zoom
+call three people lit for 6s, 4s and 2s of 269s produced a confident finding that was simply wrong.
+
+### Added
+
+**Capture loss is reproducible with no meeting, no bot and no human.** `eval/src/capture-bench.mjs`
+drives the real `createMixedAudioCapture` in a real browser over a synthetic source whose silence
+structure and main-thread load are set by the bench, and reads the delivery counters. It settles
+which of the two mechanisms — the silence gate or the main-thread ScriptProcessor — actually omits
+audio, which no session recording can do on its own.
+
+### Added
+
+**Mixed capture reports where the audio went.** The capture node now counts what the audio graph
+rendered against what the ScriptProcessor delivered and what the silence gate refused, and logs the
+split. A frame missing downstream was previously unattributable on this lane — the gmeet lane has
+always had its seen/emitted counters, the mixed lane had none, which is how a 35% capture deficit
+ran unnoticed on jitsi/zoom/teams bots.
+
+### Fixed
+
+**Bot capture delivers the whole timeline again** — 65.0% → 99.9% duty cycle on the same chain, with
+the silence gate off. The segmenter stops firing spurious cuts (8.7× fewer, sub-second turns nearly
+gone) and every word gets a real speaker name instead of 16.7% landing under a provisional id.
+
+### Fixed
+
+**A transcript timestamp is wall time, even when the audio behind it has holes.** The mixed lane
+concatenates only the frames that exist, so a span containing a hole yields audio shorter than the
+span it covers; Whisper's segment times were then read as if that compressed audio were the wall
+clock, stamping every word after a hole early by the accumulated hole. The cut now carries its span
+layout and maps back through it. The audio stays compressed — zero-filling a hole only invites the
+model to hallucinate over manufactured silence.
+
+A span is also no longer allowed to reach behind the audio ring: `cut` can only return what it still
+holds, so an over-long span returned recent audio under an old start time and put a whole turn at
+the wrong instant.
+
+### Fixed
+
+**PCM crosses the bot's page→node hop as base64, not as a JSON number array.** A 4096-sample frame
+is 16.0 KB raw; encoding it as decimal numbers cost 80.8 KB — 5.05× — because every sample became a
+~20-character string. At four frames a second that is 1.2 GB per hour per bot of pure serialization
+overhead, which the silence-gate fix would otherwise have made continuous. Base64 of the same bytes
+is 21.3 KB, so the hop drops to 0.3 GB/hour, bit-exact.
+
+### Added
+
+**A lane change can now be judged on content, not just structure.** A corpus entry stores the
+transcript its ORIGINAL live session produced, so it can score that session and nothing else — the
+moment code changes, "did this diff lose words?" was unanswerable. `TRANSCRIPT_OUT=` writes the
+transcript a replay produces, and `eval/src/score_replay.py` scores it against either a corpus
+entry's single-pass reference or a synthetic fixture's known text.
+
+### Added
+
+**The lane reports what LocalAgreement costs.** A turn re-sends its whole unconfirmed span on every
+pass, so the same audio is transcribed once per pass until it confirms. `resendRatio` (audio sent ÷
+distinct audio covered) and `maxSubmitSec` (the longest single submission) now ride in every corpus
+entry, because that tail is what a user feels as latency.
+
+### Fixed
+
+**Mixed capture no longer discards time.** The peak-amplitude silence gate is off by default: a
+dropped frame does not drop audio, it drops the timeline everything downstream reconstructs meaning
+from. Measured on a real bot renderer, that gate accounted for the entire capture deficit while the
+ScriptProcessor delivered every buffer it was given. The cost it was paying for is already paid
+twice downstream, before Whisper and after it.
+
+### Added
+
+**The bot's two injection lifetimes are pinned by a test.** A `page.evaluate` watcher dies with its
+document; an `addInitScript` one is re-injected into the next. The capture bundle and audio hook use
+the second, the platform speaker watchers used the first — so a client that navigates after join
+left audio flowing and speaker names silently dead. Proven with a Playwright double: no platform, no
+account, no meeting.
+
+### Fixed
+
+**Speaker watchers survive a navigation.** The browser bundle and the WebRTC audio hook are
+re-injected into every document via `addInitScript`; the speaker watchers were installed once, by a
+single `page.evaluate`, so their poll loops died with whichever document existed at that moment. A
+client that navigates after join left the audio path alive and the name path silently dead — a
+meeting transcribed correctly and attributed to nobody. Capture setup now re-arms on every main-frame
+navigation, guarded so it installs one watcher per document and never two.
+
+### Fixed
+
+**A speaker watcher that has gone blind now says so.** Its only output is a speaker transition, so
+selectors that stop matching produce perfect silence — clean logs, a full transcript, and a speaker
+column reading `seg_0, seg_4, seg_7`. Zoom's web client no longer renders any of the containers the
+watcher looks for, and an entire live meeting was attributed to nobody without one line reporting it.
+It now reports having seen no speaker, and names which of the two causes the DOM supports: a silent
+room, or stale selectors.
+
+### Fixed
+
+**A Zoom speaker handover now closes the outgoing speaker's hint window.** Zoom's adapter reports
+who is lit *now*, and the bridge emitted an end hint only when nobody was lit — so a direct A→B
+handover, which is what a real meeting does, opened B without ever closing A. On a live 5-person
+call that produced 142 hints with **zero** end events across 13 handovers, and two of the five
+participants reached the transcript: a speaker whose window never closes keeps winning the
+max-overlap vote against everyone who follows.
+
+### Fixed
+
+**`coverage` in a corpus lane block is marked as harness-relative.** It sits downstream of
+submission cadence, which an unpaced replay does not reproduce, so it is a regression detector
+against the same fixture's own baseline — never the share of a meeting the lane covers. Measured
+both ways on the same audio: the live session covered 0.808 of its span, a replay of it 0.378.
+
+### Added
+
+**The reference can now be checked against itself.** `--chunk-offset-sec` builds a second single-pass
+reference with the cuts moved, so a word dropped at a seam — invisible in one pass — shows up as a
+word the other pass found. Two references over identical audio disagree by 4.4% on a clean 94.9%-duty
+session and by 23.9% on a 65%-duty one, where that exceeds the loss being measured. Content figures
+from low-duty entries are marked not citable.
+
+### Fixed
+
+**The single-pass reference no longer counts its own chunk overlap twice.** Chunks are cut with 3s
+of shared audio so a word split by the cut still appears — but that audio was transcribed in both
+chunks, so the seam text landed in the reference twice. 122 words (3.2%) on the youtube control, and
+every one scored as a miss against a live transcript that correctly said it once. Streaming loss
+there was overstated as 9.5%; it is at most ~6.3%.
+
+### Fixed
+
+- **mixed lane (Zoom/Teams/YouTube): a handover turn the UI already named no longer publishes
+  provisional when a neighbour's slack overlap dilutes the vote.** The window-match confidence gate
+  scored a name's share of *all* hint time in the ±support slack. With sub-second diarizer turns, a
+  handover commit fully covered by one speaker could still fail the 0.6 gate because the previous
+  speaker's lingering/heartbeat slices sat inside the slack and split the share. Confidence now
+  measures contested-ness *inside the commit span itself* — the slack keeps its jitter roles
+  (admission, support, coverage) and loses its vote; when no hint time falls in-span at all (pure
+  lag), the slack-window share judges as before. A committed regression test
+  (`handover.smoke.test.ts`) pins the handover scenario red on the parent, green on the fix.
+
+- **Meeting workers now terminate within a declared bound after an end verdict (#934).** Capture
+  stop, recording finalization, and transcription-engine stop each report start, finish, or fault;
+  a hung teardown can no longer hold `completed(left_alone)` indefinitely or consume a bot slot
+  for hours. Recording still receives its own finalization budget and emits at most one final signal.
 
 ## Versioning
 
