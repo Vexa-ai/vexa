@@ -115,13 +115,60 @@ async def test_db_writer_tick_is_idempotent_and_upserts_rewrites(store, bus, red
     assert _durable_texts(store) == ["polished"]
 
 
-async def test_db_writer_discovers_hash_missing_from_active_set(store, redis_c):
-    """Self-healing discovery: a hash written before the sweep set existed (mid-upgrade) is still
-    found by the key scan and drained."""
+async def test_db_writer_discovers_hash_missing_from_active_set_only_on_reconcile(store, redis_c):
+    """Self-healing discovery (#893): a hash written before the sweep set existed (mid-upgrade) — NO
+    sadd, so it is invisible to the authoritative ``active_meetings`` set — is drained by the
+    ``meeting:*:segments`` key scan. That scan is now OFF the per-tick hot path: a plain tick
+    (``reconcile=False``) does NOT find the orphan; only a ``reconcile=True`` tick does."""
     seg = {**_seg("s9", 3.0, "orphaned"), "updated_at": "2026-06-20T09:00:00Z"}
-    await redis_c.hset(segments_hash_key(1), "s9", json.dumps(seg))  # NO sadd
-    assert await db_writer_tick(redis_c, store, now=LATER) == 1
+    await redis_c.hset(segments_hash_key(1), "s9", json.dumps(seg))  # NO sadd → not in active_meetings
+
+    # hot path — the set-only sweep never scans the keyspace, so the orphan is NOT discovered.
+    assert await db_writer_tick(redis_c, store, now=LATER) == 0
+    assert _durable_texts(store) == []
+
+    # reconcile tick — the self-healing scan runs and drains it (the intent, preserved off the hot path).
+    assert await db_writer_tick(redis_c, store, now=LATER, reconcile=True) == 1
     assert _durable_texts(store) == ["orphaned"]
+
+
+class _ScanCountingRedis:
+    """Forwards every call to the wrapped client but COUNTS ``scan_iter`` invocations — the direct
+    proof that the O(keyspace) ``meeting:*:segments`` SCAN is off the db-writer hot path (#893). The
+    per-tick scan was the #1 redis command in prod (31.6M calls), saturating redis and starving the
+    bounded /health PING/XINFO/XPENDING past the 5s probe timeout, restarting healthy pods."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.scan_calls = 0
+
+    def scan_iter(self, *args, **kwargs):
+        self.scan_calls += 1
+        return self._inner.scan_iter(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+async def test_hot_tick_does_not_scan_keyspace_reconcile_does(store, bus, redis_c):
+    """#893 bounded-behavior: a plain db-writer tick issues ZERO keyspace scans while still flushing
+    the active-set meetings (the set is authoritative — ``append_segment`` SADDs atomically with the
+    hash write). The self-healing scan fires ONLY on a reconcile tick. This is the saturation fix:
+    N hot ticks cost 0 scans instead of N, so a busy redis no longer starves the health probe."""
+    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 0.0, "hello")])["payload"]))
+    assert await consume_segments(store, bus) == 1
+
+    spy = _ScanCountingRedis(redis_c)
+
+    # Many hot ticks: the set is swept every time, the keyspace SCAN never runs.
+    for _ in range(20):
+        await db_writer_tick(spy, store, now=LATER)
+    assert spy.scan_calls == 0
+    assert _durable_texts(store) == ["hello"]  # set-only discovery still flushes durably
+
+    # A reconcile tick is the ONLY place the O(keyspace) scan is paid.
+    await db_writer_tick(spy, store, now=LATER, reconcile=True)
+    assert spy.scan_calls == 1
 
 
 # ── (b) the flipped incident — redis wiped after the flush ──────────────────────────────────────

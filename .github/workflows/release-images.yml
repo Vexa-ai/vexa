@@ -58,6 +58,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      reuse_candidate: ${{ steps.candidate.outputs.reuse_candidate }}
+      candidate_map: ${{ steps.candidate.outputs.candidate_map }}
     steps:
       - name: Docker Hub credentials present?
         env:
@@ -91,6 +93,30 @@ jobs:
           { echo "version=$VERSION"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
           echo "✓ releasing $VERSION (prerelease=$PRE; package.json=$PKG, appVersion=$APPV)"
 
+      - name: Resolve an exact witnessed candidate, if declared
+        id: candidate
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          MAP="releases/$VERSION/candidate-images.json"
+          if [ ! -f "$MAP" ]; then
+            {
+              echo "reuse_candidate=false"
+              echo "candidate_map="
+            } >> "$GITHUB_OUTPUT"
+            echo "· no committed candidate map; build the stable set from this source"
+            exit 0
+          fi
+
+          node release/candidate-image-map.mjs check "$MAP" "$VERSION"
+          node release/candidate-image-map.mjs check-source-inputs "$MAP" "$GITHUB_SHA"
+          {
+            echo "reuse_candidate=true"
+            echo "candidate_map=$MAP"
+          } >> "$GITHUB_OUTPUT"
+          echo "✓ same-byte stable publication selected: $MAP"
+
       - name: Helm static gates (lint + template assertions)
         run: |
           bash deploy/helm/tests/test_helm_lint.sh
@@ -118,6 +144,7 @@ jobs:
   build:
     name: "build ${{ matrix.name }}"
     needs: preflight
+    if: needs.preflight.outputs.reuse_candidate != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -189,6 +216,7 @@ jobs:
   # of a :buildcache ref.
   build-bot:
     needs: preflight
+    if: needs.preflight.outputs.reuse_candidate != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
@@ -217,6 +245,110 @@ jobs:
             -t "vexaai/vexa-bot:$VERSION" \
             .
           docker push "vexaai/vexa-bot:$VERSION"
+
+  # A release that already ran the full build → stage → production witness path
+  # promotes those exact descriptors to the stable tag. It must not rebuild after
+  # the witness: a rebuild is a new candidate even when source text is unchanged.
+  alias-candidate:
+    name: publish exact witnessed candidate as stable
+    needs: preflight
+    if: needs.preflight.outputs.reuse_candidate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      MAP: ${{ needs.preflight.outputs.candidate_map }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Copy descriptors without rebuilding or wrapping single-platform manifests
+        run: |
+          set -euo pipefail
+          : > stable-image-aliases.tsv
+          CANDIDATE_TAG="$(node -p "require('./$MAP').candidate_tag")"
+
+          while IFS=$'\t' read -r image top_digest platform expected_manifest expected_config; do
+            descriptor="$(
+              docker buildx imagetools inspect "$image@$top_digest" --format '{{json .}}'
+            )"
+            actual_manifest="$(
+              jq -r --arg platform "$platform" '
+                ($platform | split("/") | {os: .[0], architecture: .[1]}) as $wanted |
+                if (.manifest.manifests? | type) == "array" then
+                  .manifest.manifests[]
+                  | select(
+                      .platform.os == $wanted.os and
+                      .platform.architecture == $wanted.architecture
+                    )
+                  | .digest
+                else
+                  .manifest.digest
+                end
+              ' <<<"$descriptor" |
+                head -n 1
+            )"
+            [ "$actual_manifest" = "$expected_manifest" ] || {
+              echo "::error ::$image $platform manifest moved: expected $expected_manifest, got $actual_manifest"
+              exit 1
+            }
+
+            actual_config="$(
+              docker manifest inspect -v "$image@$actual_manifest" |
+                jq -r '.OCIManifest.config.digest // .SchemaV2Manifest.config.digest // empty'
+            )"
+            [ "$actual_config" = "$expected_config" ] || {
+              echo "::error ::$image $platform config moved: expected $expected_config, got $actual_config"
+              exit 1
+            }
+          done < <(node release/candidate-image-map.mjs emit-platform-tsv "$MAP")
+
+          while IFS=$'\t' read -r image digest; do
+            candidate="$image:$CANDIDATE_TAG"
+            stable="$image:$VERSION"
+
+            candidate_digest="$(
+              docker buildx imagetools inspect "$candidate" --format '{{json .}}' |
+                jq -r '.manifest.digest'
+            )"
+            [ "$candidate_digest" = "$digest" ] || {
+              echo "::error ::$candidate moved: expected $digest, got $candidate_digest"
+              exit 1
+            }
+
+            if stable_json="$(docker buildx imagetools inspect "$stable" --format '{{json .}}' 2>/dev/null)"; then
+              stable_digest="$(jq -r '.manifest.digest' <<<"$stable_json")"
+              [ "$stable_digest" = "$digest" ] || {
+                echo "::error ::refusing to overwrite $stable at $stable_digest (packet pins $digest)"
+                exit 1
+              }
+              echo "· $stable already points at $digest"
+            else
+              docker buildx imagetools create \
+                --prefer-index=false \
+                -t "$stable" \
+                "$image@$digest"
+            fi
+
+            readback="$(
+              docker buildx imagetools inspect "$stable" --format '{{json .}}' |
+                jq -r '.manifest.digest'
+            )"
+            [ "$readback" = "$digest" ] || {
+              echo "::error ::$stable readback $readback != witnessed $digest"
+              exit 1
+            }
+            printf '%s\t%s\t%s\n' "$stable" "$readback" "$candidate" |
+              tee -a stable-image-aliases.tsv
+          done < <(node release/candidate-image-map.mjs emit-tsv "$MAP")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-image-aliases-${{ needs.preflight.outputs.version }}
+          path: stable-image-aliases.tsv
+          if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Per-release SPDX SBOM (ADR-0004: "Emit an SBOM (SPDX) per release so the consumer's OSPO
@@ -274,7 +406,24 @@ jobs:
   # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
   # on the `release-promote` Environment for the owner's approval before :v012 moves.
   validate:
-    needs: [preflight, build, build-bot, sbom]
+    needs: [preflight, build, build-bot, alias-candidate, sbom]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        needs.sbom.result == 'success' &&
+        (
+          (
+            needs.preflight.outputs.reuse_candidate == 'true' &&
+            needs.alias-candidate.result == 'success'
+          ) ||
+          (
+            needs.preflight.outputs.reuse_candidate != 'true' &&
+            needs.build.result == 'success' &&
+            needs.build-bot.result == 'success'
+          )
+        )
+      }}
     uses: ./.github/workflows/release-validate.yml
     with:
       version: ${{ needs.preflight.outputs.version }}

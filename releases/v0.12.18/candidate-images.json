@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "release": "v0.12.18",
+  "stable_tag": "v0.12.18",
+  "candidate_tag": "v0.12.18-260723.stage2",
+  "build_source": "6b40fd49f9785c0b43ba28fe17e53753d96ff6da",
+  "validation_source": "a4560ec8da1cd8aa3d8b9c91cde0af9352857f5a",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/30033899550",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/30036135103",
+  "images": {
+    "vexaai/v012-admin-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:49a8bd29268250cb37976c3170fde41c960f00d55f31ef4a42e17062b968b114",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:78e10ce89f18cf355966ae9c2db6c6657809e01e880dcd23c49724311fdf0f9b",
+          "config_digest": "sha256:4df42d14268fe1089003049edd1a520895996bfe15b86e2cfb281d8ff078714a"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:d4a58e2a287557e2bb46543b6ab1fa118290f71453e6f607b3a76b537a30a6f2",
+          "config_digest": "sha256:73a62817c6fdd2d53e8b087a163f4d4d7e06e5328140283d6167f162634da9d3"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation plus hosted production rev103"
+    },
+    "vexaai/v012-runtime": {
+      "class": "prod_deployed",
+      "digest": "sha256:653fcd1a8edbc925a174a55fe34863d414c56c8ef367a94b449f89a5a3a5c4e1",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:3295c4d5073a18dc511f4e492597926580e12034ca833b435c08713e0e313ae6",
+          "config_digest": "sha256:95b1b1dd7aee004ada9c26eccdb94be82e14a5d4ec5a9ce0f49f540f319cbb41"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:2e3fa8b3b07b860d5223639ff9458656796624e3b74006c8346911bb12851c43",
+          "config_digest": "sha256:328820f9d162bf88df0172018ff98736d377f4da1aa7733570fbb3566975d543"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation plus hosted production rev103"
+    },
+    "vexaai/v012-agent-worker": {
+      "class": "oss_only",
+      "digest": "sha256:d4c637ca1ca9c05ff6de852778299da665374ed9d59115088aa030d90212bf15",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:37ce350b8a962bccdb74a74d1f5b434e16393e3584b8cc93f0026239290cd69f",
+          "config_digest": "sha256:f0ef4965be51670ddff1982b2bd3160462b147a27dc13958ce2259629976ae94"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:0a292364fcca6f38f797eaf06ed7d8b0e4a39561ab1da77083ccd4ae942f8fd7",
+          "config_digest": "sha256:200a543fa8c9e0c40aeaee1bec4fec3e35eb2bfd80450469a129a2ddf6c4cca7"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation run 30036135103"
+    },
+    "vexaai/v012-agent-api": {
+      "class": "oss_only",
+      "digest": "sha256:af4f2bf2008ed2c910904e82155e06d3b0e747d04d7c7ccb9f14208b17c49bae",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:0a7c4a02f53c1ae7112f780e41387e1f171edccea27e1e427c38794f1aa637a2",
+          "config_digest": "sha256:f51ce7681b0497ab1c79c3d31fcb701638e3fdf6a39ef80b522df5c7b974ba17"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:9c7971e36d08dc89ce4be1c12efba72d5b2144da0c9f38009b0892176646f0bf",
+          "config_digest": "sha256:f8868d3f12ec46edace3ca67a53e562ea0a514e4163eaa20bb3a2394b3101ddb"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation run 30036135103"
+    },
+    "vexaai/v012-meeting-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:d1db225472d54f0b087e1b7a342c465b01b7e7f042372a730d3b32e0c6836f4a",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:6278b0d296c79779f84663c9f0c3700fabb719ad1dfbc49c4413209280bb659e",
+          "config_digest": "sha256:a6c33a2963858f23047425460caf25f03776dc168b6079b414f14040b0a07b15"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:50108bd6ae0daa15ba1b1e7e34efe8f40fbca1727e89a5773f5517be660dcaa6",
+          "config_digest": "sha256:4bb36b3944e2f22a1a7abcb18278ca7e37ae6dfa60d22cd046f4d83aa78d13a4"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation plus hosted production rev103"
+    },
+    "vexaai/v012-gateway": {
+      "class": "prod_deployed",
+      "digest": "sha256:4b9bd9d6d33f4f2ec8df0b9530b02942482c0399ec71f39722fb06f48aae55df",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:c2e746c03364edbf929404ae42408397985efa922c45f82236090d2728c62b04",
+          "config_digest": "sha256:b4034e88b9a2856e08c46f3055a4e7b7e0aaa19734cc544297642ba7bedd1e72"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:0ae001dc2d4c61ebf3fd7597a3594c061a1781c26d9230eb5e24dfcf2972d072",
+          "config_digest": "sha256:a3558cdbd17f3517965d5a0904b491e403779411ac04960d4d0df12b08fa6b74"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation plus hosted production rev103"
+    },
+    "vexaai/v012-mcp": {
+      "class": "oss_only",
+      "digest": "sha256:72158d83293ce48c1cfd5c9bd8e2762e72a2da63d962fdbdbf7fe9b09daa8755",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:4ceaaedaf75988d5399e73b9f9e2963de38d96c6e1daecb20db2250ad29e3f25",
+          "config_digest": "sha256:a198b2935dddbd746bef360ecf20f958eff47dfd74e227205eee9a3a77d28ea7"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:cb1008c15c314a1dd152249baeb85d5345cbbb9b831af63d7a9143eb669c8f89",
+          "config_digest": "sha256:f3efd48af3fbf08e5d65f8cb503ab235b64f16cb445da437e2a7bbc309c24aec"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation run 30036135103"
+    },
+    "vexaai/v012-terminal": {
+      "class": "oss_only",
+      "digest": "sha256:a668ad43e225364422b225939fad057bff33db8b5bb3d6c341e1b625c5bde008",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:5e357c69d8bd69957f978d8af91749a7dc89f35719b53dc4794e93ef7dcac8ae",
+          "config_digest": "sha256:2c29ce8ad732446a08475bcc57657e22668f9cb90309f3d6e209111b0927c83b"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:cde9b7afe6da9ce6d9c2d9d7a14e1b6bc69c1ab45817056b110fa51976ec1836",
+          "config_digest": "sha256:0956929e2b07ff074a0fcadb464273868e2150c20199adccfda3a0264252808d"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation run 30036135103"
+    },
+    "vexaai/vexa-bot": {
+      "class": "prod_deployed",
+      "digest": "sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+      "platforms": ["linux/amd64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+          "config_digest": "sha256:14e721c8e9c1f46b67571f313fd14ee62fdea2619f3eb340a7a947028d0f0360"
+        }
+      },
+      "attestations": false,
+      "evidence": "stage meeting 13633 and production meeting 24740"
+    },
+    "vexaai/vexa-lite": {
+      "class": "oss_only",
+      "digest": "sha256:2d5c11d0fd4a194ce1085ac8624ed84116dd13c29b608cc8dac1b295979b3fb9",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:2853ff8bf887e2f61b9dc328b29af3cfb02b99715bf327e34b02d8856d7b92ea",
+          "config_digest": "sha256:a9117a68be83a5a8db7e904e44c5ea877a6aab3853b48fec8adee53a51838aa1"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:68de569f785fa220316932aa21af7ae6de5633802c2ce4b4ce38c7fc97cac8e6",
+          "config_digest": "sha256:6656fef8698d1b0c646fee95d3b85057d42d55546cfd685572bc839f340260c1"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate validation run 30036135103"
+    }
+  }
+}

@@ -56,8 +56,10 @@ absent).
 
 ## Configuration
 
-- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset → bots
-  join and capture, but produce no transcript.
+- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset →
+  default `POST /bots` answers **503** (refuse loud). Capture-only: set `TRANSCRIBE_ENABLED=false`
+  or pass `{"transcribe_enabled": false}` on the spawn. See
+  [Configuration](/configuration#transcription-stt).
 - **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
   The default `MINIO_HOST_PORT=9000` is a common port — if it's already taken on your host
   (`make all` fails with `bind … 127.0.0.1:9000 … address already in use`), set a free port in `.env`.

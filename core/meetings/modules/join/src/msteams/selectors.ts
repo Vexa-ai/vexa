@@ -111,14 +111,16 @@ export const teamsRemovalIndicators: string[] = [
   'text="Connection lost"',
   'text=Connection lost',
   'text="Unable to connect"',
-  'text=Unable to connect',
+  'text=Unable to connect'
 
-  // Generic error patterns
-  '[role="alert"]',
-  '[role="alertdialog"]',
-  '.error-message',
-  '.connection-error',
-  '.meeting-error'
+  // NOTE (#600): no generic role/class catch-alls here. `[role="alert"]`,
+  // `[role="alertdialog"]`, `.error-message`, `.connection-error` and
+  // `.meeting-error` match ANY Teams alert region — mute toasts, captions,
+  // network blips, the post-join AV-confirmation modal — none of which mean the
+  // bot was removed. A benign transient alert ~1.5s after admission tripped a
+  // false removal → self-leave → `completed(evicted)`, no transcript. The
+  // removal signal is the removal/"meeting ended" TEXT above, which is
+  // trustworthy; keep this list text-only.
 ];
 
 // Teams UI interaction selectors

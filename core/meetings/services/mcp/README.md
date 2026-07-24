@@ -52,28 +52,45 @@ likewise out of scope here.
 
 ## Gateway exposure
 
-0.10.6's api-gateway forwarded `/mcp` to this service (buffered `api_route` catch-all). The
-v0.12 gateway is a deliberate port-injected carve with an explicit route table and no
-generic reverse-proxy seam for SSE-flavoured MCP traffic, so this port does **not** patch
-the gateway: the MCP service is reachable **directly on its own port** (compose:
-`127.0.0.1:${MCP_HOST_PORT:-18010} → 8010`). Auth is still fail-closed — the service itself
-holds no credentials; every call is authorized by the gateway with the caller's key.
-Fronting `/mcp` at the gateway edge can be added later as a streamed forward
-(`_forward_stream`) once wanted.
+The gateway fronts this service at **`/mcp`** (`core/gateway/services/gateway/src/gateway/app.py`,
+target `MCP_URL`, compose `http://mcp:8010`), so an MCP client points at the same authenticated
+front door as every other Vexa client. The transport's two legs are forwarded differently, and
+that difference is the whole point (#795):
 
-Client config (e.g. Claude Desktop):
+| leg | what it is | how the gateway forwards it |
+|---|---|---|
+| `POST /mcp` (and `PUT/PATCH/DELETE/OPTIONS`) | a message — short request/response JSON | the buffered forward, status + body verbatim |
+| `GET /mcp` | the server→client **SSE stream**: headers, then silence until the server pushes | **relayed**, on a dedicated streaming client with `read=None` — never buffered |
+
+Buffering the `GET` leg is what produced the reported failure: the proxy waits on the next body
+read of a healthy-but-silent stream, hits its read timeout, and answers a gateway-manufactured
+`503` the MCP service never sees. The relay carries the upstream's status, `content-type` and
+`mcp-session-id` **verbatim** — the gateway never rewrites an MCP answer.
+
+Auth at the edge is fail-closed and identical to every other route: the gateway resolves the
+caller's Vexa API key and injects the resolved identity downstream. The key may arrive as
+`X-API-Key` or as the MCP transport's own `Authorization: Bearer <key>`; both spellings are
+forwarded on, so this service authorizes exactly as it does when called directly. The service
+itself still holds no credentials.
+
+The direct host port (compose: `127.0.0.1:${MCP_HOST_PORT:-18010} → 8010`) remains for local
+debugging. It bypasses the gateway — and therefore the gateway's auth.
+
+Client config (e.g. Claude Desktop), through the gateway front door:
 
 ```json
 {
   "mcpServers": {
     "Vexa": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:18010/mcp",
+      "args": ["-y", "mcp-remote", "http://localhost:18056/mcp",
                "--header", "Authorization: Bearer ${VEXA_API_KEY}"]
     }
   }
 }
 ```
+
+(`18056` is the compose `API_GATEWAY_HOST_PORT`; in a hosted deploy this is your public API host.)
 
 ## Licensing
 

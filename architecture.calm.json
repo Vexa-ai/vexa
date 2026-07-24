@@ -1999,6 +1999,22 @@
    "protocol": "HTTPS"
   },
   {
+   "unique-id": "gw-mcp",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "gateway"
+     },
+     "destination": {
+      "node": "mcp",
+      "interface": "mcp-http"
+     }
+    }
+   },
+   "description": "proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)",
+   "protocol": "HTTPS"
+  },
+  {
    "unique-id": "gw-admin",
    "relationship-type": {
     "connects": {

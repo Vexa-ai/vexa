@@ -1,0 +1,174 @@
+{
+  "version": "v0.12.18",
+  "candidate": "v0.12.18",
+  "generated_from": "v0.12.16...v0.12.18 (21 value PRs carried by the reviewed release integration)",
+  "witnessed_by": "Dmitry Grankin",
+  "witnessed_at": "2026-07-24",
+  "deployment": "hosted Helm stage and production candidate, exact same-byte stable map; bot sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+  "witness_deployment": {
+    "url": "https://dashboard.staging.vexa.ai/meetings/13626",
+    "provisioned_by": "v0.12.18 stage revisions 65 through 77 and production revisions 100 through 103, guarded ordered Helm rollout",
+    "prevalidated": [
+      "release-validate run 30036135103: image identity, Compose, Lite, Helm, bot spawn, v0.10 compatibility, and native arm64 green",
+      "stage storm held twice with no v0.12.18 blocker",
+      "stage meeting 13626: 420-second lobby survival, admission, live transcript, typed stop, durable transcript, recording flush",
+      "stage meeting 13633 and production meeting 24740 ran bot sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae",
+      "production revision 103: 14/14 Deployments Ready, live-bot continuity, shared transcription counters 22 to 22"
+    ]
+  },
+  "values": [
+    {
+      "pr": "894",
+      "title": "docs: truthful no-STT and capture-only contract",
+      "visibility": "docs",
+      "witnessed": "by-proxy",
+      "evidence": "reviewed documentation diff plus docs-current and docs-version gates"
+    },
+    {
+      "pr": "885",
+      "title": "test(bot): shared aloneness test doubles",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head value-fsm and bot unit suite"
+    },
+    {
+      "pr": "903",
+      "title": "fix(meeting-api): bound webhook-envelope capture",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head bounded-ring regression plus production revision 103 readiness hold"
+    },
+    {
+      "pr": "904",
+      "title": "feat(webhooks): secret-safe delivery ledger API",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head ledger/API tests; dashboard consumer explicitly deferred as #841"
+    },
+    {
+      "pr": "906",
+      "title": "fix(meeting-api): remain available during Redis degradation",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head Redis-degraded startup/read/stop fixtures and stage storm"
+    },
+    {
+      "pr": "907",
+      "title": "fix(teams): do not evict on generic alert UI",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "A legitimately admitted Teams bot remains active beyond the old 1.5-second false-eviction boundary and transcribes.",
+      "observation": "The staged Teams bot remained active for 207 seconds with the removal monitor running, produced accurate transcript text, and stopped cleanly without a false eviction."
+    },
+    {
+      "pr": "910",
+      "title": "fix(meeting-api): reject URL characters in native meeting IDs",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head typed 422 negative controls and compatibility fixtures"
+    },
+    {
+      "pr": "911",
+      "title": "fix(meeting-api): move Redis SCAN off the hot loop",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head scheduling-boundary tests plus production revision 103 readiness hold"
+    },
+    {
+      "pr": "912",
+      "title": "fix(bot spawn): dead workload no longer returns false 201",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head runtime and meeting-api dead-spawn tests proving typed 502"
+    },
+    {
+      "pr": "913",
+      "title": "fix(gmeet): pre-admission Stop reaches withdraw path",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "Stop during awaiting_admission reaches the bot, terminates the workload, and leaves durable typed control-plane truth.",
+      "observation": "The stage control plane cleaned the lobby bot in about seven seconds. Meet's host-side knock prompt persisted for a while, so visible withdrawal remains #839 and is not claimed."
+    },
+    {
+      "pr": "916",
+      "title": "fix(teams): typed authentication redirect failure",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head login.microsoftonline.com redirect fixture; external recurrence was not observed live"
+    },
+    {
+      "pr": "917",
+      "title": "fix(gmeet): diagnostic structural CTA scan",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head diagnostic-only negative controls; arbitrary-language joining is not claimed"
+    },
+    {
+      "pr": "918",
+      "title": "fix(gmeet): host denial beats ambient captcha",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "An explicit host denial terminates permanently on the first poll without a solve loop or re-knock.",
+      "observation": "The staged bot detected the explicit denial ahead of the ambient reCAPTCHA element, recorded awaiting_admission_rejected, and did not re-knock."
+    },
+    {
+      "pr": "919",
+      "title": "fix(gmeet): lobby liveness and typed pre-active failure",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "The same unadmitted workload remains Running/Ready beyond the old 315-to-325-second reap boundary, then admits and transcribes.",
+      "observation": "The staged bot survived 420 seconds and about 7.5 minutes total in the lobby, admitted into active, produced a real named-speaker transcript, and completed cleanly."
+    },
+    {
+      "pr": "920",
+      "title": "fix(gateway): MCP streamable HTTP front door",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head gateway streaming proxy suite and MCP session fixtures"
+    },
+    {
+      "pr": "924",
+      "title": "fix(admin-api): honor JSON token scopes",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head body/query compatibility and unknown-field 422 tests"
+    },
+    {
+      "pr": "925",
+      "title": "fix(mcp): sessioned GET opens SSE",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head sessioned SSE headers/ping fixtures"
+    },
+    {
+      "pr": "930",
+      "title": "fix(deploy): pinned migration tag and bounded DB boot retry",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "Helm template assertion, admin DB retry fixtures, and four-leg stage/prod rollout"
+    },
+    {
+      "pr": "931",
+      "title": "fix(lite): pin service Python to 3.12",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "dev build receipt plus release-validate Lite boot and concurrent-bot leg"
+    },
+    {
+      "pr": "932",
+      "title": "fix(gmeet): deterministic English browser locale",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "The hosted browser resolves an English Meet lobby by construction, uses the exact CTA, and records locale diagnostics.",
+      "observation": "The staged Meet URL carried hl=en, navigator.language was en-US, the exact Ask to join selector fired, and the broad structural diagnostic never clicked."
+    },
+    {
+      "pr": "933",
+      "title": "fix(bot): non-admitted failure carries a reason",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "exact-head Zoom and shared non-admitted terminal fixtures; original external Zoom failure did not recur live"
+    }
+  ],
+  "signed_off": true
+}

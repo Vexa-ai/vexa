@@ -364,6 +364,11 @@ services:
     environment:
       - ADMIN_API_URL=http://admin-api:8001
       - MEETING_API_URL=http://meeting-api:8080
+      # The MCP streamable-HTTP front door (#795): the gateway proxies /mcp here — GET (the SSE
+      # stream) relayed on the streaming client, every other method on the buffered forward.
+      # NOT a depends_on: mcp itself depends on the gateway (GATEWAY_URL), and compose refuses a
+      # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
+      - MCP_URL=http://mcp:8010
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -405,7 +410,9 @@ services:
 
   # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
   # services/mcp). Stateless: every tool call forwards the caller's key to the gateway as
-  # X-API-Key; exposed on its OWN host port (no gateway /mcp forward yet — see the service README).
+  # X-API-Key. Fronted at the gateway edge under /mcp (#795) — an MCP client points at the
+  # gateway's public port like every other Vexa client. The direct host port below stays for
+  # local debugging (bypasses the edge, so it bypasses the edge's auth too).
   mcp:
     build:
       context: ../../core/meetings/services/mcp
