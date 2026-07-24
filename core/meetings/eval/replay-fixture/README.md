@@ -13,6 +13,18 @@ Small, committed fixtures for the offline replay + flag evals (no meeting, no mo
 Deterministic: re-running yields identical output. The fixtures are intentionally tiny — they test
 that the pipeline produces the SAME segmentation/structure for the same raw signal, not STT quality.
 
+## `m1-jitsi-stale-heartbeat.captured-signal.jsonl` — #956 causal RED
+
+An authored, schema-valid Jitsi timeline for the first causal falsifier: Anna is the prior
+dominant speaker, Boris's acoustic turn starts, and Jitsi repeats Anna before its smoothed
+dominant-speaker transition reaches Boris 2,803 ms after onset. Removing only that repeated
+heartbeat leaves the turn unknown; current `dom-active` handling instead names it Anna at
+confidence 1.0. Run the intentionally failing contract without a meeting or model:
+
+```bash
+pnpm --filter @vexa/mixed-pipeline exec tsx src/causal-stale-heartbeat.red.test.ts
+```
+
 ## `session-mixed.captured-signal.jsonl.gz` — the MIXED-lane (zoom/teams/jitsi) golden
 
 Consumed by `services/bot/src/replay-mixed.test.ts`. Where the gmeet golden proves *segmentation*
