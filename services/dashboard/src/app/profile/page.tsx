@@ -10,6 +10,7 @@ import {
   Check,
   GitBranch,
   RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,10 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
+import {
+  profileApiErrorMessage,
+  tokenMetadataPreview,
+} from "@/lib/profile-api";
 
 // ==========================================
 // Types
@@ -36,7 +41,6 @@ interface APIKeyDisplay {
   id: string;
   name: string;
   scopes: KeyScope[];
-  token: string;
   masked_token: string;
   created_at: string;
   last_used_at: string | null;
@@ -54,12 +58,6 @@ const SCOPE_CONFIG: Record<KeyScope, { label: string; prefix: string; color: str
 // ==========================================
 // Helpers
 // ==========================================
-
-function inferScope(token: string): KeyScope {
-  if (token.startsWith("vxa_tx_")) return "tx";
-  if (token.startsWith("vxa_browser_")) return "browser";
-  return "bot";
-}
 
 function maskToken(token: string): string {
   if (token.length < 16) return token;
@@ -109,64 +107,71 @@ export default function ProfilePage() {
   // API Keys state
   const [apiKeys, setApiKeys] = useState<APIKeyDisplay[]>([]);
   const [isLoadingKeys, setIsLoadingKeys] = useState(true);
+  const [keysError, setKeysError] = useState<string | null>(null);
+  const [keysReload, setKeysReload] = useState(0);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyScopes, setNewKeyScopes] = useState<Set<KeyScope>>(new Set(["bot", "tx", "browser"]));
   const [newKeyExpiry, setNewKeyExpiry] = useState<string>("");
   const [isCreatingKey, setIsCreatingKey] = useState(false);
   const [createdKeyToken, setCreatedKeyToken] = useState<string | null>(null);
-  const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
 
 
   // Fetch API keys
   useEffect(() => {
     async function fetchKeys() {
-      if (!user?.id) return;
+      if (!user?.id) {
+        setIsLoadingKeys(false);
+        return;
+      }
+      setIsLoadingKeys(true);
+      setKeysError(null);
       try {
-        const response = await fetch(withBasePath(`/api/profile/keys?userId=${user.id}`));
+        const response = await fetch(withBasePath("/api/profile/keys"));
         if (!response.ok) {
-          // Graceful fallback — endpoint may not exist yet
-          setApiKeys([]);
-          return;
+          throw new Error(await profileApiErrorMessage(response));
         }
         const data = await response.json();
         setApiKeys(
-          (data.keys || []).map((k: { id: string; token: string; scopes?: string[]; name?: string; created_at: string; last_used_at?: string; expires_at?: string }) => ({
+          (data.keys || []).map((k: { id: string; scopes?: string[]; name?: string; created_at?: string; last_used_at?: string; expires_at?: string }) => ({
             id: k.id,
             name: k.name || "API Key",
-            scopes: k.scopes && k.scopes.length > 0 ? scopesFromApi(k.scopes) : [inferScope(k.token)],
-            token: k.token,
-            masked_token: maskToken(k.token),
-            created_at: k.created_at,
+            scopes: k.scopes && k.scopes.length > 0 ? scopesFromApi(k.scopes) : ["bot"],
+            masked_token: tokenMetadataPreview(k.scopes || []),
+            created_at: k.created_at || "",
             last_used_at: k.last_used_at || null,
             expires_at: k.expires_at || null,
           }))
         );
-      } catch {
+      } catch (error) {
         setApiKeys([]);
+        setKeysError(
+          error instanceof Error
+            ? error.message
+            : "The Account service is temporarily unavailable."
+        );
       } finally {
         setIsLoadingKeys(false);
       }
     }
     fetchKeys();
-  }, [user?.id]);
+  }, [user?.id, keysReload]);
 
 
   const handleCreateKey = async () => {
     setIsCreatingKey(true);
     try {
-      const scopes = Array.from(newKeyScopes).join(",");
+      const scopes = Array.from(newKeyScopes);
       const response = await fetch(withBasePath("/api/profile/keys"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newKeyName,
           scopes,
-          userId: user?.id,
           ...(newKeyExpiry ? { expires_in: parseInt(newKeyExpiry) * 86400 } : {}),
         }),
       });
-      if (!response.ok) throw new Error("Failed to create key");
+      if (!response.ok) throw new Error(await profileApiErrorMessage(response));
       const data = await response.json();
       setCreatedKeyToken(data.token);
       // Add to list
@@ -176,7 +181,6 @@ export default function ProfilePage() {
           id: data.id || String(Date.now()),
           name: newKeyName || "API Key",
           scopes: data.scopes ? scopesFromApi(data.scopes) : Array.from(newKeyScopes),
-          token: data.token,
           masked_token: maskToken(data.token),
           created_at: new Date().toISOString(),
           last_used_at: null,
@@ -201,14 +205,6 @@ export default function ProfilePage() {
       toast.error("Failed to revoke key", { description: (error as Error).message });
     }
   };
-
-  const handleCopyKey = async (keyId: string, token: string) => {
-    await navigator.clipboard.writeText(token);
-    setCopiedKeyId(keyId);
-    setTimeout(() => setCopiedKeyId(null), 2000);
-    toast.success("Copied to clipboard");
-  };
-
 
   return (
     <div className="space-y-6">
@@ -273,6 +269,21 @@ export default function ProfilePage() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
+            ) : keysError ? (
+              <div className="py-4 text-center space-y-3">
+                <div className="flex items-center justify-center gap-2 text-sm text-red-400">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>{keysError}</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setKeysReload((value) => value + 1)}
+                >
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  Try again
+                </Button>
+              </div>
             ) : apiKeys.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 No API keys yet. Create one to get started.
@@ -311,16 +322,6 @@ export default function ProfilePage() {
                       <span className="text-muted-foreground" title="Expires">
                         {key.expires_at ? `Exp ${formatExpiry(key.expires_at)}` : "No expiry"}
                       </span>
-                      <button
-                        onClick={() => handleCopyKey(key.id, key.token)}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {copiedKeyId === key.id ? (
-                          <Check className="h-3.5 w-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                      </button>
                       <button
                         onClick={() => handleRevokeKey(key.id)}
                         className="text-red-400 hover:text-red-300 transition-colors"

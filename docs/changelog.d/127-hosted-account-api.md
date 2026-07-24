@@ -1,0 +1,1 @@
+Hosted Account and API-key management now consume the stock v0.12 Admin API’s email lookup, token metadata, and strict mint contracts. Structured validation failures render as actionable text, and token secrets remain visible only on successful creation.
