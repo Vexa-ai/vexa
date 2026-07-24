@@ -15,13 +15,17 @@ ONNX).
 
 Each segmentation **turn** is transcribed over the shared engine
 ([`buffer`](../buffer/) LocalAgreement confirm + [`whisper`](../whisper/) stt.v1,
-injected). Names are **derived too**, but cheaply:
-[`ClusterNameBinder`](src/cluster-name-binder.ts) picks the max-overlap **lit hint**
-over the turn span (`recordHint` — Zoom active-speaker DOM, Teams captions /
-voice-outline), each lag-corrected. A turn with no overlapping hint yet publishes
-provisionally under its segmentation id and is **repainted in place** (same segment
-ids) when a later hint window-matches or late-box-claims it. The host wraps the
-emitted segments into the bus envelopes.
+injected). Names are **derived too**, under the producer's actual contract:
+[`ClusterNameBinder`](src/cluster-name-binder.ts) handles Teams'
+concurrent per-participant outline/caption hints and the current legacy Zoom
+`dom-active` window path, while Jitsi's smoothed global dominant-speaker stream
+binds only when transition custody is complete and globally one-to-one. Zoom is
+also an exclusive-trailing producer; #797 owns conversion from its legacy
+window binder to its distinct measured envelope. Jitsi heartbeats advance
+liveness but never mint onset testimony. A turn with no
+admissible hint publishes provisionally under its segmentation id and is
+**repainted in place** (same segment ids) only when causal evidence arrives. The
+host wraps the emitted segments into the bus envelopes.
 
 ## Surface
 `ChunkedTranscriber` · `PyannoteSegmenter` · `ClusterNameBinder` · types
@@ -56,6 +60,13 @@ loaded and there is no network:
 - `short-ui-switch.smoke.test.ts` — a short isolated Zoom/Teams UI speaker switch
   right after a different speaker stays provisional rather than stamping a wrong name;
   a longer turn by the new speaker still binds.
+- `causal-stale-heartbeat.test.ts` — a Jitsi same-name heartbeat before or after
+  acoustic end cannot name the turn; incomplete, multi-turn, multi-token, or
+  out-of-order custody fails closed.
+- `causal-watermark-lock.test.ts` — a 7 s authored PCM turn stays repairable while
+  open, confirms provisionally on one stable id, then repaints that same id only
+  after unique transition + signal progress; omitting final progress remains unknown,
+  and a later custody contradiction repaints the same id back to provisional.
 
 In production, `PyannoteSegmenter.create` lazy-downloads the segmentation model from
 Hugging Face on first use (cached thereafter). The remaining live path (real

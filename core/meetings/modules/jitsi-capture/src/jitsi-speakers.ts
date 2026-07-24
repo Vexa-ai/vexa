@@ -15,11 +15,12 @@
  *  2. DOM fallback for builds that strip the APP global: the active tile carries a
  *     `dominant-speaker` class; its display-name node carries the name.
  *
- * Speaking start/stop events per participant feed the ChunkedTranscriber's name
- * binder as 'dom-active' hints (same protocol as the Teams/Zoom watchers) —
- * INCLUDING the ~2s heartbeat the binder's turn model requires: an open hint
- * turn decays after a short grace, so a speaker who KEEPS talking must be
- * re-asserted while dominant, or every commit past the grace loses its name.
+ * The watcher emits one exclusive global dominant-speaker stream. Downstream
+ * binds it as `jitsi-dominant`: a changed name is an ordered transition token,
+ * while the ~2s same-name repeat advances liveness only and never testifies to a
+ * fresh acoustic onset. This is intentionally not the concurrent Teams outline
+ * contract. Zoom is also exclusive-trailing, but its active-tile producer has a
+ * separate measured envelope and remains a distinct downstream kind.
  */
 
 export interface JitsiSpeakersOptions {
@@ -31,8 +32,8 @@ export interface JitsiSpeakersOptions {
   log?: (msg: string) => void;
   /** Poll interval (ms). Default 400 — dominant-speaker changes are second-scale. */
   pollMs?: number;
-  /** Re-assert interval for a STILL-dominant speaker (ms). Default 2000 — the
-   *  binder's heartbeat contract (must beat its open-turn grace). */
+  /** Re-assert interval for a STILL-dominant speaker (ms). Default 2000.
+   *  Downstream treats this as signal progress, not a new transition. */
   heartbeatMs?: number;
 }
 
@@ -113,8 +114,8 @@ export function createJitsiSpeakers(opts: JitsiSpeakersOptions): JitsiSpeakers {
 
     const changed = (d?.id ?? null) !== (current?.id ?? null);
     if (!changed) {
-      // HEARTBEAT: a still-dominant speaker is re-asserted so the binder's open
-      // hint turn never decays while they keep talking.
+      // HEARTBEAT: re-observe the unchanged global state so downstream knows
+      // how far the signal stream progressed. This is not fresh onset testimony.
       if (current && Date.now() - lastAssertMs >= heartbeatMs) {
         emit(current.name, current.id, false);
         lastAssertMs = Date.now();

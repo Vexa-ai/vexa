@@ -46,6 +46,7 @@ import { createGmeetPipeline } from '@vexa/gmeet-pipeline';
 import { ChunkedTranscriber, type BoundaryEvent, type BoundarySource } from '@vexa/mixed-pipeline';
 import { gunzipSync } from 'node:zlib';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
+import { hintKindForPlatform } from './pipeline.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = process.env.REPLAY_FIXTURE
@@ -102,7 +103,7 @@ const framePcm = (f: CapFrame): Float32Array => {
 /** The mixed lane's paced run: one stream named from recorded hints, its own real pipeline. */
 interface Cut { type: 'boundary'; tMs: number; kind: string; confidence?: number }
 
-async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number, cuts: Cut[] = [])
+async function pacedMixed(platform: string, frames: CapFrame[], hints: Hint[], sttMs: number, cuts: Cut[] = [])
   : Promise<{ confirmed: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }>;
               firstDraft: Map<string, number> }> {
   const out: Array<{ speaker: string; startMs: number; endMs: number; atMs: number }> = [];
@@ -153,7 +154,7 @@ async function pacedMixed(frames: CapFrame[], hints: Hint[], sttMs: number, cuts
         if (current) emitBoundary({ kind: 'speaker→speaker', tMs: h.t, confidence: 0.9 });
         current = h.name;
       }
-      tc.recordHint(h.name, 'dom-active', h.t, h.isEnd);
+      tc.recordHint(h.name, hintKindForPlatform(platform), h.t, h.isEnd);
     } else if (ev.frame) {
       tc.feedAudio(framePcm(ev.frame), ev.frame.ts);
     }
@@ -185,7 +186,13 @@ async function main(): Promise<void> {
     console.log(session.cuts.length
       ? `  chunking: production's OWN ${session.cuts.length} recorded cuts`
       : '  chunking: SUBSTITUTE cut source — numbers are an UPPER BOUND, not this lane\'s latency');
-    const { confirmed: out, firstDraft } = await pacedMixed(frames, session.hints, STT_MS, session.cuts);
+    const { confirmed: out, firstDraft } = await pacedMixed(
+      session.header.platform,
+      frames,
+      session.hints,
+      STT_MS,
+      session.cuts,
+    );
     const s2 = out.map((c) => ({ ...c, latencyMs: Math.round(c.atMs - (c.startMs - base) / SPEED) }));
     // Time-to-text for THIS lane = turn start → first visible draft.
     const turnStart = new Map<string, number>();

@@ -13,16 +13,17 @@ Small, committed fixtures for the offline replay + flag evals (no meeting, no mo
 Deterministic: re-running yields identical output. The fixtures are intentionally tiny — they test
 that the pipeline produces the SAME segmentation/structure for the same raw signal, not STT quality.
 
-## `m1-jitsi-stale-heartbeat.captured-signal.jsonl` — #956 causal RED
+## `m1-jitsi-stale-heartbeat.captured-signal.jsonl` — #956 causal contract
 
 An authored, schema-valid Jitsi timeline for the first causal falsifier: Anna is the prior
 dominant speaker, Boris's acoustic turn starts, and Jitsi repeats Anna before its smoothed
-dominant-speaker transition reaches Boris 2,803 ms after onset. Removing only that repeated
-heartbeat leaves the turn unknown; current `dom-active` handling instead names it Anna at
-confidence 1.0. Run the intentionally failing contract without a meeting or model:
+dominant-speaker transition reaches Boris 2,803 ms after onset. The `jitsi-dominant` replay treats
+the repeated Anna observation as liveness only. Although the transition arrives after this
+authored 2,000 ms turn ended, its order can repair the turn to Boris only after the complete
+replay seals acoustic custody beyond the token and proves there is exactly one candidate turn.
 
 ```bash
-pnpm --filter @vexa/mixed-pipeline exec tsx src/causal-stale-heartbeat.red.test.ts
+pnpm --filter @vexa/mixed-pipeline exec tsx src/causal-stale-heartbeat.test.ts
 ```
 
 ## `session-mixed.captured-signal.jsonl.gz` — the MIXED-lane (zoom/teams/jitsi) golden
@@ -41,7 +42,11 @@ the ~18s window spanning one Anna→Boris turn change — 58 audio frames + 9 hi
 did. This matters more than it sounds: the mixed lane's chunking IS its behaviour, and a harness
 that substitutes its own cut source measures the substitute. Before cuts were recorded, the same
 session read 2.9-11.3s time-to-text with the opening turn never drafting; with production's cuts
-it reads 2.8s p50 and attributes both speakers. A session with no `boundary` records still
+it reads 2.8s p50. Under the causal Jitsi contract all four inherited segments stay provisional:
+one transition cannot choose among several acoustic turns in the same unresolved signal epoch.
+This is a deterministic safety baseline, not a claim that the historic tape has complete
+attribution truth. The authored M1/M2 controls carry the positive name-recall oracle. A session
+with no `boundary` records still
 replays (the harness falls back and says so), but nothing measured from it should be gated.
 
 **Real timing, synthetic waveform** (the same convention as the gmeet golden): every frame keeps

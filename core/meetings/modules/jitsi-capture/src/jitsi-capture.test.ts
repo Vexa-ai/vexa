@@ -58,7 +58,8 @@ async function main() {
   check("speaker start emitted for Alice", events.some((e) => e.name === "Alice" && !e.isEnd), JSON.stringify(events));
 
   // A STILL-dominant speaker keeps being re-asserted (the binder's heartbeat contract):
-  // an open hint turn decays after a grace, so an unchanged speaker must re-emit.
+  // an unchanged state still advances the producer watermark, without minting
+  // a new dominant-speaker transition.
   const assertsBefore = events.filter((e) => e.name === "Alice" && !e.isEnd).length;
   await sleep(100);
   const assertsAfter = events.filter((e) => e.name === "Alice" && !e.isEnd).length;
