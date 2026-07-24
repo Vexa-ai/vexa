@@ -119,10 +119,15 @@ an existing mismatched stable tag. No build occurs. The normal release
 validation then exercises `:v0.12.18`; only its green, human-gated promotion
 moves `:v012`. `:latest` remains untouched.
 
-Hosted production directly held admin API, runtime, meeting API, gateway, and
-the bot bytes. Agent worker, agent API, MCP, Terminal, and Lite are OSS-only
-artifacts proven by the published-candidate validation run; they are not
-claimed as hosted-production workloads.
+Hosted production directly held the candidate-map admin API, runtime, meeting
+API, and gateway descriptors, plus the stage2 Bot
+`sha256:9442a44558fd48950208cbef40673cc7a0b2feb41f380964fc74a0e25bf18fae`.
+The packet3 Bot
+`sha256:a7f8feae7870b722e3542fb7cb054ff7c092e62f4c5a6b6a3b63e52f8cd1fe47`
+and Lite are validation-only and were not hosted-deployed. Agent worker,
+agent API, MCP, and Terminal are also OSS-only artifacts proven by the
+published-candidate validation run; they are not claimed as
+hosted-production workloads.
 
 ## Release population
 
