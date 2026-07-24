@@ -12,7 +12,7 @@ import { useVexaWebSocket } from "@/hooks/use-vexa-websocket";
 import { useLiveStore } from "@/stores/live-store";
 import { vexaAPI } from "@/lib/api";
 import type { Platform } from "@/types/vexa";
-import { PLATFORM_CONFIG, MEETING_STATUS_CONFIG, getSpeakerColor } from "@/types/vexa";
+import { getPlatformConfig, MEETING_STATUS_CONFIG, getSpeakerColor } from "@/types/vexa";
 import { cn } from "@/lib/utils";
 import { DocsLink } from "@/components/docs/docs-link";
 
@@ -65,7 +65,7 @@ export function LiveSession({ platform, nativeId, onEnd }: LiveSessionProps) {
     }
   };
 
-  const platformConfig = PLATFORM_CONFIG[platform];
+  const platformConfig = getPlatformConfig(platform);
   const statusConfig = botStatus ? MEETING_STATUS_CONFIG[botStatus] : null;
 
   // Check if meeting is still active

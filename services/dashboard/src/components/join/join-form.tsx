@@ -11,7 +11,7 @@ import { vexaAPI } from "@/lib/api";
 import { useLiveStore } from "@/stores/live-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
-import { PLATFORM_CONFIG } from "@/types/vexa";
+import { getPlatformConfig } from "@/types/vexa";
 import { LanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -47,7 +47,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  const platformConfig = PLATFORM_CONFIG[platform];
+  const platformConfig = getPlatformConfig(platform);
 
   const validateMeetingId = (id: string): boolean => {
     if (!id.trim()) return false;

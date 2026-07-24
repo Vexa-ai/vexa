@@ -1,0 +1,483 @@
+{
+  "id": 13627,
+  "platform": "jitsi",
+  "native_meeting_id": "sanitized-13627-room",
+  "status": "active",
+  "start_time": "2026-07-23T20:00:00Z",
+  "end_time": null,
+  "data": {
+    "name": "Sanitized two-speaker witness",
+    "participants": [
+      "Anna",
+      "Boris"
+    ],
+    "languages": [
+      "en"
+    ]
+  },
+  "segments": [
+    {
+      "start": 0,
+      "end": 1.5,
+      "text": "Sanitized transcript row 1",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:00.000Z",
+      "absolute_end_time": "2026-07-23T20:00:01.500Z",
+      "created_at": "2026-07-23T20:00:00.000Z",
+      "segment_id": "sanitized-session:anna:001"
+    },
+    {
+      "start": 2.25,
+      "end": 3.75,
+      "text": "Sanitized transcript row 2",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:02.250Z",
+      "absolute_end_time": "2026-07-23T20:00:03.750Z",
+      "created_at": "2026-07-23T20:00:02.250Z",
+      "segment_id": "sanitized-session:boris:002"
+    },
+    {
+      "start": 4.5,
+      "end": 6,
+      "text": "Sanitized transcript row 3",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:04.500Z",
+      "absolute_end_time": "2026-07-23T20:00:06.000Z",
+      "created_at": "2026-07-23T20:00:04.500Z",
+      "segment_id": "sanitized-session:anna:003"
+    },
+    {
+      "start": 6.75,
+      "end": 8.25,
+      "text": "Sanitized transcript row 4",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:06.750Z",
+      "absolute_end_time": "2026-07-23T20:00:08.250Z",
+      "created_at": "2026-07-23T20:00:06.750Z",
+      "segment_id": "sanitized-session:boris:004"
+    },
+    {
+      "start": 9,
+      "end": 10.5,
+      "text": "Sanitized transcript row 5",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:09.000Z",
+      "absolute_end_time": "2026-07-23T20:00:10.500Z",
+      "created_at": "2026-07-23T20:00:09.000Z",
+      "segment_id": "sanitized-session:anna:005"
+    },
+    {
+      "start": 11.25,
+      "end": 12.75,
+      "text": "Sanitized transcript row 6",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:11.250Z",
+      "absolute_end_time": "2026-07-23T20:00:12.750Z",
+      "created_at": "2026-07-23T20:00:11.250Z",
+      "segment_id": "sanitized-session:boris:006"
+    },
+    {
+      "start": 13.5,
+      "end": 15,
+      "text": "Sanitized transcript row 7",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:13.500Z",
+      "absolute_end_time": "2026-07-23T20:00:15.000Z",
+      "created_at": "2026-07-23T20:00:13.500Z",
+      "segment_id": "sanitized-session:anna:007"
+    },
+    {
+      "start": 15.75,
+      "end": 17.25,
+      "text": "Sanitized transcript row 8",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:15.750Z",
+      "absolute_end_time": "2026-07-23T20:00:17.250Z",
+      "created_at": "2026-07-23T20:00:15.750Z",
+      "segment_id": "sanitized-session:boris:008"
+    },
+    {
+      "start": 18,
+      "end": 19.5,
+      "text": "Sanitized transcript row 9",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:18.000Z",
+      "absolute_end_time": "2026-07-23T20:00:19.500Z",
+      "created_at": "2026-07-23T20:00:18.000Z",
+      "segment_id": "sanitized-session:anna:009"
+    },
+    {
+      "start": 20.25,
+      "end": 21.75,
+      "text": "Sanitized transcript row 10",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:20.250Z",
+      "absolute_end_time": "2026-07-23T20:00:21.750Z",
+      "created_at": "2026-07-23T20:00:20.250Z",
+      "segment_id": "sanitized-session:boris:010"
+    },
+    {
+      "start": 22.5,
+      "end": 24,
+      "text": "Sanitized transcript row 11",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:22.500Z",
+      "absolute_end_time": "2026-07-23T20:00:24.000Z",
+      "created_at": "2026-07-23T20:00:22.500Z",
+      "segment_id": "sanitized-session:anna:011"
+    },
+    {
+      "start": 24.75,
+      "end": 26.25,
+      "text": "Sanitized transcript row 12",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:24.750Z",
+      "absolute_end_time": "2026-07-23T20:00:26.250Z",
+      "created_at": "2026-07-23T20:00:24.750Z",
+      "segment_id": "sanitized-session:boris:012"
+    },
+    {
+      "start": 27,
+      "end": 28.5,
+      "text": "Sanitized transcript row 13",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:27.000Z",
+      "absolute_end_time": "2026-07-23T20:00:28.500Z",
+      "created_at": "2026-07-23T20:00:27.000Z",
+      "segment_id": "sanitized-session:anna:013"
+    },
+    {
+      "start": 29.25,
+      "end": 30.75,
+      "text": "Sanitized transcript row 14",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:29.250Z",
+      "absolute_end_time": "2026-07-23T20:00:30.750Z",
+      "created_at": "2026-07-23T20:00:29.250Z",
+      "segment_id": "sanitized-session:boris:014"
+    },
+    {
+      "start": 31.5,
+      "end": 33,
+      "text": "Sanitized transcript row 15",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:31.500Z",
+      "absolute_end_time": "2026-07-23T20:00:33.000Z",
+      "created_at": "2026-07-23T20:00:31.500Z",
+      "segment_id": "sanitized-session:anna:015"
+    },
+    {
+      "start": 33.75,
+      "end": 35.25,
+      "text": "Sanitized transcript row 16",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:33.750Z",
+      "absolute_end_time": "2026-07-23T20:00:35.250Z",
+      "created_at": "2026-07-23T20:00:33.750Z",
+      "segment_id": "sanitized-session:boris:016"
+    },
+    {
+      "start": 36,
+      "end": 37.5,
+      "text": "Sanitized transcript row 17",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:36.000Z",
+      "absolute_end_time": "2026-07-23T20:00:37.500Z",
+      "created_at": "2026-07-23T20:00:36.000Z",
+      "segment_id": "sanitized-session:anna:017"
+    },
+    {
+      "start": 38.25,
+      "end": 39.75,
+      "text": "Sanitized transcript row 18",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:38.250Z",
+      "absolute_end_time": "2026-07-23T20:00:39.750Z",
+      "created_at": "2026-07-23T20:00:38.250Z",
+      "segment_id": "sanitized-session:boris:018"
+    },
+    {
+      "start": 40.5,
+      "end": 42,
+      "text": "Sanitized transcript row 19",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:40.500Z",
+      "absolute_end_time": "2026-07-23T20:00:42.000Z",
+      "created_at": "2026-07-23T20:00:40.500Z",
+      "segment_id": "sanitized-session:anna:019"
+    },
+    {
+      "start": 42.75,
+      "end": 44.25,
+      "text": "Sanitized transcript row 20",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:42.750Z",
+      "absolute_end_time": "2026-07-23T20:00:44.250Z",
+      "created_at": "2026-07-23T20:00:42.750Z",
+      "segment_id": "sanitized-session:boris:020"
+    },
+    {
+      "start": 45,
+      "end": 46.5,
+      "text": "Sanitized transcript row 21",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:45.000Z",
+      "absolute_end_time": "2026-07-23T20:00:46.500Z",
+      "created_at": "2026-07-23T20:00:45.000Z",
+      "segment_id": "sanitized-session:anna:021"
+    },
+    {
+      "start": 47.25,
+      "end": 48.75,
+      "text": "Sanitized transcript row 22",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:47.250Z",
+      "absolute_end_time": "2026-07-23T20:00:48.750Z",
+      "created_at": "2026-07-23T20:00:47.250Z",
+      "segment_id": "sanitized-session:boris:022"
+    },
+    {
+      "start": 49.5,
+      "end": 51,
+      "text": "Sanitized transcript row 23",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:49.500Z",
+      "absolute_end_time": "2026-07-23T20:00:51.000Z",
+      "created_at": "2026-07-23T20:00:49.500Z",
+      "segment_id": "sanitized-session:anna:023"
+    },
+    {
+      "start": 51.75,
+      "end": 53.25,
+      "text": "Sanitized transcript row 24",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:51.750Z",
+      "absolute_end_time": "2026-07-23T20:00:53.250Z",
+      "created_at": "2026-07-23T20:00:51.750Z",
+      "segment_id": "sanitized-session:boris:024"
+    },
+    {
+      "start": 54,
+      "end": 55.5,
+      "text": "Sanitized transcript row 25",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:54.000Z",
+      "absolute_end_time": "2026-07-23T20:00:55.500Z",
+      "created_at": "2026-07-23T20:00:54.000Z",
+      "segment_id": "sanitized-session:anna:025"
+    },
+    {
+      "start": 56.25,
+      "end": 57.75,
+      "text": "Sanitized transcript row 26",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:56.250Z",
+      "absolute_end_time": "2026-07-23T20:00:57.750Z",
+      "created_at": "2026-07-23T20:00:56.250Z",
+      "segment_id": "sanitized-session:boris:026"
+    },
+    {
+      "start": 58.5,
+      "end": 60,
+      "text": "Sanitized transcript row 27",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:00:58.500Z",
+      "absolute_end_time": "2026-07-23T20:01:00.000Z",
+      "created_at": "2026-07-23T20:00:58.500Z",
+      "segment_id": "sanitized-session:anna:027"
+    },
+    {
+      "start": 60.75,
+      "end": 62.25,
+      "text": "Sanitized transcript row 28",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:00.750Z",
+      "absolute_end_time": "2026-07-23T20:01:02.250Z",
+      "created_at": "2026-07-23T20:01:00.750Z",
+      "segment_id": "sanitized-session:boris:028"
+    },
+    {
+      "start": 63,
+      "end": 64.5,
+      "text": "Sanitized transcript row 29",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:03.000Z",
+      "absolute_end_time": "2026-07-23T20:01:04.500Z",
+      "created_at": "2026-07-23T20:01:03.000Z",
+      "segment_id": "sanitized-session:anna:029"
+    },
+    {
+      "start": 65.25,
+      "end": 66.75,
+      "text": "Sanitized transcript row 30",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:05.250Z",
+      "absolute_end_time": "2026-07-23T20:01:06.750Z",
+      "created_at": "2026-07-23T20:01:05.250Z",
+      "segment_id": "sanitized-session:boris:030"
+    },
+    {
+      "start": 67.5,
+      "end": 69,
+      "text": "Sanitized transcript row 31",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:07.500Z",
+      "absolute_end_time": "2026-07-23T20:01:09.000Z",
+      "created_at": "2026-07-23T20:01:07.500Z",
+      "segment_id": "sanitized-session:anna:031"
+    },
+    {
+      "start": 69.75,
+      "end": 71.25,
+      "text": "Sanitized transcript row 32",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:09.750Z",
+      "absolute_end_time": "2026-07-23T20:01:11.250Z",
+      "created_at": "2026-07-23T20:01:09.750Z",
+      "segment_id": "sanitized-session:boris:032"
+    },
+    {
+      "start": 72,
+      "end": 73.5,
+      "text": "Sanitized transcript row 33",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:12.000Z",
+      "absolute_end_time": "2026-07-23T20:01:13.500Z",
+      "created_at": "2026-07-23T20:01:12.000Z",
+      "segment_id": "sanitized-session:anna:033"
+    },
+    {
+      "start": 74.25,
+      "end": 75.75,
+      "text": "Sanitized transcript row 34",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:14.250Z",
+      "absolute_end_time": "2026-07-23T20:01:15.750Z",
+      "created_at": "2026-07-23T20:01:14.250Z",
+      "segment_id": "sanitized-session:boris:034"
+    },
+    {
+      "start": 76.5,
+      "end": 78,
+      "text": "Sanitized transcript row 35",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:16.500Z",
+      "absolute_end_time": "2026-07-23T20:01:18.000Z",
+      "created_at": "2026-07-23T20:01:16.500Z",
+      "segment_id": "sanitized-session:anna:035"
+    },
+    {
+      "start": 78.75,
+      "end": 80.25,
+      "text": "Sanitized transcript row 36",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:18.750Z",
+      "absolute_end_time": "2026-07-23T20:01:20.250Z",
+      "created_at": "2026-07-23T20:01:18.750Z",
+      "segment_id": "sanitized-session:boris:036"
+    },
+    {
+      "start": 81,
+      "end": 82.5,
+      "text": "Sanitized transcript row 37",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:21.000Z",
+      "absolute_end_time": "2026-07-23T20:01:22.500Z",
+      "created_at": "2026-07-23T20:01:21.000Z",
+      "segment_id": "sanitized-session:anna:037"
+    },
+    {
+      "start": 83.25,
+      "end": 84.75,
+      "text": "Sanitized transcript row 38",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:23.250Z",
+      "absolute_end_time": "2026-07-23T20:01:24.750Z",
+      "created_at": "2026-07-23T20:01:23.250Z",
+      "segment_id": "sanitized-session:boris:038"
+    },
+    {
+      "start": 85.5,
+      "end": 87,
+      "text": "Sanitized transcript row 39",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:25.500Z",
+      "absolute_end_time": "2026-07-23T20:01:27.000Z",
+      "created_at": "2026-07-23T20:01:25.500Z",
+      "segment_id": "sanitized-session:anna:039"
+    },
+    {
+      "start": 87.75,
+      "end": 89.25,
+      "text": "Sanitized transcript row 40",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:27.750Z",
+      "absolute_end_time": "2026-07-23T20:01:29.250Z",
+      "created_at": "2026-07-23T20:01:27.750Z",
+      "segment_id": "sanitized-session:boris:040"
+    },
+    {
+      "start": 90,
+      "end": 91.5,
+      "text": "Sanitized transcript row 41",
+      "speaker": "Anna",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:30.000Z",
+      "absolute_end_time": "2026-07-23T20:01:31.500Z",
+      "created_at": "2026-07-23T20:01:30.000Z",
+      "segment_id": "sanitized-session:anna:041"
+    },
+    {
+      "start": 92.25,
+      "end": 93.75,
+      "text": "Sanitized transcript row 42",
+      "speaker": "Boris",
+      "language": "en",
+      "absolute_start_time": "2026-07-23T20:01:32.250Z",
+      "absolute_end_time": "2026-07-23T20:01:33.750Z",
+      "created_at": "2026-07-23T20:01:32.250Z",
+      "segment_id": "sanitized-session:boris:042"
+    }
+  ],
+  "recordings": []
+}
