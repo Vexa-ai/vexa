@@ -43,6 +43,22 @@ telemetry teardown semantics; it changes only whether the eval run is admitted a
 The harness also refuses a pre-existing custody root before launch, so an old receipt cannot
 satisfy the current run's admission gate.
 
+### Authored cross-platform replay custody
+
+The committed causal speaker matrix extends the same receipt contract to generated offline tapes.
+One authored WAV/truth/timeline is rendered into platform-specific post-producer views, and
+[`replay-fixture/causal-speaker-matrix/manifest.json`](replay-fixture/causal-speaker-matrix/manifest.json)
+pins every uncompressed JSONL digest, byte count, record count, and source digest. The test admits
+each view through the real C1 directory adapter, removes worker staging, and permits replay only
+after a fresh reader reproduces the manifest receipt and exact bytes. Every matrix score and
+control is parsed from that independently read tape; the authored timeline remains the external
+truth. Reported hint-delay values describe this authored input schedule, not field latency.
+
+Teams and Jitsi receive the full one-dial matrix. Zoom is deliberately limited to a direct
+`dom-active` non-regression row; selector and name-resolution fidelity remain #797. These authored
+records begin at the post-producer `recordHint` seam and therefore cannot be cited as live producer,
+ASR, or field-latency evidence.
+
 ## The two commands
 
 ```bash
