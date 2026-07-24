@@ -6,7 +6,7 @@
  * `gate:licenses` (scripts/gates.mjs) PROVES the npm tree is licence-clean but
  * emits no artifact, and it never sees non-dependency bytes baked into the images
  * (model weights). This script is the emit side + the packaging complement: it
- * inventories three sources into one SPDX document —
+ * inventories four sources into one SPDX document —
  *
  *   1. npm deps   — `pnpm licenses list --json` (the same index gate:licenses uses):
  *                   name · version · declared licence, one SPDX package per version.
@@ -14,14 +14,17 @@
  *                   no licence field, so pip packages ship licenceDeclared=NOASSERTION
  *                   (Python licence resolution via pip-licenses is owed per ADR-0009);
  *                   the INVENTORY is still complete and CI-runnable with no install.
- *   3. baked model — onnx-community/pyannote-segmentation-3.0 (MIT), baked into
+ *   3. Lite apt   — every package name installed in Dockerfile.lite's final stage.
+ *                   Docker source does not resolve Ubuntu versions or licences, so
+ *                   those fields are explicitly NOASSERTION pending image scanning.
+ *   4. baked model — onnx-community/pyannote-segmentation-3.0 (MIT), baked into
  *                   vexaai/vexa-bot + vexaai/vexa-lite at /opt/hf-cache. Fully
  *                   specified (licence + copyright + download location). Mirrors
  *                   THIRD_PARTY_LICENSES.md; the piece gate:licenses cannot see.
  *
  * The npm and pip sources are best-effort: a missing pnpm index or absent uv.locks
  * degrade to a WARNING on stderr, never a hard failure — the document always emits
- * with at least the repo + the baked model (green-on-empty, like the gates).
+ * with at least the repo + the baked model and Valkey (green-on-empty, like the gates).
  *
  * Usage:
  *   node scripts/sbom.mjs --version v0.12.3 [--output sbom.spdx.json]
@@ -29,7 +32,7 @@
  * Run from the repo root (like scripts/gates.mjs).
  */
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
 
 const ROOT = process.cwd();
@@ -148,7 +151,46 @@ function pipPackages() {
   return [...byKey.values()];
 }
 
-// ── source 3: the baked model weights (the piece gate:licenses cannot see) ───────
+// ── source 3: Lite final-stage apt packages ───────────────────────────────────
+// Docker source gives us the exact declared package NAMES but not the resolved Ubuntu
+// versions or their package-level licences. Inventory the names honestly and leave those
+// fields NOASSERTION; an image scanner may enrich them after the image exists.
+function liteAptPackages() {
+  const dockerfile = process.env.SBOM_LITE_DOCKERFILE
+    ? resolve(process.env.SBOM_LITE_DOCKERFILE)
+    : join(ROOT, "deploy", "lite", "Dockerfile.lite");
+  if (!existsSync(dockerfile)) return [];
+  const text = readFileSync(dockerfile, "utf8");
+  const finalStart = text.match(/^FROM\s+\S+(?:\s+AS\s+final)\s*$/mi);
+  if (!finalStart || finalStart.index === undefined) {
+    warn("Dockerfile.lite has no named final stage — Lite apt inventory is empty");
+    return [];
+  }
+  const afterFinal = text.slice(finalStart.index + finalStart[0].length);
+  const nextStage = afterFinal.search(/^FROM\s+/mi);
+  const finalStage = (nextStage >= 0 ? afterFinal.slice(0, nextStage) : afterFinal)
+    .replace(/\\\r?\n/g, " ");
+  const names = new Set();
+  for (const match of finalStage.matchAll(/\bapt(?:-get)?\s+install\b([^&;\n]+)/gi)) {
+    for (const token of match[1].trim().split(/\s+/)) {
+      if (!token || token.startsWith("-") || token.includes("$")) continue;
+      const name = token.replace(/^["']|["']$/g, "").split("=")[0];
+      if (/^[a-z0-9][a-z0-9+.-]*$/i.test(name)) names.add(name);
+    }
+  }
+  return [...names].sort().map((name) => ({
+    eco: "deb",
+    name,
+    version: "NOASSERTION",
+    licenseDeclared: "NOASSERTION",
+    licenseConcluded: "NOASSERTION",
+    copyrightText: "NOASSERTION",
+    supplier: "Organization: Ubuntu",
+    comment: "Declared by deploy/lite/Dockerfile.lite final-stage apt install; version and package licence require enrichment from the built image.",
+  }));
+}
+
+// ── source 4: the baked model weights (the piece gate:licenses cannot see) ───────
 const BAKED_MODEL = {
   eco: "huggingface", name: "onnx-community/pyannote-segmentation-3.0", version: "main",
   licenseDeclared: "MIT", licenseConcluded: "MIT",
@@ -194,6 +236,7 @@ function pkgObject(p, id) {
 
 const npm = npmPackages();
 const pip = pipPackages();
+const liteApt = liteAptPackages();
 const deps = [...npm, ...pip].sort((a, b) => (a.eco + a.name + a.version).localeCompare(b.eco + b.name + b.version));
 
 const ROOT_ID = "SPDXRef-Package-vexa";
@@ -219,6 +262,12 @@ const valkeyId = spdxId("Package", "github", "valkey", "8.1.9");
 packages.push(pkgObject(BAKED_VALKEY, valkeyId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: valkeyId, relationshipType: "CONTAINS" });
 
+for (const apt of liteApt) {
+  const id = spdxId("Package", apt.eco, apt.name, apt.version);
+  packages.push(pkgObject(apt, id));
+  relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: id, relationshipType: "CONTAINS" });
+}
+
 for (const d of deps) {
   const id = spdxId("Package", d.eco, d.name, d.version);
   packages.push(pkgObject(d, id));
@@ -234,7 +283,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,
@@ -243,7 +292,7 @@ const doc = {
 const json = JSON.stringify(doc, null, 2) + "\n";
 if (OUTPUT) {
   writeFileSync(OUTPUT, json);
-  console.error(`[sbom] wrote ${OUTPUT} — ${packages.length} packages (root + model + ${deps.length} deps: ${npm.length} npm, ${pip.length} pip)`);
+  console.error(`[sbom] wrote ${OUTPUT} — ${packages.length} packages (root + 2 baked + ${liteApt.length} Lite apt + ${deps.length} deps: ${npm.length} npm, ${pip.length} pip)`);
 } else {
   process.stdout.write(json);
 }

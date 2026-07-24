@@ -1,6 +1,12 @@
 {
-  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images our deploy surfaces pin (user-pulled sidecars — an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution — Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. System apt tools baked by Dockerfile.lite (ffmpeg, x11vnc, pulseaudio, …) are mere-aggregation in a container and out of scope here — the per-release SPDX SBOM (scripts/sbom.mjs) inventories them.",
+  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, or Lite Dockerfile FROM surfaces (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution — Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
   "images": [
+    {
+      "name": "mcr.microsoft.com/playwright",
+      "license": "Apache-2.0",
+      "disposition": "base-image",
+      "note": "Pinned base and builder image for Vexa Lite. Playwright is Apache-2.0; Ubuntu package names installed in the final stage are separately inventoried in the SPDX with unresolved fields stated as NOASSERTION."
+    },
     {
       "name": "valkey/valkey",
       "license": "BSD-3-Clause",

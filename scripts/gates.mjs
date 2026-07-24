@@ -428,33 +428,77 @@ function gateImageLicenses() {
   const declaredImages = new Map((man.images || []).map((e) => [e.name, e]));
   const bad = [], flagged = [];
 
-  // (1) third-party `image:` pins in compose + helm values AND helm templates (a literal `image:` in a
-  //     template — e.g. the minio-init Job — is a real pin the gate must see; `{{ … }}` refs are skipped
-  //     below). Skip our own vexaai/* images — those are built here, not third-party redistributables.
+  // (1) third-party image pins across the deploy-owned forms:
+  //     • scalar `image: ref` in compose, Helm values, and Helm templates;
+  //     • structured Helm `image: { repository, tag }` blocks;
+  //     • every `FROM ref` in the Lite Dockerfile (including builder stages whose bytes feed final).
+  //     Skip our own vexaai/* / vexa/* images — those are built here, not third-party inputs.
   const chartDir = join(ROOT, "deploy", "helm", "charts", "vexa");
   const tplDir = join(chartDir, "templates");
+  const helmValueFiles = existsSync(chartDir)
+    ? readdirSync(chartDir).filter((f) => /^values.*\.yaml$/.test(f)).map((f) => join(chartDir, f))
+    : [];
   const deployFiles = [
     join(ROOT, "deploy", "compose", "docker-compose.yml"),
-    ...(existsSync(chartDir) ? readdirSync(chartDir).filter((f) => /^values.*\.yaml$/.test(f)).map((f) => join(chartDir, f)) : []),
+    ...helmValueFiles,
     ...(existsSync(tplDir) ? readdirSync(tplDir).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(tplDir, f)) : []),
   ].filter(existsSync);
-  const foundImages = new Map();   // name → ref (first sighting)
+  const foundImages = new Map();   // name → { ref, source } (first sighting)
+  const recordImage = (rawRef, source) => {
+    let ref = rawRef.replace(/^["']|["']$/g, "");
+    if (ref.includes("{{")) return;                                          // helm template expression
+    ref = ref.replace(/\$\{[^:}]*:-([^}]+)\}/g, "$1");                       // ${VAR:-default} → default image
+    if (ref.includes("$")) return;                                           // unresolved variable → no auditable pin
+    if (ref.startsWith("vexaai/") || ref.startsWith("vexa/")) return;         // first-party
+    const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");     // strip digest / :tag
+    if (!name || (!ref.includes("/") && !ref.includes(":"))) return;         // Docker stage alias / invalid ref
+    if (!foundImages.has(name)) foundImages.set(name, { ref, source });
+  };
+
   for (const f of deployFiles)
     // same-line values only ([ \t]*, never \s* which would cross a newline into a structured
-    // `image:\n  repository:` block — those are first-party app images, correctly skipped). The value
-    // may carry `${VAR:-default}` interpolation ⇒ capture the whole token (no `{}` exclusion) and resolve.
+    // `image:\n  repository:` block — that shape is enumerated separately below). The value may carry
+    // `${VAR:-default}` interpolation ⇒ capture the whole token (no `{}` exclusion) and resolve.
     for (const m of readFileSync(f, "utf8").matchAll(/^[ \t]*image:[ \t]*["']?([^\s"']+)/gm)) {
-      let ref = m[1];
-      if (ref.includes("{{")) continue;                                          // helm template expression
-      ref = ref.replace(/\$\{[^:}]*:-([^}]+)\}/g, "$1");                         // ${VAR:-default} → the default image
-      if (ref.includes("$")) continue;                                          // unresolved ${VAR} → env-only, unauditable
-      if (ref.startsWith("vexaai/")) continue;                                   // first-party (built here)
-      const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");       // strip digest / :tag, keep registry/name
-      if (!foundImages.has(name)) foundImages.set(name, ref);
+      recordImage(m[1], rel(f));
     }
-  for (const [name, ref] of foundImages) {
+
+  // Helm's established structured values shape:
+  //   image:
+  //     repository: minio/minio
+  //     tag: latest
+  // Use indentation to bind repository+tag to the same image block.
+  for (const f of helmValueFiles) {
+    const lines = readFileSync(f, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const image = lines[i].match(/^([ \t]*)image:[ \t]*(?:#.*)?$/);
+      if (!image) continue;
+      const baseIndent = image[1].length;
+      let repository;
+      let tag;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (!lines[j].trim() || lines[j].trimStart().startsWith("#")) continue;
+        const indent = (lines[j].match(/^[ \t]*/) || [""])[0].length;
+        if (indent <= baseIndent) break;
+        const repoMatch = lines[j].match(/^[ \t]*repository:[ \t]*["']?([^\s"']+)/);
+        const tagMatch = lines[j].match(/^[ \t]*tag:[ \t]*["']?([^\s"']+)/);
+        if (repoMatch) repository = repoMatch[1];
+        if (tagMatch) tag = tagMatch[1];
+      }
+      if (repository && tag) recordImage(`${repository}:${tag}`, rel(f));
+    }
+  }
+
+  const liteDockerfile = join(ROOT, "deploy", "lite", "Dockerfile.lite");
+  if (existsSync(liteDockerfile)) {
+    for (const m of readFileSync(liteDockerfile, "utf8").matchAll(
+      /^FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)/gmi,
+    )) recordImage(m[1], rel(liteDockerfile));
+  }
+
+  for (const [name, { ref, source }] of foundImages) {
     const e = declaredImages.get(name);
-    if (!e) { bad.push(`undeclared pinned image "${ref}" — add it to image-licenses.json (images[]) with its SPDX licence`); continue; }
+    if (!e) { bad.push(`undeclared pinned image "${ref}" in ${source} — add it to image-licenses.json (images[]) with its SPDX licence`); continue; }
     const cat = classifyLicense(e.license);
     if (cat === "?") bad.push(`image "${name}": unclassified licence "${e.license}" — classify it or replace the image`);
     else if (cat === "A") { /* clean */ }

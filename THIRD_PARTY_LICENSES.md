@@ -12,6 +12,11 @@ container images — audited by **`gate:image-licenses`** against
 The verbatim upstream license for each entry lives under [`licenses/`](licenses/) and is
 copied into the image next to the artifact it covers, so the notice travels with the bytes.
 
+The SPDX also inventories every package name in the Lite Dockerfile's final-stage `apt install`.
+That is a source-level inventory: Docker source does not resolve Ubuntu package versions or
+package licences, so those fields are emitted as `NOASSERTION` until an image-level scanner
+enriches them. Builder-stage packages that do not cross into the final image are excluded.
+
 ## Baked service binaries
 
 | Artifact | Version | License | Source | Baked into | In-image path |

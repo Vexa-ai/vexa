@@ -209,6 +209,30 @@ test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not jus
   assert.match(r.out, /somevendor\/unaudited/);
 });
 
+test("image-licenses RED: an undeclared structured Helm repository/tag pin reds", () => {
+  const injected = [
+    "reviewProbe:",
+    "  image:",
+    "    repository: somevendor/unaudited",
+    "    tag: 1.2",
+    "",
+    "minio:",
+  ].join("\n");
+  const r = withEdited(VALUES, "minio:\n", injected, () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a structured Helm repository/tag image pin sailed through");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /somevendor\/unaudited:1\.2/);
+});
+
+test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
+  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS bot-builder";
+  const injected = `FROM somevendor/unaudited:1.2 AS review-probe\n${base}`;
+  const r = withEdited(LITE, base, injected, () => runGate("image-licenses"));
+  assert.equal(r.green, false, "an undeclared Dockerfile FROM image pin sailed through");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /somevendor\/unaudited:1\.2/);
+});
+
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
   const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final";
