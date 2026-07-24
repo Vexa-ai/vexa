@@ -41,7 +41,7 @@ class FakeElement {
     this.attrs.class = value;
   }
 
-  setNameSurface(value: FakeElement): void {
+  setNameSurface(value: FakeElement | null): void {
     this.nameSurface = value;
   }
 
@@ -106,14 +106,14 @@ const options: TeamsSpeakersOptions & {
   onNameUnresolved: (observation: TeamsNameUnresolvedObservation) => void;
 } = {
   debounceMs: 0,
-  heartbeatMs: 20,
+  heartbeatMs: 500,
   log: (message) => logs.push(message),
   onSpeaking: (name, id, isEnd) => hints.push({ name, id, isEnd }),
   onNameUnresolved: (observation) => observations.push(observation),
 };
 
 const watcher = createTeamsSpeakers(options);
-await new Promise((resolve) => setTimeout(resolve, 70));
+await new Promise((resolve) => setTimeout(resolve, 50));
 
 const current = {
   speaking: watcher.getSpeaking(),
@@ -151,30 +151,62 @@ if (
   throw new Error(`C797_CONTRACT_RED: malformed observation ${JSON.stringify(observation)}`);
 }
 
-// A held unresolved outline remains one episode: its 20ms test heartbeat does
-// not manufacture repeated observations. A real end edge closes it exactly once.
-await new Promise((resolve) => setTimeout(resolve, 220));
+// A held unresolved outline remains one episode: its heartbeat does not
+// manufacture repeated observations. A name that paints immediately before
+// SILENT has not emitted a named START, so the episode still closes with a
+// typed unresolved END rather than an orphan named END.
+await new Promise((resolve) => setTimeout(resolve, 520));
+tile.setNameSurface(new FakeElement('SPAN', { title: 'Alpha Example' }, null, 'Alpha Example'));
 voice.setClass('');
 const pendingRaf = rafCallbacks.splice(0);
 for (const callback of pendingRaf) callback();
 await new Promise((resolve) => setTimeout(resolve, 20));
+if (hints.length !== 0) {
+  throw new Error(
+    `C797_ORPHAN_END_RED: late paint before heartbeat emitted a named edge: ${JSON.stringify(hints)}`,
+  );
+}
 if (observations.length !== 2 || observations[1]?.edge !== 'end') {
-  throw new Error(`C797_CARDINALITY_RED: expected one start and one end, got ${JSON.stringify(observations)}`);
+  throw new Error(
+    `C797_ORPHAN_END_RED: expected unresolved start/end closure, got ${JSON.stringify(observations)}`,
+  );
 }
 
 // A later-rendered name is recovered by the real Teams heartbeat and becomes a
-// normal named start. The unresolved episode is not repeated or promoted.
+// normal named start. That actual named START permits the matching named END.
+await new Promise((resolve) => setTimeout(resolve, 220));
+tile.setNameSurface(null);
 voice.setClass('vdi-frame-occlusion');
-tile.setNameSurface(new FakeElement('SPAN', { title: 'Alpha Example' }, null, 'Alpha Example'));
-await new Promise((resolve) => setTimeout(resolve, 240));
 const nextRaf = rafCallbacks.splice(0);
 for (const callback of nextRaf) callback();
-await new Promise((resolve) => setTimeout(resolve, 60));
-if (!hints.some((hint) => hint.name === 'Alpha Example' && hint.isEnd === false)) {
+await new Promise((resolve) => setTimeout(resolve, 20));
+if (observations.length !== 3 || observations[2]?.edge !== 'start') {
+  throw new Error(
+    `C797_REPAIR_RED: second unresolved episode did not open: ${JSON.stringify(observations)}`,
+  );
+}
+tile.setNameSurface(new FakeElement('SPAN', { title: 'Alpha Example' }, null, 'Alpha Example'));
+await new Promise((resolve) => setTimeout(resolve, 520));
+if (
+  hints.length !== 1
+  || hints[0]?.name !== 'Alpha Example'
+  || hints[0]?.isEnd !== false
+) {
   throw new Error(`C797_REPAIR_RED: late-rendered name did not recover on heartbeat: ${JSON.stringify(hints)}`);
 }
-if (observations.length !== 2) {
+if (observations.length !== 3) {
   throw new Error(`C797_HEARTBEAT_RED: heartbeat duplicated unresolved observations: ${JSON.stringify(observations)}`);
+}
+voice.setClass('');
+const finalRaf = rafCallbacks.splice(0);
+for (const callback of finalRaf) callback();
+await new Promise((resolve) => setTimeout(resolve, 20));
+if (
+  hints.length !== 2
+  || hints[1]?.name !== 'Alpha Example'
+  || hints[1]?.isEnd !== true
+) {
+  throw new Error(`C797_NAMED_END_RED: named START did not close with one named END: ${JSON.stringify(hints)}`);
 }
 
 watcher.destroy();
