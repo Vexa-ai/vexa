@@ -62,7 +62,7 @@ loaded and there is no network:
   a longer turn by the new speaker still binds.
 - `causal-stale-heartbeat.test.ts` — a Jitsi same-name heartbeat before or after
   acoustic end cannot name the turn; incomplete, multi-turn, multi-token, or
-  out-of-order custody fails closed.
+  out-of-order custody—including an end for a non-current identity—fails closed.
 - `causal-watermark-lock.test.ts` — a 7 s authored PCM turn stays repairable while
   open, confirms provisionally on one stable id, then repaints that same id only
   after unique transition + signal progress; omitting final progress remains unknown,
