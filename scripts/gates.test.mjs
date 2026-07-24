@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -113,4 +113,108 @@ test("a production file using the *_test.py suffix is still counted (config_test
 test("a test-only create_async_engine does not invent a service in the budget", () => {
   const r = withPlanted(PHANTOM_TEST_FILE, "engine = create_async_engine(FAKE_URL)\n", runDbBudget);
   assert.equal(r.green, true, `a test fixture phantomed agent-api into the connection budget:\n${r.out}`);
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// #653 — gate:image-licenses and gate:runtime-parity. Same plant-and-run-the-real-gate discipline: a
+// gate that never reds on the input it was written to catch is theatre. These edit a tracked deploy
+// file in place, run the real gate as a subprocess, and restore — so each RED is the actual pipeline
+// firing, not a stubbed parse. Every fixture is paired with the vacuity control that the clean tree
+// is green (a red there would invalidate the fixture below it).
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+function runGate(name) {
+  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: ROOT, encoding: "utf8" }) }; }
+  catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
+}
+// Temporarily replace `find`→`repl` in a tracked file, run fn, always restore the exact original bytes.
+function withEdited(relPath, find, repl, fn) {
+  const abs = join(ROOT, relPath);
+  const orig = readFileSync(abs, "utf8");
+  const edited = orig.replace(find, repl);
+  assert.notEqual(edited, orig, `fixture setup: pattern not found in ${relPath} — the test would prove nothing`);
+  writeFileSync(abs, edited);
+  try { return fn(); } finally { writeFileSync(abs, orig); }
+}
+
+const COMPOSE = "deploy/compose/docker-compose.yml";
+const VALUES = "deploy/helm/charts/vexa/values.yaml";
+const LITE = "deploy/lite/Dockerfile.lite";
+const IMG_MANIFEST = "image-licenses.json";
+
+// ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
+
+test("runtime-parity vacuity: the committed tree (all surfaces on Valkey 8) is green", () => {
+  const r = runGate("runtime-parity");
+  assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+});
+
+test("runtime-parity RED (#636): Lite reverting to apt redis-server (jammy 6.0.16) reds against XAUTOCLAIM", () => {
+  const r = withEdited(LITE, "supervisor postgresql-client", "supervisor redis-server postgresql-client",
+    () => runGate("runtime-parity"));
+  assert.equal(r.green, false, "a surface pinned below XAUTOCLAIM's floor no longer reds — the #636 rung is inert");
+  assert.match(r.out, /lite/);
+  assert.match(r.out, /XAUTOCLAIM/);
+});
+
+test("runtime-parity RED (#637 class): a compose pin below a used command's floor reds", () => {
+  const r = withEdited(COMPOSE, "image: valkey/valkey:8-alpine", "image: redis:6.0-alpine",
+    () => runGate("runtime-parity"));
+  assert.equal(r.green, false, "a compose engine pinned below the used-command floor no longer reds");
+  assert.match(r.out, /compose/);
+  assert.match(r.out, /6\.0/);
+});
+
+// ── gate:image-licenses ─────────────────────────────────────────────────────────────────────────
+
+test("image-licenses vacuity: the committed tree (Valkey everywhere) is green", () => {
+  const r = runGate("image-licenses");
+  assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+});
+
+test("image-licenses RED: an undeclared pinned image (a stray redis:7.4) reds", () => {
+  // redis:7.4 is exactly the source-available (RSALv2/SSPL) engine #653 keeps out; undeclared ⇒ loud red.
+  const r = withEdited(COMPOSE, "image: valkey/valkey:8-alpine", "image: redis:7.4-alpine",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "an undeclared image pin sailed through — the 'green gate ships an un-audited component' hole is back");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /redis:7\.4/);
+});
+
+test("image-licenses RED: the Lite apt redis-server parity trap reds", () => {
+  const r = withEdited(LITE, "supervisor postgresql-client", "supervisor redis-server postgresql-client",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the Lite apt redis-server guard is inert");
+  assert.match(r.out, /redis-server/);
+});
+
+test("image-licenses RED: a bundled component under a source-available licence (SSPL) is FORBIDDEN", () => {
+  // The strict redistribution path: anything baked into a vexaai/* image must be Cat A (or B-with-reason).
+  const inject = '"bundled": [\n    {\n      "name": "redis",\n      "license": "SSPLv1",\n      "artifact": "vexaai/vexa-lite",\n      "reason": "test fixture"\n    },';
+  const r = withEdited(IMG_MANIFEST, '"bundled": [', inject, () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a source-available bundled component was not forbidden — the redistribution guard is inert");
+  assert.match(r.out, /FORBIDDEN \(Cat X\)/);
+  assert.match(r.out, /redis/);
+});
+
+const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
+
+test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
+  // The gate must read helm templates, not only compose + values — a literal `image:` in a template
+  // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
+  const r = withEdited(MINIO_JOB, "image: minio/mc:latest", "image: somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /somevendor\/unaudited/);
+});
+
+test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
+  // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
+  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final";
+  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final", inject,
+    () => runGate("runtime-parity"));
+  assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
+  assert.match(r.out, /lite/);
+  assert.match(r.out, /XAUTOCLAIM/);
 });

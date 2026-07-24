@@ -1,0 +1,44 @@
+{
+  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images our deploy surfaces pin (user-pulled sidecars — an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution — Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. System apt tools baked by Dockerfile.lite (ffmpeg, x11vnc, pulseaudio, …) are mere-aggregation in a container and out of scope here — the per-release SPDX SBOM (scripts/sbom.mjs) inventories them.",
+  "images": [
+    {
+      "name": "valkey/valkey",
+      "license": "BSD-3-Clause",
+      "disposition": "sidecar",
+      "note": "compose + helm cache/stream store (#653). BSD-3 permissive; parity with the Lite source-build."
+    },
+    {
+      "name": "postgres",
+      "license": "PostgreSQL",
+      "disposition": "sidecar",
+      "note": "Primary datastore. The PostgreSQL Licence is an OSI-approved permissive (BSD/MIT-style) licence."
+    },
+    {
+      "name": "edoburu/pgbouncer",
+      "license": "MIT",
+      "disposition": "sidecar",
+      "note": "Connection pooler. Wrapper image is MIT; PgBouncer itself is ISC — both Category A."
+    },
+    {
+      "name": "minio/minio",
+      "license": "AGPL-3.0-or-later",
+      "disposition": "sidecar",
+      "reason": "Object store the operator pulls DIRECTLY from MinIO's official registry — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. A deliberate, reviewed sidecar allowance (ADR-0004). Not a bundled component."
+    },
+    {
+      "name": "minio/mc",
+      "license": "AGPL-3.0-or-later",
+      "disposition": "sidecar",
+      "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
+    }
+  ],
+  "bundled": [
+    {
+      "name": "valkey",
+      "license": "BSD-3-Clause",
+      "artifact": "vexaai/vexa-lite",
+      "how": "source-build from the pinned git tag 8.1.9 (deploy/lite/Dockerfile.lite valkey-builder stage); valkey-server + valkey-cli copied into the final image, COPYING preserved at /usr/local/share/valkey/LICENSE",
+      "reason": "XAUTOCLAIM parity with compose/helm and off BOTH jammy apt's stale Redis 6.0.16 (no XAUTOCLAIM) and source-available Redis ≥7.4 (RSALv2/SSPLv1). BSD-3 is Category A — clean to redistribute (#653)."
+    }
+  ]
+}
