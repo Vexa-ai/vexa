@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { formatDistanceToNow, format } from "date-fns";
 import { Clock, ChevronRight, Calendar, MessageSquare, FileText, Pencil, Check, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -13,54 +12,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { Meeting } from "@/types/vexa";
 import { getDetailedStatus } from "@/types/vexa";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
+import { PlatformIcon } from "@/components/meetings/platform-icon";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { toast } from "sonner";
 
 interface MeetingCardProps {
   meeting: Meeting;
-}
-
-// Platform icons using actual icon files from public folder
-function GoogleMeetIcon({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/icons/icons8-google-meet-96.png"
-      alt="Google Meet"
-      width={40}
-      height={40}
-      className={className}
-    />
-  );
-}
-
-function TeamsIcon({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/icons/icons8-teams-96.png"
-      alt="Microsoft Teams"
-      width={40}
-      height={40}
-      className={className}
-    />
-  );
-}
-
-function ZoomIcon({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/icons/icons8-zoom-96.png"
-      alt="Zoom"
-      width={40}
-      height={40}
-      className={className}
-    />
-  );
-}
-
-function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
-  if (platform === "google_meet") return <GoogleMeetIcon className={className} />;
-  if (platform === "teams") return <TeamsIcon className={className} />;
-  return <ZoomIcon className={className} />;
 }
 
 export function MeetingCard({ meeting }: MeetingCardProps) {
@@ -252,7 +209,7 @@ export function MeetingCard({ meeting }: MeetingCardProps) {
               "flex-shrink-0 relative",
               "transition-transform duration-300 group-hover:scale-110"
             )}>
-              <PlatformIcon platform={meeting.platform} className="h-10 w-10 rounded-lg" />
+              <PlatformIcon platform={meeting.platform} size={40} className="h-10 w-10 rounded-lg text-muted-foreground" />
               {/* Active indicator */}
               {isActive && (
                 <div className="absolute -top-1 -right-1">

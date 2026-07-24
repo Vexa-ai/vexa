@@ -1,6 +1,6 @@
 // Vexa API Types
 
-export type Platform = "google_meet" | "teams" | "zoom" | "browser_session";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "browser_session";
 
 export type MeetingStatus =
   | "requested"
@@ -230,12 +230,29 @@ export function getSpeakerColor(speaker: string, speakerList: string[]): Speaker
 }
 
 // Platform display helpers
+export interface PlatformConfig {
+  name: string;
+  color: string;
+  textColor: string;
+  bgColor: string;
+  /** Logo under /public/icons, or null to fall back to the lucide `icon`. */
+  iconSrc: string | null;
+  icon: "video" | "users" | "monitor";
+  pattern: RegExp;
+  placeholder: string;
+}
+
+/**
+ * One entry per Platform — `satisfies` makes that total, so widening the union
+ * without adding a config is a build error rather than a blank page.
+ */
 export const PLATFORM_CONFIG = {
   google_meet: {
     name: "Google Meet",
     color: "bg-green-500",
     textColor: "text-green-700",
     bgColor: "bg-green-50",
+    iconSrc: "/icons/icons8-google-meet-96.png",
     icon: "video",
     pattern: /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/,
     placeholder: "abc-defg-hij",
@@ -245,6 +262,7 @@ export const PLATFORM_CONFIG = {
     color: "bg-blue-600",
     textColor: "text-blue-700",
     bgColor: "bg-blue-50",
+    iconSrc: "/icons/icons8-teams-96.png",
     icon: "users",
     pattern: /^\d+$/,
     placeholder: "123456789",
@@ -254,20 +272,52 @@ export const PLATFORM_CONFIG = {
     color: "bg-blue-500",
     textColor: "text-blue-600",
     bgColor: "bg-blue-50",
+    iconSrc: "/icons/icons8-zoom-96.png",
     icon: "video",
     pattern: /^\d{9,11}$/,
     placeholder: "85173157171",
+  },
+  jitsi: {
+    name: "Jitsi Meet",
+    color: "bg-sky-500",
+    textColor: "text-sky-700",
+    bgColor: "bg-sky-50",
+    iconSrc: null,
+    icon: "video",
+    pattern: /^[A-Za-z0-9][A-Za-z0-9._~-]*$/,
+    placeholder: "vexa-room-name",
   },
   browser_session: {
     name: "Browser",
     color: "bg-gray-500",
     textColor: "text-gray-700",
     bgColor: "bg-gray-50",
+    iconSrc: null,
     icon: "monitor",
     pattern: /^bs-/,
     placeholder: "",
   },
-} as const;
+} satisfies Record<Platform, PlatformConfig>;
+
+/** Shown for a platform the API serves but this build has no entry for. */
+const UNKNOWN_PLATFORM_CONFIG: PlatformConfig = {
+  name: "Meeting",
+  color: "bg-gray-500",
+  textColor: "text-gray-700",
+  bgColor: "bg-gray-50",
+  iconSrc: null,
+  icon: "video",
+  pattern: /.+/,
+  placeholder: "",
+};
+
+/**
+ * Total platform lookup. The API is free to serve a platform this build predates;
+ * callers render it neutrally instead of dereferencing undefined.
+ */
+export function getPlatformConfig(platform: string): PlatformConfig {
+  return (PLATFORM_CONFIG as Record<string, PlatformConfig>)[platform] ?? UNKNOWN_PLATFORM_CONFIG;
+}
 
 export const MEETING_STATUS_CONFIG: Record<MeetingStatus, { label: string; color: string; bgColor: string }> = {
   requested: { label: "Requested", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },

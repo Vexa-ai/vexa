@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { Plus, RefreshCw, CreditCard, Video, Loader2, Search, Monitor } from "lucide-react";
-import Image from "next/image";
+import { Plus, RefreshCw, CreditCard, Video, Loader2, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
 import { Card } from "@/components/ui/card";
@@ -19,6 +18,7 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useJoinModalStore } from "@/stores/join-modal-store";
 import type { Platform, MeetingStatus, Meeting } from "@/types/vexa";
 import { getDetailedStatus } from "@/types/vexa";
+import { PlatformIcon } from "@/components/meetings/platform-icon";
 import { DocsLink } from "@/components/docs/docs-link";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { Input } from "@/components/ui/input";
@@ -26,19 +26,6 @@ import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { usePendingMeeting } from "@/hooks/use-pending-meeting";
 import { toast } from "sonner";
 import { withBasePath } from "@/lib/base-path";
-
-function PlatformIcon({ platform }: { platform: string }) {
-  if (platform === "google_meet") {
-    return <Image src="/icons/icons8-google-meet-96.png" alt="Google Meet" width={20} height={20} className="rounded" />;
-  }
-  if (platform === "teams") {
-    return <Image src="/icons/icons8-teams-96.png" alt="Teams" width={20} height={20} className="rounded" />;
-  }
-  if (platform === "browser_session") {
-    return <Monitor className="h-5 w-5 text-muted-foreground" />;
-  }
-  return <Image src="/icons/icons8-zoom-96.png" alt="Zoom" width={20} height={20} className="rounded" />;
-}
 
 function StatusDot({ status }: { status: string }) {
   return (
@@ -351,7 +338,7 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
         onClick={() => router.push(`/meetings/${meeting.id}`)}
       >
         <td className="hidden sm:table-cell px-5 py-3">
-          <PlatformIcon platform={meeting.platform} />
+          <PlatformIcon platform={meeting.platform} className="h-5 w-5 rounded text-muted-foreground" />
         </td>
         <td className="px-5 py-3">
           <span className="font-medium">{displayTitle}</span>
