@@ -10,6 +10,9 @@
  *   - createZoomChat: reads the chat panel (content tier).
  */
 export { createZoomSpeakers } from './zoom-speakers.js';
-export type { ZoomSpeakers } from './zoom-speakers.js';
+export type {
+  ZoomNameUnresolvedObservation,
+  ZoomSpeakers,
+} from './zoom-speakers.js';
 export { createZoomChat } from './zoom-chat.js';
 export type { ZoomChat, ZoomChatMessage } from './zoom-chat.js';

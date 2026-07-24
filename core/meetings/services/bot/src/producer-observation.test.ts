@@ -42,6 +42,27 @@ ok(
 
 observations.sink({
   type: 'name-unresolved',
+  platform: 'zoom',
+  signal: 'dom-active',
+  reason: 'footer-empty',
+  tMs: 1_700_000_000_001,
+});
+
+counts = observations.counters();
+ok(
+  counts.total === 2 && counts.teams === 1 && counts.zoom === 1 && counts.invalid === 0,
+  'one valid Zoom observation is admitted without inventing a Teams edge',
+);
+ok(
+  logs.some((message) =>
+    message.includes('platform=zoom')
+    && message.includes('reason=footer-empty')
+    && !message.includes('edge=')),
+  'Zoom telemetry preserves the exclusive-poll contract instead of a per-participant edge',
+);
+
+observations.sink({
+  type: 'name-unresolved',
   platform: 'teams',
   signal: 'dom-active',
   reason: 'resolver-empty',
@@ -51,7 +72,7 @@ observations.sink({
 
 counts = observations.counters();
 ok(
-  counts.total === 1 && counts.invalid === 1,
+  counts.total === 2 && counts.invalid === 1,
   'a platform/signal mismatch is rejected rather than counted as evidence',
 );
 ok(

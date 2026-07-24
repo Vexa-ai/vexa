@@ -22,6 +22,9 @@ export interface ZoomSpeakersOptions {
   /** Fired when the active speaker changes (name or null when nobody is active).
    *  Legacy single-track mode (used when remote audio is one mixed track). */
   onSpeakerChange?: (name: string | null) => void;
+  /** A confirmed active-speaker DOM observation whose display name could not
+   * safely resolve. This is diagnostic only and never becomes a speaker hint. */
+  onNameUnresolved?: (observation: ZoomNameUnresolvedObservation) => void;
   /** How often to report that no speaker has EVER been seen (ms, default 30s). A watcher whose
    *  selectors have gone stale is otherwise completely silent — see the report in `tick`. */
   blindReportMs?: number;
@@ -33,6 +36,14 @@ export interface ZoomSpeakersOptions {
   pollMs?: number;
   /** Votes needed to lock a track→name mapping. Default 2 (matches the bot). */
   lockVotes?: number;
+}
+
+export interface ZoomNameUnresolvedObservation {
+  type: 'name-unresolved';
+  platform: 'zoom';
+  signal: 'dom-active';
+  reason: 'footer-empty' | 'footer-absent' | 'read-fault';
+  tMs: number;
 }
 
 export interface ZoomSpeakers {
@@ -107,6 +118,10 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
   const CONFIRM_POLLS = 2;          // ~2×pollMs ≈ 500ms of stability before a change counts
   let candidate: string | null = null;
   let candidateCount = 0;
+  type UnresolvedReason = ZoomNameUnresolvedObservation['reason'];
+  let unresolvedCandidate: UnresolvedReason | null = null;
+  let unresolvedCandidateCount = 0;
+  let unresolvedCommitted: UnresolvedReason | null = null;
 
   // ── Multi-channel track→name voting (same vote/lock idea as gmeet-speakers
   //    and the bot's speaker-identity.ts) ──────────────────────────────────
@@ -153,15 +168,55 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
     return t || null;
   }
 
-  function readActiveSpeaker(): string | null {
+  function readActiveSpeaker(): {
+    name: string | null;
+    unresolved: Exclude<UnresolvedReason, 'read-fault'> | null;
+  } {
+    let unresolved: Exclude<UnresolvedReason, 'read-fault'> | null = null;
     for (const sel of ACTIVE_CONTAINER_SELECTORS) {
-      const name = nameFromContainer(document.querySelector(sel));
-      if (name) {
-        if (opts.selfName && name.toLowerCase() === opts.selfName.toLowerCase()) return null;
-        return name;
+      const container = document.querySelector(sel);
+      if (!container) continue;
+      const footer = container.querySelector(NAME_FOOTER_SELECTOR);
+      if (!footer) {
+        unresolved ??= 'footer-absent';
+        continue;
       }
+      const span = footer.querySelector('span');
+      const raw = (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || '';
+      const name = raw.replace(/\s+/g, ' ').trim();
+      if (name) {
+        if (opts.selfName && name.toLowerCase() === opts.selfName.toLowerCase()) {
+          return { name: null, unresolved: null };
+        }
+        return { name, unresolved: null };
+      }
+      unresolved ??= 'footer-empty';
     }
-    return null;
+    return { name: null, unresolved };
+  }
+
+  function observeUnresolved(reason: UnresolvedReason | null): void {
+    if (reason === unresolvedCandidate) unresolvedCandidateCount++;
+    else {
+      unresolvedCandidate = reason;
+      unresolvedCandidateCount = 1;
+    }
+    if (unresolvedCandidateCount < CONFIRM_POLLS || reason === unresolvedCommitted) return;
+    unresolvedCommitted = reason;
+    if (!reason) return;
+    const observation: ZoomNameUnresolvedObservation = {
+      type: 'name-unresolved',
+      platform: 'zoom',
+      signal: 'dom-active',
+      reason,
+      tMs: Date.now(),
+    };
+    try {
+      opts.onNameUnresolved?.(observation);
+    } catch {
+      log(`[ZoomSpeakers] name-unresolved-delivery-failed reason=${reason}`);
+    }
+    log(`[ZoomSpeakers] name-unresolved reason=${reason} signal=dom-active`);
   }
 
   // Re-assert the current speaker every ~2s even without a change, so a consumer
@@ -179,8 +234,15 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
 
   // One poll cycle: read the lit speaker; emit on change, or periodically re-assert.
   function tick(): void {
-    let name: string | null = null;
-    try { name = readActiveSpeaker(); } catch { /* DOM in flux */ return; }
+    let name: string | null;
+    let unresolved: Exclude<UnresolvedReason, 'read-fault'> | null;
+    try {
+      ({ name, unresolved } = readActiveSpeaker());
+    } catch {
+      observeUnresolved('read-fault');
+      return; // a DOM read fault never mutates the committed active speaker
+    }
+    observeUnresolved(unresolved);
     if (name !== active) {
       // A change must hold for CONFIRM_POLLS consecutive reads before we commit it,
       // so a single flicker poll can't emit a hint (and can't hijack attribution).
@@ -216,17 +278,10 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
       const speakerish = document.querySelectorAll('[class*="speaker"]').length;
       const frames = document.querySelectorAll('[class*="video-frame"]').length;
       const footers = document.querySelectorAll(NAME_FOOTER_SELECTOR).length;
-      // A screenshot of a blind bot showed the active speaker's NAME on screen, beside a live
-      // audio-level meter, while every selector above counted zero — Zoom serves a cameraless,
-      // GPU-less client a single-tile layout whose class names are nothing like the gallery's.
-      // So when blind, describe whatever carries a level meter: that is where the name lives.
-      for (const el of Array.from(document.querySelectorAll(`${NAME_FOOTER_SELECTOR}, [class*="video-frame"]`)).slice(0, 6)) {
-        log(`  name-bearing node: <${el.tagName.toLowerCase()} class="${el.className}"> text="${(el.textContent || '').trim().slice(0, 50)}"`);
-      }
       log(
         `NO ACTIVE SPEAKER seen in ${Math.round((polls * pollMs) / 1000)}s — ` +
         (anchors.length
-          ? `containers present (${anchors.join(', ')}) but none named; the room may be silent`
+          ? `active container present (${anchors.join(', ')}) but display name unresolved`
           : `none of ${ACTIVE_CONTAINER_SELECTORS.join(', ')} exist here. This DOM: ` +
             `${speakerish} [class*=speaker], ${frames} [class*=video-frame], ${footers} name footers, ` +
             `${document.querySelectorAll('iframe').length} iframes, ` +
@@ -250,7 +305,7 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
       const el = document.querySelector(selector);
       return { selector, present: !!el, name: nameFromContainer(el) };
     });
-    const matched = probe.find(p => p.name)?.selector || null;
+    const matched = probe.find(p => p.present)?.selector || null;
 
     // For every name footer in the DOM, walk up a few ancestors collecting class
     // names, and flag any class (self or descendant) hinting "speaking". This
