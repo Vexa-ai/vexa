@@ -15,7 +15,8 @@ Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 [![Self-hosted](https://img.shields.io/badge/deploy-self--hosted-success.svg)](#-quickstart)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/Ga9duGkVz9)
 
-**[vexa.ai](https://vexa.ai)** still runs the 0.10.6.13 line — it will host **0.12**.
+**[vexa.ai](https://vexa.ai)** runs Vexa 0.12 for meeting bots and transcription.
+Sandboxed knowledge agents are self-hosted only — [self-host Vexa](#-quickstart) to run the full stack.
 
 </div>
 
