@@ -57,3 +57,40 @@ export async function getAuthenticatedUserId(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Return the email bound to the already-validated hosted session.
+ *
+ * The cookie is only trusted after the API token succeeds against the gateway.
+ * Account routes use this value to resolve/upsert through the stock Admin API's
+ * supported email contract instead of inventing a user-by-id read.
+ */
+export async function getAuthenticatedUserEmail(): Promise<string | null> {
+  const VEXA_API_URL = process.env.VEXA_API_URL;
+  if (!VEXA_API_URL) return null;
+
+  const cookieStore = await cookies();
+  const token = cookieStore.get(getAuthCookieName())?.value;
+  if (!token) return null;
+
+  try {
+    const verifyRes = await fetch(`${VEXA_API_URL}/meetings`, {
+      headers: { "X-API-Key": token },
+    });
+    if (!verifyRes.ok) return null;
+  } catch {
+    return null;
+  }
+
+  const userInfoStr = cookieStore.get(getUserInfoCookieName())?.value;
+  if (!userInfoStr) return null;
+
+  try {
+    const userInfo = JSON.parse(userInfoStr) as { email?: unknown };
+    return typeof userInfo.email === "string" && userInfo.email
+      ? userInfo.email
+      : null;
+  } catch {
+    return null;
+  }
+}
