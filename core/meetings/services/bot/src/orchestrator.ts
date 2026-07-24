@@ -105,6 +105,7 @@ export interface RunOptions {
 
 export const DEFAULT_PIPELINE_STOP_TIMEOUT_MS = 9_000;
 export const PLATFORM_LEAVE_TIMEOUT_MS = 8_000;
+export const PRE_ACTIVE_WITHDRAW_TIMEOUT_MS = 8_000;
 
 /** Required ports — missing any of these used to surface as a raw TypeError deep in `run()`. */
 const REQUIRED_PORTS = ['lifecycle', 'join', 'pipeline', 'acts', 'aloneness'] as const;
@@ -161,7 +162,11 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
 
   let cur: BotStatus = 'joining';
 
-  const emit = async (status: BotStatus, extra: Partial<LifecycleEvent> = {}): Promise<void> => {
+  const emit = async (
+    status: BotStatus,
+    extra: Partial<LifecycleEvent> = {},
+    durable = false,
+  ): Promise<'persisted' | 'unconfirmed'> => {
     if (status !== cur && !canTransition(cur, status)) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
     }
@@ -173,7 +178,10 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (isTerminal(status) && deps.degraded) {
       try { degraded = deps.degraded(); } catch { degraded = undefined; }
     }
-    await deps.lifecycle.emit({ ...base, status, ...extra, ...(degraded ?? {}) });
+    const event = { ...base, status, ...extra, ...(degraded ?? {}) };
+    if (durable && deps.lifecycle.emitDurable) return deps.lifecycle.emitDurable(event);
+    await deps.lifecycle.emit(event);
+    return 'persisted';
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
@@ -249,7 +257,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // than silently dropping it.
     let reportChain: Promise<void> = Promise.resolve();
     const report = (s: BotStatus): Promise<void> => {
-      reportChain = reportChain.then(() => emit(s)).catch((e) => {
+      reportChain = reportChain.then(async () => { await emit(s); }).catch((e) => {
         console.error(`[bot] lifecycle report '${s}' rejected: ${String(e)}`);
       });
       return reportChain;
@@ -277,17 +285,59 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         // request is dropped — bounded + best-effort (the platform withdraw itself caps its clicks;
         // the guaranteed fallback closes the page). The bot never reached active, so the terminal is
         // `failed` (stage = the pre-active stage it was stopped in), attributed to the user stop.
-        await Promise.race([
-          deps.join.withdraw('stopped').catch(() => { /* best-effort */ }),
-          new Promise<void>((resolve) => setTimeout(resolve, 8000)),
-        ]);
+        const withdrawStartedAt = Date.now();
+        let withdrawTimer: ReturnType<typeof setTimeout> | null = null;
+        const withdrawSettled = deps.join.withdraw('stopped').then(
+          (evidence) => ({ kind: 'finished' as const, evidence }),
+          (error: unknown) => ({ kind: 'fault' as const, error }),
+        );
+        const withdrawDeadline = new Promise<{ kind: 'timeout' }>((resolve) => {
+          withdrawTimer = setTimeout(
+            () => resolve({ kind: 'timeout' }),
+            PRE_ACTIVE_WITHDRAW_TIMEOUT_MS,
+          );
+        });
+        const withdrawal = await Promise.race([withdrawSettled, withdrawDeadline]);
+        if (withdrawTimer) clearTimeout(withdrawTimer);
+        const durationMs = Math.min(10_000, Math.max(0, Date.now() - withdrawStartedAt));
         const stage = cur === 'awaiting_admission' ? 'awaiting_admission' : 'joining';
+        if (
+          withdrawal.kind === 'finished'
+          && withdrawal.evidence?.pageClosed === true
+        ) {
+          const persisted = await emit('failed', {
+            failure_stage: stage,
+            completion_reason: 'stopped',
+            reason: 'stopped while awaiting admission (withdrew the join request)',
+            exit_code: 0,
+            withdrawal: {
+              status: 'completed',
+              completed_at: new Date().toISOString(),
+              duration_ms: durationMs,
+              cancel_attempted: withdrawal.evidence.cancelAttempted,
+              page_closed: true,
+            },
+          }, true);
+          unsubscribe();
+          return {
+            exitCode: persisted === 'persisted' ? 0 : 1,
+            status: 'failed',
+            completionReason: 'stopped',
+          };
+        }
+        const withdrawalFailure = withdrawal.kind === 'timeout'
+          ? `withdrawal did not finish within ${PRE_ACTIVE_WITHDRAW_TIMEOUT_MS}ms`
+          : `withdrawal did not confirm page close: ${
+              withdrawal.kind === 'fault' ? String(withdrawal.error) : 'page remained open'
+            }`;
         await emit('failed', {
-          failure_stage: stage, completion_reason: 'stopped',
-          reason: 'stopped while awaiting admission (withdrew the join request)', exit_code: 0,
+          failure_stage: stage,
+          completion_reason: 'stopped',
+          reason: `stopped while awaiting admission; ${withdrawalFailure}`,
+          exit_code: 1,
         });
         unsubscribe();
-        return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
+        return { exitCode: 1, status: 'failed', completionReason: 'stopped' };
       }
       outcome = raced.result.outcome;
       joinReason = raced.result.reason;

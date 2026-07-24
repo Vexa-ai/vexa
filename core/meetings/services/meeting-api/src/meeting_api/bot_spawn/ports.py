@@ -154,6 +154,17 @@ class MeetingRepo(Protocol):
         in-process ``MeetingStore``."""
         ...
 
+    async def finalize_withdrawal(
+        self, *, session_uid: str, expected_status: str, outcome: dict
+    ) -> Optional[dict]:
+        """Atomically replace ``meeting.data.withdrawal`` only while its status matches
+        ``expected_status`` and return the updated meeting.
+
+        The bot acknowledgement and the bounded timeout race on this compare-and-set. Exactly one
+        winner persists its typed outcome before it is allowed to invoke runtime deletion; the
+        loser observes ``None`` and performs no teardown."""
+        ...
+
 
 @runtime_checkable
 class RuntimeClient(Protocol):

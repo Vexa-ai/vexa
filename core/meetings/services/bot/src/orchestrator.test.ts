@@ -73,7 +73,11 @@ const lobbyBlockingJoin = () => {
     async join(report) { await report('awaiting_admission'); return new Promise<JoinOutcome>(() => { /* never resolves */ }); },
     onRemoval() { return () => { /* */ }; },
     async leave() { calls.leave++; },
-    async withdraw(reason) { calls.withdraw++; calls.withdrawReason = reason; },
+    async withdraw(reason) {
+      calls.withdraw++;
+      calls.withdrawReason = reason;
+      return { cancelAttempted: true, pageClosed: true };
+    },
   };
   return { driver, calls };
 };
@@ -415,8 +419,34 @@ async function main(): Promise<void> {
     check('withdraw: reason forwarded to the withdraw', calls.withdrawReason === 'stopped', calls.withdrawReason);
     check('withdraw: reached awaiting_admission then terminated (no active)', seq(lc.events).includes('awaiting_admission') && !seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
     check('withdraw: terminal failed(awaiting_admission / stopped), exit 0', res.status === 'failed' && res.exitCode === 0 && last(lc.events).failure_stage === 'awaiting_admission' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
+    check('withdraw: terminal carries durable-order acknowledgement evidence',
+      last(lc.events).withdrawal?.status === 'completed'
+      && last(lc.events).withdrawal.page_closed === true
+      && last(lc.events).withdrawal.duration_ms <= 10_000,
+      JSON.stringify(last(lc.events).withdrawal));
     check('withdraw: sequence legal + conforms', allLegal(seq(lc.events)) && allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
     check('withdraw: did NOT SIGKILL-orphan — the run resolved on its own (no watchdog needed)', true);
+  }
+
+  // A page close without a control-plane 2xx is not a durable acknowledgement. The bot reports a
+  // non-zero result and leaves the pending control-plane timer to persist the typed fallback.
+  {
+    const events: LifecycleEvent[] = [];
+    const lifecycle: LifecycleSink = {
+      async emit(e) { events.push(e); },
+      async emitDurable(e) { events.push(e); return 'unconfirmed'; },
+    };
+    const { driver } = lobbyBlockingJoin();
+    const o = createOrchestrator(inv(), {
+      lifecycle, join: driver, pipeline: noopPipeline(),
+      acts: noopActs(), aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop(), 5);
+    const res = await runP;
+    check('withdraw-unconfirmed: no false graceful-success exit',
+      res.exitCode === 1 && last(events).withdrawal?.status === 'completed',
+      JSON.stringify({ res, event: last(events) }));
   }
 
   // ── #889: a `leave` ACT delivered while BLOCKED in the lobby (awaiting_admission) → WITHDRAW ──

@@ -15,6 +15,19 @@
       "description": "Furthest stage reached, for `failed` attribution.",
       "enum": ["requested", "joining", "awaiting_admission", "active"]
     },
+    "WithdrawalAcknowledgement": {
+      "description": "Durable proof that a pre-active Stop completed the platform withdrawal before workload deletion. Emitted only after the cancellation attempt and page close have finished; the control plane persists this object before invoking runtime deletion.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "completed_at", "duration_ms", "cancel_attempted", "page_closed"],
+      "properties": {
+        "status": { "const": "completed" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "cancel_attempted": { "type": "boolean" },
+        "page_closed": { "const": true }
+      }
+    },
     "LifecycleEvent": {
       "description": "One status report. connection_id + status always present; the rest are state-dependent (forensics on terminal states). LIBERAL ingestion (additionalProperties:true): the control plane validates the core shape but TOLERATES extra fields the real bot emits, matching main's pydantic ignore-extras — the carve's earlier additionalProperties:false rejected the bot's real callbacks.",
       "type": "object",
@@ -28,6 +41,7 @@
         "exit_code": { "type": "integer", "description": "terminal only" },
         "completion_reason": { "$ref": "#/$defs/CompletionReason" },
         "failure_stage": { "$ref": "#/$defs/FailureStage" },
+        "withdrawal": { "$ref": "#/$defs/WithdrawalAcknowledgement" },
         "bot_logs": { "type": "array", "items": { "type": "string" }, "description": "terminal: ring buffer of log lines" },
         "bot_resources": {
           "type": "object",
