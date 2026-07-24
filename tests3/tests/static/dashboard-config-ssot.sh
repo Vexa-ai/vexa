@@ -38,6 +38,15 @@ else
   step_fail DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT "$(printf '%s\n%s\n%s\n%s\n%s' "$runtime_public_api" "$runtime_ws_derivation" "$loopback_normalization" "$browser_api_resolver" "$entrypoint_patch" | head -10 | tr '\n' ' ')"
 fi
 
+dashboard_dockerfile="$ROOT_DIR/services/dashboard/Dockerfile"
+locked_install="$(rg -n 'WORKDIR /workspace/services/dashboard|COPY packages/transcript-rendering/package\.json /workspace/packages/transcript-rendering/package\.json|COPY services/dashboard/package-lock\.json \./package-lock\.json|RUN npm ci --ignore-scripts' "$dashboard_dockerfile" 2>/dev/null || true)"
+unlocked_install="$(rg -n 'npm install' "$dashboard_dockerfile" 2>/dev/null || true)"
+if [ "$(printf '%s\n' "$locked_install" | sed '/^$/d' | wc -l | tr -d ' ')" = "4" ] && [ -z "$unlocked_install" ]; then
+  step_pass DASHBOARD_IMAGE_USES_LOCKED_DEPENDENCIES "dashboard image preserves the repository-relative local-package path and installs the committed package-lock with npm ci"
+else
+  step_fail DASHBOARD_IMAGE_USES_LOCKED_DEPENDENCIES "$(printf '%s\n%s' "$locked_install" "$unlocked_install" | head -10 | tr '\n' ' ')"
+fi
+
 admin_fan_in="$(rg -n 'VEXA_ADMIN_API_URL[^;\n]*\|\|[^;\n]*VEXA_API_URL|process\.env\.VEXA_ADMIN_API_URL\s*\|\|\s*process\.env\.VEXA_API_URL' "$ROOT_DIR/services/dashboard/src" 2>/dev/null || true)"
 if [ -z "$admin_fan_in" ]; then
   step_pass DASHBOARD_ADMIN_URL_EXPLICIT_SSOT "admin routes require VEXA_ADMIN_API_URL explicitly instead of borrowing VEXA_API_URL"
