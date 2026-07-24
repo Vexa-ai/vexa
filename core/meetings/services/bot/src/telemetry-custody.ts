@@ -7,10 +7,16 @@
  * object store; the directory adapter is the smallest real implementation and
  * the offline oracle for the contract.
  */
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import type { Ajv, ValidateFunction } from 'ajv';
+import addFormatsDefault from 'ajv-formats';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { copyFile, link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const addFormats = addFormatsDefault as unknown as (ajv: Ajv) => Ajv;
 
 export type SignalCustodyErrorKind =
   | 'missing-source'
@@ -74,6 +80,80 @@ interface InspectedSignal {
   records: number;
 }
 
+interface CapturedSignalValidators {
+  ajv: Ajv;
+  header: ValidateFunction;
+  frame: ValidateFunction;
+  hint: ValidateFunction;
+  boundary: ValidateFunction;
+}
+
+const here = dirname(fileURLToPath(import.meta.url));
+const capturedSignalSchemaPath = join(
+  here,
+  '..',
+  '..',
+  '..',
+  'contracts',
+  'captured-signal.v1',
+  'captured-signal.schema.json',
+);
+let cachedValidators: CapturedSignalValidators | undefined;
+
+function capturedSignalValidators(): CapturedSignalValidators {
+  if (cachedValidators) return cachedValidators;
+  const schema = JSON.parse(readFileSync(capturedSignalSchemaPath, 'utf8')) as {
+    $id: string;
+  };
+  const ajv = new Ajv2020({ strict: false, allErrors: true });
+  addFormats(ajv);
+  ajv.addSchema(schema);
+  const ref = (shape: string): ValidateFunction =>
+    ajv.compile({ $ref: `${schema.$id}#/$defs/${shape}` });
+  cachedValidators = {
+    ajv,
+    header: ref('SessionHeader'),
+    frame: ref('CapturedFrame'),
+    hint: ref('HintEvent'),
+    boundary: ref('BoundaryEvent'),
+  };
+  return cachedValidators;
+}
+
+function validateCapturedSignalRecord(
+  record: unknown,
+  recordIndex: number,
+  incompleteKind: Extract<SignalCustodyErrorKind, 'incomplete-source' | 'stored-object-incomplete'>,
+  path: string,
+): void {
+  const validators = capturedSignalValidators();
+  let validate: ValidateFunction;
+  if (recordIndex === 0) {
+    validate = validators.header;
+  } else if (
+    typeof record === 'object'
+    && record !== null
+    && (record as Record<string, unknown>).type === 'hint'
+  ) {
+    validate = validators.hint;
+  } else if (
+    typeof record === 'object'
+    && record !== null
+    && (record as Record<string, unknown>).type === 'boundary'
+  ) {
+    validate = validators.boundary;
+  } else {
+    validate = validators.frame;
+  }
+  if (!validate(record)) {
+    throw new SignalCustodyError(
+      incompleteKind,
+      `${incompleteKind}: ${path} record ${recordIndex + 1} is not captured-signal.v1 — `
+      + validators.ajv.errorsText(validate.errors),
+    );
+  }
+}
+
 async function inspectSignal(
   path: string,
   missingKind: Extract<SignalCustodyErrorKind, 'missing-source' | 'stored-object-missing'>,
@@ -102,6 +182,7 @@ async function inspectSignal(
           } catch (error) {
             throw new SignalCustodyError(incompleteKind, `${incompleteKind}: ${path} has invalid JSONL record ${records + 1}`, { cause: error });
           }
+          validateCapturedSignalRecord(record, records, incompleteKind, path);
           if (records === 0) header = record;
           records++;
           line = '';
@@ -141,15 +222,26 @@ async function inspectSignal(
   return { digest: hash.digest('hex'), bytes, records };
 }
 
-function assertReceipt(receipt: CaptureSignalCustodyReceipt): void {
-  const expectedKey = `${receipt.digest}/session.captured-signal.jsonl`;
+function assertReceipt(receipt: unknown): asserts receipt is CaptureSignalCustodyReceipt {
+  if (typeof receipt !== 'object' || receipt === null) {
+    throw new SignalCustodyError('stored-object-incomplete', 'stored-object-incomplete: invalid custody receipt');
+  }
+  const candidate = receipt as Partial<CaptureSignalCustodyReceipt>;
+  const expectedKey = `${candidate.digest}/session.captured-signal.jsonl`;
   if (
-    receipt.type !== 'captured-signal-custody-receipt'
-    || receipt.v !== 1
-    || receipt.complete !== true
-    || receipt.algorithm !== 'sha256'
-    || !/^[0-9a-f]{64}$/.test(receipt.digest)
-    || receipt.key !== expectedKey
+    candidate.type !== 'captured-signal-custody-receipt'
+    || candidate.v !== 1
+    || candidate.complete !== true
+    || candidate.algorithm !== 'sha256'
+    || typeof candidate.digest !== 'string'
+    || !/^[0-9a-f]{64}$/.test(candidate.digest)
+    || typeof candidate.bytes !== 'number'
+    || !Number.isSafeInteger(candidate.bytes)
+    || candidate.bytes <= 0
+    || typeof candidate.records !== 'number'
+    || !Number.isSafeInteger(candidate.records)
+    || candidate.records <= 0
+    || candidate.key !== expectedKey
   ) {
     throw new SignalCustodyError('stored-object-incomplete', 'stored-object-incomplete: invalid custody receipt');
   }
@@ -180,7 +272,15 @@ export function directorySignalCustody(rootDir: string): SignalCustody {
         key: `${source.digest}/session.captured-signal.jsonl`,
       };
       const target = pathFor(receipt);
-      await mkdir(dirname(target), { recursive: true });
+      try {
+        await mkdir(dirname(target), { recursive: true });
+      } catch (error) {
+        throw new SignalCustodyError(
+          'io-fault',
+          `could not prepare custody target for ${receipt.key}: ${String(error)}`,
+          { cause: error },
+        );
+      }
 
       // Copy to a sibling temporary file, then link it into the deterministic
       // key atomically. A concurrent/idempotent admission wins with EEXIST; the
@@ -254,11 +354,11 @@ export function directorySignalCustody(rootDir: string): SignalCustody {
         }
         throw new SignalCustodyError('stored-object-incomplete', `stored-object-incomplete: ${digest}/receipt.json`, { cause: error });
       }
-      assertReceipt(parsed as CaptureSignalCustodyReceipt);
-      if ((parsed as CaptureSignalCustodyReceipt).digest !== digest) {
+      assertReceipt(parsed);
+      if (parsed.digest !== digest) {
         throw new SignalCustodyError('stored-object-incomplete', `stored-object-incomplete: receipt digest mismatch for ${digest}`);
       }
-      return parsed as CaptureSignalCustodyReceipt;
+      return parsed;
     },
 
     async read(receipt: CaptureSignalCustodyReceipt): Promise<Uint8Array> {

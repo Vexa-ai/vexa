@@ -34,6 +34,15 @@ is `captured-signal-custody/missing-source`; a truncated or count-mismatched sou
 `captured-signal-custody/incomplete-source`. Neither is a product-quality verdict: it is a
 harness RED, and the meeting must not be treated as a replay fixture.
 
+`hot-bot.sh` enforces that postcondition after the product worker exits: a fresh process must find
+exactly one persisted receipt and validate the receipt, every JSONL record against the
+`captured-signal.v1` schema, the byte count, and the digest. Missing, incomplete, or corrupt
+custody prints `CUSTODY_ADMISSION_RED` and exits the evidence harness non-zero even when the
+meeting worker itself ended normally. This does not change the product bot's best-effort
+telemetry teardown semantics; it changes only whether the eval run is admitted as evidence.
+The harness also refuses a pre-existing custody root before launch, so an old receipt cannot
+satisfy the current run's admission gate.
+
 ## The two commands
 
 ```bash
