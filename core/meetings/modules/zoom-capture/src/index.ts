@@ -14,5 +14,25 @@ export type {
   ZoomNameUnresolvedObservation,
   ZoomSpeakers,
 } from './zoom-speakers.js';
+export {
+  parseZoomProducerDomTrace,
+  ZOOM_TRACE_CONFIRM_POLLS,
+  ZOOM_TRACE_FOOTERS,
+  ZOOM_TRACE_MAX_ROWS,
+  ZOOM_TRACE_POLL_MS,
+  ZOOM_TRACE_PSEUDONYMS,
+  ZOOM_TRACE_SCHEMA,
+  ZOOM_TRACE_VIEWS,
+  ZoomProducerDomTraceAdmissionError,
+} from './producer-dom-trace.js';
+export type {
+  ZoomProducerDomTrace,
+  ZoomProducerDomTraceAdmissionCode,
+  ZoomProducerDomTraceHeader,
+  ZoomProducerDomTraceRow,
+  ZoomTraceFooter,
+  ZoomTracePseudonym,
+  ZoomTraceView,
+} from './producer-dom-trace.js';
 export { createZoomChat } from './zoom-chat.js';
 export type { ZoomChat, ZoomChatMessage } from './zoom-chat.js';
