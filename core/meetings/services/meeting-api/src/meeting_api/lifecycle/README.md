@@ -36,6 +36,13 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
 - `stop.py` (P3b) — the user-stop path: `request_stop(record, publisher, meeting_id)` sets
   `stop_requested` + publishes the `bot_commands:meeting:{id}` `{action:"leave"}` command;
   `classify_user_stop` / `stop_event_for` resolve the bot's exit to an ATTRIBUTED terminal.
+- `stop_router.py` — the API Stop composition. For a bot that has reported
+  `awaiting_admission`, it persists `withdrawal.status=pending`, publishes `leave`, and waits for
+  the bot's typed cancellation/page-close acknowledgement. The callback atomically persists
+  `completed` before runtime deletion. A missing acknowledgement atomically becomes `timed_out`
+  before the bounded 24-second capacity fallback deletes the workload. `requested`/`joining`
+  retain direct teardown because those states do not prove the bot subscribed to the command
+  channel; active stops retain the normal recording-finalization path.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

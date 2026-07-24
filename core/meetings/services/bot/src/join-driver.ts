@@ -109,7 +109,9 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       //     (just "Asking to join…"), so closing the tab is the reliable way to abandon the request;
       //     it is also the universal fallback if the cancel click missed. Closing the page after the
       //     click is harmless (the click already fired).
+      let cancelAttempted = false;
       try {
+        cancelAttempted = true;
         if (platform === 'teams')      await leaveMicrosoftTeams(page, undefined, reason);
         else if (platform === 'zoom')  await leaveZoomMeeting(page, undefined, reason);
         else if (platform === 'jitsi') await leaveJitsiMeeting(page, undefined, reason);
@@ -118,6 +120,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       try {
         if (!page.isClosed()) await page.close({ runBeforeUnload: false });
       } catch { /* best-effort */ }
+      return { cancelAttempted, pageClosed: page.isClosed() };
     },
   };
 }

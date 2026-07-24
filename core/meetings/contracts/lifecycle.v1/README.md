@@ -23,5 +23,9 @@ impl enforces it (lean: no separate harness, B8).
 ## Shape
 `LifecycleEvent` (`$defs`): `connection_id` + `status` always; state-dependent `reason · exit_code ·
 completion_reason · failure_stage · bot_logs · bot_resources · speaker_events` (terminal forensics).
+For a pre-active user Stop, the terminal carries `withdrawal`: a typed acknowledgement with the
+platform cancellation/page-close evidence and duration. The control plane persists that
+acknowledgement before it may delete the workload; absence of the acknowledgement takes the
+separately typed bounded-timeout path and is never reported as graceful success.
 
 No auth token (transport-layer), no tenancy fields (deferred). Goldens validated by `gate:schema`.

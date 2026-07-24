@@ -1,0 +1,16 @@
+{
+  "connection_id": "sess-lobby-stop",
+  "container_id": "mtg-839-bot",
+  "status": "failed",
+  "failure_stage": "awaiting_admission",
+  "completion_reason": "stopped",
+  "reason": "stopped while awaiting admission (withdrew the join request)",
+  "exit_code": 0,
+  "withdrawal": {
+    "status": "completed",
+    "completed_at": "2026-07-24T08:45:00Z",
+    "duration_ms": 413,
+    "cancel_attempted": true,
+    "page_closed": true
+  }
+}

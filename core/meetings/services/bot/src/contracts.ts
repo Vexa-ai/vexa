@@ -34,6 +34,14 @@ export type CompletionReason =
 
 export type FailureStage = 'requested' | 'joining' | 'awaiting_admission' | 'active';
 
+export interface WithdrawalAcknowledgement {
+  status: 'completed';
+  completed_at: string;
+  duration_ms: number;
+  cancel_attempted: boolean;
+  page_closed: true;
+}
+
 /** One lifecycle.v1 status report. `connection_id` + `status` always; the rest are
  *  state-dependent terminal forensics. Mirrors `#/$defs/LifecycleEvent`. */
 export interface LifecycleEvent {
@@ -44,6 +52,7 @@ export interface LifecycleEvent {
   exit_code?: number;
   completion_reason?: CompletionReason;
   failure_stage?: FailureStage;
+  withdrawal?: WithdrawalAcknowledgement;
   bot_logs?: string[];
   bot_resources?: { peak_memory_bytes?: number; cpu_usage_usec?: number; [k: string]: unknown };
   speaker_events?: unknown[];
