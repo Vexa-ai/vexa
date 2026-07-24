@@ -94,6 +94,29 @@ async function main(): Promise<void> {
     check('permanent-5xx: bounded to `retries` attempts', calls.length === 2, String(calls.length));
   }
 
+  // ── #839 durable acknowledgement: only a 2xx earns "persisted" ──
+  {
+    let n = 0;
+    const fetchImpl: FetchLike = async () => {
+      n++;
+      return n === 2 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+    };
+    const sink = createHttpLifecycleSink({
+      callbackUrl: 'http://cb', fetchImpl, retries: 2, sleep: noSleep,
+    });
+    const verdict = await sink.emitDurable!(EVENT);
+    check('durable: a later 2xx confirms persisted', verdict === 'persisted', verdict);
+    check('durable: confirmation used the bounded retry path', n === 2, String(n));
+  }
+  {
+    const fetchImpl: FetchLike = async () => { throw new Error('network down'); };
+    const sink = createHttpLifecycleSink({
+      callbackUrl: 'http://cb', fetchImpl, retries: 2, sleep: noSleep,
+    });
+    const verdict = await sink.emitDurable!(EVENT);
+    check('durable: no response remains unconfirmed', verdict === 'unconfirmed', verdict);
+  }
+
   // ── default horizon: 5 attempts × 500ms exponential base (≈7.5s) — a >1s meeting-api blip
   //    must not lose the event (hosted 07-14→07-17: the old ~0.6s horizon dropped callbacks and
   //    the reaper failed seated bots) ──

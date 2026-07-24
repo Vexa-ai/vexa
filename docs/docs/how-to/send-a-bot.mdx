@@ -125,6 +125,12 @@ of polling, subscribe over **WebSocket** — see the [Meetings API](/api/meeting
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
 
+If you stop a bot while it is waiting for admission, Vexa first cancels the pending join and closes
+the meeting page. It records that acknowledgement before removing the worker, so the host-visible
+knock should disappear within 10 seconds. If no acknowledgement arrives, Vexa records a
+`withdrawal.status: timed_out` diagnostic and force-removes the worker within 25 seconds; that
+fallback is not reported as a graceful withdrawal.
+
 <Note>
 Mid-call reconfiguration (`PUT …/config`, change language/task while the bot is in the call) rides
 the live bot-control plane and is **not yet wired in the v0.12 open-core stack** — it currently

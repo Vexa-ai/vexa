@@ -267,6 +267,38 @@ class SqlAlchemyMeetingRepo:
             # meeting.data (and the stop route gets a clean dict) without a second query.
             return _row_to_dict(m)
 
+    async def finalize_withdrawal(
+        self, *, session_uid, expected_status, outcome
+    ) -> Optional[dict]:
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            sess = (
+                await db.execute(select(MeetingSession).where(MeetingSession.session_uid == session_uid))
+            ).scalars().first()
+            if sess is None:
+                return None
+            m = (
+                await db.execute(
+                    select(Meeting).where(Meeting.id == sess.meeting_id).with_for_update()
+                )
+            ).scalars().first()
+            if m is None:
+                return None
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            current = data.get("withdrawal")
+            if not isinstance(current, dict) or current.get("status") != expected_status:
+                return None
+            data["withdrawal"] = {**current, **dict(outcome)}
+            m.data = data
+            flag_modified(m, "data")
+            await db.commit()
+            await db.refresh(m)
+            return _row_to_dict(m)
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         from sqlalchemy import func, select
 

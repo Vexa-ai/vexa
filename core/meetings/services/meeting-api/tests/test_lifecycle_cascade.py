@@ -142,10 +142,14 @@ def test_full_meeting_lifecycle_cascade():
     assert len(envelopes) == 3
 
 
-def test_stop_cascade_tears_down_a_booting_bot_no_orphan():
-    """Spawn → DELETE while the bot is still BOOTING (status `requested`): the stop route cascade marks
-    `stopping`, publishes the graceful leave AND directly tears the workload down (ORPH1/B1), so a
-    not-yet-subscribed bot can't orphan. Exercises bot_spawn → stop_router → runtime end to end."""
+def test_stop_cascade_waits_for_durable_withdrawal_before_workload_delete():
+    """Spawn → DELETE while the bot is still PRE-ACTIVE: publish leave and persist the withdrawal
+    request, but do not race the bot's platform cancellation with direct workload deletion.
+
+    The pre-#839 path fails this discriminator because the route calls ``delete_workload`` in the
+    same request, before any bot callback can durably acknowledge that the pending knock was
+    withdrawn.
+    """
     from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
     repo = InMemoryMeetingRepo()
@@ -160,12 +164,204 @@ def test_stop_cascade_tears_down_a_booting_bot_no_orphan():
     assert r.status_code == 201, r.text
     workload_id = runtime.specs[0]["workloadId"]
 
-    # The meeting is `requested` (booting) — the bot has NOT subscribed to its leave channel yet.
+    session_uid = repo.sessions[0]["session_uid"]
+    for status in ("joining", "awaiting_admission"):
+        progressed = client.post("/bots/internal/callback/lifecycle", json={
+            "connection_id": session_uid, "container_id": workload_id, "status": status,
+        })
+        assert progressed.status_code == 200, progressed.text
+
+    # `awaiting_admission` proves the bot subscribed before entering the lobby and that the host-side
+    # knock may exist. This is the status that must handshake rather than delete immediately.
     d = client.delete("/bots/google_meet/stop-cascade", headers={"x-user-id": str(USER)})
     assert d.status_code == 200, d.text
     assert d.json()["status"] == "stopping"
 
     # Graceful path: the leave command was published…
     assert any("leave" in msg for _ch, msg in publisher.published), "leave command must be published"
-    # …AND the guarantee: a booting bot's workload is torn down directly → no orphan.
-    assert workload_id in runtime.deleted, "a booting bot's workload must be directly torn down (ORPH1/B1)"
+    # The workload remains until a durable withdrawal acknowledgement (or the typed bounded timeout)
+    # wins the outcome race. Direct deletion here abandons the host-visible knock.
+    assert workload_id not in runtime.deleted, (
+        "pre-active Stop must not delete the workload before withdrawal is durably acknowledged"
+    )
+    row = repo._meetings[1]
+    assert row["data"]["withdrawal"]["status"] == "pending"
+
+
+def test_pre_active_withdrawal_ack_is_persisted_before_exactly_one_delete():
+    """A2: the bot's typed acknowledgement wins the durable CAS before runtime teardown."""
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher, enforce_withdrawal_timeout
+
+    order: list[str] = []
+
+    class OrderedRepo(InMemoryMeetingRepo):
+        async def finalize_withdrawal(self, **kwargs):
+            row = await super().finalize_withdrawal(**kwargs)
+            if row is not None:
+                order.append(f"persist:{kwargs['outcome']['status']}")
+            return row
+
+    class OrderedRuntime(FakeRuntimeClient):
+        async def delete_workload(self, workload_id):
+            order.append(f"delete:{workload_id}")
+            await super().delete_workload(workload_id)
+
+    repo = OrderedRepo()
+    runtime = OrderedRuntime()
+    client = TestClient(create_app(
+        meeting_repo=repo,
+        runtime=runtime,
+        command_publisher=InMemoryCommandPublisher(),
+        token_secret=SECRET,
+    ))
+    created = client.post(
+        "/bots",
+        headers={"x-user-id": str(USER)},
+        json={"platform": "google_meet", "native_meeting_id": "withdraw-order"},
+    )
+    assert created.status_code == 201, created.text
+    session_uid = repo.sessions[0]["session_uid"]
+    workload_id = runtime.specs[0]["workloadId"]
+    for status in ("joining", "awaiting_admission"):
+        r = client.post("/bots/internal/callback/lifecycle", json={
+            "connection_id": session_uid, "container_id": workload_id, "status": status,
+        })
+        assert r.status_code == 200, r.text
+
+    stopped = client.delete(
+        "/bots/google_meet/withdraw-order", headers={"x-user-id": str(USER)}
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert runtime.deleted == []
+
+    ack = client.post("/bots/internal/callback/lifecycle", json={
+        "connection_id": session_uid,
+        "container_id": workload_id,
+        "status": "failed",
+        "failure_stage": "awaiting_admission",
+        "completion_reason": "stopped",
+        "reason": "stopped while awaiting admission (withdrew the join request)",
+        "exit_code": 0,
+        "withdrawal": {
+            "status": "completed",
+            "completed_at": "2026-07-24T08:45:00Z",
+            "duration_ms": 413,
+            "cancel_attempted": True,
+            "page_closed": True,
+        },
+    })
+    assert ack.status_code == 200, ack.text
+    assert order == [f"persist:completed", f"delete:{workload_id}"]
+    assert runtime.deleted == [workload_id]
+    durable = repo._meetings[1]["data"]["withdrawal"]
+    assert durable["status"] == "completed"
+    assert durable["page_closed"] is True
+    assert durable["duration_ms"] == 413
+    assert durable["acknowledged_at"].endswith("Z")
+
+    # A late timeout loses the same CAS and cannot overwrite success or delete twice.
+    won = asyncio.run(enforce_withdrawal_timeout(
+        repo,
+        runtime,
+        session_uid=session_uid,
+        meeting_id=1,
+        workload_id=workload_id,
+    ))
+    assert won is False
+    assert runtime.deleted == [workload_id]
+    assert repo._meetings[1]["data"]["withdrawal"]["status"] == "completed"
+
+
+def test_missing_ack_persists_typed_timeout_before_bounded_fallback_delete():
+    """A3: exercise the deadline action directly — deterministic clock, no sleep-based proof."""
+    from datetime import datetime, timezone
+
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher, enforce_withdrawal_timeout
+
+    order: list[str] = []
+
+    class OrderedRepo(InMemoryMeetingRepo):
+        async def finalize_withdrawal(self, **kwargs):
+            row = await super().finalize_withdrawal(**kwargs)
+            if row is not None:
+                order.append(f"persist:{kwargs['outcome']['status']}")
+            return row
+
+    class OrderedRuntime(FakeRuntimeClient):
+        async def delete_workload(self, workload_id):
+            order.append(f"delete:{workload_id}")
+            await super().delete_workload(workload_id)
+
+    repo = OrderedRepo()
+    runtime = OrderedRuntime()
+    client = TestClient(create_app(
+        meeting_repo=repo,
+        runtime=runtime,
+        command_publisher=InMemoryCommandPublisher(),
+        token_secret=SECRET,
+    ))
+    created = client.post(
+        "/bots",
+        headers={"x-user-id": str(USER)},
+        json={"platform": "google_meet", "native_meeting_id": "withdraw-timeout"},
+    )
+    session_uid = repo.sessions[0]["session_uid"]
+    workload_id = runtime.specs[0]["workloadId"]
+    for status in ("joining", "awaiting_admission"):
+        progressed = client.post("/bots/internal/callback/lifecycle", json={
+            "connection_id": session_uid, "container_id": workload_id, "status": status,
+        })
+        assert progressed.status_code == 200, progressed.text
+    stopped = client.delete(
+        "/bots/google_meet/withdraw-timeout", headers={"x-user-id": str(USER)}
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert runtime.deleted == []
+
+    won = asyncio.run(enforce_withdrawal_timeout(
+        repo,
+        runtime,
+        session_uid=session_uid,
+        meeting_id=1,
+        workload_id=workload_id,
+        timed_out_at=datetime(2026, 7, 24, 8, 45, 25, tzinfo=timezone.utc),
+    ))
+    assert won is True
+    assert order == [f"persist:timed_out", f"delete:{workload_id}"]
+    timeout = repo._meetings[1]["data"]["withdrawal"]
+    assert timeout["status"] == "timed_out"
+    assert timeout["timed_out_at"] == "2026-07-24T08:45:25Z"
+    assert "not persisted" in timeout["reason"]
+
+
+def test_active_stop_keeps_existing_leave_finalize_path():
+    """A4: an admitted bot gets no withdrawal carrier and no direct workload delete."""
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
+
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    publisher = InMemoryCommandPublisher()
+    client = TestClient(create_app(
+        meeting_repo=repo, runtime=runtime, command_publisher=publisher, token_secret=SECRET,
+    ))
+    created = client.post(
+        "/bots",
+        headers={"x-user-id": str(USER)},
+        json={"platform": "google_meet", "native_meeting_id": "active-stop-control"},
+    )
+    session_uid = repo.sessions[0]["session_uid"]
+    workload_id = runtime.specs[0]["workloadId"]
+    for status in ("joining", "awaiting_admission", "active"):
+        r = client.post("/bots/internal/callback/lifecycle", json={
+            "connection_id": session_uid, "container_id": workload_id, "status": status,
+        })
+        assert r.status_code == 200, r.text
+
+    stopped = client.delete(
+        "/bots/google_meet/active-stop-control", headers={"x-user-id": str(USER)}
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert runtime.deleted == []
+    assert "withdrawal" not in repo._meetings[1]["data"]
+    assert repo._meetings[1]["status"] == "stopping"
+    assert any("leave" in body for _channel, body in publisher.published)

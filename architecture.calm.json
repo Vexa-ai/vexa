@@ -592,7 +592,7 @@
    "unique-id": "lifecycle.v1",
    "node-type": "contract",
    "name": "lifecycle.v1",
-   "description": "lifecycle.v1 — sealed/published contract (meetings)",
+   "description": "lifecycle.v1 — sealed/published bot-status contract, including durable lobby-withdrawal acknowledgement before runtime deletion (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/lifecycle.v1",

@@ -90,6 +90,25 @@ export function createHttpLifecycleSink(opts: HttpLifecycleSinkOptions): Lifecyc
     );
   }
 
+  async function emitDurable(event: LifecycleEvent): Promise<'persisted' | 'unconfirmed'> {
+    const body = JSON.stringify(event);
+    let lastErr: string | undefined;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const res = await fetchImpl(callbackUrl, { method: 'POST', headers, body });
+        if (res.ok) return 'persisted';
+        lastErr = `HTTP ${res.status}`;
+      } catch (e) {
+        lastErr = (e as Error)?.message ?? String(e);
+      }
+      if (attempt < attempts) await sleep(backoffMs * 2 ** (attempt - 1));
+    }
+    console.error(
+      `[bot] lifecycle.v1 durable ${event.status} POST unconfirmed after ${attempts} attempt(s): ${lastErr ?? 'unknown'}`,
+    );
+    return 'unconfirmed';
+  }
+
   // The reachability gate's first-emit probe (#530). Emits the (joining) event AND reports whether
   // the primary channel is REACHABLE. Any HTTP response — 2xx OR non-2xx — proves the channel is
   // up (P18) and returns `reachable` immediately (near-zero latency on the fast path). Only when
@@ -114,5 +133,5 @@ export function createHttpLifecycleSink(opts: HttpLifecycleSinkOptions): Lifecyc
     return 'unreachable';
   }
 
-  return { emit, emitReachable };
+  return { emit, emitDurable, emitReachable };
 }

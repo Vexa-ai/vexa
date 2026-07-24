@@ -45,7 +45,12 @@ export interface JoinDriver {
   /** Withdraw a PENDING join request from the waiting room / pre-join screen (Bug 2): cancel the
    *  ask-to-join (Teams/Meet have a Cancel affordance) and, as a guaranteed drop, close the page so
    *  the request is abandoned even where no cancel button is reachable. Best-effort; never throws. */
-  withdraw(reason: string): Promise<void>;
+  withdraw(reason: string): Promise<WithdrawalEvidence | void>;
+}
+
+export interface WithdrawalEvidence {
+  cancelAttempted: boolean;
+  pageClosed: boolean;
 }
 
 /** The capture → lane → STT → transcript/recording engine. The orchestrator starts/stops
@@ -73,6 +78,10 @@ export type PrimaryReachability = 'reachable' | 'unreachable';
  *  adapter POSTs to meeting-api's callback; the L2 fake records the sequence to assert. */
 export interface LifecycleSink {
   emit(event: LifecycleEvent): Promise<void>;
+  /** A lifecycle callback whose HTTP 2xx is part of the value contract. Unlike ordinary best-effort
+   *  status reports, a pre-active withdrawal acknowledgement is not "completed" unless the control
+   *  plane confirmed it was durably accepted. */
+  emitDurable?(event: LifecycleEvent): Promise<'persisted' | 'unconfirmed'>;
   /** Emit the LOAD-BEARING first `joining` event AND report whether the primary control-plane
    *  channel is reachable — the reachability gate (#530, P18). Reachable ⇒ the orchestrator
    *  proceeds with ZERO added latency (the secondary channel is never probed). OPTIONAL: sinks
