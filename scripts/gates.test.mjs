@@ -205,6 +205,29 @@ test("image-licenses audits the declared Firefox artifact authority", () => {
   );
 });
 
+test("image-licenses RED: an extra top-level CfT 1228 browser authority is rejected", () => {
+  const extraChromium = `"browserArtifacts": [
+    {
+      "name": "chromium",
+      "version": "149.0.7827.55",
+      "playwrightRevision": "1228",
+      "artifactPath": "/ms-playwright/chromium-1228",
+      "copyOnly": "/ms-playwright/chromium-1228"
+    },`;
+  const r = withEdited(
+    IMG_MANIFEST,
+    '"browserArtifacts": [',
+    extraChromium,
+    () => runGate("image-licenses"),
+  );
+  assert.equal(
+    r.green,
+    false,
+    "an extra top-level CfT 1228 browser authority false-greened",
+  );
+  assert.match(r.out, /exactly one.*Firefox/i);
+});
+
 test("image-licenses RED: Firefox source-image provenance drift is rejected", () => {
   const original =
     "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e";

@@ -520,6 +520,9 @@ function gateImageLicenses() {
   // separately loaded weak-copyleft components, and the artifacts that must not cross into the image.
   const browserArtifacts = man.browserArtifacts || [];
   const firefox = browserArtifacts.find((entry) => entry.name === "firefox");
+  if (browserArtifacts.length !== 1 || browserArtifacts[0]?.name !== "firefox") {
+    bad.push("browser artifact authority must contain exactly one selected Firefox record");
+  }
   const expectedFirefoxSource =
     "mcr.microsoft.com/playwright@sha256:7b86926fff94374389e8e1f4fdc5c76d050d4a06a7886bb537bf412b20e2b71e";
   const expectedNotices = [
