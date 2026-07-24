@@ -269,7 +269,6 @@ jobs:
         run: |
           set -euo pipefail
           : > stable-image-aliases.tsv
-          CANDIDATE_TAG="$(node -p "require('./$MAP').candidate_tag")"
 
           while IFS=$'\t' read -r image top_digest platform expected_manifest expected_config; do
             descriptor="$(
@@ -306,8 +305,8 @@ jobs:
             }
           done < <(node release/candidate-image-map.mjs emit-platform-tsv "$MAP")
 
-          while IFS=$'\t' read -r image digest; do
-            candidate="$image:$CANDIDATE_TAG"
+          while IFS=$'\t' read -r image digest image_candidate_tag; do
+            candidate="$image:$image_candidate_tag"
             stable="$image:$VERSION"
 
             candidate_digest="$(

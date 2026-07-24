@@ -123,6 +123,17 @@ const PANTOMIME = ['Step 3:', 'Step 4:', 'Step 5:', 'Step 6:', 'Step 6b:'];
     check(`Teams host is NOT a sign-in host: ${new URL(u).hostname}`, isMicrosoftLoginUrl(u), false);
     check(`Teams host → isTeamsMeetingUrl: ${new URL(u).hostname}`, isTeamsMeetingUrl(u), true);
   }
+  for (const u of [
+    'https://login.microsoftonline.com.evil.example/oauth2',
+    'https://login.microsoftonline.com@evil.example/oauth2',
+    'https://evil-login.microsoftonline.com/oauth2',
+  ]) {
+    check(
+      `lookalike host is NOT a Microsoft sign-in host: ${new URL(u).hostname}`,
+      isMicrosoftLoginUrl(u),
+      false,
+    );
+  }
   check('garbage url → isMicrosoftLoginUrl = false', isMicrosoftLoginUrl('not a url'), false);
 
   // The tenant/client ids and the meetup-join payload in redirect_uri are customer data; the
@@ -148,10 +159,14 @@ const PANTOMIME = ['Step 3:', 'Step 4:', 'Step 5:', 'Step 6:', 'Step 6b:'];
       'the reason text is NOT an admission/pre-join timeout',
       /admission|pre-join readiness|timeout period/i.test(String(error?.message ?? '')), false,
     );
-    check(
-      'the reason text names the sign-in page it landed on',
-      String(error?.message ?? '').includes('login.microsoftonline.com'), true,
-    );
+    const observedHost = (() => {
+      try {
+        return new URL(error instanceof TeamsJoinRedirectError ? error.observedUrl : '').hostname;
+      } catch {
+        return null;
+      }
+    })();
+    check('the typed error records the exact sign-in host', observedHost === 'login.microsoftonline.com', true);
     check('the reason text carries no query string', String(error?.message ?? '').includes('client_id'), false);
     // The RED cost was 45 700ms here (plus 30 000ms of admission polling after it).
     check(`fails fast: ${elapsedMs}ms << 45000ms pre-join wait`, elapsedMs < 5000, true);

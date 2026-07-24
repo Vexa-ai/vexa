@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
+  RUNTIME_INPUTS_BY_IMAGE,
   assertNoRuntimeInputDrift,
+  candidateInputDrift,
   validateCandidateMap,
 } from "./candidate-image-map.mjs";
 
@@ -79,6 +85,65 @@ test("refuses a class mismatch or incomplete platform identity", () => {
   invalidConfig.images["vexaai/vexa-bot"]
     .platform_manifests["linux/amd64"].config_digest = "sha256:1234";
   assert.throws(() => validateCandidateMap(invalidConfig), /invalid config digest/);
+});
+
+test("requires a complete per-image candidate override", () => {
+  const incomplete = validMap();
+  incomplete.images["vexaai/vexa-bot"].candidate_tag = "v0.12.18-260724.stage3";
+  assert.throws(() => validateCandidateMap(incomplete), /candidate override must define/);
+
+  const complete = validMap();
+  Object.assign(complete.images["vexaai/vexa-bot"], {
+    candidate_tag: "v0.12.18-260724.stage3",
+    build_source: "3".repeat(40),
+    validation_source: "4".repeat(40),
+    validation_run: "https://github.com/Vexa-ai/vexa/actions/runs/30070000000",
+  });
+  assert.doesNotThrow(() => validateCandidateMap(complete));
+});
+
+test("every root-context image tracks the ignore file that shapes its inputs", () => {
+  for (const image of [
+    "vexaai/v012-agent-worker",
+    "vexaai/v012-agent-api",
+    "vexaai/v012-meeting-api",
+    "vexaai/vexa-bot",
+  ]) {
+    assert.ok(RUNTIME_INPUTS_BY_IMAGE[image].includes(".dockerignore"), image);
+  }
+  assert.ok(
+    RUNTIME_INPUTS_BY_IMAGE["vexaai/vexa-lite"]
+      .includes("deploy/lite"),
+    "Lite input set carries Dockerfile.lite.dockerignore through deploy/lite",
+  );
+});
+
+test("a root .dockerignore-only change invalidates every affected candidate", (t) => {
+  const repo = mkdtempSync(join(tmpdir(), "candidate-map-drift-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+
+  git("init", "--quiet");
+  git("config", "user.name", "Candidate Map Test");
+  git("config", "user.email", "candidate-map-test@vexa.invalid");
+  writeFileSync(join(repo, ".dockerignore"), "node_modules\n");
+  git("add", ".dockerignore");
+  git("commit", "--quiet", "-m", "base");
+  const buildSource = git("rev-parse", "HEAD");
+
+  writeFileSync(join(repo, ".dockerignore"), "node_modules\n*.tmp\n");
+  git("add", ".dockerignore");
+  git("commit", "--quiet", "-m", "change build context");
+  const head = git("rev-parse", "HEAD");
+
+  const doc = validMap();
+  doc.build_source = buildSource;
+  assert.deepEqual(candidateInputDrift(doc, head, repo), [
+    "vexaai/v012-agent-worker: .dockerignore",
+    "vexaai/v012-agent-api: .dockerignore",
+    "vexaai/v012-meeting-api: .dockerignore",
+    "vexaai/vexa-bot: .dockerignore",
+  ]);
 });
 
 test("refuses any runtime-input drift", () => {

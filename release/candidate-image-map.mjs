@@ -25,21 +25,72 @@ export const PROD_DEPLOYED_IMAGES = new Set([
   "vexaai/vexa-bot",
 ]);
 
-// The union of every path copied by the ten release Dockerfiles. If any path
-// differs from the witnessed build source, those bytes are a new candidate and
-// may not be relabelled as the witnessed release.
+// Every path that can enter each release image. Root-context builds include the
+// root .dockerignore because changing it changes which bytes Docker receives.
+// Narrow contexts name their whole context. Lite uses Dockerfile.lite.dockerignore
+// instead of the root ignore file.
+export const RUNTIME_INPUTS_BY_IMAGE = {
+  "vexaai/v012-admin-api": [
+    "core/identity/services/admin-api",
+  ],
+  "vexaai/v012-runtime": [
+    "core/runtime",
+  ],
+  "vexaai/v012-agent-worker": [
+    ".dockerignore",
+    "core/agent",
+    "core/meetings/contracts/transcript.v1/transcript.schema.json",
+  ],
+  "vexaai/v012-agent-api": [
+    ".dockerignore",
+    "core/agent",
+    "core/meetings/contracts/transcript.v1/transcript.schema.json",
+  ],
+  "vexaai/v012-meeting-api": [
+    ".dockerignore",
+    "core/meetings/services/meeting-api",
+    "core/meetings/contracts/invocation.v1/invocation.schema.json",
+    "core/meetings/contracts/lifecycle.v1/lifecycle.schema.json",
+    "core/meetings/contracts/webhook.v1/webhook.schema.json",
+    "core/runtime/contracts/runtime.v1/runtime.schema.json",
+    "core/runtime/contracts/schedule.v1/schedule.schema.json",
+  ],
+  "vexaai/v012-gateway": [
+    "core/gateway/services/gateway",
+  ],
+  "vexaai/v012-mcp": [
+    "core/meetings/services/mcp",
+  ],
+  "vexaai/v012-terminal": [
+    "clients/terminal",
+  ],
+  "vexaai/vexa-bot": [
+    ".dockerignore",
+    "core",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.base.json",
+    "turbo.json",
+    "licenses",
+  ],
+  "vexaai/vexa-lite": [
+    "deploy/lite",
+    "core",
+    "scripts",
+    "clients/terminal",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.base.json",
+    "turbo.json",
+    "licenses",
+  ],
+};
+
 export const RUNTIME_INPUT_PATHS = [
-  "core",
-  "clients/terminal",
-  "deploy/lite",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "tsconfig.base.json",
-  "turbo.json",
-  "scripts",
-  "licenses",
-];
+  ...new Set(Object.values(RUNTIME_INPUTS_BY_IMAGE).flat()),
+].sort();
 
 const SHA = /^[0-9a-f]{40}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -124,6 +175,33 @@ export function validateCandidateMap(doc, expectedVersion) {
     if (typeof row.evidence !== "string" || row.evidence.trim() === "") {
       fail(`${image}: evidence is required`);
     }
+    const overrideFields = [
+      "candidate_tag",
+      "build_source",
+      "validation_source",
+      "validation_run",
+    ];
+    const overrideCount = overrideFields.filter((field) => row[field] !== undefined).length;
+    if (overrideCount !== 0 && overrideCount !== overrideFields.length) {
+      fail(`${image}: candidate override must define ${overrideFields.join(",")}`);
+    }
+    if (overrideCount === overrideFields.length) {
+      if (
+        typeof row.candidate_tag !== "string" ||
+        !row.candidate_tag.startsWith(`${doc.release}-`)
+      ) {
+        fail(`${image}: invalid candidate_tag override`);
+      }
+      if (!SHA.test(row.build_source)) fail(`${image}: invalid build_source override`);
+      if (!SHA.test(row.validation_source)) fail(`${image}: invalid validation_source override`);
+      if (
+        !/^https:\/\/github\.com\/Vexa-ai\/vexa\/actions\/runs\/\d+$/.test(
+          row.validation_run || "",
+        )
+      ) {
+        fail(`${image}: invalid validation_run override`);
+      }
+    }
   }
   return doc;
 }
@@ -138,12 +216,34 @@ export function assertNoRuntimeInputDrift(changedPaths) {
 }
 
 export function runtimeInputDrift(buildSource, head = "HEAD", cwd = process.cwd()) {
+  return runtimeInputDriftForPaths(buildSource, head, RUNTIME_INPUT_PATHS, cwd);
+}
+
+export function runtimeInputDriftForPaths(
+  buildSource,
+  head,
+  inputPaths,
+  cwd = process.cwd(),
+) {
   const output = execFileSync(
     "git",
-    ["diff", "--name-only", `${buildSource}..${head}`, "--", ...RUNTIME_INPUT_PATHS],
+    ["diff", "--name-only", `${buildSource}..${head}`, "--", ...inputPaths],
     { cwd, encoding: "utf8" },
   );
   return output.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+export function candidateInputDrift(doc, head = "HEAD", cwd = process.cwd()) {
+  return REQUIRED_IMAGES.flatMap((image) => {
+    const row = doc.images[image];
+    const buildSource = row.build_source || doc.build_source;
+    return runtimeInputDriftForPaths(
+      buildSource,
+      head,
+      RUNTIME_INPUTS_BY_IMAGE[image],
+      cwd,
+    ).map((path) => `${image}: ${path}`);
+  });
 }
 
 function loadMap(path) {
@@ -170,7 +270,8 @@ function main(argv) {
   }
   if (command === "emit-tsv") {
     for (const image of REQUIRED_IMAGES) {
-      console.log(`${image}\t${doc.images[image].digest}`);
+      const row = doc.images[image];
+      console.log(`${image}\t${row.digest}\t${row.candidate_tag || doc.candidate_tag}`);
     }
     return;
   }
@@ -193,10 +294,10 @@ function main(argv) {
     return;
   }
   if (command === "check-source-inputs") {
-    const drift = runtimeInputDrift(doc.build_source, arg || "HEAD");
+    const drift = candidateInputDrift(doc, arg || "HEAD");
     assertNoRuntimeInputDrift(drift);
     console.log(
-      `✓ runtime image inputs are tree-identical: ${doc.build_source} → ${arg || "HEAD"}`,
+      `✓ every image input is tree-identical to its witnessed build source → ${arg || "HEAD"}`,
     );
     return;
   }
