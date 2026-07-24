@@ -32,6 +32,16 @@ export { startDebugView, setHooks };
 // Canonical browser launch args — the vexa-bot service and the debug harness both
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
 export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
+export { browserProductContract, selectBrowserProduct } from "./browser-product";
+export type {
+  BrowserEngine,
+  BrowserProductContract,
+  BrowserProductInput,
+  BrowserProductSelection,
+  BrowserProfilePolicy,
+  BrowserRuntime,
+  JoinPlatform,
+} from "./browser-product";
 
 export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
 

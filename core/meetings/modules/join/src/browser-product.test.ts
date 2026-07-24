@@ -9,6 +9,7 @@
 import assert from "assert/strict";
 import { readFileSync } from "fs";
 import { join } from "path";
+import * as publicApi from "./index";
 
 type Contract = {
   schema: string;
@@ -112,18 +113,19 @@ async function main(): Promise<void> {
     "FIXTURE_GREEN: selection, Firefox custody, no-CfT, and official-test-page contracts are coherent",
   );
 
-  let browserProduct: {
+  assert.equal(
+    typeof (publicApi as Record<string, unknown>).selectBrowserProduct,
+    "function",
+    "PUBLIC_API_RED: @vexa/join does not export selectBrowserProduct from its governed front door",
+  );
+  const browserProduct = publicApi as typeof publicApi & {
     selectBrowserProduct: (input: Record<string, unknown>) => Record<string, unknown>;
   };
-  try {
-    const modulePath = "./browser-product";
-    browserProduct = await import(modulePath);
-  } catch (error) {
-    throw new Error(
-      "BROWSER_PRODUCT_RED: @vexa/join has no native browser/profile selection seam",
-      { cause: error },
-    );
-  }
+  assert.deepEqual(
+    browserProduct.browserProductContract,
+    contract,
+    "public front door exports the validated browser-product contract",
+  );
 
   for (const row of contract.selectionMatrix) {
     assert.deepEqual(
