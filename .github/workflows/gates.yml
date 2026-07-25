@@ -78,6 +78,16 @@ jobs:
       # (ENOENT in /tmp cleanup). The CPU binaries tests use are bundled in the package itself.
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
+      # capture-bridge.boundary.test.ts is a mandatory built-browser proof.
+      # The exact Playwright version is owned by @vexa/remote-browser; install only
+      # its Chromium runtime and cache those version-addressed browser bytes.
+      - name: Cache pinned Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('core/meetings/modules/remote-browser/package.json') }}
+      - name: Provision pinned Playwright Chromium
+        run: pnpm --filter @vexa/remote-browser exec playwright install --with-deps chromium
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
