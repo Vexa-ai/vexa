@@ -54,8 +54,14 @@ def _runtime_scheduling_env() -> dict[str, str]:
     return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
 
 
-def _kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    r = subprocess.run(["kubectl", *args], capture_output=True, text=True)
+def _kubectl(
+    *args: str, check: bool = True, timeout: Optional[float] = None,
+) -> subprocess.CompletedProcess:
+    # `timeout` is opt-in at the destructive terminal-reap boundary. Other kubectl operations retain
+    # their existing behavior; a TimeoutExpired propagates as unknown/unconfirmed to the caller.
+    r = subprocess.run(
+        ["kubectl", *args], capture_output=True, text=True, timeout=timeout,
+    )
     if check and r.returncode != 0:
         raise RuntimeError(f"kubectl {' '.join(args)} failed: {r.stderr.strip()}")
     return r
@@ -112,6 +118,9 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
 
 class K8sBackend:
     name = "k8s"
+    # Bare restart=Never Pods remain as Succeeded/Failed objects after their process exits. The
+    # kernel's terminal-reap tick may reclaim those objects only after it has recorded the exit.
+    reaps_terminal_workloads = True
 
     def __init__(self, name_prefix: str = "vexa-", namespace: Optional[str] = None) -> None:
         self._prefix = name_prefix
@@ -195,10 +204,58 @@ class K8sBackend:
         except Exception:  # noqa: BLE001 — discovery is a boot aid; it must never crash the boot
             return []
 
-    def exit_code(self, h: WorkloadHandle) -> Optional[int]:
-        r = _kubectl("get", "pod", h._impl, "-o", "json", *self._ns_args(), check=False)  # type: ignore[attr-defined]
+    def terminal_reap_snapshot(self) -> dict[str, Optional[int]]:
+        """One bounded, label-selected observation for terminal-reap candidate discovery.
+
+        Returns every managed Pod in this namespace as workload-id → exit-code, with ``None`` for
+        Pending/Running/unknown phases. A caller may interpret a tracked handle absent from this map
+        as a candidate only because rc=0 proves the complete list succeeded; any transport/API/RBAC
+        failure raises and makes the whole tick fail closed.
+        """
+        r = _kubectl(
+            "get", "pods", "-l", f"{MANAGED_LABEL}=true", "--request-timeout=3s",
+            "-o", "json", *self._ns_args(), check=False, timeout=4,
+        )
         if r.returncode != 0:
-            return 0                                     # gone (deleted/never-found) → no longer running
+            raise RuntimeError(
+                f"kubectl list managed pods failed: {r.stderr.strip()[:200]}"
+            )
+        snapshot: dict[str, Optional[int]] = {}
+        for pod in json.loads(r.stdout).get("items", []):
+            labels = (pod.get("metadata") or {}).get("labels") or {}
+            workload_id = labels.get(WORKLOAD_ID_LABEL)
+            if not workload_id:
+                continue
+            status = pod.get("status") or {}
+            phase = status.get("phase")
+            code: Optional[int] = None
+            if phase == "Succeeded":
+                code = 0
+            elif phase == "Failed":
+                code = 1
+                for container in status.get("containerStatuses", []):
+                    terminated = (container.get("state") or {}).get("terminated")
+                    if terminated and "exitCode" in terminated:
+                        code = int(terminated["exitCode"])
+                        break
+            snapshot[workload_id] = code
+        return snapshot
+
+    def exit_code(self, h: WorkloadHandle) -> Optional[int]:
+        # `--ignore-not-found` gives NotFound a unique, machine-readable shape: rc=0 + no body.
+        # Any nonzero rc is an OBSERVATION FAILURE (RBAC, timeout, DNS, API outage), never evidence
+        # that the process exited. Raising lets the kernel retain running state and the handle; the
+        # next tick retries without deleting a possibly-live customer Pod.
+        r = _kubectl(
+            "get", "pod", h._impl, "--ignore-not-found", "--request-timeout=3s", "-o", "json",
+            *self._ns_args(), check=False, timeout=4,
+        )  # type: ignore[attr-defined]
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"kubectl get pod {h._impl} failed: {r.stderr.strip()[:200]}"  # type: ignore[attr-defined]
+            )
+        if not r.stdout.strip():
+            return 0                                     # true NotFound → no longer running
         status = json.loads(r.stdout).get("status", {})
         phase = status.get("phase")
         if phase in ("Pending", "Running"):
@@ -222,5 +279,10 @@ class K8sBackend:
                  *self._ns_args(), check=False)  # type: ignore[attr-defined]
 
     def cleanup(self, h: WorkloadHandle) -> None:
-        _kubectl("delete", "pod", h._impl, "--ignore-not-found", "--grace-period=0", "--force",
-                 "--wait=false", *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        # A successful return is a CONFIRMED absence, not merely an accepted asynchronous delete.
+        # This bounds a terminal Pod's residue to the production sweep interval + five seconds and
+        # lets the kernel retry on a timeout instead of dropping the handle and claiming cleanup.
+        _kubectl(
+            "delete", "pod", h._impl, "--ignore-not-found", "--grace-period=0", "--force",
+            "--wait=true", "--timeout=5s", "--request-timeout=3s", *self._ns_args(), timeout=6,
+        )  # type: ignore[attr-defined]
