@@ -483,6 +483,32 @@ def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):
     assert r.status_code == 422, r.text
 
 
+def test_post_bots_preserves_modern_teams_guest_url_to_runtime(monkeypatch):
+    """The canonical /meet route and its guest token must reach browser navigation unchanged.
+
+    The native id remains the stable API/dashboard identity; it must never replace the join URL.
+    """
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    meeting_url = "https://teams.microsoft.com/meet/322458418885037?p=guest-token"
+
+    r = _client(repo, runtime).post(
+        "/bots",
+        headers=HEADERS,
+        json={
+            "platform": "teams",
+            "native_meeting_id": "322458418885037",
+            "meeting_url": meeting_url,
+        },
+    )
+
+    assert r.status_code == 201, r.text
+    invocation = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert invocation["nativeMeetingId"] == "322458418885037"
+    assert invocation["meetingUrl"] == meeting_url
+    assert r.json()["constructed_meeting_url"] == meeting_url
+
+
 # ── route: meeting_url-only bodies derive the addressing key, or refuse typed (#792) ─────────────
 #
 # api.v1's `meeting_url` description promises: "When provided without native_meeting_id, the URL is
