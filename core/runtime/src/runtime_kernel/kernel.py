@@ -11,6 +11,8 @@ Quotas (O-RT-2): create() rejects the N+1th active workload for an owner via the
 count_for_owner."""
 from __future__ import annotations
 
+import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -27,6 +29,8 @@ from .store import (
     WorkloadStore,
     default_owner,
 )
+
+logger = logging.getLogger("runtime_kernel.kernel")
 
 
 class QuotaExceeded(Exception):
@@ -80,6 +84,15 @@ class Runtime:
         self.owner_quota = owner_quota
         # Live, non-serializable backend handles. Empty on a fresh process (post-restart).
         self._handles: dict[str, WorkloadHandle] = {}
+        # One stable lock per workload id serializes every lifecycle operation with terminal reap.
+        # The lock objects are intentionally retained for the Runtime's lifetime: deleting/replacing
+        # a lock would itself create an ABA window for a same-id respawn.
+        self._workload_locks: dict[str, threading.RLock] = {}
+        self._workload_locks_guard = threading.Lock()
+
+    def _lock_for(self, workload_id: str) -> threading.RLock:
+        with self._workload_locks_guard:
+            return self._workload_locks.setdefault(workload_id, threading.RLock())
 
     def _emit(self, workload_id: str, state: RuntimeState, **kw) -> RuntimeEvent:
         ev = RuntimeEvent(workloadId=workload_id, state=state, at=_now(), **kw)
@@ -156,6 +169,10 @@ class Runtime:
 
     # ── runtime.v1 operations ────────────────────────────────────────────────
     def create(self, spec: WorkloadSpec) -> WorkloadStatus:
+        with self._lock_for(spec.workloadId):
+            return self._create_locked(spec)
+
+    def _create_locked(self, spec: WorkloadSpec) -> WorkloadStatus:
         # runtime.v1: workloadId is the caller-assigned IDEMPOTENCY KEY (ADR 0027). A create for a
         # workload that is still starting/running is a TOUCH — return the live status unchanged: no
         # respawn (the docker backend's name-conflict path would force-delete the RUNNING container,
@@ -216,6 +233,10 @@ class Runtime:
         return status
 
     def get(self, workload_id: str) -> WorkloadStatus:
+        with self._lock_for(workload_id):
+            return self._get_locked(workload_id)
+
+    def _get_locked(self, workload_id: str) -> WorkloadStatus:
         record = self._record(workload_id)
         status = record.status
         # A running record with NO in-process handle (restart) re-derives one from the substrate,
@@ -240,7 +261,99 @@ class Runtime:
     def list(self) -> list[WorkloadStatus]:
         return [self.get(r.spec.workloadId) for r in self.store.list()]
 
+    def reap_terminal(self) -> list[str]:
+        """Reflect self-exits and reclaim terminal substrate objects owned by a backend that opts in.
+
+        A Kubernetes ``restartPolicy: Never`` Pod survives in ``Succeeded``/``Failed`` after its
+        process exits.  The bot must be allowed to finish its own callback/recording drain first, so
+        the runtime observes and persists ``stopped`` before asking the backend to reclaim the Pod.
+        Failed/unconfirmed cleanup deliberately retains the handle: the next production tick retries
+        the exact object instead of losing custody.  Docker/process keep their existing diagnostics
+        and group-reaping semantics by not opting into this policy.
+        """
+        if not getattr(self.backend, "reaps_terminal_workloads", False):
+            return []
+
+        snapshotter = getattr(self.backend, "terminal_reap_snapshot", None)
+        if snapshotter is None:
+            logger.error("terminal reap policy enabled without a batch snapshot boundary")
+            return []
+        try:
+            # One bounded substrate LIST, independent of workload count. Values are exit codes for
+            # terminal objects and None for live/unknown phases; a tracked id absent from a
+            # successful complete snapshot is a candidate for exact NotFound confirmation.
+            snapshot: dict[str, Optional[int]] = snapshotter()
+        except Exception as exc:  # noqa: BLE001 — list failure is unknown, never absence
+            logger.warning("terminal reap batch observation failed: %s", exc)
+            return []
+
+        reaped: list[str] = []
+        for record in self.store.list():
+            workload_id = record.spec.workloadId
+            handle = self._handles.get(workload_id)
+            if handle is None:
+                continue
+            observed = snapshot.get(workload_id, "__absent__")
+            if observed is None:
+                continue  # batch proves Pending/Running/unknown: never issue a per-id destructive path
+            with self._lock_for(workload_id):
+                # Re-read under the workload lock: the outer store listing is only a candidate set.
+                # A concurrent operation may have advanced/replaced the record before we acquired it.
+                current = self.store.get(workload_id)
+                if current is None:
+                    continue
+                status = current.status
+                if status.state not in (RuntimeState.running, RuntimeState.stopped):
+                    continue
+                # The handle may have changed while this id waited for its lock. The snapshot only
+                # classified the pre-lock generation, so a replacement is not eligible this tick.
+                current_handle = self._handles.get(workload_id)
+                if current_handle is not handle:
+                    continue
+                # Exact confirmation under the stable per-id lock closes both snapshot staleness and
+                # deterministic-name ABA. Unknown/error/live retains state and custody.
+                try:
+                    code = self.backend.exit_code(handle)
+                    if code is None:
+                        continue
+                except Exception as exc:  # noqa: BLE001 — failure is never proof of exit
+                    logger.warning(
+                        "terminal reap confirmation failed for %s: %s", workload_id, exc
+                    )
+                    continue
+                if status.state is RuntimeState.running:
+                    status.state = RuntimeState.stopped
+                    status.exitCode = code
+                    status.stoppedAt = _now()
+                    status.stopReason = (
+                        StopReason.completed if code == 0 else StopReason.failed
+                    )
+                    self._persist(current.spec, status)
+                    self._emit(
+                        workload_id, RuntimeState.stopped, exitCode=code,
+                        stopReason=status.stopReason,
+                    )
+                try:
+                    self.backend.cleanup(handle)
+                except Exception as exc:  # noqa: BLE001 — retain handle so next tick retries
+                    logger.warning(
+                        "terminal reap cleanup unconfirmed for %s: %s", workload_id, exc
+                    )
+                    continue
+                # Still inside the SAME stable per-id lock: no respawn can replace this handle
+                # between confirmed cleanup and custody removal (the deterministic-name ABA race).
+                if self._handles.get(workload_id) is handle:
+                    self._handles.pop(workload_id, None)
+                reaped.append(workload_id)
+        return reaped
+
     def stop(self, workload_id: str, reason: StopReason = StopReason.stopped) -> WorkloadStatus:
+        with self._lock_for(workload_id):
+            return self._stop_locked(workload_id, reason)
+
+    def _stop_locked(
+        self, workload_id: str, reason: StopReason = StopReason.stopped,
+    ) -> WorkloadStatus:
         record = self._record(workload_id)
         status = record.status
         if status.state in (RuntimeState.stopped, RuntimeState.destroyed):
@@ -268,10 +381,16 @@ class Runtime:
         return status
 
     def destroy(self, workload_id: str) -> WorkloadStatus:
+        with self._lock_for(workload_id):
+            return self._destroy_locked(workload_id)
+
+    def _destroy_locked(self, workload_id: str) -> WorkloadStatus:
         record = self._record(workload_id)
         h = self._handle_for(workload_id)                           # re-derives post-restart handles
         if h is not None:
             self.backend.cleanup(h)   # raises on an unconfirmed reclaim — destroyed is never a lie
+            if self._handles.get(workload_id) is h:
+                self._handles.pop(workload_id, None)
         status = record.status
         status.state = RuntimeState.destroyed
         self._persist(record.spec, status)
