@@ -4,6 +4,8 @@
 
 # Vexa
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FVexa-ai%2Fvexa.svg)](https://mcptoplist.com/server/glama%2FVexa-ai%2Fvexa)
+
 **Open-source, self-hosted meeting bot & transcription API.**
 
 A bot joins your Google Meet, Microsoft Teams, Zoom, and Jitsi calls and streams speaker-attributed
