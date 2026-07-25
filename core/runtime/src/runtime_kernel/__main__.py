@@ -92,6 +92,30 @@ def _start_ticker(scheduler) -> None:
     threading.Thread(target=_loop, name="scheduler-tick", daemon=True).start()
 
 
+def _start_terminal_reaper(runtime) -> None:
+    """Continuously reclaim terminal substrate objects for backends that explicitly require it.
+
+    Kubernetes keeps restart=Never Pods after process exit; the one-second default plus the backend's
+    bounded five-second delete confirmation keeps the post-terminal object lifetime below the #934
+    17-second acceptance ceiling. Other backends do not opt in and get no thread.
+    """
+    if not getattr(runtime.backend, "reaps_terminal_workloads", False):
+        return
+    interval = 1.0
+
+    def _loop() -> None:
+        while True:
+            try:
+                reaped = runtime.reap_terminal()
+                if reaped:
+                    logger.info("terminal workload reap confirmed: %s", ", ".join(reaped))
+            except Exception as e:  # noqa: BLE001 — a bad sweep must not kill future cleanup
+                logger.warning("terminal workload reap tick failed: %s", e)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="terminal-workload-reap", daemon=True).start()
+
+
 def _build_backend():
     """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
     ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
@@ -179,7 +203,11 @@ def build_production_app():
             )
     except Exception as e:  # noqa: BLE001 — adoption is a boot aid; it must never block the boot
         logger.warning("workload re-adoption failed: %s", e)
-    return create_app(runtime, scheduler=scheduler)
+    app = create_app(runtime, scheduler=scheduler)
+    # Start only AFTER create_app has attached durable callback delivery: a terminal exit observed
+    # on the first tick must not emit into the constructor's no-op sink.
+    _start_terminal_reaper(runtime)
+    return app
 
 
 def main() -> None:

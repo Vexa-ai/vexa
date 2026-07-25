@@ -56,6 +56,7 @@ function stopCapture(): string[] { console.log = realConsoleLog; return captured
 function mockPage(url: string | string[], visible: string[] = []): any {
   const urls = Array.isArray(url) ? url : [url];
   let urlCalls = 0;
+  const navigatedTo: string[] = [];
   const node = (sel: string): any => ({
     first: () => node(sel),
     isVisible: async () => visible.some((v) => sel.includes(v)),
@@ -66,7 +67,8 @@ function mockPage(url: string | string[], visible: string[] = []): any {
   });
   return {
     url: () => urls[Math.min(urlCalls++, urls.length - 1)],
-    goto: async () => {},
+    goto: async (target: string) => { navigatedTo.push(target); },
+    navigatedTo,
     waitForTimeout: async (ms: number) => { vnow += ms; },
     locator: node,
     evaluate: async () => 'media warm-up success (tracks=0)',
@@ -85,6 +87,9 @@ const LOGIN_URL =
 
 const MEETUP_JOIN_URL =
   'https://teams.microsoft.com/l/meetup-join/19%3ameeting_REDACTED%40thread.v2/0?context=%7b%7d';
+const MODERN_GUEST_TOKEN = 'guest-token-must-not-appear';
+const MODERN_GUEST_URL =
+  `https://teams.microsoft.com/meet/322458418885037?p=${MODERN_GUEST_TOKEN}`;
 
 /** Drive joinMicrosoftTeams on a fabricated page; report what it threw and the virtual cost. */
 async function driveJoin(page: any, meetingUrl: string) {
@@ -200,16 +205,33 @@ const PANTOMIME = ['Step 3:', 'Step 4:', 'Step 5:', 'Step 6:', 'Step 6b:'];
     check('healthy pre-join → the flow still runs its steps', logs.some((l) => l.startsWith('Step 6:')), true);
   }
 
+  // ── 4b. Modern guest URL: navigation keeps the token; observability does not ──
+  {
+    const page = mockPage(MODERN_GUEST_URL, ['Join now']);
+    const { error, logs } = await driveJoin(page, MODERN_GUEST_URL);
+    check('modern guest pre-join → no throw', error === null, true);
+    check('page.goto receives the canonical URL unchanged', page.navigatedTo[0] === MODERN_GUEST_URL, true);
+    check('navigation logs omit the guest token', logs.some((l) => l.includes(MODERN_GUEST_TOKEN)), false);
+    check('navigation logs omit the guest-token query', logs.some((l) => l.includes('p=')), false);
+    check(
+      'navigation log keeps a useful redacted route',
+      logs.some((l) => l.includes('https://teams.microsoft.com/meet/322458418885037')),
+      true,
+    );
+  }
+
   // ── 5. Negative control: a SLOW pre-join on the meeting host stays advisory ──
   //     (no over-correction — a Teams page that is merely late is not a redirect)
   {
-    const page = mockPage(MEETUP_JOIN_URL);
-    const { error, logs, elapsedMs } = await driveJoin(page, MEETUP_JOIN_URL);
+    const page = mockPage(MODERN_GUEST_URL);
+    const { error, logs, elapsedMs } = await driveJoin(page, MODERN_GUEST_URL);
     check('slow pre-join ON the Teams host → no throw', error === null, true);
     check(
       'slow pre-join → the advisory readiness timeout still logs',
       logs.some((l) => l.includes('pre-join readiness')), true,
     );
+    check('advisory timeout log omits the guest token', logs.some((l) => l.includes(MODERN_GUEST_TOKEN)), false);
+    check('advisory timeout log omits the guest-token query', logs.some((l) => l.includes('p=')), false);
     check(`slow pre-join → the full wait is still spent: ${elapsedMs}ms`, elapsedMs > 45000, true);
   }
 

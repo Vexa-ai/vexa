@@ -192,7 +192,7 @@ class MeetingsApi(_Domain):
     async def send_bot(self, native: str, *, url: str, platform: str = "google_meet",
                        bot_name: str = "VexaSlim", language: str = "en") -> dict:
         body = {"platform": platform, "native_meeting_id": native,
-                "bot_name": bot_name, "language": language, "url": url}
+                "bot_name": bot_name, "language": language, "meeting_url": url}
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(self.url("/bots"), headers=self._headers, json=body)
             r.raise_for_status()

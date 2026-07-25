@@ -17,6 +17,7 @@ from __future__ import annotations
 import runtime_kernel.k8s_backend as k8s_backend
 from runtime_kernel import default_registry
 from runtime_kernel.k8s_backend import K8sBackend
+from runtime_kernel.backend import WorkloadHandle
 from runtime_kernel.profiles import Runnable
 
 
@@ -68,3 +69,18 @@ def test_k8s_run_still_replaces_entrypoint_for_a_profile_that_has_a_command(monk
     run_argv = calls[0]
     i = run_argv.index("--command")
     assert run_argv[i:] == ["--command", "--", "python", "-m", "worker"]
+
+
+def test_terminal_cleanup_waits_for_confirmed_pod_absence(monkeypatch):
+    """#934: an async delete acceptance is not cleanup evidence; wait is bounded at five seconds."""
+    calls = []
+
+    def fake_kubectl(*args, **kwargs):
+        calls.append((list(args), kwargs))
+
+    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    K8sBackend(namespace="task-ns").cleanup(WorkloadHandle(id="mtg-1", impl="vexa-mtg-1"))
+    assert calls == [([
+        "delete", "pod", "vexa-mtg-1", "--ignore-not-found", "--grace-period=0", "--force",
+        "--wait=true", "--timeout=5s", "--request-timeout=3s", "-n", "task-ns",
+    ], {"timeout": 6})]

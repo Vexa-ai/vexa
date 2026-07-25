@@ -151,6 +151,81 @@ export function makeSpeakerHintSink(
   };
 }
 
+export type ProducerNameUnresolvedObservation =
+  | {
+      type: 'name-unresolved';
+      platform: 'teams';
+      signal: 'dom-outline';
+      reason: 'resolver-empty';
+      edge: 'start' | 'end';
+      tMs: number;
+    }
+  | {
+      type: 'name-unresolved';
+      platform: 'zoom';
+      signal: 'dom-active';
+      reason: 'footer-empty' | 'footer-absent' | 'read-fault';
+      tMs: number;
+    };
+
+export interface ProducerObservationCounters {
+  total: number;
+  teams: number;
+  zoom: number;
+  invalid: number;
+}
+
+/** Admit the page-side producer observation separately from the speaker-hint
+ * stream. An unresolved identity is counted and reported, but never forwarded
+ * to `recordHint`; unknown remains unknown. The log deliberately excludes DOM
+ * text, display names, and participant ids. */
+export function makeNameUnresolvedSink(
+  warn: (message: string) => void = (message) => console.warn(message),
+): {
+  sink: (value: unknown) => void;
+  counters: () => ProducerObservationCounters;
+} {
+  const counts: ProducerObservationCounters = { total: 0, teams: 0, zoom: 0, invalid: 0 };
+  return {
+    counters: () => ({ ...counts }),
+    sink(value: unknown): void {
+      const observation = value as Partial<ProducerNameUnresolvedObservation> | null;
+      const validTeams = observation?.type === 'name-unresolved'
+        && observation.platform === 'teams'
+        && observation.signal === 'dom-outline'
+        && observation.reason === 'resolver-empty'
+        && (observation.edge === 'start' || observation.edge === 'end');
+      const validZoom = observation?.type === 'name-unresolved'
+        && observation.platform === 'zoom'
+        && observation.signal === 'dom-active'
+        && (
+          observation.reason === 'footer-empty'
+          || observation.reason === 'footer-absent'
+          || observation.reason === 'read-fault'
+        );
+      if (
+        (!validTeams && !validZoom)
+        || typeof observation?.tMs !== 'number'
+        || !Number.isFinite(observation.tMs)
+        || observation.tMs < 1_000_000_000_000
+      ) {
+        counts.invalid++;
+        warn(`[bot] producer-observation-invalid count=${counts.invalid}`);
+        return;
+      }
+
+      counts.total++;
+      if (validTeams) counts.teams++;
+      else counts.zoom++;
+      warn(
+        `[bot] name-unresolved platform=${observation.platform} signal=${observation.signal} ` +
+        `reason=${observation.reason}` +
+        `${validTeams ? ` edge=${observation.edge}` : ''} total=${counts.total}`,
+      );
+    },
+  };
+}
+
 /** Where to drop periodic screenshots of the bot's own page. Unset in production. */
 const shotDir = process.env.VEXA_DEBUG_SHOT_DIR;
 
@@ -399,12 +474,23 @@ export async function startCaptureBridge(
   const onSpeakerHint = (name: string, tMs?: number, isEnd?: boolean): void => {
     if (acceptingIngress) acceptSpeakerHint(name, tMs, isEnd);
   };
+  const unresolvedNames = makeNameUnresolvedSink();
+  const onNameUnresolved = (observation: unknown): void => {
+    if (acceptingIngress) unresolvedNames.sink(observation);
+  };
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
   const countersTimer = mixed ? setInterval(() => {
     const c = pipeline.hintCounters;
-    console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+    const unresolved = unresolvedNames.counters();
+    console.log(
+      `[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} ` +
+      `pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} ` +
+      `binder-missed=${c?.missed ?? 0} name-unresolved=${unresolved.total} ` +
+      `teams-name-unresolved=${unresolved.teams} zoom-name-unresolved=${unresolved.zoom} ` +
+      `producer-observation-invalid=${unresolved.invalid}`,
+    );
     // WHAT THE BOT IS ACTUALLY LOOKING AT. Every #852 observation so far came from querySelectorAll,
     // which can only answer questions someone thought to ask — it cannot show a layout nobody
     // predicted, a dialog over the meeting, or a page that is not the meeting at all. One PNG
@@ -423,6 +509,9 @@ export async function startCaptureBridge(
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
+  await page.exposeFunction('__vexaNameUnresolved', onNameUnresolved).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   await page.exposeFunction('__vexaRemoteAudioReady', (): void => {
     if (acceptingIngress) activity?.ready();
   }).catch((e: Error) => {
@@ -526,6 +615,8 @@ export async function startCaptureBridge(
             log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
             onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
               w.__vexaSpeakerHint?.(name, tMs, isEnd),
+            onNameUnresolved: (observation: unknown) =>
+              w.__vexaNameUnresolved?.(observation),
           });
         }
       }
@@ -570,6 +661,8 @@ export async function startCaptureBridge(
             selfName: botName,
             log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
             onSpeakerChange: onActive,
+            onNameUnresolved: (observation: unknown) =>
+              w.__vexaNameUnresolved?.(observation),
           });
         }
       }

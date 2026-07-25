@@ -73,6 +73,30 @@ async def test_agent_on_meeting_wire(wire, slim):
     assert json.loads(wire.seen[-1].content)["on"] is True       # start_processing → on=True
 
 
+async def test_send_bot_preserves_modern_teams_guest_url(wire, slim):
+    """The guest token is part of the join address, not the meeting identity.
+
+    The public API field is ``meeting_url``; any other key is ignored and lets meeting-api
+    synthesize a different address from the native id.
+    """
+    import json
+
+    meeting_url = "https://teams.microsoft.com/meet/322458418885037?p=guest-token"
+    await slim.meetings.send_bot(
+        "322458418885037",
+        url=meeting_url,
+        platform="teams",
+        bot_name="Maya",
+    )
+
+    request = wire.last()
+    assert (request.method, request.url.path) == ("POST", "/bots")
+    body = json.loads(request.content)
+    assert body["native_meeting_id"] == "322458418885037"
+    assert body["meeting_url"] == meeting_url
+    assert "url" not in body
+
+
 async def test_schedule_routine_wire(wire, slim):
     import json
     out = await cb.schedule_routine(slim, "digest", cron="0 9 * * *", prompt="brief", run_now=True)

@@ -90,6 +90,10 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
   let zoomChat: ZoomChat | null = null;
   let teamsSpeakers: TeamsSpeakers | null = null;
   let teamsChat: TeamsChat | null = null;
+  // Producer identity failures stay off the speaker-hint carrier. Count them on
+  // the existing sanitized page-diagnostic channel so the extension cannot turn
+  // the same Teams/Zoom failure into perfect silence.
+  const unresolvedIdentityCounts = { teams: 0, zoom: 0 };
 
   // Teams hosts (mirrors 0.11 isTeamsHost): teams.live.com, teams.microsoft.com
   // (+ subdomains), teams.cloud.microsoft.
@@ -131,6 +135,7 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
         selfName,
         log: (m) => console.log(`${TAG} [zoom] ${m}`),
         onSpeakerChange: (name) => post('speaker_activity', { name: name || '', isEnd: !name, kind: 'dom-active' }),
+        onNameUnresolved: () => { unresolvedIdentityCounts.zoom++; },
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
@@ -157,6 +162,7 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
         selfName,
         log: (m) => console.log(`${TAG} [teams] ${m}`),
         onSpeaking: (name, _id, isEnd) => post('speaker_activity', { name, isEnd, kind: 'dom-outline' }),
+        onNameUnresolved: () => { unresolvedIdentityCounts.teams++; },
       });
       (window as any).__vexaTeamsSpeakers = teamsSpeakers;
       console.log(`${TAG} shared msteams-speakers HINT emitter started (blue squares, self="${selfName || 'unknown'}")`);
@@ -325,6 +331,7 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
       running,
       streams: streamCount(),
       micActive: !!micStream,
+      unresolvedIdentity: { ...unresolvedIdentityCounts },
       injectedAudioEls: document.querySelectorAll('audio[data-vexa-injected]').length,
       mediaElsWithAudio: Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
         !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,

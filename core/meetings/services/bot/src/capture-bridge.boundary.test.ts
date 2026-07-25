@@ -13,12 +13,12 @@
  *      the vdi-frame-occlusion speaking signal; the test asserts the hints arrive
  *      Node-side with the participant's NAME, epoch tMs, and start/end order.
  *
- * Where headless Chromium cannot launch (no playwright browser in the env) the test
- * SKIPS LOUDLY with exit 0 — the same green-or-skip shape as gate:stack.
+ * Chromium is required: this is the built-browser boundary, so an unavailable
+ * browser is a failed proof rather than a green skip.
  * Run: npx tsx src/capture-bridge.boundary.test.ts
  */
 import { execSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const FIXTURE = `<!doctype html><html><body>
   <div data-tid="participant-tile" id="alice-tile">
-    <span title="Alice Fixture">Alice Fixture</span>
+    <div class="___clock f1timer">05:14</div>
+    <div class="___mic f1control">Mute</div>
+    <div class="___1504rl1 f1euv43f">
+      <div class="___12zni01 f1cmbuwj fv6wr3j">Alice Fixture</div>
+    </div>
     <div data-tid="voice-level-stream-outline" id="alice-outline"></div>
   </div>
   <!-- #481 two-party (1:1) layout class: the outline indicator never renders.
@@ -48,28 +52,41 @@ const FIXTURE = `<!doctype html><html><body>
   <div data-tid="participant-tile" id="bob-tile">
     <span title="Bob OneToOne">Bob OneToOne</span>
   </div>
+  <!-- A real speaking signal with no resolvable display name must stay out of
+       the hint stream while crossing the independent fail-loud boundary. -->
+  <div data-tid="participant-unresolved-tile" id="unresolved-tile" data-participant-id="fixture-unresolved">
+    <div data-tid="voice-level-stream-outline" class="vdi-frame-occlusion"></div>
+  </div>
 </body></html>`;
 
 async function main(): Promise<void> {
   // ── 1) the bundle carries the Teams brick (the shipped regression) ──
-  if (!existsSync(BUNDLE)) execSync('node build-browser-utils.mjs', { cwd: BOT_DIR, stdio: 'inherit' });
+  execSync('node build-browser-utils.mjs', { cwd: BOT_DIR, stdio: 'inherit' });
   const bundleHasTeams = execSync(`grep -c createTeamsSpeakers ${JSON.stringify(BUNDLE)} || true`).toString().trim() !== '0';
   check('browser bundle exposes createTeamsSpeakers', bundleHasTeams);
 
-  // ── 2) headless browser (green-or-skip where chromium is absent) ──
+  // ── 2) headless browser ──
   const dataDir = mkdtempSync(join(tmpdir(), 'vexa-boundary-'));
   let context: BrowserContext;
   let page;
+  const realWarn = console.warn;
   try {
     ({ context, page } = await launchPersistentBrowser({ dataDir, args: ['--no-sandbox', '--mute-audio'], headless: true }));
   } catch (e) {
-    console.log(`  ⚠️ SKIP — headless Chromium unavailable in this environment: ${(e as Error).message?.split('\n')[0]}`);
-    process.exit(0);
+    throw new Error(
+      `headless Chromium is required for capture-bridge boundary: ${(e as Error).message?.split('\n')[0]}`,
+    );
   }
   try {
     await context.addInitScript({ path: BUNDLE });
     const pageLogs: string[] = [];
     await context.exposeFunction('logBot', (m: string) => pageLogs.push(String(m)));
+    const producerObservations: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      const message = args.map(String).join(' ');
+      if (message.includes('[bot] name-unresolved')) producerObservations.push(message);
+      realWarn(...args);
+    };
 
     // The REAL bridge over a stub pipeline capturing what crosses the boundary.
     const hints: { name: string; tMs: number; isEnd?: boolean }[] = [];
@@ -97,7 +114,9 @@ async function main(): Promise<void> {
     await page.evaluate('globalThis.__name = globalThis.__name || ((t, v) => t);');
     const stop = await startCaptureBridge(page, inv, pipeline);
 
-    // Fixture drives the speaking signal: occlusion class ON (start) → OFF (end).
+    // The visible name is reachable only through its atomic-hash leaf; timer
+    // and control leaves precede it and must remain negative. Drive the speaking
+    // signal: occlusion class ON (start) → OFF (end).
     await sleep(600);   // observer attach + initial silent state past the 200ms hysteresis
     await page.evaluate(`document.getElementById('alice-outline').classList.add('vdi-frame-occlusion')`);
     await sleep(900);   // 200ms hysteresis + 300ms debounce + margin
@@ -107,15 +126,30 @@ async function main(): Promise<void> {
     // ── 3) the assertions: hints crossed with name, epoch clock, order ──
     check('page-side watcher started (hop 1 visible in page logs)', pageLogs.some((l) => l.includes('[TeamsSpeakers]')), JSON.stringify(pageLogs.slice(0, 3)));
     const alice = hints.filter((h) => h.name === 'Alice Fixture');
-    check('speaker hints crossed the boundary for the outlined tile', alice.length >= 2, JSON.stringify(hints));
-    // The watcher reports the tile's initial silent state first (an END-shaped hint),
-    // then the scripted transitions: START on occlusion, END on its removal — in order.
+    check('atomic-hash name crossed the built browser boundary', alice.length >= 2, JSON.stringify(hints));
     const firstStart = alice.findIndex((h) => h.isEnd === false);
-    check('a START hint (isEnd=false) crossed for the speaking transition', firstStart >= 0, JSON.stringify(alice));
-    check('an END hint follows the START (transition order intact)', firstStart >= 0 && alice.slice(firstStart + 1).some((h) => h.isEnd === true), JSON.stringify(alice));
+    check('atomic-hash path emitted named START', firstStart >= 0, JSON.stringify(alice));
+    check('atomic-hash path emitted named END after START',
+      firstStart >= 0 && alice.slice(firstStart + 1).some((h) => h.isEnd === true),
+      JSON.stringify(alice));
+    check('timer and Mute leaves emitted no hints',
+      !hints.some((h) => h.name === '05:14' || h.name === 'Mute'),
+      JSON.stringify(hints));
     check('hint tMs is epoch ms (same clock domain as audio)', alice.every((h) => Math.abs(h.tMs - Date.now()) < 60_000), JSON.stringify(alice.map((h) => h.tMs)));
     check('bot self-name and the signal-less 1:1 tile emit NO hints',
       !hints.some((h) => h.name.includes('Vexa') || h.name === 'Bob OneToOne'), JSON.stringify(hints));
+    check('an unresolved outlined tile emits no fabricated hint',
+      !hints.some((h) => h.name === '' || h.name === 'fixture-unresolved'), JSON.stringify(hints));
+    check('the unresolved observation crossed page→Node on the required typed boundary',
+      producerObservations.some((message) =>
+        message.includes('platform=teams')
+        && message.includes('signal=dom-outline')
+        && message.includes('reason=resolver-empty')
+        && message.includes('edge=start')),
+      JSON.stringify(producerObservations));
+    check('Node telemetry does not contain the participant id',
+      producerObservations.every((message) => !message.includes('fixture-unresolved')),
+      JSON.stringify(producerObservations));
     check('pipeline-received counter moved with the arrivals', hintCounters.received === hints.length && hintCounters.received > 0, JSON.stringify(hintCounters));
 
     // ── 4) the CAPTURE-TS boundary: the frame's own capture time crosses, or the frame is dropped ──
@@ -144,6 +178,7 @@ async function main(): Promise<void> {
     // #934: stop closes Node ingress synchronously. Exposed callbacks may still exist while the
     // page-side stop is unwinding, but they cannot feed a disposed engine or advance hints.
     await stop();
+    console.warn = realWarn;
     const framesAfterStop = mixedFrames.length;
     const hintsAfterStop = hints.length;
     await page.evaluate(([s, ts]) => (globalThis as any).__vexaPerSpeakerAudioData(0, s, ts), [b64, CAPTURE_TS + 1] as [string, number]);
@@ -187,6 +222,9 @@ async function main(): Promise<void> {
       raceCounts.started === 0 && raceCounts.stopped === 1, JSON.stringify(raceCounts));
     await racePage.close();
   } finally {
+    // A failed assertion or setup path must not leak the test's console hook.
+    // Assigning the original method again is harmless after the normal restore.
+    if (typeof realWarn === 'function') console.warn = realWarn;
     await context.close().catch(() => { /* best-effort */ });
     rmSync(dataDir, { recursive: true, force: true });
   }
