@@ -19,6 +19,7 @@ import {
   classifyNonMeetingUrl,
   isMicrosoftLoginUrl,
   meetingOriginHost,
+  redactUrl,
 } from "./auth-redirect";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
@@ -153,7 +154,7 @@ async function waitForTeamsPreJoinReadiness(
   const finalUrl = page.url();
   const offMeeting = classifyNonMeetingUrl(finalUrl, requestedHost);
   if (offMeeting) throw offMeeting;
-  log(`⚠️ Timed out waiting for Teams pre-join readiness after ${timeoutMs}ms (url=${finalUrl})`);
+  log(`⚠️ Timed out waiting for Teams pre-join readiness after ${timeoutMs}ms (url=${redactUrl(finalUrl)})`);
   return false;
 }
 
@@ -164,7 +165,7 @@ export async function joinMicrosoftTeams(
   botConfig: BotConfig
 ): Promise<void> {
   // Step 1: Navigate to Teams meeting
-  log(`Step 1: Navigating to Teams meeting: ${meetingUrl}`);
+  log(`Step 1: Navigating to Teams meeting: ${redactUrl(meetingUrl)}`);
   await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(500);
 
