@@ -76,6 +76,51 @@ function isTeamsDisplayNameCandidate(value: string): boolean {
     && !TEAMS_TIMER_LABEL.test(normalized);
 }
 
+/** Resolve the display name carried by one participant tile.
+ *
+ * Stable attributes are the preferred path. Teams may also render the visible
+ * label as a text-only leaf whose classes are opaque atomic hashes, so the
+ * fallback scans leaves only and applies the same exact-token/timer guard.
+ */
+export function extractTeamsSpeakerName(
+  element: HTMLElement,
+  opts?: { structuralFallback?: boolean },
+): string {
+  for (const selector of teamsNameSelectors) {
+    const nameElement = element.querySelector(selector) as HTMLElement | null;
+    if (!nameElement) continue;
+    let nameText = nameElement.textContent ||
+      (nameElement as any).innerText ||
+      nameElement.getAttribute('title') ||
+      nameElement.getAttribute('aria-label');
+    if (!nameText || !nameText.trim()) continue;
+    nameText = nameText.trim();
+    // Control labels are rejected as whole normalized tokens. Substring
+    // matching would erase real names such as Michael and Micah.
+    if (isTeamsDisplayNameCandidate(nameText)) return nameText;
+  }
+  const ariaLabel = element.getAttribute('aria-label');
+  if (ariaLabel && ariaLabel.includes('name')) {
+    const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
+    if (m && m[1]) {
+      const nameText = m[1].trim();
+      if (isTeamsDisplayNameCandidate(nameText)) return nameText;
+    }
+  }
+  if (opts?.structuralFallback === false) return '';
+  const leaves = element.querySelectorAll('*');
+  for (let i = 0; i < leaves.length; i++) {
+    const leaf = leaves[i] as HTMLElement;
+    if (leaf.children.length !== 0) continue;
+    const text = (leaf.textContent || '').trim();
+    if (
+      text.toLocaleLowerCase() !== text.toLocaleUpperCase()
+      && isTeamsDisplayNameCandidate(text)
+    ) return text;
+  }
+  return '';
+}
+
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
@@ -153,30 +198,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     return id!;
   }
 
-  function extractName(element: HTMLElement): string {
-    for (const selector of teamsNameSelectors) {
-      const nameElement = element.querySelector(selector) as HTMLElement | null;
-      if (!nameElement) continue;
-      let nameText = nameElement.textContent ||
-        (nameElement as any).innerText ||
-        nameElement.getAttribute('title') ||
-        nameElement.getAttribute('aria-label');
-      if (!nameText || !nameText.trim()) continue;
-      nameText = nameText.trim();
-      // Control labels are rejected as whole normalized tokens. Substring
-      // matching would erase real names such as Michael and Micah.
-      if (isTeamsDisplayNameCandidate(nameText)) return nameText;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel && ariaLabel.includes('name')) {
-      const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
-      if (m && m[1]) {
-        const nameText = m[1].trim();
-        if (isTeamsDisplayNameCandidate(nameText)) return nameText;
-      }
-    }
-    return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
-  }
+  const extractName = (element: HTMLElement): string => extractTeamsSpeakerName(element);
 
   function getIdentity(element: HTMLElement): Identity {
     let identity = cache.get(element);
