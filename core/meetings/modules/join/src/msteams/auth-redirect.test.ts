@@ -211,13 +211,24 @@ const PANTOMIME = ['Step 3:', 'Step 4:', 'Step 5:', 'Step 6:', 'Step 6b:'];
     const { error, logs } = await driveJoin(page, MODERN_GUEST_URL);
     check('modern guest pre-join → no throw', error === null, true);
     check('page.goto receives the canonical URL unchanged', page.navigatedTo[0] === MODERN_GUEST_URL, true);
-    check('navigation logs omit the guest token', logs.some((l) => l.includes(MODERN_GUEST_TOKEN)), false);
-    check('navigation logs omit the guest-token query', logs.some((l) => l.includes('p=')), false);
+    const navigationPrefix = 'Step 1: Navigating to Teams meeting: ';
+    const loggedNavigationUrl = (() => {
+      const value = logs.find((line) => line.startsWith(navigationPrefix))?.slice(navigationPrefix.length);
+      try {
+        return value ? new URL(value) : null;
+      } catch {
+        return null;
+      }
+    })();
+    check('navigation log carries a structurally valid URL', loggedNavigationUrl !== null, true);
     check(
-      'navigation log keeps a useful redacted route',
-      logs.some((l) => l.includes('https://teams.microsoft.com/meet/322458418885037')),
+      'navigation log keeps the exact useful redacted route',
+      loggedNavigationUrl?.origin === 'https://teams.microsoft.com' &&
+        loggedNavigationUrl.pathname === '/meet/322458418885037',
       true,
     );
+    check('navigation log omits every query parameter', loggedNavigationUrl?.search, '');
+    check('navigation log omits the guest-token parameter exactly', loggedNavigationUrl?.searchParams.has('p'), false);
   }
 
   // ── 5. Negative control: a SLOW pre-join on the meeting host stays advisory ──
