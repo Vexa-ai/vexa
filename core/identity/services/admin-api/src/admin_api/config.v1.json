@@ -69,6 +69,27 @@
    "targets": []
   },
   {
+   "key": "DB_CONNECT_MAX_ATTEMPTS",
+   "class": "defaulted",
+   "default": "10",
+   "description": "bounded initial-DB-connect retry: max attempts before failing loud. On a cold start where Postgres DNS isn't resolvable yet, the boot retries the first connect instead of exit(3)-ing into the k8s restart loop (#901). After this many attempts it re-raises.",
+   "targets": []
+  },
+  {
+   "key": "DB_CONNECT_BASE_DELAY",
+   "class": "defaulted",
+   "default": "0.5",
+   "description": "bounded initial-DB-connect retry: base backoff seconds (capped-exponential: base×2^(n-1), clamped to DB_CONNECT_MAX_DELAY). #901.",
+   "targets": []
+  },
+  {
+   "key": "DB_CONNECT_MAX_DELAY",
+   "class": "defaulted",
+   "default": "8.0",
+   "description": "bounded initial-DB-connect retry: max backoff seconds per attempt (the exponential is clamped here). #901.",
+   "targets": []
+  },
+  {
    "key": "DEV_MODE",
    "class": "defaulted",
    "default": "false",

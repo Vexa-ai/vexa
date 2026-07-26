@@ -51,13 +51,28 @@ function mockPage(visible: string[]) {
     waitForTimeout: async () => {},
     fill: async () => {},
     mouse: { move: async () => {} },
+    url: () => 'https://meet.google.com/abc-defg-hij',
+    // The lobby-CTA resolvers read the observed locale for the failure
+    // diagnostic and run the structural scan through evaluateHandle; neither
+    // resolves anything on this fixture, which is driven purely by `visible`.
+    evaluate: async () => ({ lang: 'en', nav: 'en-US' }),
+    evaluateHandle: async () => ({
+      getProperty: async (k: string) => ({
+        jsonValue: async () => (k === 'labels' ? [] : null),
+        asElement: () => null,
+      }),
+      dispose: async () => {},
+    }),
     waitForSelector: (sel: string, _opts?: any) =>
       visible.includes(sel)
         ? Promise.resolve(handle(sel))
         : Promise.reject(new Error(`mock: ${sel} not on page`)),
     $: async (sel: string) => (visible.includes(sel) ? handle(sel) : null),
     locator: (sel: string) => ({
-      first: () => ({ isVisible: async () => visible.includes(sel) }),
+      first: () => ({
+        isVisible: async () => visible.includes(sel),
+        elementHandle: async () => (visible.includes(sel) ? handle(sel) : null),
+      }),
     }),
   };
   return page;
@@ -103,7 +118,14 @@ function check(name: string, ok: boolean, detail = '') {
 
   console.log('\n=== #757 — detection is structural: non-English lobby fixtures ===');
   console.log(`  (structural CTA selectors: ${CTA_STRUCTURAL.length}, structural probe selectors: ${PROBE_STRUCTURAL.length})`);
-  check('the CTA array leads with structural selectors', CTA_STRUCTURAL.length > 0 && !isEnglishLiteral(googleAuthJoinCtaSelectors[0]));
+  // #856 reorder: exact English text leads (correct by construction once the UI
+  // locale is pinned); the structural backstop is retained but LAST. The array
+  // must still CONTAIN a structural selector so signed-out detection never fails
+  // open on a lobby whose CTA the English literals miss.
+  check('the CTA array retains a structural backstop, placed LAST (#856 order)',
+    CTA_STRUCTURAL.length > 0
+    && isEnglishLiteral(googleAuthJoinCtaSelectors[0])
+    && !isEnglishLiteral(googleAuthJoinCtaSelectors[googleAuthJoinCtaSelectors.length - 1]));
   check('the probe array leads with structural selectors', PROBE_STRUCTURAL.length > 0 && !isEnglishLiteral(googleSignedOutLobbyProbeSelectors[0]));
 
   // 3. Signed-out NON-ENGLISH lobby: every English-literal selector misses;

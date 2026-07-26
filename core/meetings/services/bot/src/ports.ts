@@ -19,12 +19,25 @@ import type { BotStatus, LifecycleEvent, Act, TranscriptSegment } from './contra
  *  platform's many failure modes translated into the bot's vocabulary). */
 export type JoinOutcome = 'admitted' | 'rejected' | 'timeout' | 'blocked' | 'auth_missing' | 'error';
 
+/** A join verdict that CARRIES its human reason text. A non-admitted platform failure is born with
+ *  a message (the @vexa/join AdmissionError text: "auth_required: …", "host did not start …") — but
+ *  the bare `JoinOutcome` enum throws that message away, so the orchestrator's terminal `failed`
+ *  used to arrive with `completion_reason` set and `reason` NULL, and meeting-api synthesized the
+ *  uninformative "Bot exited with code N; reason: None" (#926). A driver MAY return this instead of
+ *  a bare outcome to pass the real cause all the way to the lifecycle row. */
+export interface JoinResult {
+  outcome: JoinOutcome;
+  /** The human cause text (e.g. the AdmissionError message). Rides onto lifecycle.v1 `reason`. */
+  reason?: string;
+}
+
 /** Drives the platform join. The real adapter wraps @vexa/join.joinMeeting + admission
  *  watchers + the removal monitor over a @vexa/remote-browser page. */
 export interface JoinDriver {
   /** Join + await admission. `report` fires on each intermediate lifecycle state
-   *  (awaiting_admission / needs_help / active). Resolves with the verdict. */
-  join(report: (s: BotStatus) => void | Promise<void>): Promise<JoinOutcome>;
+   *  (awaiting_admission / needs_help / active). Resolves with the verdict — a bare `JoinOutcome`
+   *  or a `JoinResult` that also carries the failure's human reason text (#926). */
+  join(report: (s: BotStatus) => void | Promise<void>): Promise<JoinOutcome | JoinResult>;
   /** Watch for being removed from the meeting while active; returns a stop fn. */
   onRemoval(cb: () => void): () => void;
   /** Leave the meeting (best-effort; never throws fatally). */

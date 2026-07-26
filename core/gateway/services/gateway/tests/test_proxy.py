@@ -340,6 +340,31 @@ def test_user_webhook_requires_api_key():
     assert downstream.last is None
 
 
+def test_user_webhook_deliveries_forwards_to_meeting_api():
+    """#841: the DELIVERY HISTORY (GET /user/webhook/deliveries) forwards to meeting-api — NOT
+    admin-api. The config is identity-owned (admin-api); the deliveries are recorded by the
+    dispatcher (meeting-api), so this route targets the meeting-api base with X-User-Id injected."""
+    downstream = FakeDownstream(status_code=200, body={"deliveries": [
+        {"event_type": "meeting.status_change", "outcome": "delivered",
+         "status_code": 200, "target_host": "hook.example"},
+    ]})
+    client, _ = _client(downstream=downstream)
+    r = client.get("/user/webhook/deliveries", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://meeting-api/webhooks/deliveries"
+    fwd = downstream.last["headers"]
+    assert fwd["x-user-id"] == "7"  # owner scoping injected by the edge, never client-set
+    assert r.json()["deliveries"][0]["outcome"] == "delivered"
+
+
+def test_user_webhook_deliveries_requires_api_key():
+    """Fail-closed: no x-api-key → 401 before any downstream call."""
+    client, downstream = _client()
+    assert client.get("/user/webhook/deliveries").status_code == 401
+    assert downstream.last is None
+
+
 def test_downstream_target_url_matches_route_table():
     """v0.12 P2: the transcription-collector is folded INTO meeting-api (one modular monolith), so
     /transcripts + /meetings forward to the SAME meeting-api base as /bots — there is no longer a

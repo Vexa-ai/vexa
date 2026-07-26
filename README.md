@@ -15,7 +15,8 @@ Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 [![Self-hosted](https://img.shields.io/badge/deploy-self--hosted-success.svg)](#-quickstart)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/Ga9duGkVz9)
 
-**[vexa.ai](https://vexa.ai)** still runs the 0.10.6.13 line — it will host **0.12**.
+**[vexa.ai](https://vexa.ai)** runs Vexa 0.12 for meeting bots and transcription.
+Sandboxed knowledge agents are self-hosted only — [self-host Vexa](#-quickstart) to run the full stack.
 
 </div>
 
@@ -72,8 +73,9 @@ evaluation — everything runs in containers either way.
 
 **Prerequisites** — `make`, **Docker engine ≥ v26** (`make all` checks), and transcription: a free token at
 [vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
-air-gapped setup. Without transcription, bots still join and record — they just produce no text
-(`make all` warns when the credentials block in `.env` is empty).
+air-gapped setup. By default `POST /bots` **requires** STT and answers **503** when it is missing
+(`make all` warns when the credentials block in `.env` is empty). Capture-only is an explicit opt-out:
+`{"transcribe_enabled": false}` on the spawn (or set `TRANSCRIBE_ENABLED=false` for the deployment).
 
 > **Build machine:** The full stack (`make all`) requires at least **8 vCPUs and 16 GB RAM**. A smaller
 > box can run `make lite` (the single-container all-in-one image) but `make all` (Docker Compose) will
@@ -406,7 +408,7 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/bots` | Send a bot into a meeting (`platform`, `native_meeting_id`, `bot_name`, `language`, `task`) |
+| `POST` | `/bots` | Send a bot into a meeting (`platform`, `native_meeting_id`, `bot_name`, `language`, `task`, optional `transcribe_enabled` / `recording_enabled`) |
 | `GET` | `/transcripts/{platform}/{native_meeting_id}` | Fetch the real-time transcript (poll while live) |
 | `GET` | `/bots/status` | List running bots |
 | `DELETE` | `/bots/{platform}/{native_meeting_id}` | Stop / remove the bot |

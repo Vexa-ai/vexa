@@ -57,7 +57,7 @@ function consoleLifecycleSink(): LifecycleSink {
  *  the orchestrator drives to a clean terminal `failed`(join_failure) instead of the root crashing. */
 function noBrowserJoinDriver(reason: string): JoinDriver {
   return {
-    async join() { console.error(`[bot] no browser session: ${reason}`); return 'error'; },
+    async join() { console.error(`[bot] no browser session: ${reason}`); return { outcome: 'error', reason: `no browser session: ${reason}` }; },
     onRemoval() { return () => { /* */ }; },
     async leave() { /* */ },
     async withdraw() { /* no browser — nothing to withdraw */ },

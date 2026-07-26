@@ -7,7 +7,7 @@
  *
  * Run: tsx src/join-driver.test.ts
  */
-import { AdmissionError, AuthSessionError } from '@vexa/join';
+import { AdmissionError, AuthSessionError, TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT } from '@vexa/join';
 import { admissionOutcomeToJoinOutcome } from './join-driver.js';
 import type { JoinOutcome } from './ports.js';
 
@@ -45,6 +45,19 @@ const authMapped = admissionOutcomeToJoinOutcome(authErr.outcome);
 check('AuthSessionError.outcome maps to auth_missing', authMapped === 'auth_missing');
 check('a missing auth session is PERMANENT (not a retried join_failure)', PERMANENT_OUTCOMES.has(authMapped));
 check('auth failure does NOT map to the transient/retried classes', authMapped !== 'error' && authMapped !== 'timeout');
+
+// The Teams sign-in-redirect terminal (#915) takes the OTHER branch on purpose: it is NOT an
+// AdmissionError, so the driver re-raises it and the orchestrator's join catch stamps
+// `reason: String(e)` onto the terminal event — the sealed CompletionReason enum has no value for
+// "the anonymous join was handed to OAuth", so the discriminator has to ride the reason text.
+// Mapping it to a JoinOutcome would drop the message at this seam (that branch emits no reason).
+const teamsRedirect = new TeamsJoinRedirectError(
+  TEAMS_AUTH_REDIRECT, 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize', 'redirected',
+);
+check('TeamsJoinRedirectError is NOT an AdmissionError (driver re-raises → message survives)',
+  !(teamsRedirect instanceof AdmissionError));
+check('TeamsJoinRedirectError carries the typed reasonCode in its message',
+  teamsRedirect.message.startsWith(`${TEAMS_AUTH_REDIRECT}:`));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -13,55 +13,146 @@ import {
 // teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
 import { AdmissionError } from "../shared/admission";
 
-// Detect an active reCAPTCHA (enterprise) challenge. Google renders it in iframes whose
-// URL contains "/recaptcha/"; it can sit on the same screen as error affordances
-// ("Try again", "Go back") that otherwise read exactly like an admin rejection. Used to
-// keep the bot ON the page (instead of quitting) so the challenge can be solved by a
-// human over VNC or an agent over CDP — after which the normal admission poll proceeds
-// into the meeting.
+// A LIVE reCAPTCHA challenge is a VISIBLE, challenge-sized `iframe[src*="recaptcha"]` —
+// the "I'm not a robot" anchor or the opened bframe. Frame-URL presence is NOT a
+// challenge: Google Meet loads reCAPTCHA Enterprise INVISIBLY on every normal join (a
+// background bot-scoring frame whose iframe is display:none), so a `/recaptcha/` frame
+// exists on clean joins and on host-denial screens alike. A live challenge keeps the bot
+// ON the page (instead of quitting) so it can be solved by a human over VNC or an agent
+// over CDP — after which the normal admission poll proceeds into the meeting.
+const CAPTCHA_MIN_WIDTH = 120;
+const CAPTCHA_MIN_HEIGHT = 40;
 export async function hasRecaptchaChallenge(page: Page): Promise<boolean> {
   try {
-    for (const frame of page.frames()) {
-      if ((frame.url() || "").includes("/recaptcha/")) return true;
+    const frames = page.frames().filter(f => (f.url() || "").includes("/recaptcha/"));
+    if (frames.length === 0) return false;
+    const iframes = page.locator('iframe[src*="recaptcha"]');
+    const count = await iframes.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const el = iframes.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      // Size guard: a scoring/telemetry stub can be a 1x1 or 0x0 visible node; a real
+      // challenge widget is at least checkbox-sized. Unmeasurable box → keep the
+      // conservative "stay for solve" reading (the stay is now bounded, see below).
+      const box = typeof (el as any).boundingBox === "function"
+        ? await (el as any).boundingBox().catch(() => null)
+        : null;
+      if (!box) return true;
+      if (box.width >= CAPTCHA_MIN_WIDTH && box.height >= CAPTCHA_MIN_HEIGHT) return true;
     }
-    const iframe = page.locator('iframe[src*="recaptcha"]').first();
-    return await iframe.isVisible().catch(() => false);
+    return false;
   } catch {
     return false;
   }
 }
 
-// Function to check if bot has been rejected from the meeting
-export async function checkForGoogleRejection(page: Page): Promise<boolean> {
+// EXPLICIT host-denial copy. `googleRejectionIndicators` mixes two very different things:
+// unambiguous "the host said no" text, and generic error affordances ("Try again",
+// "Go back", "Access denied") that also render on Google's bot-block / invalid-state
+// pages. Only the second kind may ever be re-read as bot-detection; an explicit denial is
+// the host's answer and no captcha on the page can overturn it.
+const EXPLICIT_HOST_DENIAL_COPY = [
+  "denied your request",
+  "request to join was denied",
+  "you were denied",
+  "weren't allowed to join",
+  "weren’t allowed to join",
+  "not allowed to join",
+  "not admitted",
+  "ask to join again",
+];
+export function isExplicitDenialIndicator(selector: string): boolean {
+  const s = (selector || "").toLowerCase();
+  return EXPLICIT_HOST_DENIAL_COPY.some(copy => s.includes(copy));
+}
+
+// Bound on the stay-for-solve path. Suppressing a rejection indicator because a captcha
+// is on screen is a WAGER that a human/agent will solve it; the wager must expire, or the
+// bot polls until the admission timeout and the meeting never reaches a terminal state.
+export const CAPTCHA_SOLVE_GRACE_MS = 120_000;
+// First moment we suppressed a rejection indicator for this page. Per-page (WeakMap) so a
+// bot's pages never share the clock and nothing leaks after the page is gone.
+const captchaSuppressionSince = new WeakMap<object, number>();
+
+export type GoogleRejectionReason = "host_denial" | "error_page" | "captcha_unsolved";
+export type GoogleRejectionVerdict = {
+  rejected: boolean;
+  reason: GoogleRejectionReason | null;
+  selector: string | null;
+};
+
+/**
+ * Classify the page into a rejection verdict. The discrimination rule, in order:
+ *
+ *  1. EXPLICIT host-denial copy visible → REJECTED (`host_denial`), whatever else is on
+ *     the page. A reCAPTCHA element cannot overturn a host's "no" (#840).
+ *  2. Ambiguous error affordance + LIVE captcha challenge → not rejected, stay for solve,
+ *     but only within CAPTCHA_SOLVE_GRACE_MS of the first suppression.
+ *  3. Grace expired → REJECTED (`captcha_unsolved`): terminal beats hanging.
+ *  4. Ambiguous error affordance, no live challenge → REJECTED (`error_page`) — the
+ *     pre-existing #444 conflation, unchanged by this fix.
+ */
+export async function classifyGoogleRejection(
+  page: Page,
+  now: number = Date.now(),
+): Promise<GoogleRejectionVerdict> {
+  const isVisible = async (selector: string): Promise<boolean> => {
+    try {
+      return await (await page.locator(selector).first()).isVisible();
+    } catch {
+      return false;
+    }
+  };
   try {
-    // Check for rejection indicators
+    // PASS 1 — explicit host denials, scanned BEFORE anything ambiguous so the verdict
+    // does not depend on the order of googleRejectionIndicators.
     for (const selector of googleRejectionIndicators) {
+      if (!isExplicitDenialIndicator(selector)) continue;
+      if (!(await isVisible(selector))) continue;
+      captchaSuppressionSince.delete(page as unknown as object);
+      log(`🚨 Google Meet admission rejection detected: explicit host denial "${selector}" (wins over any reCAPTCHA element on the page)`);
+      return { rejected: true, reason: "host_denial", selector };
+    }
+
+    // PASS 2 — ambiguous error affordances; these, and only these, may be re-read as
+    // bot-detection while a live challenge is on screen.
+    for (const selector of googleRejectionIndicators) {
+      if (isExplicitDenialIndicator(selector)) continue;
       try {
-        const element = await page.locator(selector).first();
-        if (await element.isVisible()) {
-          // A reCAPTCHA challenge renders the same error affordances ("Try again",
-          // "Go back") as an admin rejection. If a captcha is on screen, this is Google
-          // bot-detection, NOT a host denial — classifying it as a rejection makes the
-          // bot quit before the captcha can be solved. Stay instead; the admission poll
-          // keeps running so a solve (human via VNC / agent via CDP) leads straight into
-          // admission.
-          if (await hasRecaptchaChallenge(page)) {
-            log(`🤖 reCAPTCHA present alongside rejection indicator "${selector}" — treating as bot-detection, NOT admin rejection. Staying for manual/agent solve.`);
-            return false;
+        if (!(await isVisible(selector))) continue;
+
+        if (await hasRecaptchaChallenge(page)) {
+          const since = captchaSuppressionSince.get(page as unknown as object) ?? now;
+          captchaSuppressionSince.set(page as unknown as object, since);
+          const waited = now - since;
+          if (waited < CAPTCHA_SOLVE_GRACE_MS) {
+            log(`🤖 Live reCAPTCHA challenge alongside ambiguous indicator "${selector}" — treating as bot-detection, NOT admin rejection. Staying for manual/agent solve (${Math.round(waited / 1000)}s/${Math.round(CAPTCHA_SOLVE_GRACE_MS / 1000)}s).`);
+            return { rejected: false, reason: null, selector };
           }
-          log(`🚨 Google Meet admission rejection detected: Found rejection indicator "${selector}"`);
-          return true;
+          captchaSuppressionSince.delete(page as unknown as object);
+          log(`⏱️ reCAPTCHA stay-for-solve bound exceeded (${Math.round(waited / 1000)}s > ${Math.round(CAPTCHA_SOLVE_GRACE_MS / 1000)}s) with "${selector}" still on screen — concluding terminal instead of polling forever.`);
+          return { rejected: true, reason: "captcha_unsolved", selector };
         }
+
+        captchaSuppressionSince.delete(page as unknown as object);
+        log(`🚨 Google Meet admission rejection detected: Found rejection indicator "${selector}"`);
+        return { rejected: true, reason: "error_page", selector };
       } catch (e) {
         // Continue checking other selectors
         continue;
       }
     }
-    return false;
+    captchaSuppressionSince.delete(page as unknown as object);
+    return { rejected: false, reason: null, selector: null };
   } catch (error: any) {
     log(`Error checking for Google Meet rejection: ${error.message}`);
-    return false;
+    return { rejected: false, reason: null, selector: null };
   }
+}
+
+// Function to check if bot has been rejected from the meeting
+export async function checkForGoogleRejection(page: Page, now: number = Date.now()): Promise<boolean> {
+  return (await classifyGoogleRejection(page, now)).rejected;
 }
 
 // Helper function to check for any visible and enabled admission indicators
@@ -233,11 +324,20 @@ export async function hasConsentPrompt(page: Page): Promise<boolean> {
   return false;
 }
 
+// Terminal admission verdicts carry an honest reason: a host denial says so, and an
+// unsolved captcha says THAT — both map to AdmissionError("denial") (PERMANENT, no
+// re-knock), which the JoinDriver records as `awaiting_admission_rejected`.
+const REJECTION_MESSAGE: Record<GoogleRejectionReason, string> = {
+  host_denial: "Bot admission was rejected by meeting admin",
+  error_page: "Bot admission was rejected by meeting admin",
+  captcha_unsolved: `Bot faced a reCAPTCHA challenge that went unsolved for ${Math.round(CAPTCHA_SOLVE_GRACE_MS / 1000)}s alongside a rejection screen`,
+};
+
 async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
-  const isRejected = await checkForGoogleRejection(page);
-  if (isRejected) {
-    log(`🚨 Bot was rejected from the Google Meet meeting by admin (${context})`);
-    throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
+  const verdict = await classifyGoogleRejection(page);
+  if (verdict.rejected) {
+    log(`🚨 Bot admission concluded terminal for the Google Meet meeting (${verdict.reason}, ${context})`);
+    throw new AdmissionError("denial", REJECTION_MESSAGE[verdict.reason!]);
   }
 }
 
@@ -377,19 +477,13 @@ export async function waitForGoogleMeetingAdmission(
       const effectiveTimeout2 = () => timeout + getEscalationExtensionMs();
       while (Date.now() - startTime < effectiveTimeout2()) {
         // #444 — the `blocked` state is wired (callBlockedCallback), but NOT emitted yet.
-        // hasRecaptchaChallenge() is too loose to drive it: Google Meet loads reCAPTCHA
-        // Enterprise INVISIBLY on every normal join (a background bot-scoring frame), so
-        // matching a "/recaptcha/" frame url false-fires on clean joins — verified live
-        // 2026-06-12 (humanized, residential): blocked->awaiting->admitted, no real challenge.
-        // The real block detector (VISIBLE challenge / blank block page) needs a run that
-        // actually reproduces a block (datacenter egress arm) to build without false positives.
+        // hasRecaptchaChallenge() detects a VISIBLE, challenge-sized widget, which is the
+        // narrow half of the signal; the blank block page half needs a run that actually
+        // reproduces a block (datacenter egress arm) before it can drive `blocked` without
+        // false positives.
 
         // Rejection check first
-        const isRejected = await checkForGoogleRejection(page);
-        if (isRejected) {
-          log("🚨 Bot was rejected from the Google Meet meeting by admin (polling mode)");
-          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
-        }
+        await throwIfGoogleAdmissionRejected(page, "polling mode");
 
         // Admission indicators — if meeting controls are visible, bot is admitted
         // regardless of any residual lobby-like elements in the DOM
@@ -459,10 +553,7 @@ export async function waitForGoogleMeetingAdmission(
 
     // Before concluding failure, check for rejection one last time
     log("No admission indicators after timeout - checking rejection one last time...");
-    const finalRejected = await checkForGoogleRejection(page);
-    if (finalRejected) {
-      throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
-    }
+    await throwIfGoogleAdmissionRejected(page, "final check");
 
     // Distinguish lobby-timeout from join-failure by checking waiting-room state
     const lobbyStillVisible = await checkForWaitingRoomIndicators(page);

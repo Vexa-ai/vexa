@@ -15,7 +15,8 @@ import { createSttFaultReporter } from './stt-faults.js';
 import { createOrchestrator } from './orchestrator.js';
 import type { Invocation } from './config.js';
 import type { LifecycleEvent } from './contracts.js';
-import type { JoinDriver, Pipeline, ActsSource, LifecycleSink, AlonenessSource } from './ports.js';
+import type { JoinDriver, Pipeline, ActsSource, LifecycleSink } from './ports.js';
+import { noopAloneness } from './test-doubles.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -41,10 +42,7 @@ function fakes(events: LifecycleEvent[]) {
   };
   const pipeline: Pipeline = { async start() { /* */ }, async stop() { /* */ } };
   const acts: ActsSource = { subscribe() { return () => { /* */ }; } };
-  // A never-firing aloneness source: this suite is about STT-fault reporting, and the
-  // orchestrator subscribes to aloneness unconditionally, so every construction site owes it one.
-  const aloneness: AlonenessSource = { onAlone() { return () => { /* */ }; } };
-  return { lifecycle, join, pipeline, acts, aloneness };
+  return { lifecycle, join, pipeline, acts, aloneness: noopAloneness() };
 }
 
 async function main(): Promise<void> {

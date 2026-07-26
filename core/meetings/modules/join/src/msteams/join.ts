@@ -14,6 +14,12 @@ import {
   teamsSpeakerDisableSelectors
 } from "./selectors";
 import { dismissTeamsAvConfirmModal, isTeamsAvConfirmModalVisible } from "./modals";
+import {
+  authRedirectError,
+  classifyNonMeetingUrl,
+  isMicrosoftLoginUrl,
+  meetingOriginHost,
+} from "./auth-redirect";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
 // virtual-camera flow are RECORDING/HOST concerns and stay outside this brick.
@@ -41,13 +47,32 @@ async function warmUpTeamsMediaDevices(page: Page): Promise<void> {
   }
 }
 
-async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Promise<boolean> {
+/**
+ * Wait for the anonymous pre-join screen.
+ *
+ * The loop watches the URL as well as the DOM: Teams can bounce the meetup-join to the Microsoft
+ * sign-in host at any point (it is a client-side navigation, so it happens mid-wait as readily as
+ * before the first tick). A sign-in page is terminal on sight — waiting out the timeout there
+ * buys nothing but a misleading "pre-join readiness" verdict on a page that has no pre-join.
+ *
+ * `requestedHost` is the host of the meeting link we were asked to open. A readiness timeout is
+ * terminal when the page ended up on neither that host nor a Teams host — there is no pre-join to
+ * be slow. Timing out ON one of those hosts stays advisory: a genuinely slow Teams pre-join is a
+ * thing, and the later steps still get their chance at it.
+ */
+async function waitForTeamsPreJoinReadiness(
+  page: Page,
+  timeoutMs: number,
+  requestedHost: string | null,
+): Promise<boolean> {
   const start = Date.now();
   let mediaWarmupAttempted = false;
   let continueClickAttempts = 0;
   let continueWithoutMediaClickAttempts = 0;
 
   while (Date.now() - start < timeoutMs) {
+    if (isMicrosoftLoginUrl(page.url())) throw authRedirectError(page.url());
+
     // v0.10.5 — "Continue without audio or video" confirmation modal.
     // Teams renders this BEFORE the prejoin name input when Chromium's
     // media-permission state is "denied". The modal is intermittent
@@ -126,6 +151,8 @@ async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Prom
   }
 
   const finalUrl = page.url();
+  const offMeeting = classifyNonMeetingUrl(finalUrl, requestedHost);
+  if (offMeeting) throw offMeeting;
   log(`⚠️ Timed out waiting for Teams pre-join readiness after ${timeoutMs}ms (url=${finalUrl})`);
   return false;
 }
@@ -145,6 +172,12 @@ export async function joinMicrosoftTeams(
   await callJoiningCallback(botConfig);
   log("Joining callback sent successfully");
 
+  // Step 1b: the navigation landed somewhere. If that somewhere is the Microsoft sign-in host,
+  // stop here — every step below hunts for pre-join controls that a sign-in page does not have,
+  // and each one of them "succeeds" quietly by continuing.
+  if (isMicrosoftLoginUrl(page.url())) throw authRedirectError(page.url());
+  const requestedHost = meetingOriginHost(meetingUrl);
+
   log("Step 2: Looking for 'Continue on this browser' button...");
   try {
     const continueButton = page.locator(teamsContinueButtonSelectors[0]).first();
@@ -158,7 +191,7 @@ export async function joinMicrosoftTeams(
   }
 
   log("Step 2.5: Waiting for Teams pre-join controls...");
-  await waitForTeamsPreJoinReadiness(page, 45000);
+  await waitForTeamsPreJoinReadiness(page, 45000, requestedHost);
 
   // NOTE: Steps 3-5 configure the pre-join screen BEFORE clicking "Join now".
   // The pre-join screen shows camera toggle, name input, and audio settings.

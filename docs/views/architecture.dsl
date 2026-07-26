@@ -115,6 +115,7 @@ edges:
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
+  gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
   gateway -read-> bm-status  # WS fan-out
   gateway -read-> u-meetings  # WS auto-subscribe

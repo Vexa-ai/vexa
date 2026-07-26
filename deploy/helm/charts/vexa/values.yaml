@@ -367,7 +367,10 @@ postgres:
 
 redis:
   enabled: true
-  image: redis:7-alpine
+  # Valkey (BSD-3 fork of Redis 7.2.4) — engine parity with Lite/compose and off source-available
+  # Redis ≥7.4. Wire-compatible (RESP): the `redis.*` keys, redisConfig.url, and the durability
+  # helper are unchanged so existing values overrides keep working; only the engine swaps (#653).
+  image: valkey/valkey:8-alpine
   service:
     port: 6379
   persistence:

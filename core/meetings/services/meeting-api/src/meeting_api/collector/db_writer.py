@@ -19,9 +19,12 @@ Parent semantics, kept exactly:
   * **trim policy** — flushed (and empty-text) hash fields are HDEL'd **only after** the sink
     confirms the durable write; a failed write leaves the hash intact for the next tick. When a
     hash drains empty its meeting id leaves the ``active_meetings`` set.
-  * **discovery** — the ``active_meetings`` set (maintained by ``append_segment``), UNIONed with a
-    ``meeting:*:segments`` key scan so hashes written before the set existed (mid-upgrade) or after
-    a set/hash divergence are still drained — self-healing, unlike the parent's set-only sweep.
+  * **discovery** — the ``active_meetings`` set (maintained ATOMICALLY with every hash write by
+    ``append_segment`` — one transactional sadd+hset+expire) is authoritative in steady state, so a
+    tick sweeps the SET alone. The self-healing ``meeting:*:segments`` key scan — for a hash written
+    before the set existed (mid-upgrade) or a set/hash divergence — runs ONLY on a ``reconcile`` tick
+    (startup + every ``DB_WRITER_RECONCILE_INTERVAL_S``), never per tick: the O(keyspace) scan on the
+    10s hot path saturated Redis and starved the /health probe, restarting healthy pods (#893).
 
 Additions over the parent:
 
@@ -318,23 +321,31 @@ async def db_writer_tick(
     *,
     immutability_threshold: Optional[float] = None,
     now: Optional[datetime] = None,
+    reconcile: bool = False,
 ) -> int:
     """ONE db-writer sweep (the loop body ``__main__`` polls): flush every discovered meeting's
     immutable segments to the durable sink, then drain its processed-notes stream. Returns the total
-    segments stored. Per-meeting failures are contained — one bad meeting never starves the rest."""
+    segments stored. Per-meeting failures are contained — one bad meeting never starves the rest.
+
+    Discovery is the ``active_meetings`` set (authoritative in steady state — ``append_segment`` SADDs
+    the meeting in the SAME transaction that writes its hash). ``reconcile=True`` ADDITIONALLY runs the
+    O(keyspace) ``meeting:*:segments`` scan to self-heal a set/hash divergence or a pre-set (mid-upgrade)
+    hash; it is OFF the per-tick hot path (``reconcile`` defaults False) because that scan saturated
+    Redis and starved the /health probe (#893) — the loop runs it only on startup + every N minutes."""
     ids: set[str] = set()
     try:
         members = await redis_c.smembers(ACTIVE_MEETINGS_KEY)
         ids.update(_s(m) for m in (members or []))
-    except Exception:  # noqa: BLE001 — the scan below still discovers hashes
+    except Exception:  # noqa: BLE001 — a due reconcile scan (below) still discovers hashes
         pass
-    try:
-        async for key in redis_c.scan_iter(match="meeting:*:segments"):
-            parts = _s(key).split(":")
-            if len(parts) == 3:
-                ids.add(parts[1])
-    except Exception:  # noqa: BLE001
-        pass
+    if reconcile:
+        try:
+            async for key in redis_c.scan_iter(match="meeting:*:segments"):
+                parts = _s(key).split(":")
+                if len(parts) == 3:
+                    ids.add(parts[1])
+        except Exception:  # noqa: BLE001
+            pass
 
     total = 0
     for raw_id in ids:

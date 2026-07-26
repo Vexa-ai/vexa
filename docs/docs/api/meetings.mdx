@@ -203,6 +203,8 @@ low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the windo
 guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
 the 0.12 API.)</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+<ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
+<ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an audio/video recording. Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
 
 ```bash POST /bots
 curl -X POST "$API_BASE/bots" \
@@ -213,6 +215,11 @@ curl -X POST "$API_BASE/bots" \
 If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
 already active on that link; `429` past your concurrency limit.
+
+With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
+`503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Capture-only:
+`{"transcribe_enabled": false}` (or `TRANSCRIBE_ENABLED=false` for the deployment). See
+[Configuration](/configuration#transcription-stt) and [Troubleshooting](/troubleshooting#bot-joins-but-theres-no-transcript).
 
 ## Get the transcript
 

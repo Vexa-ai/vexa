@@ -19,11 +19,20 @@ webhooks.py}`, reimplemented clean. The wire shape is sealed in `meetings/contra
 - **Retry** (`retry.py`) — a `RetryQueue` over a Redis list (`webhook:retry_queue`); a 5xx/429/
   transport-error enqueues; `drain_retry_queue` is one worker sweep (exponential `BACKOFF_SCHEDULE`
   = 1m·5m·30m·2h, 24h max-age). The eval drives the clock forward — no real sleeps.
+- **Delivery ledger** (`ledger.py`, #841) — the per-user, queryable record of delivery outcomes.
+  The lifecycle callback records each attempt's outcome (`build_delivery_record`: `event_type`,
+  `event_id`, target **host only**, `outcome` ∈ #817 taxonomy `delivered|queued|suppressed|blocked|
+  failed`, `status_code`, `attempt`, `created_at` — **never** the URL or secret, P14) into a per-user
+  capped store, served by `GET /webhooks/deliveries` (gateway-fronted at `/user/webhook/deliveries`).
+  `InMemoryDeliveryLedger` backs the app-factory/eval path; `RedisDeliveryLedger` is the prod adapter
+  (`webhook:deliveries:{user_id}`, LPUSH newest-first + LTRIM to the cap). This is the user-facing
+  completion of #815→#817: outcome → observable → **queryable**. Logs rotate; users need history.
 
 The HTTP transport is **injected** (`transport(url, body, headers) -> resp`), so the eval supplies a
 fake in-memory receiver — no httpx, no network, no live receiver.
 
 ## Evals
-`tests/test_webhook_signing.py` · `test_webhook_delivery.py` · `test_webhook_ssrf.py`. Ride
-`gate:python`. `webhook.v1` goldens conform via `gate:schema` (the contract is UNSEALED — sealing is
-the human `lane:contract` step).
+`tests/test_webhook_signing.py` · `test_webhook_delivery.py` · `test_webhook_ssrf.py` ·
+`test_webhook_ledger.py` (the #841 delivery-history path — a real delivery lands in
+`GET /webhooks/deliveries`, host-only rows). Ride `gate:python`. `webhook.v1` goldens conform via
+`gate:schema` (the contract is UNSEALED — sealing is the human `lane:contract` step).

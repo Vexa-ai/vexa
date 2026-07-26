@@ -108,6 +108,16 @@ class MeetingRepo(Protocol):
         """Record the kernel-assigned workload id/name on the meeting and return the updated row."""
         ...
 
+    async def fail_meeting(
+        self, *, meeting_id: int, reason: str, failure_stage: str = "requested"
+    ) -> Optional[dict]:
+        """Mark a meeting ``failed`` BY ID (no session_uid), stamping ``reason``/``failure_stage`` into
+        ``meeting.data`` — the spawn-time failure path (#718). A workload dead on arrival is refused
+        BEFORE the ``MeetingSession`` exists, so the session-keyed ``update_meeting_status`` cannot
+        reach the row; this fails it directly so no ``requested`` row lingers for the reaper to flip
+        reason-less. Returns the updated row (or ``None`` for an unknown id)."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 
@@ -250,3 +260,29 @@ class DuplicateMeeting(Exception):
     Raised by ``MeetingRepo.create_meeting_guarded`` (the atomic dedup) — either because the in-txn
     dedup query found an active row, or because the unique partial index on active rows rejected the
     concurrent insert (the DB-level backstop). Re-exported from ``service`` for the router's mapping."""
+
+
+# Statuses in which the bot has NOT yet reached the meeting. Their row goes quiet by DESIGN — a bot
+# parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
+# lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
+PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+def reconcile_grace_for_status(
+    status: Optional[str],
+    stop_grace: float,
+    active_grace: float,
+    preactive_grace: Optional[float] = None,
+) -> float:
+    """The reconcile window a stale row is measured against — the ONE definition both the SQL adapter
+    and the in-memory fake read, so the two listings can never drift.
+
+      * ``stopping``   → ``stop_grace``      (a stop was requested: clear it fast)
+      * PRE-ACTIVE     → ``preactive_grace`` (must OUTLAST the lobby budget we issued — #862)
+      * everything else→ ``active_grace``    (a bot-present row: a longer idle before we look)
+    """
+    if status == "stopping":
+        return stop_grace
+    if status in PRE_ACTIVE_MEETING_STATUSES:
+        return active_grace if preactive_grace is None else preactive_grace
+    return active_grace

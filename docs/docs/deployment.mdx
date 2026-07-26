@@ -46,7 +46,7 @@ terminal web workbench at `http://localhost:13000`.
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
 | **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
-| redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+| redis (Valkey) · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
 meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them. The
@@ -56,8 +56,10 @@ absent).
 
 ## Configuration
 
-- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset → bots
-  join and capture, but produce no transcript.
+- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset →
+  default `POST /bots` answers **503** (refuse loud). Capture-only: set `TRANSCRIBE_ENABLED=false`
+  or pass `{"transcribe_enabled": false}` on the spawn. See
+  [Configuration](/configuration#transcription-stt).
 - **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
   The default `MINIO_HOST_PORT=9000` is a common port — if it's already taken on your host
   (`make all` fails with `bind … 127.0.0.1:9000 … address already in use`), set a free port in `.env`.

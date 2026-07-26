@@ -16,11 +16,12 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
+import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
-import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, AlonenessSource, TranscriptSink, PrimaryReachability } from './ports.js';
+import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
+import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
+import { noopAloneness, controlledAloneness, noopPipeline, noopActs } from './test-doubles.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -49,17 +50,6 @@ const recordingSink = (): LifecycleSink & { readonly events: LifecycleEvent[] } 
   const events: LifecycleEvent[] = [];
   return { events, async emit(e: LifecycleEvent) { events.push(e); } };
 };
-const noopPipeline = (): Pipeline & { started: boolean } => {
-  const p = { started: false, async start() { p.started = true; }, async stop() { p.started = false; } };
-  return p;
-};
-const noopActs = (ref?: (fire: (a: { action: 'leave' }) => void) => void): ActsSource => ({
-  subscribe(handler) { ref?.((a) => void handler(a)); return () => { /* */ }; },
-});
-const noopAloneness = (): AlonenessSource => ({ onAlone() { return () => { /* */ }; } });
-const controlledAloneness = (ref: (fire: () => void) => void, onStop?: () => void): AlonenessSource => ({
-  onAlone(callback) { ref(callback); return () => onStop?.(); },
-});
 const mockJoin = (outcome: JoinOutcome, onRemovalRef?: (fire: () => void) => void): JoinDriver => ({
   async join(report) { await report('awaiting_admission'); if (outcome === 'admitted') await report('active'); return outcome; },
   onRemoval(cb) { onRemovalRef?.(cb); return () => { /* */ }; },
@@ -125,6 +115,11 @@ async function main(): Promise<void> {
     check('join-error: failed / exit 1', res.status === 'failed' && res.exitCode === 1);
     check('join-error: failure_stage=joining', last(lc.events).failure_stage === 'joining');
     check('join-error: completion_reason=join_failure', last(lc.events).completion_reason === 'join_failure');
+    // The thrown message is the ONLY channel a join-phase cause has to `last_error`: the sealed
+    // CompletionReason enum cannot name platform-specific causes, so a typed brick throw (e.g.
+    // @vexa/join's TeamsJoinRedirectError, #915) carries its discriminator in this text.
+    check('join-error: the thrown reason text reaches the terminal event',
+      String(last(lc.events).reason ?? '').includes('navigation failed'));
     check('join-error: no active emitted', !seq(lc.events).includes('active'));
     check('join-error: events conform', allConform(lc.events));
   }
@@ -145,6 +140,31 @@ async function main(): Promise<void> {
     const lc = recordingSink();
     const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('timeout'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
     check('timeout: completion_reason=awaiting_admission_timeout', last(lc.events).completion_reason === 'awaiting_admission_timeout');
+  }
+
+  // ── #926: a non-admitted terminal ALWAYS carries a human `reason` text ──
+  // Prod signature: a Zoom bot exited code 1 with reason:None because the non-admitted branch
+  // emitted completion_reason but no `reason`, so meeting-api synthesized "Bot exited with code 1;
+  // reason: None". RED before the fix (reason was undefined); GREEN after.
+  {
+    // (a) driver carries its own cause (the AdmissionError message path) → it survives to the row.
+    const lc = recordingSink();
+    const carryingJoin: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); return { outcome: 'auth_missing', reason: 'auth_required: meeting host restricted entry to authenticated Zoom users' }; },
+      onRemoval() { return () => { /* */ }; }, async leave() { /* */ }, async withdraw() { /* */ },
+    };
+    const res = await createOrchestrator(inv({ platform: 'zoom' }), { lifecycle: lc, join: carryingJoin, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    const t = last(lc.events);
+    check('reasonless#926: exit 1', res.exitCode === 1);
+    check('reasonless#926: completion_reason=auth_session_missing', t.completion_reason === 'auth_session_missing');
+    check('reasonless#926: reason text is NON-NULL (carried from driver)', typeof t.reason === 'string' && t.reason.includes('auth_required'));
+    check('reasonless#926: events conform', allConform(lc.events));
+
+    // (b) bare enum (no driver message) → orchestrator STILL stamps a derived reason (never null).
+    const lc2 = recordingSink();
+    await createOrchestrator(inv(), { lifecycle: lc2, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    const t2 = last(lc2.events);
+    check('reasonless#926: bare enum still gets a non-null reason', typeof t2.reason === 'string' && t2.reason.length > 0);
   }
 
   // ── pipeline.start throws → failed(active/...) ──
@@ -292,6 +312,38 @@ async function main(): Promise<void> {
     check('withdraw: did NOT SIGKILL-orphan — the run resolved on its own (no watchdog needed)', true);
   }
 
+  // ── #889: a `leave` ACT delivered while BLOCKED in the lobby (awaiting_admission) → WITHDRAW ──
+  // The canonical user Stop is a `leave` command on the bot's command channel (meeting-api's stop.py
+  // publishes `bot_commands:meeting:{id}` `{action:leave}`). The orchestrator used to subscribe to
+  // acts only AFTER admission, so a `leave` arriving while the bot was still knocking in the lobby was
+  // never heard (redis pub/sub has no backlog) — and handle()'s `leave` routed to the ACTIVE-phase end
+  // (signalEnd), not the pre-active abort. Net: the bot kept "asking to join" after Stop (#889). This
+  // asserts (a) the acts subscription is live DURING the lobby and (b) a lobby `leave` withdraws.
+  {
+    const lc = recordingSink();
+    const { driver, calls } = lobbyBlockingJoin();
+    let fireLeave: (a: Act) => void = () => {};
+    let subscribed = false;
+    const acts: ActsSource = {
+      subscribe(handler) { subscribed = true; fireLeave = (a) => void handler(a); return () => { /* */ }; },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: driver, pipeline: noopPipeline(), acts, aloneness: noopAloneness() });
+    const runP = o.run();
+    await new Promise((r) => setTimeout(r, 10));   // let the machine reach awaiting_admission + subscribe
+    check('#889: acts subscribed DURING the lobby (before admission)', subscribed, `subscribed=${subscribed}`);
+    fireLeave({ action: 'leave' });
+    // Bound the wait: with the bug the run never resolves (the leave is dropped) — the sentinel proves it.
+    const res = await Promise.race<MeetingResult>([
+      runP,
+      new Promise<MeetingResult>((r) => setTimeout(() => r({ exitCode: -1, status: 'joining' as BotStatus }), 500)),
+    ]);
+    check('#889: lobby leave act → withdraw invoked exactly once', calls.withdraw === 1, `withdraw=${calls.withdraw}`);
+    check('#889: withdraw reason forwarded (stopped)', calls.withdrawReason === 'stopped', calls.withdrawReason);
+    check('#889: terminal failed(awaiting_admission / stopped), exit 0', res.status === 'failed' && res.exitCode === 0 && last(lc.events).failure_stage === 'awaiting_admission' && last(lc.events).completion_reason === 'stopped', JSON.stringify(res) + ' / ' + JSON.stringify(last(lc.events)));
+    check('#889: never reached active (withdrew from the lobby)', !seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
+    check('#889: sequence legal + conforms', allLegal(seq(lc.events)) && allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+  }
+
   // ── Bug 2 (invariant): stop() while ACTIVE still uses the existing active-leave path, NOT withdraw ──
   {
     const lc = recordingSink();
@@ -421,6 +473,26 @@ async function main(): Promise<void> {
     const res = await runP;
     check('gate reachable: proceeded to completed', res.status === 'completed', JSON.stringify(res));
     check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
+  }
+
+  // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──
+  {
+    let threw: unknown;
+    try {
+      createOrchestrator(inv(), {
+        lifecycle: recordingSink(),
+        join: mockJoin('admitted'),
+        pipeline: noopPipeline(),
+        acts: noopActs(),
+        // deliberately omit aloneness
+      } as Parameters<typeof createOrchestrator>[1]);
+    } catch (e) {
+      threw = e;
+    }
+    const msg = threw instanceof Error ? threw.message : String(threw);
+    check('missing port: throws', threw instanceof Error, msg);
+    check('missing port: names the port', /required port 'aloneness' is missing/.test(msg), msg);
+    check('missing port: not a raw property TypeError', !/Cannot read properties of undefined/.test(msg), msg);
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }

@@ -87,6 +87,26 @@ usual causes:
 - **Feed too large / unreachable / redirecting** — feeds over 2 MB, behind redirects, or resolving
   to blocked/internal addresses are refused; the status line records which.
 
+## POST /bots returns 503 (transcription required)
+
+Default spawns resolve `transcribe_enabled=true`. When no STT backend is configured, meeting-api
+refuses **before** writing a meeting row:
+
+```text
+no transcription backend configured — set it in Settings or environment variables
+TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN
+```
+
+That is intentional (refuse loud). Fixes:
+
+- Configure `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN` (see
+  [Configuration](/configuration#transcription-stt)), or
+- Spawn capture-only with `{"transcribe_enabled": false}`, or set `TRANSCRIBE_ENABLED=false` for
+  the deployment.
+
+If STT *is* set but the live probe says the backend is wrong, the 503 detail names the probe
+reason instead — fix the URL/token and re-probe (`GET /health?force=1`).
+
 ## Bot joins but there's no transcript
 
 The bot is capturing audio, but transcription isn't configured — or the bot was spawned

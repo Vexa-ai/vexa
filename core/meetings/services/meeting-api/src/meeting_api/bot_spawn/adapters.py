@@ -21,7 +21,22 @@ from .ports import (
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
+    reconcile_grace_for_status,
 )
+
+
+def _reason(resp) -> str:
+    """The kernel's error reason from a non-201 runtime.v1 response — its ``{detail}`` (the sealed
+    contract defines no error shape, so the API uses FastAPI's default), falling back to the raw body
+    text. Lets the meeting-api 502 name WHY the spawn failed (e.g. the absent image) instead of a bare
+    status code (#718)."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict) and body.get("detail"):
+            return str(body["detail"])
+    except Exception:  # noqa: BLE001 — a non-JSON error body falls back to text
+        pass
+    return (getattr(resp, "text", "") or "").strip() or f"HTTP {resp.status_code}"
 
 
 def _iso_utc(dt) -> Optional[str]:
@@ -306,7 +321,7 @@ class SqlAlchemyMeetingRepo:
         return [(mid, sid, bcid) for mid, (sid, bcid) in out.items()]
 
     async def list_stale_nonterminal(
-        self, *, stop_grace: float, active_grace: float
+        self, *, stop_grace: float, active_grace: float, preactive_grace: Optional[float] = None
     ) -> list[tuple[int, str, str, Optional[str], bool]]:
         """Meetings stuck in ANY non-terminal status whose row has gone quiet past its grace window —
         a bot that exited (or vanished) without ever sending its terminal lifecycle callback leaves the
@@ -315,8 +330,10 @@ class SqlAlchemyMeetingRepo:
         CANDIDATE signal only — the sweep additionally gates the active-reap on runtime workload
         liveness (see ``reconcile.py``), because a silent-but-live bot stops bumping ``updated_at``.
 
-        Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast),
-        everything else uses ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
+        Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast), a
+        PRE-ACTIVE row (`requested`/`joining`/`awaiting_admission` — the bot has not reached the
+        meeting yet, and holds the lobby budget the control plane handed it) uses ``preactive_grace``,
+        everything else ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
         reaped). Returns ``[(meeting_id, status, session_uid, bot_container_id, stop_requested), …]`` with
         the LATEST session_uid per meeting (mirrors ``list_stale_stopping``)."""
         from datetime import datetime, timezone
@@ -344,7 +361,7 @@ class SqlAlchemyMeetingRepo:
             if mid in out or upd is None or not sid:
                 continue
             u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
-            grace = stop_grace if status == "stopping" else active_grace
+            grace = reconcile_grace_for_status(status, stop_grace, active_grace, preactive_grace)
             if (now - u).total_seconds() >= grace:
                 stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))
                 out[mid] = (status, sid, bcid, stop_req)
@@ -548,6 +565,39 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def fail_meeting(self, *, meeting_id, reason, failure_stage="requested") -> Optional[dict]:
+        """Mark a meeting ``failed`` BY ID (no session needed) — the spawn-time failure path (#718).
+
+        A workload dead on arrival (kernel ``start_failed``) is refused BEFORE the ``MeetingSession``
+        exists, so the session-keyed ``update_meeting_status`` cannot reach the row; this fails it
+        directly, stamping the reason into ``data`` so ``GET /meetings`` and the terminal show WHY
+        instead of leaving a ``requested`` row for the 5-minute reaper to flip reason-less. Row-locked;
+        a missing row is a no-op."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == meeting_id).with_for_update())
+            ).scalars().first()
+            if m is None:
+                return None
+            m.status = "failed"
+            merged = dict(m.data) if isinstance(m.data, dict) else {}
+            merged["failure_stage"] = failure_stage
+            merged["failure_reason"] = reason
+            merged["completion_reason"] = "start_failed"
+            m.data = merged
+            flag_modified(m, "data")
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            if m.end_time is None:
+                m.end_time = now
+            await db.commit()
+            await db.refresh(m)
+            return _row_to_dict(m)
+
 
 class HttpRuntimeClient:
     """``RuntimeClient`` over the runtime.v1 HTTP kernel (``POST /workloads``). 429 → QuotaExceeded;
@@ -562,8 +612,19 @@ class HttpRuntimeClient:
         if resp.status_code == 429:
             raise QuotaExceeded("runtime kernel: owner quota exceeded")
         if resp.status_code != 201:
-            raise SpawnFailed(f"runtime kernel returned {resp.status_code}")
-        return resp.json()
+            # Carry the kernel's own reason (its {detail}) so the 502 the user sees NAMES the cause
+            # — e.g. "No such image: …" for an absent bot image (#718 C1 → C2).
+            raise SpawnFailed(f"runtime kernel returned {resp.status_code}: {_reason(resp)}")
+        body = resp.json()
+        # Belt-and-suspenders (#718 C2): even a 201 must be a workload that actually STARTED. A kernel
+        # that answers 201 with a dead body (state=stopped/destroyed, e.g. start_failed) is dead on
+        # arrival — refuse it here too, so the adapter never trusts any kernel version's optimism.
+        state = body.get("state")
+        if state in ("stopped", "destroyed"):
+            raise SpawnFailed(
+                f"workload dead on spawn: {body.get('stopReason') or state}"
+            )
+        return body
 
     async def delete_workload(self, workload_id: str) -> None:
         """Tear down a workload (``DELETE /workloads/{id}``) — teardown must be CONFIRMED.
