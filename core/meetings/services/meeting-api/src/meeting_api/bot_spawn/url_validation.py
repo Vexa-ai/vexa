@@ -21,6 +21,20 @@ _PLATFORM_HOSTS = {
 _TEAMS_V2_FRAGMENT_MEET = re.compile(r"^/meet/\d{10,15}/?$")
 
 
+def _zoom_host_is_approved(host: str) -> bool:
+    """Mirror the sealed zaki-control.v1 zoom host predicate (validate.mjs /
+    meeting_url_matches_platform): commercial and US-gov Zoom hosts.
+
+    Same class of gate-disagreement the teams helper above documents: the sealed control
+    predicate admits zoomgov.com / *.zoomgov.com, so a US-gov Zoom URL passed the sealed
+    gate and was then refused HERE, surfacing as a generic 422 invalid_request.
+    """
+    return (
+        host == "zoom.us" or host.endswith(".zoom.us")
+        or host == "zoomgov.com" or host.endswith(".zoomgov.com")
+    )
+
+
 def _teams_host_is_approved(host: str) -> bool:
     """Mirror the sealed zaki-control.v1 teams host predicate (validate.mjs /
     meeting_url_matches_platform): consumer, enterprise-subdomain and US-gov/DoD Teams hosts.
@@ -40,7 +54,7 @@ def _teams_host_is_approved(host: str) -> bool:
 
 def _host_is_approved(host: str, platform: object) -> bool:
     if platform == "zoom":
-        return host == "zoom.us" or host.endswith(".zoom.us")
+        return _zoom_host_is_approved(host)
     if platform == "teams":
         return _teams_host_is_approved(host)
     if platform == "jitsi":

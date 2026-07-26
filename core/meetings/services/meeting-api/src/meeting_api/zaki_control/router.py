@@ -662,7 +662,17 @@ def build_router(
         native_meeting_id = "zaki-" + hashlib.sha256(
             f"{subject.tenant_id}\0{meeting_identity}".encode()
         ).hexdigest()
-        meeting_url_sha256 = hashlib.sha256(meeting_identity.encode()).hexdigest()
+        # Bind the grant to the URL the bot will actually NAVIGATE to, not to the
+        # query-stripped dedup identity. capture/service.py re-validates and hashes the
+        # navigation URL (validate_meeting_url keeps provider query parameters intact),
+        # so hashing the identity here made the two sides disagree for ANY URL carrying a
+        # query — the comparison then failed AUTHORITY_SCOPE_MISMATCH and surfaced as a
+        # generic 422 invalid_request. That silently denied every Zoom "Copy Invite Link"
+        # (always ?pwd=) and every enterprise Teams /l/meetup-join/...?context= link;
+        # only query-less URLs such as meet.google.com/abc-defg-hij ever matched.
+        # native_meeting_id above deliberately stays IDENTITY-based so two ?pwd= variants
+        # of one meeting still dedupe to a single native id.
+        meeting_url_sha256 = hashlib.sha256(meeting_url.encode()).hexdigest()
         try:
             # A lease retry first recovers the durable mapping.  In particular, an earlier worker
             # may have spawned the bot but died before persisting ``meeting_id``; do not mint a
