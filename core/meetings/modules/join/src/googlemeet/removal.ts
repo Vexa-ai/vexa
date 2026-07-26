@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../_host";
 import { googleRemovalIndicators } from "./selectors";
-import { countRealParticipantTiles } from "./admission";
+import { countRealParticipantTilesOrThrow } from "./admission";
 
 // Function to check if bot has been removed from the meeting
 export async function checkForGoogleRemoval(page: Page): Promise<boolean> {
@@ -89,7 +89,7 @@ export function startGoogleAlonenessMonitor(
   timeoutMs: number,
   onEveryoneLeft: () => void | Promise<void>,
   pollMs = 10_000,
-  counter: (page: Page) => Promise<number> = countRealParticipantTiles,
+  counter: (page: Page) => Promise<number> = countRealParticipantTilesOrThrow,
 ): () => void {
   log(`Starting alone-in-meeting monitoring (leave after ${Math.round(timeoutMs / 1000)}s alone)...`);
   let aloneSinceMs: number | null = null;

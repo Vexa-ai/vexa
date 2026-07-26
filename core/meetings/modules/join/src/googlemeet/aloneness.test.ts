@@ -2,6 +2,7 @@
  *  Continuous aloneness fires ONCE after the timeout; company returning resets the
  *  clock; a flaky counter read never causes a spurious leave. */
 import { startGoogleAlonenessMonitor } from "./removal";
+import { countRealParticipantTiles, countRealParticipantTilesOrThrow } from "./admission";
 
 let failed = 0;
 const check = (name: string, ok: boolean) => {
@@ -43,6 +44,17 @@ async function main() {
   await sleep(150);
   stop();
   check("flaky reads never fire", fires === 0);
+
+  // 5. REGRESSION (the shipped false positive): check 4 above proves the MONITOR resets on
+  //    a throw — but its DEFAULT counter swallowed every error and returned 0, which the
+  //    monitor reads as "everyone left". One flaky DOM read could therefore evict the bot
+  //    from a LIVE meeting. The two counters must differ exactly here: admission may treat
+  //    a failed read as "no tiles yet" (0); aloneness must never.
+  const brokenPage = { locator: () => ({ evaluateAll: async () => { throw new Error("detached frame"); } }) } as never;
+  check("admission counter still degrades to 0 on a failed read", (await countRealParticipantTiles(brokenPage)) === 0);
+  let surfaced = false;
+  try { await countRealParticipantTilesOrThrow(brokenPage); } catch { surfaced = true; }
+  check("aloneness counter surfaces a failed read instead of reporting 0", surfaced);
 
   if (failed) { console.error(`\n❌ aloneness (L2): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log("\n✅ aloneness (L2): all green.");

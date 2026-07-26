@@ -83,15 +83,35 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
  * Presence of >=1 such tile is a POSITIVE admitted signal independent of that guard.
  */
 const EFFECTS_TILE = /visual_effects|backgrounds and effects/i;
+async function readRealParticipantTiles(page: Page): Promise<number> {
+  const labels = await page.locator("[data-participant-id]").evaluateAll(
+    els => els.map(e => e.getAttribute("aria-label") || (e.textContent || "").trim()),
+  );
+  return labels.filter(l => l && !EFFECTS_TILE.test(l)).length;
+}
+
 export async function countRealParticipantTiles(page: Page): Promise<number> {
   try {
-    const labels = await page.locator("[data-participant-id]").evaluateAll(
-      els => els.map(e => e.getAttribute("aria-label") || (e.textContent || "").trim()),
-    );
-    return labels.filter(l => l && !EFFECTS_TILE.test(l)).length;
+    return await readRealParticipantTiles(page);
   } catch {
+    // Admission semantics: a failed read means "no admitted tile YET", and the caller
+    // simply polls again. Zero is safe here because it only ever delays admission.
     return 0;
   }
+}
+
+/**
+ * Aloneness semantics: a FAILED read must stay distinguishable from a genuine zero.
+ *
+ * countRealParticipantTiles() returns 0 on any error — correct for admission, but
+ * catastrophic for the aloneness monitor, where 0 means "everyone left". A transient
+ * navigation/teardown/evaluation error therefore read as an empty meeting and could
+ * evict the bot from a LIVE one. startGoogleAlonenessMonitor already treats a THROW as
+ * "flaky read — reset the clock, never a spurious leave" (that is its documented
+ * contract), so surface the failure instead of masking it as zero.
+ */
+export async function countRealParticipantTilesOrThrow(page: Page): Promise<number> {
+  return readRealParticipantTiles(page);
 }
 
 export async function dumpAdmissionState(page: Page, tag: string): Promise<void> {
