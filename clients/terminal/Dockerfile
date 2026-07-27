@@ -32,6 +32,25 @@ ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID
 # agent-api paths (404). Empty (default) keeps every surface. NEXT_PUBLIC_* → set BEFORE `next build`.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
 ENV NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
+# White-label (src/app/brand.ts): the product name in every user-visible string, the logo `src`,
+# and the accent colour BOTH themes derive from. NEXT_PUBLIC_* is inlined at BUILD time, so these
+# must be present before `next build` — setting them at `docker run` does nothing. All empty ⇒ the
+# shipped defaults, i.e. an unconfigured build is unchanged.
+# ON_ACCENT is the text painted ON a solid accent fill: set it when the accent is dark enough that
+# the near-black default would be unreadable on it.
+ARG NEXT_PUBLIC_BRAND_NAME=""
+ARG NEXT_PUBLIC_BRAND_ACCENT=""
+ARG NEXT_PUBLIC_BRAND_ON_ACCENT=""
+ARG NEXT_PUBLIC_BRAND_LOGO_URL=""
+ENV NEXT_PUBLIC_BRAND_NAME=$NEXT_PUBLIC_BRAND_NAME \
+    NEXT_PUBLIC_BRAND_ACCENT=$NEXT_PUBLIC_BRAND_ACCENT \
+    NEXT_PUBLIC_BRAND_ON_ACCENT=$NEXT_PUBLIC_BRAND_ON_ACCENT \
+    NEXT_PUBLIC_BRAND_LOGO_URL=$NEXT_PUBLIC_BRAND_LOGO_URL
+# The meeting-bot display name the terminal proposes (src/surfaces/defaultBotName.ts). It was read
+# in code but never passed into the image, so this knob was dead in every container build; empty
+# falls back to the brand name.
+ARG NEXT_PUBLIC_DEFAULT_BOT_NAME=""
+ENV NEXT_PUBLIC_DEFAULT_BOT_NAME=$NEXT_PUBLIC_DEFAULT_BOT_NAME
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 

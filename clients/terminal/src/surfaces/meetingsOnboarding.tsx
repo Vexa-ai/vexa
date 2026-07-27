@@ -23,6 +23,7 @@ import { presentError } from "./apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import { getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";
+import { BRAND } from "../app/brand";
 
 /** The success line after a connect: lead with what the sync actually FOUND. */
 export function connectOutcome(stamp: CalendarSyncStamp): { ok: boolean; text: string } {
@@ -99,7 +100,7 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
           <button aria-label="close" onClick={onClose} style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 16, cursor: "pointer", padding: 2 }}>×</button>
         </div>
         <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-          Vexa reads your calendar through its <b style={{ color: "var(--t2)" }}>secret iCal address</b> — a
+          {BRAND.name} reads your calendar through its <b style={{ color: "var(--t2)" }}>secret iCal address</b> — a
           private URL only you can see. No Google sign-in needed. Outlook and Apple Calendar ICS feeds work
           through the same box.
         </div>

@@ -7,6 +7,7 @@
  *
  *  Read via a function (not a module constant) so tests that set the env after load observe it.
  */
+import { BRAND } from "../app/brand";
 export function defaultBotName(): string {
-  return process.env.NEXT_PUBLIC_DEFAULT_BOT_NAME?.trim() || "Vexa";
+  return process.env.NEXT_PUBLIC_DEFAULT_BOT_NAME?.trim() || BRAND.name;
 }
