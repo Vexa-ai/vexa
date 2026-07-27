@@ -46,6 +46,10 @@ Override the model or image for more accuracy: `WHISPER_MODEL=Systran/faster-whi
 a GPU image via `WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
 faster-whisper-server accepts it and serves `WHISPER_MODEL`.)
 
+Set `ALLOY_STT_HEALTHCHECK=1` to replace the bundled third-party image's unusable `curl`
+self-probe with an equivalent Python probe. Default/rollback `0` leaves the image healthcheck
+unchanged.
+
 After it finishes:
 
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
@@ -110,8 +114,9 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
-`WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
-`LOCAL_STT=1`, the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
+`WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`), and
+`ALLOY_STT_HEALTHCHECK=1` (optional Python self-probe; default/rollback `0`). When `LOCAL_STT=1`,
+the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
 in `.env`; the runtime brokers credentials into spawned workers (nothing leaves the network).

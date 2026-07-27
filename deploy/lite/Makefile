@@ -51,6 +51,14 @@ WHISPER_IMAGE    ?= fedirz/faster-whisper-server:latest-cpu
 WHISPER_MODEL    ?= Systran/faster-whisper-tiny.en
 HOST_STT_PORT    ?= 8083
 
+# ALLOY: adapt the optional third-party Whisper image only when explicitly enabled.
+# The image's baked probe calls curl, which that image does not contain.
+ALLOY_STT_HEALTHCHECK ?= 0
+ALLOY_STT_HEALTHCHECK_ARGS :=
+ifeq ($(ALLOY_STT_HEALTHCHECK),1)
+ALLOY_STT_HEALTHCHECK_ARGS := --health-cmd="python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\", timeout=2).read()'" --health-interval=5s --health-timeout=3s --health-retries=30
+endif
+
 define set_tag
 	@echo "Setting '$(1)' → $(2)..."
 	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):$(1) $(DOCKERHUB_USER)/$(IMAGE_NAME):$(2)
@@ -152,6 +160,7 @@ up: preflight
 		if ! docker ps -q -f name=$(WHISPER_CONTAINER) | grep -q .; then \
 			docker rm -f $(WHISPER_CONTAINER) 2>/dev/null || true; \
 			docker run -d --name $(WHISPER_CONTAINER) --network $(NETWORK) --restart unless-stopped \
+				$(ALLOY_STT_HEALTHCHECK_ARGS) \
 				-e WHISPER__MODEL=$(WHISPER_MODEL) -e WHISPER__INFERENCE_DEVICE=cpu -e WHISPER__TTL=-1 \
 				-p $(HOST_STT_PORT):8000 \
 				$(WHISPER_IMAGE) > /dev/null; \
