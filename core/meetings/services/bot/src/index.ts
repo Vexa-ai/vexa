@@ -34,7 +34,7 @@ import { createBotPipeline, createLivePipeline, createTranscribe, serr, type Bot
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { launchBrowser, startCaptureBridge, startRecording, startVideoRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -249,7 +249,20 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
       startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
-      startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
+      // Audio (page-side MediaRecorder → recording.v1) and, when the spawn asked for it, video
+      // (an ffmpeg screen-grab of the bot's own X display — no page involvement). Composed into
+      // the ONE optional thunk the live pipeline already has, so both start together and the
+      // teardown it returns stops both. Video is best-effort: it must never cost us the audio.
+      startRecording: rec
+        ? async () => {
+            const stopAudio = await startRecording(sess.page, inv, rec);
+            const stopVideo = await startVideoRecording(inv);
+            return async () => {
+              await stopAudio().catch((e) => console.error(`[bot] audio recording teardown failed: ${serr(e)}`));
+              await stopVideo();
+            };
+          }
+        : undefined,
       engine: bp,
       onFault: (stage, e) => {
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);

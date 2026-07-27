@@ -36,7 +36,7 @@ import {
   type BrowserContext,
 } from '@vexa/remote-browser';
 import { getJoinBrowserArgs } from '@vexa/join';
-import type { RecordingMasterFormat } from '@vexa/recording';
+import { VideoRecordingService, type RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
@@ -578,5 +578,53 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       await setMic(false);
       console.log('[bot] speak_stop');
     },
+  };
+}
+
+/**
+ * Start the ffmpeg screen-grab → recording.v1 video master.  // L4 (needs a real X display).
+ *
+ * Unlike the audio tap this touches no Page: @vexa/recording's VideoRecordingService grabs the
+ * bot's own X display (DISPLAY, :99 under Xvfb), which is exactly what the meeting renders into.
+ * Gated on the invocation's `captureModes` carrying "video" — the control plane decides per spawn,
+ * so a deployment that does not want video pays nothing here.
+ *
+ * Best-effort by construction: a missing ffmpeg, a dead display or a failed upload is logged and
+ * swallowed. Video is the newest and least-proven leg of recording; it must never be able to cost
+ * a meeting its audio or its transcript.
+ *
+ * ponytail: the service buffers the whole file and uploads ONE master at stop, so a SIGKILL
+ * mid-meeting loses the video (the audio path was deliberately rewritten out of exactly this
+ * shape — see recording.ts). Upgrade path: `ffmpeg -f segment` into the per-chunk sink audio
+ * already uses.
+ */
+export async function startVideoRecording(inv: Invocation): Promise<() => Promise<void>> {
+  if (!inv.captureModes?.includes('video')) return async () => { /* video not requested */ };
+  const uploadUrl = inv.recordingUploadUrl;
+  const secret = inv.internalSecret;
+  if (!uploadUrl || !secret) {
+    console.error('[bot] video recording requested but recordingUploadUrl/internalSecret are unset — skipping');
+    return async () => { /* nothing started */ };
+  }
+
+  // meetingId only names the temp file — the upload endpoint scopes the recording by session_uid,
+  // exactly as the audio path does. A self-host spawn carries no numeric id, hence the fallback.
+  const svc = new VideoRecordingService(Number(inv.meeting_id) || 0, inv.connectionId ?? 'session');
+  try {
+    svc.start();
+  } catch (e) {
+    console.error(`[bot] video recording failed to start (audio + transcript are unaffected): ${String(e)}`);
+    return async () => { /* nothing to tear down */ };
+  }
+
+  return async () => {
+    try {
+      await svc.stop();
+      await svc.upload(uploadUrl, secret);
+    } catch (e) {
+      console.error(`[bot] video recording teardown failed: ${String(e)}`);
+    } finally {
+      await svc.cleanup().catch(() => { /* the temp file may already be gone */ });
+    }
   };
 }

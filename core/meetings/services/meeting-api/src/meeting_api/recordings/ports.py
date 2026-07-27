@@ -24,7 +24,14 @@ from typing import Optional, Protocol, runtime_checkable
 class Storage(Protocol):
     """Object storage for recording chunks + masters (MinIO/S3 in prod)."""
 
-    async def upload(self, key: str, data: bytes, *, content_type: str) -> None: ...
+    async def upload(self, key: str, data: bytes, *, content_type: str,
+                     tags: Optional[dict[str, str]] = None) -> None:
+        """Store an object. ``tags`` are object tags the BACKEND indexes — they exist so an operator
+        can express retention ("expire video after 90 days") as a bucket lifecycle rule instead of
+        us shipping a deletion service. media_type sits deep inside the key
+        (recordings/{user}/{rec}/{session}/{media_type}/...), and lifecycle prefix filters are
+        literal prefixes, so a tag is the only thing a rule can actually select on."""
+        ...
 
     async def list(self, prefix: str) -> list[str]:
         """Object keys under ``prefix`` (sorted) — used by finalize to gather a recording's chunks."""
