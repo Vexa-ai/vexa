@@ -256,10 +256,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       startRecording: rec
         ? async () => {
             const stopAudio = await startRecording(sess.page, inv, rec);
-            const stopVideo = await startVideoRecording(inv);
+            // Video is strictly best-effort and starts SECOND, behind its own catch: if it could
+            // throw here, `stopAudio` would be lost and the audio recording would never be
+            // finalized — video failing would cost us the recording it was added alongside.
+            const stopVideo = await startVideoRecording(inv).catch((e) => {
+              console.error(`[bot] video recording failed to start (audio unaffected): ${serr(e)}`);
+              return async () => { /* nothing started */ };
+            });
             return async () => {
               await stopAudio().catch((e) => console.error(`[bot] audio recording teardown failed: ${serr(e)}`));
-              await stopVideo();
+              await stopVideo().catch((e) => console.error(`[bot] video recording teardown failed: ${serr(e)}`));
             };
           }
         : undefined,
