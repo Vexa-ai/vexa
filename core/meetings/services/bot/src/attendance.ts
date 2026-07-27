@@ -36,8 +36,6 @@ export interface AttendanceReporter {
   /** The lifecycle.v1 fragment for the terminal event, or undefined if nobody was ever seen.
    *  Closes any still-open interval at call time. Shaped for `OrchestratorDeps.terminalExtras`. */
   report(nowMs?: number): Record<string, unknown> | undefined;
-  /** Distinct participants seen so far — the counter a periodic log line reads. */
-  seen(): number;
 }
 
 /** A display name we refuse to treat as a person. The capture modules already filter their own
@@ -48,7 +46,6 @@ function isUsableName(name: unknown): name is string {
 
 interface Tracked {
   first: number;            // ms — first appearance
-  last: number;             // ms — end of the most recent closed interval, or the last known presence
   openedAt: number | null;  // ms — start of the interval currently open, or null when away
   closed: Array<[number, number]>;
 }
@@ -59,8 +56,6 @@ export function createAttendanceReporter(
   const byName = new Map<string, Tracked>();
 
   return {
-    seen: () => byName.size,
-
     observe(names: readonly string[], nowMs?: number): void {
       try {
         const t = nowMs ?? now();
@@ -73,7 +68,7 @@ export function createAttendanceReporter(
         for (const name of present) {
           const cur = byName.get(name);
           if (!cur) {
-            byName.set(name, { first: t, last: t, openedAt: t, closed: [] });
+            byName.set(name, { first: t, openedAt: t, closed: [] });
           } else if (cur.openedAt === null) {
             cur.openedAt = t;   // rejoined — a NEW interval, so the away gap is never counted
           }
@@ -85,7 +80,6 @@ export function createAttendanceReporter(
           if (present.has(name) || cur.openedAt === null) continue;
           cur.closed.push([cur.openedAt, t]);
           cur.openedAt = null;
-          cur.last = t;
         }
       } catch { /* an accumulator must never break the loop that reports to it */ }
     },
@@ -100,8 +94,10 @@ export function createAttendanceReporter(
           .map(([name, cur]) => {
             // Still here when the meeting ended: close at report time, so a participant who never
             // leaves is measured to the end rather than to their arrival.
+            // Always >= 1 span: a name is tracked with an interval already open, and openedAt is
+            // nulled only after its span has been pushed.
             const spans = cur.openedAt === null ? cur.closed : [...cur.closed, [cur.openedAt, t] as [number, number]];
-            const lastMs = spans.length ? spans[spans.length - 1][1] : cur.last;
+            const lastMs = spans[spans.length - 1][1];
             return {
               name,
               first_seen: iso(cur.first),

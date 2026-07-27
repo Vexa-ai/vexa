@@ -42,12 +42,7 @@ interface MeetingRowDTO {
 /** Avatar initials from a display name: first letters of the first two words, uppercased. A
  *  single-word name gives one letter rather than a fabricated second. */
 function initialsOf(name: string): string {
-  return (name || "")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
+  return (name || "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("");
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped

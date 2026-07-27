@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     const r = createAttendanceReporter(() => min(0));
     check('no roster ever seen ⇒ no report', r.report() === undefined);
     r.observe(['', '   ']);
-    check('junk-only roster ⇒ still no report', r.report() === undefined && r.seen() === 0);
+    check('junk-only roster ⇒ still no report', r.report() === undefined);
   }
 
   // ── 2) late join + early leave + still-present-at-end ──
