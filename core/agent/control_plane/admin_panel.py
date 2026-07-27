@@ -178,10 +178,6 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
 _PROBE_SCRATCH = "admin:probe:scratch"
 _PROBE_STREAM = "admin:probe:stream"
 SEGMENT_FRESH_SEC = 120
-# meeting-api /health may refresh its cached STT capability probe. That nested probe has a
-# documented 15-second deadline, so the outer golden probe must allow it to finish instead of
-# reporting a false meeting-api outage while gateway/runtime keep their short liveness deadline.
-MEETING_HEALTH_TIMEOUT_SEC = 20.0
 
 
 def _http_health(url: str, *, timeout: float = 5.0) -> tuple[int, dict]:
@@ -202,19 +198,9 @@ def _stage(sid: str, label: str, status: str, latency_ms: int | None = None, det
     return out
 
 
-def _health_stage(
-    sid: str,
-    label: str,
-    url: str,
-    http_health,
-    *,
-    timeout: float | None = None,
-) -> dict:
+def _health_stage(sid: str, label: str, url: str, http_health) -> dict:
     try:
-        if timeout is None:
-            ms, body = http_health(url)
-        else:
-            ms, body = http_health(url, timeout=timeout)
+        ms, body = http_health(url)
     except Exception as e:  # noqa: BLE001 — typed stage failure, not a 500
         return _stage(sid, label, "fail", detail=f"{type(e).__name__}: {e}")
     status = "pass" if body.get("status") == "ok" else "warn"
@@ -234,8 +220,7 @@ def run_probe(settings, r, live_meetings: list[dict] | None = None, *,
     gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
     stages.append(_health_stage("gateway", "gateway", f"{gw}/health", http_health))
     stages.append(_health_stage("meeting-api", "meeting-api",
-                                f"{settings.meeting_api_url.rstrip('/')}/health", http_health,
-                                timeout=MEETING_HEALTH_TIMEOUT_SEC))
+                                f"{settings.meeting_api_url.rstrip('/')}/health", http_health))
 
     try:
         ms, body = http_health(f"{settings.runtime_api_url.rstrip('/')}/health")

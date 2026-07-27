@@ -208,64 +208,6 @@ def test_probe_all_pass():
     assert all(s["status"] == "pass" for s in result["stages"])
 
 
-def test_probe_meeting_health_allows_nested_stt_deadline(monkeypatch):
-    """meeting-api /health may perform a slower real STT capability check; its outer stage must
-    not inherit the shorter generic liveness deadline used by gateway and runtime."""
-    import json
-    import threading
-    import time as _time
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path == "/meeting/health":
-                _time.sleep(0.1)
-            body = {"status": "ok"}
-            if self.path == "/runtime/health":
-                body["capabilities"] = {"bot_spawn": {"status": "ok"}}
-            data = json.dumps(body).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{server.server_port}"
-    monkeypatch.setenv("VEXA_GATEWAY_URL", f"{base}/gateway")
-
-    def short_generic_deadline(url, *, timeout=0.05):
-        return admin_panel._http_health(url, timeout=timeout)
-
-    try:
-        result = admin_panel.run_probe(
-            load_settings(
-                meeting_api_url=f"{base}/meeting",
-                runtime_api_url=f"{base}/runtime",
-            ),
-            _FakeRedis(),
-            [],
-            relay_health={
-                "native_resolve": {"ok": True},
-                "ingest": {"ok": True, "last_segment_at": _time.time(), "segments": 1},
-            },
-            http_health=short_generic_deadline,
-            workloads=[],
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
-
-    meeting = next(s for s in result["stages"] if s["id"] == "meeting-api")
-    assert meeting["status"] == "pass"
-
-
 def test_probe_quiet_relay_is_warn_when_nothing_live_but_fail_when_live():
     stale_relay = {"native_resolve": {"ok": True}, "ingest": {"ok": True, "last_segment_at": None}}
     idle = _probe(relay=stale_relay)
