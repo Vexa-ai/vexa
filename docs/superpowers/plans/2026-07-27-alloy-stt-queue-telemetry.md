@@ -1,1133 +1,428 @@
 # ALLOY STT Queue Telemetry Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Implementation subagents and worktrees are not authorized for this dirty local ALLOY checkout. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use `superpowers:executing-plans` when continuing this plan.
+> The original no-worktree instruction applied only while preserving the inherited dirty `main`
+> checkout. That work was captured in a local checkpoint; all current and future edits use a
+> session-owned worktree based on the selected checkpoint ref.
 
-**Goal:** Add an owner-scoped global STT queue monitor that exposes real Whisper load, backlog, lag, RTF, and failures on every Vexa Terminal screen.
+**Status at integration ref:** source and sealed-contract implementation is present; focused
+offline evidence and standard-runner wiring are complete. Two explicit disposable-Redis lanes,
+independent review, a clean-image provenance check, and real Google Meet acceptance remain open.
 
-**Architecture:** The real gmeet scheduling boundary maintains per-meeting metrics and publishes a rate-limited current-state snapshot to Redis. Meeting API owner-scopes active meetings and aggregates their snapshots; gateway forwards the authenticated endpoint; one Terminal poller reads it every second while visible and renders a compact footer plus per-meeting details.
+**Goal:** Provide an opt-in, owner-scoped STT queue monitor that reports real Whisper execution,
+backlog, lag, RTF, and failures on every Vexa Terminal screen without changing upstream behavior
+when disabled.
 
-**Tech Stack:** TypeScript, Node.js, Redis, Python 3.11+, FastAPI, React 19, Next.js 15, Vitest, pytest, pnpm, Docker Lite deployment.
+**Architecture:** The per-channel scheduler owns pending and supersede transitions.
+`TranscriptionClient` reports the real limiter slot lifecycle after semaphore acquisition, and one
+tracker consolidates those events into a per-meeting snapshot. The bot publishes the snapshot to a
+versioned Redis key. Meeting API reads exact keys for owner-owned active meetings, validates them
+against the sealed contract, and computes the aggregate and health. Gateway forwards the
+authenticated route. One Terminal poller reads the server aggregate once per second only while the
+page is visible.
 
 **Approved specification:** `docs/ALLOY-STT-TELEMETRY-DESIGN.md`
 
-## Global Constraints
+## Fixed delivered contract
 
-- Enable all new behavior only with `ALLOY_STT_TELEMETRY=1`.
-- Prefix source comments that identify local customization with `ALLOY:` and diagnostics with `[ALLOY]`.
-- Preserve upstream behavior when the flag is disabled.
-- Do not change STT scheduling, chunk cadence, transcript text, speaker attribution, retry policy, or queue capacity as part of telemetry.
-- Do not add packages, models, runtimes, system tools, or internet downloads.
-- Do not expose Redis to the browser.
-- Do not reuse the administrator-wide overview endpoint.
-- Derive ownership only from gateway-injected `X-User-Id`; never trust meeting IDs supplied by the browser.
-- Telemetry failure must not fail, restart, pause, or slow the transcription pipeline.
-- Use one snapshot per active meeting at `alloy:stt:telemetry:{meeting_id}` with a 15-second TTL.
-- Publish at most once per second during ordinary activity, plus immediate start, stop, error, and recovery snapshots.
-- Poll once per second only while the Terminal document is visible.
-- Preserve all pre-existing dirty files and edits. Patch overlapping files narrowly.
-- Do not stage, commit, push, switch branches, or perform other Git mutations without a separate direct user instruction.
-- Apply DRY and SOLID proportionately: one queue-metrics owner, one versioned snapshot interface, one Redis publisher, one owner-scoped aggregator, and one global poller. Do not introduce speculative abstractions or unrelated refactors.
-- UI/unit tests may control external clock, HTTP, and STT completion seams, but must execute the real production tracker, scheduler, publisher, aggregator, polling store, and component code.
-- A real Redis integration node and a real bot/Whisper live acceptance node are mandatory before any stability claim.
+- All behavior is enabled only by exact opt-in flags. The upstream-compatible defaults are
+  `ALLOY_STT_MAX_CONCURRENCY=0`, `ALLOY_STT_CHANNEL_BACKPRESSURE=0`,
+  `ALLOY_STT_LANGUAGE_MODE=configured`, `ALLOY_STT_TELEMETRY=0`,
+  `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=0`, and `ALLOY_SKIP_HF_CACHE_WARM=0`.
+- The approved local pilot overrides those values explicitly as `1/1/auto/1/1/1`.
+- `ALLOY_STT_MAX_CONCURRENCY` limits one bot process. It is not a cross-process, cross-meeting, or
+  Whisper-service-wide semaphore.
+- The Redis key is `alloy:stt:telemetry:v1:{meeting_id}` with a 15-second TTL.
+- The backend route is `GET /alloy/stt/status` in Meeting API and Gateway. The Terminal proxy is
+  `GET /api/alloy/stt/status`.
+- With telemetry disabled, Meeting API and Gateway do not register the route. Terminal mounts no
+  telemetry hook, subscription, timer, or fetch and renders the upstream reset footer.
+- Meeting API reads exact keys for owner-owned active meetings only. Transcript or workspace
+  sharing does not grant telemetry access.
+- Sealed contract `alloy-stt-telemetry.v1` owns `Snapshot`, `Aggregate`, and `StatusResponse`.
+  The response fields are `version`, `enabled`, `available`, `updated_at_ms`, `aggregate`,
+  `meetings`, and `error`.
+- Meeting API computes aggregate values and health. Terminal renders that aggregate and does not
+  rederive it.
+- Invalid, incompatible, version-mismatched, non-finite, or key/payload-mismatched snapshots are
+  silently omitted. Redis transport failure returns the sealed unavailable response and never
+  changes transcription.
+- Health is red for `last_error`, age `>5s`, or lag `>15s`; amber otherwise for age `>3s`, lag
+  `>=5s`, or RTF `>1`; green otherwise; muted when there are no valid snapshots. Aggregate health
+  is the worst meeting health.
+- The Terminal polls once per second only while visible. Timer/visibility triggers reuse one
+  request promise per active polling generation. Stop/restart may start a fresh request while the
+  invalidated generation's network call is still pending; generation fencing ignores the old
+  result. The hidden and disabled paths make no request, and transport failure retains the last
+  valid response.
+- Auto-language removes the pinned language parameter and delegates detection to the configured
+  backend/model. Bundled local STT needs the separate non-ALLOY make override
+  `WHISPER_MODEL=Systran/faster-whisper-small`; the default and example `.en` models are
+  English-only. Real Russian, English, and code-switch acceptance remains open.
+- Alloy-owned blocks/comments use `ALLOY:` and runtime diagnostics use `[ALLOY]`.
+- DRY and SOLID are applied proportionately: the sealed contract owns wire semantics, the scheduler
+  and STT client own their real transitions, one tracker owns metrics, Meeting API owns aggregate
+  semantics, and one Terminal store owns polling. No speculative abstraction or unrelated
+  refactor is authorized.
+
+## Evidence interpretation
+
+Checked rows below mean that the integrated source and its named focused evidence exist on the
+selected integration ref. They do not prove that a newly built image is running, that a real
+Redis lane passed, or that a real multilingual meeting completed. Historical RED instructions
+have been reconciled into observed production-boundary checks rather than being presented as
+commands that still need to fail.
+
+The TypeScript compile portion of the focused package evidence is complete. Some package scripts
+also contain POSIX `rm`/`cp` post-steps; invoking those scripts directly in Windows PowerShell
+still requires a compatible POSIX command environment. That environment caveat does not downgrade
+the already completed TypeScript compile evidence.
 
 ## File Map
 
 | File | Responsibility |
 | --- | --- |
-| `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.ts` | Versioned snapshot types and the single in-memory queue metrics owner |
-| `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.test.ts` | Deterministic tracker transition tests using production tracker code |
-| `core/meetings/modules/gmeet-pipeline/src/gmeet-pipeline.ts` | Emits metrics at the real STT scheduling/backpressure boundary |
-| `core/meetings/modules/gmeet-pipeline/src/alloy-channel-backpressure.test.ts` | Proves real scheduler metrics while actual requests are gated |
-| `core/meetings/modules/gmeet-pipeline/src/index.ts` | Exports the telemetry contract used by bot composition |
-| `core/meetings/services/bot/src/adapters/alloy-stt-redis.ts` | Rate-limited fault-isolated Redis snapshot publisher |
-| `core/meetings/services/bot/src/adapters/alloy-stt-redis.live.test.ts` | Real Redis TTL, overwrite, immediate terminal-state, and recovery evidence |
-| `core/meetings/services/bot/src/index.ts` | Creates the tracker/publisher only when the ALLOY flag is enabled |
-| `core/meetings/services/bot/src/pipeline.ts` | Passes the optional tracker into the real gmeet pipeline |
-| `deploy/lite/bin/vexa-bot-launch` | Explicitly forwards the opt-in flag to dynamically launched bots |
-| `core/meetings/services/meeting-api/src/meeting_api/collector/alloy_stt_status.py` | Parses snapshots, computes health, and aggregates only verified meetings |
-| `core/meetings/services/meeting-api/src/meeting_api/collector/app.py` | Adds the owner-scoped `GET /alloy/stt/status` route |
-| `core/meetings/services/meeting-api/src/meeting_api/app.py` | Wires the optional telemetry reader through the unified app factory |
-| `core/meetings/services/meeting-api/src/meeting_api/__main__.py` | Supplies the production Redis client to the reader |
-| `core/meetings/services/meeting-api/tests/test_alloy_stt_status.py` | Owner isolation, stale/malformed/error, and aggregation tests |
-| `core/meetings/services/meeting-api/tests/test_alloy_stt_status_live_redis.py` | Real Redis read/TTL integration test |
-| `core/gateway/services/gateway/src/gateway/app.py` | Authenticated forwarding route to Meeting API |
-| `core/gateway/services/gateway/tests/test_proxy.py` | Verbatim forwarding and injected identity regression test |
-| `clients/terminal/src/workbench/alloySttTelemetry.ts` | API types, validation, health state, and one visibility-aware polling store |
-| `clients/terminal/src/workbench/AlloySttStatus.tsx` | Compact footer and expandable per-meeting details |
-| `clients/terminal/src/workbench/Workbench.tsx` | Mounts one global monitor in place of `reset layout` when enabled |
-| `clients/terminal/src/workbench/__tests__/alloySttTelemetry.test.ts` | Poll cadence, visibility, stale retention, and parsing tests |
-| `clients/terminal/src/workbench/__tests__/AlloySttStatus.test.tsx` | Footer states, colors, details, and fallback tests |
-| `docs/ALLOY-CUSTOMIZATIONS.md` | Registers the customization and rollback flag |
-| `deploy/lite/README.md` | Documents local activation and operational interpretation |
+| `core/meetings/contracts/alloy-stt-telemetry.v1/alloy-stt-telemetry.schema.json` | Sealed `Snapshot`, `Aggregate`, and `StatusResponse` wire contract |
+| `core/meetings/contracts/alloy-stt-telemetry.v1/golden/*.json` | Available, unavailable, disabled, active, waiting, and aggregate goldens |
+| `core/meetings/contracts/alloy-stt-telemetry.v1/validate.mjs` | Contract and golden validator |
+| `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.ts` | Single in-memory per-meeting queue-metrics owner |
+| `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.test.ts` | Tracker transition and contract tests |
+| `core/meetings/modules/gmeet-pipeline/src/gmeet-pipeline.ts` | Per-channel pending/supersede instrumentation and observer composition |
+| `core/meetings/modules/gmeet-pipeline/src/alloy-channel-backpressure.test.ts` | Active-turn preservation and real scheduler/backpressure evidence |
+| `core/meetings/modules/whisper/src/transcription-client.ts` | Per-bot limiter and real slot lifecycle observer |
+| `core/meetings/modules/whisper/src/concurrency-observer.test.ts` | Waiting/start/finish ordering and observer fault-isolation evidence |
+| `core/meetings/services/bot/src/adapters/alloy-stt-telemetry-redis.ts` | Versioned, rate-limited, bounded Redis snapshot publisher |
+| `core/meetings/services/bot/src/adapters/alloy-stt-telemetry-redis.test.ts` | Offline lifecycle checks and explicit `--real-redis` integration lane |
+| `core/meetings/services/bot/src/index.ts` | Exact-flag tracker and publisher composition |
+| `core/meetings/services/bot/src/pipeline.ts` | Optional tracker injection into the real gmeet pipeline |
+| `core/meetings/services/bot/package.json` | Standard offline runner plus explicit `test:redis` lane |
+| `core/meetings/services/meeting-api/src/meeting_api/collector/alloy_stt_telemetry.py` | Exact-key Redis reader and sealed snapshot validation |
+| `core/meetings/services/meeting-api/src/meeting_api/collector/alloy_stt_status.py` | Server-owned aggregate and health |
+| `core/meetings/services/meeting-api/src/meeting_api/collector/app.py` | Strict owner-only active-meeting route |
+| `core/meetings/services/meeting-api/tests/test_alloy_stt_status.py` | Owner, aggregate, health, omission, and unavailable tests |
+| `core/meetings/services/meeting-api/tests/test_alloy_stt_telemetry.py` | Explicit real-Redis route integration lane |
+| `core/meetings/services/meeting-api/pyproject.toml` | Standard pytest registration and explicit Redis marker |
+| `core/gateway/services/gateway/src/gateway/app.py` | Authenticated `GET /alloy/stt/status` forwarding |
+| `core/gateway/services/gateway/src/gateway/adapters.py` | Exact opt-in Gateway route composition |
+| `core/gateway/services/gateway/src/gateway/config.v1.json` | Gateway deployment-config declaration |
+| `clients/terminal/src/app/api/alloyTelemetryMode.ts` | Exact server-runtime opt-in predicate |
+| `clients/terminal/src/app/api/[...path]/route.ts` | Conditional Terminal-to-Gateway proxy routing |
+| `clients/terminal/src/workbench/alloySttTelemetry.ts` | Sealed response parsing and one visibility-aware polling owner |
+| `clients/terminal/src/workbench/AlloySttTelemetryMonitor.tsx` | Server aggregate footer and per-meeting details |
+| `clients/terminal/src/workbench/Workbench.tsx` | Global monitor mount and upstream reset-layout fallback |
+| `clients/terminal/src/workbench/__tests__/alloySttTelemetry.test.ts` | Poll cadence, visibility, parsing, and retention tests |
+| `clients/terminal/src/workbench/__tests__/alloySttTelemetry.resilience.test.ts` | Restart overlap and stale-generation result fencing tests |
+| `clients/terminal/src/workbench/__tests__/AlloySttTelemetryMonitor.test.tsx` | Footer, aggregate-health, details, and disabled fallback tests |
+| `clients/terminal/src/app/__tests__/alloyTelemetryRuntime.test.tsx` | Runtime opt-in and hook-free disabled composition tests |
+| `deploy/lite/entrypoint.sh` | Lite runtime default-zero telemetry export |
+| `deploy/lite/bin/vexa-bot-launch` | Default-zero per-bot flags and explicit propagation |
+| `deploy/lite/Makefile` | Runtime and build flag defaults |
+| `deploy/lite/tests/test_alloy_opt_in.py` | Six-flag default-zero and explicit opt-in composition tests |
+| `core/meetings/services/meeting-api/src/meeting_api/config.v1.json` | Meeting API telemetry deployment contract |
+| `architecture.calm.json` | Redis carrier, ownership, API, and Terminal dataflow |
+| Package runner files | Standard focused tests for tracker, slot observer, publisher, API, and Terminal |
+| `docs/ALLOY-CUSTOMIZATIONS.md` | Switch defaults, explicit pilot profile, and rollback |
+| `docs/ALLOY-STT-TELEMETRY-DESIGN.md` | Delivered behavioral design and evidence boundary |
+| `deploy/lite/README.md` | Operator activation, endpoints, and interpretation |
 
 ---
 
-### Task 1: Versioned Queue Telemetry Tracker
+### Task 1: Sealed Contract and Queue Telemetry Tracker
 
-**Files:**
+**Expected:** one versioned contract and one tracker own the cross-language wire fields and the
+in-memory queue state; no audio payload is retained.
 
-- Create: `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.ts`
-- Create: `core/meetings/modules/gmeet-pipeline/src/alloy-stt-telemetry.test.ts`
-- Modify: `core/meetings/modules/gmeet-pipeline/src/index.ts`
+- [x] **Step 1: Add sealed `alloy-stt-telemetry.v1` schema and representative goldens.**
 
-**Interfaces:**
+  The contract covers `Snapshot`, `Aggregate`, and `StatusResponse`, including disabled and
+  dependency-unavailable responses.
 
-- Produces:
+- [x] **Step 2: Add exact tracker transition tests.**
 
-```ts
-export type AlloySttTelemetryError = {
-  code: string;
-  message: string;
-};
+  The focused nodes cover queued-to-active movement, same-channel replacement, lag from audio
+  timeline positions, EMA RTF, balanced failure, and recovery.
 
-export type AlloySttTelemetrySnapshotV1 = {
-  version: 1;
-  meeting_id: string;
-  native_meeting_id: string;
-  updated_at_ms: number;
-  active_requests: number;
-  active_audio_sec: number;
-  waiting_channels: number;
-  queued_audio_sec: number;
-  latest_captured_audio_end_ms: number | null;
-  latest_processed_audio_end_ms: number | null;
-  lag_sec: number;
-  rtf_ema: number | null;
-  processed_windows: number;
-  superseded_windows: number;
-  last_error: AlloySttTelemetryError | null;
-};
+- [x] **Step 3: Implement the minimal per-meeting tracker.**
 
-export interface AlloySttTelemetryTracker {
-  captured(channelId: string, audioEndMs: number): void;
-  queued(channelId: string, audioSec: number): void;
-  superseded(channelId: string, audioSec: number): void;
-  started(channelId: string, audioSec: number): void;
-  completed(input: {
-    channelId: string;
-    audioSec: number;
-    audioEndMs: number;
-    processingDurationMs: number;
-  }): void;
-  failed(channelId: string, error: AlloySttTelemetryError): void;
-  recovered(): void;
-  snapshot(): AlloySttTelemetrySnapshotV1;
-}
+  Pending and active state are keyed by request/channel identity; only durations, timestamps,
+  counters, and bounded errors are retained.
 
-export function createAlloySttTelemetryTracker(input: {
-  meetingId: string;
-  nativeMeetingId: string;
-  now?: () => number;
-}): AlloySttTelemetryTracker;
-```
+- [x] **Step 4: Validate tracker invariants against the sealed snapshot schema.**
 
-- Invariant: tracker stores durations and timestamps only; it never stores audio payloads.
+  Current counters remain non-negative and cumulative counters are limited to processed and
+  superseded windows.
 
-- [ ] **Step 1: Write exact tracker RED tests**
+- [x] **Step 5: Export only the public tracker types and factory.**
 
-Cover these named cases in `alloy-stt-telemetry.test.ts`:
+  Internal mutable maps are not exported.
 
-```ts
-test("ALLOY tracker moves queued audio into active and returns to idle", () => {});
-test("ALLOY tracker replaces one pending channel without inflating wait depth", () => {});
-test("ALLOY tracker computes lag from audio timeline rather than wall-clock silence", () => {});
-test("ALLOY tracker computes EMA RTF from submitted audio duration", () => {});
-test("ALLOY tracker preserves counters on failure and clears error on recovery", () => {});
-```
+- [x] **Step 6: Run the focused tracker contract and TypeScript compile evidence.**
 
-Assert exact values, including:
-
-```ts
-assert.equal(snapshot.waiting_channels, 1);
-assert.equal(snapshot.queued_audio_sec, 4.25);
-assert.equal(snapshot.superseded_windows, 1);
-assert.equal(snapshot.lag_sec, 3);
-assert.equal(snapshot.rtf_ema, 0.8);
-```
-
-- [ ] **Step 2: Run the tracker RED**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-stt-telemetry.test.ts
-```
-
-Expected: FAIL because the production tracker module does not exist.
-
-Expected duration: under 10 seconds.
-
-Stop threshold: 30 seconds. If exceeded, terminate the node process and diagnose only this test.
-
-- [ ] **Step 3: Implement the minimal tracker**
-
-Use:
-
-```ts
-const pendingByChannel = new Map<string, number>();
-const activeByChannel = new Map<string, number>();
-let rtfEma: number | null = null;
-
-const sum = (values: Iterable<number>) =>
-  Array.from(values).reduce((total, value) => total + value, 0);
-
-const lagSec = () => {
-  if (latestCapturedAudioEndMs === null || latestProcessedAudioEndMs === null) return 0;
-  return Math.max(0, (latestCapturedAudioEndMs - latestProcessedAudioEndMs) / 1000);
-};
-```
-
-On `queued`, replace the channel's pending duration instead of adding another queue element. On `superseded`, increment `superseded_windows` once and replace that channel's pending duration. On `completed`, update:
-
-```ts
-const requestRtf = processingDurationMs / 1000 / audioSec;
-rtfEma = rtfEma === null ? requestRtf : 0.2 * requestRtf + 0.8 * rtfEma;
-```
-
-Round only at presentation time; keep full precision in the snapshot.
-
-- [ ] **Step 4: Run the tracker GREEN**
-
-Run the exact command from Step 2.
-
-Expected: all five named tests PASS.
-
-- [ ] **Step 5: Export the public contract**
-
-Export `createAlloySttTelemetryTracker`, `AlloySttTelemetryTracker`, and `AlloySttTelemetrySnapshotV1` from the package entrypoint. Do not export internal mutable state.
-
-- [ ] **Step 6: Build the focused package**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/gmeet-pipeline run build
-```
-
-Expected: exit 0.
-
-Expected duration: under 30 seconds.
-
-Stop threshold: 60 seconds.
+  Standard package runners include the tracker node.
 
 ---
 
-### Task 2: Instrument the Real GMeet Scheduling Boundary
+### Task 2: Real Scheduler and Whisper Slot Instrumentation
 
-**Files:**
+**Expected:** waiting state comes from the scheduler, while active state and RTF begin only after
+the real per-bot limiter grants a `TranscriptionClient` slot.
 
-- Modify: `core/meetings/modules/gmeet-pipeline/src/gmeet-pipeline.ts`
-- Modify: `core/meetings/modules/gmeet-pipeline/src/alloy-channel-backpressure.test.ts`
+- [x] **Step 1: Add the one-channel rotation regression through the production pipeline.**
 
-**Interfaces:**
+  The controlled external STT promise proves that a rotated active turn is finalized once, the
+  successor turn is finalized once, and no dangling draft remains.
 
-- Consumes: `AlloySttTelemetryTracker` from Task 1.
-- Produces: optional pipeline configuration:
+- [x] **Step 2: Add the optional Whisper execution observer.**
 
-```ts
-alloySttTelemetry?: AlloySttTelemetryTracker;
-```
+  `waiting`, `started`, and `finished` reflect FIFO slot lifecycle; observer callback failure
+  cannot alter STT output or prevent slot release.
 
-- [ ] **Step 1: Extend the existing real scheduler test with telemetry assertions**
+- [x] **Step 3: Connect scheduler pending/supersede events and the real slot observer to one tracker.**
 
-Use the existing controlled STT completion gate, but pass the production tracker into the production pipeline. Add one named scenario:
+  Queue waiting is excluded from processing duration and RTF.
 
-```ts
-test("ALLOY scheduler publishes real active pending superseded and completed transitions", async () => {});
-```
+- [x] **Step 4: Run focused success, failure, cancellation, and supersede boundaries.**
 
-Required sequence:
+  The tracker returns to `active_requests=0` and `waiting_channels=0` after completion.
 
-```text
-first same-channel request starts -> active=1 wait=0
-second same-channel request arrives -> active=1 wait=1
-third same-channel request arrives -> active=1 wait=1 superseded=1
-first completes -> active=1 wait=0
-newest pending completes -> active=0 wait=0
-```
+- [x] **Step 5: Record focused package compile evidence and the Windows POSIX post-step caveat.**
 
-The test may gate only the external STT completion promise. It must call the real production queue and tracker.
-
-- [ ] **Step 2: Run the scheduler RED**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-channel-backpressure.test.ts
-```
-
-Expected: the new telemetry assertions FAIL because the scheduler does not emit transitions.
-
-Expected duration: under 15 seconds.
-
-Stop threshold: 45 seconds.
-
-- [ ] **Step 3: Add transition calls beside real queue mutations**
-
-At the existing production points:
-
-```ts
-telemetry?.captured(channelId, audioEndMs);
-telemetry?.started(channelId, audioSec);
-telemetry?.queued(channelId, audioSec);
-telemetry?.superseded(channelId, audioSec);
-telemetry?.completed({ channelId, audioSec, audioEndMs, processingDurationMs });
-telemetry?.failed(channelId, { code, message });
-```
-
-Record `processingDurationMs` around the actual Whisper request. Do not include queue wait time.
-
-Use `try/finally` so active counters are released on both success and failure. Do not catch or transform the production STT error merely for telemetry.
-
-- [ ] **Step 4: Run the scheduler GREEN**
-
-Run the exact command from Step 2.
-
-Expected: existing backpressure assertions and the new telemetry scenario PASS.
-
-- [ ] **Step 5: Run the tracker plus scheduler affected boundary**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-stt-telemetry.test.ts
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-channel-backpressure.test.ts
-pnpm --filter @vexa/gmeet-pipeline run build
-```
-
-Expected: all exit 0.
+  TypeScript compilation is complete; POSIX `rm`/`cp` package-script post-steps require a
+  compatible shell when invoked from Windows.
 
 ---
 
-### Task 3: Fault-Isolated Redis Snapshot Publisher and Bot Wiring
+### Task 3: Fault-Isolated Redis Publisher and Bot Composition
 
-**Files:**
+**Expected:** an enabled bot publishes one current snapshot to
+`alloy:stt:telemetry:v1:{meeting_id}` with TTL 15 seconds; telemetry never controls bot teardown
+or transcription.
 
-- Create: `core/meetings/services/bot/src/adapters/alloy-stt-redis.ts`
-- Create: `core/meetings/services/bot/src/adapters/alloy-stt-redis.live.test.ts`
-- Modify: `core/meetings/services/bot/src/index.ts`
-- Modify: `core/meetings/services/bot/src/pipeline.ts`
-- Modify: `deploy/lite/bin/vexa-bot-launch`
+- [x] **Step 1: Add offline publisher lifecycle and bounded teardown tests.**
 
-**Interfaces:**
+- [x] **Step 2: Validate versioned key construction, one in-flight write, refresh, and `DEL`.**
 
-- Consumes: `AlloySttTelemetrySnapshotV1`.
-- Produces:
+- [x] **Step 3: Implement `alloy-stt-telemetry-redis.ts` with immediate start publish and bounded periodic refresh.**
 
-```ts
-export type AlloySttSnapshotReason = "periodic" | "start" | "stop" | "error" | "recovery";
+- [ ] **Step 4: Run the explicit publisher lane against a disposable Redis database.**
 
-export function createAlloySttRedisPublisher(input: {
-  redis: Pick<RedisClientType, "set">;
-  ttlSec?: number;
-  minIntervalMs?: number;
-  now?: () => number;
-  log?: (message: string, fields?: Record<string, unknown>) => void;
-}): {
-  publish(snapshot: AlloySttTelemetrySnapshotV1, reason: AlloySttSnapshotReason): Promise<void>;
-};
-```
+  Run only with a disposable target:
 
-- Redis command:
+  ```powershell
+  $env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/<disposable-db>'
+  pnpm --filter @vexa/bot run test:redis
+  ```
 
-```ts
-await redis.set(
-  `alloy:stt:telemetry:${snapshot.meeting_id}`,
-  JSON.stringify(snapshot),
-  { EX: 15 },
-);
-```
+  Expected: sealed snapshot exists, TTL is positive and refreshes, overwrite is visible, and
+  `stop()` deletes the key. Stop at 45 seconds or the first schema/TTL/cleanup mismatch; retain
+  output and do not repeat unchanged.
 
-- [ ] **Step 1: Write a real Redis integration RED**
+- [x] **Step 5: Compose tracker and publisher only when `ALLOY_STT_TELEMETRY` is exactly `1`.**
 
-The test reads `ALLOY_TEST_REDIS_URL`, connects with the production Redis client, uses a unique meeting id, and performs real `SET`, `GET`, `TTL`, overwrite, and cleanup.
+- [x] **Step 6: Propagate default-zero runtime flags to newly spawned Lite bots.**
 
-Named cases:
+- [x] **Step 7: Wire offline publisher checks into the standard bot test runner.**
 
-```ts
-test("ALLOY publisher stores a versioned snapshot with TTL in real Redis", async () => {});
-test("ALLOY publisher throttles periodic writes but sends error and recovery immediately", async () => {});
-test("ALLOY publisher failure never rejects the transcription caller", async () => {});
-```
-
-For the third case, stop using the Redis connection after setup and assert `publish()` resolves while recording one `[ALLOY]` warning. This controls the external failure seam but executes the real publisher.
-
-- [ ] **Step 2: Run the Redis publisher RED**
-
-Run:
-
-```powershell
-$env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/0'
-pnpm --filter @vexa/bot exec tsx src/adapters/alloy-stt-redis.live.test.ts
-```
-
-Expected: FAIL because the publisher does not exist.
-
-Expected duration: under 20 seconds.
-
-Stop threshold: 45 seconds. A refused connection is `BLOCKED_LOCAL_REDIS`, not a code PASS; start or expose the existing local Vexa Redis before continuing.
-
-- [ ] **Step 3: Implement the publisher**
-
-Required behavior:
-
-```ts
-if (reason === "periodic" && now() - lastWriteAt < minIntervalMs) return;
-try {
-  await redis.set(key, JSON.stringify(snapshot), { EX: ttlSec });
-  lastWriteAt = now();
-} catch (error) {
-  log("[ALLOY] STT telemetry publish failed", {
-    meetingId: snapshot.meeting_id,
-    error: error instanceof Error ? error.message : String(error),
-  });
-}
-```
-
-Rate-limit state is per meeting publisher instance. Do not use a process-global timestamp that couples concurrent meetings.
-
-- [ ] **Step 4: Run the real Redis GREEN**
-
-Run the exact command from Step 2.
-
-Expected: all three cases PASS and the test deletes its unique key.
-
-- [ ] **Step 5: Wire the publisher at the bot composition root**
-
-When `process.env.ALLOY_STT_TELEMETRY === "1"`:
-
-```ts
-const tracker = createAlloySttTelemetryTracker({
-  meetingId: String(config.meeting_id),
-  nativeMeetingId: config.native_meeting_id,
-});
-const publisher = createAlloySttRedisPublisher({ redis: redisClient });
-```
-
-Pass `tracker` into the real gmeet pipeline. Publish its current snapshot on:
-
-```text
-bot start -> reason start
-ordinary tracker changes -> reason periodic
-STT error -> reason error
-first subsequent success -> reason recovery
-bot shutdown -> reason stop
-```
-
-When disabled, pass `undefined` and allocate no timer.
-
-- [ ] **Step 6: Forward the opt-in flag to spawned bots**
-
-In `vexa-bot-launch`, include:
-
-```sh
--e ALLOY_STT_TELEMETRY="${ALLOY_STT_TELEMETRY:-0}"
-```
-
-Preserve all existing ALLOY flags and user changes in this dirty file.
-
-- [ ] **Step 7: Run focused bot boundaries**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/bot exec tsx src/adapters/alloy-stt-redis.live.test.ts
-pnpm --filter @vexa/bot exec tsx src/pipeline.test.ts
-pnpm --filter @vexa/bot run build
-```
-
-Expected: all exit 0.
-
-Expected duration: under 90 seconds total.
-
-Stop threshold: 150 seconds.
+  The real-Redis branch remains explicit behind `--real-redis` and is never silently skipped as
+  evidence of an integration PASS.
 
 ---
 
-### Task 4: Owner-Scoped Meeting API Aggregator
+### Task 4: Strict Owner-Only Meeting API Aggregate
 
-**Files:**
+**Expected:** the route exists only when enabled, reads exact versioned keys for owner-owned active
+meetings, silently omits invalid neighbors, and returns the server-computed sealed aggregate.
 
-- Create: `core/meetings/services/meeting-api/src/meeting_api/collector/alloy_stt_status.py`
-- Create: `core/meetings/services/meeting-api/tests/test_alloy_stt_status.py`
-- Create: `core/meetings/services/meeting-api/tests/test_alloy_stt_status_live_redis.py`
-- Modify: `core/meetings/services/meeting-api/src/meeting_api/collector/app.py`
-- Modify: `core/meetings/services/meeting-api/src/meeting_api/app.py`
-- Modify: `core/meetings/services/meeting-api/src/meeting_api/__main__.py`
+- [x] **Step 1: Add sealed parsing, aggregation, health, and unavailable-response tests.**
 
-**Interfaces:**
+- [x] **Step 2: Add strict owner-only tests that exclude transcript/workspace shares and other tenants.**
 
-- Produces:
+- [x] **Step 3: Implement strict snapshot validation and silent incompatible-record omission.**
 
-```py
-class AlloySttSnapshotReader(Protocol):
-    async def read_many(self, meeting_ids: list[int]) -> list[dict]: ...
+  Invalid, version-mismatched, non-finite, or key/payload-mismatched records are not returned and
+  do not invalidate valid neighbors.
 
-class RedisAlloySttSnapshotReader:
-    def __init__(self, redis_client): ...
-    async def read_many(self, meeting_ids: list[int]) -> list[dict]: ...
+- [x] **Step 4: Register `GET /alloy/stt/status` only with the enabled reader dependency.**
 
-def aggregate_alloy_stt_status(
-    snapshots: list[dict],
-    *,
-    now_ms: int,
-) -> dict: ...
-```
+  Owner IDs come from the trusted server identity boundary; browser-supplied meeting ownership
+  claims are not accepted.
 
-- Route:
+- [x] **Step 5: Implement one bounded `MGET` over exact owner-owned active meeting keys.**
 
-```text
-GET /alloy/stt/status
-```
+  Redis is never scanned.
 
-- [ ] **Step 1: Write aggregation and ownership RED tests**
+- [x] **Step 6: Compute aggregate counts, maxima, and health in Meeting API.**
 
-Named cases:
+  Terminal does not maintain a second aggregate implementation.
 
-```py
-async def test_alloy_stt_status_returns_only_owner_active_meetings(): ...
-async def test_alloy_stt_status_uses_sum_for_counts_and_max_for_lag_and_rtf(): ...
-async def test_alloy_stt_status_marks_error_stale_and_lag_thresholds_red(): ...
-async def test_alloy_stt_status_skips_malformed_and_unsupported_snapshots(): ...
-async def test_alloy_stt_status_disabled_preserves_upstream_behavior(): ...
-```
+- [ ] **Step 7: Run the owner route through a disposable real Redis database.**
 
-The route test must call the shipped FastAPI router. It may seed the existing production-compatible test store, but it must not duplicate route or aggregation logic in the test.
+  ```powershell
+  $env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/<disposable-db>'
+  Push-Location core/meetings/services/meeting-api
+  uv run pytest tests/test_alloy_stt_telemetry.py -q
+  Pop-Location
+  ```
 
-Owner case:
+  Expected: only the owner's active valid snapshot is returned; other-owner, ended, and malformed
+  rows are absent. Stop at 45 seconds or the first ownership/schema mismatch.
 
-```text
-user 10 owns meetings 101 and 102
-user 20 owns meeting 201
-Redis contains snapshots for all three
-GET as user 10 returns only 101 and 102
-```
+- [x] **Step 8: Wire focused API and contract nodes into the standard pytest runner.**
 
-- [ ] **Step 2: Run the owner/aggregation RED**
-
-Run:
-
-```powershell
-Push-Location core/meetings/services/meeting-api
-uv run pytest tests/test_alloy_stt_status.py -q
-Pop-Location
-```
-
-Expected: FAIL because the reader, aggregator, and route do not exist.
-
-Expected duration: under 30 seconds.
-
-Stop threshold: 60 seconds.
-
-- [ ] **Step 3: Implement strict snapshot parsing and aggregation**
-
-Accept only:
-
-```py
-snapshot.get("version") == 1
-snapshot.get("meeting_id") == str(verified_meeting_id)
-isinstance(snapshot.get("native_meeting_id"), str)
-```
-
-Reject booleans where numeric fields are expected. Clamp no values silently; malformed records are omitted and reported with `[ALLOY]`.
-
-Health:
-
-```py
-if last_error or age_sec > 5 or lag_sec > 15:
-    health = "red"
-elif rtf is not None and rtf > 1 or lag_sec >= 5:
-    health = "amber"
-else:
-    health = "green"
-```
-
-Aggregate:
-
-```py
-active_requests = sum(item["active_requests"] for item in meetings)
-waiting_channels = sum(item["waiting_channels"] for item in meetings)
-queued_audio_sec = sum(item["queued_audio_sec"] for item in meetings)
-lag_sec = max((item["lag_sec"] for item in meetings), default=0)
-rtf = max((item["rtf_ema"] for item in meetings if item["rtf_ema"] is not None), default=None)
-```
-
-- [ ] **Step 4: Add the owner-scoped route**
-
-Use the existing trusted header resolution and active status set:
-
-```py
-user_id = _resolve_user_id(x_user_id)
-running = await store.list_meetings(
-    user_id,
-    status=_RUNNING_STATUSES,
-    slim=True,
-)
-verified_ids = [int(meeting["id"]) for meeting in running]
-snapshots = await alloy_stt_reader.read_many(verified_ids)
-```
-
-Do not accept a `meeting_ids` query/body parameter.
-
-When `ALLOY_STT_TELEMETRY != "1"` or no reader is supplied:
-
-```json
-{"enabled": false, "generated_at_ms": 0, "aggregate": null, "meetings": []}
-```
-
-- [ ] **Step 5: Wire the production Redis reader**
-
-`__main__.py` already owns the real `redis.asyncio` client. Create one `RedisAlloySttSnapshotReader(redis_client)` and pass it into `create_app`; thread the optional dependency through `meeting_api.app.create_app` into `collector.build_router`.
-
-Use one bounded `MGET` for verified keys:
-
-```py
-keys = [f"alloy:stt:telemetry:{meeting_id}" for meeting_id in meeting_ids]
-raw_values = await redis_client.mget(keys) if keys else []
-```
-
-- [ ] **Step 6: Run owner/aggregation GREEN**
-
-Run the exact command from Step 2.
-
-Expected: all named tests PASS.
-
-- [ ] **Step 7: Add and run real Redis integration**
-
-The live test connects to `ALLOY_TEST_REDIS_URL`, writes two versioned snapshots with real TTLs, calls `RedisAlloySttSnapshotReader.read_many`, verifies ordering/missing keys, and deletes its keys.
-
-Run:
-
-```powershell
-$env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/0'
-Push-Location core/meetings/services/meeting-api
-uv run pytest tests/test_alloy_stt_status_live_redis.py -q
-Pop-Location
-```
-
-Expected: PASS against real Redis.
-
-Expected duration: under 20 seconds.
-
-Stop threshold: 45 seconds.
-
-- [ ] **Step 8: Run the focused Meeting API affected boundary**
-
-Run:
-
-```powershell
-Push-Location core/meetings/services/meeting-api
-uv run pytest tests/test_alloy_stt_status.py tests/test_alloy_stt_status_live_redis.py tests/test_slim_meetings_list.py tests/test_xtenant_isolation.py -q
-Pop-Location
-```
-
-Expected: all selected nodes PASS.
-
-Expected duration: under 90 seconds.
-
-Stop threshold: 150 seconds.
+  The explicit `alloy_real_redis` marker remains opt-in and is not counted as PASS unless selected
+  with a configured disposable Redis URL.
 
 ---
 
-### Task 5: Authenticated Gateway Forwarding
+### Task 5: Authenticated Gateway and Configuration Governance
 
-**Files:**
+**Expected:** exact telemetry opt-in registers a thin authenticated Gateway route and default-zero
+composition leaves it absent.
 
-- Modify: `core/gateway/services/gateway/src/gateway/app.py`
-- Modify: `core/gateway/services/gateway/tests/test_proxy.py`
+- [x] **Step 1: Add forwarding tests for authentication, stripped client identity, and injected owner identity.**
 
-**Interfaces:**
+- [x] **Step 2: Add the thin Gateway `GET /alloy/stt/status` forwarder through the existing security funnel.**
 
-- Consumes: Meeting API `GET /alloy/stt/status`.
-- Produces: public authenticated gateway `GET /alloy/stt/status`.
+- [x] **Step 3: Declare Meeting API and Gateway opt-in seams in `config.v1`.**
 
-- [ ] **Step 1: Write the gateway RED**
-
-Add:
-
-```py
-async def test_alloy_stt_status_is_authenticated_and_forwarded_with_user_identity(): ...
-```
-
-Assert:
-
-```text
-missing API key -> 401 and no downstream request
-valid API key -> downstream path /alloy/stt/status
-client-supplied X-User-Id is stripped
-gateway-resolved X-User-Id is injected
-body/status are returned verbatim
-```
-
-- [ ] **Step 2: Run the gateway RED**
-
-Run:
-
-```powershell
-Push-Location core/gateway/services/gateway
-uv run pytest tests/test_proxy.py::test_alloy_stt_status_is_authenticated_and_forwarded_with_user_identity -q
-Pop-Location
-```
-
-Expected: FAIL because the route is absent.
-
-- [ ] **Step 3: Add the thin forwarding route**
-
-```py
-@app.get("/alloy/stt/status")
-async def alloy_stt_status(request: Request):
-    return await _forward("GET", _meeting("/alloy/stt/status"), request)
-```
-
-Do not add custom auth or identity parsing; `_forward` remains the single security funnel.
-
-- [ ] **Step 4: Run the gateway GREEN and affected proxy boundary**
-
-Run:
-
-```powershell
-Push-Location core/gateway/services/gateway
-uv run pytest tests/test_proxy.py::test_alloy_stt_status_is_authenticated_and_forwarded_with_user_identity -q
-uv run pytest tests/test_proxy.py tests/test_edge_guard.py -q
-Pop-Location
-```
-
-Expected: all selected nodes PASS.
-
-Expected duration: under 60 seconds.
-
-Stop threshold: 120 seconds.
+- [x] **Step 4: Seal the Redis carrier and owner/API/Terminal flow in `architecture.calm.json`.**
 
 ---
 
-### Task 6: One Visibility-Aware Terminal Polling Store
+### Task 6: One Visibility-Aware Terminal Poller and Proxy
 
-**Files:**
+**Expected:** the enabled Terminal uses one generation-fenced poller for
+`/api/alloy/stt/status`. Triggers within the active generation reuse its promise; restart may issue
+a fresh request before the invalidated generation's network call settles. The disabled Terminal
+creates no telemetry lifecycle.
 
-- Create: `clients/terminal/src/workbench/alloySttTelemetry.ts`
-- Create: `clients/terminal/src/workbench/__tests__/alloySttTelemetry.test.ts`
+- [x] **Step 1: Add parser, cadence, visibility, stale-retention, generation reuse, and restart-fencing tests.**
 
-**Interfaces:**
+- [x] **Step 2: Implement one module-level polling owner using the sealed response.**
 
-- Produces:
+  It polls once per second only while visible and retains the last valid response after transport
+  failure.
 
-```ts
-export type AlloySttApiState =
-  | { kind: "loading"; lastValid: AlloySttStatusResponse | null }
-  | { kind: "disabled"; lastValid: null }
-  | { kind: "ready"; value: AlloySttStatusResponse }
-  | { kind: "unavailable"; lastValid: AlloySttStatusResponse | null; message: string };
+- [x] **Step 3: Add exact runtime opt-in routing through the Terminal catch-all proxy.**
 
-export function subscribeAlloySttTelemetry(
-  listener: (state: AlloySttApiState) => void,
-): () => void;
+  Enabled requests reach Gateway `/alloy/stt/status`; disabled composition leaves the meetings
+  proxy branch unavailable.
 
-export function getAlloySttTelemetrySnapshot(): AlloySttApiState;
-```
-
-- Fetch target: `/api/alloy/stt/status`.
-
-- [ ] **Step 1: Write polling and parser RED tests**
-
-Named cases:
-
-```ts
-test("ALLOY store starts exactly one poller for multiple subscribers", async () => {});
-test("ALLOY store polls every second while visible", async () => {});
-test("ALLOY store pauses while hidden and refreshes immediately when visible", async () => {});
-test("ALLOY store retains last valid data when fetch fails", async () => {});
-test("ALLOY store rejects malformed response instead of fabricating zero", async () => {});
-test("ALLOY store exposes disabled without continued polling", async () => {});
-```
-
-Use Vitest fake time only for the browser clock and a controlled `fetch` result only for the external HTTP seam. Execute the real production store and parser.
-
-- [ ] **Step 2: Run the store RED**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/alloySttTelemetry.test.ts
-```
-
-Expected: FAIL because the store does not exist.
-
-Expected duration: under 20 seconds.
-
-Stop threshold: 45 seconds.
-
-- [ ] **Step 3: Implement one module-level store**
-
-Required lifecycle:
-
-```ts
-const POLL_MS = 1000;
-const listeners = new Set<(state: AlloySttApiState) => void>();
-let timer: ReturnType<typeof setTimeout> | null = null;
-let requestGeneration = 0;
-
-function schedule(): void {
-  if (document.visibilityState !== "visible" || listeners.size === 0) return;
-  timer = setTimeout(() => void refresh(), POLL_MS);
-}
-```
-
-On the first subscriber, attach one `visibilitychange` listener and refresh immediately. On the last unsubscribe, clear the timer and remove the visibility listener. Increment `requestGeneration` so late results from an obsolete request are ignored.
-
-Validate required fields and schema version. Keep the last valid response when a later request fails.
-
-- [ ] **Step 4: Run the store GREEN**
-
-Run the exact command from Step 2.
-
-Expected: all six tests PASS.
+- [x] **Step 4: Wire focused Terminal telemetry nodes into the standard Vitest runner.**
 
 ---
 
-### Task 7: Global Footer Indicator and Per-Meeting Details
+### Task 7: Global Footer Monitor and Upstream Fallback
 
-**Files:**
+**Expected:** enabled composition renders the server aggregate and per-meeting details; disabled
+composition renders the original `reset layout` control without mounting a telemetry hook.
 
-- Create: `clients/terminal/src/workbench/AlloySttStatus.tsx`
-- Create: `clients/terminal/src/workbench/__tests__/AlloySttStatus.test.tsx`
-- Modify: `clients/terminal/src/workbench/Workbench.tsx`
+- [x] **Step 1: Add monitor tests for connecting, idle, unavailable, aggregate health, details, and fallback.**
 
-**Interfaces:**
+- [x] **Step 2: Implement `AlloySttTelemetryMonitor.tsx` with the actual compact label.**
 
-- Consumes: `subscribeAlloySttTelemetry` and `getAlloySttTelemetrySnapshot`.
-- Produces:
+  Example:
 
-```tsx
-export function AlloySttStatus(props: {
-  fallback: React.ReactNode;
-}): React.ReactElement;
-```
+  ```text
+  STT 2 · 1 active · 2 waiting · 18.4s queued · lag 26.0s · RTF 1.42 · health red
+  ```
 
-- [ ] **Step 1: Write component RED tests**
+- [x] **Step 3: Mount the monitor once in `Workbench.tsx`.**
 
-Named cases:
+- [x] **Step 4: Render server-owned aggregate health and keep per-meeting classification presentation-only.**
 
-```ts
-test("ALLOY footer renders STT idle with no active snapshots", () => {});
-test("ALLOY footer renders compact aggregate and worst health color", () => {});
-test("ALLOY footer opens per-meeting details on click", () => {});
-test("ALLOY footer renders unavailable with muted last valid values", () => {});
-test("ALLOY footer renders reset-layout fallback when feature is disabled", () => {});
-```
-
-Assert accessible button text and role. Do not assert fragile generated class names.
-
-- [ ] **Step 2: Run the component RED**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/AlloySttStatus.test.tsx
-```
-
-Expected: FAIL because the component does not exist.
-
-- [ ] **Step 3: Implement compact formatting**
-
-Render:
-
-```text
-STT · {meetings} mtg · active {active_requests} · wait {waiting_channels} ·
-audio {queued_audio_sec.toFixed(1)}s · lag {Math.round(lag_sec)}s ·
-RTF {rtf === null ? "—" : rtf.toFixed(2)}
-```
-
-Use semantic state attributes:
-
-```tsx
-<button
-  type="button"
-  aria-expanded={open}
-  aria-controls="alloy-stt-details"
-  data-health={health}
->
-```
-
-Details list one row per meeting and include `updated`, `superseded`, and bounded error text.
-
-- [ ] **Step 4: Replace only the footer control**
-
-In `Workbench.tsx`, retain the existing reset-layout button as the `fallback` node and replace its direct rendering with:
-
-```tsx
-<AlloySttStatus
-  fallback={
-    <button onClick={() => layout.resetLayout()} title="Reset layout">
-      reset layout
-    </button>
-  }
-/>
-```
-
-Mount no additional poller in screen-specific surfaces.
-
-- [ ] **Step 5: Run the component GREEN and Terminal affected boundary**
-
-Run:
-
-```powershell
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/AlloySttStatus.test.tsx
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/alloySttTelemetry.test.ts
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/layout.preview.test.ts
-pnpm --filter @vexa/terminal run build
-```
-
-Expected: all selected tests PASS and Next build exits 0.
-
-Expected duration: 2-5 minutes.
-
-Stop threshold: 8 minutes.
+- [x] **Step 5: Verify exact-flag disabled composition has no hook, subscription, timer, or request.**
 
 ---
 
-### Task 8: Deployment Flag and Operator Documentation
+### Task 8: Deployment and Documentation Reconciliation
 
-**Files:**
+**Expected:** operator docs, design, execution record, config/CALM contract, and changelog fragment
+all state the same default-zero behavior and honest evidence boundary.
 
-- Modify: `docs/ALLOY-CUSTOMIZATIONS.md`
-- Modify: `deploy/lite/README.md`
-- Modify: `deploy/lite/Makefile` only if its local run/build target explicitly enumerates ALLOY environment variables
+- [x] **Step 1: Reconcile the customization registry and telemetry design with delivered semantics.**
 
-**Interfaces:**
+- [x] **Step 2: Reconcile this plan and the Lite README; add the per-change changelog fragment.**
 
-- Produces the documented activation:
+- [x] **Step 3: Prove the six known obsolete documentation patterns are absent.**
 
-```text
-ALLOY_STT_TELEMETRY=1
-```
+- [x] **Step 4: Run focused contract, config, architecture, dataflow, docs-version, changelog, and diff checks.**
 
-- [ ] **Step 1: Register the customization**
+  Required commands and limits:
 
-Document:
+  ```powershell
+  node core/meetings/contracts/alloy-stt-telemetry.v1/validate.mjs --check
+  node scripts/gates.mjs contract-version
+  node scripts/gates.mjs config-contract
+  node scripts/arch-dsl.mjs --check
+  node scripts/gates.mjs dataflow
+  node scripts/gates.mjs docs-version
+  node scripts/changelog-collect.mjs --check
+  git diff --check
+  ```
 
-```text
-owner: gmeet scheduler -> Redis snapshot -> Meeting API -> gateway -> Terminal footer
-default: disabled
-rollback: set ALLOY_STT_TELEMETRY=0 and restart the Lite container/bots
-Redis key: alloy:stt:telemetry:{meeting_id}
-TTL: 15 seconds
-poll cadence: 1 second while visible
-```
-
-- [ ] **Step 2: Add the operator interpretation**
-
-Explain:
-
-```text
-active: Whisper calls executing now
-wait: channels waiting behind an active call
-audio: queued audio seconds
-lag: newest captured audio end minus newest processed audio end
-RTF: processing seconds divided by submitted audio seconds
-superseded: older pending windows replaced under backpressure
-```
-
-State that telemetry errors do not stop transcription and that `STT unavailable` must not be interpreted as zero backlog.
-
-- [ ] **Step 3: Preserve dirty deployment edits**
-
-Before patching `Makefile` or `vexa-bot-launch`, compare their current dirty diff and add only the telemetry flag. Do not rewrite or reorder unrelated ALLOY flags.
-
-- [ ] **Step 4: Run documentation/config focused checks**
-
-Run:
-
-```powershell
-rg -n "ALLOY_STT_TELEMETRY|alloy:stt:telemetry|STT unavailable" docs/ALLOY-CUSTOMIZATIONS.md deploy/lite/README.md deploy/lite/Makefile deploy/lite/bin/vexa-bot-launch
-Push-Location deploy/lite
-python -m pytest tests/test_env_file_hygiene.py -q
-Pop-Location
-```
-
-Expected: all four contract terms are present in their owners and env hygiene PASSes.
+  Small checks stop at 45 seconds; gates stop at 60 seconds. Changelog collection is expected to
+  exit `3` while the new fragment is pending and must name that fragment; any other result stops
+  the task.
 
 ---
 
-### Task 9: Independent Review, Affected Evidence, and Real Live Acceptance
+### Task 9: Independent Review and Real Acceptance
 
-**Files:**
+**Expected:** completion is claimed only after independent review, both disposable-Redis lanes, a
+clean source-derived image, runtime provenance, and bounded real Google Meet evidence.
 
-- Review all files listed in the File Map.
-- Create: `docs/reviews/2026-07-27-alloy-stt-queue-telemetry-review.md`
-- Update: `docs/ALLOY-CUSTOMIZATIONS.md` only if review findings require a documented contract correction.
+- [ ] **Step 1: Request independent read-only review of the frozen integrated diff.**
 
-**Interfaces:**
+  Review spec coverage, real scheduler/slot instrumentation, counter balance, publisher isolation,
+  strict ownership, server aggregation, generation-local promise reuse, restart fencing, opt-in
+  rollback, and unrelated-change absence. Record Critical, Important, Minor, and open questions
+  with exact file/line evidence.
 
-- Consumes all preceding tasks.
-- Produces independent review evidence and the only permitted basis for a completion claim.
+- [ ] **Step 2: Close both explicit disposable-Redis lanes and rerun only affected focused boundaries.**
 
-- [ ] **Step 1: Request independent read-only review**
+  Do not proceed with an ownership, schema, TTL, cleanup, or error-isolation mismatch.
 
-Reviewer must check:
+- [ ] **Step 3: Build one clean Dockerfile image from the integrated source and prove runtime/source provenance.**
 
-```text
-spec coverage
-real scheduler instrumentation
-no duplicate/fake metric calculations
-counter balance on success/failure/cancellation
-per-meeting rate limiting
-Redis TTL and fault isolation
-X-User-Id owner isolation
-no browser Redis access
-one Terminal poller
-stale/unavailable honesty
-flag-disabled upstream behavior
-dirty-file preservation
-no unrelated refactor
-```
+  Stop the correlated build process tree at 15 minutes, retain the last active stage, and do not
+  repeat an unchanged stalled build. A healthy old container is not evidence for the new source.
 
-Record Critical, Important, Minor, and open questions with exact file/line references.
+- [ ] **Step 4: Run one bounded real Google Meet journey: join, audio, Whisper, Redis, API, and Terminal.**
 
-- [ ] **Step 2: Fix every Critical/Important finding through named RED/GREEN**
+  Use product endpoints, not Docker health self-report, as the acceptance evidence. Stop at
+  15 minutes on transcript/telemetry stall and retain one aligned API, Redis, bot-log, and Terminal
+  snapshot.
 
-For each finding:
+- [ ] **Step 5: Verify real Russian, English, and code-switch transcription without a pinned language.**
 
-```text
-add or identify one exact failing node
-confirm expected RED reason
-apply minimal fix
-run exact GREEN
-rerun only the affected boundary
-request re-review of the changed scope
-```
+  For bundled local STT, start the test backend with:
 
-Do not proceed with an open Critical or Important finding.
+  ```powershell
+  make -C deploy/lite up LOCAL_STT=1 WHISPER_MODEL=Systran/faster-whisper-small
+  ```
 
-- [ ] **Step 3: Run the complete affected boundary**
+  `WHISPER_MODEL` is a make variable that selects a multilingual backend model, not an ALLOY flag
+  or request-language pin. Record the configured backend/model and actual transcript output; do
+  not infer multilingual acceptance from configuration or omission of the language parameter.
 
-Run sequentially:
+- [ ] **Step 6: Measure queue, lag, RTF, supersede, and recovery behavior under bounded real load.**
 
-```powershell
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-stt-telemetry.test.ts
-pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-channel-backpressure.test.ts
+  Confirm active/waiting return to zero and that `STT unavailable` is never interpreted as an empty
+  queue.
 
-$env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/0'
-pnpm --filter @vexa/bot exec tsx src/adapters/alloy-stt-redis.live.test.ts
-pnpm --filter @vexa/bot exec tsx src/pipeline.test.ts
+- [ ] **Step 7: Record final evidence and resolve every Critical or Important review finding through named RED/GREEN.**
 
-Push-Location core/meetings/services/meeting-api
-uv run pytest tests/test_alloy_stt_status.py tests/test_alloy_stt_status_live_redis.py tests/test_slim_meetings_list.py tests/test_xtenant_isolation.py -q
-Pop-Location
+  Include exact commands/durations, pass/fail counts, Redis URL class without credentials, native
+  meeting id, key/TTL evidence, observed metric maxima, recovery behavior, image provenance,
+  source/index state, external mutations, and remaining limitations.
 
-Push-Location core/gateway/services/gateway
-uv run pytest tests/test_proxy.py tests/test_edge_guard.py -q
-Pop-Location
+## Permitted final states
 
-pnpm --filter @vexa/terminal exec vitest run src/workbench/__tests__/alloySttTelemetry.test.ts src/workbench/__tests__/AlloySttStatus.test.tsx src/workbench/__tests__/layout.preview.test.ts
+- `complete`
+- `implementation complete / live evidence blocked_external`
+- `in progress`
 
-pnpm --filter @vexa/gmeet-pipeline run build
-pnpm --filter @vexa/bot run build
-pnpm --filter @vexa/terminal run build
-```
-
-Expected duration: 4-8 minutes.
-
-Stop threshold: 12 minutes. Stop the active command, retain its exact output, and diagnose the single failing boundary. Do not restart the entire sequence unchanged.
-
-- [ ] **Step 4: Build the local Lite image once**
-
-Purpose: publish the verified source into the locally running product image.
-
-Run:
-
-```powershell
-Push-Location deploy/lite
-$env:ALLOY_STT_TELEMETRY='1'
-make build
-Pop-Location
-```
-
-Expected duration: 8-12 minutes.
-
-Stop threshold: 15 minutes. If the threshold is reached, terminate the correlated build process tree, retain the last active Docker stage, and diagnose that stage. Do not claim the image was published and do not run an unchanged rebuild.
-
-- [ ] **Step 5: Start the local stack with telemetry enabled**
-
-Use the existing Lite start target and preserve all already approved ALLOY flags:
-
-```powershell
-Push-Location deploy/lite
-$env:ALLOY_STT_TELEMETRY='1'
-make up
-Pop-Location
-```
-
-Confirm through the product API, not container self-report:
-
-```powershell
-Invoke-RestMethod -Headers @{ 'X-API-Key' = '<locally configured test key>' } `
-  -Uri 'http://localhost:8100/alloy/stt/status'
-```
-
-Secret entry remains local. Do not write the API key into the plan, source, logs, or chat.
-
-- [ ] **Step 6: Run bounded real meeting acceptance**
-
-Use:
-
-```text
-one real Vexa bot in a Google Meet
-the existing recorded meeting played with shared tab audio
-real Redis
-real Faster Whisper
-Terminal at http://localhost:3001
-```
-
-Observe for 10 minutes:
-
-```text
-footer visible on Meetings, Infra, Routines, and meeting detail screens
-active rises while Whisper executes
-wait/audio rise only when pending work exists
-lag does not grow during silence
-RTF changes after completed requests
-per-meeting details use the native meeting id
-snapshot age updates
-Redis key TTL remains near 15 seconds during activity
-stopping the bot removes the row after TTL
-transcript continues if telemetry API is temporarily unavailable
-```
-
-Stop threshold: 15 minutes. If transcript or telemetry stalls, capture one timestamped API response, Redis snapshot, bot log interval, and Terminal state; then stop and diagnose. Do not repeat unchanged.
-
-- [ ] **Step 7: Record honest completion evidence**
-
-The review artifact must include:
-
-```text
-exact commands and durations
-pass/fail counts
-real Redis URL class without credentials
-meeting native id
-snapshot key and TTL evidence
-observed max active/wait/audio/lag/RTF
-error/recovery behavior
-build result
-open findings
-dirty Git/index state
-external mutations performed
-```
-
-Permitted final states:
-
-```text
-complete
-implementation complete / live evidence blocked_external
-in progress
-```
-
-Do not claim complete from unit tests, a successful image build, or the presence of footer text alone.
-
-## Self-Review Result
-
-- Spec coverage: all 15 design sections map to Tasks 1-9.
-- Placeholder scan: no implementation step delegates unspecified error handling, testing, ownership, or schema decisions.
-- Type consistency: snapshot field names are identical across tracker, Redis, Meeting API, gateway, store, and component.
-- Security consistency: browser supplies no meeting IDs; gateway injects identity; Meeting API derives verified active meeting IDs.
-- Evidence consistency: controlled seams are limited to external timing/transport boundaries; real Redis and real bot/Whisper acceptance remain mandatory.
-- Git consistency: no task stages or commits files without a new direct user instruction.
+Do not claim clean-image success, matching runtime, Redis integration PASS, real Meet E2E,
+multilingual acceptance, load recovery, pilot completion, or production readiness from focused
+source and contract checks alone.

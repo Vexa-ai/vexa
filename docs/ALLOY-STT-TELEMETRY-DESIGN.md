@@ -1,12 +1,17 @@
 # ALLOY STT Queue Telemetry
 
-Status: approved design, implementation not started
+Status: implemented in source; focused offline and contract verification complete;
+disposable-Redis, clean-image, and real-Meet acceptance pending
 
 ## 1. Purpose
 
-Add a global, real-time STT load indicator to the Vexa Terminal so an operator can see whether transcription is keeping up with incoming meeting audio.
+Add one owner-scoped aggregate STT load indicator to the Vexa Terminal so an operator can see
+whether transcription is keeping up with incoming meeting audio across that owner's active
+meetings. Here, global means one Terminal view across per-meeting bot snapshots; it does not mean a
+global concurrency limit across bot processes or the Whisper service.
 
-The indicator replaces the low-value `reset layout` footer text and remains visible on every Terminal screen.
+When explicitly enabled, the indicator replaces the low-value `reset layout` footer text and
+remains visible on every Terminal screen. When disabled, the upstream footer remains unchanged.
 
 This is an ALLOY customization. It must be opt-in, preserve upstream Vexa behavior when disabled, and follow the conventions documented in `docs/ALLOY-CUSTOMIZATIONS.md`.
 
@@ -15,17 +20,18 @@ This is an ALLOY customization. It must be opt-in, preserve upstream Vexa behavi
 The compact footer indicator shows an aggregate across all active meetings owned by the current user:
 
 ```text
-STT · 2 mtg · active 1 · wait 2 · audio 18.4s · lag 26s · RTF 1.42
+STT 2 · 1 active · 2 waiting · 18.4s queued · lag 26.0s · RTF 1.42 · health red
 ```
 
 Definitions:
 
-- `mtg`: meetings that currently publish a fresh STT telemetry snapshot.
+- the number after `STT`: meetings that currently publish a valid STT telemetry snapshot.
 - `active`: Whisper requests currently executing.
-- `wait`: audio channels with one pending request waiting behind an active request.
-- `audio`: total duration of queued, not-yet-started audio.
+- `waiting`: audio channels with one pending request waiting behind an active request.
+- `queued`: total duration of queued, not-yet-started audio.
 - `lag`: worst meeting lag, measured from the end of the latest captured audio to the end of the latest successfully processed audio.
 - `RTF`: worst current rolling real-time factor among active meetings. `1.0` means one second of audio takes one second to process.
+- `health`: the server-computed worst health across the returned meetings.
 
 When no meeting publishes telemetry, the footer shows:
 
@@ -57,16 +63,19 @@ Clicking the compact indicator opens details for each active meeting:
 
 ## 3. Health presentation
 
-Initial thresholds:
+Meeting API owns these thresholds:
 
-- Green: snapshot age is at most 3 seconds, there is no STT error, lag is below 5 seconds, and RTF is at most `1.0`.
-- Amber: snapshot age is at most 3 seconds, there is no STT error, and either RTF is above `1.0` or lag is from 5 through 15 seconds.
-- Red: an STT error is present, snapshot age exceeds 5 seconds, or lag exceeds 15 seconds.
-- Muted: no active telemetry (`STT idle`) or the feature is disabled.
+- Red: an STT error is present, snapshot age is greater than 5 seconds, or lag is greater than 15 seconds.
+- Amber: otherwise, snapshot age is greater than 3 seconds, lag is at least 5 seconds, or RTF is above `1.0`.
+- Green: otherwise.
+- Muted: no valid active snapshots (`STT idle`).
 
 For aggregate health, the worst meeting determines the color.
 
-Thresholds are presentation constants. They do not alter queue behavior, chunk cadence, concurrency, retries, or transcription output.
+The thresholds are server-owned contract behavior. The Terminal renders the sealed aggregate
+health rather than re-deriving it. Per-meeting detail labels are presentation-only and do not alter
+the aggregate. No health threshold changes queue behavior, chunk cadence, concurrency, retries, or
+transcription output.
 
 ## 4. Non-goals
 
@@ -86,18 +95,30 @@ This change does not:
 
 ### 5.1 Ownership
 
-The bot process is the only authority for queue metrics because it owns the real STT scheduling boundary.
+The bot process is the only producer of a meeting snapshot, but execution truth comes from the
+boundary that owns each transition:
+
+- the per-channel scheduler owns pending, supersede, and turn-rotation state;
+- `TranscriptionClient` owns the semaphore slot lifecycle and reports start/end only after real
+  slot acquisition;
+- the tracker consolidates those events into one immutable per-meeting snapshot.
+
+`ALLOY_STT_MAX_CONCURRENCY` is therefore a per-bot client limit. It does not coordinate parallel
+meetings or impose a Lite-wide/model-wide semaphore.
 
 The Terminal must not infer queue state from transcript arrival, elapsed wall time, DOM state, or UI status labels.
 
 Responsibilities are separated as follows:
 
-- STT scheduling layer: records real queue transitions and processing timings.
+- Per-channel scheduling layer: records pending and superseded transitions.
+- STT client observer: records real slot acquisition, completion, failure, and processing time.
+- Queue tracker: owns the consolidated per-meeting counters and RTF state.
 - Telemetry publisher: builds and rate-limits immutable per-meeting snapshots.
 - Redis: stores the latest per-meeting snapshot with a short TTL.
-- Server API: authenticates the user, limits results to that user's meetings, and aggregates snapshots.
+- Server API: authenticates the user, limits exact Redis reads to owner-owned active meetings,
+  validates snapshots against the sealed contract, and computes the aggregate and its health.
 - Terminal store: polls and retains the latest valid response.
-- Footer component: renders aggregate and per-meeting details.
+- Footer component: renders the server aggregate and per-meeting details.
 
 This keeps responsibilities narrow and avoids duplicating queue calculations across backend and UI.
 
@@ -115,7 +136,7 @@ real STT scheduler/backpressure
        ALLOY snapshot publisher
              |
              v
-Redis: alloy:stt:telemetry:{meeting_id}, TTL 15s
+Redis: alloy:stt:telemetry:v1:{meeting_id}, TTL 15s
              |
              v
 authenticated owner-scoped API
@@ -132,7 +153,7 @@ global footer indicator + per-meeting details
 Redis key:
 
 ```text
-alloy:stt:telemetry:{meeting_id}
+alloy:stt:telemetry:v1:{meeting_id}
 ```
 
 Value:
@@ -167,7 +188,10 @@ Schema rules:
 - `last_error` contains a bounded, user-safe error code and message. It must not contain secrets or unbounded stack traces.
 - Snapshot TTL is 15 seconds so dead bot state disappears automatically.
 
-The publisher writes at most once per second during normal operation and writes immediately on start, stop, terminal error, and recovery.
+The publisher writes immediately when it starts, refreshes at most once per second during normal
+operation, and permits only one write in flight. Stop waits only for a bounded interval, then
+deletes the meeting key. Production composition does not promise a separate immediate write for
+every tracker error or recovery; those states appear in the next successful snapshot.
 
 ## 7. RTF calculation
 
@@ -196,10 +220,11 @@ The telemetry observes the existing ALLOY per-channel backpressure implementatio
 
 Required transitions:
 
-- A request entering Whisper increments `active_requests`.
+- Acquiring a real `TranscriptionClient` slot increments `active_requests`.
 - A channel receiving audio while already active sets or replaces that channel's pending request.
 - Replacing an older pending request increments `superseded_windows`.
-- Starting a pending request decrements `waiting_channels` and moves its duration from `queued_audio_sec` to `active_audio_sec`.
+- Promoting a pending request removes it from `waiting_channels`; its duration moves into
+  `active_audio_sec` only when the STT client reports real slot acquisition.
 - Completion or failure decrements `active_requests`.
 - Failure updates `last_error` without corrupting queue counters.
 - Successful recovery clears `last_error`.
@@ -208,26 +233,38 @@ The telemetry layer must not become another queue and must not retain audio payl
 
 ## 9. API and access control
 
-Browser endpoint:
+Backend endpoint in Meeting API and Gateway:
 
 ```text
-GET /api/alloy/stt-status
+GET /alloy/stt/status
+```
+
+Terminal server proxy:
+
+```text
+GET /api/alloy/stt/status
 ```
 
 The endpoint:
 
 1. derives the current authenticated user from the server session;
-2. obtains the current user's active meetings through the existing owner-scoped meeting boundary;
-3. requests or reads telemetry only for those verified meeting IDs;
+2. obtains only owner-owned active meeting IDs through the dedicated owner boundary;
+3. performs one bounded `MGET` for those exact versioned Redis keys;
 4. rejects browser-supplied meeting ownership claims;
 5. returns aggregate and per-meeting snapshots.
+
+Transcript and workspace shares do not grant telemetry access. Invalid, incompatible,
+version-mismatched, non-finite, or key/payload-mismatched snapshots are silently omitted while
+valid neighbors remain available.
 
 Response shape:
 
 ```json
 {
+  "version": 1,
   "enabled": true,
-  "generated_at_ms": 1785100000500,
+  "available": true,
+  "updated_at_ms": 1785100000500,
   "aggregate": {
     "meetings": 2,
     "active_requests": 1,
@@ -237,7 +274,8 @@ Response shape:
     "rtf": 1.42,
     "health": "red"
   },
-  "meetings": []
+  "meetings": [],
+  "error": null
 }
 ```
 
@@ -251,6 +289,10 @@ Aggregation rules:
 
 The existing admin overview is not reused as the browser endpoint because it is administrator-scoped and can expose workloads belonging to other users.
 
+The sealed contract also carries disabled and dependency-unavailable goldens. In production,
+however, exact opt-in composition leaves the Meeting API and Gateway routes absent when
+`ALLOY_STT_TELEMETRY` is not exactly `1`.
+
 ## 10. Terminal polling
 
 The Terminal uses one global store shared by all screens.
@@ -258,12 +300,19 @@ The Terminal uses one global store shared by all screens.
 Polling behavior:
 
 - poll every 1 second while the document is visible;
-- stop periodic polling while the document is hidden;
+- make no telemetry request while the document is hidden;
 - refresh immediately when the document becomes visible;
 - never start one poller per screen or component;
-- abort or ignore an older request when a newer lifecycle replaces it;
+- within one active polling generation, make at most one request and let timer/visibility triggers
+  reuse its current promise;
+- stop invalidates that generation without requiring cancellation of its network call; restart may
+  start a fresh request while the old call remains pending, and generation fencing ignores the old
+  result;
 - retain the last valid snapshot across transient failures;
 - clean up timers and listeners when the store is disposed.
+
+The footer renders `Aggregate` and its `health` exactly as returned by Meeting API. It may classify
+individual detail rows for presentation, but it must not summarize them into a competing aggregate.
 
 Polling is preferred over extending the WebSocket protocol because:
 
@@ -287,19 +336,22 @@ ALLOY_STT_TELEMETRY=1
 When disabled:
 
 - bot snapshot publishing is disabled;
-- the API returns `enabled: false`;
-- the Terminal renders no active telemetry and preserves the upstream behavior selected for the footer;
+- Meeting API and Gateway do not register their telemetry routes;
+- the Terminal creates no hook, subscription, timer, or fetch and preserves the upstream reset footer;
 - no STT scheduling behavior changes.
 
 All new diagnostics use the `[ALLOY]` prefix. Source comments that identify the customization use the `ALLOY:` prefix.
 
 ## 12. Failure semantics
 
-- Redis unavailable: transcription continues; publishing records a bounded warning and retries on the next scheduled snapshot.
-- API unavailable: footer shows `STT unavailable` and retains the last valid snapshot in muted form.
+- Redis publish unavailable: transcription continues; publishing records a bounded warning and retries on the next scheduled snapshot.
+- Redis read unavailable: Meeting API returns the sealed unavailable `StatusResponse`; the footer
+  shows `STT unavailable` and retains the last valid snapshot.
+- API transport unavailable: the footer shows `STT unavailable` and retains the last valid snapshot.
 - Bot exits: Redis TTL removes its snapshot; the meeting disappears from the active aggregate.
-- Malformed snapshot: skip that meeting, surface a bounded diagnostic, and do not fabricate zero values.
-- Unsupported schema version: skip that snapshot and report an explicit compatibility error.
+- Malformed, non-finite, or key/payload-mismatched snapshot: silently omit that meeting and do not
+  fabricate zero values.
+- Unsupported schema version: silently omit that snapshot.
 - STT request failure: preserve real queue counts, set `last_error`, and render red health.
 
 Telemetry failure must never stop, restart, slow down, or mark the transcription pipeline successful or failed.
@@ -308,43 +360,55 @@ Telemetry failure must never stop, restart, slow down, or mark the transcription
 
 Verification starts with exact narrow nodes. Broad suites and live gates are final boundaries only.
 
-Required focused evidence:
+Delivered focused evidence:
 
-1. Real queue-transition test at the actual gmeet-pipeline scheduling boundary:
+1. Queue-transition tests at the actual gmeet-pipeline and STT-client boundaries:
    - one active request;
    - one same-channel pending request;
    - replacement increments `superseded_windows`;
    - completion promotes the pending request;
-   - counters return to zero.
-2. Real Redis integration test:
-   - writes the schema;
-   - refreshes TTL;
-   - immediate error/stop snapshots;
-   - expiration removes dead state.
-3. Owner-scoped API test:
+   - counters return to zero;
+   - RTF starts after slot acquisition and excludes queue waiting.
+2. Sealed contract and golden validation for `Snapshot`, `Aggregate`, and `StatusResponse`.
+3. Strict owner-scoped API tests:
    - two users with separate meetings;
    - each response contains only the authenticated user's snapshots;
-   - stale and malformed records are handled honestly.
-4. Terminal store test:
+   - transcript/workspace shares do not widen telemetry access;
+   - invalid neighbors are silently omitted.
+4. Terminal store and runtime opt-in tests:
    - one global poller;
    - one-second visible cadence;
    - hidden pause and visible refresh;
    - last-valid-state retention on failure.
 5. Footer component test:
    - aggregate rendering;
-   - health color;
+   - server-owned health color;
    - `STT idle`;
    - `STT unavailable`;
    - click-to-expand per-meeting details.
-6. Bounded local end-to-end run:
+
+Pending evidence:
+
+1. Explicit integration lanes against a disposable Redis database:
+   - writes and reads the sealed schema;
+   - refreshes TTL;
+   - cleanup removes ended meeting telemetry.
+2. Clean Dockerfile build from the integrated source and proof that the running image matches it.
+3. Bounded local end-to-end run:
    - real bot;
    - real Redis;
    - real Faster Whisper path;
    - recorded meeting audio;
    - visible queue growth and recovery;
    - no claim of stability based only on synthetic dispatch.
+4. Real Google Meet transcription in Russian, English, and a code-switch sequence. Bundled local
+   STT must use the multilingual make override
+   `WHISPER_MODEL=Systran/faster-whisper-small`; the default and documented `.en` variants are
+   English-only. This selects the backend model and does not pin the request language.
 
-Tests may control an external STT completion boundary to make queue timing deterministic, but they must execute the real production scheduler, metric collector, serializer, Redis transport, API aggregation, and UI store code.
+Focused tests may control an external STT completion boundary to make queue timing deterministic,
+but their results claim only the production boundaries they execute. The disposable Redis and live
+meeting rows remain open.
 
 ## 14. DRY and SOLID constraints
 
@@ -363,9 +427,13 @@ No speculative abstraction or unrelated refactoring is authorized.
 Implementation must update:
 
 - `docs/ALLOY-CUSTOMIZATIONS.md`;
-- the local deployment environment example for `ALLOY_STT_TELEMETRY`;
-- the affected operational runbook if one exists.
+- `deploy/lite/README.md`;
+- the implementation evidence plan;
+- one per-change changelog fragment.
 
-The current local Vexa image must not be described as published or verified merely because this design exists. The earlier full image build did not complete within its bounded build window. Telemetry implementation and its focused tests must be completed before a new bounded image build and live acceptance run.
+The current local Vexa image must not be described as matching or verifying the integrated source
+merely because focused checks are green. The earlier clean Dockerfile build did not complete within
+its bounded build window. A new bounded clean build, runtime provenance check, disposable Redis
+lane, and live acceptance run remain separate evidence gates.
 
 No Git staging, commit, push, branch mutation, package installation, or remote deployment is part of this design approval.

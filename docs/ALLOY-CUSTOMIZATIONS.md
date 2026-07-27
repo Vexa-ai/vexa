@@ -19,13 +19,15 @@ path for every customization.
 
 ### `ALLOY_STT_MAX_CONCURRENCY`
 
-- **Purpose:** apply backpressure before an OpenAI-compatible STT dependency so independent
-  participant lanes cannot flood a single CPU Whisper worker.
-- **Local Lite value:** `1`.
-- **Enabled behavior:** at most the configured number of STT HTTP requests execute concurrently;
-  participant buffers continue accumulating audio while waiting.
-- **Disabled/upstream-compatible behavior:** unset, empty, or `0`; requests are not limited by the
-  Alloy adapter.
+- **Purpose:** apply backpressure before an OpenAI-compatible STT dependency so the independent
+  participant lanes owned by one bot cannot flood that bot's transcription client.
+- **Default:** `0`.
+- **Approved local pilot value:** `1`.
+- **Enabled behavior:** at most the configured number of STT HTTP requests execute concurrently
+  inside one bot process; participant buffers continue accumulating audio while waiting. This is
+  not a shared limit across bot processes, meetings, or the Whisper service.
+- **Disabled/rollback behavior:** unset, empty, or `0` leaves requests unlimited by the Alloy
+  adapter. Set `0` and restart Lite so newly spawned bots use the upstream-compatible path.
 - **Scope:** STT request scheduling only. It does not change capture, speaker lanes, transcript
   contracts, or the selected Whisper model.
 
@@ -33,11 +35,18 @@ path for every customization.
 
 - **Purpose:** allow multilingual and code-switching meetings without pinning one language for the
   whole session.
-- **Local Lite value:** `auto`.
+- **Default:** `configured`.
+- **Approved local pilot value:** `auto`.
 - **Enabled behavior (`auto`):** no language is sent to Whisper; the model detects the language for
-  each submitted audio window, including Russian/English switching.
-- **Disabled/upstream-compatible behavior (`configured`, unset, or empty):** Vexa forwards the
-  invocation-configured language when one exists.
+  each submitted audio window. This is the mechanism intended to support Russian, English, and
+  switching between them; the real multilingual meeting result is not yet validated.
+- **Backend prerequisite:** Lite's bundled `Systran/faster-whisper-tiny.en` default and
+  `Systran/faster-whisper-small.en` example are English-only. The local multilingual pilot uses
+  the separate make variable `WHISPER_MODEL=Systran/faster-whisper-small`; it is not an ALLOY flag
+  or a request-language pin, and does not by itself establish a live PASS.
+- **Disabled/rollback behavior (`configured`, unset, or empty):** Vexa forwards the
+  invocation-configured language when one exists. Set `configured` and restart Lite so newly
+  spawned bots use the upstream-compatible path.
 - **Scope:** language selection at the STT boundary only. It does not change transcript formatting
   or speaker attribution.
 
@@ -45,39 +54,54 @@ path for every customization.
 
 - **Purpose:** prevent successive turns of one physical Meet audio channel from creating an
   unbounded queue while CPU Whisper is still processing an earlier turn.
-- **Local Lite value:** `1`.
+- **Default:** `0`.
+- **Approved local pilot value:** `1`.
 - **Enabled behavior:** each `ch-N` has one active STT request and one replaceable latest pending
   request. A newer pending turn supersedes an older one before it reaches Whisper.
-- **Disabled/upstream-compatible behavior:** unset, empty, or `0`; every turn is dispatched using
-  Vexa's original scheduling.
+- **Disabled/rollback behavior:** unset, empty, or `0` dispatches every turn using Vexa's original
+  scheduling. Set `0` and restart Lite so newly spawned bots use that path.
 - **Scope:** Google Meet per-channel STT scheduling only. Capture, transcript schemas, and
   cross-channel concurrency remain unchanged.
 
 ### `ALLOY_STT_TELEMETRY`
 
 - **Purpose:** make real STT pressure observable instead of inferring it from transcript pauses.
-- **Local Lite value:** `1`.
+- **Default:** `0`.
+- **Approved local pilot value:** `1`.
 - **Enabled behavior:** each Google Meet bot publishes a short-lived per-meeting snapshot to Redis;
-  Meeting API returns only the signed-in owner's active snapshots; Gateway forwards the endpoint;
-  Terminal polls once per second while visible and shows global plus per-meeting queue health.
-- **Disabled/upstream-compatible behavior:** unset or `0` outside Lite; no tracker, Redis publisher,
-  telemetry endpoint data, or active UI polling is created. Normal capture and transcription are
-  unchanged.
+  Meeting API reads exact keys for owner-owned active meetings, silently omits invalid snapshots,
+  and computes the sealed aggregate and its health; Gateway forwards `GET /alloy/stt/status`;
+  Terminal calls `GET /api/alloy/stt/status` once per second only while visible. Timer and
+  visibility triggers reuse the current promise within one active polling generation. Stop/restart
+  may start a fresh request while the invalidated generation's network call is still pending;
+  generation fencing ignores that old result. Transcript or workspace sharing does not grant
+  telemetry access.
+- **Disabled/rollback behavior:** unset, empty, or `0` leaves the Meeting API and Gateway routes
+  absent. Terminal creates no hook, subscription, timer, or fetch and renders the upstream reset
+  footer. Set `0` and restart Lite; normal capture and transcription remain unchanged.
 - **Metrics:** active requests, waiting channels, queued audio seconds, capture-to-processing lag,
   exponential moving-average RTF, processed/superseded windows, freshness, and the last worker
   error.
 - **Transport:** Redis keys use `alloy:stt:telemetry:v1:{meeting_id}` with a short TTL. Meeting API
-  reads only exact keys for verified owner-scoped running meetings; it never scans Redis.
+  uses one bounded `MGET` for verified owner-owned active meetings; it never scans Redis. Invalid,
+  incompatible, version-mismatched, and non-finite snapshots are silently omitted.
+- **Contract:** sealed `alloy-stt-telemetry.v1` owns `Snapshot`, the server-computed `Aggregate`,
+  and `StatusResponse`. Redis transport failure returns its unavailable response and never changes
+  transcription state.
+- **Meaning of global:** the Terminal displays one aggregate across the current owner's meetings;
+  this does not turn `ALLOY_STT_MAX_CONCURRENCY` into a global limiter.
 - **Scope:** diagnostics only. The flag does not alter STT cadence, buffering, transcript text,
   language detection, speaker attribution, or meeting lifecycle.
 
 ### `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT`
 
 - **Purpose:** do not present Vexa's placeholder `participants: []` as a real Meet roster count.
-- **Local Lite build value:** `1`.
+- **Default:** `0`.
+- **Approved local pilot build value:** `1`.
 - **Enabled behavior:** hide `0 in the room`; display a positive count if a real roster is added
   later.
-- **Disabled/upstream-compatible behavior:** unset, empty, or `0`; preserve Vexa's original label.
+- **Disabled/rollback behavior:** unset, empty, or `0` preserves Vexa's original label. Set `0` and
+  rebuild the Lite image.
 - **Scope:** terminal UI only. This flag does not implement participant discovery.
 - **Build-time note:** this `NEXT_PUBLIC_*` value is compiled into the terminal bundle and requires
   rebuilding the Lite image.
@@ -86,16 +110,18 @@ path for every customization.
 
 - **Purpose:** keep local Lite rebuilds offline when the mixed-lane pyannote cache is irrelevant to
   the Google Meet-only validation path.
-- **Local Lite build value:** `1`.
+- **Default:** `0`.
+- **Approved local pilot build value:** `1`.
 - **Enabled behavior:** skip `warm-hf-cache.mjs` during the bot-builder stage.
-- **Disabled/upstream-compatible behavior:** unset, empty, or `0`; preserve Vexa's original
-  best-effort cache warm.
+- **Disabled/rollback behavior:** unset, empty, or `0` preserves Vexa's original best-effort cache
+  warm. Set `0` and rebuild the Lite image.
 - **Scope:** image build only. Runtime model selection and Google Meet/Whisper behavior are
   unchanged.
 
-## Current local profile
+## Approved local pilot profile (explicit overrides)
 
-The local Vexa Lite installation uses:
+These are the approved values for the next local pilot start and build. They are explicit
+overrides, not evidence that the currently running image contains the final source:
 
 ```env
 ALLOY_STT_MAX_CONCURRENCY=1
@@ -106,13 +132,32 @@ NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=1
 ALLOY_SKIP_HF_CACHE_WARM=1
 ```
 
-To restore the upstream-compatible mode without rebuilding:
+Restore the upstream-compatible runtime path and restart Lite so new bot processes inherit:
 
 ```env
 ALLOY_STT_MAX_CONCURRENCY=0
 ALLOY_STT_CHANNEL_BACKPRESSURE=0
 ALLOY_STT_LANGUAGE_MODE=configured
 ALLOY_STT_TELEMETRY=0
+```
+
+Restore the upstream-compatible build path and rebuild the Lite image with:
+
+```env
 NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=0
 ALLOY_SKIP_HF_CACHE_WARM=0
 ```
+
+## Evidence status
+
+Focused source, contract, configuration, architecture, and component checks cover the implemented
+opt-in boundaries, real slot lifecycle accounting, active-turn preservation, strict owner-only
+lookup, sealed server aggregation, and visibility-aware Terminal polling.
+
+Still pending, and therefore not claimed here:
+
+- the explicit integration lanes against a disposable Redis database;
+- a clean Dockerfile build from the integrated source and proof that the running image matches it;
+- a real Google Meet journey through audio, Whisper, Redis, API, and Terminal;
+- real Russian, English, and code-switch transcription;
+- queue, lag, RTF, and recovery observations under real load.
