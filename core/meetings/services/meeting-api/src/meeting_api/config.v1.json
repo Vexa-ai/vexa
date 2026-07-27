@@ -68,6 +68,15 @@
    "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
   },
   {
+   "key": "ALLOY_STT_TELEMETRY",
+   "class": "defaulted",
+   "default": "0",
+   "description": "ALLOY: exact trimmed 1 injects the Redis telemetry reader and registers owner-only GET /alloy/stt/status; unset, empty, 0, or another value leaves the route absent and preserves upstream behavior.",
+   "targets": [
+    "lite"
+   ]
+  },
+  {
    "key": "RUNTIME_API_URL",
    "class": "defaulted",
    "default": "http://runtime:8090",

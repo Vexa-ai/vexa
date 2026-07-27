@@ -180,8 +180,12 @@ def _alloy_stt_telemetry_enabled(
     env: Mapping[str, str] | None = None,
 ) -> bool:
     # ALLOY: register the gateway capability only for an explicit, exact opt-in.
-    source = os.environ if env is None else env
-    return source.get("ALLOY_STT_TELEMETRY", "").strip() == "1"
+    raw = (
+        os.getenv("ALLOY_STT_TELEMETRY", "")
+        if env is None
+        else env.get("ALLOY_STT_TELEMETRY", "")
+    )
+    return raw.strip() == "1"
 
 
 def build_production_app(

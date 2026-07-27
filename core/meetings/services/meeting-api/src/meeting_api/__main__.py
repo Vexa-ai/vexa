@@ -66,10 +66,14 @@ def _resolve_alloy_stt_telemetry_redis(
     env: Mapping[str, str] | None = None,
 ) -> object | None:
     # ALLOY: expose the telemetry capability only for an explicit, exact opt-in.
-    source = os.environ if env is None else env
+    raw = (
+        os.getenv("ALLOY_STT_TELEMETRY", "")
+        if env is None
+        else env.get("ALLOY_STT_TELEMETRY", "")
+    )
     return (
         redis_client
-        if source.get("ALLOY_STT_TELEMETRY", "").strip() == "1"
+        if raw.strip() == "1"
         else None
     )
 
