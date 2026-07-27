@@ -27,3 +27,8 @@ testpaths = ["tests"]
 # (`collector_contracts`) — the same helper the standalone collector tests used.
 pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
+# ALLOY: Keep real-Redis integration out of the standard offline pytest lane.
+addopts = "-m 'not alloy_real_redis'"
+markers = [
+    "alloy_real_redis: ALLOY integration requiring ALLOY_TEST_REDIS_URL to a disposable Redis database",
+]

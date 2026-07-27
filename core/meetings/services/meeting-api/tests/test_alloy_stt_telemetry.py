@@ -1,6 +1,8 @@
+"""ALLOY: Explicit real-Redis integration for owner-scoped STT telemetry."""
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import httpx
@@ -13,10 +15,20 @@ from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
 
+ALLOY_TEST_REDIS_URL = os.environ.get("ALLOY_TEST_REDIS_URL", "").strip()
+pytestmark = [
+    pytest.mark.alloy_real_redis,
+    pytest.mark.skipif(
+        not ALLOY_TEST_REDIS_URL,
+        reason="ALLOY_TEST_REDIS_URL is required for real-Redis integration",
+    ),
+]
+
+
 @pytest.mark.asyncio
 async def test_alloy_stt_status_reads_real_redis_only_for_owned_running_meetings():
     redis = aioredis.from_url(
-        "redis://127.0.0.1:6379/0",
+        ALLOY_TEST_REDIS_URL,
         decode_responses=True,
     )
     store = InMemoryTranscriptStore()
