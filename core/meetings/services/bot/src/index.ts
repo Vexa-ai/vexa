@@ -35,7 +35,6 @@ import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { createAttendanceReporter } from './attendance.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { launchBrowser, startCaptureBridge, startRecording, startVideoRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
@@ -253,7 +252,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity, (names) => attendance.observe(names)),   // on the live meeting page
       // Audio (page-side MediaRecorder → recording.v1) and, when the spawn asked for it, video
       // (an ffmpeg screen-grab of the bot's own X display — no page involvement). Composed into
       // the ONE optional thunk the live pipeline already has, so both start together and the
