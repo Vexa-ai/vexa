@@ -1,3 +1,5 @@
+// ALLOY: Behavioral coverage for the downstream STT telemetry poller.
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyAlloySttMeeting,

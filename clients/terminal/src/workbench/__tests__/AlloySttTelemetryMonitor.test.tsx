@@ -1,3 +1,5 @@
+// ALLOY: Regression coverage for the downstream STT telemetry footer.
+
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +96,108 @@ describe("ALLOY STT telemetry monitor", () => {
 
     expect(host.textContent).toContain("abc-defg-hij");
     expect(host.textContent).toContain("2 superseded");
+  });
+
+  it("shows the connecting state before the first telemetry response", () => {
+    const store = createStore({
+      ...state,
+      enabled: false,
+      available: false,
+      aggregate: null,
+      meetings: [],
+      fetchedAtMs: null,
+    });
+    const poller: AlloySttTelemetryPoller = {
+      store,
+      start: vi.fn(),
+      stop: vi.fn(),
+      pollNow: vi.fn(async () => undefined),
+    };
+
+    act(() => root.render(
+      <AlloySttTelemetryMonitor enabled poller={poller} />,
+    ));
+
+    expect(host.textContent).toContain("STT connecting");
+  });
+
+  it("shows the idle state for an available empty aggregate", () => {
+    const store = createStore({
+      ...state,
+      aggregate: {
+        meetings: 0,
+        active_requests: 0,
+        waiting_channels: 0,
+        queued_audio_sec: 0,
+        lag_sec: 0,
+        rtf: null,
+        health: "muted" as const,
+      },
+      meetings: [],
+    });
+    const poller: AlloySttTelemetryPoller = {
+      store,
+      start: vi.fn(),
+      stop: vi.fn(),
+      pollNow: vi.fn(async () => undefined),
+    };
+
+    act(() => root.render(
+      <AlloySttTelemetryMonitor enabled poller={poller} />,
+    ));
+
+    expect(host.textContent).toContain("STT idle");
+  });
+
+  it("shows backend unavailability while retaining last-good meeting details", () => {
+    const store = createStore({
+      ...state,
+      available: false,
+      transportError: "Redis telemetry unavailable",
+    });
+    const poller: AlloySttTelemetryPoller = {
+      store,
+      start: vi.fn(),
+      stop: vi.fn(),
+      pollNow: vi.fn(async () => undefined),
+    };
+
+    act(() => root.render(
+      <AlloySttTelemetryMonitor
+        enabled
+        poller={poller}
+        now={() => 12_000}
+      />,
+    ));
+
+    expect(host.textContent).toContain("STT unavailable");
+    const button = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open STT telemetry details"]',
+    );
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(host.textContent).toContain("Redis telemetry unavailable");
+    expect(host.textContent).toContain("abc-defg-hij");
+  });
+
+  it("shows a malformed-response transport error as unavailable", () => {
+    const store = createStore({
+      ...state,
+      available: true,
+      transportError: "Invalid ALLOY STT telemetry response",
+    });
+    const poller: AlloySttTelemetryPoller = {
+      store,
+      start: vi.fn(),
+      stop: vi.fn(),
+      pollNow: vi.fn(async () => undefined),
+    };
+
+    act(() => root.render(
+      <AlloySttTelemetryMonitor enabled poller={poller} />,
+    ));
+
+    expect(host.textContent).toContain("STT unavailable");
   });
 
   it("restores the upstream footer action when telemetry is disabled", () => {

@@ -1,5 +1,7 @@
 "use client";
 
+// ALLOY: Own the downstream STT telemetry contract boundary and polling state.
+
 import { createStore, type ObservableStore } from "../platform/core";
 
 export type AlloySttTelemetryError = {
@@ -82,7 +84,7 @@ type DocumentVisibility = Pick<Document, "visibilityState"> & {
 };
 
 type AlloySttTelemetryPollerOptions = {
-  fetchStatus?: () => Promise<AlloySttStatusResponse>;
+  fetchStatus?: () => Promise<unknown>;
   intervalMs?: number;
   now?: () => number;
   documentRef?: DocumentVisibility | null;
@@ -90,6 +92,45 @@ type AlloySttTelemetryPollerOptions = {
 
 const STALE_AFTER_MS = 10_000;
 const BACKLOG_LAG_SEC = 2;
+
+type UnknownRecord = Record<string, unknown>;
+
+const TELEMETRY_ERROR_KEYS = ["code", "message"] as const;
+const AGGREGATE_KEYS = [
+  "meetings",
+  "active_requests",
+  "waiting_channels",
+  "queued_audio_sec",
+  "lag_sec",
+  "rtf",
+  "health",
+] as const;
+const MEETING_KEYS = [
+  "version",
+  "meeting_id",
+  "native_meeting_id",
+  "updated_at_ms",
+  "active_requests",
+  "active_audio_sec",
+  "waiting_channels",
+  "queued_audio_sec",
+  "latest_captured_audio_end_ms",
+  "latest_processed_audio_end_ms",
+  "lag_sec",
+  "rtf_ema",
+  "processed_windows",
+  "superseded_windows",
+  "last_error",
+] as const;
+const STATUS_KEYS = [
+  "version",
+  "enabled",
+  "available",
+  "updated_at_ms",
+  "aggregate",
+  "meetings",
+  "error",
+] as const;
 
 const initialState: AlloySttTelemetryState = {
   enabled: false,
@@ -99,6 +140,126 @@ const initialState: AlloySttTelemetryState = {
   fetchedAtMs: null,
   transportError: null,
 };
+
+// ALLOY: Validate the sealed v1 response once, before untrusted JSON can enter
+// the observable store or reach rendering code.
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasExactKeys = (
+  value: UnknownRecord,
+  keys: readonly string[],
+): boolean => {
+  const actualKeys = Object.keys(value);
+  return actualKeys.length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key));
+};
+
+const isNonblankString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
+
+const isNonnegativeNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isNonnegativeInteger = (value: unknown): value is number =>
+  isNonnegativeNumber(value) && Number.isInteger(value);
+
+const isNullableNonnegativeInteger = (value: unknown): value is number | null =>
+  value === null || isNonnegativeInteger(value);
+
+const isNullableNonnegativeNumber = (value: unknown): value is number | null =>
+  value === null || isNonnegativeNumber(value);
+
+const isTelemetryError = (
+  value: unknown,
+): value is AlloySttTelemetryError =>
+  isRecord(value) &&
+  hasExactKeys(value, TELEMETRY_ERROR_KEYS) &&
+  isNonblankString(value.code) &&
+  isNonblankString(value.message);
+
+const isAggregateHealth = (
+  value: unknown,
+): value is AlloySttAggregateHealth =>
+  value === "green" ||
+  value === "amber" ||
+  value === "red" ||
+  value === "muted";
+
+const isAggregate = (
+  value: unknown,
+): value is AlloySttTelemetryAggregate =>
+  isRecord(value) &&
+  hasExactKeys(value, AGGREGATE_KEYS) &&
+  isNonnegativeInteger(value.meetings) &&
+  isNonnegativeInteger(value.active_requests) &&
+  isNonnegativeInteger(value.waiting_channels) &&
+  isNonnegativeNumber(value.queued_audio_sec) &&
+  isNonnegativeNumber(value.lag_sec) &&
+  isNullableNonnegativeNumber(value.rtf) &&
+  isAggregateHealth(value.health);
+
+const isMeetingSnapshot = (
+  value: unknown,
+): value is AlloySttMeetingSnapshot =>
+  isRecord(value) &&
+  hasExactKeys(value, MEETING_KEYS) &&
+  value.version === 1 &&
+  isNonblankString(value.meeting_id) &&
+  isNonblankString(value.native_meeting_id) &&
+  isNonnegativeInteger(value.updated_at_ms) &&
+  isNonnegativeInteger(value.active_requests) &&
+  isNonnegativeNumber(value.active_audio_sec) &&
+  isNonnegativeInteger(value.waiting_channels) &&
+  isNonnegativeNumber(value.queued_audio_sec) &&
+  isNullableNonnegativeInteger(value.latest_captured_audio_end_ms) &&
+  isNullableNonnegativeInteger(value.latest_processed_audio_end_ms) &&
+  isNonnegativeNumber(value.lag_sec) &&
+  isNullableNonnegativeNumber(value.rtf_ema) &&
+  isNonnegativeInteger(value.processed_windows) &&
+  isNonnegativeInteger(value.superseded_windows) &&
+  (value.last_error === null || isTelemetryError(value.last_error));
+
+const isStatusResponse = (
+  value: unknown,
+): value is AlloySttStatusResponse => {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, STATUS_KEYS) ||
+    value.version !== 1 ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.available !== "boolean" ||
+    !isNonnegativeInteger(value.updated_at_ms) ||
+    !Array.isArray(value.meetings) ||
+    !value.meetings.every(isMeetingSnapshot)
+  ) {
+    return false;
+  }
+
+  if (value.enabled && value.available) {
+    return isAggregate(value.aggregate) && value.error === null;
+  }
+  if (!value.enabled && !value.available) {
+    return value.aggregate === null &&
+      value.meetings.length === 0 &&
+      value.error === null;
+  }
+  if (value.enabled && !value.available) {
+    return value.aggregate === null &&
+      value.meetings.length === 0 &&
+      isTelemetryError(value.error);
+  }
+  return false;
+};
+
+function parseAlloySttStatusResponse(
+  value: unknown,
+): AlloySttStatusResponse {
+  if (!isStatusResponse(value)) {
+    throw new Error("Invalid ALLOY STT telemetry response");
+  }
+  return value;
+}
 
 export function classifyAlloySttMeeting(
   meeting: AlloySttMeetingSnapshot,
@@ -115,7 +276,7 @@ export function classifyAlloySttMeeting(
   return "healthy";
 }
 
-async function fetchAlloySttStatus(): Promise<AlloySttStatusResponse> {
+async function fetchAlloySttStatus(): Promise<unknown> {
   const response = await fetch("/api/alloy/stt/status", { cache: "no-store" });
   if (!response.ok) {
     let detail = "";
@@ -127,7 +288,7 @@ async function fetchAlloySttStatus(): Promise<AlloySttStatusResponse> {
     }
     throw new Error(`STT telemetry request failed (${response.status})${detail}`);
   }
-  return (await response.json()) as AlloySttStatusResponse;
+  return response.json();
 }
 
 export function createAlloySttTelemetryPoller(
@@ -164,6 +325,7 @@ export function createAlloySttTelemetryPoller(
 
     let request!: Promise<void>;
     request = fetchStatus()
+      .then(parseAlloySttStatusResponse)
       .then((status) => {
         if (generation !== requestGeneration) return;
         store.set((current) => ({

@@ -1,5 +1,7 @@
 "use client";
 
+// ALLOY: Present the opt-in downstream STT telemetry state in the footer.
+
 import {
   type ReactNode,
   useEffect,
