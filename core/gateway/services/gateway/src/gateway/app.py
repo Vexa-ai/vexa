@@ -62,6 +62,7 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
 ROUTE_SCOPES: Dict[str, Set[str]] = {
     "/bots": {"bot", "browser"},
+    # ALLOY: telemetry uses the existing authenticated bot/transcript scope funnel.
     "/alloy": {"bot", "tx"},
     "/transcripts": {"tx"},
     "/meetings": {"tx"},

@@ -34,6 +34,10 @@ _SNAPSHOT_VALIDATOR = jsonschema.Draft202012Validator(
     {"$ref": f"{_SCHEMA['$id']}#/$defs/Snapshot"},
     registry=_REGISTRY,
 )
+_STATUS_RESPONSE_VALIDATOR = jsonschema.Draft202012Validator(
+    {"$ref": f"{_SCHEMA['$id']}#/$defs/StatusResponse"},
+    registry=_REGISTRY,
+)
 
 
 def _reject_non_finite_json_constant(value: str) -> None:
@@ -51,6 +55,11 @@ def _parse_finite_json_float(value: str) -> float:
 
 def alloy_stt_telemetry_key(meeting_id: int | str) -> str:
     return f"alloy:stt:telemetry:v1:{meeting_id}"
+
+
+def validate_alloy_stt_status_response(payload: Any) -> None:
+    """ALLOY: enforce the sealed StatusResponse at the Meeting API producer seam."""
+    _STATUS_RESPONSE_VALIDATOR.validate(payload)
 
 
 def _is_valid_snapshot(snapshot: Any, meeting_id: int) -> bool:

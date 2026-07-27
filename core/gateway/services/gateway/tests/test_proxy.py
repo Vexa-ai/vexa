@@ -7,6 +7,9 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,6 +18,23 @@ from gateway.ports import AuthUnavailable
 from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
 
 AUTH = {"x-api-key": VALID_KEY}
+
+
+def _alloy_status_response_golden():
+    # ALLOY: consume the sealed producer golden instead of duplicating the wire shape.
+    relative_path = (
+        Path("core")
+        / "meetings"
+        / "contracts"
+        / "alloy-stt-telemetry.v1"
+        / "golden"
+        / "StatusResponse.available.json"
+    )
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / relative_path
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"repository root with {relative_path} not found")
 
 
 class UnavailableAuthorizer:
@@ -204,9 +224,10 @@ def test_alloy_stt_status_is_absent_by_default_without_auth_or_downstream_calls(
 
 
 def test_enabled_alloy_stt_status_forwards_with_resolved_owner_identity():
+    status_response = _alloy_status_response_golden()
     downstream = FakeDownstream(
         status_code=200,
-        body={"version": 1, "enabled": True, "available": True, "meetings": []},
+        body=status_response,
     )
     client, _ = _client(
         downstream=downstream,
@@ -218,6 +239,7 @@ def test_enabled_alloy_stt_status_forwards_with_resolved_owner_identity():
     )
 
     assert response.status_code == 200
+    assert response.json() == status_response
     assert downstream.last["method"] == "GET"
     assert downstream.last["url"].endswith("/alloy/stt/status")
     assert downstream.last["headers"]["x-user-id"] == "7"

@@ -48,8 +48,9 @@ page is visible.
   silently omitted. Redis transport failure returns the sealed unavailable response and never
   changes transcription.
 - Health is red for `last_error`, age `>5s`, or lag `>15s`; amber otherwise for age `>3s`, lag
-  `>=5s`, or RTF `>1`; green otherwise; muted when there are no valid snapshots. Aggregate health
-  is the worst meeting health.
+  `>=5s`, RTF `>1`, or a first request with `active_requests > 0` and `processed_windows == 0`;
+  green otherwise; muted when there are no valid snapshots. Aggregate health is the worst meeting
+  health.
 - The Terminal polls once per second only while visible. Timer/visibility triggers reuse one
   request promise per active polling generation. Stop/restart may start a fresh request while the
   invalidated generation's network call is still pending; generation fencing ignores the old
@@ -260,7 +261,7 @@ meetings, silently omits invalid neighbors, and returns the server-computed seal
   ```powershell
   $env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/<disposable-db>'
   Push-Location core/meetings/services/meeting-api
-  uv run pytest tests/test_alloy_stt_telemetry.py -q
+  uv run pytest -m alloy_real_redis tests/test_alloy_stt_telemetry.py -q
   Pop-Location
   ```
 

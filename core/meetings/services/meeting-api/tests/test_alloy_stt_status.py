@@ -8,10 +8,17 @@ from typing import Any
 
 import fakeredis.aioredis
 import httpx
+import jsonschema
 import pytest
 
 from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.collector.alloy_stt_status import (
+    build_alloy_stt_status_response,
+)
+from meeting_api.collector.alloy_stt_telemetry import (
+    validate_alloy_stt_status_response,
+)
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
@@ -96,6 +103,10 @@ def _app(store, telemetry_redis):
         runtime=FakeRuntimeClient(),
         command_publisher=InMemoryCommandPublisher(),
     )
+
+
+def _assert_status_response_conforms(payload: dict[str, Any]) -> None:
+    validate_alloy_stt_status_response(payload)
 
 
 @pytest.mark.asyncio
@@ -190,6 +201,7 @@ async def test_status_reads_only_owner_running_ids_and_skips_invalid_neighbors(
 
         assert response.status_code == 200
         body = response.json()
+        _assert_status_response_conforms(body)
         assert body["enabled"] is True
         assert body["available"] is True
         assert [row["meeting_id"] for row in body["meetings"]] == [str(owned)]
@@ -323,6 +335,11 @@ def test_aggregate_sums_counts_and_uses_max_lag_rtf_and_worst_health():
         (0, {"lag_sec": 15.001}, "red"),
         (0, {"rtf_ema": 1}, "green"),
         (0, {"rtf_ema": 1.001}, "amber"),
+        (
+            0,
+            {"active_requests": 1, "processed_windows": 0},
+            "amber",
+        ),
         (0, {"last_error": {"code": "stt", "message": "failed"}}, "red"),
         (-1_000, {}, "green"),
     ],
@@ -385,6 +402,65 @@ def test_aggregate_worst_health_wins_over_green_neighbor():
     )["health"] == "red"
 
 
+def test_disabled_status_representation_conforms_to_sealed_contract():
+    body = build_alloy_stt_status_response(
+        enabled=False,
+        available=False,
+        updated_at_ms=10_000,
+        aggregate=None,
+        meetings=[],
+        error=None,
+    )
+
+    assert body == {
+        "version": 1,
+        "enabled": False,
+        "available": False,
+        "updated_at_ms": 10_000,
+        "aggregate": None,
+        "meetings": [],
+        "error": None,
+    }
+    _assert_status_response_conforms(body)
+
+
+def test_status_response_validator_rejects_missing_required_field():
+    malformed = {
+        "version": 1,
+        "enabled": False,
+        "available": False,
+        "updated_at_ms": 10_000,
+        "aggregate": None,
+        "meetings": [],
+    }
+
+    with pytest.raises(jsonschema.ValidationError):
+        _assert_status_response_conforms(malformed)
+
+
+@pytest.mark.asyncio
+async def test_status_route_fails_loud_when_producer_breaks_sealed_contract(
+    monkeypatch,
+):
+    store = RecordingOwnerStore()
+    collector_app = importlib.import_module("meeting_api.collector.app")
+    monkeypatch.setattr(
+        collector_app,
+        "aggregate_alloy_stt_status",
+        lambda _snapshots, *, now_ms: {"meetings": 0},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(store, object())),
+        base_url="http://test",
+    ) as client:
+        with pytest.raises(jsonschema.ValidationError):
+            await client.get(
+                "/alloy/stt/status",
+                headers={"x-user-id": str(OWNER_ID)},
+            )
+
+
 @pytest.mark.asyncio
 async def test_redis_failure_degrades_without_breaking_status_response():
     store = RecordingOwnerStore()
@@ -406,11 +482,13 @@ async def test_redis_failure_degrades_without_breaking_status_response():
         )
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    _assert_status_response_conforms(body)
+    assert body == {
         "version": 1,
         "enabled": True,
         "available": False,
-        "updated_at_ms": response.json()["updated_at_ms"],
+        "updated_at_ms": body["updated_at_ms"],
         "aggregate": None,
         "meetings": [],
         "error": {

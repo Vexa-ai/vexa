@@ -66,7 +66,9 @@ Clicking the compact indicator opens details for each active meeting:
 Meeting API owns these thresholds:
 
 - Red: an STT error is present, snapshot age is greater than 5 seconds, or lag is greater than 15 seconds.
-- Amber: otherwise, snapshot age is greater than 3 seconds, lag is at least 5 seconds, or RTF is above `1.0`.
+- Amber: otherwise, snapshot age is greater than 3 seconds, lag is at least 5 seconds, RTF is above
+  `1.0`, or `active_requests > 0` while `processed_windows == 0` (the first request has not yet
+  established completed STT flow).
 - Green: otherwise.
 - Muted: no valid active snapshots (`STT idle`).
 

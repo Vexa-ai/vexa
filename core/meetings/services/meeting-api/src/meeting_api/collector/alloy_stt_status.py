@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .alloy_stt_telemetry import validate_alloy_stt_status_response
+
 
 _HEALTH_RANK = {
     "muted": 0,
@@ -18,7 +20,17 @@ def _snapshot_health(snapshot: dict[str, Any], *, now_ms: int) -> str:
     rtf = snapshot["rtf_ema"]
     if snapshot["last_error"] is not None or age_ms > 5_000 or lag_sec > 15:
         return "red"
-    if age_ms > 3_000 or lag_sec >= 5 or (rtf is not None and rtf > 1):
+    # ALLOY: An active request has not established healthy flow until one window completes.
+    first_request_in_flight = (
+        snapshot["active_requests"] > 0
+        and snapshot["processed_windows"] == 0
+    )
+    if (
+        first_request_in_flight
+        or age_ms > 3_000
+        or lag_sec >= 5
+        or (rtf is not None and rtf > 1)
+    ):
         return "amber"
     return "green"
 
@@ -64,3 +76,26 @@ def aggregate_alloy_stt_status(
         "rtf": max(rtfs) if rtfs else None,
         "health": health,
     }
+
+
+def build_alloy_stt_status_response(
+    *,
+    enabled: bool,
+    available: bool,
+    updated_at_ms: int,
+    aggregate: dict[str, Any] | None,
+    meetings: list[dict[str, Any]],
+    error: dict[str, str] | None,
+) -> dict[str, Any]:
+    """ALLOY: build and seal-check one StatusResponse before it crosses HTTP."""
+    response = {
+        "version": 1,
+        "enabled": enabled,
+        "available": available,
+        "updated_at_ms": updated_at_ms,
+        "aggregate": aggregate,
+        "meetings": meetings,
+        "error": error,
+    }
+    validate_alloy_stt_status_response(response)
+    return response

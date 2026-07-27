@@ -9,8 +9,13 @@ import httpx
 import pytest
 import redis.asyncio as aioredis
 
+from alloy_real_redis_fixture import (
+    allocate_high_meeting_ids,
+    collision_safe_redis_rows,
+)
 from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.collector.alloy_stt_telemetry import alloy_stt_telemetry_key
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
@@ -34,25 +39,35 @@ async def test_alloy_stt_status_reads_real_redis_only_for_owned_running_meetings
     store = InMemoryTranscriptStore()
     owner_id = 71
     other_id = 72
+    (
+        owned_meeting_id,
+        other_meeting_id,
+        ended_meeting_id,
+        malformed_meeting_id,
+    ) = allocate_high_meeting_ids(4)
     owned_meeting = store.seed_meeting(
+        meeting_id=owned_meeting_id,
         user_id=owner_id,
         platform="google_meet",
         native_meeting_id="owned-room",
         status="active",
     )
     other_meeting = store.seed_meeting(
+        meeting_id=other_meeting_id,
         user_id=other_id,
         platform="google_meet",
         native_meeting_id="private-room",
         status="active",
     )
     ended_meeting = store.seed_meeting(
+        meeting_id=ended_meeting_id,
         user_id=owner_id,
         platform="google_meet",
         native_meeting_id="ended-room",
         status="completed",
     )
     malformed_meeting = store.seed_meeting(
+        meeting_id=malformed_meeting_id,
         user_id=owner_id,
         platform="google_meet",
         native_meeting_id="malformed-room",
@@ -78,45 +93,46 @@ async def test_alloy_stt_status_reads_real_redis_only_for_owned_running_meetings
             "last_error": None,
         }
 
-    keys = [
-        f"alloy:stt:telemetry:v1:{owned_meeting}",
-        f"alloy:stt:telemetry:v1:{other_meeting}",
-        f"alloy:stt:telemetry:v1:{ended_meeting}",
-        f"alloy:stt:telemetry:v1:{malformed_meeting}",
-    ]
+    malformed = snapshot(malformed_meeting, "malformed-room")
+    del malformed["queued_audio_sec"]
+    rows = {
+        alloy_stt_telemetry_key(owned_meeting): json.dumps(
+            snapshot(owned_meeting, "owned-room"),
+        ),
+        alloy_stt_telemetry_key(other_meeting): json.dumps(
+            snapshot(other_meeting, "private-room"),
+        ),
+        alloy_stt_telemetry_key(ended_meeting): json.dumps(
+            snapshot(ended_meeting, "ended-room"),
+        ),
+        alloy_stt_telemetry_key(malformed_meeting): json.dumps(malformed),
+    }
     try:
-        await redis.set(keys[0], json.dumps(snapshot(owned_meeting, "owned-room")), ex=30)
-        await redis.set(keys[1], json.dumps(snapshot(other_meeting, "private-room")), ex=30)
-        await redis.set(keys[2], json.dumps(snapshot(ended_meeting, "ended-room")), ex=30)
-        malformed = snapshot(malformed_meeting, "malformed-room")
-        del malformed["queued_audio_sec"]
-        await redis.set(keys[3], json.dumps(malformed), ex=30)
-
-        app = create_app(
-            transcript_store=store,
-            alloy_stt_telemetry_redis=redis,
-            meeting_repo=InMemoryMeetingRepo(),
-            runtime=FakeRuntimeClient(),
-            command_publisher=InMemoryCommandPublisher(),
-        )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
-        ) as client:
-            response = await client.get(
-                "/alloy/stt/status",
-                headers={"x-user-id": str(owner_id)},
+        async with collision_safe_redis_rows(redis, rows, ttl_sec=60):
+            app = create_app(
+                transcript_store=store,
+                alloy_stt_telemetry_redis=redis,
+                meeting_repo=InMemoryMeetingRepo(),
+                runtime=FakeRuntimeClient(),
+                command_publisher=InMemoryCommandPublisher(),
             )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.get(
+                    "/alloy/stt/status",
+                    headers={"x-user-id": str(owner_id)},
+                )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["enabled"] is True
-        assert body["available"] is True
-        returned_ids = {row["meeting_id"] for row in body["meetings"]}
-        assert returned_ids == {str(owned_meeting)}
-        assert body["meetings"][0]["native_meeting_id"] == "owned-room"
-        assert str(other_meeting) not in returned_ids
-        assert str(ended_meeting) not in returned_ids
+            assert response.status_code == 200
+            body = response.json()
+            assert body["enabled"] is True
+            assert body["available"] is True
+            returned_ids = {row["meeting_id"] for row in body["meetings"]}
+            assert returned_ids == {str(owned_meeting)}
+            assert body["meetings"][0]["native_meeting_id"] == "owned-room"
+            assert str(other_meeting) not in returned_ids
+            assert str(ended_meeting) not in returned_ids
     finally:
-        await redis.delete(*keys)
         await redis.aclose()

@@ -37,8 +37,11 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
-# ALLOY: telemetry stays behind its own owner/aggregate boundary.
-from .alloy_stt_status import aggregate_alloy_stt_status
+# ALLOY: telemetry stays behind its own owner/aggregate and sealed-response boundary.
+from .alloy_stt_status import (
+    aggregate_alloy_stt_status,
+    build_alloy_stt_status_response,
+)
 from .alloy_stt_telemetry import AlloySttTelemetryReader
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
@@ -284,30 +287,34 @@ def build_router(
                         "error_type": type(error).__name__,
                     },
                 )
-                return JSONResponse(content={
-                    "version": 1,
-                    "enabled": True,
-                    "available": False,
-                    "updated_at_ms": now_ms,
-                    "aggregate": None,
-                    "meetings": [],
-                    "error": {
-                        "code": "redis_unavailable",
-                        "message": "STT telemetry is temporarily unavailable",
-                    },
-                })
-            return JSONResponse(content={
-                "version": 1,
-                "enabled": True,
-                "available": True,
-                "updated_at_ms": now_ms,
-                "aggregate": aggregate_alloy_stt_status(
-                    snapshots,
-                    now_ms=now_ms,
+                # ALLOY: validate the unavailable envelope against the sealed wire contract.
+                return JSONResponse(
+                    content=build_alloy_stt_status_response(
+                        enabled=True,
+                        available=False,
+                        updated_at_ms=now_ms,
+                        aggregate=None,
+                        meetings=[],
+                        error={
+                            "code": "redis_unavailable",
+                            "message": "STT telemetry is temporarily unavailable",
+                        },
+                    ),
+                )
+            # ALLOY: validate the available envelope against the sealed wire contract.
+            return JSONResponse(
+                content=build_alloy_stt_status_response(
+                    enabled=True,
+                    available=True,
+                    updated_at_ms=now_ms,
+                    aggregate=aggregate_alloy_stt_status(
+                        snapshots,
+                        now_ms=now_ms,
+                    ),
+                    meetings=snapshots,
+                    error=None,
                 ),
-                "meetings": snapshots,
-                "error": None,
-            })
+            )
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's

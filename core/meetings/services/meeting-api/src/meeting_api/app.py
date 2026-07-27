@@ -154,6 +154,7 @@ def create_app(
     # collector ports
     transcript_store: Optional[TranscriptStore] = None,
     redis: Optional[RedisBus] = None,
+    # ALLOY: the optional Redis dependency is the exact route-composition switch.
     alloy_stt_telemetry_redis: Optional["object"] = None,
     # bot_spawn ports
     meeting_repo: Optional["_bot_spawn.MeetingRepo"] = None,
@@ -253,6 +254,7 @@ def create_app(
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
+    # ALLOY: compose the reader only when the telemetry dependency is explicitly injected.
     if alloy_stt_telemetry_redis is not None:
         from .collector.alloy_stt_telemetry import AlloySttTelemetryReader
 
