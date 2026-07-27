@@ -664,3 +664,34 @@ async def test_prune_can_be_switched_off(monkeypatch):
     rid = await _record(repo, storage, parts=3, final=True)
     await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
     assert len(_chunk_keys(storage)) == 3, "opted out → chunks kept"
+
+
+@pytest.mark.asyncio
+async def test_pruning_one_media_type_never_touches_the_other():
+    """A meeting recorded with BOTH audio and video shares one recording id and one session. The
+    prune lists chunks under the media-type prefix — if it listed the session prefix instead,
+    finalizing the audio would silently delete the video's chunks (and vice versa)."""
+    repo, storage = _seeded()
+    rid = None
+    for media_type, fmt in (("audio", "wav"), ("video", "webm")):
+        for seq in range(2):
+            receipt = await upload_chunk(
+                repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+                data=_wav() if fmt == "wav" else b"\x1a\x45\xdf\xa3vid",
+                media_type=media_type, media_format=fmt, chunk_seq=seq, is_final=(seq == 1),
+            )
+            rid = receipt["recording_id"]
+
+    video_chunks_before = [k for k in _chunk_keys(storage) if "/video/" in k]
+    assert len(video_chunks_before) == 2
+
+    # finalize ONLY the audio
+    await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid, media_type="audio")
+
+    assert [k for k in _chunk_keys(storage) if "/audio/" in k] == [], "audio chunks pruned"
+    assert [k for k in _chunk_keys(storage) if "/video/" in k] == video_chunks_before, \
+        "the video's chunks must be untouched by an audio finalize"
+
+    # and the video still finalizes correctly afterwards
+    vkey = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid, media_type="video")
+    assert storage.blobs[vkey], "video master built from its own surviving chunks"
