@@ -11,13 +11,11 @@ set -u
 
 export DISPLAY="${DISPLAY:-:99}"
 
-# ALLOY: Vexa Lite's local CPU profile. Container environment values remain authoritative:
-# set ALLOY_STT_MAX_CONCURRENCY=0, ALLOY_STT_CHANNEL_BACKPRESSURE=0, and
-# ALLOY_STT_LANGUAGE_MODE=configured to restore the original behavior without rebuilding.
-export ALLOY_STT_MAX_CONCURRENCY="${ALLOY_STT_MAX_CONCURRENCY:-1}"
-export ALLOY_STT_CHANNEL_BACKPRESSURE="${ALLOY_STT_CHANNEL_BACKPRESSURE:-1}"
-export ALLOY_STT_LANGUAGE_MODE="${ALLOY_STT_LANGUAGE_MODE:-auto}"
-export ALLOY_STT_TELEMETRY="${ALLOY_STT_TELEMETRY:-1}"
+# ALLOY: downstream STT behavior stays disabled unless the container explicitly opts in.
+export ALLOY_STT_MAX_CONCURRENCY="${ALLOY_STT_MAX_CONCURRENCY:-0}"
+export ALLOY_STT_CHANNEL_BACKPRESSURE="${ALLOY_STT_CHANNEL_BACKPRESSURE:-0}"
+export ALLOY_STT_LANGUAGE_MODE="${ALLOY_STT_LANGUAGE_MODE:-configured}"
+export ALLOY_STT_TELEMETRY="${ALLOY_STT_TELEMETRY:-0}"
 
 # Run from the bot package dir so its relative schema path (src→../../../contracts) and the
 # pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The

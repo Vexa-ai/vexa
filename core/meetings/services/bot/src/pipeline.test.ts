@@ -195,7 +195,96 @@ async function main(): Promise<void> {
       observerEvents.join(','));
   }
 
-  // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
+  // ── 5) ALLOY: exact zero is a quiet opt-out; malformed/negative values stay diagnostic. ──
+  {
+    const realFetch = globalThis.fetch;
+    const realMaxConcurrency = process.env.ALLOY_STT_MAX_CONCURRENCY;
+    const realWarn = console.warn;
+    const observations: Array<{
+      raw: string;
+      events: string[];
+      warnings: string[];
+      fetchesBeforeRelease: number;
+      fetchesCompleted: number;
+    }> = [];
+    try {
+      const pcm = new Float32Array(1600).fill(0.05);
+      for (const raw of ['0', '-1', 'garbage']) {
+        process.env.ALLOY_STT_MAX_CONCURRENCY = raw;
+        const events: string[] = [];
+        const warnings: string[] = [];
+        let fetchesStarted = 0;
+        let releaseFetch!: () => void;
+        const fetchGate = new Promise<void>((resolve) => {
+          releaseFetch = resolve;
+        });
+        (globalThis as any).fetch = async () => {
+          fetchesStarted++;
+          await fetchGate;
+          return new Response(JSON.stringify({
+            text: '',
+            language: 'en',
+            duration: 0.1,
+            segments: [],
+          }), { status: 200 });
+        };
+        console.warn = (...args: unknown[]) => {
+          warnings.push(args.map(String).join(' '));
+        };
+        const transcribe = createTranscribe(baseInv({
+          transcriptionServiceUrl: 'http://stt.test',
+        }));
+        const observer = {
+          waiting: () => events.push('waiting'),
+          started: () => events.push('started'),
+          finished: () => events.push('finished'),
+        };
+        const first = transcribe(pcm, undefined, observer);
+        const second = transcribe(pcm, undefined, observer);
+        await Promise.resolve();
+        const fetchesBeforeRelease = fetchesStarted;
+        releaseFetch();
+        await Promise.all([first, second]);
+        observations.push({
+          raw,
+          events,
+          warnings,
+          fetchesBeforeRelease,
+          fetchesCompleted: fetchesStarted,
+        });
+      }
+    } finally {
+      (globalThis as any).fetch = realFetch;
+      console.warn = realWarn;
+      if (realMaxConcurrency === undefined) {
+        delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      } else {
+        process.env.ALLOY_STT_MAX_CONCURRENCY = realMaxConcurrency;
+      }
+    }
+    const byRaw = (raw: string) => observations.find((item) => item.raw === raw);
+    const provesNoLimiter = (raw: string) => {
+      const observation = byRaw(raw);
+      return observation?.fetchesBeforeRelease === 2
+        && observation.fetchesCompleted === 2
+        && observation.events.filter((event) => event === 'waiting').length === 0
+        && observation.events.filter((event) => event === 'started').length === 2
+        && observation.events.filter((event) => event === 'finished').length === 2;
+    };
+    check('ALLOY exact concurrency 0 creates no limiter wait and emits no warning',
+      provesNoLimiter('0')
+        && byRaw('0')?.warnings.length === 0,
+      JSON.stringify(byRaw('0')));
+    for (const raw of ['-1', 'garbage']) {
+      check(`ALLOY invalid concurrency ${raw} creates no limiter and keeps the diagnostic`,
+        provesNoLimiter(raw)
+          && byRaw(raw)?.warnings.length === 1
+          && byRaw(raw)?.warnings[0]?.startsWith('[ALLOY] Ignoring invalid ALLOY_STT_MAX_CONCURRENCY='),
+        JSON.stringify(byRaw(raw)));
+    }
+  }
+
+  // ── 6) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
   //     name — so per-speaker consumers group unattributed turns as ONE speaker, not hundreds.

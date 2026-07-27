@@ -110,18 +110,22 @@ preflight:
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
+##
+## ALLOY: `alloyv` is the single runtime precedence boundary: a non-empty explicit make/ambient
+## value wins, then a non-empty .env value, then the upstream-compatible safe default.
 up: preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	alloyv() { explicit=$$(printenv "$$1" 2>/dev/null || true); file=$$(envv "$$1"); if [ -n "$$explicit" ]; then printf '%s' "$$explicit"; elif [ -n "$$file" ]; then printf '%s' "$$file"; else printf '%s' "$$2"; fi; }; \
 	ADMIN_TK=$$(envv ADMIN_TOKEN); ADMIN_TK=$${ADMIN_TK:-changeme}; \
 	INTERNAL_SECRET=$$(envv VEXA_INTERNAL_API_SECRET); INTERNAL_SECRET=$${INTERNAL_SECRET:-local-secret}; \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
-	ALLOY_STT_MAX_CONCURRENCY=$$(envv ALLOY_STT_MAX_CONCURRENCY); \
-	ALLOY_STT_CHANNEL_BACKPRESSURE=$$(envv ALLOY_STT_CHANNEL_BACKPRESSURE); \
-	ALLOY_STT_LANGUAGE_MODE=$$(envv ALLOY_STT_LANGUAGE_MODE); \
-	ALLOY_STT_TELEMETRY=$$(envv ALLOY_STT_TELEMETRY); \
+	ALLOY_STT_MAX_CONCURRENCY=$$(alloyv ALLOY_STT_MAX_CONCURRENCY 0); \
+	ALLOY_STT_CHANNEL_BACKPRESSURE=$$(alloyv ALLOY_STT_CHANNEL_BACKPRESSURE 0); \
+	ALLOY_STT_LANGUAGE_MODE=$$(alloyv ALLOY_STT_LANGUAGE_MODE configured); \
+	ALLOY_STT_TELEMETRY=$$(alloyv ALLOY_STT_TELEMETRY 0); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
@@ -231,10 +235,14 @@ stt-smoke:
 		|| { echo "  ✗ local STT returned no expected words — check $(WHISPER_CONTAINER) logs"; exit 1; }
 
 # ── Image build / publish ──────────────────────────────────────────────────────────────────────────
+# ALLOY: one build-argument owner keeps local and multi-arch images on the same opt-in defaults.
+ALLOY_LITE_BUILD_ARGS = \
+	--build-arg ALLOY_SKIP_HF_CACHE_WARM=$(or $(strip $(ALLOY_SKIP_HF_CACHE_WARM)),0) \
+	--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$(or $(strip $(NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)),0)
+
 build: preflight
 	docker build \
-		--build-arg ALLOY_SKIP_HF_CACHE_WARM=$${ALLOY_SKIP_HF_CACHE_WARM:-1} \
-		--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$${NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT:-1} \
+		$(ALLOY_LITE_BUILD_ARGS) \
 		-f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "Built $(LOCAL_TAG)"
 
@@ -244,6 +252,7 @@ setup-builder:
 
 push: setup-builder
 	docker buildx build --builder $(BUILDER_NAME) --platform $(PLATFORMS) \
+		$(ALLOY_LITE_BUILD_ARGS) \
 		-f $(DOCKERFILE) -t $(UNIQUE_DOCKERHUB_TAG) --push $(CONTEXT)
 	@echo "$(UNIQUE_TAG)" > $(LAST_TAG_FILE)
 	$(call set_tag,dev,$(UNIQUE_TAG))

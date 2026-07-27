@@ -266,15 +266,15 @@ export function createTranscribe(inv: Invocation): Transcribe {
   }
   // ALLOY: These opt-in flags isolate local CPU tuning from Vexa's default behavior.
   const alloyConcurrencyRaw = process.env.ALLOY_STT_MAX_CONCURRENCY?.trim();
-  const alloyConcurrencyParsed = alloyConcurrencyRaw
-    ? Number.parseInt(alloyConcurrencyRaw, 10)
+  const alloyConcurrencyParsed = alloyConcurrencyRaw && /^[1-9]\d*$/.test(alloyConcurrencyRaw)
+    ? Number(alloyConcurrencyRaw)
     : undefined;
-  const alloyMaxConcurrency = Number.isInteger(alloyConcurrencyParsed)
-    && (alloyConcurrencyParsed ?? 0) > 0
+  const alloyMaxConcurrency = typeof alloyConcurrencyParsed === 'number'
+    && Number.isSafeInteger(alloyConcurrencyParsed)
     ? alloyConcurrencyParsed
     : undefined;
   const alloyLanguageMode = process.env.ALLOY_STT_LANGUAGE_MODE?.trim().toLowerCase();
-  if (alloyConcurrencyRaw && alloyMaxConcurrency === undefined) {
+  if (alloyConcurrencyRaw && alloyConcurrencyRaw !== '0' && alloyMaxConcurrency === undefined) {
     console.warn(`[ALLOY] Ignoring invalid ALLOY_STT_MAX_CONCURRENCY="${alloyConcurrencyRaw}"`);
   }
   const client = new TranscriptionClient({
@@ -283,7 +283,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
     model: inv.transcriptionModel ?? undefined,
     maxConcurrentRequests: alloyMaxConcurrency,
   });
-  // ALLOY auto mode supports Russian/English code-switching per submitted window.
+  // ALLOY: auto mode supports Russian/English code-switching per submitted window.
   // Without the flag, preserve Vexa's invocation-configured language behavior.
   const language = alloyLanguageMode === 'auto' ? undefined : inv.language ?? undefined;
   // ALLOY: the bot adapter only forwards lifecycle observation to the owning client.
