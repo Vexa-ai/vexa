@@ -55,6 +55,9 @@ class S3Storage:
         await self._run(self._c().put_object, Bucket=self._bucket, Key=key, Body=data,
                         ContentType=content_type, **extra)
 
+    async def delete(self, key: str) -> None:
+        await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
+
     async def list(self, prefix: str) -> list[str]:
         # S3 (and every S3-compatible backend) caps a single list_objects_v2 response at 1000 keys and
         # signals more via IsTruncated + NextContinuationToken (#769). Loop to exhaustion — a single

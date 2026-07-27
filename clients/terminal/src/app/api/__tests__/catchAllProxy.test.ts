@@ -16,6 +16,7 @@ function makeReq(method: string, search = ""): import("next/server").NextRequest
   return {
     method,
     nextUrl: { search },
+    headers: new Headers(),
     text: async () => "",
   } as unknown as import("next/server").NextRequest;
 }
@@ -64,5 +65,57 @@ describe("catch-all proxy — upstream status passthrough", () => {
     const res = await deleteRoute(makeReq("DELETE"), ctx("meetings", "47"));
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe("upstream_unreachable");
+  });
+});
+
+// ── media passthrough ───────────────────────────────────────────────────────────────────────────
+// Recordings are BINARY and are fetched with Range requests (that is how a <video>/<audio> element
+// seeks). The default JSON path — `await upstream.text()` relabelled application/json — would
+// re-encode the bytes as UTF-8 and hand the player a corrupt file with no scrub bar.
+describe("catch-all proxy — recordings stream as media, not as JSON text", () => {
+  function mediaReq(range?: string): import("next/server").NextRequest {
+    return {
+      method: "GET",
+      nextUrl: { search: "?type=video" },
+      headers: new Headers(range ? { range } : {}),
+    } as unknown as import("next/server").NextRequest;
+  }
+
+  it("forwards Range upstream and returns 206 + the range headers verbatim", async () => {
+    const seen: { url?: string; range?: string } = {};
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      seen.url = url;
+      seen.range = (init?.headers as Record<string, string>)?.["Range"];
+      return new Response(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]), {
+        status: 206,
+        headers: {
+          "Content-Type": "video/webm",
+          "Content-Range": "bytes 0-3/1024",
+          "Content-Length": "4",
+        },
+      });
+    }));
+
+    const res = await getRoute(mediaReq("bytes=0-3"), ctx("recordings", "42", "master"));
+
+    // it reached the MEETINGS domain (gateway root), not /agent/*
+    expect(seen.url).toContain("/recordings/42/master");
+    expect(seen.url).not.toContain("/agent/");
+    expect(seen.range).toBe("bytes=0-3");
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Type")).toBe("video/webm");
+    expect(res.headers.get("Content-Range")).toBe("bytes 0-3/1024");
+    expect(res.headers.get("Accept-Ranges")).toBe("bytes");
+    // the BYTES survive — a UTF-8 round-trip would mangle 0x1a45dfa3 (the WebM magic number)
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
+  });
+
+  it("leaves a JSON response on the JSON path (no regression for normal calls)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const res = await getRoute(mediaReq(), ctx("recordings"));
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    expect(await res.json()).toEqual({ ok: true });
   });
 });

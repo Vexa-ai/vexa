@@ -155,6 +155,15 @@
    ]
   },
   {
+   "key": "RECORDING_PRUNE_CHUNKS",
+   "class": "defaulted",
+   "default": "true",
+   "description": "delete a recording's chunks once a verified master supersedes them (halves stored size; off keeps both copies)",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "BOT_AUTHENTICATED",
    "class": "defaulted",
    "default": "false",
