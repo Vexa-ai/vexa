@@ -59,6 +59,16 @@ has passed. A different compatible GPU image may still be supplied with `WHISPER
 (The client sends `model=whisper-1`, the OpenAI id; faster-whisper-server accepts it and serves
 `WHISPER_MODEL`.)
 
+If the bundled third-party image's built-in `curl` self-probe is unusable, opt in to the equivalent
+Python health probe only for this Lite start:
+
+```bash
+ALLOY_STT_HEALTHCHECK=1 make -C deploy/lite up LOCAL_STT=1
+```
+
+This is a Make/ambient opt-in, not an `.env` setting: the Lite recipe deliberately does not import
+it from `ENV_FILE`. Default/rollback `0` (or unset) leaves the image healthcheck unchanged.
+
 After it finishes:
 
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
@@ -125,8 +135,9 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
 `WHISPER_MODEL` (English-only default `Systran/faster-whisper-tiny.en`; multilingual pilot override
-`Systran/faster-whisper-small`), `WHISPER_IMAGE`, and `HOST_STT_PORT` (`8083`). When `LOCAL_STT=1`,
-the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
+`Systran/faster-whisper-small`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`), and optional exact
+`ALLOY_STT_HEALTHCHECK=1` (a Python self-probe; default/rollback `0`). When `LOCAL_STT=1`, the
+bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 ### Opt-in ALLOY pilot profile
 

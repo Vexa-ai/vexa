@@ -7,3 +7,5 @@
   Runs in CI as a `release-images / validate-lite` step against the published image, and
   on any clean host after `IMAGE_TAG=vX.Y.Z make lite`; post the attestation with
   `POST_STATUS=1 GIT_SHA=<released sha>` (sole issuer of `release/vm-validated`).
+- `test_local_stt_healthcheck.py` — generated-command regression proving the local Whisper Python
+  health override is exact-opt-in and preserves upstream behavior when disabled.

@@ -118,6 +118,20 @@ path for every customization.
 - **Scope:** image build only. Runtime model selection and Google Meet/Whisper behavior are
   unchanged.
 
+### `ALLOY_STT_HEALTHCHECK`
+
+- **Purpose:** correct the bundled third-party Whisper image's unusable `curl` self-probe for a
+  local Lite run without changing the image or transcription contract.
+- **Default:** `0` or unset.
+- **Enabled behavior (`1` exactly):** replace only the health command with a Python `GET /health`
+  probe while preserving the 5-second interval, 3-second timeout, and 30 retries.
+- **Disabled/rollback behavior:** unset, empty, `0`, or another value leaves the third-party image
+  healthcheck unchanged. Set `0` and recreate `vexa-lite-whisper` to roll back.
+- **Scope:** Docker self-health reporting only; the image, model, STT API, and transcription path
+  are unchanged.
+- **Configuration boundary:** this is a Make/ambient opt-in, not an `.env` profile entry; Lite does
+  not import `ALLOY_STT_HEALTHCHECK` from `ENV_FILE`.
+
 ## Approved local pilot profile (explicit overrides)
 
 These are the approved values for the next local pilot start and build. They are explicit
