@@ -127,6 +127,9 @@ path for every customization.
   probe while preserving the 5-second interval, 3-second timeout, and 30 retries.
 - **Disabled/rollback behavior:** unset, empty, `0`, or another value leaves the third-party image
   healthcheck unchanged. Set `0` and recreate `vexa-lite-whisper` to roll back.
+- **Activation lifecycle:** the override is applied only when Lite creates `vexa-lite-whisper`.
+  Remove an existing container before starting Lite with `ALLOY_STT_HEALTHCHECK=1` so Make
+  recreates it with the Python probe; the automatic lifecycle otherwise remains unchanged.
 - **Scope:** Docker self-health reporting only; the image, model, STT API, and transcription path
   are unchanged.
 - **Configuration boundary:** this is a Make/ambient opt-in, not an `.env` profile entry; Lite does

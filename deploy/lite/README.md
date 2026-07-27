@@ -60,9 +60,12 @@ has passed. A different compatible GPU image may still be supplied with `WHISPER
 `WHISPER_MODEL`.)
 
 If the bundled third-party image's built-in `curl` self-probe is unusable, opt in to the equivalent
-Python health probe only for this Lite start:
+Python health probe. The option is applied only when Make creates `vexa-lite-whisper`; it does not
+modify an existing container. Remove an existing container before the enable command so Make
+recreates it with the override:
 
 ```bash
+docker rm -f vexa-lite-whisper
 ALLOY_STT_HEALTHCHECK=1 make -C deploy/lite up LOCAL_STT=1
 ```
 
@@ -141,9 +144,9 @@ bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 ### Opt-in ALLOY pilot profile
 
-All six ALLOY switches preserve upstream behavior by default. The approved local pilot overrides
-them explicitly; the values are configuration instructions, not proof about the currently running
-image.
+All six `.env` pilot-profile switches preserve upstream behavior by default. The approved local
+pilot overrides them explicitly; the values are configuration instructions, not proof about the
+currently running image.
 
 Runtime flags are inherited by Lite and newly spawned bot processes:
 

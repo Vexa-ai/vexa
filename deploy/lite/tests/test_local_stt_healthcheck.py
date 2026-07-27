@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,15 @@ from pathlib import Path, PureWindowsPath
 ROOT = Path(__file__).resolve().parents[3]
 MAKEFILE = ROOT / "deploy" / "lite" / "Makefile"
 POSIX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+HEALTHCHECK_ARGS = [
+    (
+        "--health-cmd=python3 -c 'import urllib.request; "
+        'urllib.request.urlopen("http://localhost:8000/health", timeout=2).read()\''
+    ),
+    "--health-interval=5s",
+    "--health-timeout=3s",
+    "--health-retries=30",
+]
 
 
 def _wsl_path(path: Path) -> str:
@@ -21,11 +31,11 @@ def _wsl_path(path: Path) -> str:
 
 
 def _reexec_in_wsl() -> None:
-    completed = subprocess.run(
+    command = ["wsl.exe"]
+    if distro := os.environ.get("ALLOY_LITE_TEST_WSL_DISTRO", "").strip():
+        command.extend(["-d", distro])
+    command.extend(
         [
-            "wsl.exe",
-            "-d",
-            "Ubuntu",
             "--cd",
             _wsl_path(ROOT),
             "--",
@@ -37,9 +47,12 @@ def _reexec_in_wsl() -> None:
             "python3",
             "deploy/lite/tests/test_local_stt_healthcheck.py",
             "--posix",
-        ],
+        ]
+    )
+    completed = subprocess.run(
+        command,
         check=False,
-        timeout=60,
+        timeout=45,
     )
     raise SystemExit(completed.returncode)
 
@@ -80,23 +93,39 @@ def _whisper_run(flag: str | None) -> str:
     return output[start:end]
 
 
+def _whisper_argv(flag: str | None) -> list[str]:
+    """Parse the generated command with POSIX shell quoting rules."""
+    return shlex.split(_whisper_run(flag).replace("\\\n", " "), posix=True)
+
+
 class LocalSttHealthcheckTest(unittest.TestCase):
     def test_exact_one_adds_the_local_whisper_healthcheck_override(self) -> None:
         """A missing healthcheck override would keep the local Whisper defect alive."""
-        command = _whisper_run("1")
-        self.assertIn("--health-cmd=", command)
-        self.assertIn("python3 -c", command)
-        self.assertIn("urllib.request.urlopen", command)
-        self.assertIn("--health-interval=5s", command)
-        self.assertIn("--health-timeout=3s", command)
-        self.assertIn("--health-retries=30", command)
+        baseline = _whisper_argv(None)
+        enabled = _whisper_argv("1")
+        restart = baseline.index("--restart")
+        self.assertEqual(baseline[restart : restart + 2], ["--restart", "unless-stopped"])
+        insertion = restart + 2
+
+        self.assertEqual(
+            enabled,
+            [*baseline[:insertion], *HEALTHCHECK_ARGS, *baseline[insertion:]],
+        )
+        self.assertEqual(enabled.count(HEALTHCHECK_ARGS[0]), 1)
+        for timing in HEALTHCHECK_ARGS[1:]:
+            self.assertEqual(enabled.count(timing), 1)
+        self.assertEqual(enabled[-1], baseline[-1])
 
     def test_disabled_values_leave_the_local_whisper_command_unchanged(self) -> None:
         """A truthy check would wrongly alter upstream behavior for non-exact flag values."""
-        for value in (None, "", "0", "true"):
+        rendered = {
+            value: _whisper_argv(value)
+            for value in (None, "", "0", "true")
+        }
+        baseline = rendered[None]
+        for value, argv in rendered.items():
             with self.subTest(value=value):
-                self.assertNotIn("--health-cmd", _whisper_run(value))
-                self.assertNotIn("urllib.request.urlopen", _whisper_run(value))
+                self.assertEqual(argv, baseline)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "gate:readme": "node scripts/gates.mjs readme",
+    "gate:lite-makefile": "node scripts/gates.mjs lite-makefile",
     "gate:docs-version": "node scripts/gates.mjs docs-version",
     "gate:isolation": "node scripts/gates.mjs isolation",
     "gate:exports": "node scripts/gates.mjs exports",
