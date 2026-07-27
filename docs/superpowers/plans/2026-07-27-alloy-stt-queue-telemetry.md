@@ -6,8 +6,9 @@
 > session-owned worktree based on the selected checkpoint ref.
 
 **Status at integration ref:** source and sealed-contract implementation is present; focused
-offline evidence and standard-runner wiring are complete. Two explicit disposable-Redis lanes,
-independent review, a clean-image provenance check, and real Google Meet acceptance remain open.
+offline evidence, standard-runner wiring, and both disposable-Redis lanes are complete. Independent
+review returned three Important findings and no Critical findings; the approved hardening wave,
+clean-image provenance check, and real Google Meet acceptance remain open.
 
 **Goal:** Provide an opt-in, owner-scoped STT queue monitor that reports real Whisper execution,
 backlog, lag, RTF, and failures on every Vexa Terminal screen without changing upstream behavior
@@ -32,6 +33,8 @@ page is visible.
 - The approved local pilot overrides those values explicitly as `1/1/auto/1/1/1`.
 - `ALLOY_STT_MAX_CONCURRENCY` limits one bot process. It is not a cross-process, cross-meeting, or
   Whisper-service-wide semaphore.
+- A released limited-concurrency permit is handed directly to the oldest FIFO waiter; a new request
+  cannot barge ahead while the waiter resumes.
 - The Redis key is `alloy:stt:telemetry:v1:{meeting_id}` with a 15-second TTL.
 - The backend route is `GET /alloy/stt/status` in Meeting API and Gateway. The Terminal proxy is
   `GET /api/alloy/stt/status`.
@@ -47,6 +50,9 @@ page is visible.
 - Invalid, incompatible, version-mismatched, non-finite, or key/payload-mismatched snapshots are
   silently omitted. Redis transport failure returns the sealed unavailable response and never
   changes transcription.
+- Owner-visible `last_error` text is derived only from trusted STT fault kind/status values.
+  Arbitrary backend response bodies remain in the existing server-side fault channel and never
+  enter Redis, Meeting API, or Terminal telemetry.
 - Health is red for `last_error`, age `>5s`, or lag `>15s`; amber otherwise for age `>3s`, lag
   `>=5s`, RTF `>1`, or a first request with `active_requests > 0` and `processed_windows == 0`;
   green otherwise; muted when there are no valid snapshots. Aggregate health is the worst meeting
@@ -368,19 +374,87 @@ all state the same default-zero behavior and honest evidence boundary.
 
 ---
 
+### Task 8A: Independent-Review Hardening Wave
+
+**Expected:** the per-bot limiter remains FIFO at its real execution boundary, owner-visible
+telemetry cannot expose arbitrary backend error text, and the disabled upstream Agent probe is
+byte-for-byte free of the unrelated timeout customization.
+
+- [ ] **Step 1: Add and observe the three-request limiter RED.**
+
+  Extend
+  `core/meetings/modules/whisper/src/concurrency-observer.test.ts` with one controlled request,
+  one existing waiter, and one request scheduled to barge between release and waiter resumption.
+  Run:
+
+  ```powershell
+  pnpm --filter @vexa/transcribe-whisper exec tsx src/concurrency-observer.test.ts
+  ```
+
+  Expected RED: request order or observed peak concurrency proves that the current
+  decrement-before-wake release can exceed `ALLOY_STT_MAX_CONCURRENCY=1`.
+
+- [ ] **Step 2: Implement direct FIFO permit handoff and observe GREEN.**
+
+  Modify only `TranscriptionClient.withRequestSlot`: retain the active permit while handing it to
+  the oldest waiter, decrement only when no waiter exists, and keep observer callbacks
+  fault-isolated. Re-run the Step 1 command. Expected GREEN: order is FIFO, peak execution is `1`,
+  and every lifecycle ends balanced.
+
+- [ ] **Step 3: Add and observe the secret-shaped telemetry RED.**
+
+  Extend `core/meetings/modules/gmeet-pipeline/src/fault-surfacing.test.ts` with the real
+  `createGmeetPipeline` and tracker. Reject with a typed STT fault whose detail contains a
+  credential-shaped sentinel. Assert that `onError` receives the original typed fault while
+  `snapshot().last_error` contains only the trusted kind/status mapping and never the sentinel.
+  Run:
+
+  ```powershell
+  pnpm --filter @vexa/gmeet-pipeline exec tsx src/fault-surfacing.test.ts
+  ```
+
+  Expected RED: the current generic `Error.message` copy exposes the sentinel.
+
+- [ ] **Step 4: Implement one safe telemetry-error mapper and observe GREEN.**
+
+  Keep the mapper private to `gmeet-pipeline.ts`. Whitelist the existing
+  `TranscriptionFaultKind` values structurally, accept only integer HTTP status values from
+  `100` through `599`, fall back to `STT request failed`, and continue forwarding the original
+  error unchanged through `onError`. Re-run the Step 3 command and the focused
+  `alloy-channel-backpressure.test.ts` boundary.
+
+- [ ] **Step 5: Remove the unrelated Agent timeout diff and prove exact rollback.**
+
+  Remove `MEETING_HEALTH_TIMEOUT_SEC`, the optional `_health_stage` timeout branch, the
+  meeting-only override, and its dedicated test. Run:
+
+  ```powershell
+  git diff --exit-code d7ed2bb8e0fd00d4f0b2915afae06044a8b90547..HEAD -- `
+    core/agent/control_plane/admin_panel.py core/agent/tests/test_admin_panel.py
+  ```
+
+  Expected GREEN: no diff remains in either Agent file.
+
+- [ ] **Step 6: Run affected focused packages, TypeScript compilation, docs, and diff checks.**
+
+  Stop each focused command at 45 seconds and each gate at 60 seconds. Do not start the clean image
+  build until every Important finding has a named GREEN and the scoped re-review returns clean.
+
+---
+
 ### Task 9: Independent Review and Real Acceptance
 
 **Expected:** completion is claimed only after independent review, both disposable-Redis lanes, a
 clean source-derived image, runtime provenance, and bounded real Google Meet evidence.
 
-- [ ] **Step 1: Request independent read-only review of the frozen integrated diff.**
+- [x] **Step 1: Request independent read-only review of the frozen integrated diff.**
 
   Review spec coverage, real scheduler/slot instrumentation, counter balance, publisher isolation,
   strict ownership, server aggregation, generation-local promise reuse, restart fencing, opt-in
   rollback, and unrelated-change absence. Record Critical, Important, Minor, and open questions
   with exact file/line evidence.
 
-- [ ] **Step 2: Close both explicit disposable-Redis lanes and rerun only affected focused boundaries.**
+- [x] **Step 2: Close both explicit disposable-Redis lanes and rerun only affected focused boundaries.**
 
   Do not proceed with an ownership, schema, TTL, cleanup, or error-isolation mismatch.
 

@@ -1,7 +1,26 @@
 # ALLOY STT Queue Telemetry
 
-Status: implemented in source; focused offline and contract verification complete;
-disposable-Redis, clean-image, and real-Meet acceptance pending
+Status: integrated source under independent-review hardening; focused offline, contract, and both
+disposable-Redis lanes complete; clean-image and real-Meet acceptance pending
+
+## Independent-review hardening amendment
+
+The 2026-07-27 independent review found three Important gaps and no Critical findings. The
+approved minimal correction keeps the existing ownership boundaries:
+
+- `TranscriptionClient` retains one FIFO queue and transfers a released limited-concurrency permit
+  directly to its oldest waiter. A newly arriving request cannot observe an artificial free slot
+  while that handoff is pending.
+- `gmeet-pipeline` is the telemetry redaction boundary. It derives the owner-visible error only
+  from a whitelist of trusted STT fault kinds and valid HTTP status values; arbitrary exception
+  text never enters the Redis snapshot, Meeting API response, or Terminal. The original error
+  still reaches `onError` unchanged for the existing server-side fault channel.
+- The unrelated unconditional Agent admin-panel Meeting API timeout change is excluded from this
+  customization. With every Alloy flag disabled, the upstream probe deadline remains unchanged.
+
+The corrections require named RED/GREEN evidence: a three-request permit-barging regression, a
+secret-shaped STT error-body negative test, and an exact upstream-diff guard for the admin-panel
+files. No new semaphore abstraction, second error reporter, or unrelated refactor is authorized.
 
 ## 1. Purpose
 
