@@ -160,13 +160,17 @@ export class TranscriptionClient {
     const limit = this.maxConcurrentRequests;
     if (limit === undefined && executionObserver === undefined) return run();
 
+    let receivedPermitHandoff = false;
     if (limit !== undefined && this.activeRequests >= limit) {
       if (executionObserver !== undefined) {
         this.runObserverCallback(() => executionObserver.waiting());
       }
-      await new Promise<void>((resolve) => this.requestWaiters.push(resolve));
+      await new Promise<void>((resolve) => this.requestWaiters.push(() => {
+        receivedPermitHandoff = true;
+        resolve();
+      }));
     }
-    if (limit !== undefined) this.activeRequests++;
+    if (limit !== undefined && !receivedPermitHandoff) this.activeRequests++;
 
     const executionStartedAt = executionObserver === undefined ? undefined : performance.now();
     if (executionObserver !== undefined) {
@@ -180,8 +184,13 @@ export class TranscriptionClient {
         this.runObserverCallback(() => executionObserver?.finished(executionDurationMs));
       }
       if (limit !== undefined) {
-        this.activeRequests--;
-        this.requestWaiters.shift()?.();
+        const nextWaiter = this.requestWaiters.shift();
+        if (nextWaiter !== undefined) {
+          // ALLOY: Hand the occupied permit to the oldest waiter before new work can barge in.
+          nextWaiter();
+        } else {
+          this.activeRequests--;
+        }
       }
     }
   }

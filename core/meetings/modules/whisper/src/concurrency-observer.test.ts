@@ -209,6 +209,87 @@ async function run() {
       );
       check('failure and successor each reach fetch once', fetchCalls === 2, `calls=${fetchCalls}`);
     }
+
+    // ALLOY: Regression — releasing a slot hands its permit directly to the oldest waiter.
+    {
+      const fetchReleases: Array<() => void> = [];
+      let activeFetches = 0;
+      let peakFetches = 0;
+      (globalThis as any).fetch = async () => {
+        activeFetches++;
+        peakFetches = Math.max(peakFetches, activeFetches);
+        await new Promise<void>((resolve) => fetchReleases.push(resolve));
+        activeFetches--;
+        return successResponse('held request');
+      };
+
+      const lifecycle: string[] = [];
+      const executionOrder: number[] = [];
+      let third: Promise<unknown> | undefined;
+      const observer = (request: number, onFinished?: () => void): TranscriptionExecutionObserver => ({
+        waiting: () => lifecycle.push(`${request}:waiting`),
+        started: () => {
+          lifecycle.push(`${request}:started`);
+          executionOrder.push(request);
+        },
+        finished: () => {
+          lifecycle.push(`${request}:finished`);
+          onFinished?.();
+        },
+      });
+      const client = new TranscriptionClient({
+        serviceUrl: 'http://stt.test',
+        maxConcurrentRequests: 1,
+      });
+
+      const first = client.transcribe(
+        pcm,
+        'en',
+        'request 1',
+        observer(1, () => queueMicrotask(() => {
+          third = client.transcribe(pcm, 'en', 'request 3', observer(3));
+        })),
+      );
+      const second = client.transcribe(pcm, 'en', 'request 2', observer(2));
+
+      check(
+        'second request reports waiting while the first fetch owns the only slot',
+        JSON.stringify(lifecycle) === JSON.stringify(['1:started', '2:waiting']),
+        JSON.stringify(lifecycle),
+      );
+
+      fetchReleases[0]!();
+      await first;
+
+      let releasedFetches = 1;
+      while (releasedFetches < 3) {
+        fetchReleases[releasedFetches]!();
+        releasedFetches++;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await Promise.all([second, third!]);
+
+      check(
+        'release starts requests in FIFO order despite a later queued microtask',
+        JSON.stringify(executionOrder) === JSON.stringify([1, 2, 3]),
+        JSON.stringify(executionOrder),
+      );
+      check('FIFO handoff never overlaps held fetch executions', peakFetches === 1, `peak=${peakFetches}`);
+      check(
+        'all three observers report balanced waiting, started, and finished lifecycles',
+        JSON.stringify(lifecycle) === JSON.stringify([
+          '1:started',
+          '2:waiting',
+          '1:finished',
+          '3:waiting',
+          '2:started',
+          '2:finished',
+          '3:started',
+          '3:finished',
+        ]),
+        JSON.stringify(lifecycle),
+      );
+    }
   } finally {
     (globalThis as any).fetch = realFetch;
   }
