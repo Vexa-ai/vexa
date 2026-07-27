@@ -20,13 +20,23 @@
  * derived. No diarizer, no post-hoc window-match.
  */
 import { SpeakerStreamManager, type SpeakerStreamManagerConfig } from './speaker-streams.js';
-import type { TranscriptionResult } from '@vexa/transcribe-whisper';
+import type {
+  TranscriptionExecutionObserver,
+  TranscriptionResult,
+} from '@vexa/transcribe-whisper';
 import type { TranscriptSegment, TranscriptSink } from './contracts/transcript-v1.js';
 import type { AlloySttTelemetryTracker } from './alloy-stt-telemetry.js';
 
+/** ALLOY: optional limiter observer is the final, source-compatible STT argument. */
+type Transcribe = (
+  pcm: Float32Array,
+  prompt?: string,
+  executionObserver?: TranscriptionExecutionObserver,
+) => Promise<TranscriptionResult>;
+
 export interface GmeetPipelineOptions {
   /** One Whisper round-trip (stt.v1). language is baked into the closure by the host. */
-  transcribe: (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+  transcribe: Transcribe;
   /** Where transcript.v1 segments + drafts land (consumer = collector/rendering). */
   sink: TranscriptSink;
   /** Label for a turn whose onset had no single confident glow. Default 'Speaker'. */
@@ -60,6 +70,8 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   const mgr = new SpeakerStreamManager(opts.config);
   const inflight = new Set<Promise<void>>();
   type TranscriptionRequest = {
+    /** ALLOY: unique submission identity; a final resubmit is a new request. */
+    requestId: string;
     speakerId: string;
     audio: Float32Array;
     turn: number;
@@ -73,6 +85,8 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     pending?: TranscriptionRequest;
   };
   const channelQueues = new Map<string, ChannelQueue>();
+  // ALLOY: monotone per-pipeline identity is opaque outside telemetry.
+  let nextRequestSequence = 0;
   const latestAudioEndBySpeakerId = new Map<string, number>();
   // Per channel: the CURRENT turn's stream key, bound name, last-audio time, turn counter.
   const chan = new Map<number, { key: string; name: string; lastMs: number; turn: number }>();
@@ -105,28 +119,53 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   };
 
   const transcribeOne = async ({
+    requestId,
     speakerId,
     audio,
     audioEndMs,
   }: TranscriptionRequest): Promise<void> => {
     const physicalChannelId = channelId(speakerId);
     const audioSec = audio.length / 16_000;
-    const startedAtMs = Date.now();
-    opts.alloySttTelemetry?.started(physicalChannelId, audioSec);
+    // ALLOY: only the real limiter observer moves waiting → active → finished.
+    // Its duration excludes scheduler and limiter queue time by construction.
+    let executionDurationMs: number | undefined;
+    const executionObserver: TranscriptionExecutionObserver | undefined =
+      opts.alloySttTelemetry
+        ? {
+            waiting: () => opts.alloySttTelemetry?.queued(
+              requestId,
+              physicalChannelId,
+              audioSec,
+            ),
+            started: () => opts.alloySttTelemetry?.started(
+              requestId,
+              physicalChannelId,
+              audioSec,
+            ),
+            finished: (durationMs) => {
+              executionDurationMs = durationMs;
+              opts.alloySttTelemetry?.finished(requestId);
+            },
+          }
+        : undefined;
     try {
-      const r = await opts.transcribe(audio, mgr.getLastConfirmedText(speakerId) || undefined);
+      const prompt = mgr.getLastConfirmedText(speakerId) || undefined;
+      // ALLOY: preserve the exact upstream two-argument call when telemetry is off.
+      const r = executionObserver
+        ? await opts.transcribe(audio, prompt, executionObserver)
+        : await opts.transcribe(audio, prompt);
       opts.alloySttTelemetry?.completed({
-        channelId: physicalChannelId,
+        requestId,
         audioSec,
         audioEndMs,
-        processingDurationMs: Date.now() - startedAtMs,
+        executionDurationMs,
       });
       opts.alloySttTelemetry?.recovered();
       const segs = r?.segments;
       mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      opts.alloySttTelemetry?.failed(physicalChannelId, {
+      opts.alloySttTelemetry?.failed(requestId, {
         code: 'stt_failed',
         message: message.slice(0, 512),
       });
@@ -144,6 +183,15 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     mgr.removeSpeaker(request.speakerId);
   };
 
+  // ALLOY: scheduler ownership is limited to waiting-record replacement.
+  const recordQueuedRequest = (request: TranscriptionRequest): void => {
+    opts.alloySttTelemetry?.queued(
+      request.requestId,
+      channelId(request.speakerId),
+      request.audio.length / 16_000,
+    );
+  };
+
   const enqueueByChannel = (request: TranscriptionRequest): void => {
     const key = channelId(request.speakerId);
     const queue = channelQueues.get(key);
@@ -152,7 +200,11 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
       // when its prior response lands. Preserve it ahead of the replaceable
       // pending turn so rotation never releases audio still owned by the active turn.
       if (request.turn === queue.activeTurn) {
+        if (queue.activeContinuation) {
+          opts.alloySttTelemetry?.superseded(queue.activeContinuation.requestId);
+        }
         queue.activeContinuation = request;
+        recordQueuedRequest(request);
         return;
       }
       if (request.turn < queue.activeTurn) {
@@ -166,14 +218,11 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         }
         // ALLOY: this turn was superseded before reaching STT. Release its manager
         // buffer so only the newest accumulated channel audio remains pending.
-        opts.alloySttTelemetry?.superseded(
-          key,
-          queue.pending.audio.length / 16_000
-        );
+        opts.alloySttTelemetry?.superseded(queue.pending.requestId);
         dropQueuedRequest(queue.pending);
       }
       queue.pending = request;
-      opts.alloySttTelemetry?.queued(key, request.audio.length / 16_000);
+      recordQueuedRequest(request);
       return;
     }
 
@@ -202,6 +251,8 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
 
   mgr.onSegmentReady = (speakerId, _name, audio) => {
     const request = {
+      // ALLOY: every submitted window, including final resubmits, is distinct.
+      requestId: `stt-${++nextRequestSequence}`,
       speakerId,
       audio,
       turn: turnId(speakerId),

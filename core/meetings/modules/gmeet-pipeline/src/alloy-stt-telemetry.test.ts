@@ -1,3 +1,9 @@
+/**
+ * ALLOY: Focused request-aware STT telemetry contract.
+ *
+ * Break caught: channel-keyed queue state cannot represent a limiter waiter and
+ * a newer scheduler-pending request on the same physical channel.
+ */
 import assert from 'node:assert/strict';
 
 import { createAlloySttTelemetryTracker } from './alloy-stt-telemetry.js';
@@ -20,6 +26,56 @@ const closeTo = (actual: number | null, expected: number, epsilon = 1e-9) => {
   assert.ok(Math.abs((actual as number) - expected) <= epsilon, `${actual} != ${expected}`);
 };
 
+check('ALLOY tracker keeps distinct same-channel requests through limiter lifecycle', () => {
+  const tracker = createAlloySttTelemetryTracker({
+    meetingId: '100',
+    nativeMeetingId: 'request-aware-room',
+  });
+
+  tracker.started('request-a', 'ch-0', 1);
+  tracker.queued('request-b', 'ch-1', 2);
+  tracker.queued('request-c', 'ch-1', 3);
+
+  let snapshot = tracker.snapshot();
+  assert.equal(snapshot.active_requests, 1);
+  assert.equal(snapshot.active_audio_sec, 1);
+  assert.equal(snapshot.waiting_channels, 1);
+  assert.equal(snapshot.queued_audio_sec, 5);
+
+  tracker.started('request-b', 'ch-1', 2);
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.active_requests, 2);
+  assert.equal(snapshot.active_audio_sec, 3);
+  assert.equal(snapshot.waiting_channels, 1);
+  assert.equal(snapshot.queued_audio_sec, 3);
+
+  tracker.superseded('request-c');
+  tracker.queued('request-d', 'ch-1', 4);
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.superseded_windows, 1);
+  assert.equal(snapshot.waiting_channels, 1);
+  assert.equal(snapshot.queued_audio_sec, 4);
+
+  tracker.finished('request-a');
+  tracker.completed({
+    requestId: 'request-a',
+    audioSec: 1,
+    audioEndMs: 1_000,
+    executionDurationMs: 250,
+  });
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.active_requests, 1);
+  assert.equal(snapshot.processed_windows, 1);
+  closeTo(snapshot.rtf_ema, 0.25);
+
+  tracker.failed('request-b', { code: 'stt_failed', message: 'worker exited' });
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.active_requests, 0);
+  assert.equal(snapshot.waiting_channels, 1);
+  assert.equal(snapshot.queued_audio_sec, 4);
+  assert.deepEqual(snapshot.last_error, { code: 'stt_failed', message: 'worker exited' });
+});
+
 check('ALLOY tracker moves queued audio into active and returns to idle', () => {
   const tracker = createAlloySttTelemetryTracker({
     meetingId: '101',
@@ -28,24 +84,25 @@ check('ALLOY tracker moves queued audio into active and returns to idle', () => 
   });
 
   tracker.captured('ch-0', 10_000);
-  tracker.queued('ch-0', 4.25);
+  tracker.queued('request-0', 'ch-0', 4.25);
   let snapshot = tracker.snapshot();
   assert.equal(snapshot.waiting_channels, 1);
   assert.equal(snapshot.queued_audio_sec, 4.25);
   assert.equal(snapshot.active_requests, 0);
 
-  tracker.started('ch-0', 4.25);
+  tracker.started('request-0', 'ch-0', 4.25);
   snapshot = tracker.snapshot();
   assert.equal(snapshot.waiting_channels, 0);
   assert.equal(snapshot.queued_audio_sec, 0);
   assert.equal(snapshot.active_requests, 1);
   assert.equal(snapshot.active_audio_sec, 4.25);
 
+  tracker.finished('request-0');
   tracker.completed({
-    channelId: 'ch-0',
+    requestId: 'request-0',
     audioSec: 4.25,
     audioEndMs: 10_000,
-    processingDurationMs: 2_125,
+    executionDurationMs: 2_125,
   });
   snapshot = tracker.snapshot();
   assert.equal(snapshot.active_requests, 0);
@@ -61,8 +118,9 @@ check('ALLOY tracker replaces one pending channel without inflating wait depth',
     nativeMeetingId: 'replace-room',
   });
 
-  tracker.queued('ch-1', 2);
-  tracker.superseded('ch-1', 4.25);
+  tracker.queued('request-old', 'ch-1', 2);
+  tracker.superseded('request-old');
+  tracker.queued('request-new', 'ch-1', 4.25);
   const snapshot = tracker.snapshot();
 
   assert.equal(snapshot.waiting_channels, 1);
@@ -79,12 +137,13 @@ check('ALLOY tracker computes lag from audio timeline rather than wall-clock sil
   });
 
   tracker.captured('ch-0', 10_000);
-  tracker.started('ch-0', 1);
+  tracker.started('request-0', 'ch-0', 1);
+  tracker.finished('request-0');
   tracker.completed({
-    channelId: 'ch-0',
+    requestId: 'request-0',
     audioSec: 1,
     audioEndMs: 7_000,
-    processingDurationMs: 500,
+    executionDurationMs: 500,
   });
   assert.equal(tracker.snapshot().lag_sec, 3);
 
@@ -98,21 +157,23 @@ check('ALLOY tracker computes EMA RTF from submitted audio duration', () => {
     nativeMeetingId: 'rtf-room',
   });
 
-  tracker.started('ch-0', 1);
+  tracker.started('request-0', 'ch-0', 1);
+  tracker.finished('request-0');
   tracker.completed({
-    channelId: 'ch-0',
+    requestId: 'request-0',
     audioSec: 1,
     audioEndMs: 1_000,
-    processingDurationMs: 800,
+    executionDurationMs: 800,
   });
   closeTo(tracker.snapshot().rtf_ema, 0.8);
 
-  tracker.started('ch-0', 2);
+  tracker.started('request-1', 'ch-0', 2);
+  tracker.finished('request-1');
   tracker.completed({
-    channelId: 'ch-0',
+    requestId: 'request-1',
     audioSec: 2,
     audioEndMs: 3_000,
-    processingDurationMs: 2_000,
+    executionDurationMs: 2_000,
   });
   closeTo(tracker.snapshot().rtf_ema, 0.84);
 });
@@ -123,9 +184,9 @@ check('ALLOY tracker preserves pending counters on failure and clears error on r
     nativeMeetingId: 'recovery-room',
   });
 
-  tracker.started('ch-0', 3);
-  tracker.queued('ch-0', 2);
-  tracker.failed('ch-0', { code: 'stt_failed', message: 'worker exited' });
+  tracker.started('request-active', 'ch-0', 3);
+  tracker.queued('request-waiting', 'ch-0', 2);
+  tracker.failed('request-active', { code: 'stt_failed', message: 'worker exited' });
   let snapshot = tracker.snapshot();
 
   assert.equal(snapshot.active_requests, 0);

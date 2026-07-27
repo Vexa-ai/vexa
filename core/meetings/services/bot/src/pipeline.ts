@@ -31,14 +31,23 @@ import {
   type ChunkedTranscriberCallbacks,
   type HintKind,
 } from '@vexa/mixed-pipeline';
-import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
+import {
+  TranscriptionClient,
+  type TranscriptionExecutionObserver,
+  type TranscriptionResult,
+} from '@vexa/transcribe-whisper';
 import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
 /** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
-export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+export type Transcribe = (
+  pcm: Float32Array,
+  prompt?: string,
+  /** ALLOY: optional observer owned by the real limiter slot. */
+  executionObserver?: TranscriptionExecutionObserver,
+) => Promise<TranscriptionResult>;
 
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
  *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
@@ -277,7 +286,9 @@ export function createTranscribe(inv: Invocation): Transcribe {
   // ALLOY auto mode supports Russian/English code-switching per submitted window.
   // Without the flag, preserve Vexa's invocation-configured language behavior.
   const language = alloyLanguageMode === 'auto' ? undefined : inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  // ALLOY: the bot adapter only forwards lifecycle observation to the owning client.
+  return (pcm, prompt, executionObserver) =>
+    client.transcribe(pcm, language, prompt, executionObserver);
 }
 
 /**

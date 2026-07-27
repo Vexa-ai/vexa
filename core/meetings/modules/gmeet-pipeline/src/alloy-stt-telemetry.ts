@@ -1,3 +1,4 @@
+/** ALLOY: local STT queue snapshot and request-lifecycle contract. */
 export type AlloySttTelemetryError = {
   code: string;
   message: string;
@@ -23,19 +24,26 @@ export type AlloySttTelemetrySnapshotV1 = {
 
 export interface AlloySttTelemetryTracker {
   captured(channelId: string, audioEndMs: number): void;
-  queued(channelId: string, audioSec: number): void;
-  superseded(channelId: string, audioSec: number): void;
-  started(channelId: string, audioSec: number): void;
+  queued(requestId: string, channelId: string, audioSec: number): void;
+  superseded(requestId: string): void;
+  started(requestId: string, channelId: string, audioSec: number): void;
+  finished(requestId: string): void;
   completed(input: {
-    channelId: string;
+    requestId: string;
     audioSec: number;
     audioEndMs: number;
-    processingDurationMs: number;
+    executionDurationMs?: number;
   }): void;
-  failed(channelId: string, error: AlloySttTelemetryError): void;
+  failed(requestId: string, error: AlloySttTelemetryError): void;
   recovered(): void;
   snapshot(): AlloySttTelemetrySnapshotV1;
 }
+
+/** ALLOY: request metadata only; PCM stays owned by the scheduler. */
+type AlloySttRequestRecord = {
+  channelId: string;
+  audioSec: number;
+};
 
 const nonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -52,8 +60,10 @@ export function createAlloySttTelemetryTracker(input: {
   now?: () => number;
 }): AlloySttTelemetryTracker {
   const now = input.now ?? Date.now;
-  const pendingByChannel = new Map<string, number>();
-  const activeByChannel = new Map<string, number>();
+  // ALLOY: request identity keeps a limiter waiter and a newer scheduler
+  // window on the same channel without either record overwriting the other.
+  const pendingByRequest = new Map<string, AlloySttRequestRecord>();
+  const activeByRequest = new Map<string, AlloySttRequestRecord>();
 
   let updatedAtMs = now();
   let latestCapturedAudioEndMs: number | null = null;
@@ -78,10 +88,12 @@ export function createAlloySttTelemetryTracker(input: {
       meeting_id: input.meetingId,
       native_meeting_id: input.nativeMeetingId,
       updated_at_ms: updatedAtMs,
-      active_requests: activeByChannel.size,
-      active_audio_sec: sum(activeByChannel.values()),
-      waiting_channels: pendingByChannel.size,
-      queued_audio_sec: sum(pendingByChannel.values()),
+      active_requests: activeByRequest.size,
+      active_audio_sec: sum([...activeByRequest.values()].map((record) => record.audioSec)),
+      waiting_channels: new Set(
+        [...pendingByRequest.values()].map((record) => record.channelId),
+      ).size,
+      queued_audio_sec: sum([...pendingByRequest.values()].map((record) => record.audioSec)),
       latest_captured_audio_end_ms: latestCapturedAudioEndMs,
       latest_processed_audio_end_ms: latestProcessedAudioEndMs,
       lag_sec: lagSec,
@@ -102,25 +114,38 @@ export function createAlloySttTelemetryTracker(input: {
       touch();
     },
 
-    queued(channelId, audioSec) {
-      pendingByChannel.set(channelId, nonNegative(audioSec));
+    queued(requestId, channelId, audioSec) {
+      pendingByRequest.set(requestId, {
+        channelId,
+        audioSec: nonNegative(audioSec),
+      });
       touch();
     },
 
-    superseded(channelId, audioSec) {
-      pendingByChannel.set(channelId, nonNegative(audioSec));
-      supersededWindows++;
+    superseded(requestId) {
+      if (pendingByRequest.delete(requestId)) supersededWindows++;
       touch();
     },
 
-    started(channelId, audioSec) {
-      pendingByChannel.delete(channelId);
-      activeByChannel.set(channelId, nonNegative(audioSec));
+    started(requestId, channelId, audioSec) {
+      pendingByRequest.delete(requestId);
+      activeByRequest.set(requestId, {
+        channelId,
+        audioSec: nonNegative(audioSec),
+      });
       touch();
     },
 
-    completed({ channelId, audioSec, audioEndMs, processingDurationMs }) {
-      activeByChannel.delete(channelId);
+    finished(requestId) {
+      activeByRequest.delete(requestId);
+      touch();
+    },
+
+    completed({ requestId, audioSec, audioEndMs, executionDurationMs }) {
+      // ALLOY: custom/injected transcribers may ignore the optional observer.
+      // Completion still drains their exact request without inventing execution time.
+      pendingByRequest.delete(requestId);
+      activeByRequest.delete(requestId);
       const normalizedEnd = nonNegative(audioEndMs);
       latestProcessedAudioEndMs =
         latestProcessedAudioEndMs === null
@@ -128,15 +153,22 @@ export function createAlloySttTelemetryTracker(input: {
           : Math.max(latestProcessedAudioEndMs, normalizedEnd);
       processedWindows++;
 
-      if (Number.isFinite(audioSec) && audioSec > 0 && Number.isFinite(processingDurationMs)) {
-        const requestRtf = nonNegative(processingDurationMs) / 1000 / audioSec;
+      if (
+        Number.isFinite(audioSec)
+        && audioSec > 0
+        && executionDurationMs !== undefined
+        && Number.isFinite(executionDurationMs)
+      ) {
+        const requestRtf = nonNegative(executionDurationMs) / 1000 / audioSec;
         rtfEma = rtfEma === null ? requestRtf : 0.2 * requestRtf + 0.8 * rtfEma;
       }
       touch();
     },
 
-    failed(channelId, error) {
-      activeByChannel.delete(channelId);
+    failed(requestId, error) {
+      // ALLOY: clear only the failed request; unrelated waiters remain visible.
+      pendingByRequest.delete(requestId);
+      activeByRequest.delete(requestId);
       lastError = error;
       touch();
     },

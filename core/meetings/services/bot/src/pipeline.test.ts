@@ -20,7 +20,10 @@ import { createBotPipeline, createTranscribe } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
-import type { TranscriptionResult } from '@vexa/transcribe-whisper';
+import type {
+  TranscriptionExecutionObserver,
+  TranscriptionResult,
+} from '@vexa/transcribe-whisper';
 import type { ChunkedTranscriberCallbacks } from '@vexa/mixed-pipeline';
 
 let failed = 0;
@@ -134,18 +137,62 @@ async function main(): Promise<void> {
   // (stubbed fetch, real client), so the whole bot-side thread is closed, not just the client.
   {
     const realFetch = globalThis.fetch;
-    const modelParts: Array<string | null> = [];
-    (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
-      const m = Buffer.from(init.body).toString('latin1').match(/name="model"\r\n\r\n([^\r]*)\r\n/);
-      modelParts.push(m ? m[1] : null);
-      return new Response(JSON.stringify({ text: '', language: 'en', duration: 0.1, segments: [] }), { status: 200 });
+    // ALLOY: Keep flag state and fetch isolated so this observer-wiring proof
+    // cannot change later cases or depend on the shell's local profile.
+    const realLanguageMode = process.env.ALLOY_STT_LANGUAGE_MODE;
+    const realMaxConcurrency = process.env.ALLOY_STT_MAX_CONCURRENCY;
+    const formParts: Array<{
+      model: string | null;
+      language: string | null;
+      prompt: string | null;
+    }> = [];
+    const observerEvents: string[] = [];
+    const observer: TranscriptionExecutionObserver = {
+      waiting: () => observerEvents.push('waiting'),
+      started: () => observerEvents.push('started'),
+      finished: () => observerEvents.push('finished'),
     };
-    const pcm = new Float32Array(1600).fill(0.05);
-    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test', transcriptionModel: 'whisper-large-v3-turbo' }))(pcm);
-    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
-    (globalThis as any).fetch = realFetch;
-    check('invocation.transcriptionModel rides the model form part', modelParts[0] === 'whisper-large-v3-turbo', JSON.stringify(modelParts[0]));
-    check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
+    try {
+      delete process.env.ALLOY_STT_LANGUAGE_MODE;
+      delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
+        const body = Buffer.from(init.body).toString('latin1');
+        const part = (name: string): string | null =>
+          body.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)\\r\\n`))?.[1] ?? null;
+        formParts.push({
+          model: part('model'),
+          language: part('language'),
+          prompt: part('prompt'),
+        });
+        return new Response(JSON.stringify({
+          text: '',
+          language: 'ru',
+          duration: 0.1,
+          segments: [],
+        }), { status: 200 });
+      };
+      const pcm = new Float32Array(1600).fill(0.05);
+      await createTranscribe(baseInv({
+        transcriptionServiceUrl: 'http://stt.test',
+        transcriptionModel: 'whisper-large-v3-turbo',
+        language: 'ru',
+      }))(pcm, 'previous words', observer);
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
+    } finally {
+      (globalThis as any).fetch = realFetch;
+      if (realLanguageMode === undefined) delete process.env.ALLOY_STT_LANGUAGE_MODE;
+      else process.env.ALLOY_STT_LANGUAGE_MODE = realLanguageMode;
+      if (realMaxConcurrency === undefined) delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      else process.env.ALLOY_STT_MAX_CONCURRENCY = realMaxConcurrency;
+    }
+    check('invocation.transcriptionModel rides the model form part', formParts[0]?.model === 'whisper-large-v3-turbo', JSON.stringify(formParts[0]?.model));
+    check('no transcriptionModel → default whisper-1 (wire unchanged)', formParts[1]?.model === 'whisper-1', JSON.stringify(formParts[1]?.model));
+    check('invocation language and prompt still ride the STT wire',
+      formParts[0]?.language === 'ru' && formParts[0]?.prompt === 'previous words',
+      JSON.stringify(formParts[0]));
+    check('ALLOY createTranscribe forwards the real limiter observer',
+      observerEvents.join(',') === 'started,finished',
+      observerEvents.join(','));
   }
 
   // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
