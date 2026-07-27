@@ -20,6 +20,7 @@ import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
+import { RecordingPlayer } from "./RecordingPlayer";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
@@ -835,6 +836,11 @@ function MeetingTab({ params }: TabProps) {
           <ModelChips />
         </div>
       </header>
+      {m?.recordings?.length ? (
+        <div style={{ flex: "none", marginBottom: 12, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
+          <RecordingPlayer recordings={m.recordings} />
+        </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />
       </div>

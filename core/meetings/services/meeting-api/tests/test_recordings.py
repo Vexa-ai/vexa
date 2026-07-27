@@ -578,3 +578,89 @@ async def test_nothing_expires_by_default():
     )
     for tags in storage.tags.values():
         assert set(tags) == {"media"}, f"unexpected retention metadata attached: {tags}"
+
+
+# ── chunk pruning: the master supersedes the parts it was built from ───────────────────────────
+# Chunks exist so a bot killed mid-meeting still leaves every finished part durable (#412). Once
+# the recording is COMPLETE and a verified master holds the same bytes, keeping both doubles the
+# stored size of every recording anyone ever plays. These pin that the delete is safe: it happens
+# only after the bot's final chunk, never while a recording is still growing.
+
+async def _record(repo, storage, *, parts: int, final: bool, session=SESSION_UID):
+    """Upload `parts` chunks; the last carries is_final=`final`. Returns the recording id."""
+    rid = None
+    for seq in range(parts):
+        receipt = await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=session, data=_wav(),
+            media_format="wav", chunk_seq=seq, is_final=(final and seq == parts - 1),
+        )
+        rid = receipt["recording_id"]
+    return rid
+
+
+def _chunk_keys(storage):
+    return [k for k in storage.blobs if not k.rsplit("/", 1)[-1].startswith("master.")]
+
+
+@pytest.mark.asyncio
+async def test_completed_recording_prunes_its_chunks_once_the_master_holds_them():
+    repo, storage = _seeded()
+    rid = await _record(repo, storage, parts=3, final=True)
+    expected = build_recording_master([storage.blobs[k] for k in sorted(_chunk_keys(storage))], "wav")
+
+    master_key = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+
+    assert _chunk_keys(storage) == [], "the superseded chunks should be gone"
+    assert storage.blobs[master_key] == expected, "the master must still hold every byte"
+    # one object, not N+1 — the whole point
+    assert list(storage.blobs) == [master_key]
+
+    mf = (await repo.get_recordings(MEETING_ID))[0]["media_files"][0]
+    assert mf["chunks_pruned_count"] == 3 and mf["chunks_pruned_at"]
+
+
+@pytest.mark.asyncio
+async def test_a_recording_still_in_progress_is_NEVER_pruned():
+    """THE safety case. A master read mid-meeting assembles a PARTIAL master and sets the media
+    file's own is_final — pruning on that signal would truncate a live recording to whatever had
+    arrived, permanently. Only the recording's `completed` status (the bot's final chunk) may
+    authorise the delete."""
+    repo, storage = _seeded()
+    rid = await _record(repo, storage, parts=2, final=False)   # bot still recording
+
+    await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    assert len(_chunk_keys(storage)) == 2, "chunks of a live recording must survive a master read"
+
+    # the rest of the meeting arrives and must still assemble into a COMPLETE master
+    for seq in (2, 3):
+        await upload_chunk(repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+                           data=_wav(), media_format="wav", chunk_seq=seq, is_final=(seq == 3))
+    expected = build_recording_master([storage.blobs[k] for k in sorted(_chunk_keys(storage))], "wav")
+    master_key = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    assert storage.blobs[master_key] == expected, "all four parts must be in the final master"
+    assert _chunk_keys(storage) == [], "now complete → now prunable"
+
+
+@pytest.mark.asyncio
+async def test_rewatching_after_a_prune_serves_the_same_master():
+    """A second read finds zero chunks. It must serve the existing master as-is, never rebuild
+    from nothing and never report a chunk-count mismatch."""
+    repo, storage = _seeded()
+    rid = await _record(repo, storage, parts=3, final=True)
+    first = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    bytes_after_first = storage.blobs[first]
+
+    second = await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    assert second == first
+    assert storage.blobs[second] == bytes_after_first, "a rewatch must not alter the master"
+    assert list(storage.blobs) == [first]
+
+
+@pytest.mark.asyncio
+async def test_prune_can_be_switched_off(monkeypatch):
+    """The delete is irreversible, so an operator can refuse it and keep both copies."""
+    monkeypatch.setenv("RECORDING_PRUNE_CHUNKS", "false")
+    repo, storage = _seeded()
+    rid = await _record(repo, storage, parts=3, final=True)
+    await finalize_master(repo, storage, meeting_id=MEETING_ID, recording_id=rid)
+    assert len(_chunk_keys(storage)) == 3, "opted out → chunks kept"

@@ -28,6 +28,11 @@ class InMemoryStorage:
         self.content_types[key] = content_type
         self.tags[key] = dict(tags or {})
 
+    async def delete(self, key: str) -> None:
+        self.blobs.pop(key, None)
+        self.content_types.pop(key, None)
+        self.tags.pop(key, None)
+
     async def list(self, prefix: str) -> list[str]:
         return sorted(k for k in self.blobs if k.startswith(prefix))
 

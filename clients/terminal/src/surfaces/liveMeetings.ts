@@ -19,7 +19,9 @@ interface MeetingRowDTO {
   end_time?: string | null;
   constructed_meeting_url?: string | null;
   data?: {
-    recordings?: unknown[];
+    // Each carries the playback paths meeting-api minted for it; `null` for a media type this
+    // recording does not have (video is opt-in per deployment).
+    recordings?: { id?: number; playback_url?: { audio?: string | null; video?: string | null } }[];
     docs?: { workspace: string; path: string; title?: string; kind?: string }[];
     scheduled_at?: string;
     stop_requested?: boolean;
@@ -187,6 +189,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     end_time: d.end_time ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
+    recordings: d.data?.recordings,
     docs: d.data?.docs ?? [],
     participants: [],
     mentioned: [],

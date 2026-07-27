@@ -318,6 +318,7 @@ services:
       - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - RECORDING_VIDEO_ENABLED=${RECORDING_VIDEO_ENABLED:-false}
+      - RECORDING_PRUNE_CHUNKS=${RECORDING_PRUNE_CHUNKS:-true}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
       # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.

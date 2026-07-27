@@ -16,11 +16,11 @@ import { resolveApiKey } from "../proxyAuth";
 import { GET as catchAllGet, PUT as catchAllPut, PATCH as catchAllPatch } from "../[...path]/route";
 
 function makeReq(search = ""): import("next/server").NextRequest {
-  return { method: "GET", nextUrl: { search } } as unknown as import("next/server").NextRequest;
+  return { method: "GET", nextUrl: { search }, headers: new Headers() } as unknown as import("next/server").NextRequest;
 }
 
 function makeReqM(method: string, body = "", search = ""): import("next/server").NextRequest {
-  return { method, nextUrl: { search }, text: async () => body } as unknown as import("next/server").NextRequest;
+  return { method, nextUrl: { search }, headers: new Headers(), text: async () => body } as unknown as import("next/server").NextRequest;
 }
 
 afterEach(() => {

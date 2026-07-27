@@ -20,7 +20,13 @@ from typing import Any, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
-from .jsonb import apply_chunk_to_recording, chunk_storage_key, master_storage_key, new_recording_numeric_id
+from .jsonb import (
+    _STATUS_COMPLETED,
+    apply_chunk_to_recording,
+    chunk_storage_key,
+    master_storage_key,
+    new_recording_numeric_id,
+)
 from .ports import RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
@@ -129,6 +135,15 @@ async def upload_chunk(
     }
 
 
+def _prune_enabled() -> bool:
+    """Whether a verified master may delete the chunks it superseded (``RECORDING_PRUNE_CHUNKS``,
+    default ON). The off switch exists because the delete is irreversible: if the master codec ever
+    mis-assembles, the chunks are the only path back to the original audio."""
+    import os
+
+    return (os.getenv("RECORDING_PRUNE_CHUNKS") or "true").strip().lower() not in ("false", "0", "no", "off")
+
+
 async def finalize_master(
     repo: RecordingRepo,
     storage: Storage,
@@ -170,7 +185,8 @@ async def finalize_master(
     # Loud guard (#769): the number of chunks we're about to assemble vs what the JSONB fold counted.
     # A mismatch means chunks were dropped from the listing (truncation) or the fold — surface it.
     jsonb_count = mf.get("chunk_count")
-    if jsonb_count is not None and listed_count != jsonb_count:
+    pruned = bool(mf.get("chunks_pruned_at"))
+    if jsonb_count is not None and listed_count != jsonb_count and not pruned:
         log_event(
             "recording_chunk_count_mismatch", audience="operator", span="recordings.finalize",
             meeting_id=str(meeting_id),
@@ -223,7 +239,51 @@ async def finalize_master(
         others = [x for x in recs if x.get("id") != recording_id]
         return others + [r], master_key
 
-    return await repo.mutate_recordings(meeting_id, _stamp)
+    result = await repo.mutate_recordings(meeting_id, _stamp)
+
+    # ── prune the chunks the master now supersedes ────────────────────────────────────────────
+    # The chunks exist so a bot killed mid-meeting still leaves every finished part durable (#412).
+    # Once the recording is COMPLETE and a verified master holds the same bytes, keeping them
+    # doubles the stored size of every recording anyone ever plays, forever.
+    #
+    # Three conditions, all necessary — this is an irreversible delete:
+    #   * the recording is `completed` (the bot sent its final chunk). NOT `mf["is_final"]`, which a
+    #     mid-meeting master read sets to True on its own (jsonb.py: master_finalized) — pruning on
+    #     that would truncate a live recording to whatever had arrived, the #768 freeze made
+    #     permanent and unrecoverable.
+    #   * this call actually assembled from every listed chunk (assembled == listed).
+    #   * the master is verifiably non-empty ON STORAGE — we re-read its size rather than trusting
+    #     the upload we just made.
+    if result and rebuild and _prune_enabled() and rec.get("status") == _STATUS_COMPLETED:
+        try:
+            master_size = await storage.size(master_key)
+        except Exception:  # noqa: BLE001 — an unreadable master means we keep the chunks
+            master_size = 0
+        if master_size > 0:
+            for k in keys:
+                await storage.delete(k)
+            log_event(
+                "recording_chunks_pruned", audience="operator", span="recordings.finalize",
+                meeting_id=str(meeting_id),
+                fields={"recording_id": recording_id, "media_type": media_type,
+                        "pruned_count": len(keys), "master_bytes": master_size},
+            )
+
+            def _stamp_pruned(recs):
+                r = next((x for x in recs if x.get("id") == recording_id), None)
+                if r is None:
+                    return recs, None
+                m = next((x for x in r.get("media_files", []) if x.get("type") == media_type), None)
+                if m is None:
+                    return recs, None
+                m["chunks_pruned_at"] = _now_iso()
+                m["chunks_pruned_count"] = len(keys)
+                others = [x for x in recs if x.get("id") != recording_id]
+                return others + [r], master_key
+
+            await repo.mutate_recordings(meeting_id, _stamp_pruned)
+
+    return result
 
 
 def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:

@@ -23,6 +23,7 @@ are public.
 | `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's transcription when `POST /bots` does not say. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
 | `RECORDING_ENABLED` | `true` | Deployment-level default for a spawn's recording when `POST /bots` does not say. Same empty-means-default rule as above. |
 | `RECORDING_VIDEO_ENABLED` | `false` | Capture **video** as well as audio on a recording spawn. Off by default: video is roughly 20-50x the size of the audio and, like audio, is kept until you add a retention rule (below). The bot grabs its own X display with ffmpeg. |
+| `RECORDING_PRUNE_CHUNKS` | `true` | Once a recording is complete and its assembled master is verified on storage, delete the 15-second chunks the master was built from. Halves the stored size of every recording anyone plays. A recording still in progress is never pruned. Set `false` to keep both copies. |
 | `BOT_ALONE_SILENCE_WINDOW_MS` | `600000` | Active-phase remote-audio silence window before the bot leaves with `completed(left_alone)`. Forwarded to spawned bots. A request's `automatic_leave.max_time_left_alone` overrides it. |
 | `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
 | `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
@@ -35,6 +36,13 @@ are public.
 Recordings are kept indefinitely. There is no TTL, no sweeper and no delete path in Vexa: deleting a
 customer's meeting on a schedule is the kind of job you only want to run when someone has explicitly
 asked for it.
+
+A recording is stored as 15-second chunks while it is being made — so a bot killed mid-meeting
+still leaves every finished part durable — and those chunks are assembled into one master file the
+first time anyone plays it back. Once the recording is complete and that master is verified, the
+chunks are deleted (`RECORDING_PRUNE_CHUNKS`, default on): the master holds the same bytes, so
+keeping both would double the stored size of every recording you ever watch. A one-hour recording
+ends up as one object rather than ~240.
 
 What Vexa does instead is **tag every stored object with its media type** (`media=audio` /
 `media=video`), so retention becomes a bucket lifecycle rule your object store enforces:

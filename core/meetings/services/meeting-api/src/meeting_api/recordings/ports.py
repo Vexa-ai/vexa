@@ -41,6 +41,11 @@ class Storage(Protocol):
 
     async def exists(self, key: str) -> bool: ...
 
+    async def delete(self, key: str) -> None:
+        """Remove one object. Used ONLY to prune chunks a verified master has superseded — never
+        on a recording still in progress, where the chunks are the only copy of the tail."""
+        ...
+
     async def size(self, key: str) -> int:
         """Object byte size WITHOUT fetching the body — lets the raw media route resolve
         ``Content-Range`` / a 416 for an HTTP Range without downloading the whole master."""
