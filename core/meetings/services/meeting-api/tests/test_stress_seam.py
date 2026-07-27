@@ -40,9 +40,9 @@ class SlowRepo(InMemoryMeetingRepo):
 
 
 class _YieldingStorage(InMemoryStorage):
-    async def upload(self, key, data, *, content_type):
+    async def upload(self, key, data, *, content_type, tags=None):
         await asyncio.sleep(0)
-        await super().upload(key, data, content_type=content_type)
+        await super().upload(key, data, content_type=content_type, tags=tags)
 
 
 def _wav(n: int = 4) -> bytes:

@@ -219,11 +219,11 @@ class _YieldingStorage(InMemoryStorage):
     """An InMemoryStorage whose upload YIELDS the event loop, so two concurrent uploads genuinely
     interleave (forcing the read→modify→write race the atomic mutate must serialize)."""
 
-    async def upload(self, key, data, *, content_type):
+    async def upload(self, key, data, *, content_type, tags=None):
         import asyncio
 
         await asyncio.sleep(0)
-        await super().upload(key, data, content_type=content_type)
+        await super().upload(key, data, content_type=content_type, tags=tags)
 
 
 async def test_concurrent_chunk_uploads_do_not_lose_updates():
@@ -540,3 +540,41 @@ async def test_s3_storage_list_paginates_past_1000_keys():
     listed = await storage.list(prefix)
     assert len(listed) == 1500, f"expected all 1500 keys across pages, got {len(listed)}"
     assert listed == sorted(keys)
+
+
+# ── retention: objects are TAGGED by media type ────────────────────────────────────────────────
+# There is no deletion service here on purpose — an operator expresses retention as a bucket
+# lifecycle rule ("expire media=video after 90 days"). That rule can only select on a tag: the
+# media type sits deep inside the key (recordings/{user}/{rec}/{session}/{media_type}/...) and
+# lifecycle prefix filters are literal prefixes, so they cannot match a middle path segment.
+
+@pytest.mark.asyncio
+async def test_chunks_and_masters_are_tagged_by_media_type():
+    repo, storage = InMemoryRecordingRepo(), InMemoryStorage()
+    for media_type, fmt, blob in (("audio", "wav", _wav()), ("video", "webm", b"\x1a\x45\xdf\xa3video")):
+        repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=f"{SESSION_UID}-{media_type}")
+        await upload_chunk(
+            repo, storage, token_meeting_id=MEETING_ID, session_uid=f"{SESSION_UID}-{media_type}",
+            data=blob, media_type=media_type, media_format=fmt, chunk_seq=0, is_final=True,
+        )
+    tagged = {k: v.get("media") for k, v in storage.tags.items()}
+    assert tagged, "nothing was uploaded"
+    # Every object carries a media tag, and it matches the media type in its own key.
+    for key, media in tagged.items():
+        assert media in ("audio", "video"), (key, media)
+        assert f"/{media}/" in key, f"tag {media!r} disagrees with key {key}"
+    assert set(tagged.values()) == {"audio", "video"}
+
+
+@pytest.mark.asyncio
+async def test_nothing_expires_by_default():
+    """Negative control: tagging is the MECHANISM, not a policy. We attach no expiry, no TTL and no
+    lifecycle rule — an operator opts in deliberately, and until then recordings are kept."""
+    repo, storage = InMemoryRecordingRepo(), InMemoryStorage()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    await upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID, data=_wav(),
+        media_type="audio", media_format="wav", chunk_seq=0, is_final=True,
+    )
+    for tags in storage.tags.values():
+        assert set(tags) == {"media"}, f"unexpected retention metadata attached: {tags}"

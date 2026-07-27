@@ -86,7 +86,10 @@ async def upload_chunk(
         user_id=owner or 0, recording_id=recording_id, session_uid=session_uid,
         media_type=media_type, media_format=media_format, chunk_seq=chunk_seq,
     )
-    await storage.upload(key, data, content_type=_content_type(media_format))
+    # Tag by media type so retention is a bucket lifecycle rule, not a deletion service
+    # we own ("expire media=video after 90 days"). Nothing expires by default.
+    await storage.upload(key, data, content_type=_content_type(media_format),
+                         tags={"media": media_type})
 
     # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings under one
     # row lock and folds cumulatively, so a concurrent chunk/finalize can't clobber it (the old
@@ -192,7 +195,8 @@ async def finalize_master(
             )
         chunks = [await storage.get(k) for k in keys]
         master_bytes = build_recording_master(chunks, media_format)
-        await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
+        await storage.upload(master_key, master_bytes, content_type=_content_type(media_format),
+                             tags={"media": media_type})
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
