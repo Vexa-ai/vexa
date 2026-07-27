@@ -65,7 +65,13 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     turn: number;
     audioEndMs: number;
   };
-  type ChannelQueue = { running: boolean; activeTurn: number; pending?: TranscriptionRequest };
+  type ChannelQueue = {
+    running: boolean;
+    activeTurn: number;
+    /** ALLOY: deferred final resubmit owned by the active turn. */
+    activeContinuation?: TranscriptionRequest;
+    pending?: TranscriptionRequest;
+  };
   const channelQueues = new Map<string, ChannelQueue>();
   const latestAudioEndBySpeakerId = new Map<string, number>();
   // Per channel: the CURRENT turn's stream key, bound name, last-audio time, turn counter.
@@ -142,6 +148,17 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     const key = channelId(request.speakerId);
     const queue = channelQueues.get(key);
     if (queue?.running) {
+      // ALLOY: a closing active turn can synchronously request one final STT pass
+      // when its prior response lands. Preserve it ahead of the replaceable
+      // pending turn so rotation never releases audio still owned by the active turn.
+      if (request.turn === queue.activeTurn) {
+        queue.activeContinuation = request;
+        return;
+      }
+      if (request.turn < queue.activeTurn) {
+        dropQueuedRequest(request);
+        return;
+      }
       if (queue.pending) {
         if (request.turn <= queue.pending.turn) {
           dropQueuedRequest(request);
@@ -154,9 +171,6 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
           queue.pending.audio.length / 16_000
         );
         dropQueuedRequest(queue.pending);
-      } else if (request.turn < queue.activeTurn) {
-        dropQueuedRequest(request);
-        return;
       }
       queue.pending = request;
       opts.alloySttTelemetry?.queued(key, request.audio.length / 16_000);
@@ -171,8 +185,13 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         while (current) {
           nextQueue.activeTurn = current.turn;
           await transcribeOne(current);
-          current = nextQueue.pending;
-          nextQueue.pending = undefined;
+          if (nextQueue.activeContinuation) {
+            current = nextQueue.activeContinuation;
+            nextQueue.activeContinuation = undefined;
+          } else {
+            current = nextQueue.pending;
+            nextQueue.pending = undefined;
+          }
         }
       } finally {
         nextQueue.running = false;

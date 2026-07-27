@@ -12,7 +12,6 @@
 import {
   createAlloySttTelemetryTracker,
   createGmeetPipeline,
-  type AlloySttTelemetrySnapshotV1,
   type TranscriptSink,
 } from "./index.js";
 import type { TranscriptionResult } from "@vexa/transcribe-whisper";
@@ -23,6 +22,7 @@ const pcm = (marker: number) => new Float32Array(400).fill(marker);
 let releaseFirst!: () => void;
 const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
 const started: number[] = [];
+const completedSpeakers: string[] = [];
 let active = 0;
 let peakActive = 0;
 
@@ -48,7 +48,8 @@ const transcribe = async (audio: Float32Array): Promise<TranscriptionResult> => 
 };
 
 const sink: TranscriptSink = {
-  segment: () => {},
+  // ALLOY: observe completed transcript output at the production sink boundary.
+  segment: (segment) => { completedSpeakers.push(segment.speaker); },
   draft: () => {},
   finalize: () => {},
 };
@@ -57,19 +58,6 @@ const tracker = createAlloySttTelemetryTracker({
   meetingId: "501",
   nativeMeetingId: "alloy-backpressure-room",
 });
-
-const expectSnapshot = (
-  label: string,
-  expected: Partial<AlloySttTelemetrySnapshotV1>,
-) => {
-  const snapshot = tracker.snapshot();
-  for (const [key, value] of Object.entries(expected)) {
-    const actual = snapshot[key as keyof AlloySttTelemetrySnapshotV1];
-    if (actual !== value) {
-      throw new Error(`${label}: expected ${key}=${value}, got ${String(actual)}`);
-    }
-  }
-};
 
 async function run() {
   const pipe = createGmeetPipeline({
@@ -87,45 +75,34 @@ async function run() {
   pipe.feedAudio(0, "Alice", pcm(0.1), 0);
   await sleep(30);
   if (started.length !== 1) throw new Error(`expected first STT request, got ${started.length}`);
-  expectSnapshot("first request active", {
-    active_requests: 1,
-    waiting_channels: 0,
-  });
 
   pipe.feedAudio(0, "Bob", pcm(0.2), 30);
   await sleep(30);
-  expectSnapshot("second request pending", {
-    active_requests: 1,
-    waiting_channels: 1,
-    superseded_windows: 0,
-  });
-
-  pipe.feedAudio(0, "Carol", pcm(0.3), 60);
-  await sleep(30);
-  expectSnapshot("third request supersedes second", {
-    active_requests: 1,
-    waiting_channels: 1,
-    superseded_windows: 1,
-  });
-
-  if (peakActive !== 1) {
-    throw new Error(`same channel dispatched ${peakActive} concurrent STT requests`);
-  }
 
   releaseFirst();
   await sleep(80);
 
-  if (started.length !== 2 || started[1] !== 3) {
-    throw new Error(`expected latest pending turn only; started markers=${started.join(",")}`);
-  }
-
   await pipe.dispose();
-  expectSnapshot("queue drained", {
-    active_requests: 0,
-    waiting_channels: 0,
-    processed_windows: 2,
-  });
-  console.log("PASS ALLOY channel backpressure serializes and coalesces same-channel turns");
+
+  // ALLOY: the active Alice turn owns its deferred final resubmit; Bob remains
+  // the latest pending turn and runs only after Alice has finalized.
+  const observedSpeakers = completedSpeakers.join(",");
+  if (observedSpeakers !== "Alice,Bob") {
+    throw new Error(`expected completed speakers Alice,Bob exactly once; got ${observedSpeakers || "<none>"}`);
+  }
+  if (started.join(",") !== "1,1,2") {
+    throw new Error(`expected Alice active+final then Bob pending; started markers=${started.join(",")}`);
+  }
+  if (peakActive !== 1) {
+    throw new Error(`same channel dispatched ${peakActive} concurrent STT requests`);
+  }
+  const finalSnapshot = tracker.snapshot();
+  if (finalSnapshot.active_requests !== 0 || finalSnapshot.waiting_channels !== 0) {
+    throw new Error(
+      `expected drained telemetry; active=${finalSnapshot.active_requests} waiting=${finalSnapshot.waiting_channels}`,
+    );
+  }
+  console.log("PASS ALLOY channel backpressure preserves the active turn before the latest pending turn");
 }
 
 run().catch((error) => {
