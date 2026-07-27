@@ -73,6 +73,20 @@ class ControlConfig:
     # only (the historical egress boundary); an operator widens it via ZAKI_MINUTES_ADMITTED_PLATFORMS.
     # Read once at router construction, never re-read per request.
     admitted_platforms: frozenset[str] = frozenset({"google_meet"})
+    # Per-platform capture ceiling, in seconds. ONLY Google Meet has a working
+    # alone-in-meeting detector (join-driver.ts onEveryoneLeft is a no-op elsewhere), so on
+    # every other platform a bot whose participants all leave runs to the ceiling and bills
+    # the whole way. Capping those platforms lower bounds that exposure without a single new
+    # DOM selector, and it is the honest interim until each platform has a roster counter.
+    # A platform absent from this map simply uses max_capture_seconds.
+    platform_capture_seconds: tuple[tuple[str, int], ...] = ()
+
+    def capture_seconds_for(self, platform: object) -> int:
+        """The effective ceiling for one platform, never above the deployment maximum."""
+        for name, seconds in self.platform_capture_seconds:
+            if name == platform:
+                return min(seconds, self.max_capture_seconds)
+        return self.max_capture_seconds
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "ControlConfig | None":
@@ -105,6 +119,24 @@ class ControlConfig:
         )
         if not admitted_platforms or not admitted_platforms <= _SEALED_PLATFORMS:
             raise RuntimeError("ZAKI Minutes control has an invalid admitted-platform set")
+        # ZAKI_MINUTES_PLATFORM_CAPTURE_SECONDS = "teams=3600,zoom=3600". Unset means every
+        # platform uses the deployment maximum (the previous behaviour, unchanged).
+        platform_seconds: list[tuple[str, int]] = []
+        for entry in values.get("ZAKI_MINUTES_PLATFORM_CAPTURE_SECONDS", "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            name, sep, raw = entry.partition("=")
+            name = name.strip().lower()
+            if not sep or name not in _SEALED_PLATFORMS:
+                raise RuntimeError("ZAKI Minutes control has an invalid per-platform capture ceiling")
+            try:
+                seconds = int(raw.strip())
+            except (TypeError, ValueError):
+                raise RuntimeError("ZAKI Minutes control has an invalid per-platform capture ceiling") from None
+            if not _MIN_CAPTURE_SECONDS <= seconds <= max_capture_seconds:
+                raise RuntimeError("ZAKI Minutes control has an invalid per-platform capture ceiling")
+            platform_seconds.append((name, seconds))
         return cls(
             enabled=True,
             operator_enabled=values.get("ZAKI_MINUTES_OPERATOR_ENABLED", "false").lower() == "true",
@@ -112,6 +144,7 @@ class ControlConfig:
             max_capture_seconds=max_capture_seconds,
             jitsi_hosts=hosts,
             admitted_platforms=admitted_platforms,
+            platform_capture_seconds=tuple(platform_seconds),
         )
 
 
@@ -623,7 +656,10 @@ def build_router(
         attestation = body["capture_attestation"]
         attested_at = _parse_datetime(attestation.get("attested_at"))
         reserved_units = body["metering"]["reserved_units"]
-        max_reserved_units = (config.max_capture_seconds + 59) // 60
+        # Bound the reserve by the ceiling that will ACTUALLY apply to this platform, so a
+        # client cannot reserve (and be billed a hold for) more minutes than the bot may run.
+        platform_capture_seconds = config.capture_seconds_for(body.get("platform"))
+        max_reserved_units = (platform_capture_seconds + 59) // 60
         if (
             attestation.get("attested_by_user_id") != subject.user_id
             or attestation.get("policy_version") != policy.policy_version
@@ -685,7 +721,7 @@ def build_router(
                     capture_id=_capture_id(), subject=subject, operation_id=claim.operation_id,
                     reservation_id=body["metering"]["reservation_id"], platform=body["platform"],
                     native_meeting_id=native_meeting_id, meeting_id=None, state="requested",
-                    max_capture_seconds=min(config.max_capture_seconds, reserved_units * 60),
+                    max_capture_seconds=min(platform_capture_seconds, reserved_units * 60),
                 )
                 await store.create_capture(capture)
             if capture.meeting_id is not None:
@@ -743,7 +779,7 @@ def build_router(
                 meeting_title=body.get("meeting_title"),
                 recording_enabled=policy.audio_days > 0,
                 agent_read_enabled=policy.agent_read_enabled,
-                max_lifetime_sec=min(config.max_capture_seconds, reserved_units * 60),
+                max_lifetime_sec=min(platform_capture_seconds, reserved_units * 60),
                 evaluated_at=current,
             )
             meeting_id = str(meeting["id"])
