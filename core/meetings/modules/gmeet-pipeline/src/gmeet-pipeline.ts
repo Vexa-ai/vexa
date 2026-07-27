@@ -22,6 +22,7 @@
 import { SpeakerStreamManager, type SpeakerStreamManagerConfig } from './speaker-streams.js';
 import type {
   TranscriptionExecutionObserver,
+  TranscriptionFaultKind,
   TranscriptionResult,
 } from '@vexa/transcribe-whisper';
 import type { TranscriptSegment, TranscriptSink } from './contracts/transcript-v1.js';
@@ -33,6 +34,36 @@ type Transcribe = (
   prompt?: string,
   executionObserver?: TranscriptionExecutionObserver,
 ) => Promise<TranscriptionResult>;
+
+const trustedSttFaultMessages: Record<TranscriptionFaultKind, string> = {
+  payment_required: 'STT payment required',
+  unauthorized: 'STT authentication failed',
+  rate_limited: 'STT rate limited',
+  unavailable: 'STT unavailable',
+  timeout: 'STT request timed out',
+  bad_request: 'STT request rejected',
+  unknown: 'STT request failed',
+};
+
+/** ALLOY: telemetry crosses a user-visible boundary, so only typed STT metadata is trusted. */
+function telemetrySttErrorMessage(fault: unknown): string {
+  if (!fault || typeof fault !== 'object') return 'STT request failed';
+  const { source, kind, status } = fault as {
+    source?: unknown;
+    kind?: unknown;
+    status?: unknown;
+  };
+  if (
+    source !== 'stt'
+    || typeof kind !== 'string'
+    || !Object.prototype.hasOwnProperty.call(trustedSttFaultMessages, kind)
+  ) return 'STT request failed';
+
+  const message = trustedSttFaultMessages[kind as TranscriptionFaultKind];
+  return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+    ? `${message} (HTTP ${status})`
+    : message;
+}
 
 export interface GmeetPipelineOptions {
   /** One Whisper round-trip (stt.v1). language is baked into the closure by the host. */
@@ -199,12 +230,11 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
       const segs = r?.segments;
       mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
       observeAlloyTelemetry(
         'failed',
         (tracker) => tracker.failed(requestId, {
           code: 'stt_failed',
-          message: message.slice(0, 512),
+          message: telemetrySttErrorMessage(e),
         }),
       );
       opts.onError?.(e);                          // P18: report the fault, don't swallow it…
