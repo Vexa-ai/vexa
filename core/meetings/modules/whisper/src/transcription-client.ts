@@ -26,6 +26,13 @@ export interface TranscriptionResult {
   segments: TranscriptionSegment[];
 }
 
+/** ALLOY: Optional synchronous diagnostics at the real STT execution boundary. */
+export interface TranscriptionExecutionObserver {
+  waiting(): void;
+  started(): void;
+  finished(executionDurationMs: number): void;
+}
+
 export interface TranscriptionClientConfig {
   /** Base URL of transcription-service, e.g. "http://localhost:8083" */
   serviceUrl: string;
@@ -130,26 +137,61 @@ export class TranscriptionClient {
    * Transcribe a Float32Array audio buffer.
    * Converts to WAV, POSTs to transcription-service, returns parsed result.
    * Retries on transient failures (503, network errors).
+   * ALLOY: An optional per-call observer reports the limiter-owned execution lifecycle.
    */
-  async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
-    return this.withRequestSlot(() => this.transcribeSerially(audioData, language, prompt));
+  async transcribe(
+    audioData: Float32Array,
+    language?: string,
+    prompt?: string,
+    executionObserver?: TranscriptionExecutionObserver,
+  ): Promise<TranscriptionResult> {
+    // ALLOY: The limiter owns execution lifecycle truth; callers only observe it.
+    return this.withRequestSlot(
+      () => this.transcribeSerially(audioData, language, prompt),
+      executionObserver,
+    );
   }
 
   /** ALLOY: Bound only explicitly configured clients; preserve upstream concurrency otherwise. */
-  private async withRequestSlot<T>(run: () => Promise<T>): Promise<T> {
+  private async withRequestSlot<T>(
+    run: () => Promise<T>,
+    executionObserver?: TranscriptionExecutionObserver,
+  ): Promise<T> {
     const limit = this.maxConcurrentRequests;
-    if (limit === undefined) return run();
+    if (limit === undefined && executionObserver === undefined) return run();
 
-    if (this.activeRequests >= limit) {
+    if (limit !== undefined && this.activeRequests >= limit) {
+      if (executionObserver !== undefined) {
+        this.runObserverCallback(() => executionObserver.waiting());
+      }
       await new Promise<void>((resolve) => this.requestWaiters.push(resolve));
     }
-    this.activeRequests++;
+    if (limit !== undefined) this.activeRequests++;
 
+    const executionStartedAt = executionObserver === undefined ? undefined : performance.now();
+    if (executionObserver !== undefined) {
+      this.runObserverCallback(() => executionObserver.started());
+    }
     try {
       return await run();
     } finally {
-      this.activeRequests--;
-      this.requestWaiters.shift()?.();
+      if (executionStartedAt !== undefined) {
+        const executionDurationMs = performance.now() - executionStartedAt;
+        this.runObserverCallback(() => executionObserver?.finished(executionDurationMs));
+      }
+      if (limit !== undefined) {
+        this.activeRequests--;
+        this.requestWaiters.shift()?.();
+      }
+    }
+  }
+
+  /** ALLOY: Optional diagnostics cannot control STT results or slot ownership. */
+  private runObserverCallback(callback: () => void): void {
+    try {
+      callback();
+    } catch {
+      // ALLOY: Observer failures are deliberately isolated from production execution.
     }
   }
 

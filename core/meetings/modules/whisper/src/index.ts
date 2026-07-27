@@ -15,5 +15,7 @@ export type {
   TranscriptionClientConfig,
   TranscriptionFaultKind,
 } from './transcription-client.js';
+// ALLOY: Optional per-call diagnostics observe the real Whisper execution boundary.
+export type { TranscriptionExecutionObserver } from './transcription-client.js';
 export { isLowConfidenceSegment } from './confidence.js';
 export { setLogger } from './log.js';
