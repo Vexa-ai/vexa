@@ -37,8 +37,10 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
-from .meeting_link import parse_meeting_url
+# ALLOY: telemetry stays behind its own owner/aggregate boundary.
+from .alloy_stt_status import aggregate_alloy_stt_status
 from .alloy_stt_telemetry import AlloySttTelemetryReader
+from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
@@ -256,6 +258,7 @@ def build_router(
             "running": running, "running_bots": running, "count": len(running),
         })
 
+    # ALLOY: optional owner-only operational telemetry; transcript sharing never grants access.
     @router.get("/alloy/stt/status")
     async def alloy_stt_status(
         x_user_id: Optional[str] = Header(default=None),
@@ -268,17 +271,14 @@ def build_router(
                 "enabled": False,
                 "available": False,
                 "updated_at_ms": now_ms,
+                "aggregate": None,
                 "meetings": [],
                 "error": None,
             })
-        running = await store.list_meetings(
-            user_id, status=_RUNNING_STATUSES, slim=True,
+        owned_ids = await store.list_owned_meeting_ids(
+            user_id,
+            statuses=_RUNNING_STATUSES,
         )
-        owned_ids = [
-            row.get("id")
-            for row in running
-            if isinstance(row.get("id"), int)
-        ]
         try:
             snapshots = await alloy_stt_telemetry.read_owned(owned_ids)
         except Exception as error:  # noqa: BLE001 - optional diagnostics must not break core reads
@@ -288,13 +288,17 @@ def build_router(
                 level="warning",
                 span="alloy.stt.status",
                 user_id=user_id,
-                fields={"error_type": type(error).__name__},
+                fields={
+                    "message": "[ALLOY] STT telemetry read failed",
+                    "error_type": type(error).__name__,
+                },
             )
             return JSONResponse(content={
                 "version": 1,
                 "enabled": True,
                 "available": False,
                 "updated_at_ms": now_ms,
+                "aggregate": None,
                 "meetings": [],
                 "error": {
                     "code": "redis_unavailable",
@@ -306,6 +310,10 @@ def build_router(
             "enabled": True,
             "available": True,
             "updated_at_ms": now_ms,
+            "aggregate": aggregate_alloy_stt_status(
+                snapshots,
+                now_ms=now_ms,
+            ),
             "meetings": snapshots,
             "error": None,
         })
