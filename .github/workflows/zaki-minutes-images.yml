@@ -1,8 +1,31 @@
-# Build the four ZAKI Minutes deployment images from this fork. This is intentionally manual:
-# publication produces immutable inputs for a reviewed chart release; it does not activate a cluster.
+# Build the four ZAKI Minutes deployment images from this fork.
+#
+# PUBLISH ON MERGE, PROMOTE BY HAND (owner ruling 2026-07-27). Publishing is not deploying:
+# this produces immutable sha-pinned inputs and activates nothing. zaki-infra remains the ONLY
+# thing that moves a tag into a cluster, by a reviewed edit to a values file.
+#
+# This workflow used to be workflow_dispatch-only, and it was the single repo in the platform
+# without build-on-merge (NULL-ALIS, zaki-prod x4, zaki-design-engine and zaki-chat-engine all
+# build on push). The cost of the exception was measured on 2026-07-27: four launch-blocking
+# fixes — #43 (capture grant must hash the navigation URL: every Zoom `?pwd=` and enterprise
+# Teams `?context=` link was 422'd), #44 (a flaky participant read could make the bot leave a
+# LIVE meeting), #45, #46 — sat merged and green for days with no image ever built. Nothing
+# surfaced the gap, because in this repo "merged" and "shipped" were different states and only
+# one of them was visible.
+#
+# NO `paths:` FILTER, deliberately. meeting-api and bot both build with the repository root as
+# their Docker context, so almost any file can change those images. A narrow allowlist would
+# silently skip real rebuilds and recreate the exact failure above. Only docs and licences are
+# ignored. A run is ~8 minutes.
 name: zaki-minutes-images
 
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "licenses/**"
+      - "**/*.md"
   workflow_dispatch:
 
 concurrency:
