@@ -13,6 +13,7 @@ from pathlib import Path, PureWindowsPath
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "deploy" / "lite" / "bin" / "vexa-bot-launch"
 ENTRYPOINT = ROOT / "deploy" / "lite" / "entrypoint.sh"
+DOCKERFILE = ROOT / "deploy" / "lite" / "Dockerfile.lite"
 MAKEFILE = ROOT / "deploy" / "lite" / "Makefile"
 RUNTIME_DEFAULTS = {
     "ALLOY_STT_MAX_CONCURRENCY": "0",
@@ -203,6 +204,32 @@ def _build_args(dry_run: str) -> dict[str, str]:
 
 
 class AlloyLiteOptInTest(unittest.TestCase):
+    def test_bot_builder_creates_hf_cache_before_warm_switch_and_final_copy(self) -> None:
+        source = DOCKERFILE.read_text(encoding="utf-8")
+        bot_builder_start = source.index(" AS bot-builder")
+        bot_builder_end = source.index("\nFROM ", bot_builder_start)
+        cache_create = re.search(
+            r"(?m)^RUN mkdir -p /opt/hf-cache\s*$",
+            source[bot_builder_start:bot_builder_end],
+        )
+        self.assertIsNotNone(
+            cache_create,
+            "bot-builder must create /opt/hf-cache unconditionally",
+        )
+        cache_create_offset = bot_builder_start + cache_create.start()
+        warm_switch = source.index(
+            'RUN if [ "$ALLOY_SKIP_HF_CACHE_WARM" = "1" ]',
+            bot_builder_start,
+            bot_builder_end,
+        )
+        final_copy = source.index(
+            "COPY --from=bot-builder /opt/hf-cache /opt/hf-cache",
+            bot_builder_end,
+        )
+        self.assertLess(cache_create_offset, warm_switch)
+        self.assertLess(warm_switch, bot_builder_end)
+        self.assertLess(bot_builder_end, final_copy)
+
     def test_launcher_absent_flags_restore_upstream_behavior(self) -> None:
         self.assertEqual(
             _real_export_values(LAUNCHER, tuple(RUNTIME_DEFAULTS)),
@@ -283,6 +310,30 @@ class AlloyLiteOptInTest(unittest.TestCase):
         self.assertEqual(push, BUILD_DEFAULTS)
         self.assertEqual(push, build)
 
+    def test_build_args_share_one_scoped_env_file_aware_owner(self) -> None:
+        source = MAKEFILE.read_text(encoding="utf-8")
+        start = source.index("ALLOY_LITE_BUILD_ARGS =")
+        end = source.index("\n\n", start)
+        build_args_owner = source[start:end]
+        resolver_calls = re.findall(
+            r"\$\(call\s+([A-Za-z0-9_-]+),"
+            r"(ALLOY_SKIP_HF_CACHE_WARM|NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)\)",
+            build_args_owner,
+        )
+        self.assertEqual(
+            resolver_calls,
+            [
+                ("alloy_build_value", "ALLOY_SKIP_HF_CACHE_WARM"),
+                ("alloy_build_value", "NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT"),
+            ],
+        )
+        resolver_start = source.index("alloy_build_value =")
+        resolver_end = source.index("\n\n", resolver_start)
+        resolver = source[resolver_start:resolver_end]
+        self.assertIn("$(ENV_FILE)", resolver)
+        self.assertIn("$($(1))", resolver)
+        self.assertNotRegex(source, r"(?m)^\s*-?include\s+\$\(ENV_FILE\)")
+
     def test_build_and_push_dry_runs_preserve_explicit_build_args(self) -> None:
         explicit = {key: "1" for key in BUILD_DEFAULTS}
         build = _build_args(_make_dry_run("build", make_vars=explicit))
@@ -290,6 +341,46 @@ class AlloyLiteOptInTest(unittest.TestCase):
         self.assertEqual(build, explicit)
         self.assertEqual(push, explicit)
         self.assertEqual(push, build)
+
+    def test_build_and_push_dry_runs_use_build_flag_precedence(self) -> None:
+        enabled = {key: "1" for key in BUILD_DEFAULTS}
+        disabled = BUILD_DEFAULTS
+        enabled_env = "\n".join(f"{key}=1" for key in BUILD_DEFAULTS)
+        disabled_env = "\n".join(f"{key}=0" for key in BUILD_DEFAULTS)
+        empty_env = "\n".join(f"{key}=" for key in BUILD_DEFAULTS)
+        cases = [
+            ("non-empty .env", enabled_env, None, None, enabled),
+            ("ambient overrides .env", enabled_env, disabled, None, disabled),
+            (
+                "make command line overrides .env",
+                disabled_env,
+                None,
+                enabled,
+                enabled,
+            ),
+            (
+                "empty .env cannot erase ambient",
+                empty_env,
+                enabled,
+                None,
+                enabled,
+            ),
+            ("empty .env falls back safely", empty_env, None, None, BUILD_DEFAULTS),
+        ]
+        for target in ("build", "push"):
+            for name, env_text, ambient, make_vars, expected in cases:
+                with self.subTest(target=target, name=name):
+                    self.assertEqual(
+                        _build_args(
+                            _make_dry_run(
+                                target,
+                                env_text=env_text,
+                                ambient=ambient,
+                                make_vars=make_vars,
+                            )
+                        ),
+                        expected,
+                    )
 
 
 if __name__ == "__main__":

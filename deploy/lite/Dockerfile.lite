@@ -44,6 +44,8 @@ RUN test -f /build/core/meetings/services/bot/dist/index.js \
 # Mixed-lane (Zoom/Teams) diarization model — best-effort; the gmeet lane never loads it, so a
 # restricted-network build still succeeds (the lane simply downloads on first use if reachable).
 ENV VEXA_HF_CACHE=/opt/hf-cache
+# ALLOY: the opt-in skip branch must still provide the cache directory copied into the final image.
+RUN mkdir -p /opt/hf-cache
 ARG ALLOY_SKIP_HF_CACHE_WARM="0"
 RUN if [ "$ALLOY_SKIP_HF_CACHE_WARM" = "1" ]; then \
       echo "[ALLOY] HF cache warm skipped for the local Lite build"; \

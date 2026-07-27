@@ -235,10 +235,14 @@ stt-smoke:
 		|| { echo "  ✗ local STT returned no expected words — check $(WHISPER_CONTAINER) logs"; exit 1; }
 
 # ── Image build / publish ──────────────────────────────────────────────────────────────────────────
-# ALLOY: one build-argument owner keeps local and multi-arch images on the same opt-in defaults.
+# ALLOY: read only the requested build flag from ENV_FILE. A non-empty make/ambient value wins,
+# then a non-empty file value, then the upstream-compatible safe default.
+alloy_build_value = $(or $(strip $($(1))),$(strip $(shell if [ -f "$(ENV_FILE)" ]; then sed -n 's/^$(1)=//p' "$(ENV_FILE)" | head -n 1 | sed -E 's/[[:space:]]+$$//'; fi)),0)
+
+# ALLOY: one build-argument owner keeps local and multi-arch images on identical resolved values.
 ALLOY_LITE_BUILD_ARGS = \
-	--build-arg ALLOY_SKIP_HF_CACHE_WARM=$(or $(strip $(ALLOY_SKIP_HF_CACHE_WARM)),0) \
-	--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$(or $(strip $(NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)),0)
+	--build-arg ALLOY_SKIP_HF_CACHE_WARM=$(call alloy_build_value,ALLOY_SKIP_HF_CACHE_WARM) \
+	--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$(call alloy_build_value,NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)
 
 build: preflight
 	docker build \

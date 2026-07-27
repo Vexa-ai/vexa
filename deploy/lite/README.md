@@ -157,7 +157,8 @@ Build flags are compiled into the image and require a rebuild after either chang
 | `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT` | `0` | `1` | Set `0` and rebuild to restore the upstream placeholder label |
 | `ALLOY_SKIP_HF_CACHE_WARM` | `0` | `1` | Set `0` and rebuild to restore the upstream best-effort cache warm |
 
-An explicit pilot configuration therefore uses:
+Put the explicit six-line pilot profile in the repo-root `.env` (or the file selected with
+`ENV_FILE=...`) before building and starting Lite:
 
 ```env
 ALLOY_STT_MAX_CONCURRENCY=1
@@ -167,6 +168,13 @@ ALLOY_STT_TELEMETRY=1
 NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=1
 ALLOY_SKIP_HF_CACHE_WARM=1
 ```
+
+`make -C deploy/lite build` and `push` read only the two named build flags from that file; a
+non-empty make command-line or ambient value takes precedence, and an empty file value cannot
+erase it. Those targets do not source the file or import any other key. Rebuild the image after
+changing either build flag. `make -C deploy/lite up` resolves the four runtime flags with the same
+precedence; rerun it after changing them so the recreated Lite container and newly spawned bot
+processes inherit the profile.
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
 in `.env`; the runtime brokers credentials into spawned workers (nothing leaves the network).
