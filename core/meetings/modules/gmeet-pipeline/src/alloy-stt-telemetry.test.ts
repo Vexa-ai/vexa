@@ -5,7 +5,9 @@
  * a newer scheduler-pending request on the same physical channel.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
+import Ajv2020 from 'ajv/dist/2020.js';
 import { createAlloySttTelemetryTracker } from './alloy-stt-telemetry.js';
 
 let failed = 0;
@@ -25,6 +27,25 @@ const closeTo = (actual: number | null, expected: number, epsilon = 1e-9) => {
   assert.notEqual(actual, null);
   assert.ok(Math.abs((actual as number) - expected) <= epsilon, `${actual} != ${expected}`);
 };
+
+check('ALLOY tracker snapshot conforms to the shared telemetry contract', () => {
+  const schemaPath = new URL(
+    '../../../contracts/alloy-stt-telemetry.v1/alloy-stt-telemetry.schema.json',
+    import.meta.url,
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+  const validate = new Ajv2020({ strict: false, allErrors: true }).compile({
+    $schema: schema.$schema,
+    $defs: schema.$defs,
+    $ref: '#/$defs/Snapshot',
+  });
+  const tracker = createAlloySttTelemetryTracker({
+    meetingId: '100',
+    nativeMeetingId: 'contract-room',
+  });
+
+  assert.equal(validate(tracker.snapshot()), true, JSON.stringify(validate.errors));
+});
 
 check('ALLOY tracker keeps distinct same-channel requests through limiter lifecycle', () => {
   const tracker = createAlloySttTelemetryTracker({

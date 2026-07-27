@@ -1,87 +1,65 @@
-"""ALLOY read adapter for ephemeral per-meeting STT scheduler snapshots."""
+"""ALLOY: read adapter for ephemeral per-meeting STT scheduler snapshots."""
 from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from typing import Any, Iterable
+
+import jsonschema
+from referencing import Registry, Resource
+
+
+def _load_alloy_stt_telemetry_schema() -> dict:
+    """ALLOY: load the shared contract by path in source and production images."""
+    rel = (
+        Path("meetings")
+        / "contracts"
+        / "alloy-stt-telemetry.v1"
+        / "alloy-stt-telemetry.schema.json"
+    )
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / rel
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"monorepo root with {rel} not found")
+
+
+_SCHEMA = _load_alloy_stt_telemetry_schema()
+_REGISTRY = Registry().with_resource(
+    _SCHEMA["$id"],
+    Resource.from_contents(_SCHEMA),
+)
+_SNAPSHOT_VALIDATOR = jsonschema.Draft202012Validator(
+    {"$ref": f"{_SCHEMA['$id']}#/$defs/Snapshot"},
+    registry=_REGISTRY,
+)
+
+
+def _reject_non_finite_json_constant(value: str) -> None:
+    """ALLOY: reject JavaScript constants that are not valid JSON numbers."""
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    """ALLOY: reject valid JSON exponents that overflow Python's finite float range."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"JSON number is not finite: {value}")
+    return parsed
 
 
 def alloy_stt_telemetry_key(meeting_id: int | str) -> str:
     return f"alloy:stt:telemetry:v1:{meeting_id}"
 
 
-def _is_non_negative_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
-def _is_non_negative_number(value: Any, *, optional: bool = False) -> bool:
-    if optional and value is None:
-        return True
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-        and value >= 0
-    )
-
-
-def _is_valid_last_error(value: Any) -> bool:
-    if value is None:
-        return True
-    return (
-        isinstance(value, dict)
-        and isinstance(value.get("code"), str)
-        and bool(value["code"].strip())
-        and isinstance(value.get("message"), str)
-        and bool(value["message"].strip())
-    )
-
-
 def _is_valid_snapshot(snapshot: Any, meeting_id: int) -> bool:
-    if not isinstance(snapshot, dict):
-        return False
-    if (
-        not _is_non_negative_int(snapshot.get("version"))
-        or snapshot["version"] != 1
-    ):
-        return False
-    if (
-        not isinstance(snapshot.get("meeting_id"), str)
-        or snapshot["meeting_id"] != str(meeting_id)
-        or not isinstance(snapshot.get("native_meeting_id"), str)
-        or not snapshot["native_meeting_id"].strip()
-    ):
-        return False
-    if not all(
-        _is_non_negative_int(snapshot.get(field))
-        for field in (
-            "updated_at_ms",
-            "active_requests",
-            "waiting_channels",
-            "processed_windows",
-            "superseded_windows",
-        )
-    ):
-        return False
-    if not all(
-        _is_non_negative_number(snapshot.get(field))
-        for field in (
-            "active_audio_sec",
-            "queued_audio_sec",
-            "lag_sec",
-        )
-    ):
-        return False
-    if not all(
-        _is_non_negative_number(snapshot.get(field), optional=True)
-        for field in (
-            "latest_captured_audio_end_ms",
-            "latest_processed_audio_end_ms",
-            "rtf_ema",
-        )
-    ):
-        return False
-    return _is_valid_last_error(snapshot.get("last_error"))
+    # ALLOY: schema owns the payload shape; the adapter owns key/payload identity.
+    return (
+        isinstance(snapshot, dict)
+        and _SNAPSHOT_VALIDATOR.is_valid(snapshot)
+        and snapshot["meeting_id"] == str(meeting_id)
+    )
 
 
 class AlloySttTelemetryReader:
@@ -100,7 +78,11 @@ class AlloySttTelemetryReader:
             if not raw:
                 continue
             try:
-                snapshot = json.loads(raw)
+                snapshot = json.loads(
+                    raw,
+                    parse_constant=_reject_non_finite_json_constant,
+                    parse_float=_parse_finite_json_float,
+                )
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             if not _is_valid_snapshot(snapshot, meeting_id):

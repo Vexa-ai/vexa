@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/alloy-stt-telemetry.v1",
+  "title": "alloy-stt-telemetry.v1",
+  "description": "ALLOY: versioned snapshots, owner aggregate, and status response for local STT queue diagnostics.",
+  "$defs": {
+    "TelemetryError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "Snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "meeting_id",
+        "native_meeting_id",
+        "updated_at_ms",
+        "active_requests",
+        "active_audio_sec",
+        "waiting_channels",
+        "queued_audio_sec",
+        "latest_captured_audio_end_ms",
+        "latest_processed_audio_end_ms",
+        "lag_sec",
+        "rtf_ema",
+        "processed_windows",
+        "superseded_windows",
+        "last_error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "meeting_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "native_meeting_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_audio_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "waiting_channels": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "queued_audio_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "latest_captured_audio_end_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "latest_processed_audio_end_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "lag_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rtf_ema": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "processed_windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "superseded_windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TelemetryError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "meetings",
+        "active_requests",
+        "waiting_channels",
+        "queued_audio_sec",
+        "lag_sec",
+        "rtf",
+        "health"
+      ],
+      "properties": {
+        "meetings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "waiting_channels": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "queued_audio_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lag_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rtf": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "health": {
+          "enum": ["green", "amber", "red", "muted"]
+        }
+      }
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "available",
+        "updated_at_ms",
+        "aggregate",
+        "meetings",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aggregate": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Aggregate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "meetings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Snapshot"
+          }
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TelemetryError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "enabled": {
+              "const": true
+            },
+            "available": {
+              "const": true
+            },
+            "aggregate": {
+              "$ref": "#/$defs/Aggregate"
+            },
+            "error": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "enabled": {
+              "const": false
+            },
+            "available": {
+              "const": false
+            },
+            "aggregate": {
+              "type": "null"
+            },
+            "meetings": {
+              "maxItems": 0
+            },
+            "error": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "enabled": {
+              "const": true
+            },
+            "available": {
+              "const": false
+            },
+            "aggregate": {
+              "type": "null"
+            },
+            "meetings": {
+              "maxItems": 0
+            },
+            "error": {
+              "$ref": "#/$defs/TelemetryError"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

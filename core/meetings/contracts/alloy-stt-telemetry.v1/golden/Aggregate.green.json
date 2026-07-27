@@ -1,0 +1,9 @@
+{
+  "meetings": 1,
+  "active_requests": 1,
+  "waiting_channels": 0,
+  "queued_audio_sec": 0,
+  "lag_sec": 2,
+  "rtf": 0.75,
+  "health": "green"
+}

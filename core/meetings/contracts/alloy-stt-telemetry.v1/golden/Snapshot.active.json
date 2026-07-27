@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "meeting_id": "41",
+  "native_meeting_id": "abc-defg-hij",
+  "updated_at_ms": 10000,
+  "active_requests": 1,
+  "active_audio_sec": 2.5,
+  "waiting_channels": 0,
+  "queued_audio_sec": 0,
+  "latest_captured_audio_end_ms": 10000,
+  "latest_processed_audio_end_ms": 8000,
+  "lag_sec": 2,
+  "rtf_ema": 0.75,
+  "processed_windows": 4,
+  "superseded_windows": 1,
+  "last_error": null
+}
