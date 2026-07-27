@@ -70,7 +70,10 @@ async def test_postgres_read_metadata_projection_is_owner_scoped_and_body_free()
     assert "FROM transcriptions t" in session.sql
     assert "t.text ~ '[^[:space:]]'" in session.sql
     assert "char_length(t.text) <= 65536" in session.sql
-    assert "(attendee #>> '{}') !~ '[^[:space:]]'" in session.sql
+    # REMOVED predicate: it excluded any meeting whose attendees array held a non-string
+    # entry, and calendar_sync stores attendees as OBJECTS — so every calendar-synced
+    # meeting was hidden from the archive. Availability must not depend on invite-list shape.
+    assert "(attendee #>> '{}') !~ '[^[:space:]]'" not in session.sql
     assert "(m.data->>'summary') ~ '[^[:space:]]'" in session.sql
     assert "jsonb_typeof(m.data->'title') = 'string'" in session.sql
     assert "jsonb_typeof(m.data->'name') = 'string'" in session.sql

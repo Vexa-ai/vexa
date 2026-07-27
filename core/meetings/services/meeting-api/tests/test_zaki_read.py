@@ -438,7 +438,13 @@ def test_meeting_item_hides_platforms_outside_the_sealed_contract():
     assert all(item["id"] != "meeting:41" for item in index.json()["items"])
 
 
-def test_meeting_index_hides_metadata_whose_detail_shape_is_invalid():
+def test_meeting_stays_available_when_the_invite_list_has_non_string_entries():
+    """Availability must not depend on the SHAPE of the invite list.
+
+    calendar_sync stores attendees as OBJECTS, not strings, so a predicate that hid any
+    meeting containing a non-string attendee erased every calendar-synced meeting from the
+    archive. The projection drops the entries it cannot render and keeps the meeting.
+    """
     store = _store()
     store._meetings[41]["data"]["attendees"] = ["Amina", 42]
     client = _client(store)
@@ -452,8 +458,8 @@ def test_meeting_index_hides_metadata_whose_detail_shape_is_invalid():
         headers=HEADERS,
     )
 
-    assert item.status_code == 404
-    assert all(entry["id"] != "meeting:41" for entry in index.json()["items"])
+    assert item.status_code == 200
+    assert any(entry["id"] == "meeting:41" for entry in index.json()["items"])
 
 
 def test_runtime_responses_validate_against_the_sealed_contract_schema():

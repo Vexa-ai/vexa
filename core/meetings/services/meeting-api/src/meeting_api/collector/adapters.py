@@ -672,17 +672,17 @@ class SqlAlchemyTranscriptStore:
                 END AS zaki_retention,
                 m.created_at,
                 m.updated_at,
+                -- Availability must not depend on the SHAPE of the invite list. The item
+                -- projection drops non-string attendees and keeps the meeting (see
+                -- zaki_read/router.py), so hiding the row here would re-create exactly the
+                -- bug that fix removes: calendar_sync stores attendees as
+                -- [{email, name?, partstat?}] dicts, and the meeting would silently vanish
+                -- from the index while its transcript and summary orphaned. Only the size
+                -- bound survives, because that one guards the response, not the shape.
                 CASE
                     WHEN NOT (m.data ? 'attendees') THEN TRUE
                     WHEN jsonb_typeof(m.data->'attendees') <> 'array' THEN FALSE
-                    ELSE
-                        jsonb_array_length(m.data->'attendees') <= 1000
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(m.data->'attendees') AS attendee
-                            WHERE jsonb_typeof(attendee) <> 'string'
-                               OR (attendee #>> '{}') !~ '[^[:space:]]'
-                        )
+                    ELSE jsonb_array_length(m.data->'attendees') <= 1000
                 END AS meeting_available,
                 COALESCE((
                     SELECT

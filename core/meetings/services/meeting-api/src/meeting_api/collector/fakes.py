@@ -122,12 +122,14 @@ def _read_index_control_metadata(data: dict) -> dict:
 
 
 def _read_index_meeting_available(data: dict) -> bool:
+    """Mirror of the adapter SQL: availability must NOT depend on invite-list SHAPE.
+
+    calendar_sync stores attendees as OBJECTS, so requiring every entry to be a non-blank
+    string hid every calendar-synced meeting from the archive index. Only list-ness and the
+    size bound gate availability; unrenderable entries are dropped by the projection.
+    """
     attendees = data.get("attendees", [])
-    return (
-        isinstance(attendees, list)
-        and len(attendees) <= 1000
-        and all(isinstance(attendee, str) and attendee.strip() for attendee in attendees)
-    )
+    return isinstance(attendees, list) and len(attendees) <= 1000
 
 
 class _InMemoryTranscriptBatchWriter:

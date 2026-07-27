@@ -324,23 +324,41 @@ async def _item_from_store(
     if kind == "meeting":
         retention = _retention(data, "transcript", now)
         ended_at = meeting.get("end_time")
-        attendees = data.get("attendees", [])
+        raw_attendees = data.get("attendees", [])
         platform = meeting.get("platform")
         if (
             retention is None
             or not isinstance(platform, str)
             or platform not in SEALED_MEETING_PLATFORMS
             or _parse_time(ended_at) is None
-            or not isinstance(attendees, list)
-            or len(attendees) > 1000
-            or any(not isinstance(attendee, str) or not attendee.strip() for attendee in attendees)
+            or not isinstance(raw_attendees, list)
+            or len(raw_attendees) > 1000
         ):
             return None
+        # Keep only the string entries the sealed zaki-read.v1 MeetingContent allows, and
+        # DROP anything else instead of rejecting the whole record.
+        #
+        # This used to fail the entire meeting on a single non-string attendee, which is the
+        # wrong blast radius by a mile: calendar_sync writes attendees as
+        # [{email, name?, partstat?}] dicts (calendar_sync/service.py _attendees), so the
+        # first calendar-synced meeting that got captured would have disappeared from the
+        # archive outright — dropped from /index and 404 from /item/meeting:<id> — stranding
+        # its transcript and summary as orphans. A shape mismatch in an INVITE LIST must
+        # never delete the meeting record.
+        #
+        # The dicts are dropped rather than flattened on purpose: rendering invitee names or
+        # emails into the archive (and, later, into agent-readable memory) is a product and
+        # privacy decision, not something to start doing implicitly from a bug fix.
+        attendees = [
+            attendee.strip()[:500]
+            for attendee in raw_attendees
+            if isinstance(attendee, str) and attendee.strip()
+        ]
         content = {
             "platform": platform,
             "started_at": occurred_at,
             "ended_at": ended_at,
-            "attendees": [attendee.strip()[:500] for attendee in attendees],
+            "attendees": attendees,
         }
         return {**base, "capture_notice": notice, "retention": retention, "content": content}
     if kind == "transcript":
@@ -443,16 +461,17 @@ async def _project_items(
         }
         meeting_id = f"meeting:{meeting['id']}"
         attendees = data.get("attendees", [])
+        # Availability must not depend on the SHAPE of the invite list — same rule the item
+        # projection follows. calendar_sync stores attendees as OBJECTS, so requiring every
+        # entry to be a non-blank string hid every calendar-synced meeting from the INDEX even
+        # though the item endpoint served it. Only the list-ness and the size bound gate
+        # availability; unrenderable entries are dropped by the projection.
         meeting_available = (
             meeting.get("meeting_available") is True
             if metadata_only
             else (
                 isinstance(attendees, list)
                 and len(attendees) <= 1000
-                and all(
-                    isinstance(attendee, str) and attendee.strip()
-                    for attendee in attendees
-                )
             )
         )
         if (
