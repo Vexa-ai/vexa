@@ -19,6 +19,7 @@ the conformance harness never imports it — it injects its own in-process fakes
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -175,6 +176,14 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
     return authorizer, downstream
 
 
+def _alloy_stt_telemetry_enabled(
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    # ALLOY: register the gateway capability only for an explicit, exact opt-in.
+    source = os.environ if env is None else env
+    return source.get("ALLOY_STT_TELEMETRY", "").strip() == "1"
+
+
 def build_production_app(
     *,
     admin_api_url: Optional[str] = None,
@@ -225,6 +234,8 @@ def build_production_app(
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
+        # ALLOY: Resolve the exact production opt-in before injecting the telemetry proxy capability.
+        alloy_stt_telemetry_enabled=_alloy_stt_telemetry_enabled(),
     )
 
     # --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban (edge_guard.py) ---

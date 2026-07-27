@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 
 log = logging.getLogger("meeting_api.entrypoint")
@@ -58,6 +59,19 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
     from .config_preflight import preflight
 
     preflight(env)
+
+
+def _resolve_alloy_stt_telemetry_redis(
+    redis_client: object,
+    env: Mapping[str, str] | None = None,
+) -> object | None:
+    # ALLOY: expose the telemetry capability only for an explicit, exact opt-in.
+    source = os.environ if env is None else env
+    return (
+        redis_client
+        if source.get("ALLOY_STT_TELEMETRY", "").strip() == "1"
+        else None
+    )
 
 
 def build_production_app():
@@ -179,9 +193,8 @@ def build_production_app():
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
-        alloy_stt_telemetry_redis=(
-            redis_client if os.getenv("ALLOY_STT_TELEMETRY", "").strip() == "1" else None
-        ),
+        # ALLOY: Inject the telemetry reader only after the exact production opt-in succeeds.
+        alloy_stt_telemetry_redis=_resolve_alloy_stt_telemetry_redis(redis_client),
         meeting_repo=meeting_repo,
         runtime=runtime_client,
         recording_repo=recording_repo,

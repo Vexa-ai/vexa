@@ -258,65 +258,56 @@ def build_router(
             "running": running, "running_bots": running, "count": len(running),
         })
 
-    # ALLOY: optional owner-only operational telemetry; transcript sharing never grants access.
-    @router.get("/alloy/stt/status")
-    async def alloy_stt_status(
-        x_user_id: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
-        now_ms = int(time.time() * 1000)
-        if alloy_stt_telemetry is None:
-            return JSONResponse(content={
-                "version": 1,
-                "enabled": False,
-                "available": False,
-                "updated_at_ms": now_ms,
-                "aggregate": None,
-                "meetings": [],
-                "error": None,
-            })
-        owned_ids = await store.list_owned_meeting_ids(
-            user_id,
-            statuses=_RUNNING_STATUSES,
-        )
-        try:
-            snapshots = await alloy_stt_telemetry.read_owned(owned_ids)
-        except Exception as error:  # noqa: BLE001 - optional diagnostics must not break core reads
-            log_event(
-                "alloy_stt_telemetry_read_failed",
-                audience="system",
-                level="warning",
-                span="alloy.stt.status",
-                user_id=user_id,
-                fields={
-                    "message": "[ALLOY] STT telemetry read failed",
-                    "error_type": type(error).__name__,
-                },
+    # ALLOY: the owner-only telemetry route exists only when production composition opts in.
+    if alloy_stt_telemetry is not None:
+        @router.get("/alloy/stt/status")
+        async def alloy_stt_status(
+            x_user_id: Optional[str] = Header(default=None),
+        ):
+            user_id = _resolve_user_id(x_user_id)
+            now_ms = int(time.time() * 1000)
+            owned_ids = await store.list_owned_meeting_ids(
+                user_id,
+                statuses=_RUNNING_STATUSES,
             )
+            try:
+                snapshots = await alloy_stt_telemetry.read_owned(owned_ids)
+            except Exception as error:  # noqa: BLE001 - optional diagnostics must not break core reads
+                log_event(
+                    "alloy_stt_telemetry_read_failed",
+                    audience="system",
+                    level="warning",
+                    span="alloy.stt.status",
+                    user_id=user_id,
+                    fields={
+                        "message": "[ALLOY] STT telemetry read failed",
+                        "error_type": type(error).__name__,
+                    },
+                )
+                return JSONResponse(content={
+                    "version": 1,
+                    "enabled": True,
+                    "available": False,
+                    "updated_at_ms": now_ms,
+                    "aggregate": None,
+                    "meetings": [],
+                    "error": {
+                        "code": "redis_unavailable",
+                        "message": "STT telemetry is temporarily unavailable",
+                    },
+                })
             return JSONResponse(content={
                 "version": 1,
                 "enabled": True,
-                "available": False,
+                "available": True,
                 "updated_at_ms": now_ms,
-                "aggregate": None,
-                "meetings": [],
-                "error": {
-                    "code": "redis_unavailable",
-                    "message": "STT telemetry is temporarily unavailable",
-                },
+                "aggregate": aggregate_alloy_stt_status(
+                    snapshots,
+                    now_ms=now_ms,
+                ),
+                "meetings": snapshots,
+                "error": None,
             })
-        return JSONResponse(content={
-            "version": 1,
-            "enabled": True,
-            "available": True,
-            "updated_at_ms": now_ms,
-            "aggregate": aggregate_alloy_stt_status(
-                snapshots,
-                now_ms=now_ms,
-            ),
-            "meetings": snapshots,
-            "error": None,
-        })
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's

@@ -28,9 +28,13 @@ class UnavailableAuthorizer:
         return {"authorized": [], "errors": ["unavailable"]}
 
 
-def _client(authorizer=None, downstream=None):
+# ALLOY: Keep the telemetry capability an explicit opt-in at the shared Gateway test seam.
+def _client(authorizer=None, downstream=None, *, alloy_stt_telemetry_enabled=None):
     downstream = downstream or FakeDownstream(status_code=200, body={"meetings": []})
-    app = create_app(authorizer or FakeAuthorizer(), downstream, FakeRedis())
+    kwargs = {}
+    if alloy_stt_telemetry_enabled is not None:
+        kwargs["alloy_stt_telemetry_enabled"] = alloy_stt_telemetry_enabled
+    app = create_app(authorizer or FakeAuthorizer(), downstream, FakeRedis(), **kwargs)
     return TestClient(app), downstream
 
 
@@ -173,12 +177,41 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-api-key"] == VALID_KEY
 
 
-def test_alloy_stt_status_forwards_with_resolved_owner_identity():
+class RecordingAuthorizer(FakeAuthorizer):
+    """ALLOY: records whether a disabled route still reaches identity resolution."""
+
+    def __init__(self):
+        super().__init__()
+        self.resolve_calls = 0
+
+    async def resolve(self, api_key):
+        self.resolve_calls += 1
+        return await super().resolve(api_key)
+
+
+def test_alloy_stt_status_is_absent_by_default_without_auth_or_downstream_calls():
+    authorizer = RecordingAuthorizer()
+    downstream = FakeDownstream(status_code=200, body={})
+    app = create_app(authorizer, downstream, FakeRedis())
+    client = TestClient(app)
+
+    response = client.get("/alloy/stt/status", headers=AUTH)
+
+    assert "/alloy/stt/status" not in app.openapi()["paths"]
+    assert response.status_code == 404
+    assert authorizer.resolve_calls == 0
+    assert downstream.last is None
+
+
+def test_enabled_alloy_stt_status_forwards_with_resolved_owner_identity():
     downstream = FakeDownstream(
         status_code=200,
         body={"version": 1, "enabled": True, "available": True, "meetings": []},
     )
-    client, _ = _client(downstream=downstream)
+    client, _ = _client(
+        downstream=downstream,
+        alloy_stt_telemetry_enabled=True,
+    )
     response = client.get(
         "/alloy/stt/status",
         headers={**AUTH, "x-user-id": "999"},

@@ -426,27 +426,40 @@ async def test_redis_failure_degrades_without_breaking_status_response():
 
 
 @pytest.mark.asyncio
-async def test_disabled_status_does_not_touch_store_or_redis():
+async def test_disabled_status_route_is_absent_and_touches_no_owner_dependency():
     store = RecordingOwnerStore()
+    app = _app(store, None)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_app(store, None)),
+        transport=httpx.ASGITransport(app=app),
         base_url="http://test",
     ) as client:
-        response = await client.get(
-            "/alloy/stt/status",
-            headers={"x-user-id": str(OWNER_ID)},
-        )
+        response = await client.get("/alloy/stt/status")
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "version": 1,
-        "enabled": False,
-        "available": False,
-        "updated_at_ms": response.json()["updated_at_ms"],
-        "aggregate": None,
-        "meetings": [],
-        "error": None,
-    }
+    assert "/alloy/stt/status" not in app.openapi()["paths"]
+    assert response.status_code == 404
     assert store.list_meetings_calls == 0
     assert store.list_owned_meeting_ids_calls == []
+
+
+@pytest.mark.parametrize(
+    ("env", "enabled"),
+    [
+        ({}, False),
+        ({"ALLOY_STT_TELEMETRY": ""}, False),
+        ({"ALLOY_STT_TELEMETRY": "0"}, False),
+        ({"ALLOY_STT_TELEMETRY": "true"}, False),
+        ({"ALLOY_STT_TELEMETRY": "   "}, False),
+        ({"ALLOY_STT_TELEMETRY": " 1 "}, True),
+    ],
+)
+def test_meeting_api_telemetry_env_requires_exact_trimmed_one(env, enabled):
+    # ALLOY: the composition decision is deterministic under an injected env mapping.
+    from meeting_api.__main__ import _resolve_alloy_stt_telemetry_redis
+
+    redis_client = object()
+    resolved = _resolve_alloy_stt_telemetry_redis(redis_client, env)
+
+    assert (resolved is redis_client) is enabled
+    if not enabled:
+        assert resolved is None
