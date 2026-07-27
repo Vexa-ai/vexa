@@ -253,3 +253,58 @@ def test_healthy_meeting_carries_no_stt_fault():
         "completion_reason": "stopped",
     })[-1]
     assert "stt_fault" not in final["data"]
+
+
+# ── ATTENDANCE: who was in the room, and for how long ───────────────────────────────────────────
+# Same additive shape as stt_fault above: the bot holds the roster in memory across the meeting
+# (from the enumeration its capture modules already maintain for speaker attribution) and reports
+# the timeline ONCE, on the terminal event. This asserts the control plane persists it rather than
+# accepting-and-dropping it, and that a non-terminal event never carries it.
+
+_ATTENDANCE = {
+    "participants": [
+        {"name": "Priya Raman", "first_seen": "2026-07-27T10:00:00.000Z",
+         "last_seen": "2026-07-27T11:00:00.000Z", "present_seconds": 3600,
+         "intervals": [["2026-07-27T10:00:00.000Z", "2026-07-27T11:00:00.000Z"]]},
+        {"name": "Marcus Webb", "first_seen": "2026-07-27T10:30:00.000Z",
+         "last_seen": "2026-07-27T10:45:00.000Z", "present_seconds": 900,
+         "intervals": [["2026-07-27T10:30:00.000Z", "2026-07-27T10:45:00.000Z"]]},
+    ],
+    "observed_to": "2026-07-27T11:00:00.000Z",
+}
+
+
+def test_completed_meeting_persists_who_was_in_the_room():
+    terminal = {
+        "connection_id": "sess-uid", "status": "completed", "exit_code": 0,
+        "completion_reason": "stopped",
+        "attendance": _ATTENDANCE,
+    }
+    # Additive on lifecycle.v1 (additionalProperties: true) — still a CONFORMING event.
+    conforms(terminal, "LifecycleEvent")
+
+    client, app, deliveries = _client()
+    final = _drive(client, JOINING, ACTIVE, terminal)[-1]
+
+    assert final["meeting_status"] == "completed"
+    persisted = final["data"]["attendance"]
+    assert [p["name"] for p in persisted["participants"]] == ["Priya Raman", "Marcus Webb"]
+    # The late joiner who left early is measured to HIS OWN window, not the meeting's.
+    assert persisted["participants"][0]["present_seconds"] == 3600
+    assert persisted["participants"][1]["present_seconds"] == 900
+
+    # The webhook carries it too — an integrator gets attendance without polling.
+    status_hooks = [d for d in deliveries if d["event_type"] == "meeting.status_change"]
+    assert len(status_hooks[-1]["data"]["meeting"]["data"]["attendance"]["participants"]) == 2
+
+
+def test_attendance_is_terminal_only_and_absent_when_unreported():
+    """Two negative controls in one: a mid-meeting event never carries attendance into the row,
+    and a meeting whose roster was never readable carries no empty scaffold."""
+    client, app, deliveries = _client()
+    bodies = _drive(client, JOINING, {**ACTIVE, "attendance": _ATTENDANCE}, {
+        "connection_id": "sess-uid", "status": "completed", "exit_code": 0,
+        "completion_reason": "stopped",
+    })
+    assert "attendance" not in bodies[-1]["data"]
+    assert all("attendance" not in b.get("data", {}) for b in bodies)
