@@ -11,6 +11,7 @@
  *  track() call no-ops unless a measurement id was configured. NOTE: this captures only WEB-CLIENT calls
  *  — the authoritative cross-caller API-usage signal is the gateway's per-request logs. */
 import { track, endpointLabel } from "@/app/analytics";
+import { BRAND } from "../app/brand";
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly detail: string, public readonly url: string) {
@@ -24,7 +25,7 @@ export class ApiError extends Error {
  *  error text) for the operator channel — a `title=` affordance and the browser console. */
 export interface PresentedError { headline: string; detail: string }
 
-const NETWORK_HEADLINE = "Couldn't reach the Vexa server — check that the stack is running.";
+const NETWORK_HEADLINE = `Couldn't reach the ${BRAND.name} server — check that the stack is running.`;
 const GENERIC_HEADLINE = "Something went wrong — details are in the browser console.";
 
 // A fetch()-level network failure surfaces as one of these engine-specific messages.
@@ -47,7 +48,7 @@ export function presentError(e: unknown): PresentedError {
     const detail = e.message;
     console.warn("api failure", detail);
     if (e.status === 0) return { headline: NETWORK_HEADLINE, detail };
-    if (e.status === 502 || e.status === 504) return { headline: "The Vexa server can't reach a backend service right now.", detail };
+    if (e.status === 502 || e.status === 504) return { headline: `The ${BRAND.name} server can't reach a backend service right now.`, detail };
     if (e.status === 401) return { headline: "Your API key was rejected — sign in again.", detail };
     if (e.status === 403) return { headline: "Your key doesn't have access to this.", detail };
     if (e.status === 429) return { headline: "Rate limit hit — try again in a moment.", detail };

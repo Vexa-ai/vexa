@@ -17,6 +17,8 @@ import { useService, useStore, KeybindingServiceId } from "../platform";
 import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { OpsNotice } from "./OpsNotice";
+import { BrandLogo } from "../app/BrandLogo";
+import { BRAND } from "../app/brand";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/updatesBadge";
@@ -181,9 +183,8 @@ function LeftPane() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px 8px", flex: "none" }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
+        <BrandLogo size={24} radius={7} />
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>{BRAND.name} <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
       </div>
       {/* stacked vertically — every list is visible at any sidebar width (no horizontal
           overflow/scroll), matching the file-tree rows below */}

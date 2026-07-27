@@ -18,6 +18,7 @@ import { OnboardingGate } from "./OnboardingGate";
 import { SetupGate } from "./SetupGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import "../surfaces";
+import { BRAND } from "./brand";
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
 
@@ -67,7 +68,7 @@ function InviteGate({ children }: { children: ReactNode }) {
 /** Pre-join CONSENT screen (shown right AFTER login, when a link carries ?invite=). Fetches a read-only
  *  preview of the invite — what the workspace is (its purpose) and the terms (role · who shared it) — so
  *  the invitee knows what they're joining before committing. "Continue to join" redeems and lands on the
- *  workspace README (pinned); "Not now" drops the invite and opens Vexa. */
+ *  workspace README (pinned); "Not now" drops the invite and opens the workbench. */
 function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: string; onProceed: () => void; onDecline: () => void; busy?: boolean }) {
   const [pv, setPv] = useState<InvitePreview | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -98,7 +99,7 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
           <>
             <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>Invite unavailable</div>
             <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
-            <button onClick={onDecline} style={btnGhost}>Continue to Vexa</button>
+            <button onClick={onDecline} style={btnGhost}>Continue to {BRAND.name}</button>
           </>
         )}
         {pv && pv.valid && (
