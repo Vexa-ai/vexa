@@ -17,6 +17,25 @@ import { wrapTranscribeWithTap } from './telemetry.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// ALLOY: appendFile is deliberately fire-and-forget in the production tap.
+// Bound Windows cleanup retries to this test's exact mkdtemp directory.
+async function removeTempDir(path: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  const transientCodes = new Set(['EACCES', 'EBUSY', 'ENOTEMPTY', 'EPERM']);
+  while (true) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return;
+      const remainingMs = deadline - Date.now();
+      if (!code || !transientCodes.has(code) || remainingMs <= 0) throw error;
+      await sleep(Math.min(20, remainingMs));
+    }
+  }
+}
+
 async function run(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'alloy-stt-tap-'));
   const sessionPath = join(dir, 'observer.captured-signal.jsonl');
@@ -51,9 +70,8 @@ async function run(): Promise<void> {
 
     assert.equal(receivedObserver, observer);
     assert.equal(response.text, 'observer pass-through');
-    await sleep(25);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(dir);
   }
 
   console.log('PASS ALLOY STT tap forwards the exact limiter observer');
