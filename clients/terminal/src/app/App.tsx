@@ -134,7 +134,12 @@ const container = createContainer([
 registry.commands().forEach((c) => container.get(CommandServiceId).register(c));
 registerEngineCommands(container); // engine commands (palette/layout/open-surface) + default keybindings
 
-export function App() {
+type AppProps = {
+  // ALLOY: Server-resolved opt-in propagated without re-reading env in the browser.
+  alloySttTelemetryEnabled: boolean;
+};
+
+export function App({ alloySttTelemetryEnabled }: AppProps) {
   // The workbench is a client-only shell (localStorage-driven layout, dockview). Gate render until
   // mounted so the server HTML (which can't see localStorage/dockview) matches — no hydration mismatch.
   const [mounted, setMounted] = useState(false);
@@ -152,7 +157,9 @@ export function App() {
         <SetupGate>
           <OnboardingGate>
             <ServicesProvider container={container}>
-              <Workbench />
+              <Workbench
+                alloySttTelemetryEnabled={alloySttTelemetryEnabled}
+              />
             </ServicesProvider>
           </OnboardingGate>
         </SetupGate>

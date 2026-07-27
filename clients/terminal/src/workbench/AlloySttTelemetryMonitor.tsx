@@ -3,19 +3,19 @@
 import {
   type ReactNode,
   useEffect,
-  useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
 import {
   alloySttTelemetryPoller,
   classifyAlloySttMeeting,
-  summarizeAlloySttTelemetry,
+  type AlloySttAggregateHealth,
   type AlloySttMeetingHealth,
   type AlloySttTelemetryPoller,
 } from "./alloySttTelemetry";
 
 type AlloySttTelemetryMonitorProps = {
+  enabled?: boolean;
   poller?: AlloySttTelemetryPoller;
   now?: () => number;
   disabledFallback?: ReactNode;
@@ -28,15 +28,46 @@ const HEALTH_COLORS: Record<AlloySttMeetingHealth, string> = {
   stale: "#c58a23",
 };
 
+/** ALLOY: Present the server-owned health enum directly; no client thresholds. */
+const AGGREGATE_HEALTH_COLORS: Record<AlloySttAggregateHealth, string> = {
+  green: HEALTH_COLORS.healthy,
+  amber: HEALTH_COLORS.backlogged,
+  red: HEALTH_COLORS.failed,
+  muted: "var(--text-muted)",
+};
+
 const formatSeconds = (value: number) => `${value.toFixed(1)}s`;
 const formatAge = (ageMs: number) =>
   ageMs < 1_000 ? "now" : `${Math.floor(ageMs / 1_000)}s ago`;
 
 export function AlloySttTelemetryMonitor({
+  enabled = false,
   poller = alloySttTelemetryPoller,
   now = Date.now,
   disabledFallback = null,
 }: AlloySttTelemetryMonitorProps) {
+  // ALLOY: Keep the disabled path hook-free so rollback creates no subscription,
+  // timer, or telemetry request.
+  if (!enabled) return <>{disabledFallback}</>;
+
+  return (
+    <EnabledAlloySttTelemetryMonitor
+      poller={poller}
+      now={now}
+      disabledFallback={disabledFallback}
+    />
+  );
+}
+
+type EnabledAlloySttTelemetryMonitorProps = Required<
+  Pick<AlloySttTelemetryMonitorProps, "poller" | "now">
+> & Pick<AlloySttTelemetryMonitorProps, "disabledFallback">;
+
+function EnabledAlloySttTelemetryMonitor({
+  poller,
+  now,
+  disabledFallback,
+}: EnabledAlloySttTelemetryMonitorProps) {
   const state = useSyncExternalStore(
     poller.store.subscribe,
     poller.store.getState,
@@ -44,10 +75,6 @@ export function AlloySttTelemetryMonitor({
   );
   const [expanded, setExpanded] = useState(false);
   const nowMs = now();
-  const summary = useMemo(
-    () => summarizeAlloySttTelemetry(state.meetings, nowMs),
-    [state.meetings, nowMs],
-  );
 
   useEffect(() => {
     poller.start();
@@ -59,28 +86,34 @@ export function AlloySttTelemetryMonitor({
   }
 
   const unavailable = Boolean(state.transportError) ||
-    (state.fetchedAtMs !== null && !state.available);
+    (
+      state.fetchedAtMs !== null &&
+      (!state.available || state.aggregate === null)
+    );
+  const aggregate = state.aggregate;
+  const aggregateHealth = aggregate?.health ?? "muted";
   const label = state.fetchedAtMs === null
     ? "STT connecting"
     : !state.enabled
       ? "STT monitor off"
       : unavailable
         ? "STT unavailable"
-        : summary.meetingCount === 0
+        : aggregate === null || aggregate.meetings === 0
           ? "STT idle"
           : [
-            `STT ${summary.meetingCount}`,
-            `${summary.activeRequests} active`,
-            `${summary.waitingChannels} waiting`,
-            `${formatSeconds(summary.queuedAudioSec)} queued`,
-            `lag ${formatSeconds(summary.maxLagSec)}`,
-            `RTF ${summary.maxRtf?.toFixed(2) ?? "n/a"}`,
+            `STT ${aggregate.meetings}`,
+            `${aggregate.active_requests} active`,
+            `${aggregate.waiting_channels} waiting`,
+            `${formatSeconds(aggregate.queued_audio_sec)} queued`,
+            `lag ${formatSeconds(aggregate.lag_sec)}`,
+            `RTF ${aggregate.rtf?.toFixed(2) ?? "n/a"}`,
+            `health ${aggregate.health}`,
           ].join(" · ");
   const indicatorColor = unavailable
     ? HEALTH_COLORS.failed
-    : state.fetchedAtMs === null || !state.enabled || summary.meetingCount === 0
+    : state.fetchedAtMs === null || !state.enabled
       ? "var(--text-muted)"
-      : HEALTH_COLORS[summary.health];
+      : AGGREGATE_HEALTH_COLORS[aggregateHealth];
 
   return (
     <div style={{ position: "relative", maxWidth: "100%" }}>

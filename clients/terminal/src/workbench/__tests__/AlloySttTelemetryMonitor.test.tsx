@@ -13,6 +13,15 @@ const state: AlloySttTelemetryState = {
   available: true,
   fetchedAtMs: 12_000,
   transportError: null,
+  aggregate: {
+    meetings: 1,
+    active_requests: 1,
+    waiting_channels: 1,
+    queued_audio_sec: 3,
+    lag_sec: 3,
+    rtf: 0.8,
+    health: "amber",
+  },
   meetings: [{
     version: 1,
     meeting_id: "41",
@@ -31,13 +40,16 @@ const state: AlloySttTelemetryState = {
     last_error: null,
   }],
 };
+const reactTestEnvironment = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT: boolean;
+};
 
 describe("ALLOY STT telemetry monitor", () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
-    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    reactTestEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
@@ -59,7 +71,11 @@ describe("ALLOY STT telemetry monitor", () => {
     };
 
     act(() => root.render(
-      <AlloySttTelemetryMonitor poller={poller} now={() => 12_000} />,
+      <AlloySttTelemetryMonitor
+        enabled
+        poller={poller}
+        now={() => 12_000}
+      />,
     ));
 
     expect(host.textContent).toContain("STT 1");
@@ -85,6 +101,7 @@ describe("ALLOY STT telemetry monitor", () => {
       ...state,
       enabled: false,
       available: false,
+      aggregate: null,
       meetings: [],
     });
     const poller: AlloySttTelemetryPoller = {
@@ -96,6 +113,7 @@ describe("ALLOY STT telemetry monitor", () => {
 
     act(() => root.render(
       <AlloySttTelemetryMonitor
+        enabled={false}
         poller={poller}
         disabledFallback={<button type="button">reset layout</button>}
       />,

@@ -10,6 +10,15 @@ const response = (updatedAtMs: number): AlloySttStatusResponse => ({
   enabled: true,
   available: true,
   updated_at_ms: updatedAtMs,
+  aggregate: {
+    meetings: 1,
+    active_requests: 1,
+    waiting_channels: 1,
+    queued_audio_sec: 3,
+    lag_sec: 3,
+    rtf: 0.8,
+    health: "amber",
+  },
   meetings: [{
     version: 1,
     meeting_id: "41",
@@ -58,6 +67,7 @@ describe("ALLOY STT telemetry poller", () => {
     await poller.pollNow();
     expect(fetchStatus).toHaveBeenCalledTimes(1);
     expect(poller.store.getState().meetings[0].meeting_id).toBe("41");
+    expect(poller.store.getState().aggregate?.health).toBe("amber");
 
     now = 2_000;
     await vi.advanceTimersByTimeAsync(1_000);
@@ -89,11 +99,18 @@ describe("ALLOY STT telemetry poller", () => {
 
     const state = poller.store.getState();
     expect(state.meetings).toHaveLength(1);
+    expect(state.aggregate?.meetings).toBe(1);
     expect(state.transportError).toBe("gateway down");
   });
 
   it("stops polling after the server reports telemetry disabled", async () => {
-    const disabled = { ...response(1_000), enabled: false, available: false, meetings: [] };
+    const disabled = {
+      ...response(1_000),
+      enabled: false,
+      available: false,
+      aggregate: null,
+      meetings: [],
+    };
     const fetchStatus = vi.fn(async () => disabled);
     const poller = createAlloySttTelemetryPoller({ fetchStatus, intervalMs: 1_000 });
 

@@ -25,11 +25,25 @@ export type AlloySttMeetingSnapshot = {
   last_error: AlloySttTelemetryError | null;
 };
 
+/** ALLOY: Sealed Meeting API aggregate; the Terminal only presents these global values. */
+export type AlloySttAggregateHealth = "green" | "amber" | "red" | "muted";
+
+export type AlloySttTelemetryAggregate = {
+  meetings: number;
+  active_requests: number;
+  waiting_channels: number;
+  queued_audio_sec: number;
+  lag_sec: number;
+  rtf: number | null;
+  health: AlloySttAggregateHealth;
+};
+
 export type AlloySttStatusResponse = {
   version: 1;
   enabled: boolean;
   available: boolean;
   updated_at_ms: number;
+  aggregate: AlloySttTelemetryAggregate | null;
   meetings: AlloySttMeetingSnapshot[];
   error: AlloySttTelemetryError | null;
 };
@@ -37,6 +51,7 @@ export type AlloySttStatusResponse = {
 export type AlloySttTelemetryState = {
   enabled: boolean;
   available: boolean;
+  aggregate: AlloySttTelemetryAggregate | null;
   meetings: AlloySttMeetingSnapshot[];
   fetchedAtMs: number | null;
   transportError: string | null;
@@ -47,19 +62,6 @@ export type AlloySttMeetingHealth =
   | "backlogged"
   | "failed"
   | "stale";
-
-export type AlloySttTelemetrySummary = {
-  meetingCount: number;
-  activeRequests: number;
-  waitingChannels: number;
-  queuedAudioSec: number;
-  maxLagSec: number;
-  maxRtf: number | null;
-  supersededWindows: number;
-  failedMeetings: number;
-  staleMeetings: number;
-  health: AlloySttMeetingHealth;
-};
 
 export type AlloySttTelemetryPoller = {
   store: ObservableStore<AlloySttTelemetryState>;
@@ -92,6 +94,7 @@ const BACKLOG_LAG_SEC = 2;
 const initialState: AlloySttTelemetryState = {
   enabled: false,
   available: false,
+  aggregate: null,
   meetings: [],
   fetchedAtMs: null,
   transportError: null,
@@ -110,60 +113,6 @@ export function classifyAlloySttMeeting(
     return "backlogged";
   }
   return "healthy";
-}
-
-export function summarizeAlloySttTelemetry(
-  meetings: AlloySttMeetingSnapshot[],
-  nowMs: number,
-): AlloySttTelemetrySummary {
-  let activeRequests = 0;
-  let waitingChannels = 0;
-  let queuedAudioSec = 0;
-  let maxLagSec = 0;
-  let maxRtf: number | null = null;
-  let supersededWindows = 0;
-  let failedMeetings = 0;
-  let staleMeetings = 0;
-  let backloggedMeetings = 0;
-
-  for (const meeting of meetings) {
-    activeRequests += meeting.active_requests;
-    waitingChannels += meeting.waiting_channels;
-    queuedAudioSec += meeting.queued_audio_sec;
-    maxLagSec = Math.max(maxLagSec, meeting.lag_sec);
-    if (meeting.rtf_ema !== null) {
-      maxRtf = maxRtf === null
-        ? meeting.rtf_ema
-        : Math.max(maxRtf, meeting.rtf_ema);
-    }
-    supersededWindows += meeting.superseded_windows;
-
-    const health = classifyAlloySttMeeting(meeting, nowMs);
-    if (health === "failed") failedMeetings += 1;
-    if (health === "stale") staleMeetings += 1;
-    if (health === "backlogged") backloggedMeetings += 1;
-  }
-
-  const health: AlloySttMeetingHealth = staleMeetings > 0
-    ? "stale"
-    : failedMeetings > 0
-      ? "failed"
-      : backloggedMeetings > 0
-        ? "backlogged"
-        : "healthy";
-
-  return {
-    meetingCount: meetings.length,
-    activeRequests,
-    waitingChannels,
-    queuedAudioSec,
-    maxLagSec,
-    maxRtf,
-    supersededWindows,
-    failedMeetings,
-    staleMeetings,
-    health,
-  };
 }
 
 async function fetchAlloySttStatus(): Promise<AlloySttStatusResponse> {
@@ -220,6 +169,11 @@ export function createAlloySttTelemetryPoller(
         store.set((current) => ({
           enabled: status.enabled,
           available: status.available,
+          // ALLOY: A soft transport failure retains the last valid server aggregate.
+          aggregate:
+            !status.available && status.error
+              ? current.aggregate
+              : status.aggregate,
           meetings:
             !status.available && status.error
               ? current.meetings

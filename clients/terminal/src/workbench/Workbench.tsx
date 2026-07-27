@@ -268,7 +268,14 @@ function RightPane() {
 }
 
 // ── the shell ───────────────────────────────────────────────────────────────────
-export function Workbench() {
+type WorkbenchProps = {
+  // ALLOY: The server-owned opt-in reaches the footer through one explicit seam.
+  alloySttTelemetryEnabled: boolean;
+};
+
+export function Workbench({
+  alloySttTelemetryEnabled,
+}: WorkbenchProps) {
   const layout = useService(LayoutServiceId);
   const keybindings = useService(KeybindingServiceId);
   const { leftCollapsed, rightCollapsed, activeList, activeTab } = useStore(layout.store);
@@ -446,6 +453,7 @@ export function Workbench() {
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
         <div style={{ flex: 1 }} />
         <AlloySttTelemetryMonitor
+          enabled={alloySttTelemetryEnabled}
           disabledFallback={
             <button
               onClick={() => layout.resetLayout()}

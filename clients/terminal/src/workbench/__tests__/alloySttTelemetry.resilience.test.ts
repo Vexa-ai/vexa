@@ -30,6 +30,15 @@ const status = (
   enabled: true,
   available: true,
   updated_at_ms: 1_000,
+  aggregate: {
+    meetings: 1,
+    active_requests: 1,
+    waiting_channels: 2,
+    queued_audio_sec: 3.5,
+    lag_sec: 2,
+    rtf: 0.8,
+    health: "green",
+  },
   meetings: [meeting],
   error: null,
   ...overrides,
@@ -41,6 +50,7 @@ describe("ALLOY STT telemetry poller resilience", () => {
       status(),
       status({
         available: false,
+        aggregate: null,
         meetings: [],
         error: {
           code: "redis_unavailable",
@@ -59,6 +69,15 @@ describe("ALLOY STT telemetry poller resilience", () => {
 
     expect(poller.store.getState()).toMatchObject({
       available: false,
+      aggregate: {
+        meetings: 1,
+        active_requests: 1,
+        waiting_channels: 2,
+        queued_audio_sec: 3.5,
+        lag_sec: 2,
+        rtf: 0.8,
+        health: "green",
+      },
       meetings: [meeting],
       transportError: "Redis telemetry unavailable",
     });
