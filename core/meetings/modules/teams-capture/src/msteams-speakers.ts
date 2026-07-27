@@ -80,6 +80,10 @@ export interface TeamsSpeakersOptions {
 export interface TeamsSpeakers {
   /** Names currently in 'speaking' state. */
   getSpeaking(): string[];
+  /** Every participant currently identified — speaking or not. The identity cache is
+   *  maintained by the same observers that drive `getSpeaking`, so this is the roster the
+   *  detector already holds, not a second scan. Excludes the bot's own tile. */
+  getRoster(): string[];
   destroy(): void;
 }
 
@@ -348,6 +352,14 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         for (const ident of cache.values()) if (ident.id === id) { names.push(ident.name); break; }
       }
       return names;
+    },
+    getRoster(): string[] {
+      const names = new Set<string>();
+      for (const ident of cache.values()) {
+        const name = (ident.name || '').trim();
+        if (name && name.toLowerCase() !== selfLower) names.add(name);
+      }
+      return [...names];
     },
     destroy(): void {
       destroyed = true;

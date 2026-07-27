@@ -77,6 +77,10 @@ export interface MeetingState {
     live?: boolean;             // true while the backend session is live (session_uid present)
     startedAt?: string;
     participants?: string[];
+    /** Who was in the room and for how long — bot-observed, so a late joiner and an early leaver
+     *  are distinguishable from someone present throughout. Absent on meetings recorded before
+     *  attendance shipped, and on a platform whose roster could not be read. */
+    attendance?: { name: string; first_seen?: string; last_seen?: string; present_seconds?: number }[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
   };
   transcript: {

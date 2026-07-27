@@ -55,6 +55,10 @@ export interface LifecycleEvent {
   /** The control-plane channels found unreachable when `infra_fault` is set (e.g. the
    *  meeting-api callback and/or redis). Additive; same liberal-ingestion rationale. */
   unreachable_channels?: string[];
+  /** Who was in the room, and for how long — `{participants:[{name, first_seen, last_seen,
+   *  present_seconds, intervals}], observed_to}` (see attendance.ts). TERMINAL events only.
+   *  Additive; same liberal-ingestion rationale as `infra_fault`. */
+  attendance?: unknown;
 }
 
 /** The legal transitions — the machine the bot MUST obey (lifecycle.v1/README.md). */

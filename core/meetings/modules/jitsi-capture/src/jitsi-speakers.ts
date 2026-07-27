@@ -39,6 +39,11 @@ export interface JitsiSpeakersOptions {
 export interface JitsiSpeakers {
   destroy(): void;
   getState(): { mode: "redux" | "dom" | null; current: string | null; changes: number };
+  /** Every participant the app itself currently lists — the roster, not just the dominant
+   *  speaker. Read from the same store `dominantFromRedux` consults, so it is the app's own
+   *  answer rather than a DOM guess; empty on a deployment where the store is unreachable
+   *  (the DOM fallback can name the dominant tile, never the full room). Excludes the bot. */
+  getRoster(): string[];
 }
 
 // The dominant tile's marker class (stock jitsi filmstrip) + display-name nodes.
@@ -69,6 +74,26 @@ function dominantFromRedux(): { id: string; name: string } | null {
     return name ? { id: String(id), name } : null;
   } catch {
     return null;
+  }
+}
+
+/** Defensive read of the app's participants state → every listed participant's name. */
+function rosterFromRedux(selfName?: string): string[] {
+  try {
+    const p = (globalThis as any).APP?.store?.getState?.()?.["features/base/participants"];
+    if (!p) return [];
+    const self = (selfName || "").trim().toLowerCase();
+    const names = new Set<string>();
+    // `remote` is a Map<id, participant>; `local` is the bot itself, so it is never a guest.
+    const remote = p.remote;
+    const values = typeof remote?.values === "function" ? [...remote.values()] : [];
+    for (const participant of values) {
+      const name = String((participant as any)?.name || "").trim();
+      if (name && name.toLowerCase() !== self) names.add(name);
+    }
+    return [...names];
+  } catch {
+    return [];
   }
 }
 
@@ -142,6 +167,9 @@ export function createJitsiSpeakers(opts: JitsiSpeakersOptions): JitsiSpeakers {
     },
     getState() {
       return { mode, current: current?.name ?? null, changes };
+    },
+    getRoster() {
+      return rosterFromRedux(opts.selfName);
     },
   };
 }

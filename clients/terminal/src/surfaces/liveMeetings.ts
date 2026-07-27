@@ -31,7 +31,23 @@ interface MeetingRowDTO {
     auto_join_error?: string;
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
+    // Who was actually in the room (bot-observed), as distinct from `attendees` (the invite list).
+    attendance?: {
+      participants?: { name: string; first_seen?: string; last_seen?: string; present_seconds?: number }[];
+      observed_to?: string;
+    };
   } | null;
+}
+
+/** Avatar initials from a display name: first letters of the first two words, uppercased. A
+ *  single-word name gives one letter rather than a fabricated second. */
+function initialsOf(name: string): string {
+  return (name || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("");
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -188,7 +204,14 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
-    participants: [],
+    // Who was OBSERVED in the room by the bot (`data.attendance`), not who was invited
+    // (`attendees`, above) — the header count and the canvas roster both read this.
+    participants: (d.data?.attendance?.participants ?? []).map((p) => ({
+      name: p.name,
+      role: "",
+      initials: initialsOf(p.name),
+    })),
+    attendance: d.data?.attendance?.participants,
     mentioned: [],
     actions: [],
     transcript: [],

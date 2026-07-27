@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   {
     const events: LifecycleEvent[] = [];
     const r = createSttFaultReporter(() => { /* quiet */ });
-    const o = createOrchestrator(inv, { ...fakes(events), degraded: () => r.report() });
+    const o = createOrchestrator(inv, { ...fakes(events), terminalExtras: () => r.report() });
     r.record(sttError('payment_required', 402, 'Insufficient balance'));
     const run = o.run({ maxActiveMs: 50 });
     const result = await run;
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   {
     const events: LifecycleEvent[] = [];
     const r = createSttFaultReporter(() => { /* quiet */ });
-    const o = createOrchestrator(inv, { ...fakes(events), degraded: () => r.report() });
+    const o = createOrchestrator(inv, { ...fakes(events), terminalExtras: () => r.report() });
     await o.run({ maxActiveMs: 50 });
     check('a meeting with no STT fault emits NO stt_fault field',
       events.every((e) => !(e as any).stt_fault), JSON.stringify(events.map((e) => e.status)));
@@ -120,7 +120,7 @@ async function main(): Promise<void> {
     const events: LifecycleEvent[] = [];
     const o = createOrchestrator(inv, {
       ...fakes(events),
-      degraded: () => { throw new Error('reporter exploded'); },
+      terminalExtras: () => { throw new Error('reporter exploded'); },
     });
     const result = await o.run({ maxActiveMs: 50 });
     check('a throwing reporter still lets the bot report its terminal state',

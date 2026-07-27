@@ -47,15 +47,16 @@ export interface OrchestratorDeps {
    *  treated as reachable (conservative: never abort on an un-probeable channel), so the gate
    *  never turns a missing probe into a join refusal. */
   reachability?: ControlPlaneProbe;
-  /** Optional — what DEGRADED the meeting without ending it (today: STT refusing every chunk).
-   *  Consulted once, when a TERMINAL event is built, and merged onto it. A meeting whose STT
-   *  backend was dead used to reach `completed` indistinguishable from a silent room: the faults
-   *  were typed and attributed all the way to the composition root and then died in a
-   *  console.error, so the emptiest possible transcript arrived with no reason attached (the #807
-   *  shape). Rides lifecycle.v1 exactly as `infra_fault` does — the contract is
-   *  additionalProperties:true, so this is additive.
-   *  Returns `undefined` when nothing degraded. MUST NOT throw. */
-  degraded?: () => Record<string, unknown> | undefined;
+  /** Optional — the forensics a TERMINAL event carries and no other: what DEGRADED the meeting
+   *  without ending it (STT refusing every chunk) and WHO was in the room (attendance). Consulted
+   *  once, when a terminal event is built, and merged onto it. A meeting whose STT backend was
+   *  dead used to reach `completed` indistinguishable from a silent room: the faults were typed
+   *  and attributed all the way to the composition root and then died in a console.error, so the
+   *  emptiest possible transcript arrived with no reason attached (the #807 shape). Rides
+   *  lifecycle.v1 exactly as `infra_fault` does — the contract is additionalProperties:true, so
+   *  this is additive.
+   *  Returns `undefined` when there is nothing to add. MUST NOT throw. */
+  terminalExtras?: () => Record<string, unknown> | undefined;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -110,13 +111,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     }
     cur = status;
     // A terminal event is the LAST thing anyone hears from this bot — if the meeting was degraded,
-    // it says so here or the reason dies with the container. A reporter fault must never change the
-    // exit path (P18: report, but never at the cost of the report itself).
-    let degraded: Record<string, unknown> | undefined;
-    if (isTerminal(status) && deps.degraded) {
-      try { degraded = deps.degraded(); } catch { degraded = undefined; }
+    // or anyone was in the room, it says so here or the record dies with the container. A reporter
+    // fault must never change the exit path (P18: report, but never at the cost of the report itself).
+    let extras: Record<string, unknown> | undefined;
+    if (isTerminal(status) && deps.terminalExtras) {
+      try { extras = deps.terminalExtras(); } catch { extras = undefined; }
     }
-    await deps.lifecycle.emit({ ...base, status, ...extra, ...(degraded ?? {}) });
+    await deps.lifecycle.emit({ ...base, status, ...extra, ...(extras ?? {}) });
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
