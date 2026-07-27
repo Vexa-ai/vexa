@@ -23,12 +23,14 @@
  * lazy redis connect.
  */
 import { createClient } from 'redis';
+// ALLOY: optional STT telemetry tracker composition dependency.
 import { createAlloySttTelemetryTracker } from '@vexa/gmeet-pipeline';
 import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
+// ALLOY: optional STT telemetry Redis publisher composition dependencies.
 import {
   alloySttTelemetryRedisClientFrom,
   createAlloySttTelemetryPublisher,
@@ -186,6 +188,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
   });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
+  // ALLOY: exact opt-in composition; absent/disabled keeps the upstream bot graph.
   const alloyTelemetryEnabled =
     env.ALLOY_STT_TELEMETRY?.trim() === '1' && inv.platform === 'google_meet';
   const alloyTelemetryTracker = alloyTelemetryEnabled
@@ -231,11 +234,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
       transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
       config: speakerStreamConfig,
+      // ALLOY: inject diagnostics only when the exact opt-in created the tracker.
       alloySttTelemetry: alloyTelemetryTracker,
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
       onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
     });
+    // ALLOY: publish the tracker snapshot only for the opt-in Google Meet lane.
     if (alloyTelemetryTracker) {
       alloyTelemetryClient = alloySttTelemetryRedisClientFrom(inv.redisUrl);
       alloyTelemetryPublisher = createAlloySttTelemetryPublisher({
@@ -331,6 +336,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     await pipeline.stop().catch(() => { /* best-effort */ });
     await signalRecorder?.close().catch(() => { /* best-effort */ });
     if (session) await session.close().catch(() => { /* best-effort */ });
+    // ALLOY: optional telemetry teardown is bounded and cannot change bot exit.
     await alloyTelemetryPublisher?.stop().catch(() => { /* best-effort */ });
     await alloyTelemetryClient?.quit().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the

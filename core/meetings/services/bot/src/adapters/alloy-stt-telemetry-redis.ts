@@ -1,3 +1,4 @@
+/** ALLOY: Redis publication boundary for opt-in local STT queue diagnostics. */
 import type { AlloySttTelemetrySnapshotV1 } from '@vexa/gmeet-pipeline';
 import { createClient } from 'redis';
 import { makeLazyConnect } from './redis-lazy-connect.js';
