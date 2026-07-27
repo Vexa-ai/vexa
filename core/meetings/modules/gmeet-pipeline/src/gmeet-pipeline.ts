@@ -22,6 +22,7 @@
 import { SpeakerStreamManager, type SpeakerStreamManagerConfig } from './speaker-streams.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import type { TranscriptSegment, TranscriptSink } from './contracts/transcript-v1.js';
+import type { AlloySttTelemetryTracker } from './alloy-stt-telemetry.js';
 
 export interface GmeetPipelineOptions {
   /** One Whisper round-trip (stt.v1). language is baked into the closure by the host. */
@@ -39,6 +40,11 @@ export interface GmeetPipelineOptions {
    *  so the host can make it observable (a /ws health frame, telemetry, lifecycle) instead
    *  of a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** ALLOY: keep one active STT request plus one replaceable pending request per
+   * physical Meet audio channel. Disabled by default to preserve Vexa behavior. */
+  serializeTranscriptionByChannel?: boolean;
+  /** ALLOY: optional state tracker for local STT queue telemetry. */
+  alloySttTelemetry?: AlloySttTelemetryTracker;
 }
 
 export interface GmeetPipeline {
@@ -53,6 +59,15 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   const ONSET_GAP = opts.onsetGapMs ?? 1000;
   const mgr = new SpeakerStreamManager(opts.config);
   const inflight = new Set<Promise<void>>();
+  type TranscriptionRequest = {
+    speakerId: string;
+    audio: Float32Array;
+    turn: number;
+    audioEndMs: number;
+  };
+  type ChannelQueue = { running: boolean; activeTurn: number; pending?: TranscriptionRequest };
+  const channelQueues = new Map<string, ChannelQueue>();
+  const latestAudioEndBySpeakerId = new Map<string, number>();
   // Per channel: the CURRENT turn's stream key, bound name, last-audio time, turn counter.
   const chan = new Map<number, { key: string; name: string; lastMs: number; turn: number }>();
 
@@ -77,19 +92,107 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   const langOf = (l: string | undefined): string | undefined =>
     l && l !== 'unknown' ? l : undefined;
 
-  mgr.onSegmentReady = (speakerId, _name, audio) => {
-    const p = (async () => {
-      try {
-        const r = await opts.transcribe(audio, mgr.getLastConfirmedText(speakerId) || undefined);
-        const segs = r?.segments;
-        mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
-      } catch (e) {
-        opts.onError?.(e);                          // P18: report the fault, don't swallow it…
-        mgr.handleTranscriptionResult(speakerId, '');   // …but still free the turn (graceful degrade)
-      }
-    })();
+  const channelId = (speakerId: string): string => speakerId.split(':', 1)[0] ?? speakerId;
+  const turnId = (speakerId: string): number => {
+    const parsed = Number.parseInt(speakerId.split(':', 2)[1] ?? '', 10);
+    return Number.isInteger(parsed) ? parsed : 0;
+  };
+
+  const transcribeOne = async ({
+    speakerId,
+    audio,
+    audioEndMs,
+  }: TranscriptionRequest): Promise<void> => {
+    const physicalChannelId = channelId(speakerId);
+    const audioSec = audio.length / 16_000;
+    const startedAtMs = Date.now();
+    opts.alloySttTelemetry?.started(physicalChannelId, audioSec);
+    try {
+      const r = await opts.transcribe(audio, mgr.getLastConfirmedText(speakerId) || undefined);
+      opts.alloySttTelemetry?.completed({
+        channelId: physicalChannelId,
+        audioSec,
+        audioEndMs,
+        processingDurationMs: Date.now() - startedAtMs,
+      });
+      opts.alloySttTelemetry?.recovered();
+      const segs = r?.segments;
+      mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      opts.alloySttTelemetry?.failed(physicalChannelId, {
+        code: 'stt_failed',
+        message: message.slice(0, 512),
+      });
+      opts.onError?.(e);                          // P18: report the fault, don't swallow it…
+      mgr.handleTranscriptionResult(speakerId, '');   // …but still free the turn (graceful degrade)
+    }
+  };
+
+  const track = (p: Promise<void>): void => {
     inflight.add(p);
     void p.finally(() => inflight.delete(p));
+  };
+
+  const dropQueuedRequest = (request: TranscriptionRequest): void => {
+    mgr.removeSpeaker(request.speakerId);
+  };
+
+  const enqueueByChannel = (request: TranscriptionRequest): void => {
+    const key = channelId(request.speakerId);
+    const queue = channelQueues.get(key);
+    if (queue?.running) {
+      if (queue.pending) {
+        if (request.turn <= queue.pending.turn) {
+          dropQueuedRequest(request);
+          return;
+        }
+        // ALLOY: this turn was superseded before reaching STT. Release its manager
+        // buffer so only the newest accumulated channel audio remains pending.
+        opts.alloySttTelemetry?.superseded(
+          key,
+          queue.pending.audio.length / 16_000
+        );
+        dropQueuedRequest(queue.pending);
+      } else if (request.turn < queue.activeTurn) {
+        dropQueuedRequest(request);
+        return;
+      }
+      queue.pending = request;
+      opts.alloySttTelemetry?.queued(key, request.audio.length / 16_000);
+      return;
+    }
+
+    const nextQueue: ChannelQueue = { running: true, activeTurn: request.turn };
+    channelQueues.set(key, nextQueue);
+    track((async () => {
+      let current: TranscriptionRequest | undefined = request;
+      try {
+        while (current) {
+          nextQueue.activeTurn = current.turn;
+          await transcribeOne(current);
+          current = nextQueue.pending;
+          nextQueue.pending = undefined;
+        }
+      } finally {
+        nextQueue.running = false;
+        channelQueues.delete(key);
+      }
+    })());
+  };
+
+  mgr.onSegmentReady = (speakerId, _name, audio) => {
+    const request = {
+      speakerId,
+      audio,
+      turn: turnId(speakerId),
+      audioEndMs: latestAudioEndBySpeakerId.get(speakerId) ?? 0,
+    };
+    if (opts.serializeTranscriptionByChannel) {
+      enqueueByChannel(request);
+      return;
+    }
+    track(transcribeOne(request));
   };
 
   mgr.onSegmentConfirmed = (speakerId, speakerName, text, startMs, endMs, _segmentId, lang) => {
@@ -134,6 +237,9 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         mgr.updateSpeakerName(st.key, glowName);
       }
       st.lastMs = tsMs;
+      const audioEndMs = tsMs + pcm.length / 16;
+      latestAudioEndBySpeakerId.set(st.key, audioEndMs);
+      opts.alloySttTelemetry?.captured(`ch-${channel}`, audioEndMs);
       mgr.feedAudio(st.key, pcm, tsMs);
     },
     flush: async () => { for (const st of chan.values()) await mgr.flushSpeaker(st.key, true); await settle(); },

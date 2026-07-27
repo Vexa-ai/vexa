@@ -7,6 +7,8 @@ served to agents as `.md` + `/llms.txt` automatically. Start at
 
 What remains here, deliberately repo-side:
 
+- [`ALLOY-CUSTOMIZATIONS.md`](ALLOY-CUSTOMIZATIONS.md) — local downstream behavior, mandatory
+  `ALLOY` marking rules, feature switches, and rollback values.
 - [`adr/`](adr/) — the case law: decision records the constitutions cite (`lane:contract`).
 - [`views/`](views/) — **generated** architecture projections (`architecture.dsl`, `.mmd`) —
   written by `pnpm arch:dsl` / `arch:viz`, drift-checked by `gate:dataflow`. Never hand-edit.

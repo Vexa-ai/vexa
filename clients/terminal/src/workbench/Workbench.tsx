@@ -26,6 +26,7 @@ import { Chat } from "../surfaces/chat";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
+import { AlloySttTelemetryMonitor } from "./AlloySttTelemetryMonitor";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly } from "../app/mode";
@@ -444,7 +445,24 @@ export function Workbench() {
 
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
         <div style={{ flex: 1 }} />
-        <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
+        <AlloySttTelemetryMonitor
+          disabledFallback={
+            <button
+              onClick={() => layout.resetLayout()}
+              style={{
+                padding: "0 10px",
+                height: "100%",
+                background: "none",
+                border: "none",
+                color: "var(--t3)",
+                cursor: "pointer",
+              }}
+              title="Reset layout"
+            >
+              reset layout
+            </button>
+          }
+        />
       </footer>
 
       <CommandPalette />

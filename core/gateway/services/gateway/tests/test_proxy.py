@@ -173,6 +173,23 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-api-key"] == VALID_KEY
 
 
+def test_alloy_stt_status_forwards_with_resolved_owner_identity():
+    downstream = FakeDownstream(
+        status_code=200,
+        body={"version": 1, "enabled": True, "available": True, "meetings": []},
+    )
+    client, _ = _client(downstream=downstream)
+    response = client.get(
+        "/alloy/stt/status",
+        headers={**AUTH, "x-user-id": "999"},
+    )
+
+    assert response.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/alloy/stt/status")
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
 def test_meeting_intent_put_forwards_to_meeting_api():
     """The Meetings surface's Schedule/Cancel action PUTs the user-owned intent; the gateway must
     forward it verbatim to meeting-api's PUT /meetings/{platform}/{native}/intent. Regression: this

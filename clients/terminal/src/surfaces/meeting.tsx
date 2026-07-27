@@ -15,6 +15,7 @@ import { ApiError, presentError } from "./apiClient";
 import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
+import { shouldShowRoomCount } from "./alloyRoomCount";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
@@ -827,7 +828,7 @@ function MeetingTab({ params }: TabProps) {
             <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
             <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
-            {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
+            {m && shouldShowRoomCount(m.participants.length) && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
           <div style={{ flex: 1 }} />
           {m && <BotControls m={m} connected={connected} />}

@@ -115,8 +115,13 @@ up: preflight
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	ADMIN_TK=$$(envv ADMIN_TOKEN); ADMIN_TK=$${ADMIN_TK:-changeme}; \
+	INTERNAL_SECRET=$$(envv VEXA_INTERNAL_API_SECRET); INTERNAL_SECRET=$${INTERNAL_SECRET:-local-secret}; \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
+	ALLOY_STT_MAX_CONCURRENCY=$$(envv ALLOY_STT_MAX_CONCURRENCY); \
+	ALLOY_STT_CHANNEL_BACKPRESSURE=$$(envv ALLOY_STT_CHANNEL_BACKPRESSURE); \
+	ALLOY_STT_LANGUAGE_MODE=$$(envv ALLOY_STT_LANGUAGE_MODE); \
+	ALLOY_STT_TELEMETRY=$$(envv ALLOY_STT_TELEMETRY); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
@@ -158,7 +163,7 @@ up: preflight
 		fi; \
 		echo "  Waiting for the STT model to load (up to 3 min)..."; \
 		for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_STT_PORT)/health 2>/dev/null && break; sleep 5; done; \
-		TX_URL=http://$(WHISPER_CONTAINER):8000; TX_TOKEN=; \
+		TX_URL=http://$(WHISPER_CONTAINER):8000; TX_TOKEN=$${TX_TOKEN:-local-vexa}; \
 		echo "  ✓ local STT ready — routing transcription to $$TX_URL (model $(WHISPER_MODEL))"; \
 	fi; \
 	echo "Starting Vexa Lite ($$IMG)..."; \
@@ -168,7 +173,12 @@ up: preflight
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
+		-e INTERNAL_API_SECRET="$$INTERNAL_SECRET" -e VEXA_INTERNAL_API_SECRET="$$INTERNAL_SECRET" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
+		-e ALLOY_STT_MAX_CONCURRENCY="$$ALLOY_STT_MAX_CONCURRENCY" \
+		-e ALLOY_STT_CHANNEL_BACKPRESSURE="$$ALLOY_STT_CHANNEL_BACKPRESSURE" \
+		-e ALLOY_STT_LANGUAGE_MODE="$$ALLOY_STT_LANGUAGE_MODE" \
+		-e ALLOY_STT_TELEMETRY="$$ALLOY_STT_TELEMETRY" \
 		-e MINIO_ENDPOINT=$(MINIO_CONTAINER):9000 -e MINIO_ACCESS_KEY=$(MINIO_ACCESS_KEY) \
 		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
@@ -222,7 +232,10 @@ stt-smoke:
 
 # ── Image build / publish ──────────────────────────────────────────────────────────────────────────
 build: preflight
-	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
+	docker build \
+		--build-arg ALLOY_SKIP_HF_CACHE_WARM=$${ALLOY_SKIP_HF_CACHE_WARM:-1} \
+		--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$${NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT:-1} \
+		-f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "Built $(LOCAL_TAG)"
 
 setup-builder:

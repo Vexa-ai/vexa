@@ -62,6 +62,7 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
 ROUTE_SCOPES: Dict[str, Set[str]] = {
     "/bots": {"bot", "browser"},
+    "/alloy": {"bot", "tx"},
     "/transcripts": {"tx"},
     "/meetings": {"tx"},
     "/recordings": {"tx", "bot"},
@@ -333,6 +334,10 @@ def create_app(
     @app.get("/bots/status")
     async def bots_status(request: Request):
         return await _forward("GET", _meeting("/bots/status"), request)
+
+    @app.get("/alloy/stt/status")
+    async def alloy_stt_status(request: Request):
+        return await _forward("GET", _meeting("/alloy/stt/status"), request)
 
     @app.delete("/bots/{platform}/{native_meeting_id}")
     async def stop_bot(platform: str, native_meeting_id: str, request: Request):

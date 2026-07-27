@@ -47,6 +47,9 @@ export interface TranscriptionClientConfig {
    *  (Groq, vLLM, gateways) need their served name; the bundled unit ignores it (its model is
    *  the unit's own MODEL_SIZE). Default: "whisper-1". */
   model?: string;
+  /** ALLOY: Optional per-client request concurrency limit. Undefined preserves Vexa's
+   *  original unrestricted behavior; use 1 for a single CPU-backed Whisper worker. */
+  maxConcurrentRequests?: number;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -99,6 +102,11 @@ export class TranscriptionClient {
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
   private model: string;
+  /** ALLOY: Opt-in dependency backpressure; disabled unless explicitly configured. */
+  private maxConcurrentRequests: number | undefined;
+  private activeRequests = 0;
+  private requestWaiters: Array<() => void> = [];
+
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
@@ -112,6 +120,10 @@ export class TranscriptionClient {
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
     this.model = config.model ?? 'whisper-1';
+    this.maxConcurrentRequests = Number.isInteger(config.maxConcurrentRequests)
+      && (config.maxConcurrentRequests ?? 0) > 0
+      ? config.maxConcurrentRequests
+      : undefined;
   }
 
   /**
@@ -120,6 +132,32 @@ export class TranscriptionClient {
    * Retries on transient failures (503, network errors).
    */
   async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
+    return this.withRequestSlot(() => this.transcribeSerially(audioData, language, prompt));
+  }
+
+  /** ALLOY: Bound only explicitly configured clients; preserve upstream concurrency otherwise. */
+  private async withRequestSlot<T>(run: () => Promise<T>): Promise<T> {
+    const limit = this.maxConcurrentRequests;
+    if (limit === undefined) return run();
+
+    if (this.activeRequests >= limit) {
+      await new Promise<void>((resolve) => this.requestWaiters.push(resolve));
+    }
+    this.activeRequests++;
+
+    try {
+      return await run();
+    } finally {
+      this.activeRequests--;
+      this.requestWaiters.shift()?.();
+    }
+  }
+
+  private async transcribeSerially(
+    audioData: Float32Array,
+    language?: string,
+    prompt?: string,
+  ): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {

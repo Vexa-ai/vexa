@@ -48,6 +48,9 @@ export BOT_SPEAKER_CONFIRM_THRESHOLD="${BOT_SPEAKER_CONFIRM_THRESHOLD:-}"
 export BOT_SPEAKER_MAX_BUFFER_SEC="${BOT_SPEAKER_MAX_BUFFER_SEC:-}"
 export BOT_SPEAKER_IDLE_TIMEOUT_SEC="${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}"
 
+# ALLOY: expose one opt-out flag consistently to control-plane services and spawned bots.
+export ALLOY_STT_TELEMETRY="${ALLOY_STT_TELEMETRY:-1}"
+
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
 # STT model id for validating backends (Groq/vLLM); empty → whisper-1.

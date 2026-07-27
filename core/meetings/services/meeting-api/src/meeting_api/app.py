@@ -154,6 +154,7 @@ def create_app(
     # collector ports
     transcript_store: Optional[TranscriptStore] = None,
     redis: Optional[RedisBus] = None,
+    alloy_stt_telemetry_redis: Optional["object"] = None,
     # bot_spawn ports
     meeting_repo: Optional["_bot_spawn.MeetingRepo"] = None,
     runtime: Optional["_bot_spawn.RuntimeClient"] = None,
@@ -252,7 +253,15 @@ def create_app(
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
-    app.include_router(_build_collector_router(transcript_store, redis,
+    if alloy_stt_telemetry_redis is not None:
+        from .collector.alloy_stt_telemetry import AlloySttTelemetryReader
+
+        alloy_stt_telemetry = AlloySttTelemetryReader(alloy_stt_telemetry_redis)
+    else:
+        alloy_stt_telemetry = None
+    app.include_router(_build_collector_router(
+                                            transcript_store, redis,
+                                            alloy_stt_telemetry=alloy_stt_telemetry,
                                             calendar_sync_now=calendar_sync_now,
                                             calendar_sync_status=calendar_sync_status))
 

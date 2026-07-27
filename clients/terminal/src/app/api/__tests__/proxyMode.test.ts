@@ -37,4 +37,12 @@ describe("proxyMode — meetings-only server gate", () => {
     process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
     expect(refusedInMeetingsMode("user/calendar")).toBe(false);
   });
+
+  it("routes ALLOY STT telemetry through the gateway meeting domain", () => {
+    expect(MEETINGS_DOMAIN.test("alloy/stt/status")).toBe(true);
+    expect(MEETINGS_DOMAIN.test("alloyed/stt/status")).toBe(false);
+
+    process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
+    expect(refusedInMeetingsMode("alloy/stt/status")).toBe(false);
+  });
 });

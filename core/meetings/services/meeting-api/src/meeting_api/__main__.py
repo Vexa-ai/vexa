@@ -179,6 +179,9 @@ def build_production_app():
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
+        alloy_stt_telemetry_redis=(
+            redis_client if os.getenv("ALLOY_STT_TELEMETRY", "").strip() == "1" else None
+        ),
         meeting_repo=meeting_repo,
         runtime=runtime_client,
         recording_repo=recording_repo,

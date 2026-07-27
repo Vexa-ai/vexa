@@ -106,6 +106,7 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 |---|---|---|
 | `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
 | `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
+| `ALLOY_STT_TELEMETRY` | `1` | ALLOY live STT queue telemetry in Redis/API/Terminal. Set `0` to preserve the upstream-compatible path with no telemetry publication or polling |
 | `ADMIN_TOKEN` | `changeme` | admin API token (the stack's shared admin secret) |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 
@@ -124,6 +125,13 @@ docker exec vexa-lite supervisorctl status        # all supervised services
 docker exec vexa-lite supervisorctl restart meeting-api
 docker exec vexa-lite ps aux | grep dist/index.js # running bot processes
 ```
+
+The Terminal footer shows the global ALLOY STT monitor on every screen. Its compact line reports
+active STT requests, waiting channels, queued audio seconds, maximum audio lag, and the slowest
+current RTF. Click it for per-meeting values, superseded-window counts, update age, and the last
+worker error. The Terminal performs one owner-scoped request per second only while the document is
+visible, never starts a second request while one is in flight, and keeps the last good snapshot
+during a temporary gateway failure.
 
 ## Lite vs. Compose
 

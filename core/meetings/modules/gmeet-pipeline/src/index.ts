@@ -17,3 +17,9 @@ export type { SpeakerStreamManagerConfig } from './speaker-streams.js';
 export { isHallucination } from './hallucination-filter.js';
 export { setLogger } from './log.js';
 export type { TranscriptSegment, TranscriptSink, TimestampedWord, TranscriptMeta, Source } from './contracts/transcript-v1.js';
+export { createAlloySttTelemetryTracker } from './alloy-stt-telemetry.js';
+export type {
+  AlloySttTelemetryError,
+  AlloySttTelemetrySnapshotV1,
+  AlloySttTelemetryTracker,
+} from './alloy-stt-telemetry.js';

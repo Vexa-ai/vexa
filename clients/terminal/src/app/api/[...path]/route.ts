@@ -2,7 +2,8 @@
  *  keeping hosts + keys server-side. It replaces the ~9 near-identical thin route files.
  *
  *  Path-based routing (the architecture seam — two domains behind ONE authenticated edge, the gateway):
- *    • meetings · transcripts · bots  → the gateway ROOT paths (/meetings, /transcripts/{…}, /bots),
+ *    • meetings · transcripts · bots · alloy → the gateway ROOT paths
+ *      (/meetings, /transcripts/{…}, /bots, /alloy/{…}),
  *      where meeting-api is fronted.
  *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
  *      prefix, where agent-api is fronted.
@@ -23,7 +24,7 @@ export const dynamic = "force-dynamic";
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
 // Two domains behind ONE authenticated edge (the gateway):
-//   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
+//   • meetings · transcripts · bots · alloy → the gateway ROOT (/meetings, …) — meeting-api behind it.
 //   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
 //     prefix — agent-api behind it.
 // BOTH carry the per-user X-API-Key; the gateway resolves it → user and injects X-User-Id downstream,

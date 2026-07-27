@@ -44,7 +44,12 @@ RUN test -f /build/core/meetings/services/bot/dist/index.js \
 # Mixed-lane (Zoom/Teams) diarization model — best-effort; the gmeet lane never loads it, so a
 # restricted-network build still succeeds (the lane simply downloads on first use if reachable).
 ENV VEXA_HF_CACHE=/opt/hf-cache
-RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs || echo "[bot-builder] HF cache warm skipped"
+ARG ALLOY_SKIP_HF_CACHE_WARM="0"
+RUN if [ "$ALLOY_SKIP_HF_CACHE_WARM" = "1" ]; then \
+      echo "[ALLOY] HF cache warm skipped for the local Lite build"; \
+    else \
+      cd /build && node core/meetings/services/bot/warm-hf-cache.mjs || echo "[bot-builder] HF cache warm skipped"; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Stage 2b: terminal-builder — the agent-domain workbench (clients/terminal). A Next.js app run
@@ -57,6 +62,9 @@ WORKDIR /app/terminal
 COPY clients/terminal/package.json clients/terminal/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY clients/terminal/ ./
+# ALLOY: hide the placeholder room count only in explicitly opted-in builds.
+ARG NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT="0"
+ENV NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT
 # next build needs the dev deps (typescript/tailwind); prune them after so the runtime tree is lean.
 RUN npm run build && npm prune --omit=dev
 

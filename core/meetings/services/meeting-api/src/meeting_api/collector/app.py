@@ -31,12 +31,14 @@ gateway's contextvars (the cross-hop trace ``test_tracing.py`` asserts).
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from .meeting_link import parse_meeting_url
+from .alloy_stt_telemetry import AlloySttTelemetryReader
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
@@ -99,6 +101,7 @@ def build_router(
     store: TranscriptStore,
     redis: RedisBus,
     *,
+    alloy_stt_telemetry: Optional[AlloySttTelemetryReader] = None,
     log_event: Callable[..., dict] = _default_log_event,
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
@@ -251,6 +254,60 @@ def build_router(
         # emitted (additive back-compat, #579 C2) — the same list under both keys.
         return JSONResponse(content={
             "running": running, "running_bots": running, "count": len(running),
+        })
+
+    @router.get("/alloy/stt/status")
+    async def alloy_stt_status(
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        now_ms = int(time.time() * 1000)
+        if alloy_stt_telemetry is None:
+            return JSONResponse(content={
+                "version": 1,
+                "enabled": False,
+                "available": False,
+                "updated_at_ms": now_ms,
+                "meetings": [],
+                "error": None,
+            })
+        running = await store.list_meetings(
+            user_id, status=_RUNNING_STATUSES, slim=True,
+        )
+        owned_ids = [
+            row.get("id")
+            for row in running
+            if isinstance(row.get("id"), int)
+        ]
+        try:
+            snapshots = await alloy_stt_telemetry.read_owned(owned_ids)
+        except Exception as error:  # noqa: BLE001 - optional diagnostics must not break core reads
+            log_event(
+                "alloy_stt_telemetry_read_failed",
+                audience="system",
+                level="warning",
+                span="alloy.stt.status",
+                user_id=user_id,
+                fields={"error_type": type(error).__name__},
+            )
+            return JSONResponse(content={
+                "version": 1,
+                "enabled": True,
+                "available": False,
+                "updated_at_ms": now_ms,
+                "meetings": [],
+                "error": {
+                    "code": "redis_unavailable",
+                    "message": "STT telemetry is temporarily unavailable",
+                },
+            })
+        return JSONResponse(content={
+            "version": 1,
+            "enabled": True,
+            "available": True,
+            "updated_at_ms": now_ms,
+            "meetings": snapshots,
+            "error": None,
         })
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).

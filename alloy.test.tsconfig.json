@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@vexa/transcribe-buffer": [
+        "core/meetings/modules/buffer/src/index.ts"
+      ],
+      "@vexa/transcribe-whisper": [
+        "core/meetings/modules/whisper/src/index.ts"
+      ]
+    }
+  }
+}
