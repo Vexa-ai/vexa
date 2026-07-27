@@ -6,9 +6,10 @@
 > session-owned worktree based on the selected checkpoint ref.
 
 **Status at integration ref:** source and sealed-contract implementation is present; focused
-offline evidence, standard-runner wiring, and both disposable-Redis lanes are complete. Independent
-review returned three Important findings and no Critical findings; the approved hardening wave,
-clean-image provenance check, and real Google Meet acceptance remain open.
+offline evidence, standard-runner wiring, both disposable-Redis lanes, and the approved
+independent-review hardening wave are complete. The three Important findings have named
+RED/GREEN evidence and clean scoped reviews; no Critical findings remain. Clean-image provenance,
+real Google Meet acceptance, multilingual evidence, and bounded-load recovery remain open.
 
 **Goal:** Provide an opt-in, owner-scoped STT queue monitor that reports real Whisper execution,
 backlog, lag, RTF, and failures on every Vexa Terminal screen without changing upstream behavior
@@ -75,10 +76,11 @@ page is visible.
 ## Evidence interpretation
 
 Checked rows below mean that the integrated source and its named focused evidence exist on the
-selected integration ref. They do not prove that a newly built image is running, that a real
-Redis lane passed, or that a real multilingual meeting completed. Historical RED instructions
-have been reconciled into observed production-boundary checks rather than being presented as
-commands that still need to fail.
+selected integration ref. The two real-Redis rows are checked only because their explicit
+disposable lanes completed successfully. Checked rows do not prove that a newly built image is
+running or that a real multilingual meeting completed. Historical RED instructions have been
+reconciled into observed production-boundary checks rather than being presented as commands that
+still need to fail.
 
 The TypeScript compile portion of the focused package evidence is complete. Some package scripts
 also contain POSIX `rm`/`cp` post-steps; invoking those scripts directly in Windows PowerShell
@@ -211,7 +213,7 @@ or transcription.
 
 - [x] **Step 3: Implement `alloy-stt-telemetry-redis.ts` with immediate start publish and bounded periodic refresh.**
 
-- [ ] **Step 4: Run the explicit publisher lane against a disposable Redis database.**
+- [x] **Step 4: Run the explicit publisher lane against a disposable Redis database.**
 
   Run only with a disposable target:
 
@@ -262,7 +264,7 @@ meetings, silently omits invalid neighbors, and returns the server-computed seal
 
   Terminal does not maintain a second aggregate implementation.
 
-- [ ] **Step 7: Run the owner route through a disposable real Redis database.**
+- [x] **Step 7: Run the owner route through a disposable real Redis database.**
 
   ```powershell
   $env:ALLOY_TEST_REDIS_URL='redis://127.0.0.1:6379/<disposable-db>'
@@ -380,7 +382,7 @@ all state the same default-zero behavior and honest evidence boundary.
 telemetry cannot expose arbitrary backend error text, and the disabled upstream Agent probe is
 byte-for-byte free of the unrelated timeout customization.
 
-- [ ] **Step 1: Add and observe the three-request limiter RED.**
+- [x] **Step 1: Add and observe the three-request limiter RED.**
 
   Extend
   `core/meetings/modules/whisper/src/concurrency-observer.test.ts` with one controlled request,
@@ -394,14 +396,14 @@ byte-for-byte free of the unrelated timeout customization.
   Expected RED: request order or observed peak concurrency proves that the current
   decrement-before-wake release can exceed `ALLOY_STT_MAX_CONCURRENCY=1`.
 
-- [ ] **Step 2: Implement direct FIFO permit handoff and observe GREEN.**
+- [x] **Step 2: Implement direct FIFO permit handoff and observe GREEN.**
 
   Modify only `TranscriptionClient.withRequestSlot`: retain the active permit while handing it to
   the oldest waiter, decrement only when no waiter exists, and keep observer callbacks
   fault-isolated. Re-run the Step 1 command. Expected GREEN: order is FIFO, peak execution is `1`,
   and every lifecycle ends balanced.
 
-- [ ] **Step 3: Add and observe the secret-shaped telemetry RED.**
+- [x] **Step 3: Add and observe the secret-shaped telemetry RED.**
 
   Extend `core/meetings/modules/gmeet-pipeline/src/fault-surfacing.test.ts` with the real
   `createGmeetPipeline` and tracker. Reject with a typed STT fault whose detail contains a
@@ -415,7 +417,7 @@ byte-for-byte free of the unrelated timeout customization.
 
   Expected RED: the current generic `Error.message` copy exposes the sentinel.
 
-- [ ] **Step 4: Implement one safe telemetry-error mapper and observe GREEN.**
+- [x] **Step 4: Implement one safe telemetry-error mapper and observe GREEN.**
 
   Keep the mapper private to `gmeet-pipeline.ts`. Whitelist the existing
   `TranscriptionFaultKind` values structurally, accept only integer HTTP status values from
@@ -423,7 +425,7 @@ byte-for-byte free of the unrelated timeout customization.
   error unchanged through `onError`. Re-run the Step 3 command and the focused
   `alloy-channel-backpressure.test.ts` boundary.
 
-- [ ] **Step 5: Remove the unrelated Agent timeout diff and prove exact rollback.**
+- [x] **Step 5: Remove the unrelated Agent timeout diff and prove exact rollback.**
 
   Remove `MEETING_HEALTH_TIMEOUT_SEC`, the optional `_health_stage` timeout branch, the
   meeting-only override, and its dedicated test. Run:
@@ -435,10 +437,15 @@ byte-for-byte free of the unrelated timeout customization.
 
   Expected GREEN: no diff remains in either Agent file.
 
-- [ ] **Step 6: Run affected focused packages, TypeScript compilation, docs, and diff checks.**
+- [x] **Step 6: Run affected focused packages, TypeScript compilation, docs, and diff checks.**
 
   Stop each focused command at 45 seconds and each gate at 60 seconds. Do not start the clean image
   build until every Important finding has a named GREEN and the scoped re-review returns clean.
+
+  Final hardening evidence: the limiter observer, fault-surfacing, channel-backpressure, both
+  affected TypeScript compiles, and the Agent admin-panel suite completed successfully; the Python
+  suite reported `17 passed`. Contract, config, architecture, dataflow, and docs-version checks
+  were green. The changelog collector preview named the ALLOY fragment and wrote nothing.
 
 ---
 
