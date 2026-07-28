@@ -139,9 +139,10 @@ class LiteBundledPythonTest(unittest.TestCase):
         """An unconditional copy or duplicated venv branch would change flag-off behavior."""
         source = DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn(
-            "FROM python:3.12-slim-bullseye AS alloy-lite-bundled-python",
+            "FROM python:3.12-slim-bookworm AS alloy-lite-bundled-python",
             source,
         )
+        self.assertNotIn("python:3.12-slim-bullseye", source)
         self.assertRegex(
             source,
             rf"(?m)^FROM [^\n]+ AS {UPSTREAM_STAGE}$",
@@ -172,6 +173,10 @@ class LiteBundledPythonTest(unittest.TestCase):
         )
         self.assertIn(f'ARG {BUILD_FLAG}="0"', bundled_branch)
         self.assertIn(f'test "${BUILD_FLAG}" = "1"', bundled_branch)
+        self.assertRegex(
+            bundled_branch,
+            r'python3\.12 -c "import ssl; .*ssl\.OPENSSL_VERSION',
+        )
         self.assertIn("[ALLOY]", bundled_branch)
 
     def test_makefile_is_the_single_build_argument_owner(self) -> None:

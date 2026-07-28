@@ -44,7 +44,7 @@ Docker/BuildKit, Vexa Lite, faster-whisper CPU, PowerShell.
 
 **Interfaces:**
 
-- Consumes: Dockerfile `FROM python:3.12-slim-bullseye` discovered by
+- Consumes: Dockerfile `FROM python:3.12-slim-bookworm` discovered by
   `gate:image-licenses`.
 - Produces: one `images[]` entry keyed by `name: "python"` with a Category-A SPDX licence.
 
@@ -58,7 +58,7 @@ node --test --test-name-pattern="image-licenses" scripts/gates.test.mjs
 ```
 
 Expected: the gate and committed-tree vacuity test fail only because
-`python:3.12-slim-bullseye` is undeclared; the six adversarial negative controls remain green.
+`python:3.12-slim-bookworm` is undeclared; the six adversarial negative controls remain green.
 
 - [ ] **Step 2: Add the minimal manifest entry**
 
@@ -69,7 +69,7 @@ Insert after the existing Playwright base-image entry:
   "name": "python",
   "license": "Python-2.0",
   "disposition": "base-image",
-  "note": "Pinned Python 3.12 source for the exact ALLOY_LITE_BUNDLED_PYTHON=1 Lite build stage. The flag-off build does not select or copy this stage; Python is distributed under the PSF License Version 2 (SPDX Python-2.0)."
+  "note": "Pinned Bookworm Python 3.12 source for the exact ALLOY_LITE_BUNDLED_PYTHON=1 Lite build stage. The flag-off build does not select or copy this stage; Python is distributed under the PSF License Version 2 (SPDX Python-2.0)."
 }
 ```
 

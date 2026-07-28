@@ -28,7 +28,7 @@ The required product evidence is:
   behavior, and the Google Meet human bar are still open.
 - The last full gate is not a valid pass. It exposed both Windows-local baseline/tooling failures
   and one R&D-owned failure: `deploy/lite/Dockerfile.lite` pins
-  `python:3.12-slim-bullseye`, but `image-licenses.json` does not declare that base image.
+  `python:3.12-slim-bookworm`, but `image-licenses.json` does not declare that base image.
 - An earlier clean-context build completed all five Python environments but lost its WSL process
   tree during cleanup before an image tag, digest, labels, or source hashes were proven. Repeating
   the same uncontrolled run would not add evidence.

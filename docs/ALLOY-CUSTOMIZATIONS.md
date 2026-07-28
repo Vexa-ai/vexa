@@ -125,8 +125,8 @@ path for every customization.
 - **Default:** `0` or unset.
 - **Approved local pilot build value:** `1`.
 - **Enabled behavior (`1` exactly):** select the ALLOY Python bootstrap stage, copy `/usr/local`
-  from pinned `python:3.12-slim-bullseye`, verify Python 3.12, and then run the same five existing
-  service-venv commands.
+  from pinned `python:3.12-slim-bookworm`, verify Python 3.12 plus its OpenSSL 3 runtime import
+  against Playwright Jammy, and then run the same five existing service-venv commands.
 - **Disabled/rollback behavior:** unset, empty, `0`, or another value selects the original
   Playwright-jammy base and leaves every `uv venv --python 3.12` path unchanged. Set `0` and rebuild
   Lite to roll back.

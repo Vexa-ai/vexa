@@ -136,15 +136,16 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
 
-# ALLOY: exact opt-in selects a registry-provided Python 3.12 compatible with Playwright jammy.
+# ALLOY: exact opt-in selects a registry-provided Python 3.12 whose OpenSSL 3 ABI matches jammy.
 # The default branch stays on lite-system, so it neither resolves nor copies the bundled image.
-FROM python:3.12-slim-bullseye AS alloy-lite-bundled-python
+FROM python:3.12-slim-bookworm AS alloy-lite-bundled-python
 FROM lite-system AS alloy-lite-python-0
 FROM lite-system AS alloy-lite-python-1
 ARG ALLOY_LITE_BUNDLED_PYTHON="0"
 COPY --from=alloy-lite-bundled-python /usr/local /usr/local
 RUN test "$ALLOY_LITE_BUNDLED_PYTHON" = "1" \
  && python3.12 --version \
+ && python3.12 -c "import ssl; print('[ALLOY] ' + ssl.OPENSSL_VERSION)" \
  && echo "[ALLOY] Lite Python 3.12 bootstrap enabled"
 
 # ALLOY: the selected base owns one unchanged set of service venv commands. This named target lets
