@@ -244,7 +244,7 @@ wall-clock time or delayed webhook receipt time. A bot that never reached `activ
 URL, hostname, token, credential, meeting title, or transcript.
 
 If a legacy or mixed-version run lacks provider ownership or producer timestamps, the block is
-absent. Consumers must treat that as unresolved provenance; do not reconstruct it from
+`null` or absent. Consumers must treat that as unresolved provenance; do not reconstruct it from
 `transcribe_enabled`, current user settings, endpoint URLs, or meeting start/end time.
 
 ## Get the transcript
