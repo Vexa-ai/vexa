@@ -48,7 +48,9 @@
   --r: 8px;
   --r2: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  /* --brand-sans (optional, from NEXT_PUBLIC_BRAND_FONT) swaps the UI face. --mono is
+   * deliberately NOT brandable: transcripts, timestamps and code align on it. */
+  --sans: var(--brand-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif);
 }
 
 /*
