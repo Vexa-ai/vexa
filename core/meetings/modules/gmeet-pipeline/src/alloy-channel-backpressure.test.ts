@@ -737,6 +737,73 @@ async function runLimiterObserverTelemetry() {
   console.log("PASS ALLOY limiter observer owns active/waiting transitions and queue-free RTF");
 }
 
+async function runSameSpeakerCodeSwitchContinuityRegression() {
+  let releaseHeld!: () => void;
+  const held = new Promise<void>((resolve) => { releaseHeld = resolve; });
+  const requests: number[][] = [];
+  let activeCalls = 0;
+  let peakCalls = 0;
+  const pipe = createGmeetPipeline({
+    transcribe: async (audio) => {
+      const markers = [...new Set(
+        Array.from(audio, (sample) => Math.round(sample * 10)),
+      )];
+      requests.push(markers);
+      activeCalls++;
+      peakCalls = Math.max(peakCalls, activeCalls);
+      try {
+        if (requests.length === 1) await held;
+        return result(markers[markers.length - 1] ?? 0, audio.length / 16_000);
+      } finally {
+        activeCalls--;
+      }
+    },
+    sink: {
+      segment: () => {},
+      draft: () => {},
+      finalize: () => {},
+    },
+    serializeTranscriptionByChannel: true,
+    config: {
+      minAudioDuration: 0.01,
+      submitInterval: 0.01,
+      confirmThreshold: 1,
+    },
+  });
+
+  try {
+    pipe.feedAudio(0, "Code Switch Guest", pcm(0.1), 0);
+    await waitFor(() => requests.length === 1, "the held first language window");
+
+    // The same remote participant resumes after two capture-visible gaps while
+    // the first CPU STT request is still active. Every language window remains
+    // product audio: backpressure may coalesce it, but must not discard it.
+    pipe.feedAudio(0, "Code Switch Guest", pcm(0.2), 1_500);
+    await sleep(20);
+    pipe.feedAudio(0, "Code Switch Guest", pcm(0.3), 3_000);
+    await sleep(20);
+    releaseHeld();
+
+    await waitFor(
+      () => {
+        const observed = new Set(requests.flat());
+        return observed.has(1) && observed.has(2) && observed.has(3);
+      },
+      "all EN-RU-EN capture markers to reach STT",
+    );
+    await pipe.dispose();
+
+    if (peakCalls !== 1) {
+      throw new Error(`same channel dispatched ${peakCalls} concurrent STT requests`);
+    }
+  } finally {
+    releaseHeld?.();
+    await pipe.dispose().catch(() => undefined);
+  }
+
+  console.log("PASS ALLOY same-speaker gaps preserve every code-switch audio window");
+}
+
 async function run() {
   await runCleanupDeadlineRotationRegression();
   await runUpstreamCleanupNegativeControl();
@@ -744,6 +811,7 @@ async function run() {
   await runTelemetryAudioEndStateLifecycle();
   await runRotationRegression();
   await runLimiterObserverTelemetry();
+  await runSameSpeakerCodeSwitchContinuityRegression();
 }
 
 run().catch((error) => {

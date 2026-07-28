@@ -410,7 +410,17 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
       // name (the Галина→Зоя mislabel). A different single glow IS the rotation signal.
       const gapOnset = !!st && tsMs - st.lastMs > ONSET_GAP;
       const glowRotation = !!st && !!glowName && st.name !== UNKNOWN && glowName !== st.name;
-      if (!st || gapOnset || glowRotation) {
+      // ALLOY: a confidently identical participant resuming on the same physical
+      // channel stays one buffered turn while serialized CPU STT is active. Its
+      // later audio then coalesces behind the active request instead of becoming
+      // a replaceable pending turn whose middle language window can be discarded.
+      const sameNamedResume = !!st
+        && opts.serializeTranscriptionByChannel === true
+        && gapOnset
+        && !!glowName
+        && st.name !== UNKNOWN
+        && glowName === st.name;
+      if (!st || (gapOnset && !sameNamedResume) || glowRotation) {
         // TURN ONSET / rotation: close the previous turn and open a fresh stream named
         // from the glow lit RIGHT NOW (fixed for the turn — held through overlap below).
         if (st) closeTurn(st.key);
@@ -432,7 +442,10 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         'captured',
         (tracker) => tracker.captured(`ch-${channel}`, audioEndMs),
       );
-      mgr.feedAudio(st.key, pcm, tsMs);
+      // ALLOY: this is a live capture feed. Serialized mode keeps wall-clock
+      // turn detection above, while the manager receives contiguous captured PCM
+      // and therefore does not apply its batch-feeder gap/reset policy a second time.
+      mgr.feedAudio(st.key, pcm, opts.serializeTranscriptionByChannel ? undefined : tsMs);
     },
     flush: async () => { for (const st of chan.values()) await mgr.flushSpeaker(st.key, true); await settle(); },
     dispose: async () => {
