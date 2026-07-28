@@ -331,3 +331,258 @@ The candidate image and ignored source/runtime artifacts were retained for repro
 
 `PASS` for bounded cleanup and preservation. `NO MERGE` because the required Google Meet witness is
 `BLOCKED_PRODUCT`.
+
+# Continuation — isolated Meet audio path and merge candidate
+
+The failed Task 6 result above is retained as historical evidence. This continuation changes the
+stand topology, measures each existing tap, and records the later candidate without rewriting that
+failure into a pass.
+
+## Task 9 — branch and stand preflight
+
+### Expected
+
+Delete only the obsolete runtime branch after proving its commit is already reachable from the
+working R&D line. Keep `main` untouched and perform all file changes in a new worktree inside the
+repository.
+
+### Actual
+
+- `main` was clean at `3ab9af522c61441dccb75f2de274cd26549927e5`.
+- The prior R&D line was clean at `458e025` and 37 commits ahead of `main`.
+- `main` was an ancestor of the R&D line.
+- `alloy/vexa-rnd-runtime-next-20260728` at `c1fe497` was an ancestor of that line and was deleted
+  with `git branch -d`.
+- The continuation ran in its own
+  `alloy-rnd-meet-witness-20260728` worktree and branch.
+
+### Verdict
+
+`PASS`. No commit became unreachable and `main` was not changed.
+
+## Task 10 — one-hypothesis audio-boundary isolation
+
+### Expected
+
+Measure the existing path:
+
+```text
+source WAV → virtual mic → WebRTC sender → Meet remote stream → Vexa capture → Whisper/API
+```
+
+Change one stand variable at a time. Do not change production STT to compensate for damaged input.
+
+### Actual
+
+The source was mono signed 16-bit PCM at 16 kHz:
+
+| Duration | Peak | RMS | Clipping | SHA-256 |
+|---:|---:|---:|---:|---|
+| `15.370938 s` | `0.672913` | `0.085264` | `0` | `fa33da1e…c7c2` |
+
+The bounded hypotheses were:
+
+1. **Shared PulseAudio graph.** A separate speaker container, profile, and PulseAudio graph removed
+   speaker/listener coupling, but default Chromium processing still produced three clipped sender
+   samples and 419 clipped Meet-remote samples. The hypothesis explained isolation risk but did not
+   close the signal-quality bar.
+2. **Chromium AGC/noise suppression/echo cancellation.** Keeping the separate graph and changing
+   only these applied constraints from enabled to disabled removed clipping at virtual mic, sender,
+   Meet remote, and Vexa capture. Virtual-mic/source correlation was `0.983`, sender/source
+   correlation was `0.991`, and Meet-remote/source correlation was `0.897`.
+3. **Source format or level.** The exact WAV had valid mono/16 kHz/s16 framing, `peak=0.672913`,
+   `RMS=0.085264`, and no clipped sample. The whole pattern survived the Meet remote stream, so this
+   hypothesis was disproved.
+
+The first clean-image run after stand calibration still retained only `10.752 s` in Vexa capture
+from the `15.370938 s` source and emitted only the middle Russian phrase. That localized the
+remaining defect to the product capture/scheduling path rather than Whisper or the test speaker.
+
+### Verdict
+
+`PASS` for localization. Stand distortion was removed without a production change; the remaining
+loss was proven at a producer/capture boundary before code was changed.
+
+## Task 11 — producer-boundary RED → GREEN fixes
+
+### Expected
+
+Write a failing regression at each proven point of introduction, then make the smallest
+producer-owned change. Preserve the default configured-language behavior and avoid a second audio
+path.
+
+### Actual
+
+Two independent RED → GREEN pairs were required:
+
+1. `alloy-channel-backpressure.test.ts` first reproduced an EN → RU → EN same-speaker sequence in
+   which the replaceable pending scheduler discarded the middle turn. Commit `37d3f9f` preserved
+   every same-speaker window through the existing scheduler and removed batch-relative timestamp
+   ownership from that lane.
+2. `silence-hangover.test.ts` first failed because the capture gate had no bounded pause state.
+   Commit `a0c471c` added one pure `advanceSilenceGate` policy and one per-stream counter to the
+   existing `onAudio` path. Loud audio resets a 2,000 ms allowance; silence is emitted only while
+   that allowance remains.
+
+The source contains two natural pauses of `1.60137 s` and `1.58425 s`. Both fit within the bounded
+hangover. Idle silence still closes after the allowance.
+
+Focused final results:
+
+```text
+pnpm --filter @vexa/gmeet-capture exec tsx src/silence-hangover.test.ts
+  5/5 cases passed
+
+pnpm --filter @vexa/gmeet-pipeline exec tsx src/alloy-channel-backpressure.test.ts
+  PASS ALLOY same-speaker gaps preserve every code-switch audio window
+
+pnpm --filter @vexa/gmeet-capture test
+  all four capture suites passed
+
+pnpm --filter @vexa/capture-codec build
+pnpm --filter @vexa/gmeet-capture build
+  both exited 0
+```
+
+### Verdict
+
+`PASS`. The implementation remains DRY/SOLID at the scale of the fix: one policy, one stream-owned
+state, and the existing capture port; no duplicate capture or downstream compensation.
+
+## Task 12 — exact Lite candidate
+
+### Expected
+
+Build a clean tracked snapshot of the exact code candidate, prove its provenance, and run the live
+stand from that image.
+
+### Actual
+
+| Property | Observation |
+|---|---|
+| Candidate | `a0c471ce518258efc2dadffa06e63b998f4b5581` |
+| Git tree | `5fa770b61b6107c3688e988faba4b99c1b70152d` |
+| Tracked tar SHA-256 | `3ee2578a0301aa67f8e17fcb36b07b2d8058ac5e66965eb3716d52154f3d5a1c` |
+| Snapshot exclusions | no `.git`, `.env`, or `node_modules` |
+| Confirmed image | `sha256:3f917a98be8fd78f8a3941dc4eb395e8dd7f6e616792cf44c456c4d4a9408297` |
+| OCI revision | exact candidate SHA |
+
+The `--no-cache` build completed all 83 Dockerfile steps, registered the image, and supplied the
+healthy app used by both live witnesses. Its 15-minute outer watchdog canceled the BuildKit client
+after registration while the exporter was still reporting unpack, so that invocation is not
+reported as exit-0. A bounded export confirmation from a newly unpacked copy of the same verified
+tar reused those clean layers, exported the identical config/layers, and ended with `#84 DONE`.
+
+The exact app answered HTTP 200 at the gateway, terminal, and agent boundaries before either
+witness began.
+
+### Verdict
+
+`PASS`. The live artifact is traceable to the exact clean code candidate; the watchdog condition is
+recorded rather than hidden.
+
+## Task 13 — two fresh Google Meet witnesses
+
+### Expected
+
+Run two sequential meetings with fresh guest identities. Each finalized API transcript must contain
+recognizable EN → RU → EN, honest language metadata, monotonic bounded timestamps, and no transport
+clipping, unintended duplicate, or hallucination.
+
+### Actual
+
+Each run used a new Meet room, listener identity, guest identity, Chromium profile, container, and
+PulseAudio graph. Applied browser constraints reported AGC, noise suppression, and echo cancellation
+disabled. The speaker used the fixed 85% calibrated level.
+
+Boundary measurements:
+
+| Run | Boundary | Duration (s) | Peak | RMS | Clipped samples |
+|---|---|---:|---:|---:|---:|
+| 1 | source WAV | `15.370938` | `0.672913` | `0.085264` | `0` |
+| 1 | virtual mic | `21.012375` | `0.414852` | `0.044690` | `0` |
+| 1 | WebRTC sender | `21.000000` | `0.552482` | `0.061598` | `0` |
+| 1 | Meet remote master | `326.100000` | `0.522098` | `0.015309` | `0` |
+| 1 | Vexa capture | `16.128000` | `0.373174` | `0.047588` | `0` |
+| 2 | source WAV | `15.370938` | `0.672913` | `0.085264` | `0` |
+| 2 | virtual mic | `21.029812` | `0.409486` | `0.044671` | `0` |
+| 2 | WebRTC sender | `20.940000` | `0.548602` | `0.061776` | `0` |
+| 2 | Meet remote master | `174.480000` | `0.539183` | `0.020847` | `0` |
+| 2 | Vexa capture | `15.616000` | `0.388199` | `0.047322` | `0` |
+
+Meet-remote duration includes the admitted listener's full room lifetime; its peak, RMS, clipping,
+and PCM are nevertheless measured from the actual product recording. Vexa capture retained the
+speech plus bounded pause allowance rather than the earlier `10.752 s` truncated signal.
+
+Both finalized API results were:
+
+```text
+Today we are checking multilingual speech recognition in English.  [mul]
+Теперь мы проверяем многоязычную расшифровку на русском языке.     [mul]
+Today we are checking multilingual speech recognition in English.  [en]
+```
+
+Run 1 relative intervals were `0.000–4.000`, `4.160–9.160`, and `9.160–16.128`.
+Run 2 relative intervals were `0.000–3.560`, `4.320–9.320`, and `9.320–15.616`.
+The repeated English wording is present in the source as its first and third phrases; the API added
+no unintended repeat.
+
+Sanitized PCM, boundary statistics, transcripts, build logs, and gate logs are retained under:
+
+```text
+.superpowers/sdd/runtime-evidence/alloy-meet-audio-20260728/
+```
+
+Meeting URLs, native meeting IDs, account details, keys, and captured-signal headers are excluded.
+
+### Verdict
+
+`PASS`. The live human bar is green twice on the exact candidate.
+
+## Task 14 — final Linux gate
+
+### Expected
+
+Run `node scripts/gates.mjs all` in Linux against the exact tracked candidate with a temporary Git
+index. Treat transport or worker failures as failures, even when every assertion is green.
+
+### Actual
+
+The first full run used the exact source through a Windows p9 bind mount. It is retained as a
+negative control, not a pass:
+
+```text
+@vexa/terminal:
+  Test Files 48 passed (48)
+  Tests      332 passed (332)
+  Errors     11 worker-response timeouts
+  Duration   490.39 s
+```
+
+Changing only the source filesystem to a native Docker volume produced:
+
+```text
+pnpm --filter @vexa/terminal test
+  Test Files 59 passed (59)
+  Tests      434 passed (434)
+  Duration   29.28 s
+```
+
+A new native source volume was then populated from the verified tracked tar. Dependencies were
+linked from the isolated session store with lifecycle scripts disabled; `.git` was read-only and a
+temporary index was loaded with candidate `a0c471c`. The full run ended with:
+
+```text
+✓ gate:db-budget — Σ 70/100 connections fits [...]
+✓ gate:python — 12 package(s) · pytest green
+✓ gate:node — 18 package(s) · build + test green
+✓ gate:contract-conformance — 2 service(s) conform [...]
+✅ gates green
+```
+
+All 35 reported groups were green, including their declared green-or-skip/opt-in outcomes. No failed
+run is presented as an official pass.
+
+### Verdict
+
+`PASS`. Focused tests, live witnesses, exact-image provenance, and the complete Linux gate are green.
