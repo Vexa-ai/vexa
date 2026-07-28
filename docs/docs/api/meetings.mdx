@@ -221,6 +221,32 @@ With transcription requested (the default) and STT unconfigured, the spawn is **
 `{"transcribe_enabled": false}` (or `TRANSCRIBE_ENABLED=false` for the deployment). See
 [Configuration](/configuration#transcription-stt) and [Troubleshooting](/troubleshooting#bot-joins-but-theres-no-transcript).
 
+### Completion service provenance
+
+The signed `meeting.completed` webhook includes
+`data.meeting.service_provenance` when the meeting has complete producer-owned lifecycle facts:
+
+```json
+{
+  "bot_admitted_at": "2026-07-28T10:05:00.000Z",
+  "bot_departed_at": "2026-07-28T10:30:00.000Z",
+  "bot_outcome": "served",
+  "transcription_provider": "customer",
+  "transcription_outcome": "served",
+  "lifecycle_contract_version": "2026-07-28"
+}
+```
+
+`transcription_provider` is frozen when that bot is created: `vexa`, `customer`, or `none`.
+`bot_admitted_at` and `bot_departed_at` are the bot-observed lifecycle transitions, not meeting
+wall-clock time or delayed webhook receipt time. A bot that never reached `active` reports
+`bot_outcome: "never_admitted"` with both timestamps absent. The block never contains an endpoint
+URL, hostname, token, credential, meeting title, or transcript.
+
+If a legacy or mixed-version run lacks provider ownership or producer timestamps, the block is
+absent. Consumers must treat that as unresolved provenance; do not reconstruct it from
+`transcribe_enabled`, current user settings, endpoint URLs, or meeting start/end time.
+
 ## Get the transcript
 
 ```bash GET /transcripts/{platform}/{native_meeting_id}

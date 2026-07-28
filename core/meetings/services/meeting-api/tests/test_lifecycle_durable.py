@@ -93,10 +93,10 @@ def test_rehydration_preserves_admission_timestamp_for_runtime_billing(goldens):
         admitted,
         {
             "from": "active",
-                "to": "completed",
-                "timestamp": "2026-07-28T10:25:10.000Z",
-                "timestamp_source": "producer",
-                "source": "bot_callback",
+            "to": "completed",
+            "timestamp": "2026-07-28T10:25:10.000Z",
+            "timestamp_source": "producer",
+            "source": "bot_callback",
             "completion_reason": "stopped",
         },
     ]
