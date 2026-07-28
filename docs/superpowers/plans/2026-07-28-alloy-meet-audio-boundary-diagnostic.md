@@ -41,6 +41,10 @@ FFmpeg/FFprobe, Vexa Lite, faster-whisper, Google Meet, Git.
   `.superpowers/sdd/tmp/alloy-meet-audio-20260728/run-isolated-speaker.mjs`
 - Create ignored:
   `.superpowers/sdd/tmp/alloy-meet-audio-20260728/materialize-captured-signal.mjs`
+- Create ignored:
+  `.superpowers/sdd/tmp/alloy-meet-audio-20260728/materialize-stt.mjs`
+- Create ignored from the candidate image:
+  `.superpowers/sdd/tmp/alloy-meet-audio-20260728/telemetry.instrumented.js`
 - Read: `core/meetings/services/bot/src/telemetry.ts`
 - Read: `core/meetings/services/bot/src/capture-bridge.ts`
 
@@ -77,7 +81,12 @@ Decode each `CapturedFrame.pcm` base64 payload as Float32 LE, preserve frame ord
 `speakerIndex`, and materialize one PCM file per channel plus a frame manifest. Reject a
 non-monotone `seq`, invalid `pcm_len`, or non-finite sample.
 
-- [ ] **Step 4: Create `run-isolated-speaker.mjs`**
+- [ ] **Step 4: Create `materialize-stt.mjs`**
+
+Decode each instrumented `.stt.jsonl` `pcm_b64` payload, require exactly `pcm_len * 4` bytes, and
+write one Float32 LE file per online Whisper request plus a manifest aligned to its result metadata.
+
+- [ ] **Step 5: Create `run-isolated-speaker.mjs`**
 
 Reuse `getJoinBrowserArgs()` and `joinMeeting()`. Launch one ephemeral Chromium context inside the
 speaker container, log the actual `getUserMedia` constraints, use the container's own
@@ -91,7 +100,14 @@ speaker container, log the actual `getUserMedia` constraints, use the container'
 The script accepts `--processing=default|disabled`. `disabled` changes only
 `autoGainControl`, `noiseSuppression`, and `echoCancellation`.
 
-- [ ] **Step 5: Capability-probe the candidate image**
+- [ ] **Step 6: Instrument the existing online transcribe tap**
+
+Copy the exact candidate image's built `dist/telemetry.js` into the ignored artifact directory and
+add only `pcm_b64` to the existing success/fault `.stt.jsonl` records. Mount that file read-only over
+the same built adapter for diagnostic runs. This preserves the existing transcribe call and adds no
+second request. Record both original and instrumented SHA-256 values.
+
+- [ ] **Step 7: Capability-probe the candidate image**
 
 Run one bounded `--rm` container from
 `vexa-lite:alloy-code-switch-20260728-59bc7e9` and prove `node`, Chromium, Xvfb, `pulseaudio`,
