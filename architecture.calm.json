@@ -1731,7 +1731,7 @@
      }
     }
    },
-   "description": "audio -> first-party STT via TRANSCRIPTION_SERVICE_URL",
+   "description": "audio -> first-party STT via TRANSCRIPTION_SERVICE_URL. ALLOY: opt-in auto-language mode may split one PCM window at natural pauses into sequential no-language requests and merge verbose results.",
    "protocol": "HTTPS",
    "metadata": [
     {

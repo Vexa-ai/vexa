@@ -178,6 +178,17 @@ async function main(): Promise<void> {
         language: 'ru',
       }))(pcm, 'previous words', observer);
       await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
+      // ALLOY: Break caught — merely omitting language without enabling pause-bounded
+      // re-detection would still make one backend request and lose code-switched legs.
+      process.env.ALLOY_STT_LANGUAGE_MODE = 'auto';
+      const autoPcm = new Float32Array(64_000);
+      autoPcm.fill(0.2, 0, 16_000);
+      autoPcm.fill(0.2, 24_000, 40_000);
+      autoPcm.fill(0.2, 48_000, 64_000);
+      await createTranscribe(baseInv({
+        transcriptionServiceUrl: 'http://stt.test',
+        language: 'ru',
+      }))(autoPcm, 'multilingual context');
     } finally {
       (globalThis as any).fetch = realFetch;
       if (realLanguageMode === undefined) delete process.env.ALLOY_STT_LANGUAGE_MODE;
@@ -193,6 +204,14 @@ async function main(): Promise<void> {
     check('ALLOY createTranscribe forwards the real limiter observer',
       observerEvents.join(',') === 'started,finished',
       observerEvents.join(','));
+    const autoParts = formParts.slice(2);
+    check(
+      'ALLOY auto mode enables pause-bounded requests without a language pin',
+      autoParts.length === 3
+        && autoParts.every((part) => part.language === null)
+        && autoParts.map((part) => part.prompt).join(',') === 'multilingual context,,',
+      JSON.stringify(autoParts),
+    );
   }
 
   // ── 5) ALLOY: exact zero is a quiet opt-out; malformed/negative values stay diagnostic. ──

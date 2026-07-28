@@ -53,9 +53,10 @@ make -C deploy/lite up LOCAL_STT=1 WHISPER_MODEL=Systran/faster-whisper-small
 
 `WHISPER_MODEL` is a Lite make variable, not an ALLOY flag. It chooses the model loaded by the
 backend; it does not pin the language sent with an individual transcription request. Pair it with
-`ALLOY_STT_LANGUAGE_MODE=auto`, which omits that request language. This recipe is the required
-backend setup for the next multilingual run, not evidence that Russian or code-switch acceptance
-has passed. A different compatible GPU image may still be supplied with `WHISPER_IMAGE=...`.
+`ALLOY_STT_LANGUAGE_MODE=auto`, which omits that request language and re-detects it on sequential
+chunks separated by qualifying natural pauses. This recipe is the required backend setup for the
+multilingual run, not evidence that clean-image product or Google Meet acceptance has passed. A
+different compatible GPU image may still be supplied with `WHISPER_IMAGE=...`.
 (The client sends `model=whisper-1`, the OpenAI id; faster-whisper-server accepts it and serves
 `WHISPER_MODEL`.)
 
@@ -159,10 +160,13 @@ Runtime flags are inherited by Lite and newly spawned bot processes:
 
 `ALLOY_STT_MAX_CONCURRENCY=1` limits each bot process independently; it is not a shared limit
 across meetings, bot processes, or the Whisper service. `ALLOY_STT_LANGUAGE_MODE=auto` removes the
-pinned language parameter and delegates detection to the configured backend/model. For bundled
-local STT, the multilingual pilot must also set the non-ALLOY make variable
+pinned language parameter, splits a window at qualifying natural pauses, and submits the chunks
+sequentially inside one logical limiter/telemetry lifecycle. Results are merged onto the original
+timeline; a mixed window reports `mul`. Pause-rich windows therefore cost additional inference
+latency, and a switch without an acoustic pause remains backend-limited. For bundled local STT, the
+multilingual pilot must also set the non-ALLOY make variable
 `WHISPER_MODEL=Systran/faster-whisper-small`; the default `.en` model cannot satisfy that test.
-Real Russian, English, and code-switch acceptance remains pending.
+Clean-image product and Google Meet acceptance remain pending.
 
 Build flags are compiled into the image and require a rebuild after either change:
 

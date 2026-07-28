@@ -1,5 +1,6 @@
 import { log } from './log.js';
 import { isLowConfidenceSegment } from './confidence.js';
+import { splitOnPauses, type AudioSampleRange } from './pause-segmenter.js';
 
 export interface TranscriptionWord {
   word: string;
@@ -57,6 +58,8 @@ export interface TranscriptionClientConfig {
   /** ALLOY: Optional per-client request concurrency limit. Undefined preserves Vexa's
    *  original unrestricted behavior; use 1 for a single CPU-backed Whisper worker. */
   maxConcurrentRequests?: number;
+  /** ALLOY: Re-detect language on pause-bounded chunks. Disabled preserves one upstream request. */
+  autoDetectLanguagePerSegment?: boolean;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -111,6 +114,8 @@ export class TranscriptionClient {
   private model: string;
   /** ALLOY: Opt-in dependency backpressure; disabled unless explicitly configured. */
   private maxConcurrentRequests: number | undefined;
+  /** ALLOY: Opt-in pause-bounded language re-detection; disabled by default. */
+  private autoDetectLanguagePerSegment: boolean;
   private activeRequests = 0;
   private requestWaiters: Array<() => void> = [];
 
@@ -131,6 +136,7 @@ export class TranscriptionClient {
       && (config.maxConcurrentRequests ?? 0) > 0
       ? config.maxConcurrentRequests
       : undefined;
+    this.autoDetectLanguagePerSegment = config.autoDetectLanguagePerSegment === true;
   }
 
   /**
@@ -209,6 +215,31 @@ export class TranscriptionClient {
     language?: string,
     prompt?: string,
   ): Promise<TranscriptionResult> {
+    // ALLOY: Only the explicit auto-language path may turn one logical window into child requests.
+    if (this.autoDetectLanguagePerSegment && language === undefined) {
+      const ranges = splitOnPauses(audioData, this.sampleRate);
+      if (ranges.length > 1) {
+        const results: TranscriptionResult[] = [];
+        for (let i = 0; i < ranges.length; i++) {
+          const range = ranges[i];
+          results.push(await this.transcribeAudio(
+            audioData.subarray(range.startSample, range.endSample),
+            undefined,
+            i === 0 ? prompt : undefined,
+          ));
+        }
+        return this.mergeSegmentedResults(audioData.length, ranges, results);
+      }
+    }
+    return this.transcribeAudio(audioData, language, prompt);
+  }
+
+  /** ALLOY: Child requests reuse the one upstream WAV/retry/request implementation. */
+  private async transcribeAudio(
+    audioData: Float32Array,
+    language?: string,
+    prompt?: string,
+  ): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -238,6 +269,53 @@ export class TranscriptionClient {
 
     // Should never reach here, but TypeScript needs it
     throw new Error('Transcription failed: exhausted retries');
+  }
+
+  /** ALLOY: Restore child-local verbose results to the original logical window timeline. */
+  private mergeSegmentedResults(
+    audioLength: number,
+    ranges: AudioSampleRange[],
+    results: TranscriptionResult[],
+  ): TranscriptionResult {
+    const languages = new Set(
+      results
+        .map((result) => result.language)
+        .filter((language) => language && language !== 'unknown'),
+    );
+    const language = languages.size > 1
+      ? 'mul'
+      : languages.values().next().value ?? 'unknown';
+    const agreedProbabilities = language === 'mul' || language === 'unknown'
+      ? []
+      : results
+        .filter((result) => result.language === language)
+        .map((result) => result.language_probability)
+        .filter((probability): probability is number => typeof probability === 'number');
+
+    return {
+      text: results
+        .map((result) => result.text.trim())
+        .filter(Boolean)
+        .join(' '),
+      language,
+      language_probability: agreedProbabilities.length > 0
+        ? Math.min(...agreedProbabilities)
+        : undefined,
+      duration: audioLength / this.sampleRate,
+      segments: results.flatMap((result, index) => {
+        const offsetSec = ranges[index].startSample / this.sampleRate;
+        return result.segments.map((segment) => ({
+          ...segment,
+          start: segment.start + offsetSec,
+          end: segment.end + offsetSec,
+          words: segment.words?.map((word) => ({
+            ...word,
+            start: word.start + offsetSec,
+            end: word.end + offsetSec,
+          })),
+        }));
+      }),
+    };
   }
 
   /**

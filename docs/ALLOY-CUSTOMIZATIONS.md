@@ -37,9 +37,13 @@ path for every customization.
   whole session.
 - **Default:** `configured`.
 - **Approved local pilot value:** `auto`.
-- **Enabled behavior (`auto`):** no language is sent to Whisper; the model detects the language for
-  each submitted audio window. This is the mechanism intended to support Russian, English, and
-  switching between them; the real multilingual meeting result is not yet validated.
+- **Enabled behavior (`auto`):** no language is sent to Whisper. A submitted PCM window is split at
+  qualifying natural pauses and the chunks are sent sequentially so the model re-detects language
+  for each chunk. The adapter merges text plus segment/word offsets back onto the original window;
+  mixed detected languages use the standard aggregate code `mul`.
+- **Cost and limit:** pause-rich windows make more sequential STT calls inside the same logical
+  limiter/telemetry lifecycle, increasing CPU latency. A language switch with no qualifying
+  acoustic pause remains limited by the backend's one-language decode.
 - **Backend prerequisite:** Lite's bundled `Systran/faster-whisper-tiny.en` default and
   `Systran/faster-whisper-small.en` example are English-only. The local multilingual pilot uses
   the separate make variable `WHISPER_MODEL=Systran/faster-whisper-small`; it is not an ALLOY flag
@@ -188,9 +192,13 @@ ALLOY_LITE_BUNDLED_PYTHON=0
 ## Evidence status
 
 Focused source, contract, configuration, architecture, and component checks cover the implemented
-opt-in boundaries, real slot lifecycle accounting, active-turn preservation, strict owner-only
-lookup, sealed server aggregation, visibility-aware Terminal polling, and the Lite bundled-Python
-build-selection contract.
+opt-in boundaries, pause-bounded auto-language ranges and merged offsets, real slot lifecycle
+accounting, active-turn preservation, strict owner-only lookup, sealed server aggregation,
+visibility-aware Terminal polling, and the Lite bundled-Python build-selection contract.
+
+A one-variable backend diagnostic reproduced the full-window Russian-only failure, then returned
+English → Russian → English after only the request boundary was split at the same PCM's natural
+pauses. This confirms the mechanism; it is not the clean-image product or Google Meet acceptance.
 
 Still pending, and therefore not claimed here:
 

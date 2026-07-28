@@ -100,7 +100,7 @@ edges:
   bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
-  bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
+  bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL. ALLOY: opt-in auto-language mode may split one PCM window at natural pauses into sequential no-language requests and merge verbose results.
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status

@@ -282,8 +282,10 @@ export function createTranscribe(inv: Invocation): Transcribe {
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
     maxConcurrentRequests: alloyMaxConcurrency,
+    // ALLOY: Re-detect at natural pauses only under the explicit auto-language opt-in.
+    autoDetectLanguagePerSegment: alloyLanguageMode === 'auto',
   });
-  // ALLOY: auto mode supports Russian/English code-switching per submitted window.
+  // ALLOY: auto mode supports Russian/English code-switching within a submitted window.
   // Without the flag, preserve Vexa's invocation-configured language behavior.
   const language = alloyLanguageMode === 'auto' ? undefined : inv.language ?? undefined;
   // ALLOY: the bot adapter only forwards lifecycle observation to the owning client.
