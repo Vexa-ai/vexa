@@ -57,6 +57,9 @@ export interface OrchestratorDeps {
    *  additionalProperties:true, so this is additive.
    *  Returns `undefined` when nothing degraded. MUST NOT throw. */
   degraded?: () => Record<string, unknown> | undefined;
+  /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
+   *  before the lifecycle adapter performs any HTTP retry. */
+  now?: () => string;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -123,6 +126,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   const recordingKey = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
 
   let cur: BotStatus = 'joining';
+  const eventTime = (): string => deps.now?.() ?? new Date().toISOString();
 
   const emit = async (status: BotStatus, extra: Partial<LifecycleEvent> = {}): Promise<void> => {
     if (status !== cur && !canTransition(cur, status)) {
@@ -136,14 +140,25 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (isTerminal(status) && deps.degraded) {
       try { degraded = deps.degraded(); } catch { degraded = undefined; }
     }
-    await deps.lifecycle.emit({ ...base, status, ...extra, ...(degraded ?? {}) });
+    await deps.lifecycle.emit({
+      ...base,
+      status,
+      timestamp: extra.timestamp ?? eventTime(),
+      ...extra,
+      ...(degraded ?? {}),
+    });
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
   // needs no transition guard. When the sink can report reachability we consult it; otherwise the
   // event is emitted normally and treated as reachable (self-host / test sinks have no gate).
   const emitJoining = async (extra: Partial<LifecycleEvent>): Promise<boolean> => {
-    const ev: LifecycleEvent = { ...base, status: 'joining', ...extra };
+    const ev: LifecycleEvent = {
+      ...base,
+      status: 'joining',
+      timestamp: extra.timestamp ?? eventTime(),
+      ...extra,
+    };
     if (deps.lifecycle.emitReachable) return (await deps.lifecycle.emitReachable(ev)) === 'reachable';
     await deps.lifecycle.emit(ev);
     return true;
@@ -195,6 +210,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         await deps.lifecycle.emit({
           ...base,
           status: 'failed',
+          timestamp: eventTime(),
           failure_stage: 'requested',
           completion_reason: 'join_failure',
           infra_fault: CONTROL_PLANE_UNREACHABLE,

@@ -690,12 +690,30 @@ def create_app() -> FastAPI:
         # The effective transcription backend (user pref > platform setting) — bot_spawn overrides
         # its env-derived TRANSCRIPTION_SERVICE_URL/TOKEN with this when present. The token crosses
         # ONLY this internal hop.
-        transcription = _resolve_effective(
-            data.get("transcription_prefs") or {},
-            await _platform_setting("transcription", db),
-            _TRANSCRIPTION_FIELDS,
-        )
+        user_transcription = data.get("transcription_prefs") or {}
+        platform_transcription = await _platform_setting("transcription", db)
+        if user_transcription.get("url"):
+            # Selecting a customer endpoint changes the credential owner too. Never fill a
+            # missing customer token/model from the platform record: that would disclose a Vexa
+            # provider credential to an arbitrary customer-controlled host.
+            transcription = {
+                key: user_transcription[key]
+                for key in _TRANSCRIPTION_FIELDS
+                if user_transcription.get(key) not in (None, "")
+            }
+        else:
+            transcription = _resolve_effective(
+                user_transcription,
+                platform_transcription,
+                _TRANSCRIPTION_FIELDS,
+            )
         if transcription:
+            # Ownership follows the URL that will actually serve this spawn. This non-secret
+            # discriminator crosses only the internal bot-context edge; the URL/token remain
+            # internal and never enter the public completion provenance.
+            transcription["provider"] = (
+                "customer" if user_transcription.get("url") else "vexa"
+            )
             resp["transcription"] = transcription
         return resp
 

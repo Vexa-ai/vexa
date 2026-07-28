@@ -36,6 +36,9 @@ _INTERNAL_DATA_KEYS = frozenset({
     "webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_secrets",
     "webhook_events", "webhook_url", "outbound_events",
     "bot_container_id", "container_name",
+    # Internal rating input. Consumers receive only the privacy-safe, frozen
+    # `service_provenance` projection assembled at terminal finalization.
+    "transcription_provider",
 })
 
 

@@ -25,6 +25,10 @@ this shape.
   (`event_type` is part of the identity).
 - **Retention.** Retain seen `event_id`s ≥ 48h (the retry schedule tops out at 24h, `retry.py`, plus
   slack) to dedupe a late redelivery.
+- **Completion carries frozen service facts.** `meeting.completed.data.meeting.service_provenance`
+  states admitted/departed time, bot outcome, transcription provider/outcome, and lifecycle
+  contract version. It contains no endpoint URL, token, credential, meeting title, or transcript.
+  Absence means provenance is unresolved; consumers must not infer it from legacy intent flags.
 
 ## Shapes (`$defs`)
 - **`Envelope`** — `event_id · event_type · api_version · created_at · data`. The body POSTed is
