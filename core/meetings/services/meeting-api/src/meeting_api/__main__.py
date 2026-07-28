@@ -156,8 +156,8 @@ def build_production_app():
     # the next db-writer tick happens to run`).
     from .collector.db_writer import finalize_meeting
 
-    async def _transcript_finalizer(meeting_id: int) -> None:
-        await finalize_meeting(redis_client, transcript_store, meeting_id)
+    async def _transcript_finalizer(meeting_id: int) -> int:
+        return await finalize_meeting(redis_client, transcript_store, meeting_id)
 
     # Calendar-sync user edges (GET/POST /user/calendar/sync): the SAME one-user pass the
     # background sweep runs, on demand — paste-a-feed gets an immediate result instead of a

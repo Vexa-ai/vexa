@@ -1,6 +1,7 @@
 {
   "connection_id": "sess-uid",
   "status": "completed",
+  "timestamp": "2026-07-28T10:30:00.000Z",
   "exit_code": 0,
   "completion_reason": "stopped",
   "bot_logs": ["[JOIN-STATE] admitted", "[ACT] leave received"]

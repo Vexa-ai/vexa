@@ -349,6 +349,7 @@ def _mount_lifecycle(
     import jsonschema
 
     from .lifecycle.machine import IllegalTransition, TransitionSource
+    from .lifecycle.provenance import build_service_provenance
     from .lifecycle.receiver import conforms
     from .lifecycle.webhook import build_status_change_envelope, build_typed_envelope
     from .obs import log_event
@@ -371,6 +372,7 @@ def _mount_lifecycle(
             "status": row.get("status"),
             "completion_reason": data.get("completion_reason"),
             "failure_stage": data.get("failure_stage"),
+            "service_provenance": data.get("service_provenance"),
             "start_time": _iso(row.get("start_time")),
             "end_time": _iso(row.get("end_time")),
             "data": clean_meeting_data(data),
@@ -423,13 +425,19 @@ def _mount_lifecycle(
             existing = sink.store.get(connection_id)
             if existing is None or existing.status is None:
                 try:
-                    persisted = await meeting_repo.get_status_by_session(session_uid=connection_id)
+                    persisted = await meeting_repo.get_lifecycle_state_by_session(
+                        session_uid=connection_id
+                    )
                 except Exception as e:  # noqa: BLE001 — rehydration is best-effort
                     persisted = None
                     log_event("lifecycle_rehydrate_failed", audience="system", level="warning",
                               span="lifecycle.callback", fields={"error": str(e)})
                 if persisted:
-                    sink.store.rehydrate(connection_id, persisted)
+                    sink.store.rehydrate(
+                        connection_id,
+                        persisted.get("status"),
+                        persisted.get("data"),
+                    )
         try:
             change = sink.apply_change(
                 body,
@@ -482,20 +490,85 @@ def _mount_lifecycle(
         # This guarantees a completed meeting's transcript is durable even if the periodic
         # db-writer never gets another tick (crash/restart right after completion). Best-effort:
         # the periodic loop retries anything this misses; never fail the bot's callback.
-        if (
-            transcript_finalizer is not None
-            and not change.no_op
+        terminal_advanced = (
+            not change.no_op
             and rec.status is not None
             and rec.status.value in ("completed", "failed")
             and isinstance(meeting_row, dict)
             and meeting_row.get("id") is not None
+        )
+        if (
+            transcript_finalizer is not None
+            and terminal_advanced
         ):
+            terminal_meeting_id = meeting_row["id"]
             try:
-                await transcript_finalizer(meeting_row["id"])
+                finalized_segments = await transcript_finalizer(terminal_meeting_id)
+                if isinstance(finalized_segments, int) and finalized_segments >= 0:
+                    rec_data = rec.data
+                    rec_data["segments_captured"] = finalized_segments
+                    updated_row = await meeting_repo.update_meeting_status(
+                        session_uid=rec.connection_id,
+                        status=rec.status.value,
+                        completion_reason=(
+                            rec.completion_reason.value if rec.completion_reason else None
+                        ),
+                        failure_stage=rec.failure_stage.value if rec.failure_stage else None,
+                        data=rec_data,
+                    )
+                    if isinstance(updated_row, dict):
+                        meeting_row = updated_row
             except Exception as e:  # noqa: BLE001 — the db-writer loop is the retry path
+                rec_data = rec.data
+                rec_data["transcript_finalize_failed"] = True
+                try:
+                    updated_row = await meeting_repo.update_meeting_status(
+                        session_uid=rec.connection_id,
+                        status=rec.status.value,
+                        completion_reason=(
+                            rec.completion_reason.value if rec.completion_reason else None
+                        ),
+                        failure_stage=rec.failure_stage.value if rec.failure_stage else None,
+                        data=rec_data,
+                    )
+                    if isinstance(updated_row, dict):
+                        meeting_row = updated_row
+                except Exception:  # noqa: BLE001 — original finalization failure is the signal
+                    pass
                 log_event("transcript_finalize_failed", audience="system", level="warning",
                           span="lifecycle.callback",
-                          fields={"meeting_id": meeting_row.get("id"), "error": str(e)})
+                          fields={"meeting_id": terminal_meeting_id, "error": str(e)})
+        if terminal_advanced and isinstance(meeting_row, dict):
+            data = dict(meeting_row.get("data") or {})
+            provenance = build_service_provenance({**meeting_row, "data": data})
+            if provenance is not None:
+                data["service_provenance"] = provenance
+                # The event projection can truthfully carry the producer facts even if this
+                # best-effort persistence attempt fails, matching the callback's established
+                # availability contract. The next reconciliation pass owns that exception.
+                projection_row = {**meeting_row, "data": data}
+                try:
+                    updated_row = await meeting_repo.update_meeting_status(
+                        session_uid=rec.connection_id,
+                        status=rec.status.value,
+                        completion_reason=(
+                            rec.completion_reason.value if rec.completion_reason else None
+                        ),
+                        failure_stage=rec.failure_stage.value if rec.failure_stage else None,
+                        data=data,
+                    )
+                    meeting_row = (
+                        updated_row if isinstance(updated_row, dict) else projection_row
+                    )
+                except Exception as e:  # noqa: BLE001 — callback availability is pre-existing
+                    meeting_row = projection_row
+                    log_event(
+                        "service_provenance_persist_failed",
+                        audience="system",
+                        level="warning",
+                        span="lifecycle.callback",
+                        fields={"meeting_id": meeting_row.get("id"), "error": str(e)},
+                    )
         # Build the TYPED event the transition maps to (meeting.started on active,
         # meeting.completed with the post-meeting envelope on completion, bot.failed on terminal
         # failure) — additive alongside meeting.status_change, never instead of it. Built AFTER the

@@ -87,10 +87,12 @@ class MeetingRepo(Protocol):
         ``create_meeting`` pre-check sequence on the fresh-insert path."""
         ...
 
-    async def reopen_meeting(self, *, meeting_id: int) -> dict:
+    async def reopen_meeting(
+        self, *, meeting_id: int, data_patch: Optional[dict] = None
+    ) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
-        survive). Returns the updated row."""
+        survive), and freeze the new session's service-selection facts. Returns the updated row."""
         ...
 
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
@@ -133,6 +135,15 @@ class MeetingRepo(Protocol):
         FSM after a meeting-api restart (LIFECYCLE-409): the in-memory store is non-durable, so the
         callback reconciles a fresh/empty record against the DB's real status BEFORE applying the
         bot's event (else a terminal event on an empty store creates a status=None record and 409s)."""
+        ...
+
+    async def get_lifecycle_state_by_session(self, *, session_uid: str) -> Optional[dict]:
+        """Return the persisted lifecycle state needed to restore the FSM after restart.
+
+        Shape: ``{"status": str, "data": dict}``. The transition trail is part of the durable
+        lifecycle fact: restoring only the current status would erase the producer-observed
+        admission time when the terminal callback arrives after a process restart.
+        """
         ...
 
     async def update_meeting_status(

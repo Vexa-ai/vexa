@@ -130,7 +130,7 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
-    async def reopen_meeting(self, *, meeting_id) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
@@ -146,6 +146,11 @@ class SqlAlchemyMeetingRepo:
             data = dict(m.data) if isinstance(m.data, dict) else {}
             for k in ("completion_reason", "failure_stage"):
                 data.pop(k, None)
+            for key, value in (data_patch or {}).items():
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
             m.data = data
             flag_modified(m, "data")
             # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
@@ -169,6 +174,26 @@ class SqlAlchemyMeetingRepo:
                 await db.execute(select(Meeting.status).where(Meeting.id == sess.meeting_id))
             ).scalars().first()
             return status
+
+    async def get_lifecycle_state_by_session(self, *, session_uid) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting.status, Meeting.data)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(MeetingSession.session_uid == session_uid)
+                )
+            ).first()
+            if row is None:
+                return None
+            return {
+                "status": row.status,
+                "data": dict(row.data) if isinstance(row.data, dict) else {},
+            }
 
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         """The meeting + latest session for a workload id — used by the runtime callback (CC5) to drive a

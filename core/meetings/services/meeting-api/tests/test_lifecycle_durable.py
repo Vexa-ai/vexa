@@ -67,6 +67,41 @@ def test_rehydration_terminal_after_restart_is_200(goldens):
     assert asyncio.run(repo.get_status_by_session(session_uid="sess-uid")) == "completed"
 
 
+def test_rehydration_preserves_admission_timestamp_for_runtime_billing(goldens):
+    """A restart between admission and departure must not erase the admitted transition."""
+    repo = InMemoryMeetingRepo()
+    m = _seed_active_meeting(repo)
+    admitted = {
+        "from": "awaiting_admission",
+        "to": "active",
+        "timestamp": "2026-07-28T10:00:10.000Z",
+        "timestamp_source": "producer",
+        "source": "bot_callback",
+    }
+    repo._meetings[m["id"]]["data"]["status_transition"] = [admitted]
+    client = TestClient(create_app(meeting_repo=repo))
+    terminal = {
+        **goldens["completed-stopped"],
+        "timestamp": "2026-07-28T10:25:10.000Z",
+    }
+
+    response = client.post(ENDPOINT, json=terminal)
+
+    assert response.status_code == 200, response.text
+    trail = repo._meetings[m["id"]]["data"]["status_transition"]
+    assert trail == [
+        admitted,
+        {
+            "from": "active",
+            "to": "completed",
+            "timestamp": "2026-07-28T10:25:10.000Z",
+            "timestamp_source": "producer",
+            "source": "bot_callback",
+            "completion_reason": "stopped",
+        },
+    ]
+
+
 def test_rehydration_emits_status_change_and_no_409(goldens):
     """The rehydrated advance still emits the meeting.status_change webhook envelope (the finalize
     signal that never fired while stuck at 409)."""
