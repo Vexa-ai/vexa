@@ -1,11 +1,14 @@
 # Alloy STT pause-bounded code-switch evidence
 
 **Date:** `2026-07-28`
-**Branch:** `alloy/vexa-rnd-code-switch-20260728`
-**Candidate commit:** `59bc7e925cf9ee173fd3262963b7b47c6d3c1bcd`
-**Candidate tree:** `d8988e3b8ae6415cd58180881c3922e068b8faab`
-**Overall verdict:** `BLOCKED_PRODUCT`
-**Merge verdict:** keep the local branch/worktree; do not move `main`
+**Finalized:** `2026-07-29`
+**Branch:** `agent/alloy-stt-code-switch-witness`
+**Live code candidate:** `a0c471ce518258efc2dadffa06e63b998f4b5581`
+**Live code tree:** `5fa770b61b6107c3688e988faba4b99c1b70152d`
+**Upstream-integrated candidate:** `14245db2f566937c42aff15a187da858aa8c49eb`
+**Integrated tree:** `a8a122bda4b7208890aa29309f87ab83598d8819`
+**Overall verdict:** `PASS`
+**Merge verdict:** eligible for a protected-main PR; direct push to `main` is prohibited
 
 ## Summary
 
@@ -13,18 +16,22 @@ The opt-in pause-bounded adapter works through the real bot/STT boundary for nat
 natural Russian, and an EN → RU → EN WAV. The mixed direct product result contains all three legs
 in order, reports `language: mul`, and keeps every timestamp inside the original audio duration.
 
-The exact clean candidate also passes the full Linux repository gate. The final Google Meet human
-bar is red, however. Google Meet transported the disposable guest audio to the Vexa listener and
-Whisper detected both English and Russian, but the finalized Meeting API text did not preserve
-recognizable EN → RU → EN content. Three bounded one-variable levels established a too-quiet region
-and a clipping region without finding a valid witness. The stop threshold was then enforced.
+The first Google Meet witness was red and remains below as a negative control. Boundary isolation
+then separated the speaker and listener audio graphs, disabled applied Chromium processing, and
+localized the remaining loss to the existing producer/capture path. Two focused RED → GREEN fixes
+preserved every same-speaker window and bounded natural pauses without adding a second audio path or
+compensating in Whisper/API.
 
-The live witness is part of the merge bar. Therefore the implementation is not eligible for
-fast-forward into `main`, even though focused checks, clean-image product checks, and the full
-repository gate are green.
+Two fresh Google Meet runs on the exact clean live candidate then produced recognizable EN → RU →
+EN in order, honest language metadata, monotonic bounded timestamps, and zero clipped samples at
+every measured boundary. The exact candidate also passed the complete Linux repository gate.
 
-No push occurred. No credential, API key, cookie, account identifier, or meeting invite code is
-recorded here.
+The upstream-integrated candidate adds the service-provenance change from `origin/main` without
+changing the audio modules. Its independent Linux run reported all 35 gate groups green. The branch
+is therefore eligible for integration through a pull request into the protected fork `main`.
+
+No credential, API key, cookie, account identifier, meeting invite code, or captured-signal header
+is recorded here.
 
 ## Task 1 — one-variable backend hypothesis
 
