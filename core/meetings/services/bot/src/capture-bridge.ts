@@ -36,7 +36,7 @@ import {
   type BrowserContext,
 } from '@vexa/remote-browser';
 import { getJoinBrowserArgs } from '@vexa/join';
-import type { RecordingMasterFormat } from '@vexa/recording';
+import { VideoRecordingService, type RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
@@ -266,6 +266,9 @@ export async function startCaptureBridge(
   onChat?: (sender: string, text: string) => void,
   /** Active-phase silence signal. It remains unavailable until page capture reports ready. */
   activity?: RemoteAudioActivityTap,
+  /** Roster sink — the participant list, delivered ONLY when it changed (the page diffs first).
+   *  The composition root turns the stream of changes into the attendance record. */
+  onRoster?: (names: string[]) => void,
 ): Promise<() => Promise<void>> {
   const mixed = isMixedLanePlatform(inv.platform);
   const jitsi = inv.platform === 'jitsi';
@@ -322,6 +325,10 @@ export async function startCaptureBridge(
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
+  }).catch(() => { /* optional */ });
+  // The roster, ON CHANGE ONLY (the page side diffs before calling) → the attendance record.
+  await page.exposeFunction('__vexaRoster', (names: string[]): void => {
+    try { onRoster?.(names); } catch (e) { console.error(`[bot] roster sink rejected: ${String(e)}`); }
   }).catch(() => { /* optional */ });
 
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
@@ -442,6 +449,51 @@ export async function startCaptureBridge(
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
+  // ── The roster watcher (attendance) ──────────────────────────────────────────────────────
+  // A SEPARATE evaluate because the capture body above returns early on the mixed lane, and the
+  // roster is wanted on every platform. It reads each speakers module's PUBLIC surface — the same
+  // enumeration they already maintain for speaker attribution — so no platform is re-scanned here
+  // and no module internal is reached into (P6).
+  //
+  // It crosses the boundary ONLY when the set of names actually differs. That is load-bearing, not
+  // a nicety: this feeds a record that lands in `meeting.data`, and the sibling per-tick channel
+  // (`speaker_events`) measured 155 MB across one account before it was omitted from list reads.
+  // One call per arrival and one per departure is the entire budget.
+  await page.evaluate(({ isJitsi, isTeams, isZoom, botName }) => {
+    const w = (globalThis as any) as Record<string, any>;
+    if (w.__vexaRosterPoll) return;
+    const self = (botName || '').trim().toLowerCase();
+
+    const readRoster = (): string[] => {
+      try {
+        if (isTeams) return w.__vexaTeamsSpeakers?.getRoster?.() ?? [];
+        if (isJitsi) return w.__vexaJitsiSpeakers?.getRoster?.() ?? [];
+        if (isZoom) return (w.__vexaZoomSpeakers?.getState?.()?.tiles ?? []).map((t: any) => t?.name);
+        // gmeet: the tile scan already carries `self`, so the bot's own tile is dropped by flag
+        // rather than by name-matching (a guest may legitimately share the bot's display name).
+        return (w.__vexaGmeetSpeakers?.getState?.()?.tiles ?? [])
+          .filter((t: any) => !t?.self)
+          .map((t: any) => t?.name);
+      } catch { return []; }
+    };
+
+    let last = '';
+    const tick = (): void => {
+      const names = [...new Set(
+        readRoster()
+          .map((n: unknown) => (typeof n === 'string' ? n.trim() : ''))
+          .filter((n: string) => n.length > 0 && n.toLowerCase() !== self),
+      )].sort();
+      const key = names.join(' ');
+      if (key === last) return;      // unchanged ⇒ the boundary is not crossed at all
+      last = key;
+      w.__vexaRoster?.(names);
+    };
+    tick();
+    w.__vexaRosterPoll = (globalThis as any).setInterval(tick, 2000);
+  }, { isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName })
+    .catch((e) => { console.error(`[bot] roster watcher: page-side start failed: ${String(e)}`); });
+
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
@@ -454,6 +506,7 @@ export async function startCaptureBridge(
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
       try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
+      try { if (w.__vexaRosterPoll) { (globalThis as any).clearInterval(w.__vexaRosterPoll); w.__vexaRosterPoll = null; } } catch { /* */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
       try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* best-effort */ }
@@ -578,5 +631,53 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       await setMic(false);
       console.log('[bot] speak_stop');
     },
+  };
+}
+
+/**
+ * Start the ffmpeg screen-grab → recording.v1 video master.  // L4 (needs a real X display).
+ *
+ * Unlike the audio tap this touches no Page: @vexa/recording's VideoRecordingService grabs the
+ * bot's own X display (DISPLAY, :99 under Xvfb), which is exactly what the meeting renders into.
+ * Gated on the invocation's `captureModes` carrying "video" — the control plane decides per spawn,
+ * so a deployment that does not want video pays nothing here.
+ *
+ * Best-effort by construction: a missing ffmpeg, a dead display or a failed upload is logged and
+ * swallowed. Video is the newest and least-proven leg of recording; it must never be able to cost
+ * a meeting its audio or its transcript.
+ *
+ * ponytail: the service buffers the whole file and uploads ONE master at stop, so a SIGKILL
+ * mid-meeting loses the video (the audio path was deliberately rewritten out of exactly this
+ * shape — see recording.ts). Upgrade path: `ffmpeg -f segment` into the per-chunk sink audio
+ * already uses.
+ */
+export async function startVideoRecording(inv: Invocation): Promise<() => Promise<void>> {
+  if (!inv.captureModes?.includes('video')) return async () => { /* video not requested */ };
+  const uploadUrl = inv.recordingUploadUrl;
+  const secret = inv.internalSecret;
+  if (!uploadUrl || !secret) {
+    console.error('[bot] video recording requested but recordingUploadUrl/internalSecret are unset — skipping');
+    return async () => { /* nothing started */ };
+  }
+
+  // meetingId only names the temp file — the upload endpoint scopes the recording by session_uid,
+  // exactly as the audio path does. A self-host spawn carries no numeric id, hence the fallback.
+  const svc = new VideoRecordingService(Number(inv.meeting_id) || 0, inv.connectionId ?? 'session');
+  try {
+    svc.start();
+  } catch (e) {
+    console.error(`[bot] video recording failed to start (audio + transcript are unaffected): ${String(e)}`);
+    return async () => { /* nothing to tear down */ };
+  }
+
+  return async () => {
+    try {
+      await svc.stop();
+      await svc.upload(uploadUrl, secret);
+    } catch (e) {
+      console.error(`[bot] video recording teardown failed: ${String(e)}`);
+    } finally {
+      await svc.cleanup().catch(() => { /* the temp file may already be gone */ });
+    }
   };
 }

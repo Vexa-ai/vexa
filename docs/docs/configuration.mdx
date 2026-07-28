@@ -22,12 +22,45 @@ are public.
 | `TRANSCRIPTION_MODEL` | `whisper-1` | STT model id sent on every transcription request (the OpenAI-compatible `model` field). **Set it when the backend validates model ids** — Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1` / `gpt-4o-transcribe`), vLLM/LiteLLM (the served name) — or every request fails `model_not_found`. Ignored by the bundled `deploy/transcription` unit, whose model is its own `MODEL_SIZE`. |
 | `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's `transcribe_enabled` when `POST /bots` does not say. Resolution: **explicit request body wins** → else this env → else `true`. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
 | `RECORDING_ENABLED` | `true` | Deployment-level default for a spawn's recording when `POST /bots` does not say. Same empty-means-default rule as above. |
+| `RECORDING_VIDEO_ENABLED` | `false` | Capture **video** as well as audio on a recording spawn. Off by default: video is roughly 20-50x the size of the audio and, like audio, is kept until you add a retention rule (below). The bot grabs its own X display with ffmpeg. |
+| `RECORDING_PRUNE_CHUNKS` | `true` | Once a recording is complete and its assembled master is verified on storage, delete the 15-second chunks the master was built from. Halves the stored size of every recording anyone plays. A recording still in progress is never pruned. Set `false` to keep both copies. |
 | `BOT_ALONE_SILENCE_WINDOW_MS` | `600000` | Active-phase remote-audio silence window before the bot leaves with `completed(left_alone)`. Forwarded to spawned bots. A request's `automatic_leave.max_time_left_alone` overrides it. |
 | `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
 | `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
 | `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
 | `BOT_SPEAKER_MAX_BUFFER_SEC` | `30` | Maximum buffered Google Meet audio before a forced submission. |
 | `BOT_SPEAKER_IDLE_TIMEOUT_SEC` | `15` | Flush/reset timeout after a speaker stops producing audio. |
+
+### Retention — nothing expires until you say so
+
+Recordings are kept indefinitely. There is no TTL, no sweeper and no delete path in Vexa: deleting a
+customer's meeting on a schedule is the kind of job you only want to run when someone has explicitly
+asked for it.
+
+A recording is stored as 15-second chunks while it is being made — so a bot killed mid-meeting
+still leaves every finished part durable — and those chunks are assembled into one master file the
+first time anyone plays it back. Once the recording is complete and that master is verified, the
+chunks are deleted (`RECORDING_PRUNE_CHUNKS`, default on): the master holds the same bytes, so
+keeping both would double the stored size of every recording you ever watch. A one-hour recording
+ends up as one object rather than ~240.
+
+What Vexa does instead is **tag every stored object with its media type** (`media=audio` /
+`media=video`), so retention becomes a bucket lifecycle rule your object store enforces:
+
+```bash
+# keep audio forever, expire video after 90 days
+mc ilm rule add --tags "media=video" --expire-days 90 myminio/vexa
+mc ilm rule ls myminio/vexa
+```
+
+The tag is what makes this expressible at all: the media type sits in the *middle* of an object key
+(`recordings/{user}/{recording}/{session}/{media_type}/…`) and lifecycle prefix filters only match a
+literal prefix, so no prefix rule can select video without also selecting audio.
+
+<Note>
+Keeping meeting **video** indefinitely may carry privacy or records-retention obligations depending
+on your jurisdiction and what participants were told. Decide the policy before the archive is large.
+</Note>
 
 The STT service is the **GPU workload, deployed separately** from this stack — see
 [Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack

@@ -113,6 +113,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        fluxbox \
        socat \
        awscli \
+       ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && aws --version
 

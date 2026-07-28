@@ -48,6 +48,10 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
   const { url, headers } = await upstreamFor(joined, req.nextUrl.search);
 
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
+  // Range must reach the backend verbatim: it is how a <video>/<audio> element SEEKS. Dropping it
+  // makes the player refetch the whole file to jump anywhere, and disables the scrub bar entirely.
+  const range = req.headers.get("range");
+  if (range) (init.headers as Record<string, string>)["Range"] = range;
   if (req.method !== "GET" && req.method !== "DELETE") {
     const body = await req.text();
     if (body) {
@@ -69,6 +73,19 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
           "X-Accel-Buffering": "no",
         },
       });
+    }
+
+    // Media (recordings) is BINARY and may be a 206 partial. Streaming it through untouched —
+    // body, status and the range headers a player needs — is the difference between a working
+    // scrub bar and a corrupted download: `await upstream.text()` below would re-encode the bytes
+    // as UTF-8 and relabel them application/json.
+    if (contentType.startsWith("audio/") || contentType.startsWith("video/") || contentType === "application/octet-stream") {
+      const passthrough = new Headers({ "Content-Type": contentType, "Accept-Ranges": "bytes" });
+      for (const h of ["Content-Length", "Content-Range", "Content-Disposition", "ETag"]) {
+        const v = upstream.headers.get(h);
+        if (v) passthrough.set(h, v);
+      }
+      return new Response(upstream.body, { status: upstream.status, headers: passthrough });
     }
 
     // 204/205/304 are null-body statuses: new Response(body, …) throws for them (undici),

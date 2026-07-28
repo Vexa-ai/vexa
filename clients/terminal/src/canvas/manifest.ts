@@ -11,7 +11,10 @@ const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", windo
 // segments: { speaker?: string; text: string; ts?: number | string }[]
 
 const meeting = useMeeting()
-// { meeting: { id, nativeId?, title, status?, startedAt?, participants?, docs? }, transcript, entities, cards, diagnostics, metrics, sections }
+// { meeting: { id, nativeId?, title, status?, startedAt?, participants?, attendance?, docs? }, transcript, entities, cards, diagnostics, metrics, sections }
+// meeting.attendance: who was OBSERVED in the room (not the invite list) —
+//   { name, first_seen?, last_seen?, present_seconds? }[], ordered by arrival. Empty until the
+//   meeting ends (it is reported once, on the bot's terminal event) and on older meetings.
 // diagnostics: { liveConnected?, ended?, reconnects?, lastEventAt?, lastTranscriptAt?, issues?: { kind, message, status?, at?, model?, stage? }[] }
 
 const speakers = useSpeakers()

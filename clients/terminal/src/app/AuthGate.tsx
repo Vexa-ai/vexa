@@ -12,6 +12,8 @@
  *  direct entry with an honest banner naming the OAuth upgrade path. */
 import { useEffect, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
+import { BrandLogo } from "./BrandLogo";
+import { BRAND } from "./brand";
 
 type Status = "checking" | "out" | "in";
 type Providers = { google: boolean; microsoft: boolean };
@@ -81,16 +83,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
+          <BrandLogo size={28} radius={8} />
           <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>
-            {claiming ? "Set up your instance" : "Vexa Terminal"}
+            {claiming ? "Set up your instance" : `${BRAND.name} Terminal`}
           </div>
         </div>
         {claiming ? (
           <>
             <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-              This Vexa instance has no administrator yet. The first sign-in becomes the admin and can
+              This {BRAND.name} instance has no administrator yet. The first sign-in becomes the admin and can
               configure models, transcription, and other users.
             </div>
             <div

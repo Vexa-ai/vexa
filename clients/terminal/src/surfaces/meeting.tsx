@@ -20,6 +20,8 @@ import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
+import { BRAND } from "../app/brand";
+import { RecordingPlayer } from "./RecordingPlayer";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
@@ -691,7 +693,7 @@ function MeetingsList() {
         <div style={{ display: "flex", gap: 6 }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
             placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi)…" style={{ flex: 1, minWidth: 0, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 7, padding: "6px 8px", color: "var(--t1)", fontSize: 12, outline: "none" }} />
-          <button onClick={() => void addBot()} disabled={!url.trim() || sent === "sending"} title="Send the Vexa bot to this meeting"
+          <button onClick={() => void addBot()} disabled={!url.trim() || sent === "sending"} title={`Send the ${BRAND.name} bot to this meeting`}
             style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
             {sent === "sending" ? "…" : "Add bot"}
           </button>
@@ -835,6 +837,11 @@ function MeetingTab({ params }: TabProps) {
           <ModelChips />
         </div>
       </header>
+      {m?.recordings?.length ? (
+        <div style={{ flex: "none", marginBottom: 12, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
+          <RecordingPlayer recordings={m.recordings} />
+        </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />
       </div>

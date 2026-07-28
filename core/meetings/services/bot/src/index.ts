@@ -34,7 +34,8 @@ import { createBotPipeline, createLivePipeline, createTranscribe, serr, type Bot
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { createAttendanceReporter } from './attendance.js';
+import { launchBrowser, startCaptureBridge, startRecording, startVideoRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -200,6 +201,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
   const sttFaults = createSttFaultReporter();
+  // Records who was visible and when, from the roster the capture modules already enumerate for
+  // speaker attribution — so a completed meeting says who was in the room, not just what was said.
+  const attendance = createAttendanceReporter();
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
@@ -248,8 +252,27 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
-      startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity, (names) => attendance.observe(names)),   // on the live meeting page
+      // Audio (page-side MediaRecorder → recording.v1) and, when the spawn asked for it, video
+      // (an ffmpeg screen-grab of the bot's own X display — no page involvement). Composed into
+      // the ONE optional thunk the live pipeline already has, so both start together and the
+      // teardown it returns stops both. Video is best-effort: it must never cost us the audio.
+      startRecording: rec
+        ? async () => {
+            const stopAudio = await startRecording(sess.page, inv, rec);
+            // Video is strictly best-effort and starts SECOND, behind its own catch: if it could
+            // throw here, `stopAudio` would be lost and the audio recording would never be
+            // finalized — video failing would cost us the recording it was added alongside.
+            const stopVideo = await startVideoRecording(inv).catch((e) => {
+              console.error(`[bot] video recording failed to start (audio unaffected): ${serr(e)}`);
+              return async () => { /* nothing started */ };
+            });
+            return async () => {
+              await stopAudio().catch((e) => console.error(`[bot] audio recording teardown failed: ${serr(e)}`));
+              await stopVideo().catch((e) => console.error(`[bot] video recording teardown failed: ${serr(e)}`));
+            };
+          }
+        : undefined,
       engine: bp,
       onFault: (stage, e) => {
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
@@ -280,7 +303,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
-    degraded: () => sttFaults.report(),
+    // Everything a terminal event carries and no other: WHY the transcript is thin (stt_fault)
+    // and WHO was in the room (attendance). Merged, so the two reporters share one seam.
+    terminalExtras: () => {
+      const extras = { ...sttFaults.report(), ...attendance.report() };
+      return Object.keys(extras).length ? extras : undefined;
+    },
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →

@@ -417,6 +417,15 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
         live: Boolean(selected.session_uid),
         startedAt: selected.scheduled_at,
         participants: participants.map((p) => p.name),
+        // The timeline behind those names. `participants` is kept as bare strings (every existing
+        // view reads it that way); the timings ride alongside so a view can show WHEN each person
+        // was here, ordered by arrival, without re-deriving anything.
+        attendance: safeArray(selected.attendance).map((p) => ({
+          name: textOf(p.name, ""),
+          first_seen: p.first_seen,
+          last_seen: p.last_seen,
+          present_seconds: typeof p.present_seconds === "number" ? p.present_seconds : undefined,
+        })),
         docs: normalizedSelected.docs.map((doc) => ({
           path: doc.path,
           title: doc.title,

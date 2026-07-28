@@ -320,6 +320,8 @@ services:
       # capture-only bots instead of 503-ing every default POST /bots.
       - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
+      - RECORDING_VIDEO_ENABLED=${RECORDING_VIDEO_ENABLED:-false}
+      - RECORDING_PRUNE_CHUNKS=${RECORDING_PRUNE_CHUNKS:-true}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
       # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
@@ -462,6 +464,17 @@ services:
         # dev (full tree). Set TERMINAL_RUNTIME_DEPS=dev in .env on hosts that run the terminal
         # under the hot overlay's NODE_ENV=development — dev-mode Next needs the dev toolchain at
         # runtime and otherwise npm-installs it AT BOOT (slow, network-dependent, currently broken).
+        # White-label, baked at build time (NEXT_PUBLIC_* — clients/terminal/src/app/brand.ts).
+        # Every value defaults EMPTY, which leaves the shipped Vexa look untouched; set them in
+        # .env and rebuild the terminal image. BRAND_ACCENT_LIGHT exists because an accent chosen
+        # for a dark UI is usually unreadable on white — see the contrast note in .env.example.
+        NEXT_PUBLIC_BRAND_NAME: ${BRAND_NAME:-}
+        NEXT_PUBLIC_BRAND_ACCENT: ${BRAND_ACCENT:-}
+        NEXT_PUBLIC_BRAND_ACCENT_LIGHT: ${BRAND_ACCENT_LIGHT:-}
+        NEXT_PUBLIC_BRAND_ON_ACCENT: ${BRAND_ON_ACCENT:-}
+        NEXT_PUBLIC_BRAND_FONT: ${BRAND_FONT:-}
+        NEXT_PUBLIC_BRAND_LOGO_URL: ${BRAND_LOGO_URL:-}
+        NEXT_PUBLIC_DEFAULT_BOT_NAME: ${DEFAULT_BOT_NAME:-}
         RUNTIME_DEPS: ${TERMINAL_RUNTIME_DEPS:-prod}
     image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
     ports:

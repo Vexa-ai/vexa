@@ -4,6 +4,13 @@
 export interface Participant { name: string; role: string; initials: string }
 /** A calendar-invited human (data.attendees, prep-v3 slice b) — email is the identity key. */
 export interface Attendee { email: string; name?: string; partstat?: string }
+/** A human the bot OBSERVED in the room (data.attendance) — the counterpart to Attendee, which is
+ *  only who was invited. Timings make a late joiner and an early leaver distinguishable from
+ *  someone present throughout. Written once, when the meeting ends. */
+export interface AttendanceEntry { name: string; first_seen?: string; last_seen?: string; present_seconds?: number }
+/** A stored capture of a meeting and the paths that play it back. `playback_url.video` is null
+ *  unless the deployment opted into video (RECORDING_VIDEO_ENABLED). */
+export interface RecordingRef { id?: number; playback_url?: { audio?: string | null; video?: string | null } }
 export interface ProposedAction { id: string; label: string; detail: string }
 export interface TranscriptLine { t: string; speaker: string; text: string }
 export interface MeetingMock {
@@ -23,6 +30,8 @@ export interface MeetingMock {
   workspace_id?: string;      // the sharing bind (data.workspace_id) — members of it see this meeting
   calendar_uid?: string;      // calendar-import provenance (data.calendar_uid)
   attendees?: Attendee[];     // invited humans from the calendar (data.attendees)
+  attendance?: AttendanceEntry[];  // humans OBSERVED in the room by the bot (data.attendance)
+  recordings?: RecordingRef[];     // playable captures of this meeting (data.recordings)
   auto_join?: boolean;        // "scheduled means the bot joins" toggle (data.auto_join; absent = on)
   auto_join_error?: string;   // the auto-join sweep's LOUD failure (data.auto_join_error)
   meeting_url?: string;       // the joinable link (constructed_meeting_url) — send-bot uses it verbatim

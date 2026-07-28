@@ -44,8 +44,19 @@ class S3Storage:
 
         return await asyncio.to_thread(fn, *args, **kwargs)
 
-    async def upload(self, key: str, data: bytes, *, content_type: str) -> None:
-        await self._run(self._c().put_object, Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
+    async def upload(self, key: str, data: bytes, *, content_type: str,
+                     tags: Optional[dict[str, str]] = None) -> None:
+        extra = {}
+        if tags:
+            from urllib.parse import urlencode
+
+            # S3/MinIO take object tags as a URL-encoded query string on the PUT.
+            extra["Tagging"] = urlencode(tags)
+        await self._run(self._c().put_object, Bucket=self._bucket, Key=key, Body=data,
+                        ContentType=content_type, **extra)
+
+    async def delete(self, key: str) -> None:
+        await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
 
     async def list(self, prefix: str) -> list[str]:
         # S3 (and every S3-compatible backend) caps a single list_objects_v2 response at 1000 keys and

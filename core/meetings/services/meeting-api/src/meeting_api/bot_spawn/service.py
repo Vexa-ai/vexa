@@ -75,6 +75,17 @@ _URL_TEMPLATES = {
 }
 
 
+def _capture_modes() -> list[str]:
+    """What a recording spawn captures. Audio always; video only when the deployment asks for it
+    (``RECORDING_VIDEO_ENABLED``, default OFF).
+
+    This used to be the constant ``["audio", "video"]``, which was harmless only because the bot
+    ignored the video half. The moment the bot honours it, that constant would turn video on for
+    every recording-enabled meeting at deploy time — a storage decision nobody made. Video is
+    opt-in, and defaults off for the same reason it is not in `make all`."""
+    return ["audio", "video"] if env_flag("RECORDING_VIDEO_ENABLED", False) else ["audio"]
+
+
 async def _resolve_transcription_backend(user_id: int) -> dict:
     """The Settings-configured transcription backend for this spawn: admin-api's bot-context
     resolves user pref > platform setting into ``{"transcription": {url, token}}``. Best-effort
@@ -384,7 +395,7 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
-        capture_modes=(["audio", "video"] if recording_enabled else None),
+        capture_modes=(_capture_modes() if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
         userdata_s3_path=auth_userdata_path,

@@ -20,8 +20,12 @@
   --t1: #ededf0;
   --t2: #9a9aa4;
   --t3: #65656f;
-  --accent: #d8855c;
-  --accentbg: rgba(216, 133, 92, 0.14);
+  /* --brand-accent (optional; layout.tsx emits it from NEXT_PUBLIC_BRAND_ACCENT) repaints every
+   * accented surface in BOTH themes from one value. Unset ⇒ the default below, so an unbranded
+   * build is byte-identical. --accentbg is derived with color-mix so a brand supplies ONE colour
+   * rather than a hand-matched pair that can drift out of step with it. */
+  --accent: var(--brand-accent, #d8855c);
+  --accentbg: color-mix(in srgb, var(--accent) 14%, transparent);
   /* Semantic set (palette A, design-spec meeting-lifecycle-v2): --danger = destructive
    * actions + errors ONLY (never "live" — live is green); --warn = attention-not-error
    * (needs_help, waiting, behind). --on-* = text on solid semantic fills. The old --live
@@ -30,7 +34,9 @@
   --dangerbg: rgba(224, 100, 94, 0.12);
   --warn: #d9a13c;
   --warnbg: rgba(217, 161, 60, 0.14);
-  --on-accent: #241008;
+  /* Text painted ON a solid --accent fill. Overridable alongside the accent, because a brand
+   * colour darker than the default would render this near-black text unreadable on it. */
+  --on-accent: var(--brand-on-accent, #241008);
   --on-green: #08110c;
   --on-warn: #1a1200;
   --green: #48b787;
@@ -42,7 +48,9 @@
   --r: 8px;
   --r2: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  /* --brand-sans (optional, from NEXT_PUBLIC_BRAND_FONT) swaps the UI face. --mono is
+   * deliberately NOT brandable: transcripts, timestamps and code align on it. */
+  --sans: var(--brand-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif);
 }
 
 /*
@@ -63,13 +71,15 @@
   --t1: #1a1a1f;
   --t2: #5c5c66;
   --t3: #8a8a94;
-  --accent: #c06a3f;
-  --accentbg: rgba(192, 106, 63, 0.12);
+  /* Day mode takes the SAME brand override; only the unbranded default differs (the dark
+   * accent is too light on white). --accentbg derives from whichever wins. */
+  --accent: var(--brand-accent, #c06a3f);
+  --accentbg: color-mix(in srgb, var(--accent) 12%, transparent);
   --danger: #c9403a;
   --dangerbg: rgba(201, 64, 58, 0.10);
   --warn: #b8811f;
   --warnbg: rgba(184, 129, 31, 0.12);
-  --on-accent: #ffffff;
+  --on-accent: var(--brand-on-accent, #ffffff);
   --on-green: #ffffff;
   --on-warn: #ffffff;
   --green: #2f9e72;

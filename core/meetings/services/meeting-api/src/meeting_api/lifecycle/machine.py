@@ -216,6 +216,10 @@ class MeetingRecord:
     #: What degraded the meeting without ending it — today the STT backend refusing chunks
     #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
     stt_fault: Optional[Dict[str, Any]] = None
+    #: Who was in the room and for how long — ``{participants: [{name, first_seen, last_seen,
+    #: present_seconds, intervals}], observed_to}``, reported by the bot on the terminal event
+    #: from the roster its capture modules already enumerate for speaker attribution.
+    attendance: Optional[Dict[str, Any]] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -254,6 +258,8 @@ class MeetingRecord:
             d["stop_requested"] = True
         if self.stt_fault is not None:
             d["stt_fault"] = dict(self.stt_fault)
+        if self.attendance is not None:
+            d["attendance"] = dict(self.attendance)
         return d
 
 
@@ -446,6 +452,11 @@ class LifecycleSink:
             # lifecycle.v1 (additionalProperties: true), same as infra_fault.
             if event.get("stt_fault"):
                 rec.stt_fault = dict(event["stt_fault"])
+            # WHO was in the room. Same terminal-only, additive shape as stt_fault: the bot holds
+            # the roster in memory across the meeting and reports the timeline once, on the way
+            # out — never per observation, which is what made `speaker_events` unshippable.
+            if event.get("attendance"):
+                rec.attendance = dict(event["attendance"])
 
         rec.status = to
         rec.history.append(to)
