@@ -2,8 +2,10 @@
  *  keeping hosts + keys server-side. It replaces the ~9 near-identical thin route files.
  *
  *  Path-based routing (the architecture seam — two domains behind ONE authenticated edge, the gateway):
- *    • meetings · transcripts · bots  → the gateway ROOT paths (/meetings, /transcripts/{…}, /bots),
+ *    • meetings · transcripts · bots → the gateway ROOT paths
+ *      (/meetings, /transcripts/{…}, /bots),
  *      where meeting-api is fronted.
+ *    • ALLOY: alloy joins that ROOT branch only while ALLOY_STT_TELEMETRY=1.
  *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
  *      prefix, where agent-api is fronted.
  *  BOTH carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). The gateway
@@ -16,36 +18,50 @@
  */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
-import { MEETINGS_DOMAIN, refusedInMeetingsMode } from "../proxyMode";
+import { isAlloySttTelemetryEnabled } from "../alloyTelemetryMode";
+import { isMeetingsDomain, refusedInMeetingsMode } from "../proxyMode";
 
 export const dynamic = "force-dynamic";
 
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
 // Two domains behind ONE authenticated edge (the gateway):
-//   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
+//   • meetings · transcripts · bots → the gateway ROOT (/meetings, …) — meeting-api behind it.
+//   • ALLOY: alloy joins the ROOT branch only while its server opt-in is enabled.
 //   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
 //     prefix — agent-api behind it.
 // BOTH carry the per-user X-API-Key; the gateway resolves it → user and injects X-User-Id downstream,
 // so the client never sends a `subject` (scope is server-derived — P20). agent-api is never reached directly.
-// MEETINGS_DOMAIN (the meetings-vs-agent split) lives in ../proxyMode — shared with the meetings-only gate.
+// ALLOY: The flag-aware meetings-vs-agent split lives in ../proxyMode and is shared with the edge gate.
 
 /** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
  *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
-async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
-  const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/agent/${path}`;
+async function upstreamFor(
+  path: string,
+  search: string,
+  alloyEnabled: boolean,
+): Promise<{ url: string; headers: HeadersInit }> {
+  const base = isMeetingsDomain(path, alloyEnabled)
+    ? `${GATEWAY_URL}/${path}`
+    : `${GATEWAY_URL}/agent/${path}`;
   return { url: `${base}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
 }
 
 async function forward(req: NextRequest, params: Promise<{ path: string[] }>): Promise<Response> {
   const { path } = await params;
   const joined = path.join("/");
+  // ALLOY: Resolve per request so runtime env changes are not frozen by module import.
+  const alloyEnabled = isAlloySttTelemetryEnabled();
   // Meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings): the agent branch is refused at the edge —
   // hiding the surfaces client-side is not enough, a hand-crafted request must not reach agent-api.
-  if (refusedInMeetingsMode(joined)) {
+  if (refusedInMeetingsMode(joined, alloyEnabled)) {
     return new Response(JSON.stringify({ error: "not_found", detail: "agent endpoints are disabled in meetings mode" }), { status: 404, headers: { "Content-Type": "application/json" } });
   }
-  const { url, headers } = await upstreamFor(joined, req.nextUrl.search);
+  const { url, headers } = await upstreamFor(
+    joined,
+    req.nextUrl.search,
+    alloyEnabled,
+  );
 
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "DELETE") {

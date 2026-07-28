@@ -62,6 +62,8 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
 ROUTE_SCOPES: Dict[str, Set[str]] = {
     "/bots": {"bot", "browser"},
+    # ALLOY: telemetry uses the existing authenticated bot/transcript scope funnel.
+    "/alloy": {"bot", "tx"},
     "/transcripts": {"tx"},
     "/meetings": {"tx"},
     "/recordings": {"tx", "bot"},
@@ -107,6 +109,8 @@ def create_app(
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
     rate_limiter=None,
+    # ALLOY: Inject the optional telemetry proxy capability; false preserves the upstream route surface.
+    alloy_stt_telemetry_enabled: bool = False,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -333,6 +337,12 @@ def create_app(
     @app.get("/bots/status")
     async def bots_status(request: Request):
         return await _forward("GET", _meeting("/bots/status"), request)
+
+    # ALLOY: omit the telemetry proxy entirely unless production composition explicitly opts in.
+    if alloy_stt_telemetry_enabled:
+        @app.get("/alloy/stt/status")
+        async def alloy_stt_status(request: Request):
+            return await _forward("GET", _meeting("/alloy/stt/status"), request)
 
     @app.delete("/bots/{platform}/{native_meeting_id}")
     async def stop_bot(platform: str, native_meeting_id: str, request: Request):

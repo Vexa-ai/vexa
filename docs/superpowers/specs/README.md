@@ -1,3 +1,4 @@
-# Design specifications
+# docs/superpowers/specs — design records
 
-Each file records one approved, bounded design before implementation begins.
+Dated design records capture an approved technical direction, scope, evidence contract, and stop
+conditions before a corresponding implementation plan is written.

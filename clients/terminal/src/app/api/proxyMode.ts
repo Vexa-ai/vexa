@@ -13,7 +13,22 @@ import { meetingsOnly } from "../mode";
  *  (/user/webhook, /user/calendar) — same authenticated edge, admin-api behind it. */
 export const MEETINGS_DOMAIN = /^(meetings|transcripts|bots|user)(\/|$)/;
 
-/** true when this /api/<path> must be refused (meetings mode + a non-meeting-domain path). */
-export function refusedInMeetingsMode(path: string): boolean {
-  return meetingsOnly() && !MEETINGS_DOMAIN.test(path);
+/** ALLOY: Telemetry joins the meeting domain only while its server opt-in is enabled. */
+export const ALLOY_DOMAIN = /^alloy(\/|$)/;
+
+/** ALLOY: Pure path decision shared by routing and the meetings-only edge gate. */
+export function isMeetingsDomain(
+  path: string,
+  alloyEnabled: boolean,
+): boolean {
+  return MEETINGS_DOMAIN.test(path) ||
+    (alloyEnabled && ALLOY_DOMAIN.test(path));
+}
+
+/** ALLOY: Refuse disabled telemetry at the meetings-only edge before any fetch. */
+export function refusedInMeetingsMode(
+  path: string,
+  alloyEnabled: boolean,
+): boolean {
+  return meetingsOnly() && !isMeetingsDomain(path, alloyEnabled);
 }

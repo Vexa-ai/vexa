@@ -1,6 +1,7 @@
 %% GENERATED — pnpm arch:dsl --write
 flowchart LR
   segments_stream[("transcription_segments (stream)")]
+  alloy_stt_telemetry_key[("alloy:stt:telemetry:v1:{meeting_id} (Redis key)")]
   tc_mutable[("tc:meeting:{id}:mutable (pubsub)")]
   style tc_mutable stroke-dasharray: 5 5,stroke-width:3px
   tc_stream[("tc:meeting:{id} (stream)")]
@@ -18,8 +19,10 @@ flowchart LR
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
   bot -->|write| segments_stream
+  bot -->|write| alloy_stt_telemetry_key
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
+  meeting_api -.->|read| alloy_stt_telemetry_key
   meeting_api -->|write| tc_mutable
   meeting_api -->|write| segments_table
   meeting_api -->|write| tc_stream

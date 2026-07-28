@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { TranscriptionExecutionObserver } from '@vexa/transcribe-whisper';
 import { isMixedLanePlatform, type Invocation } from './config.js';
 import { rmsOf } from './capture-bridge.js';
 import type { CapturedFrame, HintEvent, TelemetrySink } from './ports.js';
@@ -76,7 +77,12 @@ export function sessionHeader(inv: Invocation, startedAt: number): Record<string
 }
 
 /** The minimal structural shape of the STT round-trip we tap (pipeline.ts Transcribe). */
-type TranscribeFn = (pcm: Float32Array, prompt?: string) => Promise<{
+type TranscribeFn = (
+  pcm: Float32Array,
+  prompt?: string,
+  /** ALLOY: pass-through only; the tap never interprets limiter lifecycle. */
+  executionObserver?: TranscriptionExecutionObserver,
+) => Promise<{
   text: string; language: string; duration: number; segments: unknown[];
 }>;
 
@@ -97,10 +103,17 @@ export function wrapTranscribeWithTap<T extends TranscribeFn>(
     appendFile(path, JSON.stringify(rec) + '\n', 'utf8')
       .catch((e) => { if (faults++ < 5) log(`write failed: ${String(e)}`); });
   };
-  const tapped = (async (pcm: Float32Array, prompt?: string) => {
+  // ALLOY: preserve the exact optional observer across this diagnostic adapter.
+  const tapped = (async (
+    pcm: Float32Array,
+    prompt?: string,
+    executionObserver?: TranscriptionExecutionObserver,
+  ) => {
     const t0 = Date.now();
     try {
-      const res = await transcribe(pcm, prompt);
+      const res = executionObserver
+        ? await transcribe(pcm, prompt, executionObserver)
+        : await transcribe(pcm, prompt);
       write({ at: new Date(t0).toISOString(), ms: Date.now() - t0, pcm_len: pcm.length, prompt_len: prompt?.length ?? 0, ok: true, text: res.text, language: res.language, duration: res.duration, segments: res.segments.length });
       return res;
     } catch (e) {

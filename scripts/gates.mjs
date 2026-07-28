@@ -9,7 +9,7 @@
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const ROOT = process.cwd();
@@ -1228,7 +1228,23 @@ function gateLiteMakefile() {
     cont = recipe && line.replace(/\s+$/, "").endsWith("\\");
   }
   if (errs.length) return fail(["lite-makefile (#581, the empty-$IMG class):", ...errs.map((e) => "   " + e)]);
-  console.log("  ✓ gate:lite-makefile — no comment lines inside continued recipe blocks (deploy/lite/Makefile)");
+  const healthcheckTest = join(ROOT, "deploy", "lite", "tests", "test_local_stt_healthcheck.py");
+  if (!existsSync(healthcheckTest))
+    return fail(["gate:lite-makefile — missing deploy/lite/tests/test_local_stt_healthcheck.py"]);
+  try {
+    execFileSync(
+      process.platform === "win32" ? "python" : "python3",
+      [healthcheckTest],
+      { cwd: ROOT, encoding: "utf8", stdio: "pipe", timeout: 55_000 },
+    );
+  } catch (error) {
+    const output = `${error.stdout || ""}${error.stderr || ""}`.trim();
+    return fail([
+      "gate:lite-makefile — local STT generated-command regression failed:",
+      ...output.split(/\r?\n/).map((line) => "   " + line),
+    ]);
+  }
+  console.log("  ✓ gate:lite-makefile — continued recipes and local STT generated command");
   return true;
 }
 

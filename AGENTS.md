@@ -11,6 +11,24 @@ Two constitutions govern everything here — read them on the docs site or in th
 
 This file is the actor contract: intake, claim, and how a session behaves in the checkout.
 
+## ALLOY local customization contract
+
+This checkout also carries local Alloy behavior. These rules are mandatory for every future
+agent working here:
+
+- Every Alloy-owned behavior change must be opt-in behind an `ALLOY_*` environment variable or
+  feature flag. With the flag absent or disabled, upstream Vexa behavior must remain available.
+- Mark every Alloy-owned code block or adjacent explanatory comment with `ALLOY:`. Prefix
+  Alloy-specific runtime diagnostics with `[ALLOY]`.
+- Do not rename or relabel upstream Vexa contracts, public APIs, services, or existing variables
+  merely to add the prefix. The prefix identifies the downstream customization boundary, not Vexa.
+- Keep each customization at one responsible boundary and reuse it from callers. Apply DRY and
+  SOLID proportionately: avoid duplicated forks, keep configuration separate from processing,
+  minimize coupling, and preserve independently testable rollback paths.
+- Document every added `ALLOY_*` switch, its default, enabled behavior, and rollback value in
+  [`docs/ALLOY-CUSTOMIZATIONS.md`](docs/ALLOY-CUSTOMIZATIONS.md) in the same change.
+- Never introduce an unmarked, unconditional downstream change to Vexa's baseline behavior.
+
 ## Researching Vexa? Start here
 
 - **Found something** (bug, gap, docs lie)? **File a GitHub issue** — every report enters

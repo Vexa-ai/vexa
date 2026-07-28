@@ -11,6 +11,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"],
+    // ALLOY: Keep the opt-in room-count regression in the standard runner.
+    include: [
+      "src/**/__tests__/**/*.test.ts",
+      "src/**/__tests__/**/*.test.tsx",
+      "src/surfaces/alloyRoomCount.test.ts",
+    ],
   },
 });

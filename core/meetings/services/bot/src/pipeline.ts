@@ -23,6 +23,7 @@ import {
   type TranscriptSink as LaneTranscriptSink,
   type TranscriptSegment as LaneSegment,
   type SpeakerStreamManagerConfig,
+  type AlloySttTelemetryTracker,
 } from '@vexa/gmeet-pipeline';
 import {
   ChunkedTranscriber,
@@ -30,14 +31,23 @@ import {
   type ChunkedTranscriberCallbacks,
   type HintKind,
 } from '@vexa/mixed-pipeline';
-import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
+import {
+  TranscriptionClient,
+  type TranscriptionExecutionObserver,
+  type TranscriptionResult,
+} from '@vexa/transcribe-whisper';
 import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
 /** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
  *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
-export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+export type Transcribe = (
+  pcm: Float32Array,
+  prompt?: string,
+  /** ALLOY: optional observer owned by the real limiter slot. */
+  executionObserver?: TranscriptionExecutionObserver,
+) => Promise<TranscriptionResult>;
 
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
  *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
@@ -166,8 +176,18 @@ function createGmeetBotPipeline(
   sink: TranscriptSink,
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
+  serializeTranscriptionByChannel = false,
+  alloySttTelemetry?: AlloySttTelemetryTracker,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const lane = createGmeetPipeline({
+    transcribe,
+    sink: laneSink(sink.publish, onError),
+    config,
+    onError,
+    // ALLOY: opt-in per-channel latest-only backpressure for CPU STT.
+    serializeTranscriptionByChannel,
+    alloySttTelemetry,
+  });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
@@ -244,13 +264,31 @@ export function createTranscribe(inv: Invocation): Transcribe {
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
     return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
   }
+  // ALLOY: These opt-in flags isolate local CPU tuning from Vexa's default behavior.
+  const alloyConcurrencyRaw = process.env.ALLOY_STT_MAX_CONCURRENCY?.trim();
+  const alloyConcurrencyParsed = alloyConcurrencyRaw && /^[1-9]\d*$/.test(alloyConcurrencyRaw)
+    ? Number(alloyConcurrencyRaw)
+    : undefined;
+  const alloyMaxConcurrency = typeof alloyConcurrencyParsed === 'number'
+    && Number.isSafeInteger(alloyConcurrencyParsed)
+    ? alloyConcurrencyParsed
+    : undefined;
+  const alloyLanguageMode = process.env.ALLOY_STT_LANGUAGE_MODE?.trim().toLowerCase();
+  if (alloyConcurrencyRaw && alloyConcurrencyRaw !== '0' && alloyMaxConcurrency === undefined) {
+    console.warn(`[ALLOY] Ignoring invalid ALLOY_STT_MAX_CONCURRENCY="${alloyConcurrencyRaw}"`);
+  }
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
+    maxConcurrentRequests: alloyMaxConcurrency,
   });
-  const language = inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  // ALLOY: auto mode supports Russian/English code-switching per submitted window.
+  // Without the flag, preserve Vexa's invocation-configured language behavior.
+  const language = alloyLanguageMode === 'auto' ? undefined : inv.language ?? undefined;
+  // ALLOY: the bot adapter only forwards lifecycle observation to the owning client.
+  return (pcm, prompt, executionObserver) =>
+    client.transcribe(pcm, language, prompt, executionObserver);
 }
 
 /**
@@ -264,6 +302,8 @@ export function createBotPipeline(
     transcribe?: Transcribe;
     config?: SpeakerStreamManagerConfig;
     onError?: (e: unknown) => void;
+    /** ALLOY: optional real scheduler telemetry; Google Meet lane only. */
+    alloySttTelemetry?: AlloySttTelemetryTracker;
     /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
      *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
     createMixedTranscriber?: MixedTranscriberFactory;
@@ -276,7 +316,14 @@ export function createBotPipeline(
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,
     );
   }
-  return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
+  return createGmeetBotPipeline(
+    transcribe,
+    sink,
+    opts.config,
+    opts.onError,
+    process.env.ALLOY_STT_CHANNEL_BACKPRESSURE?.trim() === '1',
+    opts.alloySttTelemetry,
+  );
 }
 
 /** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */

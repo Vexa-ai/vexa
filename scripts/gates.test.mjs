@@ -140,7 +140,23 @@ function withEdited(relPath, find, repl, fn) {
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
+const LITE_MAKEFILE = "deploy/lite/Makefile";
 const IMG_MANIFEST = "image-licenses.json";
+
+// ── gate:lite-makefile ─────────────────────────────────────────────────────────────────────────
+
+test("lite-makefile vacuity: the committed generated-command regression is green", () => {
+  const r = runGate("lite-makefile");
+  assert.equal(r.green, true, `the clean tree already reds — the mutation below proves nothing:\n${r.out}`);
+});
+
+test("lite-makefile RED: a changed local-Whisper healthcheck token is rejected", () => {
+  const r = withEdited(LITE_MAKEFILE, "--health-retries=30", "--health-retries=31",
+    () => runGate("lite-makefile"));
+  assert.equal(r.green, false,
+    "the generated-command regression is not enforced — an incorrect healthcheck reached green");
+  assert.match(r.out, /health-retries=30|test_local_stt_healthcheck/);
+});
 
 // ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
 

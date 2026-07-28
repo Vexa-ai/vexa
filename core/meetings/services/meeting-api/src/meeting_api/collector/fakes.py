@@ -172,6 +172,25 @@ class InMemoryTranscriptStore:
         )
         return await self._transcript_doc(mid) if authorized else None
 
+    # ALLOY: mirror the production owner-only telemetry query without the shared access union.
+    async def list_owned_meeting_ids(
+        self,
+        user_id: int,
+        *,
+        statuses: tuple[str, ...],
+    ) -> list[int]:
+        allowed = set(statuses)
+        rows = [
+            (mid, meeting)
+            for mid, meeting in self._meetings.items()
+            if meeting["user_id"] == user_id and meeting["status"] in allowed
+        ]
+        rows.sort(
+            key=lambda row: (row[1].get("created_at") or "", row[0]),
+            reverse=True,
+        )
+        return [mid for mid, _meeting in rows]
+
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
         from .projection import DEFAULT_LIST_LIMIT, project_list_data

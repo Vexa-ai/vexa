@@ -1,0 +1,7 @@
+%% GENERATED — pnpm arch:dsl --write
+sequenceDiagram
+  autonumber
+  bot->>alloy_stt_telemetry_key: ALLOY: one sealed Snapshot per active meeting, with a 15-second TTL.
+  meeting_api->>alloy_stt_telemetry_key: ALLOY: exact keys for owner-active ids and the server Aggregate.
+  gateway->>meeting_api: ALLOY: authenticated owner-scoped StatusResponse.
+  terminal->>gateway: ALLOY: visible-page polling renders the server Aggregate.

@@ -1,3 +1,5 @@
-# Implementation plans
+# docs/superpowers/plans — implementation plans
 
-Each plan decomposes one approved design into bounded, test-first implementation tasks.
+This directory contains dated, repository-local plans for approved changes. Each plan is a
+documentation artifact that depends on its governing requirements and the code revision it names;
+the directory exposes no runtime API.

@@ -26,6 +26,13 @@ export interface TranscriptionResult {
   segments: TranscriptionSegment[];
 }
 
+/** ALLOY: Optional synchronous diagnostics at the real STT execution boundary. */
+export interface TranscriptionExecutionObserver {
+  waiting(): void;
+  started(): void;
+  finished(executionDurationMs: number): void;
+}
+
 export interface TranscriptionClientConfig {
   /** Base URL of transcription-service, e.g. "http://localhost:8083" */
   serviceUrl: string;
@@ -47,6 +54,9 @@ export interface TranscriptionClientConfig {
    *  (Groq, vLLM, gateways) need their served name; the bundled unit ignores it (its model is
    *  the unit's own MODEL_SIZE). Default: "whisper-1". */
   model?: string;
+  /** ALLOY: Optional per-client request concurrency limit. Undefined preserves Vexa's
+   *  original unrestricted behavior; use 1 for a single CPU-backed Whisper worker. */
+  maxConcurrentRequests?: number;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -99,6 +109,11 @@ export class TranscriptionClient {
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
   private model: string;
+  /** ALLOY: Opt-in dependency backpressure; disabled unless explicitly configured. */
+  private maxConcurrentRequests: number | undefined;
+  private activeRequests = 0;
+  private requestWaiters: Array<() => void> = [];
+
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
@@ -112,14 +127,88 @@ export class TranscriptionClient {
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
     this.model = config.model ?? 'whisper-1';
+    this.maxConcurrentRequests = Number.isInteger(config.maxConcurrentRequests)
+      && (config.maxConcurrentRequests ?? 0) > 0
+      ? config.maxConcurrentRequests
+      : undefined;
   }
 
   /**
    * Transcribe a Float32Array audio buffer.
    * Converts to WAV, POSTs to transcription-service, returns parsed result.
    * Retries on transient failures (503, network errors).
+   * ALLOY: An optional per-call observer reports the limiter-owned execution lifecycle.
    */
-  async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
+  async transcribe(
+    audioData: Float32Array,
+    language?: string,
+    prompt?: string,
+    executionObserver?: TranscriptionExecutionObserver,
+  ): Promise<TranscriptionResult> {
+    // ALLOY: The limiter owns execution lifecycle truth; callers only observe it.
+    return this.withRequestSlot(
+      () => this.transcribeSerially(audioData, language, prompt),
+      executionObserver,
+    );
+  }
+
+  /** ALLOY: Bound only explicitly configured clients; preserve upstream concurrency otherwise. */
+  private async withRequestSlot<T>(
+    run: () => Promise<T>,
+    executionObserver?: TranscriptionExecutionObserver,
+  ): Promise<T> {
+    const limit = this.maxConcurrentRequests;
+    if (limit === undefined && executionObserver === undefined) return run();
+
+    let receivedPermitHandoff = false;
+    if (limit !== undefined && this.activeRequests >= limit) {
+      if (executionObserver !== undefined) {
+        this.runObserverCallback(() => executionObserver.waiting());
+      }
+      await new Promise<void>((resolve) => this.requestWaiters.push(() => {
+        receivedPermitHandoff = true;
+        resolve();
+      }));
+    }
+    if (limit !== undefined && !receivedPermitHandoff) this.activeRequests++;
+
+    const executionStartedAt = executionObserver === undefined ? undefined : performance.now();
+    if (executionObserver !== undefined) {
+      this.runObserverCallback(() => executionObserver.started());
+    }
+    try {
+      return await run();
+    } finally {
+      if (executionStartedAt !== undefined) {
+        const executionDurationMs = performance.now() - executionStartedAt;
+        this.runObserverCallback(() => executionObserver?.finished(executionDurationMs));
+      }
+      if (limit !== undefined) {
+        const nextWaiter = this.requestWaiters.shift();
+        if (nextWaiter !== undefined) {
+          // ALLOY: Hand the occupied permit to the oldest waiter before new work can barge in.
+          nextWaiter();
+        } else {
+          this.activeRequests--;
+        }
+      }
+    }
+  }
+
+  /** ALLOY: Optional diagnostics cannot control STT results or slot ownership. */
+  private runObserverCallback(callback: () => void): void {
+    try {
+      callback();
+    } catch {
+      // ALLOY: Observer failures are deliberately isolated from production execution.
+    }
+  }
+
+  private async transcribeSerially(
+    audioData: Float32Array,
+    language?: string,
+    prompt?: string,
+  ): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {

@@ -149,3 +149,70 @@ async def test_auth_isolated_from_slow_downstream():
     release.set()
     await hang
     await forward_client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("env", "enabled"),
+    [
+        ({}, False),
+        ({"ALLOY_STT_TELEMETRY": ""}, False),
+        ({"ALLOY_STT_TELEMETRY": "0"}, False),
+        ({"ALLOY_STT_TELEMETRY": "true"}, False),
+        ({"ALLOY_STT_TELEMETRY": "   "}, False),
+        ({"ALLOY_STT_TELEMETRY": " 1 "}, True),
+    ],
+)
+def test_gateway_telemetry_env_requires_exact_trimmed_one(env, enabled):
+    # ALLOY: the gateway composition decision mirrors Meeting API without sharing a package.
+    from gateway.adapters import _alloy_stt_telemetry_enabled
+
+    assert _alloy_stt_telemetry_enabled(env) is enabled
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        (None, False),
+        (" 1 ", True),
+    ],
+)
+def test_production_composition_injects_telemetry_capability(
+    monkeypatch,
+    raw_value,
+    expected,
+):
+    # ALLOY: isolate external adapters while exercising the real production composition root.
+    import redis.asyncio as aioredis
+
+    import gateway.adapters as adapters
+    import gateway.app as app_module
+    import gateway.config_preflight as config_module
+    import gateway.edge_guard as guard_module
+    import gateway.ratelimit as rate_limit_module
+
+    if raw_value is None:
+        monkeypatch.delenv("ALLOY_STT_TELEMETRY", raising=False)
+    else:
+        monkeypatch.setenv("ALLOY_STT_TELEMETRY", raw_value)
+
+    captured = {}
+    sentinel_app = object()
+
+    def fake_create_app(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return sentinel_app
+
+    monkeypatch.setattr(config_module, "preflight", lambda: None)
+    monkeypatch.setattr(
+        adapters,
+        "build_auth_and_downstream",
+        lambda *_args: (object(), object()),
+    )
+    monkeypatch.setattr(aioredis, "from_url", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(rate_limit_module, "from_env", lambda: None)
+    monkeypatch.setattr(app_module, "create_app", fake_create_app)
+    monkeypatch.setattr(guard_module, "apply_guard", lambda _app: None)
+
+    assert adapters.build_production_app() is sentinel_app
+    assert captured["kwargs"]["alloy_stt_telemetry_enabled"] is expected

@@ -25,9 +25,11 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract invocation.v1
   contract lifecycle.v1
   contract transcript.v1
+  contract alloy-stt-telemetry.v1
   contract webhook.v1
   service transcription
   data-asset segments-stream [writers: bot]
+  data-asset alloy-stt-telemetry-key [writers: bot]
   data-asset tc-stream [writers: meeting-api]
   data-asset tc-mutable [writers: bot, meeting-api]
   data-asset bm-status [writers: meeting-api]
@@ -82,8 +84,10 @@ system platform  # shared infra backing the services
 
 edges:
   bot -write-> segments-stream
+  bot -write-> alloy-stt-telemetry-key  # ALLOY: SET a sealed Snapshot, DEL on clean stop, with a 15-second TTL.
   bot -write-> tc-mutable
   meeting-api -read-> segments-stream
+  meeting-api -read-> alloy-stt-telemetry-key  # ALLOY: MGET exact keys for owner-owned active ids; never SCAN.
   meeting-api -write-> tc-mutable
   meeting-api -write-> segments-table
   meeting-api -write-> tc-stream
@@ -113,7 +117,7 @@ edges:
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
-  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
+  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings. ALLOY: when ALLOY_STT_TELEMETRY=1, proxy owner-scoped GET /alloy/stt/status.
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
@@ -122,7 +126,7 @@ edges:
   gateway -read-> va-chat  # WS fan-out
   admin-api -write-> identity-db
   admin-api -write-> postgres
-  terminal -req-> gateway  # all REST via gateway
+  terminal -req-> gateway  # all REST via gateway. ALLOY: exact opt-in polls GET /api/alloy/stt/status once per second while the page is visible.
   terminal -req-> gateway  # live WS via gateway
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
@@ -133,4 +137,5 @@ edges:
 
 flows:
   live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed
+  alloy-stt-status-flow: bot-writes-alloy-stt-telemetry -> meeting-api-reads-alloy-stt-telemetry -> gw-ma -> term-gw-rest
   dispatch-flow: aa-runtime -> workers-deployed -> aw-unitout -> aa-unitout

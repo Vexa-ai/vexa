@@ -613,6 +613,18 @@
    ]
   },
   {
+   "unique-id": "alloy-stt-telemetry.v1",
+   "node-type": "contract",
+   "name": "alloy-stt-telemetry.v1",
+   "description": "ALLOY: sealed meetings contract for bot Snapshot, Meeting API Aggregate, and owner-scoped StatusResponse.",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/alloy-stt-telemetry.v1",
+     "domain": "meetings"
+    }
+   ]
+  },
+  {
    "unique-id": "webhook.v1",
    "node-type": "contract",
    "name": "webhook.v1",
@@ -706,13 +718,14 @@
    ],
    "controls": {
     "render-only": {
-     "description": "A reader must not re-derive a producer's data. The terminal renders raw|processed; it must NOT contain a transcript-shaping transform (e.g. clustering).",
+     "description": "A reader must not re-derive a producer's data. The terminal renders raw|processed; it must NOT contain a transcript-shaping transform (e.g. clustering). ALLOY: the Terminal must render the server Aggregate without re-deriving it.",
      "requirements": [
       {
        "requirement-url": "vexa/controls/render-only",
        "config": {
         "forbidden-symbols": [
-         "buildMeetingNotes"
+         "buildMeetingNotes",
+         "summarizeAlloySttTelemetry"
         ]
        }
       }
@@ -748,6 +761,37 @@
     },
     {
      "stage": "raw"
+    }
+   ]
+  },
+  {
+   "unique-id": "alloy-stt-telemetry-key",
+   "node-type": "data-asset",
+   "name": "alloy:stt:telemetry:v1:{meeting_id} (Redis key)",
+   "description": "ALLOY: ephemeral per-meeting snapshot; bot is the single writer, Meeting API reads exact owner-active keys, and TTL is 15 seconds.",
+   "controls": {
+    "ownership": {
+     "description": "ALLOY: single writer (P23).",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "bot"
+        ],
+        "match": "alloy:stt:telemetry:v1:",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "alloy-stt-telemetry.v1"
+    },
+    {
+     "stage": "diagnostic"
     }
    ]
   },
@@ -1289,9 +1333,11 @@
       "invocation.v1",
       "lifecycle.v1",
       "transcript.v1",
+      "alloy-stt-telemetry.v1",
       "webhook.v1",
       "transcription",
       "segments-stream",
+      "alloy-stt-telemetry-key",
       "tc-stream",
       "tc-mutable",
       "bm-status",
@@ -1336,6 +1382,25 @@
    ]
   },
   {
+   "unique-id": "bot-writes-alloy-stt-telemetry",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "bot"
+     },
+     "destination": {
+      "node": "alloy-stt-telemetry-key"
+     }
+    }
+   },
+   "description": "ALLOY: SET a sealed Snapshot, DEL on clean stop, with a 15-second TTL.",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
    "unique-id": "bot-publishes-mutable",
    "relationship-type": {
     "connects": {
@@ -1365,6 +1430,25 @@
      }
     }
    },
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "meeting-api-reads-alloy-stt-telemetry",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "alloy-stt-telemetry-key"
+     }
+    }
+   },
+   "description": "ALLOY: MGET exact keys for owner-owned active ids; never SCAN.",
    "metadata": [
     {
      "access": "read"
@@ -1979,7 +2063,7 @@
      }
     }
    },
-   "description": "proxy /bots /transcripts /meetings /recordings",
+   "description": "proxy /bots /transcripts /meetings /recordings. ALLOY: when ALLOY_STT_TELEMETRY=1, proxy owner-scoped GET /alloy/stt/status.",
    "protocol": "HTTPS"
   },
   {
@@ -2138,7 +2222,7 @@
      }
     }
    },
-   "description": "all REST via gateway",
+   "description": "all REST via gateway. ALLOY: exact opt-in polls GET /api/alloy/stt/status once per second while the page is visible.",
    "protocol": "HTTPS"
   },
   {
@@ -2287,6 +2371,33 @@
      "relationship-unique-id": "terminal-reads-processed",
      "sequence-number": 6,
      "description": "one engine renders raw|processed; no re-derivation"
+    }
+   ]
+  },
+  {
+   "unique-id": "alloy-stt-status-flow",
+   "name": "ALLOY STT queue status",
+   "description": "ALLOY: bot-owned ephemeral snapshots -> Meeting API owner filter/server aggregate -> authenticated Gateway proxy -> render-only Terminal footer.",
+   "transitions": [
+    {
+     "relationship-unique-id": "bot-writes-alloy-stt-telemetry",
+     "sequence-number": 1,
+     "description": "ALLOY: one sealed Snapshot per active meeting, with a 15-second TTL."
+    },
+    {
+     "relationship-unique-id": "meeting-api-reads-alloy-stt-telemetry",
+     "sequence-number": 2,
+     "description": "ALLOY: exact keys for owner-active ids and the server Aggregate."
+    },
+    {
+     "relationship-unique-id": "gw-ma",
+     "sequence-number": 3,
+     "description": "ALLOY: authenticated owner-scoped StatusResponse."
+    },
+    {
+     "relationship-unique-id": "term-gw-rest",
+     "sequence-number": 4,
+     "description": "ALLOY: visible-page polling renders the server Aggregate."
     }
    ]
   },
