@@ -513,6 +513,17 @@ clean source-derived image, runtime provenance, and bounded real Google Meet evi
   repeat an unchanged stalled build. Use exact `ALLOY_LITE_BUNDLED_PYTHON=1` only after Task 8B's
   focused target is green. A healthy old container is not evidence for the new source.
 
+  **2026-07-28 BLOCKED_ENV evidence:** source commit
+  `31b5bce7aaa9baeeee37c9621ecf245accf59c8f` was archived into a tracked-only context with
+  1,931 tracked entries/files, no `.git`, no `node_modules`, and matching commit/worktree/context
+  SHA-256 values for five key files. The unique build
+  `vexa-lite:alloy-stt-31b5bce-20260728` used exact bundled-Python opt-in and reached all five
+  Python 3.12 venv completions. The WSL process tree, including the recorded keepalive, then
+  disappeared while BuildKit began the cleanup step after the agent venv. The 390-line log contains
+  no BuildKit `ERROR`, `CANCELED`, or failed-step line and stopped changing at the same time.
+  Image export, tag existence, digest, and OCI label readback were therefore not proven. The
+  unchanged build was not repeated; clean-image provenance remains open.
+
 - [ ] **Step 4: Run one bounded real Google Meet journey: join, audio, Whisper, Redis, API, and Terminal.**
 
   Use product endpoints, not Docker health self-report, as the acceptance evidence. Stop at
