@@ -118,6 +118,24 @@ path for every customization.
 - **Scope:** image build only. Runtime model selection and Google Meet/Whisper behavior are
   unchanged.
 
+### `ALLOY_LITE_BUNDLED_PYTHON`
+
+- **Purpose:** let a clean local Lite build use a compatible Python 3.12 without relying on `uv`
+  to download managed CPython from GitHub.
+- **Default:** `0` or unset.
+- **Approved local pilot build value:** `1`.
+- **Enabled behavior (`1` exactly):** select the ALLOY Python bootstrap stage, copy `/usr/local`
+  from pinned `python:3.12-slim-bullseye`, verify Python 3.12, and then run the same five existing
+  service-venv commands.
+- **Disabled/rollback behavior:** unset, empty, `0`, or another value selects the original
+  Playwright-jammy base and leaves every `uv venv --python 3.12` path unchanged. Set `0` and rebuild
+  Lite to roll back.
+- **Scope:** Lite image build only. Runtime service behavior, dependency commands, models,
+  transcription, and other deployment shapes are unchanged.
+- **Configuration boundary:** the Makefile is the only resolver for the public flag. It normalizes
+  exact `1` to the bundled stage for both local and multi-architecture builds; all other values
+  resolve to the upstream stage.
+
 ### `ALLOY_STT_HEALTHCHECK`
 
 - **Purpose:** correct the bundled third-party Whisper image's unusable `curl` self-probe for a
@@ -147,6 +165,7 @@ ALLOY_STT_LANGUAGE_MODE=auto
 ALLOY_STT_TELEMETRY=1
 NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=1
 ALLOY_SKIP_HF_CACHE_WARM=1
+ALLOY_LITE_BUNDLED_PYTHON=1
 ```
 
 Restore the upstream-compatible runtime path and restart Lite so new bot processes inherit:
@@ -163,13 +182,15 @@ Restore the upstream-compatible build path and rebuild the Lite image with:
 ```env
 NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=0
 ALLOY_SKIP_HF_CACHE_WARM=0
+ALLOY_LITE_BUNDLED_PYTHON=0
 ```
 
 ## Evidence status
 
 Focused source, contract, configuration, architecture, and component checks cover the implemented
 opt-in boundaries, real slot lifecycle accounting, active-turn preservation, strict owner-only
-lookup, sealed server aggregation, and visibility-aware Terminal polling.
+lookup, sealed server aggregation, visibility-aware Terminal polling, and the Lite bundled-Python
+build-selection contract.
 
 Still pending, and therefore not claimed here:
 

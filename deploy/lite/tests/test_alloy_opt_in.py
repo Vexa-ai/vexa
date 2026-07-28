@@ -29,6 +29,7 @@ LOCAL_PROFILE = {
 }
 BUILD_DEFAULTS = {
     "ALLOY_SKIP_HF_CACHE_WARM": "0",
+    "ALLOY_LITE_BUNDLED_PYTHON": "0",
     "NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT": "0",
 }
 POSIX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -195,7 +196,8 @@ def _build_args(dry_run: str) -> dict[str, str]:
     found = dict(
         re.findall(
             r"--build-arg\s+"
-            r"(ALLOY_SKIP_HF_CACHE_WARM|NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)"
+            r"(ALLOY_SKIP_HF_CACHE_WARM|ALLOY_LITE_BUNDLED_PYTHON|"
+            r"NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)"
             r"=([^\s\\]+)",
             dry_run,
         )

@@ -144,7 +144,7 @@ bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 ### Opt-in ALLOY pilot profile
 
-All six `.env` pilot-profile switches preserve upstream behavior by default. The approved local
+All seven `.env` pilot-profile switches preserve upstream behavior by default. The approved local
 pilot overrides them explicitly; the values are configuration instructions, not proof about the
 currently running image.
 
@@ -170,8 +170,14 @@ Build flags are compiled into the image and require a rebuild after either chang
 |---|---:|---:|---|
 | `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT` | `0` | `1` | Set `0` and rebuild to restore the upstream placeholder label |
 | `ALLOY_SKIP_HF_CACHE_WARM` | `0` | `1` | Set `0` and rebuild to restore the upstream best-effort cache warm |
+| `ALLOY_LITE_BUNDLED_PYTHON` | `0` | `1` | Set `0` and rebuild to restore the original `uv venv --python 3.12` managed-interpreter path |
 
-Put the explicit six-line pilot profile in the repo-root `.env` (or the file selected with
+`ALLOY_LITE_BUNDLED_PYTHON=1` exactly copies Python 3.12 from the pinned
+`python:3.12-slim-bullseye` build stage before running the same five service-venv commands. This
+avoids `uv`'s managed-Python download for the Lite build only. Unset, empty, `0`, or another value
+does not select or build that fallback stage.
+
+Put the explicit seven-line pilot profile in the repo-root `.env` (or the file selected with
 `ENV_FILE=...`) before building and starting Lite:
 
 ```env
@@ -181,12 +187,13 @@ ALLOY_STT_LANGUAGE_MODE=auto
 ALLOY_STT_TELEMETRY=1
 NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=1
 ALLOY_SKIP_HF_CACHE_WARM=1
+ALLOY_LITE_BUNDLED_PYTHON=1
 ```
 
-`make -C deploy/lite build` and `push` read only the two named build flags from that file; a
+`make -C deploy/lite build` and `push` read only the three named build flags from that file; a
 non-empty make command-line or ambient value takes precedence, and an empty file value cannot
 erase it. Those targets do not source the file or import any other key. Rebuild the image after
-changing either build flag. `make -C deploy/lite up` resolves the four runtime flags with the same
+changing a build flag. `make -C deploy/lite up` resolves the four runtime flags with the same
 precedence; rerun it after changing them so the recreated Lite container and newly spawned bot
 processes inherit the profile.
 

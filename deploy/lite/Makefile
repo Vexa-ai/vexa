@@ -248,9 +248,16 @@ stt-smoke:
 # then a non-empty file value, then the upstream-compatible safe default.
 alloy_build_value = $(or $(strip $($(1))),$(strip $(shell if [ -f "$(ENV_FILE)" ]; then sed -n 's/^$(1)=//p' "$(ENV_FILE)" | head -n 1 | sed -E 's/[[:space:]]+$$//'; fi)),0)
 
+# ALLOY: normalize the bundled-Python switch once; only exact `1` may select the fallback stage.
+alloy_exact_one = $(if $(filter 1,$(call alloy_build_value,$(1))),1,0)
+override ALLOY_LITE_BUNDLED_PYTHON_RESOLVED := $(call alloy_exact_one,ALLOY_LITE_BUNDLED_PYTHON)
+override ALLOY_LITE_PYTHON_STAGE := alloy-lite-python-$(ALLOY_LITE_BUNDLED_PYTHON_RESOLVED)
+
 # ALLOY: one build-argument owner keeps local and multi-arch images on identical resolved values.
 ALLOY_LITE_BUILD_ARGS = \
 	--build-arg ALLOY_SKIP_HF_CACHE_WARM=$(call alloy_build_value,ALLOY_SKIP_HF_CACHE_WARM) \
+	--build-arg ALLOY_LITE_BUNDLED_PYTHON=$(ALLOY_LITE_BUNDLED_PYTHON_RESOLVED) \
+	--build-arg ALLOY_LITE_PYTHON_STAGE=$(ALLOY_LITE_PYTHON_STAGE) \
 	--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$(call alloy_build_value,NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)
 
 build: preflight

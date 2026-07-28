@@ -7,9 +7,10 @@
 
 **Status at integration ref:** source and sealed-contract implementation is present; focused
 offline evidence, standard-runner wiring, both disposable-Redis lanes, and the approved
-independent-review hardening wave are complete. The three Important findings have named
-RED/GREEN evidence and clean scoped reviews; no Critical findings remain. Clean-image provenance,
-real Google Meet acceptance, multilingual evidence, and bounded-load recovery remain open.
+independent-review hardening wave are complete. The three Important findings have named RED/GREEN
+evidence and clean scoped reviews; no Critical findings remain. The exact opt-in bundled-Python
+source contract and production admin-venv target are green. Clean full-image provenance, real
+Google Meet acceptance, multilingual evidence, and bounded-load recovery remain open.
 
 **Goal:** Provide an opt-in, owner-scoped STT queue monitor that reports real Whisper execution,
 backlog, lag, RTF, and failures on every Vexa Terminal screen without changing upstream behavior
@@ -30,8 +31,12 @@ page is visible.
 - All behavior is enabled only by exact opt-in flags. The upstream-compatible defaults are
   `ALLOY_STT_MAX_CONCURRENCY=0`, `ALLOY_STT_CHANNEL_BACKPRESSURE=0`,
   `ALLOY_STT_LANGUAGE_MODE=configured`, `ALLOY_STT_TELEMETRY=0`,
-  `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=0`, and `ALLOY_SKIP_HF_CACHE_WARM=0`.
-- The approved local pilot overrides those values explicitly as `1/1/auto/1/1/1`.
+  `NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=0`, `ALLOY_SKIP_HF_CACHE_WARM=0`, and
+  `ALLOY_LITE_BUNDLED_PYTHON=0`.
+- The approved local pilot overrides those values explicitly as `1/1/auto/1/1/1/1`.
+- Exact `ALLOY_LITE_BUNDLED_PYTHON=1` selects a pinned
+  `python:3.12-slim-bullseye` bootstrap before the unchanged five Lite service-venv commands.
+  Every other value retains the original Playwright-jammy `uv venv --python 3.12` path.
 - `ALLOY_STT_MAX_CONCURRENCY` limits one bot process. It is not a cross-process, cross-meeting, or
   Whisper-service-wide semaphore.
 - A released limited-concurrency permit is handed directly to the oldest FIFO waiter; a new request
@@ -123,10 +128,12 @@ the already completed TypeScript compile evidence.
 | `clients/terminal/src/workbench/__tests__/alloySttTelemetry.resilience.test.ts` | Restart overlap and stale-generation result fencing tests |
 | `clients/terminal/src/workbench/__tests__/AlloySttTelemetryMonitor.test.tsx` | Footer, aggregate-health, details, and disabled fallback tests |
 | `clients/terminal/src/app/__tests__/alloyTelemetryRuntime.test.tsx` | Runtime opt-in and hook-free disabled composition tests |
+| `deploy/lite/Dockerfile.lite` | Exact opt-in bundled-Python base selection plus one unchanged five-service venv path |
 | `deploy/lite/entrypoint.sh` | Lite runtime default-zero telemetry export |
 | `deploy/lite/bin/vexa-bot-launch` | Default-zero per-bot flags and explicit propagation |
-| `deploy/lite/Makefile` | Runtime and build flag defaults |
-| `deploy/lite/tests/test_alloy_opt_in.py` | Six-flag default-zero and explicit opt-in composition tests |
+| `deploy/lite/Makefile` | Runtime defaults and the single resolver for public build flags and the internal Python-stage selector |
+| `deploy/lite/tests/test_alloy_opt_in.py` | Seven-flag default-zero and explicit opt-in composition tests |
+| `deploy/lite/tests/test_lite_bundled_python.py` | Exact-1 Make/Dockerfile Python-bootstrap contract |
 | `core/meetings/services/meeting-api/src/meeting_api/config.v1.json` | Meeting API telemetry deployment contract |
 | `architecture.calm.json` | Redis carrier, ownership, API, and Terminal dataflow |
 | Package runner files | Standard focused tests for tracker, slot observer, publisher, API, and Terminal |
@@ -449,6 +456,41 @@ byte-for-byte free of the unrelated timeout customization.
 
 ---
 
+### Task 8B: Opt-in Lite Python Bootstrap
+
+**Expected:** a clean ALLOY Lite build can source compatible Python 3.12 from a pinned container
+image without changing the absent/disabled upstream path or duplicating any of the five existing
+service-venv command blocks.
+
+- [x] **Step 1: Add the focused Make/Dockerfile contract test and observe RED before production changes.**
+
+  The new test failed in 2.81 seconds because both build targets exposed neither the public flag nor
+  its internal stage selector and the pinned bundled-Python stage was absent. The worktree contained
+  only the new test at RED.
+
+- [x] **Step 2: Implement the exact-1 Make-owned selector, pinned Python stage, docs, and focused GREEN.**
+
+  Only exact `1` may select the bundled stage. Absent, empty, `0`, `true`, `01`, `2`, and other
+  values must select the upstream stage for both `build` and `push`.
+
+  The new focused test passed `3/3`; the existing Lite opt-in and local-STT healthcheck suites
+  passed `9/9` and `2/2`. An extra non-ALLOY env-file hygiene node did not start because the WSL
+  environment lacks `pytest`; it is recorded as an environment limitation and was not rerun.
+
+- [x] **Step 3: Build the production `lite-admin-venv` target through the new mechanism.**
+
+  Stop at five minutes. Expected: Python 3.12 is registry-provided, the unchanged admin
+  `uv venv`, frozen sync, and production extras succeed, and no managed-Python GitHub download is
+  attempted.
+
+  The first uncached build completed every Docker step and image export with Python `3.12.11`, then
+  its outer evidence wrapper returned `1` because an empty `PIPESTATUS` value reached `exit`.
+  The corrected pipefail-only wrapper completed from cache in 5.5 seconds with exit `0`. The full
+  uncached log contains the `[ALLOY]` marker, the unchanged admin commands, and no
+  `python-build-standalone` or `cpython-3.12.12` download.
+
+---
+
 ### Task 9: Independent Review and Real Acceptance
 
 **Expected:** completion is claimed only after independent review, both disposable-Redis lanes, a
@@ -468,7 +510,8 @@ clean source-derived image, runtime provenance, and bounded real Google Meet evi
 - [ ] **Step 3: Build one clean Dockerfile image from the integrated source and prove runtime/source provenance.**
 
   Stop the correlated build process tree at 15 minutes, retain the last active stage, and do not
-  repeat an unchanged stalled build. A healthy old container is not evidence for the new source.
+  repeat an unchanged stalled build. Use exact `ALLOY_LITE_BUNDLED_PYTHON=1` only after Task 8B's
+  focused target is green. A healthy old container is not evidence for the new source.
 
 - [ ] **Step 4: Run one bounded real Google Meet journey: join, audio, Whisper, Redis, API, and Terminal.**
 

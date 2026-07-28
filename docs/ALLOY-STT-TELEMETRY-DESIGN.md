@@ -454,7 +454,10 @@ Implementation must update:
 
 The current local Vexa image must not be described as matching or verifying the integrated source
 merely because focused checks are green. The earlier clean Dockerfile build did not complete within
-its bounded build window. A new bounded clean build, runtime provenance check, disposable Redis
-lane, and live acceptance run remain separate evidence gates.
+its bounded build window. For the next clean Lite build,
+`ALLOY_LITE_BUNDLED_PYTHON=1` exactly selects the pinned
+`python:3.12-slim-bullseye` bootstrap before the unchanged five service-venv commands; disabled
+values retain the original `uv venv --python 3.12` path. A new bounded clean build, runtime
+provenance check, disposable Redis lane, and live acceptance run remain separate evidence gates.
 
 No Git staging, commit, push, branch mutation, package installation, or remote deployment is part of this design approval.
