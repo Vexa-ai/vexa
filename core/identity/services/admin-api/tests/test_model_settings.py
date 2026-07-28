@@ -130,13 +130,20 @@ def test_bot_context_carries_effective_transcription(client):
     client.put("/internal/settings/transcription", headers=_internal(),
                json={"url": "https://stt-global.example.com", "token": "tok-global"})
     r = client.get(f"/internal/users/{uid}/bot-context", headers=_internal())
-    assert r.json()["transcription"] == {"url": "https://stt-global.example.com", "token": "tok-global"}
+    assert r.json()["transcription"] == {
+        "url": "https://stt-global.example.com",
+        "token": "tok-global",
+        "provider": "vexa",
+    }
 
     client.put("/user/transcription", headers={"X-API-Key": tok},
                json={"url": "https://stt-mine.example.com"})
     r = client.get(f"/internal/users/{uid}/bot-context", headers=_internal())
-    # user url wins; global token still fills the gap (field-by-field)
-    assert r.json()["transcription"] == {"url": "https://stt-mine.example.com", "token": "tok-global"}
+    # A customer URL never inherits the platform credential.
+    assert r.json()["transcription"] == {
+        "url": "https://stt-mine.example.com",
+        "provider": "customer",
+    }
 
     # masked user-facing read-back
     cfg = client.get("/user/transcription", headers={"X-API-Key": tok}).json()

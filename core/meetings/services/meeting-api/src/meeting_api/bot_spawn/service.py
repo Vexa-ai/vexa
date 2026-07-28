@@ -194,6 +194,7 @@ async def request_bot(
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
     configured = await _resolve_transcription_backend(user_id)
+    transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
         # A configured backend's token replaces the env token even when empty — the env token
@@ -202,6 +203,14 @@ async def request_bot(
         # backend carries its own (unset → the client's whisper-1 default).
         transcription_service_token = configured.get("token") or None
         transcription_model = configured.get("model") or None
+        configured_provider = configured.get("provider")
+        if configured_provider in ("vexa", "customer"):
+            transcription_provider = configured_provider
+    elif transcribe_enabled and transcription_service_url:
+        # The process-level backend is operated by this Vexa deployment. A Settings response,
+        # however, is not inferred from its URL: mixed-version identity may return a customer URL
+        # without provenance, and guessing there could turn an unknown service into a Vexa charge.
+        transcription_provider = "vexa"
     if transcribe_enabled and not transcription_service_url:
         raise TranscriptionNotConfigured(
             "no transcription backend configured — set it in Settings or environment variables "
@@ -312,13 +321,22 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
-        row = await repo.reopen_meeting(meeting_id=reused_row["id"])
+        row = await repo.reopen_meeting(
+            meeting_id=reused_row["id"],
+            data_patch={
+                "transcribe_enabled": transcribe_enabled,
+                "recording_enabled": recording_enabled,
+                "transcription_provider": transcription_provider,
+            },
+        )
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        if transcription_provider is not None:
+            meeting_data["transcription_provider"] = transcription_provider
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path

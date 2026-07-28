@@ -180,7 +180,7 @@ class InMemoryMeetingRepo:
             else:
                 m["data"][k] = v
 
-    async def reopen_meeting(self, *, meeting_id) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         row = self._meetings[meeting_id]
         row["status"] = "requested"
         row["end_time"] = None
@@ -188,6 +188,11 @@ class InMemoryMeetingRepo:
         # Clear the prior terminal attribution but KEEP the row + its transcripts/recordings.
         for k in ("completion_reason", "failure_stage"):
             row["data"].pop(k, None)
+        for key, value in (data_patch or {}).items():
+            if value is None:
+                row["data"].pop(key, None)
+            else:
+                row["data"][key] = value
         self.reopened.append(meeting_id)
         return dict(row)
 
@@ -218,6 +223,18 @@ class InMemoryMeetingRepo:
             return None
         row = self._meetings.get(sess["meeting_id"])
         return row["status"] if row else None
+
+    async def get_lifecycle_state_by_session(self, *, session_uid) -> Optional[dict]:
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None:
+            return None
+        return {
+            "status": row["status"],
+            "data": dict(row.get("data") or {}),
+        }
 
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         row = next(

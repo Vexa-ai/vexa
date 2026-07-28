@@ -97,6 +97,35 @@ async function main(): Promise<void> {
     check('happy: pipeline started then stopped', pipe.started === false);
   }
 
+  // ── producer-owned event time: admission/runtime billing survives callback delay ──
+  {
+    const lc = recordingSink();
+    const timestamps = [
+      '2026-07-28T10:00:00.000Z',
+      '2026-07-28T10:00:05.000Z',
+      '2026-07-28T10:00:10.000Z',
+      '2026-07-28T10:25:10.000Z',
+    ];
+    let index = 0;
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: lc,
+      join: mockJoin('admitted'),
+      pipeline: noopPipeline(),
+      acts: noopActs((f) => { fireLeave = f; }),
+      aloneness: noopAloneness(),
+      now: () => timestamps[index++],
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    await runP;
+    check(
+      'event-time: every lifecycle transition carries its producer timestamp exactly once',
+      JSON.stringify(lc.events.map((event) => event.timestamp)) === JSON.stringify(timestamps),
+      JSON.stringify(lc.events),
+    );
+  }
+
   // ── leave via the orchestrator.handle entrypoint (the acts adapter / test surface) ──
   {
     const lc = recordingSink();

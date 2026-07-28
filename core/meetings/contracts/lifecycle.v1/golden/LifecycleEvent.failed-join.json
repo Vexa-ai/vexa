@@ -1,6 +1,7 @@
 {
   "connection_id": "sess-uid",
   "status": "failed",
+  "timestamp": "2026-07-28T10:10:00.000Z",
   "exit_code": 1,
   "failure_stage": "awaiting_admission",
   "completion_reason": "awaiting_admission_rejected",

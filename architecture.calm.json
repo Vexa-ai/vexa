@@ -592,7 +592,7 @@
    "unique-id": "lifecycle.v1",
    "node-type": "contract",
    "name": "lifecycle.v1",
-   "description": "lifecycle.v1 — sealed/published contract (meetings)",
+   "description": "lifecycle.v1 — sealed/published bot status with producer-observed transition time (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/lifecycle.v1",
@@ -616,7 +616,7 @@
    "unique-id": "webhook.v1",
    "node-type": "contract",
    "name": "webhook.v1",
-   "description": "webhook.v1 — sealed/published contract (meetings)",
+   "description": "webhook.v1 — sealed/published delivery including privacy-safe terminal service provenance (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/webhook.v1",
