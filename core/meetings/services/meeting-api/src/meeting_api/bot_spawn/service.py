@@ -204,7 +204,7 @@ async def request_bot(
         transcription_service_token = configured.get("token") or None
         transcription_model = configured.get("model") or None
         configured_provider = configured.get("provider")
-        if configured_provider in ("vexa", "customer"):
+        if transcribe_enabled and configured_provider in ("vexa", "customer"):
             transcription_provider = configured_provider
     elif transcribe_enabled and transcription_service_url:
         # The process-level backend is operated by this Vexa deployment. A Settings response,

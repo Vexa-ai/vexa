@@ -8,11 +8,26 @@ LIFECYCLE_CONTRACT_VERSION = "2026-07-28"
 _PROVIDERS = frozenset({"vexa", "customer", "none"})
 
 
-def _transition_time(transitions: list[dict], status: str) -> Optional[str]:
+def _latest_session(transitions: list[dict]) -> list[dict]:
+    """Return only the last bot run carried by a continued meeting row."""
+    for index in range(len(transitions) - 1, -1, -1):
+        if transitions[index].get("to") == "joining":
+            return transitions[index:]
+    return transitions
+
+
+def _transition(transitions: list[dict], status: str) -> Optional[dict]:
     for transition in reversed(transitions):
-        if transition.get("to") == status and isinstance(transition.get("timestamp"), str):
-            return transition["timestamp"]
+        if transition.get("to") == status:
+            return transition
     return None
+
+
+def _producer_time(transition: Optional[dict]) -> Optional[str]:
+    if not transition or transition.get("timestamp_source") != "producer":
+        return None
+    timestamp = transition.get("timestamp")
+    return timestamp if isinstance(timestamp, str) else None
 
 
 def build_service_provenance(meeting: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -30,18 +45,26 @@ def build_service_provenance(meeting: Dict[str, Any]) -> Optional[Dict[str, Any]
     transitions = data.get("status_transition")
     if not isinstance(transitions, list):
         transitions = []
-    transitions = [item for item in transitions if isinstance(item, dict)]
+    transitions = _latest_session(
+        [item for item in transitions if isinstance(item, dict)],
+    )
 
-    admitted_at = _transition_time(transitions, "active")
+    admitted_transition = _transition(transitions, "active")
+    admitted_at = _producer_time(admitted_transition)
     terminal_status = meeting.get("status")
-    departed_at = (
-        _transition_time(transitions, terminal_status)
+    terminal_transition = (
+        _transition(transitions, terminal_status)
         if terminal_status in ("completed", "failed")
         else None
     )
-    if admitted_at is None:
+    departed_at = _producer_time(terminal_transition)
+    if admitted_transition is None:
         bot_outcome = "never_admitted"
         departed_at = None
+    elif admitted_at is None or departed_at is None:
+        # A mixed-version bot can omit producer time. Receiver time is operationally useful but
+        # retry latency makes it unfit for rating, so an admitted legacy session stays unresolved.
+        return None
     elif terminal_status == "failed":
         bot_outcome = "failed"
     else:

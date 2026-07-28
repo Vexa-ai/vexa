@@ -433,6 +433,29 @@ async def test_request_bot_disabled_transcription_freezes_none_provider(monkeypa
     assert row["data"]["transcription_provider"] == "none"
 
 
+async def test_request_bot_disabled_transcription_ignores_configured_provider(monkeypatch):
+    from meeting_api.bot_spawn import service as spawn_service
+
+    async def fake_resolve(_user_id):
+        return {"url": "https://stt-mine.example.com", "provider": "customer"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    await request_bot(
+        repo,
+        FakeRuntimeClient(),
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="disabled-configured-tx",
+        transcribe_enabled=False,
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "none"
+
+
 async def test_request_bot_does_not_guess_provider_for_legacy_settings_response(monkeypatch):
     """A mixed-version identity response may have a URL but no provenance.
 

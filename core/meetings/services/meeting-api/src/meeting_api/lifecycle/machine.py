@@ -463,14 +463,16 @@ class LifecycleSink:
         rec.last_transition_source = transition_source
 
         # Append the status_transition[] trail entry (parent's update_meeting_status entry).
+        producer_timestamp = event.get("timestamp")
         entry: Dict[str, Any] = {
             "from": frm.value if frm is not None else None,
             "to": to.value,
             # The producer observed admission/departure. Callback receipt time may be delayed by
             # retries, so it cannot be the billing clock. Legacy events without event time retain
             # the server fallback but will not satisfy the provenance contract used for billing.
-            "timestamp": event.get("timestamp")
+            "timestamp": producer_timestamp
             or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp_source": "producer" if producer_timestamp else "receiver",
             "source": transition_source.value,
         }
         if rec.reason is not None and to in _TERMINAL:
