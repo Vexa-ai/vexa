@@ -277,6 +277,7 @@ export class TranscriptionClient {
     ranges: AudioSampleRange[],
     results: TranscriptionResult[],
   ): TranscriptionResult {
+    const duration = audioLength / this.sampleRate;
     const languages = new Set(
       results
         .map((result) => result.language)
@@ -301,19 +302,31 @@ export class TranscriptionClient {
       language_probability: agreedProbabilities.length > 0
         ? Math.min(...agreedProbabilities)
         : undefined,
-      duration: audioLength / this.sampleRate,
+      duration,
       segments: results.flatMap((result, index) => {
         const offsetSec = ranges[index].startSample / this.sampleRate;
-        return result.segments.map((segment) => ({
-          ...segment,
-          start: segment.start + offsetSec,
-          end: segment.end + offsetSec,
-          words: segment.words?.map((word) => ({
-            ...word,
-            start: word.start + offsetSec,
-            end: word.end + offsetSec,
-          })),
-        }));
+        const rangeEndSec = Math.min(duration, ranges[index].endSample / this.sampleRate);
+        // ALLOY: Backends may round a child-local timestamp past the submitted PCM. Clamp at
+        // the producer boundary so every merged segment and word stays on the logical timeline.
+        const clampToRange = (childTime: number): number =>
+          Math.max(offsetSec, Math.min(rangeEndSec, childTime + offsetSec));
+        return result.segments.map((segment) => {
+          const start = clampToRange(segment.start);
+          const end = Math.max(start, clampToRange(segment.end));
+          return {
+            ...segment,
+            start,
+            end,
+            words: segment.words?.map((word) => {
+              const wordStart = Math.max(start, Math.min(end, clampToRange(word.start)));
+              return {
+                ...word,
+                start: wordStart,
+                end: Math.max(wordStart, Math.min(end, clampToRange(word.end))),
+              };
+            }),
+          };
+        });
       }),
     };
   }

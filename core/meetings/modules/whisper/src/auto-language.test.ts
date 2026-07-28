@@ -61,12 +61,12 @@ const serviceResponses = [
     duration: 1.25,
     segments: [{
       start: 0.05,
-      end: 0.65,
+      end: 2,
       text: 'again',
       avg_logprob: -0.1,
       no_speech_prob: 0.01,
       compression_ratio: 1,
-      words: [{ word: 'again', start: 0.05, end: 0.65, probability: 0.96 }],
+      words: [{ word: 'again', start: 0.05, end: 2, probability: 0.96 }],
     }],
   },
 ];
@@ -139,7 +139,7 @@ try {
       === JSON.stringify([
         { start: 0.1, end: 0.8 },
         { start: 1.45, end: 2.05 },
-        { start: 2.8, end: 3.4 },
+        { start: 2.8, end: 4 },
       ]),
     JSON.stringify(result.segments),
   );
@@ -151,7 +151,7 @@ try {
     }))) === JSON.stringify([
       { start: 0.1, end: 0.8 },
       { start: 1.45, end: 2.05 },
-      { start: 2.8, end: 3.4 },
+      { start: 2.8, end: 4 },
     ]),
     JSON.stringify(result.segments),
   );
