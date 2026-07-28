@@ -1,7 +1,7 @@
 # Alloy Meet audio-boundary diagnostic design
 
-**Date:** 2026-07-28  
-**Status:** approved for execution  
+**Date:** 2026-07-28
+**Status:** approved for execution
 **Scope:** the blocked Google Meet witness for the Alloy STT code-switch candidate
 
 ## Goal
