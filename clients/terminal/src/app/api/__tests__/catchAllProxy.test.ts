@@ -24,6 +24,7 @@ const ctx = (...path: string[]) => ({ params: Promise.resolve({ path }) });
 
 beforeEach(() => {
   delete process.env.NEXT_PUBLIC_TERMINAL_MODE;
+  delete process.env.ALLOY_STT_TELEMETRY;
 });
 
 afterEach(() => {
@@ -64,5 +65,48 @@ describe("catch-all proxy — upstream status passthrough", () => {
     const res = await deleteRoute(makeReq("DELETE"), ctx("meetings", "47"));
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe("upstream_unreachable");
+  });
+});
+
+describe("catch-all proxy — ALLOY telemetry opt-in routing", () => {
+  it("uses the ordinary agent branch in full mode when disabled and Gateway root when enabled", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await getRoute(makeReq("GET"), ctx("alloy", "stt", "status"));
+    const [disabledUrl] = fetchSpy.mock.calls[0] as unknown as [string];
+    expect(disabledUrl).toContain("/agent/alloy/stt/status");
+
+    process.env.ALLOY_STT_TELEMETRY = "1";
+    await getRoute(makeReq("GET"), ctx("alloy", "stt", "status"));
+    const [enabledUrl] = fetchSpy.mock.calls[1] as unknown as [string];
+    expect(enabledUrl).toContain("/alloy/stt/status");
+    expect(enabledUrl).not.toContain("/agent/alloy/stt/status");
+  });
+
+  it("refuses disabled ALLOY without fetch in meetings-only mode and routes enabled ALLOY to Gateway root", async () => {
+    process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const refused = await getRoute(
+      makeReq("GET"),
+      ctx("alloy", "stt", "status"),
+    );
+    expect(refused.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    process.env.ALLOY_STT_TELEMETRY = "1";
+    const enabled = await getRoute(
+      makeReq("GET"),
+      ctx("alloy", "stt", "status"),
+    );
+    expect(enabled.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const [enabledUrl] = fetchSpy.mock.calls[0] as unknown as [string];
+    expect(enabledUrl).toContain("/alloy/stt/status");
+    expect(enabledUrl).not.toContain("/agent/alloy/stt/status");
   });
 });

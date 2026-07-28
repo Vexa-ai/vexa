@@ -11,6 +11,13 @@ nothing of topology, naming, or confirmation.
 - `isLowConfidenceSegment` drops acoustically-junk segments (bad logprob, high
   no-speech, runaway compression) before they reach the confirm loop.
 - WAV-encodes Float32 PCM, retries transient failures with backoff, 30s timeout.
+- ALLOY: `autoDetectLanguagePerSegment` is disabled by default. When explicitly
+  enabled without a forced language, the adapter splits only at qualifying
+  natural pauses, submits chunks sequentially, and merges verbose text,
+  segment/word offsets, duration, and `mul` language metadata. The caller still
+  observes one limiter lifecycle; any child failure rejects the logical call.
+- ALLOY: language switches without an acoustic pause remain backend-limited, and
+  pause-rich windows trade additional inference latency for re-detection.
 
 ## Surface
 `TranscriptionClient` · `isLowConfidenceSegment` · `setLogger` · types
@@ -20,8 +27,8 @@ nothing of topology, naming, or confirmation.
 ## Verify
 ```bash
 pnpm --filter @vexa/transcribe-whisper build
-pnpm --filter @vexa/transcribe-whisper test   # the stt.v1 low-confidence filter golden
+pnpm --filter @vexa/transcribe-whisper test   # filters, limiter, pause split, merge/rollback
 ```
-`gate:node` runs the **offline** filter golden here; the HTTP client is exercised
-end-to-end by pipeline replay (3.2) and live L4. Covered by `gate:node`,
-`gate:isolation`, `gate:exports`, `gate:readme`.
+`gate:node` runs the **offline** adapter goldens here; the HTTP boundary is
+exercised with complete verbose responses and then by pipeline replay (3.2) and
+live L4. Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.

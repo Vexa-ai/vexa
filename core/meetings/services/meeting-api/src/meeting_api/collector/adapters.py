@@ -419,6 +419,29 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
+    # ALLOY: use an owner predicate at the introduction boundary; shares never enter this query.
+    async def list_owned_meeting_ids(
+        self,
+        user_id: int,
+        *,
+        statuses: tuple[str, ...],
+    ) -> list[int]:
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting.id)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.status.in_(tuple(statuses)),
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            )
+            meeting_ids = (await db.execute(stmt)).scalars().all()
+            return [int(meeting_id) for meeting_id in meeting_ids]
+
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
         from sqlalchemy import cast, func, select, union_all

@@ -8,6 +8,12 @@
       "note": "Pinned base and builder image for Vexa Lite. Playwright is Apache-2.0; Ubuntu package names installed in the final stage are separately inventoried in the SPDX with unresolved fields stated as NOASSERTION."
     },
     {
+      "name": "python",
+      "license": "Python-2.0",
+      "disposition": "base-image",
+      "note": "Pinned Bookworm Python 3.12 source for the exact ALLOY_LITE_BUNDLED_PYTHON=1 Lite build stage. The flag-off build does not select or copy this stage; Python is distributed under the PSF License Version 2 (SPDX Python-2.0)."
+    },
+    {
       "name": "valkey/valkey",
       "license": "BSD-3-Clause",
       "disposition": "sidecar",

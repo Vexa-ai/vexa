@@ -20,7 +20,10 @@ import { createBotPipeline, createTranscribe } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
-import type { TranscriptionResult } from '@vexa/transcribe-whisper';
+import type {
+  TranscriptionExecutionObserver,
+  TranscriptionResult,
+} from '@vexa/transcribe-whisper';
 import type { ChunkedTranscriberCallbacks } from '@vexa/mixed-pipeline';
 
 let failed = 0;
@@ -134,21 +137,173 @@ async function main(): Promise<void> {
   // (stubbed fetch, real client), so the whole bot-side thread is closed, not just the client.
   {
     const realFetch = globalThis.fetch;
-    const modelParts: Array<string | null> = [];
-    (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
-      const m = Buffer.from(init.body).toString('latin1').match(/name="model"\r\n\r\n([^\r]*)\r\n/);
-      modelParts.push(m ? m[1] : null);
-      return new Response(JSON.stringify({ text: '', language: 'en', duration: 0.1, segments: [] }), { status: 200 });
+    // ALLOY: Keep flag state and fetch isolated so this observer-wiring proof
+    // cannot change later cases or depend on the shell's local profile.
+    const realLanguageMode = process.env.ALLOY_STT_LANGUAGE_MODE;
+    const realMaxConcurrency = process.env.ALLOY_STT_MAX_CONCURRENCY;
+    const formParts: Array<{
+      model: string | null;
+      language: string | null;
+      prompt: string | null;
+    }> = [];
+    const observerEvents: string[] = [];
+    const observer: TranscriptionExecutionObserver = {
+      waiting: () => observerEvents.push('waiting'),
+      started: () => observerEvents.push('started'),
+      finished: () => observerEvents.push('finished'),
     };
-    const pcm = new Float32Array(1600).fill(0.05);
-    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test', transcriptionModel: 'whisper-large-v3-turbo' }))(pcm);
-    await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
-    (globalThis as any).fetch = realFetch;
-    check('invocation.transcriptionModel rides the model form part', modelParts[0] === 'whisper-large-v3-turbo', JSON.stringify(modelParts[0]));
-    check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
+    try {
+      delete process.env.ALLOY_STT_LANGUAGE_MODE;
+      delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      (globalThis as any).fetch = async (_url: unknown, init: { body: Buffer }) => {
+        const body = Buffer.from(init.body).toString('latin1');
+        const part = (name: string): string | null =>
+          body.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)\\r\\n`))?.[1] ?? null;
+        formParts.push({
+          model: part('model'),
+          language: part('language'),
+          prompt: part('prompt'),
+        });
+        return new Response(JSON.stringify({
+          text: '',
+          language: 'ru',
+          duration: 0.1,
+          segments: [],
+        }), { status: 200 });
+      };
+      const pcm = new Float32Array(1600).fill(0.05);
+      await createTranscribe(baseInv({
+        transcriptionServiceUrl: 'http://stt.test',
+        transcriptionModel: 'whisper-large-v3-turbo',
+        language: 'ru',
+      }))(pcm, 'previous words', observer);
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }))(pcm);
+      // ALLOY: Break caught — merely omitting language without enabling pause-bounded
+      // re-detection would still make one backend request and lose code-switched legs.
+      process.env.ALLOY_STT_LANGUAGE_MODE = 'auto';
+      const autoPcm = new Float32Array(64_000);
+      autoPcm.fill(0.2, 0, 16_000);
+      autoPcm.fill(0.2, 24_000, 40_000);
+      autoPcm.fill(0.2, 48_000, 64_000);
+      await createTranscribe(baseInv({
+        transcriptionServiceUrl: 'http://stt.test',
+        language: 'ru',
+      }))(autoPcm, 'multilingual context');
+    } finally {
+      (globalThis as any).fetch = realFetch;
+      if (realLanguageMode === undefined) delete process.env.ALLOY_STT_LANGUAGE_MODE;
+      else process.env.ALLOY_STT_LANGUAGE_MODE = realLanguageMode;
+      if (realMaxConcurrency === undefined) delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      else process.env.ALLOY_STT_MAX_CONCURRENCY = realMaxConcurrency;
+    }
+    check('invocation.transcriptionModel rides the model form part', formParts[0]?.model === 'whisper-large-v3-turbo', JSON.stringify(formParts[0]?.model));
+    check('no transcriptionModel → default whisper-1 (wire unchanged)', formParts[1]?.model === 'whisper-1', JSON.stringify(formParts[1]?.model));
+    check('invocation language and prompt still ride the STT wire',
+      formParts[0]?.language === 'ru' && formParts[0]?.prompt === 'previous words',
+      JSON.stringify(formParts[0]));
+    check('ALLOY createTranscribe forwards the real limiter observer',
+      observerEvents.join(',') === 'started,finished',
+      observerEvents.join(','));
+    const autoParts = formParts.slice(2);
+    check(
+      'ALLOY auto mode enables pause-bounded requests without a language pin',
+      autoParts.length === 3
+        && autoParts.every((part) => part.language === null)
+        && autoParts.map((part) => part.prompt).join(',') === 'multilingual context,,',
+      JSON.stringify(autoParts),
+    );
   }
 
-  // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
+  // ── 5) ALLOY: exact zero is a quiet opt-out; malformed/negative values stay diagnostic. ──
+  {
+    const realFetch = globalThis.fetch;
+    const realMaxConcurrency = process.env.ALLOY_STT_MAX_CONCURRENCY;
+    const realWarn = console.warn;
+    const observations: Array<{
+      raw: string;
+      events: string[];
+      warnings: string[];
+      fetchesBeforeRelease: number;
+      fetchesCompleted: number;
+    }> = [];
+    try {
+      const pcm = new Float32Array(1600).fill(0.05);
+      for (const raw of ['0', '-1', 'garbage']) {
+        process.env.ALLOY_STT_MAX_CONCURRENCY = raw;
+        const events: string[] = [];
+        const warnings: string[] = [];
+        let fetchesStarted = 0;
+        let releaseFetch!: () => void;
+        const fetchGate = new Promise<void>((resolve) => {
+          releaseFetch = resolve;
+        });
+        (globalThis as any).fetch = async () => {
+          fetchesStarted++;
+          await fetchGate;
+          return new Response(JSON.stringify({
+            text: '',
+            language: 'en',
+            duration: 0.1,
+            segments: [],
+          }), { status: 200 });
+        };
+        console.warn = (...args: unknown[]) => {
+          warnings.push(args.map(String).join(' '));
+        };
+        const transcribe = createTranscribe(baseInv({
+          transcriptionServiceUrl: 'http://stt.test',
+        }));
+        const observer = {
+          waiting: () => events.push('waiting'),
+          started: () => events.push('started'),
+          finished: () => events.push('finished'),
+        };
+        const first = transcribe(pcm, undefined, observer);
+        const second = transcribe(pcm, undefined, observer);
+        await Promise.resolve();
+        const fetchesBeforeRelease = fetchesStarted;
+        releaseFetch();
+        await Promise.all([first, second]);
+        observations.push({
+          raw,
+          events,
+          warnings,
+          fetchesBeforeRelease,
+          fetchesCompleted: fetchesStarted,
+        });
+      }
+    } finally {
+      (globalThis as any).fetch = realFetch;
+      console.warn = realWarn;
+      if (realMaxConcurrency === undefined) {
+        delete process.env.ALLOY_STT_MAX_CONCURRENCY;
+      } else {
+        process.env.ALLOY_STT_MAX_CONCURRENCY = realMaxConcurrency;
+      }
+    }
+    const byRaw = (raw: string) => observations.find((item) => item.raw === raw);
+    const provesNoLimiter = (raw: string) => {
+      const observation = byRaw(raw);
+      return observation?.fetchesBeforeRelease === 2
+        && observation.fetchesCompleted === 2
+        && observation.events.filter((event) => event === 'waiting').length === 0
+        && observation.events.filter((event) => event === 'started').length === 2
+        && observation.events.filter((event) => event === 'finished').length === 2;
+    };
+    check('ALLOY exact concurrency 0 creates no limiter wait and emits no warning',
+      provesNoLimiter('0')
+        && byRaw('0')?.warnings.length === 0,
+      JSON.stringify(byRaw('0')));
+    for (const raw of ['-1', 'garbage']) {
+      check(`ALLOY invalid concurrency ${raw} creates no limiter and keeps the diagnostic`,
+        provesNoLimiter(raw)
+          && byRaw(raw)?.warnings.length === 1
+          && byRaw(raw)?.warnings[0]?.startsWith('[ALLOY] Ignoring invalid ALLOY_STT_MAX_CONCURRENCY='),
+        JSON.stringify(byRaw(raw)));
+    }
+  }
+
+  // ── 6) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
   //     name — so per-speaker consumers group unattributed turns as ONE speaker, not hundreds.

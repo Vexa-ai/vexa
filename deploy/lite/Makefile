@@ -51,6 +51,14 @@ WHISPER_IMAGE    ?= fedirz/faster-whisper-server:latest-cpu
 WHISPER_MODEL    ?= Systran/faster-whisper-tiny.en
 HOST_STT_PORT    ?= 8083
 
+# ALLOY: adapt the optional third-party Whisper image only when explicitly enabled.
+# The image's baked probe calls curl, which that image does not contain.
+ALLOY_STT_HEALTHCHECK ?= 0
+ALLOY_STT_HEALTHCHECK_ARGS :=
+ifeq ($(ALLOY_STT_HEALTHCHECK),1)
+ALLOY_STT_HEALTHCHECK_ARGS := --health-cmd="python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\", timeout=2).read()'" --health-interval=5s --health-timeout=3s --health-retries=30
+endif
+
 define set_tag
 	@echo "Setting '$(1)' → $(2)..."
 	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):$(1) $(DOCKERHUB_USER)/$(IMAGE_NAME):$(2)
@@ -110,13 +118,22 @@ preflight:
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
+##
+## ALLOY: `alloyv` is the single runtime precedence boundary: a non-empty explicit make/ambient
+## value wins, then a non-empty .env value, then the upstream-compatible safe default.
 up: preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	alloyv() { explicit=$$(printenv "$$1" 2>/dev/null || true); file=$$(envv "$$1"); if [ -n "$$explicit" ]; then printf '%s' "$$explicit"; elif [ -n "$$file" ]; then printf '%s' "$$file"; else printf '%s' "$$2"; fi; }; \
 	ADMIN_TK=$$(envv ADMIN_TOKEN); ADMIN_TK=$${ADMIN_TK:-changeme}; \
+	INTERNAL_SECRET=$$(envv VEXA_INTERNAL_API_SECRET); INTERNAL_SECRET=$${INTERNAL_SECRET:-local-secret}; \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
+	ALLOY_STT_MAX_CONCURRENCY=$$(alloyv ALLOY_STT_MAX_CONCURRENCY 0); \
+	ALLOY_STT_CHANNEL_BACKPRESSURE=$$(alloyv ALLOY_STT_CHANNEL_BACKPRESSURE 0); \
+	ALLOY_STT_LANGUAGE_MODE=$$(alloyv ALLOY_STT_LANGUAGE_MODE configured); \
+	ALLOY_STT_TELEMETRY=$$(alloyv ALLOY_STT_TELEMETRY 0); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
@@ -152,13 +169,14 @@ up: preflight
 		if ! docker ps -q -f name=$(WHISPER_CONTAINER) | grep -q .; then \
 			docker rm -f $(WHISPER_CONTAINER) 2>/dev/null || true; \
 			docker run -d --name $(WHISPER_CONTAINER) --network $(NETWORK) --restart unless-stopped \
+				$(ALLOY_STT_HEALTHCHECK_ARGS) \
 				-e WHISPER__MODEL=$(WHISPER_MODEL) -e WHISPER__INFERENCE_DEVICE=cpu -e WHISPER__TTL=-1 \
 				-p $(HOST_STT_PORT):8000 \
 				$(WHISPER_IMAGE) > /dev/null; \
 		fi; \
 		echo "  Waiting for the STT model to load (up to 3 min)..."; \
 		for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_STT_PORT)/health 2>/dev/null && break; sleep 5; done; \
-		TX_URL=http://$(WHISPER_CONTAINER):8000; TX_TOKEN=; \
+		TX_URL=http://$(WHISPER_CONTAINER):8000; TX_TOKEN=$${TX_TOKEN:-local-vexa}; \
 		echo "  ✓ local STT ready — routing transcription to $$TX_URL (model $(WHISPER_MODEL))"; \
 	fi; \
 	echo "Starting Vexa Lite ($$IMG)..."; \
@@ -168,7 +186,12 @@ up: preflight
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
+		-e INTERNAL_API_SECRET="$$INTERNAL_SECRET" -e VEXA_INTERNAL_API_SECRET="$$INTERNAL_SECRET" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
+		-e ALLOY_STT_MAX_CONCURRENCY="$$ALLOY_STT_MAX_CONCURRENCY" \
+		-e ALLOY_STT_CHANNEL_BACKPRESSURE="$$ALLOY_STT_CHANNEL_BACKPRESSURE" \
+		-e ALLOY_STT_LANGUAGE_MODE="$$ALLOY_STT_LANGUAGE_MODE" \
+		-e ALLOY_STT_TELEMETRY="$$ALLOY_STT_TELEMETRY" \
 		-e MINIO_ENDPOINT=$(MINIO_CONTAINER):9000 -e MINIO_ACCESS_KEY=$(MINIO_ACCESS_KEY) \
 		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
@@ -221,8 +244,26 @@ stt-smoke:
 		|| { echo "  ✗ local STT returned no expected words — check $(WHISPER_CONTAINER) logs"; exit 1; }
 
 # ── Image build / publish ──────────────────────────────────────────────────────────────────────────
+# ALLOY: read only the requested build flag from ENV_FILE. A non-empty make/ambient value wins,
+# then a non-empty file value, then the upstream-compatible safe default.
+alloy_build_value = $(or $(strip $($(1))),$(strip $(shell if [ -f "$(ENV_FILE)" ]; then sed -n 's/^$(1)=//p' "$(ENV_FILE)" | head -n 1 | sed -E 's/[[:space:]]+$$//'; fi)),0)
+
+# ALLOY: normalize the bundled-Python switch once; only exact `1` may select the fallback stage.
+alloy_exact_one = $(if $(filter 1,$(call alloy_build_value,$(1))),1,0)
+override ALLOY_LITE_BUNDLED_PYTHON_RESOLVED := $(call alloy_exact_one,ALLOY_LITE_BUNDLED_PYTHON)
+override ALLOY_LITE_PYTHON_STAGE := alloy-lite-python-$(ALLOY_LITE_BUNDLED_PYTHON_RESOLVED)
+
+# ALLOY: one build-argument owner keeps local and multi-arch images on identical resolved values.
+ALLOY_LITE_BUILD_ARGS = \
+	--build-arg ALLOY_SKIP_HF_CACHE_WARM=$(call alloy_build_value,ALLOY_SKIP_HF_CACHE_WARM) \
+	--build-arg ALLOY_LITE_BUNDLED_PYTHON=$(ALLOY_LITE_BUNDLED_PYTHON_RESOLVED) \
+	--build-arg ALLOY_LITE_PYTHON_STAGE=$(ALLOY_LITE_PYTHON_STAGE) \
+	--build-arg NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT=$(call alloy_build_value,NEXT_PUBLIC_ALLOY_HIDE_EMPTY_ROOM_COUNT)
+
 build: preflight
-	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
+	docker build \
+		$(ALLOY_LITE_BUILD_ARGS) \
+		-f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "Built $(LOCAL_TAG)"
 
 setup-builder:
@@ -231,6 +272,7 @@ setup-builder:
 
 push: setup-builder
 	docker buildx build --builder $(BUILDER_NAME) --platform $(PLATFORMS) \
+		$(ALLOY_LITE_BUILD_ARGS) \
 		-f $(DOCKERFILE) -t $(UNIQUE_DOCKERHUB_TAG) --push $(CONTEXT)
 	@echo "$(UNIQUE_TAG)" > $(LAST_TAG_FILE)
 	$(call set_tag,dev,$(UNIQUE_TAG))

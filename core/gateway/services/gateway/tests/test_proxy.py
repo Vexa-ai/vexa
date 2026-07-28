@@ -7,6 +7,9 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,6 +18,23 @@ from gateway.ports import AuthUnavailable
 from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
 
 AUTH = {"x-api-key": VALID_KEY}
+
+
+def _alloy_status_response_golden():
+    # ALLOY: consume the sealed producer golden instead of duplicating the wire shape.
+    relative_path = (
+        Path("core")
+        / "meetings"
+        / "contracts"
+        / "alloy-stt-telemetry.v1"
+        / "golden"
+        / "StatusResponse.available.json"
+    )
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / relative_path
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"repository root with {relative_path} not found")
 
 
 class UnavailableAuthorizer:
@@ -28,9 +48,13 @@ class UnavailableAuthorizer:
         return {"authorized": [], "errors": ["unavailable"]}
 
 
-def _client(authorizer=None, downstream=None):
+# ALLOY: Keep the telemetry capability an explicit opt-in at the shared Gateway test seam.
+def _client(authorizer=None, downstream=None, *, alloy_stt_telemetry_enabled=None):
     downstream = downstream or FakeDownstream(status_code=200, body={"meetings": []})
-    app = create_app(authorizer or FakeAuthorizer(), downstream, FakeRedis())
+    kwargs = {}
+    if alloy_stt_telemetry_enabled is not None:
+        kwargs["alloy_stt_telemetry_enabled"] = alloy_stt_telemetry_enabled
+    app = create_app(authorizer or FakeAuthorizer(), downstream, FakeRedis(), **kwargs)
     return TestClient(app), downstream
 
 
@@ -171,6 +195,54 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-user-id"] == "7", "must reflect the resolved user, not the spoofed header"
     assert fwd["x-user-scopes"] == "bot,tx,browser"
     assert fwd["x-api-key"] == VALID_KEY
+
+
+class RecordingAuthorizer(FakeAuthorizer):
+    """ALLOY: records whether a disabled route still reaches identity resolution."""
+
+    def __init__(self):
+        super().__init__()
+        self.resolve_calls = 0
+
+    async def resolve(self, api_key):
+        self.resolve_calls += 1
+        return await super().resolve(api_key)
+
+
+def test_alloy_stt_status_is_absent_by_default_without_auth_or_downstream_calls():
+    authorizer = RecordingAuthorizer()
+    downstream = FakeDownstream(status_code=200, body={})
+    app = create_app(authorizer, downstream, FakeRedis())
+    client = TestClient(app)
+
+    response = client.get("/alloy/stt/status", headers=AUTH)
+
+    assert "/alloy/stt/status" not in app.openapi()["paths"]
+    assert response.status_code == 404
+    assert authorizer.resolve_calls == 0
+    assert downstream.last is None
+
+
+def test_enabled_alloy_stt_status_forwards_with_resolved_owner_identity():
+    status_response = _alloy_status_response_golden()
+    downstream = FakeDownstream(
+        status_code=200,
+        body=status_response,
+    )
+    client, _ = _client(
+        downstream=downstream,
+        alloy_stt_telemetry_enabled=True,
+    )
+    response = client.get(
+        "/alloy/stt/status",
+        headers={**AUTH, "x-user-id": "999"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == status_response
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/alloy/stt/status")
+    assert downstream.last["headers"]["x-user-id"] == "7"
 
 
 def test_meeting_intent_put_forwards_to_meeting_api():

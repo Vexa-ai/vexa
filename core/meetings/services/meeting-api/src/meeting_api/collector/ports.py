@@ -65,6 +65,16 @@ class TranscriptStore(Protocol):
         (the body of ``MeetingListResponse``)."""
         ...
 
+    # ALLOY: strict owner-only lookup for the telemetry read boundary.
+    async def list_owned_meeting_ids(
+        self,
+        user_id: int,
+        *,
+        statuses: tuple[str, ...],
+    ) -> list[int]:
+        """Return only rows owned by ``user_id`` in the requested status set."""
+        ...
+
     async def authorize_subscribe(
         self, user_id: int, platform: str, native_meeting_id: str,
         member_workspaces: "Optional[set[str]]" = None,

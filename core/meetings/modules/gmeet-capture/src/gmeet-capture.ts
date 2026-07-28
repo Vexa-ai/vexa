@@ -23,6 +23,7 @@ export interface GmeetCaptureOptions {
   targetSampleRate?: number;   // default 16000
   bufferSize?: number;         // default 4096
   silenceThreshold?: number;   // default 0.005 — skip near-silent chunks
+  silenceHangoverMs?: number;  // default 2000 — preserve bounded inter-phrase pauses
   rescanMs?: number;           // default 15000 — discover late joiners
   findRetries?: number;        // default 10
   findDelayMs?: number;        // default 2000
@@ -35,10 +36,44 @@ export interface GmeetCapture {
   streamCount(): number;
 }
 
+export interface SilenceGateState {
+  emit: boolean;
+  remainingSamples: number;
+}
+
+/**
+ * Advance the per-stream silence gate.
+ *
+ * Speech refreshes a bounded sample allowance. Following silent frames consume
+ * that allowance and stay in the same PCM timeline; once exhausted, idle audio
+ * is gated again. Whole frames are indivisible, so the emitted hangover rounds
+ * up to the next frame boundary.
+ */
+export function advanceSilenceGate(
+  isLoud: boolean,
+  frameSamples: number,
+  remainingSamples: number,
+  hangoverSamples: number,
+): SilenceGateState {
+  if (isLoud) {
+    return { emit: true, remainingSamples: Math.max(0, hangoverSamples) };
+  }
+  if (remainingSamples <= 0) {
+    return { emit: false, remainingSamples: 0 };
+  }
+  return {
+    emit: true,
+    remainingSamples: Math.max(0, remainingSamples - frameSamples),
+  };
+}
+
 export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
   const log = opts.log || (() => { /* silent */ });
   const SR = opts.targetSampleRate ?? 16000;
   const SILENCE = opts.silenceThreshold ?? 0.005;
+  const SILENCE_HANGOVER_SAMPLES = Math.max(0, Math.round(
+    (opts.silenceHangoverMs ?? 2000) * SR / 1000,
+  ));
   const RESCAN = opts.rescanMs ?? 15000;
   const FIND_RETRIES = opts.findRetries ?? 10;
   const FIND_DELAY = opts.findDelayMs ?? 2000;
@@ -73,12 +108,20 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
       // which duplicates/drops buffers under main-thread load — the captured-audio
       // stutter. connectElement is sync, so wire the node when addModule resolves.
       let seen = 0, emitted = 0; // L4 frame-flow diagnostic
+      let silenceSamplesRemaining = 0;
       createPcmCaptureNode(ctx, (data) => {
         if (!running) return;
         seen++;
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > SILENCE) { emitted++; if (emitted === 1 || emitted % 100 === 0) log(`stream ${index} AUDIO seen=${seen} emitted=${emitted} max=${maxVal.toFixed(3)}`); opts.onAudio(index, data); } // worklet already yields a fresh copy
+        const gate = advanceSilenceGate(
+          maxVal > SILENCE,
+          data.length,
+          silenceSamplesRemaining,
+          SILENCE_HANGOVER_SAMPLES,
+        );
+        silenceSamplesRemaining = gate.remainingSamples;
+        if (gate.emit) { emitted++; if (emitted === 1 || emitted % 100 === 0) log(`stream ${index} AUDIO seen=${seen} emitted=${emitted} max=${maxVal.toFixed(3)}`); opts.onAudio(index, data); } // worklet already yields a fresh copy
         else if (seen % 250 === 0) log(`stream ${index} silent seen=${seen} emitted=${emitted} max=${maxVal.toFixed(4)} ctx=${ctx.state}`);
       }).then((node) => { source.connect(node); node.connect(ctx.destination); })
         .catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));

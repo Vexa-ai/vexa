@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "enabled": true,
+  "available": false,
+  "updated_at_ms": 10000,
+  "aggregate": null,
+  "meetings": [],
+  "error": {
+    "code": "redis_unavailable",
+    "message": "STT telemetry is temporarily unavailable"
+  }
+}

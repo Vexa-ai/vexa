@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "meeting_id": "42",
+  "native_meeting_id": "waiting-room",
+  "updated_at_ms": 11000,
+  "active_requests": 0,
+  "active_audio_sec": 0,
+  "waiting_channels": 2,
+  "queued_audio_sec": 3.5,
+  "latest_captured_audio_end_ms": 12000,
+  "latest_processed_audio_end_ms": null,
+  "lag_sec": 0,
+  "rtf_ema": null,
+  "processed_windows": 0,
+  "superseded_windows": 2,
+  "last_error": {
+    "code": "stt_backlog",
+    "message": "slot wait exceeded threshold"
+  }
+}

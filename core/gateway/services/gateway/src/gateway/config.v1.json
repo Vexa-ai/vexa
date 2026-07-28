@@ -41,6 +41,13 @@
    "description": "pub/sub bus backing the /ws fan-in"
   },
   {
+   "key": "ALLOY_STT_TELEMETRY",
+   "class": "defaulted",
+   "default": "0",
+   "description": "ALLOY: exact trimmed 1 registers the authenticated proxy GET /alloy/stt/status; unset, empty, 0, or another value leaves it absent and preserves upstream behavior.",
+   "targets": ["lite"]
+  },
+  {
    "key": "LOG_LEVEL",
    "class": "defaulted",
    "default": "info",
