@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .delivery import build_headers
@@ -161,11 +162,15 @@ async def _dead_letter(
     except Exception:  # noqa: BLE001 — never let logging wiring break the drain
         log_event = None
     if log_event is not None:
+        try:
+            target_host = urlsplit(str(record["url"] or "")).hostname or "?"
+        except Exception:  # noqa: BLE001 — telemetry must not break the queue
+            target_host = "?"
         log_event(
             "webhook_dead_lettered", audience="system", level="warning",
             span="webhook.retry_drain",
             fields={
-                "url": record["url"], "label": record["label"],
+                "target_host": target_host, "label": record["label"],
                 "attempts": record["attempts"], "reason": reason,
                 "last_status_code": status_code, "last_error": error,
                 "created_at": record["created_at"],

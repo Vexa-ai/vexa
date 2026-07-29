@@ -82,6 +82,12 @@
    "description": "optional operator-owned admission and active-service authority; absent in stock OSS and never owns billing policy inside core"
   },
   {
+   "unique-id": "system-webhook-system",
+   "node-type": "system",
+   "name": "system webhook",
+   "description": "optional operator-owned terminal-event consumer; absent in stock OSS and never selected from customer or meeting data"
+  },
+  {
    "unique-id": "agent-api",
    "node-type": "service",
    "name": "agent-api",
@@ -227,6 +233,18 @@
    "interfaces": [
     {
      "unique-id": "service-authority-rest",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "system-webhook",
+   "node-type": "service",
+   "name": "operator terminal callback",
+   "description": "optional operator-provided webhook.v1 endpoint for signed meeting.completed and bot.failed service facts",
+   "interfaces": [
+    {
+     "unique-id": "system-webhook-rest",
      "type": "api"
     }
    ]
@@ -1347,6 +1365,17 @@
    }
   },
   {
+   "unique-id": "system-webhook-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "system-webhook-system",
+     "nodes": [
+      "system-webhook"
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "runtime-composed",
    "relationship-type": {
     "composed-of": {
@@ -1877,6 +1906,22 @@
    },
    "description": "optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed",
    "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "ma-system-webhook",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "system-webhook",
+      "interface": "system-webhook-rest"
+     }
+    }
+   },
+   "description": "optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate",
+   "protocol": "HTTP(S)"
   },
   {
    "unique-id": "aa-watch",

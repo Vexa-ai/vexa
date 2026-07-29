@@ -83,6 +83,23 @@ runtime teardown and resumed after restart.
 but it is not evidence that a hard service control is enforced. A session admitted in one mode is
 never reinterpreted under another mode after a deployment change.
 
+## Operator terminal callback
+
+An operator can send terminal service facts to one deployment-owned system endpoint. This is
+separate from a user's webhook configuration: the URL is frozen at boot, cannot be supplied by an
+API caller or meeting payload, and receives only `meeting.completed` and `bot.failed`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_SYSTEM_WEBHOOK_URL` | — | Absolute operator-owned endpoint for terminal `webhook.v1` envelopes. HTTPS is required unless private HTTP is explicitly enabled. URLs with credentials, query strings or fragments are rejected. |
+| `VEXA_SYSTEM_WEBHOOK_SECRET` | — | HMAC-SHA256 secret for the exact timestamped envelope bytes. Required with the URL and stored only in the deployment secret store. |
+| `VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP` | `false` | Explicitly permits a private/in-cluster HTTP destination such as a billing service on the Compose/Kubernetes network. It does not change customer webhook SSRF protection. |
+| `VEXA_SYSTEM_WEBHOOK_TIMEOUT_S` | `10` | Bounded delivery timeout, greater than zero and at most 60 seconds. |
+
+Transient delivery failures enter a dedicated retry/dead-letter queue and retain the same
+deterministic event ID. Customer webhook destinations continue through DNS/IP validation and cannot
+redirect this operator callback. Leave all four values unset for the stock OSS behavior.
+
 ## Secrets & identity
 
 | Variable | Default | Purpose |

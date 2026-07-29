@@ -410,6 +410,51 @@
    "targets": []
   },
   {
+   "key": "VEXA_SYSTEM_WEBHOOK_URL",
+   "class": "defaulted",
+   "default": "(unset — no operator-owned terminal callback)",
+   "description": "Boot-frozen operator destination for signed meeting.completed and bot.failed envelopes. It is never read from user or meeting data. HTTPS is required unless VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP explicitly enables an in-cluster HTTP service.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "VEXA_SYSTEM_WEBHOOK_SECRET",
+   "class": "defaulted",
+   "default": "(unset — required when VEXA_SYSTEM_WEBHOOK_URL is set)",
+   "secret": true,
+   "description": "Shared secret for Bearer compatibility and exact-byte timestamped HMAC signing of the operator-owned terminal callback.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP",
+   "class": "defaulted",
+   "default": "false",
+   "description": "Explicit operator opt-in for an HTTP system callback on a private/in-cluster service network. This never changes the customer webhook SSRF policy.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S",
+   "class": "defaulted",
+   "default": "10",
+   "description": "Bounded HTTP timeout in seconds for the operator-owned terminal callback; must be greater than 0 and at most 60.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
    "key": "HOST",
    "class": "defaulted",
    "default": "0.0.0.0",

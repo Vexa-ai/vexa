@@ -168,6 +168,8 @@ def create_app(
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
+    # operator-owned terminal callback — boot-frozen destination, never user/meeting input
+    system_webhook_sink: Optional["object"] = None,
     # per-user delivery ledger (#841) — the queryable record GET /webhooks/deliveries reads. The
     # lifecycle callback records each delivery outcome here so the dashboard's Delivery History
     # reflects real deliveries, not just the Test button. None → in-memory fake (app-factory/tests).
@@ -239,8 +241,16 @@ def create_app(
     app.state.delivery_ledger = delivery_ledger
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
-                     delivery_ledger)
+    _mount_lifecycle(
+        app,
+        sink,
+        meeting_repo,
+        webhook_sink,
+        system_webhook_sink,
+        redis,
+        transcript_finalizer,
+        delivery_ledger,
+    )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(
@@ -328,6 +338,7 @@ def _mount_lifecycle(
     sink: LifecycleSink,
     meeting_repo: "_bot_spawn.MeetingRepo",
     webhook_sink: "object" = None,
+    system_webhook_sink: "object" = None,
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
@@ -584,6 +595,59 @@ def _mount_lifecycle(
             )
             if typed_envelope is not None:
                 app.state.typed_webhooks.append(typed_envelope)
+        # The operator callback is a separate trust boundary from a customer's
+        # webhook. It receives terminal service facts only, through a destination
+        # frozen by deployment config. A transient failure is retained by the
+        # sink's dedicated retry queue; it never falls back to a user URL.
+        if (
+            system_webhook_sink is not None
+            and typed_envelope is not None
+            and typed_envelope.get("event_type") in {
+                "meeting.completed",
+                "bot.failed",
+            }
+        ):
+            try:
+                result = await system_webhook_sink.deliver(
+                    typed_envelope,
+                    label=f"meeting:{meeting_row.get('id')}"
+                    if isinstance(meeting_row, dict)
+                    else f"session:{rec.connection_id}",
+                )
+                if result is not None:
+                    log_event(
+                        "system_webhook_delivery",
+                        audience="system",
+                        level=(
+                            "info"
+                            if result.status == "delivered"
+                            else "warning"
+                        ),
+                        span="lifecycle.callback",
+                        meeting_id=(
+                            meeting_row.get("id")
+                            if isinstance(meeting_row, dict)
+                            else None
+                        ),
+                        fields={
+                            "outcome": result.status,
+                            "event_type": typed_envelope.get("event_type"),
+                            "status_code": result.status_code,
+                        },
+                    )
+            except Exception as e:  # noqa: BLE001 — terminal fact stays in meeting storage
+                log_event(
+                    "system_webhook_delivery_failed",
+                    audience="system",
+                    level="warning",
+                    span="lifecycle.callback",
+                    meeting_id=(
+                        meeting_row.get("id")
+                        if isinstance(meeting_row, dict)
+                        else None
+                    ),
+                    fields={"error_type": type(e).__name__},
+                )
         # Deliver the sealed webhook.v1 envelopes (meeting.status_change + the typed event, if any)
         # to the user's configured endpoint (per-user config rides on meeting.data — set at spawn
         # from identity via the gateway; NO users-table read). The sink's per-user event filter

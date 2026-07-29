@@ -127,6 +127,9 @@ def build_production_app():
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
+    from .webhooks import build_system_webhook_from_env
+
+    system_webhook_sink = build_system_webhook_from_env(redis_client)
 
     # #841: the per-user delivery ledger — the queryable record GET /webhooks/deliveries serves.
     # A per-user capped Redis list; the lifecycle callback records each delivery outcome so the
@@ -192,6 +195,7 @@ def build_production_app():
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
+        system_webhook_sink=system_webhook_sink,
         delivery_ledger=delivery_ledger,
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
@@ -201,6 +205,7 @@ def build_production_app():
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
         service_authority=service_authority,
+        system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
     )
     return app
@@ -217,7 +222,7 @@ def _minio_endpoint_url() -> str:
 
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
-    service_authority=None, session_factory=None,
+    service_authority=None, system_webhook_sink=None, session_factory=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -382,6 +387,8 @@ def _attach_background_loops(
 
         async def _tick():
             await drain_retry_queue(redis_client, _transport)
+            if system_webhook_sink is not None:
+                await system_webhook_sink.drain()
 
         while True:
             try:
