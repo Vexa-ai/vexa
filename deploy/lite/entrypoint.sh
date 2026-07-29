@@ -53,6 +53,11 @@ export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
 # STT model id for validating backends (Groq/vLLM); empty → whisper-1.
 export TRANSCRIPTION_MODEL="${TRANSCRIPTION_MODEL:-}"
 
+# Optional operator-owned service-authority.v1 boundary. The config stays credential-free; the
+# signing secret remains a separate inherited environment value and is never printed below.
+export VEXA_SERVICE_AUTHORITY_CONFIG="${VEXA_SERVICE_AUTHORITY_CONFIG:-}"
+export VEXA_SERVICE_AUTHORITY_SECRET="${VEXA_SERVICE_AUTHORITY_SECRET:-}"
+
 export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
 export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"
 export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"

@@ -330,6 +330,9 @@ services:
       - BOT_S3_BUCKET=${BOT_S3_BUCKET:-}
       - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
       - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
+      # Optional operator-owned service-authority.v1 boundary. Empty is explicit OSS allow-all.
+      - VEXA_SERVICE_AUTHORITY_CONFIG=${VEXA_SERVICE_AUTHORITY_CONFIG:-}
+      - VEXA_SERVICE_AUTHORITY_SECRET=${VEXA_SERVICE_AUTHORITY_SECRET:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}

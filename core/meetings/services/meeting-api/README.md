@@ -21,6 +21,7 @@ and stays in their ecosystem (FastAPI + redis + DB).
 | spawns-over | runtime kernel | `runtime.v1` (`RuntimeClient.create_workload`) | the meeting-bot workload (carries the `invocation.v1` BOT_CONFIG + MeetingToken) |
 | consumes | meeting-bot | `POST /bots/internal/callback/lifecycle` | `lifecycle.v1` `LifecycleEvent` → FSM advance + DB persist |
 | consumes | runtime kernel | `POST /runtime/callback` | workload state/terminal ACK (CC5 synthetic `failed`) |
+| calls (optional) | operator service authority | `service-authority.v1` over signed HTTP | allow/deny before spawn and at each one-minute active-service boundary; no hosted billing data |
 | consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB |
 | publishes | api-gateway `/ws` | redis channel `tc:meeting:{id}:mutable` | the live mutable transcript bundle |
 | publishes | api-gateway `/ws` | redis channel `bm:meeting:{id}:status` | ws.v1 `meeting.status` (BotStatus) on each FSM advance |
@@ -30,7 +31,7 @@ and stays in their ecosystem (FastAPI + redis + DB).
 
 **Owns:** `core/meetings/contracts/lifecycle.v1` · `core/meetings/contracts/transcript.v1` ·
 `core/meetings/contracts/webhook.v1` · `core/meetings/contracts/invocation.v1` ·
-`core/meetings/contracts/acts.v1`.
+`core/meetings/contracts/acts.v1` · `core/meetings/contracts/service-authority.v1`.
 **Consumes:** `core/runtime/contracts/runtime.v1` (spawn the bot workload) and api.v1
 (`MeetingListResponse` / `TranscriptionResponse` response shapes). All sealed in `contracts.seal.json`.
 
@@ -53,5 +54,7 @@ Levels: **L1** contract conformance (`test_contract_conformance`, `collector_con
 - ✅ delivered — collector: `transcription_segments` → DB, publish `tc:meeting:{id}:mutable` + `bm:meeting:{id}:status`
 - ✅ delivered — `GET /meetings` (live + past per user) · `GET /transcripts` · `POST /ws/authorize-subscribe`
 - ✅ delivered — `webhook.v1` `meeting.status_change` signed per-user delivery
+- ✅ delivered — opt-in `service-authority.v1` admission and active-service boundary; unset is
+  explicit self-hosted allow-all, configured failure is closed
 - 🟡 partial — production composition root wiring real adapters (DB/redis/MinIO) is P3; ports are in place
 - ⬜ planned — `GET /meetings` is the source the terminal meetings list (live+past) will read via agent-api

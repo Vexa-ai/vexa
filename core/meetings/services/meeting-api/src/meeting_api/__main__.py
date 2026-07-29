@@ -102,6 +102,9 @@ def build_production_app():
 
     runtime_http = httpx.AsyncClient(timeout=30.0)
     runtime_client = HttpRuntimeClient(runtime_http, runtime_api_url)
+    from .service_authority import build_service_authority_from_env
+
+    service_authority = build_service_authority_from_env()
 
     recording_repo = SqlAlchemyRecordingRepo(session_factory)
     storage = S3Storage(
@@ -181,6 +184,7 @@ def build_production_app():
         redis=segment_bus,
         meeting_repo=meeting_repo,
         runtime=runtime_client,
+        service_authority=service_authority,
         recording_repo=recording_repo,
         storage=storage,
         token_secret=token_secret,
@@ -196,6 +200,7 @@ def build_production_app():
 
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        service_authority=service_authority,
         session_factory=session_factory,
     )
     return app
@@ -212,7 +217,7 @@ def _minio_endpoint_url() -> str:
 
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
-    session_factory=None,
+    service_authority=None, session_factory=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -280,6 +285,9 @@ def _attach_background_loops(
     # presumed lost (runtime restart on the process backend / external removal) and advanced to
     # `failed` with the evidence note, instead of retrying an error + dead DELETE every sweep forever.
     untracked_grace = float(os.getenv("MEETING_UNTRACKED_GRACE_SEC", "600"))
+    service_authority_interval = float(
+        os.getenv("SERVICE_AUTHORITY_SWEEP_INTERVAL_S", "15")
+    )
 
     # #527: per-loop liveness heartbeats. A loop hung inside an await stops stamping, so /health can
     # SEE a dead consumer that would otherwise look alive (live WS keeps flowing on a SEPARATE path —
@@ -437,6 +445,41 @@ def _attach_background_loops(
                 log.exception("stop-reconcile tick failed")
             await asyncio.sleep(stop_interval)
 
+    async def _service_authority_loop() -> None:
+        if (
+            service_authority is None
+            or not getattr(service_authority, "configured", False)
+            or meeting_repo is None
+            or runtime is None
+        ):
+            return
+        from .service_authority import run_service_authority_sweep
+
+        async def _tick():
+            observation = await run_service_authority_sweep(
+                meeting_repo,
+                runtime,
+                service_authority,
+            )
+            if observation.faults:
+                log.warning(
+                    "service-authority sweep faults=%s decisions=%s "
+                    "teardowns_confirmed=%s",
+                    observation.faults,
+                    observation.decisions,
+                    observation.teardowns_confirmed,
+                )
+
+        while True:
+            try:
+                await _guarded("service-authority", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("service-authority sweep failed")
+            ticks["service-authority"] = _time.monotonic()
+            await asyncio.sleep(service_authority_interval)
+
     # Auto-join: "scheduled" means the bot joins. The sweep spawns a bot for every scheduled row
     # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
     # SAME request_bot flow POST /bots runs — the claim/upgrade branch makes it idempotent. The
@@ -492,6 +535,7 @@ def _attach_background_loops(
         async def _tick():
             await auto_join_tick(
                 meeting_repo, runtime,
+                authority=service_authority,
                 fetch_bot_context=fetch_bot_context,
                 publish_status=publish_status,
                 lead_s=auto_join_lead, grace_s=auto_join_grace,
@@ -562,6 +606,10 @@ def _attach_background_loops(
             asyncio.create_task(_db_writer_loop(), name="db-writer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
+            asyncio.create_task(
+                _service_authority_loop(),
+                name="service-authority",
+            ),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
         ]

@@ -22,6 +22,9 @@ flowchart LR
   subgraph runtime_system["runtime"]
     runtime["runtime"]
   end
+  subgraph service_authority_system["service authority"]
+    service_authority["external service authority"]
+  end
   subgraph platform["platform"]
     redis["redis"]
     postgres["postgres"]
@@ -36,6 +39,7 @@ flowchart LR
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
+  meeting_api -->|"HTTPS"| service_authority
   agent_api -->|"HTTPS"| runtime
   mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api

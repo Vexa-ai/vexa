@@ -86,6 +86,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: TRANSCRIPTION_SERVICE_TOKEN
+            - name: VEXA_SERVICE_AUTHORITY_CONFIG
+              value: {{ .Values.meetingApi.serviceAuthorityConfig | default "" | quote }}
+            - name: VEXA_SERVICE_AUTHORITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_SERVICE_AUTHORITY_SECRET
+                  optional: true
             {{- if .Values.minio.enabled }}
             - name: MINIO_ENDPOINT
               value: "{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"

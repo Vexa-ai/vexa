@@ -60,6 +60,29 @@ does **not** strip it — the comment becomes part of the value, so `TERMINAL_PO
 sets the port to the literal string `13000  # the UI`.
 </Warning>
 
+## Optional service authority
+
+Stock self-hosted Vexa has no external service authority and continues to admit bots exactly as
+before. Operators who need an independently owned admission/active-service policy can opt into the
+sealed `service-authority.v1` boundary:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_SERVICE_AUTHORITY_CONFIG` | — | Compact JSON containing a credential-free `url`, `contract_version: "service-authority.v1"`, `timeout_ms`, `response_max_age_seconds`, `failure_policy: "closed"`, and `mode: "enforce"` or `"observe"`. HTTPS is required except for loopback/in-cluster HTTP. |
+| `VEXA_SERVICE_AUTHORITY_SECRET` | — | HMAC-SHA256 secret for the exact timestamped request bytes. Required only when the config is set; keep it in the deployment secret store. |
+| `SERVICE_AUTHORITY_SWEEP_INTERVAL_S` | `15` | Poll cadence for discovering due active-service boundaries. Decisions remain anchored to admitted time plus whole minutes, so changing the poll cadence does not change the billable boundary. |
+
+The request contains service identity, authoritative user ID, service mode, frozen transcription
+provider, concurrency, and lifecycle timestamps. It deliberately contains no email, customer or
+payment-provider identifier, price, balance, transcription endpoint URL, or credential. A
+configured authority that is unavailable, malformed, stale, or bound to another request fails
+closed before a new bot is spawned. During active service, its stop intent is committed before
+runtime teardown and resumed after restart.
+
+`mode: "observe"` records decisions without refusing or stopping service. It is useful for rollout,
+but it is not evidence that a hard service control is enforced. A session admitted in one mode is
+never reinterpreted under another mode after a deployment change.
+
 ## Secrets & identity
 
 | Variable | Default | Purpose |

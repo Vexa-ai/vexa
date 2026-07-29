@@ -21,6 +21,10 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..service_authority import (
+    ServiceAuthorityDenied,
+    ServiceAuthorityUnavailable,
+)
 from .env_flags import env_flag
 from .ports import (
     AuthSessionBusy,
@@ -229,8 +233,12 @@ def _passcode_from_url(meeting_url: str) -> Optional[str]:
     return None
 
 
-def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
-    """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports."""
+def build_router(
+    repo: MeetingRepo,
+    runtime: RuntimeClient,
+    authority=None,
+) -> APIRouter:
+    """The bot-spawn routes over injected storage, runtime, and authority ports."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -382,6 +390,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             meeting = await request_bot(
                 repo,
                 runtime,
+                authority=authority,
                 user_id=user_id,
                 platform=platform,
                 native_meeting_id=native_meeting_id,
@@ -413,6 +422,23 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             # One stored session, one live bot: the second concurrent authenticated spawn is
             # refused naming the conflicting meeting (per-identity serialization, #725).
             raise HTTPException(status_code=409, detail=str(e))
+        except ServiceAuthorityDenied as e:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "service_not_allowed",
+                    "reason": e.reason,
+                    "decision_id": e.decision_id,
+                },
+            )
+        except ServiceAuthorityUnavailable:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "service_authority_unavailable",
+                    "reason": "service_authority_unavailable",
+                },
+            )
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

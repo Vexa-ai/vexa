@@ -157,6 +157,7 @@ def create_app(
     # bot_spawn ports
     meeting_repo: Optional["_bot_spawn.MeetingRepo"] = None,
     runtime: Optional["_bot_spawn.RuntimeClient"] = None,
+    service_authority: Optional["object"] = None,
     # recordings ports
     recording_repo: Optional["_recordings.RecordingRepo"] = None,
     storage: Optional["_recordings.Storage"] = None,
@@ -218,6 +219,11 @@ def create_app(
         meeting_repo = _bot_spawn_fakes().InMemoryMeetingRepo()
     if runtime is None:
         runtime = _bot_spawn_fakes().FakeRuntimeClient()
+    if service_authority is None:
+        from .service_authority import AllowAllServiceAuthority
+
+        service_authority = AllowAllServiceAuthority()
+    app.state.service_authority = service_authority
 
     # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
@@ -237,7 +243,13 @@ def create_app(
                      delivery_ledger)
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
-    app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
+    app.include_router(
+        _bot_spawn.build_router(
+            meeting_repo,
+            runtime,
+            service_authority,
+        )
+    )
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router

@@ -129,6 +129,45 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def list_service_authority_sessions(self) -> list[dict]:
+        """Active admitted rows carrying a frozen service-authority identity."""
+        ...
+
+    async def record_service_authority_decision(
+        self,
+        *,
+        meeting_id: int,
+        request: Any,
+        decision: Any,
+    ) -> bool:
+        """Append the next monotonic boundary decision; return whether it was new."""
+        ...
+
+    async def list_service_authority_teardowns(self) -> list[dict]:
+        """Denied stop intents whose runtime teardown is not yet confirmed."""
+        ...
+
+    async def claim_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        claim_id: str,
+        claimed_at: Any,
+        lease_seconds: float,
+    ) -> Optional[dict]:
+        """Lease one pending teardown under storage serialization."""
+        ...
+
+    async def confirm_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        decision_id: str,
+        claim_id: str,
+    ) -> bool:
+        """Mark one matching stop intent confirmed; replay returns false."""
+        ...
+
     async def get_status_by_session(self, *, session_uid: str) -> Optional[str]:
         """Resolve ``session_uid`` (== the bot's ``connectionId``) → the meeting's CURRENT persisted
         status string, or ``None`` for an unknown session. Used to REHYDRATE the in-memory lifecycle

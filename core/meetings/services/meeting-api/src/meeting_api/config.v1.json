@@ -380,6 +380,36 @@
    "targets": []
   },
   {
+   "key": "VEXA_SERVICE_AUTHORITY_CONFIG",
+   "class": "defaulted",
+   "default": "(unset — explicit allow-all OSS behavior)",
+   "description": "JSON service-authority.v1 adapter config: credential-free endpoint URL, contract_version, timeout_ms, response_max_age_seconds, failure_policy=closed, and mode=enforce|observe. When set, unavailable or malformed authority decisions fail closed.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "VEXA_SERVICE_AUTHORITY_SECRET",
+   "class": "defaulted",
+   "default": "(unset — required when VEXA_SERVICE_AUTHORITY_CONFIG is set)",
+   "secret": true,
+   "description": "shared HMAC secret for exact-byte timestamped service-authority requests",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "SERVICE_AUTHORITY_SWEEP_INTERVAL_S",
+   "class": "defaulted",
+   "default": "15",
+   "description": "poll cadence for due one-minute active-service decisions; boundary timestamps remain admitted_at + N minutes regardless of polling cadence",
+   "targets": []
+  },
+  {
    "key": "HOST",
    "class": "defaulted",
    "default": "0.0.0.0",

@@ -76,6 +76,12 @@
    ]
   },
   {
+   "unique-id": "service-authority-system",
+   "node-type": "system",
+   "name": "service authority",
+   "description": "optional operator-owned admission and active-service authority; absent in stock OSS and never owns billing policy inside core"
+  },
+  {
    "unique-id": "agent-api",
    "node-type": "service",
    "name": "agent-api",
@@ -200,7 +206,7 @@
    "unique-id": "meeting-api",
    "node-type": "service",
    "name": "meeting-api",
-   "description": "collector + bot-spawn + recordings + sessions (the hub)",
+   "description": "collector + bot-spawn + recordings + sessions (the hub); optionally asks an external service authority before spawn and at one-minute active boundaries",
    "metadata": [
     {
      "path": "core/meetings/services/meeting-api"
@@ -209,6 +215,18 @@
    "interfaces": [
     {
      "unique-id": "meeting-api-rest",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "service-authority",
+   "node-type": "service",
+   "name": "external service authority",
+   "description": "optional operator-provided service-authority.v1 endpoint; decides only allow/deny and remains outside the self-hosted core",
+   "interfaces": [
+    {
+     "unique-id": "service-authority-rest",
      "type": "api"
     }
    ]
@@ -596,6 +614,18 @@
    "metadata": [
     {
      "path": "core/meetings/contracts/lifecycle.v1",
+     "domain": "meetings"
+    }
+   ]
+  },
+  {
+   "unique-id": "service-authority.v1",
+   "node-type": "contract",
+   "name": "service-authority.v1",
+   "description": "service-authority.v1 — sealed opt-in admission and active-service decision contract without hosted billing data",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/service-authority.v1",
      "domain": "meetings"
     }
    ]
@@ -1288,6 +1318,7 @@
       "flagged-issue.v1",
       "invocation.v1",
       "lifecycle.v1",
+      "service-authority.v1",
       "transcript.v1",
       "webhook.v1",
       "transcription",
@@ -1300,6 +1331,17 @@
       "segments-table",
       "recording-blob",
       "userdata-blob"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "service-authority-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "service-authority-system",
+     "nodes": [
+      "service-authority"
      ]
     }
    }
@@ -1818,6 +1860,22 @@
     }
    },
    "description": "POST /workloads spawn bot",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "ma-service-authority",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "service-authority",
+      "interface": "service-authority-rest"
+     }
+    }
+   },
+   "description": "optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed",
    "protocol": "HTTPS"
   },
   {
