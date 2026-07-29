@@ -455,7 +455,7 @@ async def test_active_boundary_deny_tears_down_once_and_restart_replays_none() -
 
 
 @pytest.mark.asyncio
-async def test_active_boundary_absent_workload_converges_stop_once() -> None:
+async def test_active_boundary_untracked_workload_stays_pending_then_recovers() -> None:
     authority = RecordingAuthority(
         continuation=_decision(
             allow=False,
@@ -484,16 +484,51 @@ async def test_active_boundary_absent_workload_converges_stop_once() -> None:
         authority,
         now=ADMITTED_AT + timedelta(minutes=1, seconds=1),
     )
+    pending_after_untracked = dict(
+        row["data"]["service_authority"],
+    )
     replay = await run_service_authority_sweep(
         repo,
         runtime,
         authority,
         now=ADMITTED_AT + timedelta(minutes=1, seconds=20),
     )
+    pending_after_replay = dict(row["data"]["service_authority"])
+    runtime._workloads[row["bot_container_id"]] = {
+        "workloadId": row["bot_container_id"],
+        "state": "running",
+    }
+    recovered = await run_service_authority_sweep(
+        repo,
+        runtime,
+        authority,
+        now=ADMITTED_AT + timedelta(minutes=2, seconds=2),
+    )
+    inert = await run_service_authority_sweep(
+        repo,
+        runtime,
+        authority,
+        now=ADMITTED_AT + timedelta(minutes=2, seconds=20),
+    )
 
     assert observed.decisions == 1
-    assert observed.teardowns_confirmed == 1
+    assert observed.teardowns_confirmed == 0
+    assert observed.faults == 1
+    assert pending_after_untracked["teardown_confirmed"] is False
+    assert pending_after_untracked["teardown_claim_id"]
     assert replay.decisions == 0
+    assert replay.teardowns_confirmed == 0
+    assert pending_after_replay["teardown_confirmed"] is False
+    assert (
+        pending_after_replay["teardown_claim_id"]
+        == pending_after_untracked["teardown_claim_id"]
+    )
+    assert recovered.decisions == 0
+    assert recovered.teardowns_confirmed == 1
+    assert recovered.faults == 0
+    assert inert.decisions == 0
+    assert inert.teardowns_confirmed == 0
+    assert len(runtime.deleted) == 1
     assert row["data"]["service_authority"]["teardown_confirmed"] is True
 
 

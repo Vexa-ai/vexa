@@ -169,10 +169,12 @@ async def run_service_authority_sweep(
         try:
             await runtime.delete_workload(workload_id)
         except WorkloadUnknown:
-            # The requested workload is already absent.  This is the desired
-            # terminal runtime state, so converge the durable stop intent
-            # instead of retrying an impossible deletion forever.
-            pass
+            # Runtime 404 means UNTRACKED, not destroyed: a recreated runtime
+            # can forget a still-live external workload.  Keep the durable stop
+            # pending so re-adoption or another positive teardown can confirm
+            # it after the claim lease expires.
+            faults += 1
+            continue
         except Exception:
             faults += 1
             continue

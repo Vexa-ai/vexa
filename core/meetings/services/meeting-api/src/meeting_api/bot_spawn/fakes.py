@@ -501,8 +501,8 @@ class FakeRuntimeClient:
 
     async def delete_workload(self, workload_id: str) -> None:
         # Mirrors the HTTP adapter: an id the kernel doesn't track raises WorkloadUnknown (404).
-        # The service-authority sweep treats absence as an already-converged stop; other callers
-        # may still distinguish the response at their own boundary.
+        # Absence is NOT evidence the underlying workload stopped; every caller must preserve that
+        # distinction until it has a positive destroyed/teardown observation.
         if self._workloads is not None and workload_id not in self._workloads:
             raise WorkloadUnknown(workload_id)
         # Record the teardown so the partial-spawn test asserts the orphaned workload was torn down.
