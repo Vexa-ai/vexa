@@ -65,6 +65,16 @@ _CLAIM_TOKEN = "_claim"
 Transport = Callable[[str, bytes, Dict[str, str]], Awaitable[Any]]
 
 
+def _transport_error_category(error: Exception) -> str:
+    """Classify a transport failure without retaining attacker-controlled text."""
+    name = type(error).__name__.lower()
+    if "timeout" in name:
+        return "transport_timeout"
+    if "connect" in name or "network" in name:
+        return "transport_connection_error"
+    return "transport_exception"
+
+
 class RetryQueue:
     """A thin async wrapper over the Redis list that holds failed deliveries."""
 
@@ -102,9 +112,9 @@ class RetryQueue:
 async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optional[int], Optional[str]]:
     """Attempt one queued delivery.
 
-    Returns ``(success, status_code, error)``. ``success`` is True on a 2xx (or a
-    permanent 4xx → stop retrying); the status_code/error are surfaced so a permanently
-    failed entry can be dead-lettered with its last outcome.
+    Returns ``(success, status_code, error_category)``. ``success`` is True on a
+    2xx (or a permanent 4xx → stop retrying); status/error category are surfaced
+    so a permanently failed entry can be dead-lettered without exception text.
     """
     url = entry["url"]
     envelope = entry["payload"]
@@ -121,7 +131,7 @@ async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optiona
             return False, code, f"HTTP {code}"  # transient — re-enqueue
         return True, code, f"HTTP {code}"  # 4xx (non-429) — permanent, drop (don't re-enqueue)
     except Exception as e:  # noqa: BLE001 — transport error is transient
-        return False, None, str(e)
+        return False, None, _transport_error_category(e)
 
 
 async def _dead_letter(

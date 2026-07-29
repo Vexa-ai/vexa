@@ -7,7 +7,10 @@ service. Meeting/user payloads never select or alter that destination.
 """
 from __future__ import annotations
 
+import math
 import os
+import re
+from ipaddress import ip_address
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
@@ -18,10 +21,32 @@ SYSTEM_RETRY_QUEUE_KEY = "webhook:system:retry_queue"
 SYSTEM_PROCESSING_KEY = "webhook:system:retry_processing"
 SYSTEM_DEAD_LETTER_KEY = "webhook:system:dead_letter"
 _TERMINAL_EVENTS = frozenset({"meeting.completed", "bot.failed"})
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_private_http_target(hostname: str) -> bool:
+    """Return whether plaintext HTTP is explicitly limited to a local target."""
+    host = hostname.lower()
+    try:
+        address = ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None:
+        return address.is_private or address.is_loopback or address.is_link_local
+
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+
+    labels = host.split(".")
+    if not all(_DNS_LABEL.fullmatch(label) for label in labels):
+        return False
+    if len(labels) == 1:
+        return True
+    return host.endswith(".svc") or host.endswith(".svc.cluster.local")
 
 
 class SystemWebhookSink:
@@ -45,10 +70,16 @@ class SystemWebhookSink:
             raise ValueError(
                 "system webhook URL cannot contain credentials, query or fragment",
             )
-        if parsed.scheme == "http" and not allow_private_http:
-            raise ValueError(
-                "system webhook private HTTP requires explicit operator opt-in",
-            )
+        if parsed.scheme == "http":
+            if not allow_private_http:
+                raise ValueError(
+                    "system webhook private HTTP requires explicit operator opt-in",
+                )
+            if not _is_private_http_target(parsed.hostname):
+                raise ValueError(
+                    "system webhook HTTP target must be loopback, private IP or "
+                    "an explicit in-cluster service name",
+                )
         if not secret.strip():
             raise ValueError("system webhook secret is required")
 
@@ -114,10 +145,17 @@ def build_system_webhook_from_env(
             "must be configured together",
         )
 
-    timeout = float(os.getenv("VEXA_SYSTEM_WEBHOOK_TIMEOUT_S", "10"))
-    if timeout <= 0 or timeout > 60:
+    try:
+        timeout = float(os.getenv("VEXA_SYSTEM_WEBHOOK_TIMEOUT_S", "10"))
+    except ValueError as exc:
         raise RuntimeError(
-            "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S must be greater than 0 and at most 60",
+            "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S must be a finite number greater "
+            "than 0 and at most 60",
+        ) from exc
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > 60:
+        raise RuntimeError(
+            "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S must be a finite number greater "
+            "than 0 and at most 60",
         )
 
     if transport is None:

@@ -170,6 +170,16 @@ def test_private_http_requires_explicit_operator_opt_in(receiver):
         )
 
 
+def test_public_http_is_rejected_even_with_private_opt_in(receiver):
+    with pytest.raises(ValueError, match="in-cluster service name"):
+        SystemWebhookSink(
+            url="http://billing.example.com/hooks/meeting-completed",
+            secret=SECRET,
+            transport=receiver,
+            allow_private_http=True,
+        )
+
+
 @pytest.mark.asyncio
 async def test_retry_uses_system_queue_and_same_event_identity(
     receiver,
@@ -214,6 +224,19 @@ async def test_environment_requires_url_and_secret_as_one_operator_tuple(
     monkeypatch.setenv("VEXA_SYSTEM_WEBHOOK_URL", SYSTEM_URL)
     monkeypatch.delenv("VEXA_SYSTEM_WEBHOOK_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="configured together"):
+        build_system_webhook_from_env(fake_redis, transport=receiver)
+
+
+@pytest.mark.asyncio
+async def test_environment_rejects_nonfinite_timeout(
+    monkeypatch,
+    receiver,
+    fake_redis,
+):
+    monkeypatch.setenv("VEXA_SYSTEM_WEBHOOK_URL", SYSTEM_URL)
+    monkeypatch.setenv("VEXA_SYSTEM_WEBHOOK_SECRET", SECRET)
+    monkeypatch.setenv("VEXA_SYSTEM_WEBHOOK_TIMEOUT_S", "NaN")
+    with pytest.raises(RuntimeError, match="finite number"):
         build_system_webhook_from_env(fake_redis, transport=receiver)
 
 
