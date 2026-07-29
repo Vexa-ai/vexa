@@ -333,6 +333,10 @@ services:
       # Optional operator-owned service-authority.v1 boundary. Empty is explicit OSS allow-all.
       - VEXA_SERVICE_AUTHORITY_CONFIG=${VEXA_SERVICE_AUTHORITY_CONFIG:-}
       - VEXA_SERVICE_AUTHORITY_SECRET=${VEXA_SERVICE_AUTHORITY_SECRET:-}
+      - VEXA_SYSTEM_WEBHOOK_URL=${VEXA_SYSTEM_WEBHOOK_URL:-}
+      - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
+      - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
+      - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}

@@ -94,6 +94,18 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_SERVICE_AUTHORITY_SECRET
                   optional: true
+            - name: VEXA_SYSTEM_WEBHOOK_URL
+              value: {{ .Values.meetingApi.systemWebhookUrl | default "" | quote }}
+            - name: VEXA_SYSTEM_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_SYSTEM_WEBHOOK_SECRET
+                  optional: true
+            - name: VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP
+              value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
+            - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
+              value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
             {{- if .Values.minio.enabled }}
             - name: MINIO_ENDPOINT
               value: "{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"

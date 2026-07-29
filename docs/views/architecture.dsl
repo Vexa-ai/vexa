@@ -79,6 +79,9 @@ system deploy  # deployment + execution-target registry
 system service-authority-system  # optional operator-owned admission and active-service authority; absent in stock OSS and never owns billing policy inside core
   service service-authority
 
+system system-webhook-system  # optional operator-owned terminal-event consumer; absent in stock OSS and never selected from customer or meeting data
+  service system-webhook
+
 system platform  # shared infra backing the services
   service redis
   database postgres
@@ -110,6 +113,7 @@ edges:
   meeting-api -write-> minio
   meeting-api -req-> runtime  # POST /workloads spawn bot
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
+  meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
   agent-api -read-> segments-stream  # XREADGROUP agent_copilot (proactive watcher)
   agent-api -req-> runtime  # POST /workloads spawn agent-worker
   agent-api -read-> out-stream  # SSE relay (/api/chat, /api/meeting/stream)

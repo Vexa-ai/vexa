@@ -43,7 +43,8 @@ global:
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
-# VEXA_SERVICE_AUTHORITY_SECRET, VEXA_DISPATCH_SIGNING_KEY, VEXA_BOT_API_KEY, ANTHROPIC_API_KEY,
+# VEXA_SERVICE_AUTHORITY_SECRET, VEXA_SYSTEM_WEBHOOK_SECRET, VEXA_DISPATCH_SIGNING_KEY,
+# VEXA_BOT_API_KEY, ANTHROPIC_API_KEY,
 # ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
 secrets:
   existingSecretName: ""
@@ -51,6 +52,7 @@ secrets:
   internalApiSecret: ""             # gateway↔admin-api↔meeting-api internal calls (default vexa-internal-secret)
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
+  systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
@@ -183,6 +185,11 @@ meetingApi:
   # authority must use failure_policy=closed and mode=enforce|observe; the secret lives under
   # secrets.serviceAuthoritySecret or the existing Secret key VEXA_SERVICE_AUTHORITY_SECRET.
   serviceAuthorityConfig: ""
+  # Optional boot-frozen operator callback for terminal meeting facts. This is separate from
+  # customer webhook configuration; private HTTP requires the explicit deployment opt-in.
+  systemWebhookUrl: ""
+  systemWebhookAllowPrivateHttp: "false"
+  systemWebhookTimeoutSeconds: "10"
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
   # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.

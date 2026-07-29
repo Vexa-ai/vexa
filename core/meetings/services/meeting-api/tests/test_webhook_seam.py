@@ -592,7 +592,9 @@ async def test_dead_letter_on_permanent_failure(fake_redis, capsys):
     assert len(dl_logs) == 1, "expected exactly one webhook_dead_lettered log event"
     log = dl_logs[0]
     assert log["audience"] == "system" and log["level"] == "warning"
-    assert log["fields"]["url"] == URL
+    assert log["fields"]["target_host"] == "hooks.example.com"
+    assert "url" not in log["fields"]
+    assert "/vexa" not in json.dumps(log["fields"])
     assert log["fields"]["reason"] == "schedule_exhausted"
     assert log["fields"]["last_status_code"] == 500
 
@@ -615,6 +617,37 @@ async def test_dead_letter_on_age_expiry(fake_redis, capsys):
         e.get("event") == "webhook_dead_lettered" and e["fields"]["reason"] == "max_age_exceeded"
         for e in lines
     ), "expected a webhook_dead_lettered log for the age-expired entry"
+
+
+async def test_transport_exception_text_is_never_logged_or_dead_lettered(
+    fake_redis,
+    capsys,
+):
+    secret_text = "https://hooks.example.com/private/token=do-not-log"
+    queue = RetryQueue(fake_redis)
+    base = 62_000_000_000.0
+    await queue.enqueue(
+        url=URL,
+        envelope=build_envelope("meeting.completed", {"m": 8}),
+        webhook_secret=SECRET,
+        now=base,
+        label="meeting:8",
+    )
+    raw = json.loads(await fake_redis.lindex(RETRY_QUEUE_KEY, 0))
+    raw["attempt"] = len(BACKOFF_SCHEDULE) - 1
+    raw["next_retry_at"] = base
+    await fake_redis.lset(RETRY_QUEUE_KEY, 0, json.dumps(raw))
+
+    transport = ScriptedTransport(script=[RuntimeError(secret_text)])
+    await drain_retry_queue(fake_redis, transport, now=base + 1)
+
+    record = json.loads(await fake_redis.lindex(DEAD_LETTER_KEY, 0))
+    assert record["last_error"] == "transport_exception"
+    output = capsys.readouterr().out
+    assert secret_text not in output
+    assert "/private/" not in output
+    assert "token=do-not-log" not in output
+    assert "transport_exception" in output
 
 
 # ════════════════════════════════════════════════════════════════════════════════════
