@@ -25,6 +25,7 @@ port (prod = HttpRuntimeClient; tests = FakeRuntimeClient). Best-effort per meet
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
@@ -449,6 +450,17 @@ _PRE_ACTIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
 _WAS_ACTIVE_STATUSES = frozenset({"stopping", "active", "needs_help"})
 
 
+def _runtime_event_timestamp(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    timestamp = value.strip()
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return timestamp if parsed.tzinfo is not None else None
+
+
 def _pre_active_completion_reason(status: Optional[str], stop_requested: bool = False) -> str:
     """Attribute a pre-active teardown to the stage the bot died in: a bot whose workload is torn
     down while it sits in the waiting room (``awaiting_admission``) was never admitted →
@@ -472,6 +484,7 @@ async def synthesize_terminal_for_dead_workload(
     state: Optional[str],
     drive_terminal: Callable[[dict], Awaitable[Any]],
     *,
+    event_at: Optional[str] = None,
     log: Any,
 ) -> bool:
     """Consume a runtime-confirmed TERMINAL workload callback (``destroyed``/``exited``/…) as EVIDENCE the
@@ -539,6 +552,9 @@ async def synthesize_terminal_for_dead_workload(
             body["data"] = {"stop_requested": True}
     else:
         return False  # already terminal (completed/failed) — the bot's own callback is authoritative
+    producer_timestamp = _runtime_event_timestamp(event_at)
+    if producer_timestamp is not None:
+        body["timestamp"] = producer_timestamp
     try:
         await drive_terminal(body)
         log.info("runtime-callback: drove synthetic %s for meeting %s (workload %s %s, was %s)",

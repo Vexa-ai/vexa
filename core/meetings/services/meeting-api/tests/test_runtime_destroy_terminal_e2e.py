@@ -138,21 +138,87 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
     async def scenario():
         repo = _ReaperRepo()
         m = await _seed(repo)  # requested → the callbacks walk it up to active
+        repo._meetings[m["id"]]["data"]["transcription_provider"] = "none"
         redis = _StreamRedis()
         app = create_app(meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
-            for st in ("joining", "active"):
-                assert (await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": st})).status_code == 200
+            for st, timestamp in (
+                ("joining", "2026-07-30T16:26:00.000Z"),
+                ("active", "2026-07-30T16:26:17.000Z"),
+            ):
+                assert (
+                    await c.post(
+                        LIFECYCLE,
+                        json={
+                            "connection_id": "sess-uid",
+                            "status": st,
+                            "timestamp": timestamp,
+                        },
+                    )
+                ).status_code == 200
             repo.set_status(m["id"], "stopping")
-            rc = await c.post(RUNTIME, json={"workloadId": "wl-1", "state": "destroyed"})
+            rc = await c.post(
+                RUNTIME,
+                json={
+                    "workloadId": "wl-1",
+                    "state": "destroyed",
+                    "at": "2026-07-30T16:27:18.000Z",
+                },
+            )
             assert rc.status_code == 200, rc.text
         return repo, redis, m
 
     repo, redis, m = asyncio.run(scenario())
     assert repo._meetings[m["id"]]["status"] == "completed"
     assert repo._meetings[m["id"]]["data"].get("completion_reason") == "stopped"
+    assert repo._meetings[m["id"]]["data"].get("service_provenance") == {
+        "bot_admitted_at": "2026-07-30T16:26:17.000Z",
+        "bot_departed_at": "2026-07-30T16:27:18.000Z",
+        "bot_outcome": "served",
+        "transcription_provider": "none",
+        "transcription_outcome": "disabled",
+        "lifecycle_contract_version": "2026-07-28",
+    }
     assert repo.list_stale_stopping_sync() == []
     assert len(redis.streams.get(f"tc:meeting:{m['id']}", [])) == 1
+
+
+def test_runtime_destroy_with_invalid_time_does_not_fabricate_provenance():
+    async def scenario():
+        repo = _ReaperRepo()
+        m = await _seed(repo)
+        repo._meetings[m["id"]]["data"]["transcription_provider"] = "none"
+        app = create_app(meeting_repo=repo)
+        async with _asgi(app) as c:
+            for status, timestamp in (
+                ("joining", "2026-07-30T16:26:00.000Z"),
+                ("active", "2026-07-30T16:26:17.000Z"),
+            ):
+                assert (
+                    await c.post(
+                        LIFECYCLE,
+                        json={
+                            "connection_id": "sess-uid",
+                            "status": status,
+                            "timestamp": timestamp,
+                        },
+                    )
+                ).status_code == 200
+            repo.set_status(m["id"], "stopping")
+            response = await c.post(
+                RUNTIME,
+                json={
+                    "workloadId": "wl-1",
+                    "state": "destroyed",
+                    "at": "not-a-timestamp",
+                },
+            )
+            assert response.status_code == 200
+        return repo, m
+
+    repo, meeting = asyncio.run(scenario())
+    assert repo._meetings[meeting["id"]]["status"] == "completed"
+    assert "service_provenance" not in repo._meetings[meeting["id"]]["data"]
 
 
 def test_runtime_destroy_fails_pre_active_e2e():

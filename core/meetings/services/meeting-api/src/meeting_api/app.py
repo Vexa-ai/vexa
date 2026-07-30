@@ -892,6 +892,7 @@ def _mount_lifecycle(
 
             await synthesize_terminal_for_dead_workload(
                 meeting_repo, workload_id, state, _drive_terminal,
+                event_at=body.get("at"),
                 log=_logging.getLogger("meeting_api.runtime.callback"),
             )
         except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the terminal backstop
