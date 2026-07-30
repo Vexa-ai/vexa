@@ -126,6 +126,69 @@ def test_new_user_defaults_to_3_bots(client):
     assert v["max_concurrent"] == 3
 
 
+def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={
+            "email": "by-id@vexa.ai",
+            "name": "By ID",
+            "max_concurrent_bots": 7,
+        },
+    ).json()
+    assert created["data"] == {}
+
+    found = client.get(f"/admin/users/{created['id']}", headers=_admin())
+    assert found.status_code == 200, found.text
+    assert found.json() == created
+
+    token = client.post(
+        f"/admin/users/{created['id']}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    updated = client.put(
+        "/user/webhook",
+        headers={"X-API-Key": token},
+        json={
+            "webhook_url": "https://example.com/by-id",
+            "webhook_secret": "never-return-this",
+            "webhook_events": {"meeting.completed": True},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"] == {
+        "webhook_url": "https://example.com/by-id",
+        "webhook_events": {"meeting.completed": True},
+    }
+    assert "never-return-this" not in updated.text
+
+    found = client.get(f"/admin/users/{created['id']}", headers=_admin())
+    assert found.status_code == 200, found.text
+    assert found.json()["data"] == updated.json()["data"]
+    assert "never-return-this" not in found.text
+
+    assert client.get(f"/admin/users/{created['id']}").status_code == 403
+    assert (
+        client.get(
+            f"/admin/users/{created['id']}",
+            headers={"X-Admin-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+
+    missing = client.get("/admin/users/999999", headers=_admin())
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "User not found"}
+
+    users_after = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "by-id@vexa.ai"},
+    )
+    assert users_after.status_code == 200
+    assert users_after.json() == found.json()
+
+
 def test_internal_validate_requires_secret(client):
     """HMAC internal-secret REQUIRED — a missing/wrong X-Internal-Secret is rejected 403."""
     # Mint a token to validate.

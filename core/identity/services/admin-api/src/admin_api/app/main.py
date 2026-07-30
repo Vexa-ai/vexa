@@ -20,11 +20,11 @@ exercises:
 import hmac
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,6 +85,15 @@ class UserResponse(BaseModel):
     email: str
     name: Optional[str] = None
     max_concurrent_bots: int
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer("data")
+    def omit_webhook_secret(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in data.items()
+            if key != "webhook_secret"
+        }
 
     model_config = {"from_attributes": True}
 
@@ -262,6 +271,14 @@ def create_app() -> FastAPI:
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
         user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return UserResponse.model_validate(user)
+
+    @app.get("/admin/users/{user_id}", response_model=UserResponse,
+             dependencies=[Depends(verify_admin_token)])
+    async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
