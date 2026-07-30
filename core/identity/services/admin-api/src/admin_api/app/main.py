@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, model_validator
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +78,21 @@ class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
     max_concurrent_bots: int = 3
+
+
+class UserAdminPatch(BaseModel):
+    max_concurrent_bots: Optional[int] = Field(default=None, ge=0)
+    data: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if self.max_concurrent_bots is None and not self.data:
+            raise ValueError("at least one user field must be supplied")
+        if self.data and "webhook_secret" in self.data:
+            raise ValueError("webhook_secret is not admin-patchable")
+        return self
 
 
 class UserResponse(BaseModel):
@@ -281,6 +296,21 @@ def create_app() -> FastAPI:
         user = await db.get(User, user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return UserResponse.model_validate(user)
+
+    @app.patch("/admin/users/{user_id}", response_model=UserResponse,
+               dependencies=[Depends(verify_admin_token)])
+    async def patch_user_by_id(user_id: int, patch: UserAdminPatch,
+                               db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        if patch.max_concurrent_bots is not None:
+            user.max_concurrent_bots = patch.max_concurrent_bots
+        if patch.data:
+            user.data = {**(user.data or {}), **patch.data}
+        await db.commit()
+        await db.refresh(user)
         return UserResponse.model_validate(user)
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,

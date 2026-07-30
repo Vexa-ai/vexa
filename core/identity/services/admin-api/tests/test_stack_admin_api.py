@@ -189,6 +189,88 @@ def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client
     assert users_after.json() == found.json()
 
 
+def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "entitlement@vexa.ai", "max_concurrent_bots": 3},
+    ).json()
+    user_id = created["id"]
+    token = client.post(
+        f"/admin/users/{user_id}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    webhook = client.put(
+        "/user/webhook",
+        headers={"X-API-Key": token},
+        json={
+            "webhook_url": "https://example.com/entitlement",
+            "webhook_secret": "private-hook-secret",
+            "webhook_events": {"meeting.completed": True},
+        },
+    )
+    assert webhook.status_code == 200, webhook.text
+
+    patched = client.patch(
+        f"/admin/users/{user_id}",
+        headers=_admin(),
+        json={
+            "max_concurrent_bots": 25,
+            "data": {
+                "subscription_tier": "commitment_25",
+                "billing_contract_version": 1,
+            },
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == {
+        "webhook_url": "https://example.com/entitlement",
+        "webhook_events": {"meeting.completed": True},
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+    }
+    assert "private-hook-secret" not in patched.text
+
+    validated = client.post(
+        "/internal/validate",
+        headers={"X-Internal-Secret": INTERNAL_SECRET},
+        json={"token": token},
+    )
+    assert validated.status_code == 200, validated.text
+    assert validated.json()["max_concurrent"] == 25
+    assert validated.json()["webhook_secret"] == "private-hook-secret"
+
+    for headers, body, expected in (
+        ({}, {"max_concurrent_bots": 5}, 403),
+        ({"X-Admin-API-Key": "wrong"}, {"max_concurrent_bots": 5}, 403),
+        (_admin(), {}, 422),
+        (_admin(), {"max_concurrent_bots": -1}, 422),
+        (_admin(), {"email": "other@vexa.ai"}, 422),
+    ):
+        rejected = client.patch(
+            f"/admin/users/{user_id}",
+            headers=headers,
+            json=body,
+        )
+        assert rejected.status_code == expected, rejected.text
+
+    missing = client.patch(
+        "/admin/users/999999",
+        headers=_admin(),
+        json={"max_concurrent_bots": 5},
+    )
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "User not found"}
+
+    unchanged = client.get(
+        f"/admin/users/{user_id}",
+        headers=_admin(),
+    ).json()
+    assert unchanged["max_concurrent_bots"] == 25
+    assert unchanged["data"] == patched.json()["data"]
+
+
 def test_internal_validate_requires_secret(client):
     """HMAC internal-secret REQUIRED — a missing/wrong X-Internal-Secret is rejected 403."""
     # Mint a token to validate.
