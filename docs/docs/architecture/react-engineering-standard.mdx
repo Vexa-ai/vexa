@@ -1,0 +1,1784 @@
+---
+title: "React 19.2 engineering standard"
+description: "The reviewable, incrementally enforceable React standard for clients/terminal: components, state, Effects, data, Next App Router boundaries, tests, migration, and CI."
+---
+
+This standard governs **new and touched React code in `clients/terminal`**. It is subordinate
+to the [architecture constitution](/governance/architecture) and the
+[delivery constitution](/governance/delivery): it turns their purity, ownership, evidence,
+and safe-delivery principles into React-specific review signals.
+
+It does **not** declare every older pattern defective, require a repository-wide rewrite, or
+govern non-React backend packages. A change should improve the smallest boundary it needs to
+touch and leave unrelated working code alone.
+
+## Repository baseline
+
+The standard is tied to the checked-in toolchain, not to generic “modern React” advice.
+
+| Surface | Current Vexa state | Enforcement status |
+|---|---|---|
+| React / React DOM | `package.json` declares `^19.1.0`; both active lockfiles resolve `19.2.7` | Runtime and build |
+| Framework | Next.js `15.5.19`, App Router | Server Components supported and used at route boundaries |
+| Client boundary | The workbench and most interactive surfaces are Client Components | Existing architecture |
+| Server Actions | Supported by the framework; no `"use server"`, `useActionState`, or `useOptimistic` use in current source | Available, not a mandate |
+| TypeScript | `strict: true`, TypeScript `5.9.3`; Terminal has no separate `typecheck` script | Enforced by `next build` today |
+| Tests | Vitest `4.1.9`, jsdom, Testing Library React `16.3.2` | Enforced by `pnpm --filter @vexa/terminal test` |
+| User-event helpers | `@testing-library/user-event` and `@testing-library/jest-dom` are not installed | Proposed |
+| ESLint | A `next lint` script exists, but no checked-in ESLint config or direct ESLint dependencies exist | **Not enforced** |
+| React Compiler | Compiler package is not installed; `experimental.reactCompiler` is unset | **Off**; experimental opt-in pilot only |
+| CI | Root CI runs typecheck, build, and test; it does not run lint | Partial |
+| Docs validation | README and docs-version gates exist; no repository MDX or broken-link gate exists | Partial |
+
+An automation cell below uses one of four labels:
+
+- **Now** — a checked-in command already provides the signal.
+- **Proposed** — an exact adoption step is defined, but the check is not yet present.
+- **Harness** — the exact checked-in runner exists, but this rule has no confirmed
+  repository-wide scenario; every affected change must add or name focused coverage.
+- **Manual** — human judgment remains necessary; a textual rule must not be described as a
+  CI guarantee.
+
+### Concrete check commands
+
+Rule automation and the matrix use these IDs so each command is defined once:
+
+| Check ID | Exact command | Current truth |
+|---|---|---|
+| `C-DIFF` | `git diff --check` | **Now:** structural whitespace only; untracked files need an explicit content check |
+| `C-BUILD` | `pnpm --filter @vexa/terminal build` | **Now:** Next production build and the current Terminal TypeScript check |
+| `C-TEST` | `pnpm --filter @vexa/terminal test` | **Harness:** Vitest/Testing Library runner exists; rule-specific coverage must be named |
+| `C-LINT` | `pnpm --filter @vexa/terminal lint` | **Proposed:** current `next lint` script has no config/dependencies and is not enforcement |
+| `C-GATE` | `node scripts/gates.mjs all` | **Now command:** a green claim is valid only for the recorded run; it is not a rule-specific test |
+| `C-EXCEPT` | `node scripts/check-react-standard-exceptions.mjs clients/terminal/src` | **Proposed:** validate exception fields, rule IDs, and dates |
+
+### Normative levels
+
+- **MUST** — violating the rule can create a correctness, compatibility, security,
+  accessibility, or supportability defect. A new violation blocks review unless the rule
+  explicitly allows a documented exception.
+- **SHOULD** — the default engineering choice. A different choice is acceptable when the
+  diff contains evidence and a documented reason.
+- **MAY** — a supported option, never a universal requirement. Select it only when it makes
+  the current design simpler or safer.
+
+“MUST” does not imply “currently linted.” Until a proposed gate lands, the reviewer enforces
+the rule manually and reports that enforcement altitude honestly.
+
+## What is specifically relevant in React 19.2
+
+- `useEffectEvent` is available for non-reactive events that are fired by an Effect. It is
+  not a way to hide dependencies from `exhaustive-deps`.
+- `<Activity>` may hide and later restore a UI while preserving its state. Hidden Activities
+  clean up Effects; they are not a substitute for domain loading/error/empty states or for
+  unmounting media and other imperative resources.
+- `cacheSignal` is for React Server Components. It is not a Client Component cache.
+- React Compiler 1.0 is separate, optional build tooling. React `19.2.7` does not mean this
+  repository is compiled; the current Vexa build is not.
+- The generated `useId` format changed in React 19.2 (`:` became `_`). Tests must treat IDs
+  as opaque rather than asserting their exact text.
+
+## Legacy classification and migration bar
+
+Every review finding about old code MUST be classified before prescribing a rewrite.
+
+| Class | Meaning | Required response |
+|---|---|---|
+| **L1 — removed or incompatible** | React 19 no longer supports the API or silently ignores the contract | Replace before the affected path ships |
+| **L2 — demonstrated defect** | A test, trace, profile, accessibility check, or reproducible behavior proves incorrectness or material loss | Fix at the point of introduction and add evidence |
+| **L3 — architectural risk** | The code works now but duplicates authority, hides ownership, couples unrelated concerns, or makes safe testing difficult | Improve the touched boundary; wider work needs a separate issue |
+| **L4 — old but valid** | The style predates current recommendations but remains supported, correct, understandable, and measured adequately | Leave it unless the current change benefits from a local migration |
+
+A line is not L1–L3 merely because a newer API exists. In particular, existing
+`forwardRef`, `memo`, `useMemo`, `useCallback`, Context providers, controlled forms, or
+Effect-based browser integrations may be L4.
+
+### Proportionate DRY and SOLID
+
+- **DRY** removes duplicated authority and duplicated stateful processes, not every repeated
+  JSX fragment. Two clear local expressions are safer than a speculative universal Hook.
+- **Single Responsibility** means a component or Hook has one cohesive reason to change,
+  not that it meets a line-count target.
+- **Open/Closed and Interface Segregation** favor composition and narrow props over another
+  mode flag or a broad “options” object.
+- **Dependency Inversion** keeps browser APIs, external stores, and request clients behind
+  focused adapters that components can test through observable behavior.
+
+Apply these principles only to the boundary the change owns. An abstraction must reduce
+current coupling or duplication and make testing safer; hypothetical reuse is not enough.
+
+## Rule format
+
+Every rule below has the same review contract:
+
+1. level and applicability;
+2. problem and consequence;
+3. anti-pattern;
+4. corrected pattern;
+5. allowed exception;
+6. diff/review signal;
+7. concrete automation;
+8. false-positive risk.
+
+Stable IDs are the DRY seam: checklists, exceptions, and CI reports refer to the ID instead
+of restating or subtly changing the rule.
+
+## Rule catalog
+
+### R-COMP-01 — pure, focused components
+
+**Level and applicability — MUST** for render purity; **SHOULD** for one cohesive
+responsibility. Applies to every new or touched component.
+
+**Problem and consequence.** Render may run repeatedly, be interrupted, or be abandoned.
+Mutating inputs or touching an external system during render produces order-dependent UI,
+duplicate telemetry, hydration differences, and bugs that Strict Mode exposes. A component
+that owns unrelated data access, orchestration, and presentation also becomes difficult to
+test or replace. DRY means one source of truth; SOLID means cohesive responsibilities, not
+one component per line.
+
+**Anti-pattern**
+
+```tsx
+function Transcript({ segments }: { segments: Segment[] }) {
+  segments.sort((a, b) => a.startedAt - b.startedAt);
+  analytics.track("transcript-rendered");
+  localStorage.setItem("last-meeting", segments[0]?.meetingId ?? "");
+
+  return segments.map((segment) => <p key={segment.id}>{segment.text}</p>);
+}
+```
+
+This mutates a prop and performs two external side effects during render.
+
+**Corrected pattern**
+
+```tsx
+function Transcript({ segments }: { readonly segments: readonly Segment[] }) {
+  const ordered = [...segments].sort((a, b) => a.startedAt - b.startedAt);
+
+  function handleExport() {
+    analytics.track("transcript-exported");
+    exportTranscript(ordered);
+  }
+
+  return (
+    <section aria-labelledby="transcript-heading">
+      <h2 id="transcript-heading">Transcript</h2>
+      {ordered.map((segment) => (
+        <p key={segment.id}>{segment.text}</p>
+      ))}
+      <button type="button" onClick={handleExport}>Export</button>
+    </section>
+  );
+}
+```
+
+**Allowed exception.** A composition root may coordinate several cohesive children.
+Framework route/layout components and class Error Boundaries may have framework-defined
+responsibilities. Size alone is not an exception or a violation.
+
+**Diff/review signal.** Look for mutation of props, module state, browser APIs, network calls,
+timers, logging, or subscription setup in a component body; nested component definitions;
+and unrelated reasons for the component to change.
+
+**Automation.**
+
+- **Now via `C-BUILD`:** types and production compilation catch shape errors, but do not
+  prove render purity.
+- **Proposed via `C-LINT`:** enable `purity`, `immutability`, `static-components`, and
+  `component-hook-factories`.
+- **Harness via `C-TEST`:** mount the changed component under `<StrictMode>` and assert that
+  render performs no external call or input mutation.
+- **Manual:** identify responsibility boundaries and speculative abstraction.
+
+**False-positive risk.** Reading a stable value is not the same as mutating it. Module-level
+constants, deliberate composition roots, generated code, and measured low-level primitives
+need contextual review; line-count thresholds MUST NOT be a blocking proxy.
+
+### R-HOOK-01 — Hooks express one reusable stateful process
+
+**Level and applicability — MUST** follow the Rules of Hooks; custom-Hook extraction is
+**SHOULD** when a named stateful process is reused or obscures the component’s purpose.
+
+**Problem and consequence.** Conditional or indirect Hook calls change call order and bind
+state to the wrong operation. “Utility” Hooks that mix unrelated concerns hide dependencies,
+couple callers, and make every change risky. A custom Hook shares logic, not one global copy
+of its state.
+
+**Anti-pattern**
+
+```tsx
+function MeetingPanel({ meetingId, live }: Props) {
+  if (live) {
+    useEffect(() => connectToMeeting(meetingId), [meetingId]);
+  }
+
+  const data = useEverything(meetingId); // auth + socket + theme + transcript + telemetry
+  return <Panel data={data} />;
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function useMeetingConnection(meetingId: string, enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const connection = connectToMeeting(meetingId);
+    return () => connection.disconnect();
+  }, [enabled, meetingId]);
+}
+
+function MeetingPanel({ meetingId, live }: Props) {
+  useMeetingConnection(meetingId, live);
+  return <TranscriptPanel meetingId={meetingId} />;
+}
+```
+
+**Allowed exception.** React’s `use(promise)` API may be called in conditions and loops, but
+not in `try/catch`, and it does not relax the rules for Hooks such as `useState` or
+`useEffect`. A one-off, readable Effect need not be extracted merely to reduce line count.
+
+**Diff/review signal.** A Hook below a return/condition/loop; Hooks called from ordinary
+functions; dynamic Hook factories; a custom Hook with unrelated outputs or a generic options
+object that represents several independent processes.
+
+**Automation.**
+
+- **Proposed blocking via `C-LINT`:** `react-hooks/rules-of-hooks`.
+- **Proposed via `C-LINT`:** `component-hook-factories`, `incompatible-library`, and
+  `additionalEffectHooks` configuration for repository wrappers.
+- **Harness via `C-TEST`:** rerender the custom Hook through its public component and assert
+  independent callers do not share state accidentally.
+- **Manual:** decide whether extraction names a real process or only moves code.
+
+**False-positive risk.** A function beginning with `use` is not necessarily a Hook in
+generated or third-party code. Conversely, renaming a Hook to evade lint does not make the
+call safe. Review the behavior, not only the name.
+
+### R-STATE-01 — store the minimal source of truth; keep derived state derived
+
+**Level and applicability — MUST** avoid contradictory or render-derivable state.
+
+**Problem and consequence.** Duplicating props or calculable values into state creates two
+authorities. They drift on prop changes, add render/Effect cycles, flash stale UI, and expand
+the test matrix.
+
+**Anti-pattern**
+
+```tsx
+function ParticipantList({ participants, query }: Props) {
+  const [visible, setVisible] = useState<Participant[]>([]);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const next = participants.filter((p) => p.name.includes(query));
+    setVisible(next);
+    setCount(next.length);
+  }, [participants, query]);
+
+  return <p>{count} matches: {visible.map((p) => p.name).join(", ")}</p>;
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function ParticipantList({ participants, query }: Props) {
+  const visible = participants.filter((participant) =>
+    participant.name.toLocaleLowerCase().includes(query.toLocaleLowerCase())
+  );
+
+  return <p>{visible.length} matches: {visible.map((p) => p.name).join(", ")}</p>;
+}
+```
+
+**Allowed exception.** State initialized from a prop may be an intentional editable snapshot
+or a value preserved across later prop changes. Make that contract explicit with a name such
+as `initialDraft`, and use a deliberate `key` when parent identity should reset it. Expensive
+pure derivation may be memoized after measurement; it still is not state.
+
+**Diff/review signal.** State whose setter appears only in an Effect; mirrored props;
+separate booleans that permit impossible combinations; stored totals, filtered arrays, or
+formatted labels that can be calculated from current inputs.
+
+**Automation.**
+
+- **Proposed via `C-LINT`:** `set-state-in-effect`, `set-state-in-render`, and `immutability`.
+- **Now via `C-BUILD`:** TypeScript checks a discriminated union when the implementation
+  actually uses one; it does not discover duplicated state.
+- **Harness via `C-TEST`:** rerender with changed props and assert the derived value updates
+  without an intermediate stale frame.
+- **Manual:** determine whether a value is a snapshot or a duplicate authority.
+
+**False-positive risk.** DOM measurement, an external-store snapshot, animation state, and
+an intentionally frozen initial value are not ordinary render derivations. The reviewer
+should ask what event owns the value before prescribing removal.
+
+### R-STATE-02 — colocate state; lift only shared authority
+
+**Level and applicability — SHOULD.**
+
+**Problem and consequence.** State placed too high causes unrelated rerenders, prop drilling,
+and a parent that owns child details. State duplicated in siblings diverges. Moving every
+value into Context or an external store replaces local coupling with global coupling.
+
+**Anti-pattern**
+
+```tsx
+function Workbench() {
+  const [hoveredRow, setHoveredRow] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+
+  return (
+    <>
+      <MeetingTable hoveredRow={hoveredRow} onHover={setHoveredRow} />
+      <RenameDialog draft={draftTitle} onDraftChange={setDraftTitle} />
+    </>
+  );
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function Workbench() {
+  return (
+    <>
+      <MeetingTable />
+      <RenameDialog />
+    </>
+  );
+}
+
+function RenameDialog() {
+  const [draft, setDraft] = useState("");
+  return <label>Name <input value={draft} onChange={(e) => setDraft(e.target.value)} /></label>;
+}
+```
+
+When two siblings truly edit the same value, the nearest common owner holds one controlled
+value and passes a narrow value/change interface.
+
+**Allowed exception.** URL state, a persisted draft, cross-tab state, and state that must
+survive subtree replacement may need a higher or external owner. The exception must identify
+the consumers and lifetime that require it.
+
+**Diff/review signal.** A parent forwards a value to only one child; duplicate sibling state
+with synchronization Effects; broad Context added for a nearby relationship; a global store
+used for ephemeral hover, open, or input state.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** rerender the owner, unmount/remount the child, and change its
+  `key`; assert preservation or reset exactly matches the declared lifetime.
+- **Proposed evidence:** record React Profiler output when high-frequency ownership is
+  justified by performance.
+- **Manual:** ownership and lifetime cannot be inferred reliably by lint.
+
+**False-positive risk.** Prop drilling through one or two explicit layers is often clearer
+than Context. Conversely, many consumers do not automatically prove a global store is right;
+lifetime and authority are the deciding signals.
+
+### R-EFFECT-01 — Effects synchronize with external systems
+
+**Level and applicability — MUST.**
+
+**Problem and consequence.** An Effect is an escape hatch for keeping React synchronized
+with something React does not own: a network connection, browser API, imperative widget,
+timer, or external subscription. Using Effects for derivation or event-specific work adds
+extra renders, stale closures, duplicate actions, and dependency suppressions.
+
+**Anti-pattern**
+
+```tsx
+function InviteButton({ userId }: { userId: string }) {
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (submitted) {
+      void postInvite(userId);
+    }
+  }, [submitted, userId]);
+
+  return <button onClick={() => setSubmitted(true)}>Invite</button>;
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function InviteButton({ userId }: { userId: string }) {
+  async function handleInvite() {
+    await postInvite(userId);
+  }
+
+  return <button type="button" onClick={handleInvite}>Invite</button>;
+}
+```
+
+A legitimate external synchronization mirrors setup and cleanup:
+
+```tsx
+useEffect(() => {
+  const stream = subscribeToTranscript(meetingId, handleSegment);
+  return () => stream.close();
+}, [meetingId]);
+```
+
+**Allowed exception.** Browser-only APIs, subscriptions, focus/measurement, media controls,
+third-party widgets, telemetry tied to visibility rather than a click, and legacy interfaces
+without a framework adapter may require Effects. State set from synchronous DOM measurement
+can be valid when layout requires it.
+
+**Diff/review signal.** An Effect that sets only React state from props/state, handles a
+button/form outcome, chains multiple unrelated processes, or has no cleanup despite
+allocating an external resource.
+
+**Automation.**
+
+- **Proposed blocking via `C-LINT`:** `react-hooks/exhaustive-deps`.
+- **Proposed via `C-LINT`:** `set-state-in-effect`, `set-state-in-render`, and rejection of
+  unregistered dependency-rule suppressions.
+- **Harness via `C-TEST`:** mount/unmount twice under `<StrictMode>` and assert one live
+  subscription, mirrored cleanup, and no post-unmount update.
+
+**False-positive risk.** Static analysis cannot know whether a function talks to an external
+system. A ban on `useEffect` or on all setters inside Effects would reject valid adapters;
+review the synchronization contract and cleanup.
+
+### R-EVENT-01 — events stay reactive; Effect Events isolate non-reactive reads
+
+**Level and applicability — MUST** keep dependencies honest; `useEffectEvent` is **MAY** for
+the specific React 19.2 case it solves.
+
+**Problem and consequence.** Removing a dependency or suppressing lint makes the Effect read
+stale values. Adding a cosmetic dependency may reconnect an expensive external system.
+`useEffectEvent` separates the non-reactive event fired by an Effect from the reactive
+synchronization process.
+
+**Anti-pattern**
+
+```tsx
+function Room({ roomId, theme }: Props) {
+  useEffect(() => {
+    const room = connect(roomId);
+    room.on("connected", () => showToast("Connected", theme));
+    return () => room.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function Room({ roomId, theme }: Props) {
+  const onConnected = useEffectEvent(() => {
+    showToast("Connected", theme);
+  });
+
+  useEffect(() => {
+    const room = connect(roomId);
+    room.on("connected", () => {
+      onConnected();
+    });
+    return () => room.disconnect();
+  }, [roomId]);
+}
+```
+
+The connection reacts to `roomId`; the notification sees the latest theme without making
+theme changes reconnect the room.
+
+**Allowed exception.** A dependency suppression is acceptable only for a proven external API
+whose identity contract cannot be represented safely, with an exception record and a test
+covering stale reads and cleanup. `useEffectEvent` may only be called from an Effect or
+another Effect Event in the same component/Hook; it is not a general stable callback.
+
+**Diff/review signal.** Dependency-array disables, empty arrays that read props/state,
+callbacks created only to placate dependencies, Effect Events passed to children or called
+from event handlers.
+
+**Automation.**
+
+- **Proposed blocking via `C-LINT`:** `exhaustive-deps` with `additionalEffectHooks`
+  configured for local wrappers, plus current Effect Event placement checks.
+- **Harness via `C-TEST`:** change the non-reactive value and assert no reconnection; then
+  fire the external event and assert it observes the latest value.
+- **Manual:** verify the split between reactive synchronization and non-reactive event.
+
+**False-positive risk.** Stable module constants and state-setter functions need not appear
+as dependencies. Auto-fixing arrays without understanding object/function identity can cause
+reconnection loops; fixes require design review.
+
+### R-DATA-01 — load in parallel, cache deliberately, cancel stale work
+
+**Level and applicability — MUST** prevent stale-result races; **SHOULD** use the framework
+or a shared cache for route data; **MAY** fetch in an Effect for a justified client-only
+process.
+
+**Problem and consequence.** Fetching route data in nested Effects creates network
+waterfalls, loses server rendering, duplicates cache policy, and can render an old request
+after a newer key wins. React `cache` and `cacheSignal` are server facilities, not a browser
+query cache.
+
+**Anti-pattern**
+
+```tsx
+function Meeting({ meetingId }: { meetingId: string }) {
+  const [meeting, setMeeting] = useState<Meeting | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/meetings/${meetingId}`)
+      .then((response) => response.json())
+      .then(setMeeting);
+  }, [meetingId]);
+
+  return meeting ? <Participants meetingId={meeting.id} /> : <Spinner />;
+}
+```
+
+The child can only begin its own request after the first request and render complete.
+Changing `meetingId` can also let an older response overwrite the new one.
+
+**Corrected pattern** — route data
+
+```tsx
+export default async function MeetingPage({
+  params,
+}: {
+  params: Promise<{ meetingId: string }>;
+}) {
+  const { meetingId } = await params;
+  const [meeting, participants] = await Promise.all([
+    getMeeting(meetingId),
+    getParticipants(meetingId),
+  ]);
+
+  return <MeetingClient meeting={meeting} participants={participants} />;
+}
+```
+
+**Corrected fallback — genuinely client-only data**
+
+```tsx
+useEffect(() => {
+  const controller = new AbortController();
+
+  void loadBrowserOnlyData(meetingId, controller.signal)
+    .then(setData)
+    .catch((error) => {
+      if (error.name !== "AbortError") setError(error);
+    });
+
+  return () => controller.abort();
+}, [meetingId]);
+```
+
+**Allowed exception.** Polling, browser-only APIs, user-triggered requests, streaming
+subscriptions, and small isolated widgets may load in an Effect. The code must define cache
+ownership, abort or ignore obsolete work, and render all result states.
+
+**Diff/review signal.** `fetch` in `useEffect`; parent then child requests for independent
+data; no abort/ignore guard; a new ad hoc module cache; a new Promise created during every
+client render and passed to `use`.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** start requests for keys A then B, resolve B then A, and assert
+  only B renders; also assert independent requests start before either resolves.
+- **Proposed via `C-LINT`:** a scoped `no-restricted-syntax` selector reports
+  `fetch`/request-client calls inside Effects for review without automatically banning them.
+- **Proposed integration via `C-TEST`:** record request start/count evidence to catch
+  avoidable waterfalls and duplicate requests.
+
+**False-positive risk.** Text search cannot distinguish subscriptions, polling, or
+interaction-triggered requests from route loading. Parallelizing dependent requests can be
+incorrect or wasteful; only independent work belongs in `Promise.all`.
+
+### R-ACTION-01 — mutation state has one Action owner
+
+**Level and applicability — SHOULD** for new form mutations when React Actions simplify the
+existing boundary; **MAY** for current code. Server Functions remain framework-conditional.
+
+**Problem and consequence.** Hand-managed pending/error/success flags drift, allow duplicate
+submits, and often omit rollback. React Actions, `useActionState`, `useOptimistic`,
+`useFormStatus`, and transitions can make one mutation own its lifecycle, but adopting them
+without framework and test support merely replaces one abstraction with another.
+
+**Anti-pattern**
+
+```tsx
+async function handleSubmit(event: FormEvent) {
+  event.preventDefault();
+  setPending(true);
+  setError(null);
+  items.push(draft); // mutates shared state before success
+  await saveItem(draft);
+  setPending(false); // never runs on rejection
+}
+```
+
+**Corrected pattern**
+
+```tsx
+type SaveState = { error: string | null };
+
+async function saveItemAction(
+  _previous: SaveState,
+  formData: FormData,
+): Promise<SaveState> {
+  try {
+    await saveItem(String(formData.get("title") ?? ""));
+    return { error: null };
+  } catch {
+    return { error: "The item could not be saved." };
+  }
+}
+
+function ItemForm() {
+  const [state, submitAction, pending] = useActionState(
+    saveItemAction,
+    { error: null },
+  );
+
+  return (
+    <form action={submitAction}>
+      <label>Title <input name="title" required /></label>
+      <button disabled={pending}>{pending ? "Saving…" : "Save"}</button>
+      {state.error && <p role="alert">{state.error}</p>}
+    </form>
+  );
+}
+```
+
+An optimistic form keeps the server result authoritative:
+
+```tsx
+import { startTransition, useOptimistic, useState } from "react";
+import { useFormStatus } from "react-dom";
+
+type Message = {
+  id: string;
+  text: string;
+  pending?: boolean;
+};
+
+function MessageComposer({
+  initialMessages,
+  sendMessage,
+}: {
+  initialMessages: readonly Message[];
+  sendMessage: (text: string) => Promise<Message>;
+}) {
+  const [messages, setMessages] = useState<readonly Message[]>(initialMessages);
+  const [optimisticMessages, addOptimistic] = useOptimistic(
+    messages,
+    (current, optimistic: Message) => [...current, optimistic],
+  );
+
+  async function sendAction(formData: FormData) {
+    const text = String(formData.get("message") ?? "");
+    addOptimistic({ id: crypto.randomUUID(), text, pending: true });
+    const confirmed = await sendMessage(text);
+    startTransition(() => {
+      setMessages((current) => [...current, confirmed]);
+    });
+  }
+
+  return (
+    <>
+      <MessageList messages={optimisticMessages} />
+      <form action={sendAction}>
+        <label>Message <input name="message" required /></label>
+        <SubmitButton />
+      </form>
+    </>
+  );
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return <button disabled={pending}>{pending ? "Sending…" : "Send"}</button>;
+}
+```
+
+The form Action supplies the transition context for the optimistic update. A confirmed
+message updates the canonical local collection before the Action returns; rejection leaves
+that collection unchanged, so the optimistic row disappears. Test both successful
+convergence and rollback. Use `useTransition`/`startTransition` for non-urgent rendering
+work, not for the controlled input value that must update immediately. The explicit
+`startTransition` above is required for a state update after `await` until React removes that
+limitation.
+
+**Allowed exception.** Existing mutation libraries, non-form commands, controlled inputs
+whose values must not reset, and APIs with domain-specific queues/retries may remain the
+clearer owner. A Server Function must never be introduced merely to use a new React API.
+
+**Diff/review signal.** Three or more booleans for one mutation; optimistic mutation of the
+authoritative collection; missing rejection/finally path; `useOptimistic` outside an
+Action/Transition; `useFormStatus` in the component that creates rather than descends from
+the form; `"use server"` without authorization and validation.
+
+**Automation.**
+
+- **Runtime diagnostic only:** React may warn about optimistic updates outside an
+  Action/Transition; this is not a checked-in gate.
+- **Harness via `C-TEST`:** assert pending, duplicate-submit prevention, success convergence,
+  validation failure, unexpected failure, optimistic rollback, and form reset.
+- **Manual:** decide whether Actions fit the existing data boundary.
+
+**False-positive risk.** Actions are not mandatory for every request, and a boolean
+`pending` state is not inherently wrong. The defect is conflicting ownership or uncovered
+transitions, not the absence of a particular Hook.
+
+### R-SUSPENSE-01 — pending, error, and empty are different states
+
+**Level and applicability — MUST** represent user-relevant states; Suspense itself is
+**SHOULD** only for supported resources or framework boundaries.
+
+**Problem and consequence.** A spinner cannot represent failure or a successful empty
+result. Suspense does not detect data fetched in an Effect. Missing boundaries produce blank
+or indefinitely pending surfaces and make retry behavior undefined.
+
+**Anti-pattern**
+
+```tsx
+<Suspense fallback={<Spinner />}>
+  <EffectFetchedHistory meetingId={meetingId} />
+</Suspense>
+```
+
+The component’s Effect may set loading state, but it does not suspend; the fallback is not
+the loading contract.
+
+**Corrected pattern**
+
+```tsx
+const History = lazy(() => import("./History"));
+
+function HistorySurface() {
+  return (
+    <HistoryErrorBoundary>
+      <Suspense fallback={<p role="status">Loading history…</p>}>
+        <History />
+      </Suspense>
+    </HistoryErrorBoundary>
+  );
+}
+
+function HistoryList({ entries }: { entries: readonly Entry[] }) {
+  if (entries.length === 0) {
+    return <p>No history yet.</p>;
+  }
+  return <ul>{entries.map((entry) => <li key={entry.id}>{entry.title}</li>)}</ul>;
+}
+```
+
+Next route-level `loading.tsx` and `error.tsx` may own these states instead of a local
+boundary. `<Activity>` MAY preserve state for intentionally hidden UI; it does not replace
+the result-state model.
+
+**Allowed exception.** A parent route or surface may already own the correct Suspense and
+Error Boundary. Small synchronous views need no Suspense. Background refresh may keep stale
+content visible while exposing a separate progress signal.
+
+**Diff/review signal.** Suspense around Effect fetching; one `loading` boolean with no
+failure/empty branch; an empty array treated as still loading; a rejected Promise with no
+meaningful recovery boundary; nested fallbacks that cause layout flicker.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** assert loading, resolved non-empty, resolved empty, rejection,
+  retry, and fallback removal as separate observations.
+- **Proposed via `C-TEST`:** add a route-level scenario for streaming/fallback placement and
+  preserved layout when the changed boundary lives above a component test.
+- **Manual:** confirm that the resource can actually suspend and the boundary altitude is
+  appropriate.
+
+**False-positive risk.** The boundary may live in an unchanged ancestor. Static adjacency
+checks over-report; reviewers must trace the rendered route/surface before requiring another
+boundary.
+
+### R-RSC-01 — keep the Next client boundary at interactive leaves
+
+**Level and applicability — SHOULD** for Next App Router modules; **MUST** keep boundary data
+serializable and authorize every Server Function input.
+
+**Problem and consequence.** Adding `"use client"` high in the tree pulls the transitive
+module subtree into the client bundle, blocks server-only capabilities, and broadens state
+and hydration work. Ordinary functions and server-only objects cannot cross as serialized
+props. A Server Function is the explicit function exception: it is a remotely callable
+server entry point whose arguments must be treated as untrusted, even though only its use in
+an Action/mutation context is called a Server Action.
+
+**Anti-pattern**
+
+```tsx
+"use client";
+
+export default function MeetingPage() {
+  // Forces route data and the entire page subtree into the client boundary.
+  return <Workbench />;
+}
+```
+
+**Corrected pattern**
+
+```tsx
+// Server Component: no directive.
+export default async function MeetingPage() {
+  const summary = await getMeetingSummary();
+  return <RefreshableSummary initialSummary={summary} />;
+}
+```
+
+```tsx
+"use client";
+
+export function RefreshableSummary({ initialSummary }: Props) {
+  const [summary, setSummary] = useState(initialSummary);
+  return <SummaryView summary={summary} onRefresh={setSummary} />;
+}
+```
+
+**Allowed exception.** The existing Terminal workbench is intentionally a rich Client
+Component composition root. Moving its directive is not automatically beneficial. A client
+boundary may be broad when interactive libraries, browser APIs, or shared local state make
+that boundary cohesive.
+
+**Diff/review signal.** New `"use client"` in a route/layout or shared barrel; server-only
+imports below a client boundary; non-serializable props; `"use server"` used for reads or
+without authentication, authorization, input validation, and error handling.
+
+**Automation.**
+
+- **Now via `C-BUILD`:** Next catches many invalid imports and serialization contracts; it
+  does not prove authorization.
+- **Harness via `C-TEST`:** call each changed Server Function with unauthorized and malformed
+  inputs and assert default-deny behavior.
+- **Proposed evidence:** compare client bundle output before/after a moved boundary.
+- **Manual:** review the transitive boundary and whether moving it lower is actually simpler.
+
+**False-positive risk.** Counting `"use client"` files is not a quality metric. A smaller
+bundle boundary can introduce awkward duplicated state or adapters; require measurable or
+structural benefit.
+
+### R-REF-01 — prefer declarative APIs; accept `ref` as a prop in new code
+
+**Level and applicability — SHOULD** use React 19’s ref-as-prop form for new internal
+function components; **MUST** preserve compatibility requirements.
+
+**Problem and consequence.** Imperative handles bypass data flow and expose implementation
+details. `forwardRef` adds an unnecessary wrapper for new React 19-only components, but a
+mass rewrite creates churn without user value.
+
+**Anti-pattern**
+
+```tsx
+const SearchInput = forwardRef<HTMLInputElement, Props>((props, ref) => {
+  return <input {...props} ref={ref} />;
+});
+```
+
+**Corrected pattern**
+
+```tsx
+function SearchInput({
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<"input">) {
+  return <input ref={ref} {...props} />;
+}
+```
+
+Expose a narrow `useImperativeHandle` API only when focus, scroll, measurement, animation,
+or another genuinely imperative operation cannot be expressed as props.
+
+**Allowed exception.** Existing `forwardRef` is supported and may remain L4. Libraries that
+also support React 18, class components, adapters to ref-dependent libraries, and stable
+public component APIs may require the old shape.
+
+**Diff/review signal.** New `forwardRef`; a ref used as ordinary state; parent code reaching
+into child DOM internals; a callback ref that implicitly returns an assignment or element
+rather than an optional cleanup function.
+
+**Automation.**
+
+- **Now via `C-BUILD`:** React 19 TypeScript types check ref-as-prop and ref callback cleanup
+  signatures.
+- **Proposed via `C-LINT`:** a scoped `no-restricted-imports` restriction reports new
+  internal `forwardRef` imports; it is not a repository-wide ban.
+- **Manual:** judge public compatibility and whether an imperative seam is necessary.
+
+**False-positive risk.** A mechanical search cannot distinguish a React 18-compatible public
+library from Terminal-internal code. Never auto-remove existing `forwardRef` without tests.
+
+### R-MEMO-01 — memoization requires evidence or semantic identity
+
+**Level and applicability — SHOULD** write clear code without blanket memoization;
+**MUST NOT** remove existing memoization solely because Compiler exists.
+
+**Problem and consequence.** `memo`, `useMemo`, and `useCallback` add dependency surfaces and
+can retain stale values while providing no measurable benefit. Conversely, stable identity
+may be part of an external subscription or library contract. React Compiler can automate
+many cases, but this repository does not currently run it.
+
+**Anti-pattern**
+
+```tsx
+type ProfileCardProps = {
+  firstName: string;
+  lastName: string;
+  onOpen: () => void;
+};
+
+function ProfileCard({ firstName, lastName, onOpen }: ProfileCardProps) {
+  const label = useMemo(() => `${firstName} ${lastName}`, [firstName, lastName]);
+  const handleOpen = useCallback(() => onOpen(), [onOpen]);
+
+  return <button type="button" onClick={handleOpen}>Open {label}</button>;
+}
+export default memo(ProfileCard);
+```
+
+**Corrected pattern**
+
+```tsx
+type ProfileCardProps = {
+  firstName: string;
+  lastName: string;
+  onOpen: () => void;
+};
+
+function ProfileCard({ firstName, lastName, onOpen }: ProfileCardProps) {
+  const label = `${firstName} ${lastName}`;
+
+  return (
+    <button type="button" onClick={onOpen}>
+      Open {label}
+    </button>
+  );
+}
+```
+
+Keep manual memoization when profiling proves an expensive recalculation/render or when a
+documented external API requires stable identity.
+
+**Allowed exception.** Existing measured memoization, context values with material fan-out,
+selectors, third-party grids/editors, and identities used as subscription keys may remain.
+The exception should name the consumer or profile, not say “performance.”
+
+**Diff/review signal.** New trivial `useMemo`/`useCallback`; `memo` on components whose props
+always change; dependency suppression; removal of memoization in unrelated code; claims that
+React 19.2 automatically compiles the component.
+
+**Automation.**
+
+- **Current reality:** no Compiler and no Compiler lint coverage.
+- **Proposed via `C-LINT`:** `preserve-manual-memoization`, `use-memo`,
+  `incompatible-library`, `unsupported-syntax`, and the current
+  `eslint-plugin-react-hooks` recommended preset.
+- **Proposed pilot via `C-BUILD` and `C-TEST`:** annotation mode, exact package pin,
+  build/behavior/profile comparison, and opt-in rollback before coverage expands.
+
+**False-positive risk.** A Compiler diagnostic usually means a component is skipped, not
+that runtime behavior is broken. Memoization value is workload-dependent; lint cannot prove
+performance, and a profiler snapshot cannot prove semantic identity.
+
+### R-STORE-01 — choose props, Context, or an external store by ownership
+
+**Level and applicability — SHOULD** prefer explicit props/composition for local
+relationships; **MUST** use `useSyncExternalStore` for mutable external stores that drive
+rendering.
+
+**Problem and consequence.** Context used as a general state bus rerenders broad subtrees and
+hides dependencies. Subscribing to a mutable store with an ad hoc Effect risks tearing,
+missed updates, and hydration mismatch. `useSyncExternalStore` defines React’s snapshot and
+subscription contract.
+
+**Anti-pattern**
+
+```tsx
+function useWorkspaceStore(store: WorkspaceStore) {
+  const [snapshot, setSnapshot] = useState(store.value);
+
+  useEffect(() => store.subscribe(() => setSnapshot(store.value)), [store]);
+  return snapshot;
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function useWorkspaceStore(store: WorkspaceStore) {
+  return useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot,
+  );
+}
+```
+
+`getSnapshot` MUST return the same immutable/cached value until the store changes.
+`getServerSnapshot` MUST agree with the initial client snapshot when server rendering is
+used.
+
+**Allowed exception.** Context is appropriate for theme, authenticated subject, feature
+capabilities, or another cohesive value needed through a distant subtree. An Effect remains
+valid for external synchronization that is not a render-driving store.
+
+**Diff/review signal.** Context with a large changing object; Provider added to avoid a few
+explicit props; mutable module singleton read during render; subscription Effect that copies
+an external value into state; uncached `getSnapshot`.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** assert subscribe/unsubscribe count, stable snapshot identity,
+  update delivery, and matching server/client hydration snapshots.
+- **Proposed review check:** centralize adapters in named Hooks and report new ad hoc
+  render-driving subscription Effects.
+- **Manual:** decide whether the value’s scope and lifetime justify Context/store ownership.
+
+**False-positive risk.** Not every subscription is a store, and not every Context update is
+performance-sensitive. A local event listener may be a normal Effect; require evidence
+before introducing a new abstraction.
+
+### R-COMPOSE-01 — compose capabilities instead of accumulating modes
+
+**Level and applicability — SHOULD.**
+
+**Problem and consequence.** A “universal” component with boolean flags and mode switches
+contains many implicit products. Invalid combinations grow faster than tests, callers become
+coupled to internals, and changes for one mode break another.
+
+**Anti-pattern**
+
+```tsx
+<Panel
+  chat
+  meeting={false}
+  compact
+  editable
+  showToolbar
+  renderAsModal={false}
+/>
+```
+
+**Corrected pattern**
+
+```tsx
+<Surface>
+  <SurfaceToolbar>
+    <MeetingActions meetingId={meetingId} />
+  </SurfaceToolbar>
+  <MeetingTranscript meetingId={meetingId} />
+</Surface>
+```
+
+Prefer explicit children, narrow slots, and domain components over a single prop API that
+models unrelated capabilities.
+
+**Allowed exception.** A design-system primitive may expose a small, finite set of
+orthogonal visual variants. A performance-sensitive library adapter may centralize modes
+when one tested boundary is safer than several copies.
+
+**Diff/review signal.** New boolean prop added beside several existing flags; switches on
+domain type inside a generic primitive; `cloneElement` or `Children` transformations;
+callers passing mutually dependent options.
+
+**Automation.**
+
+- **Proposed via `C-LINT`:** `no-restricted-imports` reports new `cloneElement` and
+  `Children` imports for architectural review.
+- **Now via `C-BUILD`, when modeled:** TypeScript checks invalid combinations represented by
+  a discriminated union; it does not decide whether the abstraction is cohesive.
+- **Manual:** assess whether variants are orthogonal and whether composition reduces or only
+  relocates complexity.
+
+**False-positive risk.** Prop count and cyclomatic complexity are investigation signals, not
+proof. Splitting a cohesive component across many files can make ownership worse.
+
+### R-ERROR-01 — errors terminate at a meaningful recovery boundary
+
+**Level and applicability — MUST** define handling for render, event, and async failures.
+
+**Problem and consequence.** Error Boundaries catch rendering/lifecycle errors below them,
+not event-handler errors or arbitrary rejected Promises. `try/catch` around returned JSX
+does not catch a child’s later render. Missing ownership yields a dead surface, duplicate
+toasts, or silent failures.
+
+**Anti-pattern**
+
+```tsx
+function MeetingSurface() {
+  try {
+    return <Transcript />;
+  } catch {
+    return <p>Something went wrong.</p>;
+  }
+}
+```
+
+**Corrected pattern** — Next route/surface boundary
+
+```tsx
+"use client";
+
+export default function ErrorView({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    reportError(error);
+  }, [error]);
+
+  return (
+    <section role="alert">
+      <p>The meeting surface could not be loaded.</p>
+      <button type="button" onClick={reset}>Try again</button>
+    </section>
+  );
+}
+```
+
+Event and ordinary async code still needs its own `try/catch` and user-visible result.
+
+**Allowed exception.** An unchanged route ancestor may already provide the correct recovery
+boundary. Fail-fast is acceptable for an impossible invariant when the nearest boundary
+reports an attributable error and recovery would be unsafe.
+
+**Diff/review signal.** `try/catch` around JSX; swallowed `.catch`; only `console.error`;
+generic boundary with no retry or attribution; one boundary around the whole application
+when a smaller surface can recover; duplicate reporting at several layers.
+
+**Automation.**
+
+- **Proposed via `C-LINT`:** `error-boundaries`.
+- **Harness via `C-TEST`:** force render failure, request rejection, event failure, and
+  retry; assert one user fallback and one telemetry emission.
+- **Manual:** select the recovery altitude and avoid duplicate ownership.
+
+**False-positive risk.** The required boundary may be framework-generated or live in an
+ancestor. Not every error is recoverable; forcing a retry button can be dishonest.
+
+### R-A11Y-01 — semantics, name, keyboard, focus, and feedback ship together
+
+**Level and applicability — MUST.**
+
+**Problem and consequence.** Pointer-only controls, unlabeled inputs, and color-only status
+exclude keyboard and assistive-technology users and make tests depend on implementation
+details. Accessibility is part of the user-facing contract, not a post-review polish pass.
+
+**Anti-pattern**
+
+```tsx
+function MeetingName({
+  failed,
+  onDelete,
+}: {
+  failed: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <>
+      <div className="icon" onClick={onDelete}>×</div>
+      <input placeholder="Meeting name" />
+      <span className={failed ? "red" : "green"} />
+    </>
+  );
+}
+```
+
+**Corrected pattern**
+
+```tsx
+function MeetingName({
+  failed,
+  onDelete,
+}: {
+  failed: boolean;
+  onDelete: () => void;
+}) {
+  const nameId = useId();
+
+  return (
+    <>
+      <label htmlFor={nameId}>Meeting name</label>
+      <input id={nameId} name="meetingName" />
+      <button type="button" onClick={onDelete}>Delete meeting</button>
+      <p role="status">{failed ? "Delete failed" : "Ready"}</p>
+    </>
+  );
+}
+```
+
+Generated `useId` values are for accessibility relationships, not list keys or test
+assertions.
+
+**Allowed exception.** A custom widget is acceptable when no native element expresses the
+interaction and it implements the appropriate ARIA pattern, keyboard behavior, focus
+management, name, state, and tests. The exception names the pattern.
+
+**Diff/review signal.** Click handlers on non-interactive elements; placeholder-only labels;
+positive `tabIndex`; removed focus outline; icon-only buttons without names; status conveyed
+only by color; dialogs without initial/return focus.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** query by role/name, perform keyboard interaction, and assert focus
+  and user-visible feedback.
+- **Proposed via `C-LINT`:** pin `jsx-a11y/click-events-have-key-events`,
+  `jsx-a11y/no-static-element-interactions`, `jsx-a11y/label-has-associated-control`, and
+  `jsx-a11y/interactive-supports-focus`, plus an automated DOM accessibility check in
+  `C-TEST`.
+- **Manual:** keyboard traversal, focus order, announcements, and visual contrast.
+
+**False-positive risk.** Static lint cannot prove a useful accessible name, correct focus
+order, or announcement timing. ARIA can silence a warning while making the experience worse;
+native semantics remain the default.
+
+### R-TEST-01 — test user-observable behavior with Testing Library
+
+**Level and applicability — MUST** cover changed behavior at its failure altitude;
+**SHOULD** use accessible queries and realistic interactions.
+
+**Problem and consequence.** Tests coupled to component state, private functions, CSS
+selectors, or exact generated IDs survive broken UX and fail during harmless refactors.
+Testing only a successful render misses loading, failure, race, and rollback behavior.
+
+**Anti-pattern**
+
+```tsx
+const view = render(<InviteForm />);
+fireEvent.click(view.container.querySelector(".submit")!);
+expect(view.container.querySelector('[data-testid="pending"]')).toBeTruthy();
+```
+
+**Corrected pattern**
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+const user = userEvent.setup();
+render(<InviteForm />);
+
+await user.type(screen.getByRole("textbox", { name: "Email" }), "dev@example.com");
+await user.click(screen.getByRole("button", { name: "Invite" }));
+
+expect(await screen.findByText("Invitation sent")).toBeVisible();
+```
+
+`@testing-library/user-event` and `jest-dom` are proposed dependencies, not current ones.
+Until they land, current tests MAY use `fireEvent`, but they still query by role/name and
+assert a user-visible outcome.
+
+**Allowed exception.** `data-testid` is acceptable when no stable semantic query exists,
+such as a canvas, virtualized implementation detail that has a separate accessibility
+surface, or non-user diagnostic node. Low-level pure adapters may use direct unit tests.
+
+**Diff/review signal.** `getByTestId` as first choice; `querySelector`; assertions on Hook
+state or child props; exact `useId` values; shallow rendering; only happy-path coverage;
+`fireEvent` sequences that cannot occur through the UI.
+
+**Automation.**
+
+- **Harness via `C-TEST`:** Vitest + jsdom + Testing Library run in Terminal; each changed
+  behavior must name its focused test because runner existence is not coverage.
+- **Proposed via `C-LINT`:** add pinned user-event/jest-dom dependencies and enable
+  `testing-library/prefer-screen-queries`, `testing-library/prefer-user-event`,
+  `testing-library/no-node-access`, and relevant `jest-dom` recommended rules.
+- **Harness via `C-TEST`:** add loading, empty, error, retry, rapid-key race, duplicate
+  submit, optimistic rollback, keyboard, and focus scenarios where the change can fail.
+
+**False-positive risk.** Role queries are not always available for non-DOM adapters and
+unfinished accessibility migrations. A test ID exception does not waive the product’s
+accessibility requirement.
+
+### R-API-01 — removed React 19 APIs cannot enter executable code
+
+**Level and applicability — MUST.**
+
+**Problem and consequence.** Removed APIs fail at runtime/build or silently stop honoring a
+contract. Deprecated APIs continue temporarily but raise migration cost. These are
+compatibility findings, not stylistic preferences.
+
+**Anti-pattern**
+
+```tsx
+ReactDOM.render(<App />, document.getElementById("root"));
+
+function Greeting(props: { name?: string }) {
+  return <p>Hello {props.name}</p>;
+}
+Greeting.defaultProps = { name: "Guest" };
+```
+
+**Corrected pattern**
+
+```tsx
+const root = createRoot(document.getElementById("root")!);
+root.render(<App />);
+
+function Greeting({ name = "Guest" }: { name?: string }) {
+  return <p>Hello {name}</p>;
+}
+```
+
+**Removed or behaviorally unavailable in React 19**
+
+- `ReactDOM.render`, `ReactDOM.hydrate`, `unmountComponentAtNode`, and `findDOMNode`;
+- string refs, legacy `contextTypes`/`childContextTypes`/`getChildContext`;
+- `React.createFactory` and module-pattern component factories;
+- function-component `defaultProps`; function-component `propTypes` checks are ignored;
+- `react-test-renderer/shallow`;
+- every `react-dom/test-utils` helper other than the legacy `act` export;
+- UMD builds and the removed unstable DOM APIs listed in the React 19 upgrade guide.
+
+**Deprecated/legacy, migrate when touched**
+
+- `react-test-renderer`;
+- `ReactDOM.useFormState` in favor of `React.useActionState`;
+- `element.ref` access in favor of `element.props.ref`;
+- `act` imported from `react-dom/test-utils`; import it from `react` instead;
+- new internal `forwardRef`, subject to R-REF-01;
+- direct imports from React internals.
+
+Class-component `defaultProps` remains supported; R-API-01 does not classify it as removed.
+
+**Allowed exception.** There is no executable-code exception for an API removed from the
+installed runtime. A compatibility adapter for another supported React major must be
+isolated, tested against both majors, and unreachable from the Terminal 19.2 bundle.
+Deprecated-but-supported code may be L4.
+
+**Diff/review signal.** Imports/names above, string `ref`, function `propTypes`/
+`defaultProps`, exact React-generated IDs, direct internals, new test-renderer snapshots.
+
+**Automation.**
+
+- **Now via `C-BUILD`:** TypeScript and production compilation catch many removals.
+- **Proposed blocking via `C-LINT`:** `no-restricted-imports`/`no-restricted-syntax` plus a
+  first-party compatibility scan for APIs that types cannot detect.
+- **Harness via `C-TEST`:** run behavioral coverage after official React 19 codemods; never
+  accept codemod output without review.
+
+**False-positive risk.** Text scans hit comments, documentation, compatibility declarations,
+and third-party code. Restrict scans to first-party executable/test sources and parse imports
+where possible.
+
+### R-MIGRATE-01 — migrate at an evidence-sized boundary
+
+**Level and applicability — MUST** keep migration scope justified; **SHOULD** improve touched
+code when the local change makes that safer.
+
+**Problem and consequence.** Combining a feature, API migration, component redesign,
+memoization removal, and test rewrite produces a diff whose cause/effect cannot be reviewed.
+Refusing every local improvement lets debt grow. The safe middle is an independently
+testable boundary.
+
+**Anti-pattern**
+
+```text
+"Upgrade the whole frontend to modern React":
+- convert every forwardRef
+- remove all memo/useMemo/useCallback
+- move all fetching to Server Components
+- replace all forms with Actions
+- rewrite every test
+```
+
+**Corrected pattern**
+
+```text
+1. Classify the finding as L1, L2, L3, or L4.
+2. Add characterization or user-behavior evidence at the affected surface.
+3. Change one authority boundary.
+4. Run the focused test and production build.
+5. Compare behavior/performance when that is the claim.
+6. Record a follow-up for unrelated candidates.
+```
+
+**Allowed exception.** A removed API that blocks React 19, a security boundary, or a coherent
+mechanical migration may require wider scope. Split it from feature work and retain
+per-surface evidence.
+
+**Diff/review signal.** Unrelated directories, broad formatting churn, codemod plus feature
+logic, mass memo/Effect/forwardRef deletion, framework feature adoption with no capability
+check, or a “cleanup” claim without observed defect.
+
+**Automation.**
+
+- **Now via `C-DIFF`, `C-BUILD`, and `C-GATE`:** record each command separately; none proves
+  user behavior by itself.
+- **Harness via `C-TEST`:** name the focused behavior tests for every migrated boundary.
+- **Proposed via `C-LINT` and `C-EXCEPT`:** diff-only compatibility and exception-expiry
+  checks.
+- **Manual:** classification, causal review, and whether the boundary is independently
+  testable.
+
+**False-positive risk.** Diff size is not risk by itself; generated changes and coherent
+migrations can be large. A small change can still cross several authorities. Review seams
+and evidence, not line count.
+
+## Review matrix
+
+| Rule | Signal in the diff | Automated check | Manual check | Allowed exception |
+|---|---|---|---|---|
+| `R-COMP-01` | mutation or external call during render; mixed concerns | Now: `C-BUILD` shapes only; Proposed: `C-LINT`; Harness: `C-TEST` purity scenario | Is render pure and the responsibility cohesive? | composition/framework root with a named cohesive role |
+| `R-HOOK-01` | conditional Hook; generic multi-process Hook | Proposed: `C-LINT`; Harness: `C-TEST` caller independence | Does the Hook model one stateful process? | conditional `use`; readable one-off Effect |
+| `R-STATE-01` | setter-only Effect; mirrored prop; redundant flags | Proposed: `C-LINT`; Harness: `C-TEST` prop-rerender scenario | Is there one source of truth? | explicit initial snapshot, DOM measurement |
+| `R-STATE-02` | state lifted for one child; Context for local state | Harness: `C-TEST` lifetime/reset scenario | Which lifetime and consumers own it? | URL/persistence/cross-tab/shared lifetime |
+| `R-EFFECT-01` | derivation or click outcome in Effect; missing cleanup | Proposed: `C-LINT`; Harness: `C-TEST` StrictMode lifecycle | What external system is synchronized? | browser/widget/subscription/measurement adapter |
+| `R-EVENT-01` | disabled deps; stale closure; misplaced Effect Event | Proposed: `C-LINT`; Harness: `C-TEST` no-reconnect/latest-value scenario | Is the non-reactive event split real? | documented unrepresentable external identity |
+| `R-DATA-01` | route fetch in Effect; serial waterfall; no abort | Harness: `C-TEST` B-before-A race and parallel-start assertions; Proposed: `C-LINT` report | Who owns cache, concurrency, and stale cancellation? | polling/browser-only/interaction/stream |
+| `R-ACTION-01` | drift-prone mutation flags; untested optimism | Harness: `C-TEST` mutation lifecycle; runtime warning is diagnostic only | Does Action adoption simplify existing ownership? | existing domain mutation abstraction |
+| `R-SUSPENSE-01` | Suspense around Effect fetch; no empty/error | Harness: `C-TEST` six-state matrix | Can the resource suspend, and is boundary altitude right? | correct ancestor boundary; synchronous view |
+| `R-RSC-01` | high `"use client"`; invalid prop; unsafe Server Function | Now: `C-BUILD` boundary checks; Harness: `C-TEST` authorization | Is the transitive boundary cohesive and secure? | intentional interactive composition root |
+| `R-REF-01` | new `forwardRef`; broad imperative handle | Now: `C-BUILD` types; Proposed: `C-LINT` diff restriction | Is React 18/public compatibility required? | existing/public compatibility adapter |
+| `R-MEMO-01` | trivial memo; unrelated memo removal; Compiler assumption | Proposed: `C-LINT`; pilot: `C-BUILD` + `C-TEST` + profile | Is there measured cost or identity semantics? | measured/external identity contract |
+| `R-STORE-01` | mutable singleton or subscription Effect drives render | Harness: `C-TEST` store-contract scenario | Do scope and lifetime require Context/store? | non-store external synchronization |
+| `R-COMPOSE-01` | another boolean mode; `cloneElement`/`Children` | Proposed: `C-LINT`; Now: `C-BUILD` only for modeled unions | Are variants orthogonal or separate capabilities? | finite design-system primitive/library adapter |
+| `R-ERROR-01` | JSX `try/catch`; swallowed error; no recovery | Proposed: `C-LINT`; Harness: `C-TEST` failure/retry/telemetry | Which boundary owns retry and telemetry? | correct ancestor; intentional fail-fast |
+| `R-A11Y-01` | clickable `div`; missing name/label/focus | Proposed: `C-LINT`; Harness: `C-TEST` role/keyboard/focus | Keyboard, focus, announcement, contrast | fully implemented tested custom widget |
+| `R-TEST-01` | test IDs/selectors/internal assertions/happy path only | Harness: `C-TEST`; Proposed: `C-LINT` Testing Library rules | Does the test prove user-observable behavior? | semantic query unavailable, low-level adapter |
+| `R-API-01` | removed import/API or ignored contract | Now: `C-BUILD`; Proposed: `C-LINT`; Harness: `C-TEST` behavior | Is hit executable first-party code? | isolated tested cross-major adapter only |
+| `R-MIGRATE-01` | feature plus broad cleanup/codemod churn | Now: `C-DIFF`/`C-BUILD`/`C-GATE`; Harness: `C-TEST`; Proposed: `C-EXCEPT` | Is every changed boundary necessary and evidenced? | separate coherent compatibility/security migration |
+
+## Author checklist before a PR
+
+- [ ] I named the affected rule IDs and classified any legacy finding as L1–L4.
+- [ ] Components and Hooks remain pure; each new Effect names an external system and cleanup.
+- [ ] State has one owner; render-derivable values are not synchronized through Effects.
+- [ ] Requests define concurrency, cache ownership, stale cancellation, and every user state.
+- [ ] Actions, Suspense, RSC, or Compiler claims match the current Next/build support above.
+- [ ] Client boundaries are no higher than necessary and Server Functions validate and
+      authorize untrusted input.
+- [ ] Manual memoization added or removed has semantic or measured evidence.
+- [ ] Every interactive control has semantics, accessible name, keyboard behavior, focus, and
+      feedback.
+- [ ] Tests assert user-observable outcomes and include the failure/race states introduced by
+      the change.
+- [ ] Removed React 19 APIs do not enter executable code.
+- [ ] Any exception has complete metadata and an unexpired review date.
+- [ ] I ran the narrowest relevant checks, recorded raw Actual output, and did not describe a
+      missing lint/Compiler check as green.
+
+## React reviewer checklist
+
+- [ ] Trace each changed state value to exactly one authority and event.
+- [ ] For every Effect, ask “which external system?” and verify setup/cleanup symmetry.
+- [ ] Follow request starts to find waterfalls, stale-result races, and duplicate cache owners.
+- [ ] Inspect the transitive `"use client"` boundary, not only the edited file.
+- [ ] Check pending, error, empty, retry, duplicate-submit, and optimistic rollback paths.
+- [ ] Treat memoization and Compiler claims as evidence questions, not style votes.
+- [ ] Navigate the UI by roles/names and verify keyboard/focus behavior where applicable.
+- [ ] Distinguish L1/L2/L3 from L4 before requesting legacy migration.
+- [ ] Map every blocking comment to a rule ID and an observed consequence.
+- [ ] If automation is proposed rather than present, require a manual check and honest wording.
+
+## Blocking findings
+
+A reviewer blocks when at least one of these is true:
+
+- a MUST rule is violated without an allowed, complete, unexpired exception;
+- a React 19 removed API reaches first-party executable code;
+- render has an externally visible side effect or mutates input;
+- Hook order or dependency honesty is violated;
+- duplicated state can produce a contradictory user-visible result;
+- a request race, duplicate mutation, missing authorization, or missing cleanup is reachable;
+- the change can indefinitely show loading, hide failure, or misreport success/empty;
+- an interactive path is inaccessible by keyboard or lacks an accessible name;
+- a new behavior has no test at the altitude where it can fail;
+- the PR claims ESLint, Compiler, CI, or product acceptance that the evidence did not run;
+- a broad migration mixes unrelated behavior so causal review is not possible.
+
+## Non-blocking improvements
+
+These normally remain suggestions unless evidence elevates them to a MUST consequence:
+
+- splitting a large but cohesive component;
+- replacing valid existing `forwardRef`;
+- removing existing manual memoization without a profile or semantic need;
+- converting a working controlled form to Actions;
+- moving an intentional interactive root to Server Components;
+- replacing a valid Effect-based browser integration with a library;
+- extracting a one-use custom Hook only to reduce line count;
+- replacing an accessible `fireEvent` test with user-event before the dependency is adopted;
+- formatting or naming preferences not tied to ownership, correctness, or readability;
+- speculative component libraries, stores, caches, or abstractions for hypothetical reuse.
+
+## Documented exceptions
+
+An exception is a temporary, reviewable engineering decision—not a silent lint disable.
+Place the record immediately above the suppression or exceptional boundary. Broad exceptions
+also need a tracking issue/ADR; the inline record links to it.
+
+```tsx
+/* react-standard-exception
+ * rule: R-EFFECT-01
+ * scope: MeetingCanvas browser-only recorder subscription
+ * owner: clients/terminal
+ * reason: Recorder API exposes no useSyncExternalStore-compatible snapshot.
+ * evidence: rapid mount/unmount and device-switch tests cover cleanup.
+ * tracking: Vexa-ai/vexa#<issue>
+ * review-by: 2026-09-30
+ * expires: 2026-10-31
+ */
+```
+
+Required fields are `rule`, `scope`, `owner`, `reason`, `evidence`, `tracking`, and
+`review-by`, and `expires`.
+
+- MUST exceptions are valid only where the rule explicitly lists an exception.
+- “Legacy,” “performance,” “temporary,” and “lint is wrong” are not sufficient reasons.
+- `review-by` is the next mandatory review; `expires` is the hard stop. Both are dates, not
+  “next release,” and `review-by` cannot be later than `expires`.
+- An expired exception blocks new changes in its scope until it is removed or explicitly
+  renewed with fresh evidence.
+- The exception records the designed present; resolved history remains in the issue, not in
+  permanent source commentary.
+- A future CI check SHOULD parse these blocks, validate rule IDs and dates, and fail on
+  missing or expired fields. It MUST NOT decide whether the engineering reason is sound.
+
+## Automation rollout
+
+The phases are deliberately independent. Each one has a rollback and must be green before
+the next expands enforcement.
+
+### Phase 0 — freeze an honest baseline
+
+**Entry:** this standard is reviewed against the current lockfiles and build.
+
+**Actions:**
+
+1. Record the current ESLint/Compiler absence in CI output and contributor docs.
+2. Fix or separately track existing deterministic test failures before using “all tests
+   green” as an entry criterion.
+3. Add a small script that inventories rule exceptions and removed API candidates without
+   failing CI.
+
+**Exit:** baseline output is reproducible and no proposed check is described as current.
+
+**False-positive control:** inventory output remains report-only until first-party executable
+hits are separated from docs, generated files, and compatibility declarations.
+
+**Rollback:** documentation only; remove an inaccurate claim rather than weakening a gate.
+
+### Phase 1 — explicit ESLint foundation
+
+**Entry:** compatible versions have been tested against Next `15.5.19`, TypeScript `5.9.3`,
+and Node `>=22.13`.
+
+**Actions:**
+
+1. Add direct, exact-pinned `eslint`, `eslint-config-next`, and
+   `eslint-plugin-react-hooks` dependencies to `clients/terminal`.
+2. Check in `eslint.config.mjs`; replace `next lint` with
+   `eslint . --max-warnings=0`.
+3. Make `rules-of-hooks` and `exhaustive-deps` blocking immediately.
+4. Enable `purity`, `immutability`, `set-state-in-effect`, `set-state-in-render`,
+   `error-boundaries`, and the remaining Compiler diagnostic rules as warnings first;
+   baseline existing findings by exact rule and path, never by disabling the preset globally.
+5. Run the Terminal lint script from root CI.
+
+**Exit:** new violations fail; existing warnings have owners and review dates; local and CI
+commands are identical.
+
+**False-positive control:** scope overrides to generated/config/test files and require the
+exception schema above.
+
+**Rollback:** remove the CI invocation while keeping diagnostic local lint; never insert
+blanket `eslint-disable`.
+
+### Phase 2 — TypeScript and compatibility checks
+
+**Entry:** Phase 1 is stable.
+
+**Actions:**
+
+1. Add an explicit Terminal typecheck command compatible with generated Next types, or keep
+   `next build` as the named type gate until such a command is proven on a clean checkout.
+2. Add restricted imports/syntax for R-API-01.
+3. Add a first-party source scan for React 19 removals that types may miss.
+4. Run the scan in report mode, triage false positives, then make new hits blocking.
+
+**Exit:** type and compatibility failures identify Terminal explicitly instead of relying on
+an incidental monorepo build.
+
+**False-positive control:** parse first-party imports/AST where possible, exclude generated
+and dependency code, and keep a candidate report nonblocking until every pattern has a
+reviewed positive and negative fixture.
+
+**Rollback:** return the compatibility scan to report-only; build remains the type gate.
+
+### Phase 3 — behavioral and accessibility tests
+
+**Entry:** component-test baseline is deterministic.
+
+**Actions:**
+
+1. Add exact-pinned `@testing-library/user-event`, `@testing-library/jest-dom`,
+   `eslint-plugin-testing-library`, and `eslint-plugin-jest-dom`.
+2. Add shared test setup without converting unrelated tests.
+3. For touched surfaces, add the result-state and interaction matrix from R-TEST-01.
+4. Add a pinned JSX accessibility lint policy and automated DOM accessibility checks.
+5. Keep manual keyboard, focus, announcement, and contrast checks in the PR bundle.
+
+**Exit:** user-event tests cover representative form, async, error, keyboard, and focus
+paths; new test-query violations fail CI.
+
+**False-positive control:** query and lint exceptions require the documented schema; a test
+ID exception never waives the manual accessibility check.
+
+**Rollback:** disable a noisy individual rule with a time-bounded configuration exception,
+not the entire plugin.
+
+### Phase 4 — Compiler diagnostics, then an opt-in pilot
+
+**Entry:** lint, tests, production build, and user-critical behavior are stable. Compiler
+adoption is a separate change.
+
+**Actions:**
+
+1. Run current Compiler lints without enabling compilation and triage skipped components.
+2. Pin `babel-plugin-react-compiler` exactly; do not rely on React’s runtime version.
+3. Start with annotation mode and a small tested surface. Confirm compiled output/DevTools
+   signal, production build, behavior, and representative performance.
+
+```ts
+import type { NextConfig } from "next";
+
+// ALLOY: omit the downstream Compiler pilot unless explicitly enabled.
+const alloyReactCompiler = process.env.ALLOY_REACT_COMPILER === "1";
+
+const nextConfig: NextConfig = {
+  ...(alloyReactCompiler
+    ? {
+        experimental: {
+          reactCompiler: { compilationMode: "annotation" as const },
+        },
+      }
+    : {}),
+};
+
+export default nextConfig;
+```
+
+4. If this remains an ALLOY-owned downstream change, gate it behind a documented
+   `ALLOY_REACT_COMPILER` switch: default off, enabled value explicit, rollback value off,
+   and update `docs/ALLOY-CUSTOMIZATIONS.md` in the same change. The implementation MUST
+   follow the complete checkout contract: keep disabled behavior equal to upstream, put the
+   switch at one responsible boundary, mark owned code/comments with `ALLOY:`, prefix
+   diagnostics with `[ALLOY]`, and exercise both enabled and disabled paths.
+5. Preserve existing manual memoization during the pilot. Remove it only in separately
+   measured, tested diffs.
+
+**Exit:** pilot behavior is equivalent, rollback is rehearsed, build-time cost is known, and
+Compiler coverage/skip diagnostics are observable.
+
+**False-positive control:** a skipped component is diagnostic, not automatically a release
+blocker.
+
+**Rollback:** set the opt-in switch off and restore the prior build path; no runtime data
+migration may be required.
+
+### Phase 5 — CI convergence
+
+**Entry:** each earlier phase has a green local command and an owner.
+
+**Actions:**
+
+1. CI runs install with frozen lockfiles, Terminal lint, explicit type/build, tests,
+   compatibility scan, exception-expiry scan, and repository gates.
+2. Keep fast diff checks early; run build and broader tests after them.
+3. Emit rule IDs in diagnostics so authors can navigate directly to this document.
+4. Treat focused green, build green, and full-gate green as different evidence rows.
+
+**Exit:** the matrix accurately says “Now” for each landed gate, and the documentation is
+updated in the same change.
+
+**False-positive control:** promote one diagnostic at a time only after its negative fixtures
+and existing exceptions are reviewed; do not convert a report-only scan into a global blocker.
+
+**Rollback:** disable only the faulty new gate with an owner and review date; product
+correctness gates remain intact.
+
+## Existing-code audit order
+
+Do not start with file size or memoization counts. Audit in consequence order:
+
+1. **React 19 compatibility:** removed APIs, ignored function `propTypes`/`defaultProps`,
+   legacy context/string refs, obsolete test renderers.
+2. **User-visible correctness:** contradictory state, stale Effect dependencies, uncleaned
+   subscriptions, request races, duplicate mutation, false success/loading.
+3. **Security and boundaries:** Server Function authorization, client/server imports,
+   serialization, secret-bearing props.
+4. **Accessibility:** names, semantics, keyboard, focus, feedback, dialogs.
+5. **Async resilience:** parallel data, cache ownership, loading/error/empty/retry/rollback.
+6. **Test altitude:** user behavior and failure/race coverage for the above.
+7. **Architecture risk:** over-broad client boundaries, global state, Context fan-out,
+   universal components, mixed responsibilities.
+8. **Performance:** profile first; then address measured rerenders, waterfalls, bundle
+   growth, or expensive derivation.
+9. **Optional modernization:** ref-as-prop, Actions, Suspense restructuring, and Compiler
+   pilots only where they make a current boundary safer or simpler.
+
+For each candidate record:
+
+`Expected → Actual evidence → L1/L2/L3/L4 classification → smallest safe change → focused
+check → remaining risk`.
+
+Stop a batch when evidence contradicts its premise; do not turn an audit into an
+unbounded refactor.
+
+## Primary sources
+
+React:
+
+- [React 19.2 release](https://react.dev/blog/2025/10/01/react-19-2)
+- [React versions](https://react.dev/versions)
+- [React 19 upgrade guide](https://react.dev/blog/2024/04/25/react-19-upgrade-guide)
+- [Rules of React](https://react.dev/reference/rules)
+- [Choosing the state structure](https://react.dev/learn/choosing-the-state-structure)
+- [Sharing state between components](https://react.dev/learn/sharing-state-between-components)
+- [You might not need an Effect](https://react.dev/learn/you-might-not-need-an-effect)
+- [Separating events from Effects](https://react.dev/learn/separating-events-from-effects)
+- [`useEffectEvent`](https://react.dev/reference/react/useEffectEvent)
+- [`useActionState`](https://react.dev/reference/react/useActionState),
+  [`useOptimistic`](https://react.dev/reference/react/useOptimistic), and
+  [`useTransition`](https://react.dev/reference/react/useTransition)
+- [Suspense](https://react.dev/reference/react/Suspense) and
+  [`use`](https://react.dev/reference/react/use)
+- [Server Components](https://react.dev/reference/rsc/server-components),
+  [Server Functions](https://react.dev/reference/rsc/server-functions),
+  [`"use client"`](https://react.dev/reference/rsc/use-client), and
+  [`"use server"`](https://react.dev/reference/rsc/use-server)
+- [`forwardRef`](https://react.dev/reference/react/forwardRef) and
+  [`useImperativeHandle`](https://react.dev/reference/react/useImperativeHandle)
+- [React Compiler introduction](https://react.dev/learn/react-compiler/introduction) and
+  [incremental adoption](https://react.dev/learn/react-compiler/incremental-adoption)
+- [`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore)
+- [Error Boundaries](https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary)
+- [`react-dom/test-utils` warning](https://react.dev/warnings/react-dom-test-utils)
+- [`eslint-plugin-react-hooks`](https://react.dev/reference/eslint-plugin-react-hooks)
+
+Next.js 15:
+
+- [Server and Client Components](https://nextjs.org/docs/15/app/getting-started/server-and-client-components)
+- [Updating data with Server Functions and Actions](https://nextjs.org/docs/15/app/getting-started/updating-data)
+- [Page file convention](https://nextjs.org/docs/15/app/api-reference/file-conventions/page)
+- [React Compiler configuration](https://nextjs.org/docs/15/app/api-reference/config/next-config-js/reactCompiler)
+- [Error handling](https://nextjs.org/docs/15/app/getting-started/error-handling)
+
+Testing Library:
+
+- [Guiding principles](https://testing-library.com/docs/guiding-principles/)
+- [About queries and priority](https://testing-library.com/docs/queries/about/)
+- [User-event introduction](https://testing-library.com/docs/user-event/intro/)
+- [Accessibility](https://testing-library.com/docs/dom-testing-library/api-accessibility/)

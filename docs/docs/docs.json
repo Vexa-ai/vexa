@@ -71,6 +71,7 @@
         "group": "Architecture",
         "pages": [
           "architecture/modules",
+          "architecture/react-engineering-standard",
           "architecture/execution",
           "architecture/dispatch",
           "architecture/streaming",

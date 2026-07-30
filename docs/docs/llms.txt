@@ -58,6 +58,12 @@ most coding agents).
 - [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
 - [Troubleshooting](https://docs.vexa.ai/troubleshooting.md)
 
+## Engineering standards
+
+- [React 19.2](https://docs.vexa.ai/architecture/react-engineering-standard.md): enforceable
+  rules, diff signals, tests, exceptions, and staged ESLint/Compiler adoption for
+  `clients/terminal`
+
 ## Governance (the law)
 
 - [How Vexa governs itself](https://docs.vexa.ai/governance/index.md): the full map — two constitutions, protocols, surfaces, actors

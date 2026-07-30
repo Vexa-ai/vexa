@@ -47,6 +47,13 @@ rebuild; see `src/app/mode.ts`):
 Pass it as a Docker build arg (`--build-arg NEXT_PUBLIC_TERMINAL_MODE=meetings`) or via the
 commented example on the `terminal` service in `deploy/compose/docker-compose.yml`.
 
+## React engineering standard
+
+New and touched React code follows the
+[React 19.2 engineering standard](../../docs/docs/architecture/react-engineering-standard.mdx).
+It defines rule IDs, review signals, allowed exceptions, tests, and the staged ESLint/Compiler
+adoption path for this client.
+
 ## API tokens (self-serve)
 
 The **API Tokens** left list (`src/surfaces/tokens.tsx`) lets the logged-in user list, mint
@@ -64,11 +71,13 @@ tokens; **self-serve tokens you created above are never pruned by login.**
 
 ## Isolated evaluation
 
-No test suite yet (`tests/` absent). Standalone build + typecheck:
+The focused component suite uses Vitest + jsdom + Testing Library. The production build is
+also the current Terminal TypeScript check. ESLint enforcement is not configured yet; the
+standard above records that gap instead of treating `next lint` as a working gate.
 
 ```bash
-pnpm install && pnpm build      # next build = typecheck + lint (L1/L2)
-pnpm dev                        # next dev -p 3000 — drive surfaces against a live agent-api (L4)
+pnpm --filter @vexa/terminal test
+pnpm --filter @vexa/terminal build
 ```
 
 ## Status
