@@ -73,6 +73,17 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
     return user
 
 
+async def get_current_user_for_update(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return (
+        await db.execute(
+            select(User).where(User.id == user.id).with_for_update()
+        )
+    ).scalar_one()
+
+
 # --- request/response models ---
 class UserCreate(BaseModel):
     email: str
@@ -80,18 +91,44 @@ class UserCreate(BaseModel):
     max_concurrent_bots: int = 3
 
 
+class PlatformBillingDataPatch(BaseModel):
+    updated_by_webhook: Optional[int] = Field(default=None, ge=0)
+    stripe_customer_id: Optional[str] = None
+    stripe_subscription_id: Optional[str] = None
+    stripe_tx_subscription_id: Optional[str] = None
+    stripe_payment_method_id: Optional[str] = None
+    subscription_status: Optional[str] = None
+    subscription_tier: Optional[str] = None
+    subscription_cancel_at_period_end: Optional[bool] = None
+    subscription_cancellation_date: Optional[int] = None
+    subscription_current_period_start: Optional[int] = None
+    subscription_current_period_end: Optional[int] = None
+    tx_subscription_status: Optional[str] = None
+    tx_subscription_tier: Optional[str] = None
+    tx_subscription_cancel_at_period_end: Optional[bool] = None
+    tx_subscription_cancellation_date: Optional[int] = None
+    tx_subscription_current_period_start: Optional[int] = None
+    tx_subscription_current_period_end: Optional[int] = None
+    transcription_enabled: Optional[bool] = None
+    billing_contract_version: Optional[int] = Field(default=None, ge=1)
+    billing_catalog_version: Optional[str] = None
+    pending_commitment_tier: Optional[str] = None
+    pending_commitment_effective_at: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class UserAdminPatch(BaseModel):
     max_concurrent_bots: Optional[int] = Field(default=None, ge=0)
-    data: Optional[Dict[str, Any]] = None
+    data: Optional[PlatformBillingDataPatch] = None
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def require_change(self):
-        if self.max_concurrent_bots is None and not self.data:
+        has_data = self.data is not None and bool(self.data.model_fields_set)
+        if self.max_concurrent_bots is None and not has_data:
             raise ValueError("at least one user field must be supplied")
-        if self.data and "webhook_secret" in self.data:
-            raise ValueError("webhook_secret is not admin-patchable")
         return self
 
 
@@ -302,13 +339,20 @@ def create_app() -> FastAPI:
                dependencies=[Depends(verify_admin_token)])
     async def patch_user_by_id(user_id: int, patch: UserAdminPatch,
                                db: AsyncSession = Depends(get_db)):
-        user = await db.get(User, user_id)
+        user = (
+            await db.execute(
+                select(User).where(User.id == user_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         if patch.max_concurrent_bots is not None:
             user.max_concurrent_bots = patch.max_concurrent_bots
         if patch.data:
-            user.data = {**(user.data or {}), **patch.data}
+            user.data = {
+                **(user.data or {}),
+                **patch.data.model_dump(exclude_unset=True),
+            }
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
@@ -381,7 +425,7 @@ def create_app() -> FastAPI:
     # --- user tier: webhook self-serve (writes to user.data JSONB) ---
     @app.put("/user/webhook", response_model=UserResponse)
     async def set_user_webhook(webhook_update: WebhookUpdate,
-                               user: User = Depends(get_current_user),
+                               user: User = Depends(get_current_user_for_update),
                                db: AsyncSession = Depends(get_db)):
         from sqlalchemy.orm import attributes
         data = dict(user.data or {})
@@ -417,7 +461,7 @@ def create_app() -> FastAPI:
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     @app.put("/user/calendar")
     async def set_user_calendar(calendar_update: CalendarUpdate,
-                                user: User = Depends(get_current_user),
+                                user: User = Depends(get_current_user_for_update),
                                 db: AsyncSession = Depends(get_db)):
         """Set/clear the caller's secret ICS feed URL (+ the global auto-join default for
         imported meetings). ``ics_url: null`` disconnects the calendar. The URL is a SECRET
@@ -491,7 +535,7 @@ def create_app() -> FastAPI:
 
     @app.put("/user/models")
     async def set_user_models(update: ModelPrefsUpdate,
-                              user: User = Depends(get_current_user),
+                              user: User = Depends(get_current_user_for_update),
                               db: AsyncSession = Depends(get_db)):
         """Set the caller's model config (partial; empty string clears a field). ``api_key``
         is a SECRET — stored, never echoed in the clear."""
@@ -513,7 +557,7 @@ def create_app() -> FastAPI:
 
     @app.put("/user/transcription")
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
-                                     user: User = Depends(get_current_user),
+                                     user: User = Depends(get_current_user_for_update),
                                      db: AsyncSession = Depends(get_db)):
         """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
         await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
@@ -599,12 +643,20 @@ def create_app() -> FastAPI:
             if not hmac.compare_digest(provided, secret):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
 
-    async def _load_user(user_id: str, db: AsyncSession) -> User:
+    async def _load_user(
+        user_id: str,
+        db: AsyncSession,
+        *,
+        for_update: bool = False,
+    ) -> User:
         try:
             uid = int(user_id)
         except (TypeError, ValueError):
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
-        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        statement = select(User).where(User.id == uid)
+        if for_update:
+            statement = statement.with_for_update()
+        user = (await db.execute(statement)).scalar_one_or_none()
         if user is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
         return user
@@ -637,7 +689,11 @@ def create_app() -> FastAPI:
         from sqlalchemy.orm import attributes
 
         _check_internal(request)
-        user = await _load_user(str(payload.get("user_id", "")), db)
+        user = await _load_user(
+            str(payload.get("user_id", "")),
+            db,
+            for_update=True,
+        )
         await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"),
                          {"key": _BOOTSTRAP_ADMIN_LOCK})
         if await _admin_exists(db):
@@ -663,7 +719,7 @@ def create_app() -> FastAPI:
         """Upsert {workspace_id, role, added_at} into the user's memberships[] (idempotent per ws)."""
         _check_internal(request)
         from sqlalchemy.orm import attributes
-        user = await _load_user(user_id, db)
+        user = await _load_user(user_id, db, for_update=True)
         ws_id = payload.get("workspace_id")
         if not ws_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="workspace_id required")
@@ -684,7 +740,7 @@ def create_app() -> FastAPI:
                                 db: AsyncSession = Depends(get_db)):
         _check_internal(request)
         from sqlalchemy.orm import attributes
-        user = await _load_user(user_id, db)
+        user = await _load_user(user_id, db, for_update=True)
         data = dict(user.data or {})
         memberships = [m for m in (data.get("memberships") or []) if m.get("workspace_id") != workspace_id]
         data["memberships"] = memberships

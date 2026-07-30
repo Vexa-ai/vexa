@@ -8,10 +8,13 @@ The golden identity flow against an ephemeral Postgres, asserting the REAL admin
   invalid scope 422 → admin-tier auth enforced.
 """
 import asyncio
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from admin_api.app import db as app_db
 from admin_api.app.main import create_app
@@ -247,6 +250,8 @@ def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client
         (_admin(), {}, 422),
         (_admin(), {"max_concurrent_bots": -1}, 422),
         (_admin(), {"email": "other@vexa.ai"}, 422),
+        (_admin(), {"data": {"webhook_url": "https://attacker.invalid"}}, 422),
+        (_admin(), {"data": {"memberships": []}}, 422),
     ):
         rejected = client.patch(
             f"/admin/users/{user_id}",
@@ -269,6 +274,127 @@ def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client
     ).json()
     assert unchanged["max_concurrent_bots"] == 25
     assert unchanged["data"] == patched.json()["data"]
+
+
+def test_admin_patch_serializes_with_concurrent_foreign_data_update(
+    client,
+    pg_url,
+):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "concurrent-entitlement@vexa.ai"},
+    ).json()
+    user_id = created["id"]
+    engine = create_engine(pg_url)
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(
+            text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"),
+            {"user_id": user_id},
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                client.patch,
+                f"/admin/users/{user_id}",
+                headers=_admin(),
+                json={
+                    "max_concurrent_bots": 25,
+                    "data": {
+                        "subscription_tier": "commitment_25",
+                        "billing_contract_version": 1,
+                    },
+                },
+            )
+            waiting = False
+            deadline = time.monotonic() + 5
+            with engine.connect() as observer:
+                while time.monotonic() < deadline:
+                    waiting = bool(observer.execute(text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM pg_stat_activity "
+                        "  WHERE pid <> pg_backend_pid() "
+                        "    AND state = 'active' "
+                        "    AND wait_event_type = 'Lock' "
+                        "    AND query ILIKE '%FROM users%' "
+                        "    AND query ILIKE '%FOR UPDATE%'"
+                        ")"
+                    )).scalar_one())
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+            assert waiting, "admin patch did not acquire the row-lock contract"
+            connection.execute(
+                text(
+                    "UPDATE users "
+                    "SET data = data || CAST(:foreign_patch AS jsonb) "
+                    "WHERE id = :user_id"
+                ),
+                {
+                    "user_id": user_id,
+                    "foreign_patch": json.dumps({
+                        "webhook_url": "https://example.com/concurrent",
+                        "webhook_events": {"meeting.completed": True},
+                    }),
+                },
+            )
+            transaction.commit()
+            patched = future.result(timeout=5)
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == {
+        "webhook_url": "https://example.com/concurrent",
+        "webhook_events": {"meeting.completed": True},
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+    }
+
+
+def test_admin_patch_accepts_the_typed_platform_billing_contract(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "billing-contract@vexa.ai"},
+    ).json()
+    billing_data = {
+        "updated_by_webhook": 1_777_777_777,
+        "stripe_customer_id": "cus_test_contract",
+        "stripe_subscription_id": "sub_test_bot",
+        "stripe_tx_subscription_id": "sub_test_tx",
+        "stripe_payment_method_id": "pm_test_contract",
+        "subscription_status": "active",
+        "subscription_tier": "commitment_25",
+        "subscription_cancel_at_period_end": False,
+        "subscription_cancellation_date": None,
+        "subscription_current_period_start": 1_777_000_000,
+        "subscription_current_period_end": 1_779_000_000,
+        "tx_subscription_status": "active",
+        "tx_subscription_tier": "transcription_api",
+        "tx_subscription_cancel_at_period_end": False,
+        "tx_subscription_cancellation_date": None,
+        "tx_subscription_current_period_start": 1_777_000_000,
+        "tx_subscription_current_period_end": 1_779_000_000,
+        "transcription_enabled": True,
+        "billing_contract_version": 1,
+        "billing_catalog_version": "2026-07-28",
+        "pending_commitment_tier": None,
+        "pending_commitment_effective_at": None,
+    }
+    patched = client.patch(
+        f"/admin/users/{created['id']}",
+        headers=_admin(),
+        json={"max_concurrent_bots": 25, "data": billing_data},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == billing_data
 
 
 def test_internal_validate_requires_secret(client):
