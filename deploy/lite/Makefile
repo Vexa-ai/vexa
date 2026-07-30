@@ -4,13 +4,18 @@
 # `make lite` (from repo root) → this Makefile's `all`: provisions PostgreSQL + MinIO sidecar
 # containers, pulls/builds the all-in-one image, runs it on the host network with the process
 # backend, and verifies the front doors. The app image is lean; postgres/minio stay external.
-.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke
+.PHONY: all dev published status up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help stt-smoke
 
 # --- Paths ---
+## ALLOY: explicit provenance callers provide ROOT so Windows-created worktrees need no parse-time
+## Linux Git lookup; callers without ROOT keep the original resolver.
+ifneq ($(origin ROOT),command line)
 ROOT       := $(shell git rev-parse --show-toplevel)
+endif
 ENV_FILE   := $(ROOT)/.env
 DOCKERFILE := $(ROOT)/deploy/lite/Dockerfile.lite
 CONTEXT    := $(ROOT)
+PROVENANCE_RUNNER := $(ROOT)/deploy/lite/bin/provenance.sh
 
 # --- DockerHub / image ---
 DOCKERHUB_USER ?= vexaai
@@ -67,6 +72,9 @@ endef
 help:
 	@echo "Vexa Lite (v0.12)"
 	@echo "  make -C deploy/lite all     # provision + run + verify (this is `make lite` from root)"
+	@echo "  make -C deploy/lite dev     # ALLOY: build + run this checkout with exact provenance"
+	@echo "  make -C deploy/lite published # ALLOY: pull + run an exact published digest"
+	@echo "  make -C deploy/lite status  # ALLOY: verify source → image → container"
 	@echo "  make -C deploy/lite down    # stop + remove app + sidecars"
 	@echo "  make -C deploy/lite build   # build the image locally (tagged :dev)"
 	@echo "  make -C deploy/lite push    # multi-arch build+push, move the 'dev' tag"
@@ -79,6 +87,16 @@ all: env preflight up init-db test
 	echo "  Terminal:  http://$$HOST:$(HOST_TERMINAL_PORT)"; \
 	echo "  API docs:  http://$$HOST:$(HOST_GATEWAY_PORT)/docs"; \
 	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"
+
+## ALLOY: the lifecycle runner owns provenance sequencing; Make remains the public front door.
+dev: env preflight
+	@ALLOY_LITE_PROVENANCE=1 bash "$(PROVENANCE_RUNNER)" dev
+
+published: env preflight
+	@ALLOY_LITE_PROVENANCE=1 bash "$(PROVENANCE_RUNNER)" published
+
+status:
+	@bash "$(PROVENANCE_RUNNER)" status --format "$(FORMAT)"
 
 ## env — ensure a repo-root .env exists (seed from compose/.env if present, else a minimal template).
 env:
@@ -134,8 +152,7 @@ up: preflight
 	ALLOY_STT_CHANNEL_BACKPRESSURE=$$(alloyv ALLOY_STT_CHANNEL_BACKPRESSURE 0); \
 	ALLOY_STT_LANGUAGE_MODE=$$(alloyv ALLOY_STT_LANGUAGE_MODE configured); \
 	ALLOY_STT_TELEMETRY=$$(alloyv ALLOY_STT_TELEMETRY 0); \
-	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
-	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	$(ALLOY_LITE_IMAGE_SELECTION) \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
@@ -182,6 +199,7 @@ up: preflight
 	echo "Starting Vexa Lite ($$IMG)..."; \
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
+		$(ALLOY_LITE_CONTAINER_LABELS) \
 		--env-file $(ENV_FILE) \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
@@ -252,6 +270,19 @@ alloy_build_value = $(or $(strip $($(1))),$(strip $(shell if [ -f "$(ENV_FILE)" 
 alloy_exact_one = $(if $(filter 1,$(call alloy_build_value,$(1))),1,0)
 override ALLOY_LITE_BUNDLED_PYTHON_RESOLVED := $(call alloy_exact_one,ALLOY_LITE_BUNDLED_PYTHON)
 override ALLOY_LITE_PYTHON_STAGE := alloy-lite-python-$(ALLOY_LITE_BUNDLED_PYTHON_RESOLVED)
+# ALLOY: provenance is a deliberate lifecycle invocation, never a sticky ENV_FILE setting.
+override ALLOY_LITE_PROVENANCE_RESOLVED := $(if $(filter 1,$(strip $(ALLOY_LITE_PROVENANCE))),1,0)
+
+# ALLOY: exact opt-in replaces the legacy local-tag probe with one caller-supplied immutable image.
+ifeq ($(ALLOY_LITE_PROVENANCE_RESOLVED),1)
+ALLOY_LITE_IMAGE_SELECTION = [ -n "$(APP_IMAGE)" ] || { echo "[ALLOY] APP_IMAGE is required for provenance mode"; exit 2; }; IMG="$(APP_IMAGE)";
+ALLOY_LITE_CONTAINER_LABELS = --label ai.vexa.lite.mode=$(LITE_MODE) --label ai.vexa.lite.expected-image=$(APP_IMAGE)
+ALLOY_LITE_SOURCE_LABELS = --label org.opencontainers.image.revision=$(SOURCE_REVISION) --label ai.vexa.source.fingerprint=$(SOURCE_FINGERPRINT) --label ai.vexa.source.dirty=$(SOURCE_DIRTY)
+else
+ALLOY_LITE_IMAGE_SELECTION = IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG);
+ALLOY_LITE_CONTAINER_LABELS =
+ALLOY_LITE_SOURCE_LABELS =
+endif
 
 # ALLOY: one build-argument owner keeps local and multi-arch images on identical resolved values.
 ALLOY_LITE_BUILD_ARGS = \
@@ -263,6 +294,7 @@ ALLOY_LITE_BUILD_ARGS = \
 build: preflight
 	docker build \
 		$(ALLOY_LITE_BUILD_ARGS) \
+		$(ALLOY_LITE_SOURCE_LABELS) \
 		-f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "Built $(LOCAL_TAG)"
 
