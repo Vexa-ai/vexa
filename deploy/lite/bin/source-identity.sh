@@ -35,7 +35,9 @@ if [[ -z "$root" ]]; then
 fi
 
 root="$(cd "$root" && pwd -P)"
-git_command=(git -C "$root")
+# ALLOY: an explicit root owns repository routing; inherited gate or caller Git variables must not
+# redirect identity reads to another checkout or index.
+git_command=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$root")
 if [[ -f "$root/.git" ]]; then
   gitdir_pointer="$(sed -n 's/^gitdir: //p' "$root/.git" | head -n 1)"
   if [[ "$gitdir_pointer" =~ ^([A-Za-z]):[/\\](.*)$ ]]; then
@@ -43,7 +45,10 @@ if [[ -f "$root/.git" ]]; then
     tail="${BASH_REMATCH[2]//\\//}"
     translated_gitdir="/mnt/$drive/$tail"
     if [[ "$root" =~ ^/mnt/[A-Za-z]/ && -d "$translated_gitdir" ]]; then
-      git_command=(git "--git-dir=$translated_gitdir" "--work-tree=$root")
+      git_command=(
+        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
+        git "--git-dir=$translated_gitdir" "--work-tree=$root"
+      )
     fi
   fi
 fi

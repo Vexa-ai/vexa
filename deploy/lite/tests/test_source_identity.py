@@ -49,7 +49,12 @@ def _run(
     *args: str,
     cwd: Path,
     input_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    controlled_env = os.environ.copy() if env is None else env
+    if env is None:
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            controlled_env.pop(key, None)
     return subprocess.run(
         args,
         cwd=cwd,
@@ -57,6 +62,7 @@ def _run(
         capture_output=True,
         text=True,
         input=input_text,
+        env=controlled_env,
         timeout=15,
     )
 
@@ -113,6 +119,57 @@ class SourceIdentityTest(unittest.TestCase):
         self.assertEqual(changed["revision"], clean["revision"])
         self.assertEqual(changed["dirty"], True)
         self.assertNotEqual(changed["fingerprint"], clean["fingerprint"])
+
+    def test_explicit_root_ignores_ambient_git_routing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="vexa-lite-ambient-git-") as temp_dir:
+            redirected_repo = Path(temp_dir)
+            _run("git", "init", "-q", cwd=redirected_repo)
+            _run("git", "config", "user.name", "Vexa Test", cwd=redirected_repo)
+            _run(
+                "git",
+                "config",
+                "user.email",
+                "vexa-test@example.invalid",
+                cwd=redirected_repo,
+            )
+            (redirected_repo / "other.txt").write_text("redirected\n", encoding="utf-8")
+            _run("git", "add", "other.txt", cwd=redirected_repo)
+            committed = _run(
+                "git",
+                "commit",
+                "-q",
+                "-m",
+                "redirected fixture",
+                cwd=redirected_repo,
+            )
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+
+            redirected_env = {
+                **os.environ,
+                "GIT_DIR": str(redirected_repo / ".git"),
+                "GIT_WORK_TREE": str(redirected_repo),
+            }
+            completed = _run(
+                "bash",
+                str(SCRIPT),
+                "--root",
+                str(self.repo),
+                "--format",
+                "json",
+                cwd=self.repo,
+                env=redirected_env,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            expected_revision = _run(
+                "git",
+                "rev-parse",
+                "HEAD",
+                cwd=self.repo,
+            ).stdout.strip()
+            self.assertEqual(payload["revision"], expected_revision)
+            self.assertEqual(payload["dirty"], False)
 
     def test_staged_and_unstaged_worktree_bytes_drive_fingerprint(self) -> None:
         clean = self.identity()

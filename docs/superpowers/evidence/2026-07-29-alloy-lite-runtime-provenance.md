@@ -228,8 +228,9 @@ is pushed and no PR is opened in this session.
   mutation file returned `22/22` green under Git Bash.
 - `.pnpm-store/` is ignored by Git and the Lite Docker context. `git check-ignore` resolves the
   probe to the root `.gitignore`, and `pnpm store path` reports `F:\.pnpm-store\v11`.
-- `test_source_identity.py` currently returns `Ran 10 tests ... OK`, including staged/unstaged,
-  deleted, symlink, unmerged-index, ignored-cache, and full Windows-pointer identity cases.
+- `test_source_identity.py` currently returns `Ran 11 tests ... OK`, including staged/unstaged,
+  deleted, symlink, unmerged-index, ignored-cache, full Windows-pointer identity, and inherited
+  Git-routing isolation cases.
 - A clean Windows Git stat refresh initially made WSL `diff-files --name-only` report the entire
   tree as changed. The Windows-pointer regression reproduced the false `dirty:true` fingerprint
   (RED); source identity now uses the porcelain worktree diff and the same cross-Git case is GREEN.
@@ -241,8 +242,17 @@ is pushed and no PR is opened in this session.
   `bash -n deploy/lite/bin/provenance.sh` both returned exit code `0`.
 - `node scripts/gates.mjs lite-makefile` returned `gates green`; the mutation suite returned
   `22/22` green after exercising its intentional RED controls.
-- Five scoped local commits now contain the candidate. The real Docker witness on the exact
-  candidate and the full 35-group Linux gate have not run yet.
+- Candidate `c653f2ff7186dc749934ea29493145ee703245ba` completed published and local live Docker
+  `MATCH`, three front doors, recognizable WAV STT, preserved sidecars/volumes, and
+  source-probe `STALE → MATCH`. The first local build attempt timed out downloading CPython; the
+  endpoint returned HTTP 200 and one bounded retry succeeded.
+- Its first full Linux gate returned `33/35`: the new temp-Git tests inherited gate-level Git
+  routing, while `db-schema` ran under the image's Python 3.10 instead of the Ubuntu/CI Python 3.12
+  normalization. The former is now covered by a RED→GREEN ambient-routing regression; the latter
+  requires the next gate harness to select the already-bundled Python 3.12 venv, without changing
+  schema source or seal.
+- Six scoped local commits now contain the next candidate. Its exact live Docker witness and full
+  35-group Linux gate have not run yet.
 
 ### Verdict
 

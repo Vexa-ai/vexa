@@ -8,7 +8,8 @@
   an explicit test distro.
 - `test_source_identity.py` — temporary-Git-repository checks for clean, staged, unstaged,
   deleted, untracked, ignored-cache, executable-bit, symlink, unmerged-index, and
-  Windows-pointer source identity behavior.
+  Windows-pointer/cross-Git stat-cache source identity behavior, plus isolation from inherited
+  gate-level Git routing.
 - `test_lite_provenance.py` — Docker-free Make and fake-Docker lifecycle checks for exact source
   labels, exact opt-in, immutable image selection, source-drift and label-mismatch refusal,
   RepoDigest launch/fail-closed behavior, `MATCH`/`STALE`/`LEGACY`/`UNHEALTHY` status details,
