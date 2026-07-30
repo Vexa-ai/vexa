@@ -11,6 +11,8 @@ node_modules/
 **/.pytest_cache/
 .turbo/
 **/.turbo/
+# ALLOY: project-local pnpm stores are caches, never Lite build-context inputs.
+.pnpm-store/
 *.egg-info/
 *.log
 .DS_Store

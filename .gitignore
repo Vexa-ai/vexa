@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .turbo/
+# ALLOY: project-local pnpm stores are caches, never source identity inputs.
+.pnpm-store/
 .venv/
 __pycache__/
 *.egg-info/
