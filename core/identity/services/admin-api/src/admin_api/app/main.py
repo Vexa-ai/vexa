@@ -79,7 +79,10 @@ async def get_current_user_for_update(
 ) -> User:
     return (
         await db.execute(
-            select(User).where(User.id == user.id).with_for_update()
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one()
 

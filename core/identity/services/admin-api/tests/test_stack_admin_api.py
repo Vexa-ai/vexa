@@ -357,6 +357,99 @@ def test_admin_patch_serializes_with_concurrent_foreign_data_update(
     }
 
 
+def test_user_webhook_serializes_with_concurrent_platform_billing_update(
+    client,
+    pg_url,
+):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "concurrent-user-settings@vexa.ai"},
+    ).json()
+    user_id = created["id"]
+    token_value = client.post(
+        f"/admin/users/{user_id}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    engine = create_engine(pg_url)
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(
+            text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"),
+            {"user_id": user_id},
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                client.put,
+                "/user/webhook",
+                headers={"X-API-Key": token_value},
+                json={
+                    "webhook_url": "https://example.com/user-settings",
+                    "webhook_secret": "test-webhook-secret",
+                    "webhook_events": {"meeting.completed": True},
+                },
+            )
+            waiting = False
+            deadline = time.monotonic() + 5
+            with engine.connect() as observer:
+                while time.monotonic() < deadline:
+                    waiting = bool(observer.execute(text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM pg_stat_activity "
+                        "  WHERE pid <> pg_backend_pid() "
+                        "    AND state = 'active' "
+                        "    AND wait_event_type = 'Lock' "
+                        "    AND query ILIKE '%FROM users%' "
+                        "    AND query ILIKE '%FOR UPDATE%'"
+                        ")"
+                    )).scalar_one())
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+            assert waiting, "user webhook update did not acquire the row-lock contract"
+            connection.execute(
+                text(
+                    "UPDATE users "
+                    "SET data = data || CAST(:billing_patch AS jsonb) "
+                    "WHERE id = :user_id"
+                ),
+                {
+                    "user_id": user_id,
+                    "billing_patch": json.dumps({
+                        "subscription_tier": "commitment_25",
+                        "billing_contract_version": 1,
+                    }),
+                },
+            )
+            transaction.commit()
+            updated = future.result(timeout=5)
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"] == {
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+        "webhook_url": "https://example.com/user-settings",
+        "webhook_events": {"meeting.completed": True},
+    }
+    masked = client.get(
+        "/user/webhook",
+        headers={"X-API-Key": token_value},
+    )
+    assert masked.status_code == 200, masked.text
+    assert masked.json() == {
+        "webhook_url": "https://example.com/user-settings",
+        "webhook_secret_set": True,
+        "webhook_secret": "********cret",
+        "webhook_events": {"meeting.completed": True},
+    }
+
+
 def test_admin_patch_accepts_the_typed_platform_billing_contract(client):
     created = client.post(
         "/admin/users",
