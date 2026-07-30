@@ -6,6 +6,14 @@
   Whisper Python health override is exact-opt-in and preserves the complete upstream argv when
   disabled. On Windows it uses the default WSL distro; set `ALLOY_LITE_TEST_WSL_DISTRO` to select
   an explicit test distro.
+- `test_source_identity.py` — temporary-Git-repository checks for clean, staged, unstaged,
+  deleted, untracked, ignored-cache, executable-bit, symlink, unmerged-index, and
+  Windows-pointer source identity behavior.
+- `test_lite_provenance.py` — Docker-free Make and fake-Docker lifecycle checks for exact source
+  labels, exact opt-in, immutable image selection, source-drift and label-mismatch refusal,
+  RepoDigest launch/fail-closed behavior, `MATCH`/`STALE`/`LEGACY`/`UNHEALTHY` status details,
+  stopped or missing containers, volume/image-preserving down commands, and disabled negative
+  controls. These tests do not claim a live Docker runtime.
 
 ## Published-image smoke tests
 

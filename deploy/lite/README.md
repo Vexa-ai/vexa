@@ -22,10 +22,55 @@ From the repo root:
 make lite
 ```
 
-Provisions a PostgreSQL + MinIO sidecar, pulls/builds the lite image, starts everything on the
-host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
+Provisions PostgreSQL + MinIO sidecars, uses a local `vexa-lite:dev` image when one already exists
+or the selected published image otherwise, starts everything on the dedicated Lite network, and
+probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
+
+### Source-bound local development (ALLOY opt-in)
+
+Ordinary `make lite` retains the upstream-compatible image-selection path described above. To
+guarantee that the running app was built from the current checkout — including tracked edits and
+non-ignored untracked files — use the explicit development path instead:
+
+```bash
+make lite-dev
+make lite-status
+make lite-status FORMAT=json
+```
+
+`lite-dev` computes the full Git SHA, dirty state, and a stable fingerprint of the current source;
+stamps them into a uniquely tagged image; computes the fingerprint again after the build; and
+refuses to launch if the source changed during that interval. It then verifies the image labels
+and starts `vexa-lite` from that exact image ID. `lite-status` compares the current source, image
+labels, expected image, running image ID, container ID, and health. It exits nonzero for `STALE`,
+`LEGACY`, or `UNHEALTHY`; JSON is the machine-readable source of truth.
+
+To run a published build without mutable-tag ambiguity:
+
+```bash
+make lite-published
+```
+
+That command pulls the selected `IMAGE_TAG`, resolves its immutable RepoDigest, and launches that
+digest. Both provenance commands always replace the app container. The current Lite lifecycle
+keeps already-running PostgreSQL, MinIO, and optional Whisper sidecars; declarative sidecar
+convergence is a separate follow-up. `make lite-down` removes the exact Lite containers and network
+but preserves volumes and images.
+
+The provenance switch is deliberate Make/ambient configuration, not a persistent `.env` entry:
+only exact `ALLOY_LITE_PROVENANCE=1` or the explicit `lite-dev` / `lite-published` targets enable
+it. Unset, `0`, another value, or a same-named `.env` line leaves ordinary `make lite` unchanged.
+
+Run from Ubuntu WSL without a hidden keepalive:
+
+```bash
+wsl.exe -d Ubuntu --cd /mnt/f/vexa -- make lite-dev
+```
+
+Docker/WSL availability is an external prerequisite. If the invoking WSL process exits, Docker
+must remain available independently; diagnose WSL lifetime separately from Vexa.
 
 ### Transcripts with no token and no GPU — `LOCAL_STT=1`
 
@@ -232,9 +277,10 @@ When the flag is disabled, Meeting API and Gateway do not register the telemetry
 Terminal keeps the upstream `reset layout` footer without creating a telemetry hook, subscription,
 timer, or request.
 
-Focused source and contract checks do not prove that a currently running image matches this source.
-A clean Dockerfile build, image/source provenance check, disposable-Redis lanes, and real Google
-Meet multilingual and queue-recovery acceptance remain separate evidence gates.
+Focused source and contract checks prove the provenance mechanism but not a particular live
+runtime. `make lite-status` is the runtime check for the current source → image → container chain.
+A clean Dockerfile build, disposable-Redis lanes, and real Google Meet multilingual and
+queue-recovery acceptance remain separate evidence gates.
 
 ## Lite vs. Compose
 

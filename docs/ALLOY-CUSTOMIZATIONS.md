@@ -140,6 +140,30 @@ path for every customization.
   exact `1` to the bundled stage for both local and multi-architecture builds; all other values
   resolve to the upstream stage.
 
+### `ALLOY_LITE_PROVENANCE`
+
+- **Purpose:** bind a local source tree to the exact Lite image and app container that are running.
+- **Default:** `0` or unset.
+- **Enabled behavior (`1` exactly):** require a caller-supplied immutable `APP_IMAGE` for the Lite
+  `up` boundary instead of probing the mutable legacy `vexa-lite:dev` tag. The explicit
+  `make lite-dev` front door calculates the full Git SHA, dirty state, and stable tracked plus
+  non-ignored-untracked source fingerprint before and after the build; refuses launch on drift;
+  labels the uniquely tagged image; verifies those labels; and launches its exact image ID.
+  `make lite-published` pulls the selected published tag and launches its RepoDigest.
+- **Status contract:** `make lite-status` compares current source identity, image labels, expected
+  image, actual image ID, app container ID, and health. Human output and `FORMAT=json` report
+  `MATCH`, `STALE`, `LEGACY`, or `UNHEALTHY`; only `MATCH` exits zero.
+- **Disabled/rollback behavior:** unset, `0`, or another value preserves ordinary `make lite`,
+  including its existing local `vexa-lite:dev` precedence. Use that target to roll back.
+- **Activation lifecycle:** use `make lite-dev` or `make lite-published`; both pass the exact opt-in
+  explicitly and always replace only the app container. The current PostgreSQL, MinIO, and optional
+  Whisper preservation behavior is unchanged in this phase.
+- **Scope:** Lite source/image/container provenance and app launch only. No API schema, Terminal UI,
+  STT processing, datastore, model, volume, or image-deletion behavior changes.
+- **Configuration boundary:** deliberate Make/ambient configuration only. A same-named `ENV_FILE`
+  entry cannot enable the mode, preventing a sticky `.env` value from changing ordinary
+  `make lite`.
+
 ### `ALLOY_STT_HEALTHCHECK`
 
 - **Purpose:** correct the bundled third-party Whisper image's unusable `curl` self-probe for a
