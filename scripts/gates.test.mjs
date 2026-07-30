@@ -158,6 +158,18 @@ test("lite-makefile RED: a changed local-Whisper healthcheck token is rejected",
   assert.match(r.out, /health-retries=30|test_local_stt_healthcheck/);
 });
 
+test("lite-makefile RED: a broken Lite provenance label is rejected", () => {
+  const r = withEdited(
+    LITE_MAKEFILE,
+    "--label ai.vexa.lite.mode=$(LITE_MODE)",
+    "--label ai.vexa.lite.mode=broken",
+    () => runGate("lite-makefile"),
+  );
+  assert.equal(r.green, false,
+    "the provenance generated-command regression is not enforced — a stale identity path reached green");
+  assert.match(r.out, /ai\.vexa\.lite\.mode|test_lite_provenance/);
+});
+
 // ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
 
 test("runtime-parity vacuity: the committed tree (all surfaces on Valkey 8) is green", () => {
@@ -251,8 +263,9 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
 
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
-  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final";
-  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final", inject,
+  const finalStage = "FROM lite-admin-venv AS final";
+  const inject = `RUN apt install -y redis-server\n${finalStage}`;
+  const r = withEdited(LITE, finalStage, inject,
     () => runGate("runtime-parity"));
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);

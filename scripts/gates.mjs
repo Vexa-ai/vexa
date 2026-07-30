@@ -1228,23 +1228,30 @@ function gateLiteMakefile() {
     cont = recipe && line.replace(/\s+$/, "").endsWith("\\");
   }
   if (errs.length) return fail(["lite-makefile (#581, the empty-$IMG class):", ...errs.map((e) => "   " + e)]);
-  const healthcheckTest = join(ROOT, "deploy", "lite", "tests", "test_local_stt_healthcheck.py");
-  if (!existsSync(healthcheckTest))
-    return fail(["gate:lite-makefile — missing deploy/lite/tests/test_local_stt_healthcheck.py"]);
-  try {
-    execFileSync(
-      process.platform === "win32" ? "python" : "python3",
-      [healthcheckTest],
-      { cwd: ROOT, encoding: "utf8", stdio: "pipe", timeout: 55_000 },
-    );
-  } catch (error) {
-    const output = `${error.stdout || ""}${error.stderr || ""}`.trim();
-    return fail([
-      "gate:lite-makefile — local STT generated-command regression failed:",
-      ...output.split(/\r?\n/).map((line) => "   " + line),
-    ]);
+  const behaviorTests = [
+    "test_local_stt_healthcheck.py",
+    "test_source_identity.py",
+    "test_lite_provenance.py",
+  ].map((name) => join(ROOT, "deploy", "lite", "tests", name));
+  const missing = behaviorTests.filter((testPath) => !existsSync(testPath));
+  if (missing.length)
+    return fail(missing.map((testPath) => `gate:lite-makefile — missing ${rel(testPath)}`));
+  for (const testPath of behaviorTests) {
+    try {
+      execFileSync(
+        process.platform === "win32" ? "python" : "python3",
+        [testPath],
+        { cwd: ROOT, encoding: "utf8", stdio: "pipe", timeout: 65_000 },
+      );
+    } catch (error) {
+      const output = `${error.stdout || ""}${error.stderr || ""}`.trim();
+      return fail([
+        `gate:lite-makefile — ${rel(testPath)} failed:`,
+        ...output.split(/\r?\n/).map((line) => "   " + line),
+      ]);
+    }
   }
-  console.log("  ✓ gate:lite-makefile — continued recipes and local STT generated command");
+  console.log("  ✓ gate:lite-makefile — continued recipes, local STT, and Lite provenance");
   return true;
 }
 
