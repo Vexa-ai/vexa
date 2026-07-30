@@ -228,6 +228,7 @@ class SourceIdentityTest(unittest.TestCase):
             _run("git", "init", "-q", cwd=primary)
             _run("git", "config", "user.name", "Vexa Test", cwd=primary)
             _run("git", "config", "user.email", "vexa-test@example.invalid", cwd=primary)
+            _run("git", "config", "core.filemode", "false", cwd=primary)
             (primary / "app.txt").write_text("alpha\n", encoding="utf-8")
             _run("git", "add", "app.txt", cwd=primary)
             committed = _run("git", "commit", "-q", "-m", "fixture", cwd=primary)
@@ -244,8 +245,7 @@ class SourceIdentityTest(unittest.TestCase):
             )
             self.assertEqual(added.returncode, 0, added.stderr)
 
-            (linked / "app.txt").write_text("beta\n", encoding="utf-8")
-            posix_completed = _run(
+            posix_clean_completed = _run(
                 "bash",
                 str(SCRIPT),
                 "--root",
@@ -254,8 +254,12 @@ class SourceIdentityTest(unittest.TestCase):
                 "json",
                 cwd=linked,
             )
-            self.assertEqual(posix_completed.returncode, 0, posix_completed.stderr)
-            posix_payload = json.loads(posix_completed.stdout)
+            self.assertEqual(
+                posix_clean_completed.returncode,
+                0,
+                posix_clean_completed.stderr,
+            )
+            posix_clean = json.loads(posix_clean_completed.stdout)
 
             gitdir = (linked / ".git").read_text(encoding="utf-8").strip().removeprefix("gitdir: ")
             match = re.match(r"^/mnt/([a-z])/(.*)$", gitdir)
@@ -266,7 +270,36 @@ class SourceIdentityTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            completed = _run(
+            git_exe = next(
+                (
+                    candidate
+                    for candidate in (
+                        Path("/mnt/c/Git/bin/git.exe"),
+                        Path("/mnt/c/Program Files/Git/cmd/git.exe"),
+                    )
+                    if candidate.exists()
+                ),
+                None,
+            )
+            if git_exe is None:
+                self.skipTest("Windows Git is unavailable for cross-Git stat-cache coverage")
+            linked_match = re.match(r"^/mnt/([a-z])/(.*)$", str(linked.resolve()))
+            self.assertIsNotNone(linked_match, str(linked))
+            linked_drive, linked_tail = linked_match.groups()
+            linked_tail = linked_tail.replace("/", "\\")
+            linked_windows = f"{linked_drive.upper()}:\\{linked_tail}"
+            refreshed = _run(
+                str(git_exe),
+                "-C",
+                linked_windows,
+                "status",
+                "--short",
+                cwd=linked,
+            )
+            self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+            self.assertEqual(refreshed.stdout, "")
+
+            windows_clean_completed = _run(
                 "bash",
                 str(SCRIPT),
                 "--root",
@@ -275,12 +308,38 @@ class SourceIdentityTest(unittest.TestCase):
                 "json",
                 cwd=linked,
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            windows_payload = json.loads(completed.stdout)
+            self.assertEqual(
+                windows_clean_completed.returncode,
+                0,
+                windows_clean_completed.stderr,
+            )
+            windows_clean = json.loads(windows_clean_completed.stdout)
+            self.assertEqual(windows_clean, posix_clean)
+            self.assertEqual(windows_clean["dirty"], False)
+
+            (linked / "app.txt").write_text("beta\n", encoding="utf-8")
+            windows_dirty_completed = _run(
+                "bash",
+                str(SCRIPT),
+                "--root",
+                str(linked),
+                "--format",
+                "json",
+                cwd=linked,
+            )
+            self.assertEqual(
+                windows_dirty_completed.returncode,
+                0,
+                windows_dirty_completed.stderr,
+            )
+            windows_dirty = json.loads(windows_dirty_completed.stdout)
             revision = _run("git", "rev-parse", "HEAD", cwd=primary).stdout.strip()
-            self.assertEqual(posix_payload["revision"], revision)
-            self.assertEqual(posix_payload["dirty"], True)
-            self.assertEqual(windows_payload, posix_payload)
+            self.assertEqual(windows_dirty["revision"], revision)
+            self.assertEqual(windows_dirty["dirty"], True)
+            self.assertNotEqual(
+                windows_dirty["fingerprint"],
+                windows_clean["fingerprint"],
+            )
 
 
 if __name__ == "__main__":

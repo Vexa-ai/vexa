@@ -70,7 +70,9 @@ done < <("${git_command[@]}" ls-files -s -z)
 while IFS= read -r -d '' path; do
   changed_tracked["$path"]=1
   dirty=true
-done < <("${git_command[@]}" diff-files --name-only -z)
+# ALLOY: porcelain diff verifies bytes/modes; diff-files --name-only can expose only a
+# cross-Git stat-cache mismatch after Windows Git touches an index consumed from WSL.
+done < <("${git_command[@]}" diff --no-ext-diff --name-only -z --)
 if ! "${git_command[@]}" diff-index --cached --quiet HEAD --; then
   dirty=true
 fi

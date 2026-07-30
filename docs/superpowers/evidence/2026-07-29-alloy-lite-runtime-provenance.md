@@ -230,6 +230,9 @@ is pushed and no PR is opened in this session.
   probe to the root `.gitignore`, and `pnpm store path` reports `F:\.pnpm-store\v11`.
 - `test_source_identity.py` currently returns `Ran 10 tests ... OK`, including staged/unstaged,
   deleted, symlink, unmerged-index, ignored-cache, and full Windows-pointer identity cases.
+- A clean Windows Git stat refresh initially made WSL `diff-files --name-only` report the entire
+  tree as changed. The Windows-pointer regression reproduced the false `dirty:true` fingerprint
+  (RED); source identity now uses the porcelain worktree diff and the same cross-Git case is GREEN.
 - `test_lite_provenance.py` currently returns `Ran 21 tests ... OK`, including exact opt-in,
   missing `APP_IMAGE`, image-label mismatch, missing RepoDigest, every status verdict, missing and
   stopped containers, positive JSON details, source drift before launch, and `[ALLOY]`-prefixed
@@ -238,7 +241,7 @@ is pushed and no PR is opened in this session.
   `bash -n deploy/lite/bin/provenance.sh` both returned exit code `0`.
 - `node scripts/gates.mjs lite-makefile` returned `gates green`; the mutation suite returned
   `22/22` green after exercising its intentional RED controls.
-- Four scoped local commits now contain the candidate. The real Docker witness on the exact
+- Five scoped local commits now contain the candidate. The real Docker witness on the exact
   candidate and the full 35-group Linux gate have not run yet.
 
 ### Verdict
