@@ -45,6 +45,32 @@ def _message(meeting_id: int, segments: list[dict]) -> dict:
     })}
 
 
+def _retract_message(meeting_id: int, segment_ids: list) -> dict:
+    """A decoded ``transcript_retract`` stream message (the bot withdrawing superseded drafts)."""
+    return {"payload": json.dumps({
+        "type": "transcript_retract", "meeting_id": str(meeting_id), "segment_ids": segment_ids,
+    })}
+
+
+async def test_ingest_retract_deletes_drafts_and_publishes(store, bus):
+    # A turn: one confirmed segment + one still-pending draft.
+    await ingest(store, bus, _message(1, [
+        {"segment_id": "turn:1:0", "start": 1.0, "end": 2.0, "text": "keep me", "language": "en",
+         "speaker": "Alice", "completed": True},
+        {"segment_id": "turn:1:p0", "start": 2.0, "end": 3.0, "text": "stale draft", "language": "en",
+         "speaker": "Speaker", "completed": False},
+    ]))
+    # The draft is superseded/over-extended → the bot retracts it.
+    n = await ingest(store, bus, _retract_message(1, ["turn:1:p0"]))
+    assert n == 0  # a retract persists no segments
+    texts = [s["text"] for s in (await store.get_transcript(7, "google_meet", "abc-defg-hij"))["segments"]]
+    assert "keep me" in texts        # the confirmed segment survives
+    assert "stale draft" not in texts  # the retracted draft is gone from the durable store
+    # a live retract was published on the mutable channel so the terminal drops it in place
+    retracts = [json.loads(raw) for _ch, raw in bus.published if json.loads(raw).get("type") == "transcript_retract"]
+    assert retracts and retracts[0]["segment_ids"] == ["turn:1:p0"]
+
+
 async def test_ingest_persists_and_is_readable(store, bus):
     n = await ingest(store, bus, _message(1, [
         {"segment_id": "ch-0:1:a", "start": 1.0, "end": 2.5, "text": "Hello", "language": "en",

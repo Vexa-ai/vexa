@@ -496,6 +496,19 @@ class InMemoryTranscriptStore:
             return
         self._row_or_placeholder(meeting_id)["segments"][segment["segment_id"]] = segment
 
+    async def delete_segments(self, meeting_id, segment_ids) -> None:
+        ids = [str(s) for s in (segment_ids or []) if s]
+        if not ids:
+            return
+        if self._redis is not None:
+            from .db_writer import segments_hash_key
+
+            await self._redis.hdel(segments_hash_key(meeting_id), *ids)
+            return
+        segs = self._row_or_placeholder(meeting_id)["segments"]
+        for sid in ids:
+            segs.pop(sid, None)
+
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink (the dict stands in for the ``transcriptions`` table):
         upsert by ``segment_id`` — idempotent, a re-flush updates in place."""

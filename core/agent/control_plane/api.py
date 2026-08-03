@@ -1865,6 +1865,13 @@ def create_app(
                             "completed": seg.get("completed", True),
                             "id": seg.get("segment_id")}, cursor())
 
+            def retract_event(payload):
+                """A `retract` marker (the collector withdrew superseded/over-extended pending drafts) →
+                a `retract` SSE event so the terminal drops those segment ids from the live view."""
+                ids = payload.get("segment_ids") or []
+                if ids:
+                    yield ({"type": "retract", "segment_ids": ids}, cursor())
+
             def note_events(entry_fields):
                 """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
                 (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
@@ -1888,6 +1895,9 @@ def create_app(
                         ending = True
                         ending_at = _time.monotonic()
                         last.pop(tkey, None)
+                        continue
+                    if payload.get("type") == "retract":
+                        yield from retract_event(payload)
                         continue
                     # A real segment AFTER a session_end in the replay tail means a NEW session resumed
                     # on this reused meeting-row stream (tc:meeting:{id} is shared across a meeting's
@@ -1958,6 +1968,9 @@ def create_app(
                                 ending = False
                             if ptype == "session_start":
                                 continue                 # marker only — nothing to render
+                            if ptype == "retract":
+                                yield from retract_event(payload)
+                                continue
                             yield from seg_events(payload)
                         elif stream == pkey:
                             yield from note_events(fields)
