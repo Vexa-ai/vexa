@@ -103,6 +103,12 @@ class TranscriptStore(Protocol):
         persistence)."""
         ...
 
+    async def delete_segments(self, meeting_id: int, segment_ids: list) -> None:
+        """Withdraw retracted drafts by ``segment_id``: drop them from the live segments hash (before an
+        un-flushed draft reaches Postgres) AND delete any already-flushed rows. Idempotent — a missing id
+        is a no-op. The mixed lane's full-replace pending tail leaves stale drafts otherwise."""
+        ...
+
     async def connect_doc(
         self, user_id: int, platform: str, native_meeting_id: str, doc: dict
     ) -> Optional[list[dict]]:
