@@ -64,7 +64,20 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     await client.publish(channel, msg);
   }
 
-  return { publish };
+  /** Withdraw previously-published segments by id (a superseded/over-extended pending draft). Rides the
+   *  SAME durable stream as `publish` so it's ordered with the segments it retracts — the collector
+   *  deletes those rows and forwards a `retract` marker; the mutable channel carries it live too. */
+  async function retract(segmentIds: string[]): Promise<void> {
+    if (segmentIds.length === 0) return;
+    const payload = JSON.stringify({
+      type: 'transcript_retract', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segment_ids: segmentIds,
+    });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    const msg = JSON.stringify({ type: 'transcript_retract', meeting: { id: meetingId }, segment_ids: segmentIds });
+    await client.publish(channel, msg);
+  }
+
+  return { publish, retract };
 }
 
 /** A live transcript client that also exposes connect/quit so the composition root can
