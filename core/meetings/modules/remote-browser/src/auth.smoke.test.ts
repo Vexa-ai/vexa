@@ -39,6 +39,14 @@ check(authArgs.includes('--disable-blink-features=AutomationControlled'),
 check(!authArgs.includes('--incognito'),
   'authenticated args must NOT be incognito (wipes stored cookies)');
 check(authArgs.includes('--no-sandbox'), 'authenticated args must include --no-sandbox (container)');
+check(
+  authArgs.includes('--use-file-for-fake-video-capture=/tmp/blank-camera.y4m'),
+  'authenticated args must point the fake camera at the entrypoint-generated blank y4m (#998)'
+);
+check(
+  !authArgs.some((a) => a.includes('--use-file-for-fake-video-capture=/dev/null')),
+  'authenticated args must NOT point the fake camera at /dev/null (undecodable — permanent "Camera not found" toast on Meet)'
+);
 
 const sessionArgs = getBrowserSessionArgs();
 for (const bad of FORBIDDEN) {

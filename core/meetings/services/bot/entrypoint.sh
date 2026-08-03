@@ -35,6 +35,16 @@ pactl set-default-source virtual_mic 2>/dev/null || true
 pactl set-sink-mute tts_sink 1 2>/dev/null || true
 pactl set-source-mute virtual_mic 1 2>/dev/null || true
 
+# A DECODABLE fake camera. --use-file-for-fake-video-capture must point at a real y4m;
+# /dev/null makes Chromium register a camera it cannot decode, so Google Meet shows a permanent
+# "Camera not found" toast over the meeting stage. One black frame is enough: the bot turns its
+# camera off at join, so this is never published.
+BLANK_CAM=/tmp/blank-camera.y4m
+if [ ! -s "$BLANK_CAM" ]; then
+  ffmpeg -y -loglevel error -f lavfi -i color=c=black:s=640x360:d=1 -pix_fmt yuv420p \
+    -frames:v 1 "$BLANK_CAM" || echo "[entrypoint] WARNING: blank camera source not generated"
+fi
+
 # Run the worker from its package dir so the schema path (src→../../../contracts)
 # and the pnpm-linked workspace deps resolve. Always emit start + exit breadcrumbs
 # so an instant crash is never silent in container stdout.

@@ -19,6 +19,19 @@ console.log("\n=== 1. Default pin: en-US ===");
   assert(args.includes("--accept-lang=en-US,en"), "getJoinBrowserArgs() carries --accept-lang=en-US,en by default");
 }
 
+console.log("\n=== 1b. Fake camera source is decodable, not /dev/null (#998) ===");
+{
+  const args = getJoinBrowserArgs();
+  assert(
+    args.includes("--use-file-for-fake-video-capture=/tmp/blank-camera.y4m"),
+    "getJoinBrowserArgs() points the fake camera at the entrypoint-generated blank y4m"
+  );
+  assert(
+    !args.some((a) => a.includes("--use-file-for-fake-video-capture=/dev/null")),
+    "getJoinBrowserArgs() must NOT point the fake camera at /dev/null (undecodable — permanent 'Camera not found' toast on Meet)"
+  );
+}
+
 console.log("\n=== 2. Negative control: the knob really drives it (A2) ===");
 {
   process.env.BOT_UI_LOCALE = "hu-HU";

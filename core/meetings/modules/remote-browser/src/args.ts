@@ -38,7 +38,10 @@ export function getAuthenticatedBrowserArgs(): string[] {
     '--disable-site-isolation-trials',
     '--in-process-gpu',
     '--use-fake-ui-for-media-stream',
-    '--use-file-for-fake-video-capture=/dev/null',
+    // Must point at a real, decodable y4m — /dev/null registers a camera Chromium can't decode,
+    // so Google Meet shows a permanent "Camera not found" toast over the meeting stage (#998).
+    // The entrypoint generates this file.
+    '--use-file-for-fake-video-capture=/tmp/blank-camera.y4m',
     '--disable-features=VizDisplayCompositor',
     '--password-store=basic',
   ];

@@ -14,7 +14,21 @@
  */
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { existsSync, writeFileSync } from "fs";
 import { joinMeeting, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, getJoinBrowserArgs } from "../src/index";
+
+// The fake camera must point at a DECODABLE y4m — /dev/null registers a camera Chromium can
+// never read frames from, and Google Meet shows a permanent "Camera not found" toast over the
+// meeting stage (#998). The bot image generates this file in its entrypoint (ffmpeg); the debug
+// image carries no ffmpeg, so write the one black 640x360 yuv420p frame directly.
+const BLANK_CAM = "/tmp/blank-camera.y4m";
+if (!existsSync(BLANK_CAM)) {
+  const w = 640, h = 360;
+  const header = Buffer.from(`YUV4MPEG2 W${w} H${h} F30:1 Ip A1:1 C420jpeg\nFRAME\n`, "ascii");
+  const luma = Buffer.alloc(w * h, 0);
+  const chroma = Buffer.alloc((w * h) / 2, 128);
+  writeFileSync(BLANK_CAM, Buffer.concat([header, luma, chroma]));
+}
 
 
 if (process.platform !== "linux" || !process.env.DISPLAY) {
@@ -56,7 +70,7 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
       "--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled",
       "--disable-infobars", "--disable-gpu", "--disable-features=IsolateOrigins,site-per-process",
       "--disable-site-isolation-trials", "--in-process-gpu", "--use-fake-ui-for-media-stream",
-      "--use-file-for-fake-video-capture=/dev/null", "--disable-features=VizDisplayCompositor",
+      "--use-file-for-fake-video-capture=/tmp/blank-camera.y4m", "--disable-features=VizDisplayCompositor",
       "--password-store=basic", "--remote-debugging-port=9222",
     ];
     const ctx = await chromium.launchPersistentContext(AUTH_PROFILE, {

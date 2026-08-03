@@ -64,7 +64,12 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   // Start AudioContexts in 'running', not 'suspended' — the capture taps remote participant audio
   // via createMediaStreamSource; without this the worklet never fires and no PCM flows. (L4.)
   "--autoplay-policy=no-user-gesture-required",
-  "--use-file-for-fake-video-capture=/dev/null",
+  // Must point at a real, decodable y4m — /dev/null registers a camera Chromium can't decode,
+  // so Google Meet shows a permanent "Camera not found" toast over the meeting stage (#998).
+  // The entrypoint generates this file. Do NOT switch to --use-fake-device-for-media-stream:
+  // that also fakes the microphone, displacing the tts_sink→virtual_mic PulseAudio chain the
+  // speak path depends on.
+  "--use-file-for-fake-video-capture=/tmp/blank-camera.y4m",
   "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",
   "--disable-site-isolation-trials",
