@@ -294,7 +294,30 @@ def build_router(
         user_id = _resolve_user_id(x_user_id)
         if calendar_sync_now is None:
             raise HTTPException(status_code=503, detail="calendar sync is not available")
-        stamp = await calendar_sync_now(user_id)
+        from ..calendar_sync import (
+            CALENDAR_CONFIG_UNAVAILABLE_DETAIL,
+            CalendarConfigDiscoveryError,
+        )
+
+        try:
+            stamp = await calendar_sync_now(user_id)
+        except CalendarConfigDiscoveryError as exc:
+            log_event(
+                "calendar_config_discovery_failed",
+                audience="system",
+                level="warning",
+                span="calendar.sync.discovery",
+                fields={"source": exc.source, "reason": exc.kind.value},
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": CALENDAR_CONFIG_UNAVAILABLE_DETAIL,
+                    "code": "calendar_config_discovery_unavailable",
+                    "retryable": True,
+                },
+                headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         if stamp is None:
             raise HTTPException(status_code=404, detail="no calendar feed connected")
         return stamp

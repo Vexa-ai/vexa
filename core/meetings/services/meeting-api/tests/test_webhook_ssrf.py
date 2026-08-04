@@ -32,6 +32,8 @@ _PUBLIC = lambda host: ["93.184.216.34"]    # noqa: E731 — a public IP
         "http://192.168.1.10/hook",        # private
         "http://169.254.169.254/latest",   # cloud metadata (link-local)
         "https://[::1]/hook",              # ipv6 loopback
+        "https://[::ffff:127.0.0.1]/hook", # IPv4-mapped IPv6 loopback
+        "https://[::ffff:169.254.169.254]/", # IPv4-mapped cloud metadata
         "http://redis/hook",               # internal Docker service
         "http://meeting-api/internal",     # internal Docker service
         "http://metadata.google.internal/", # cloud metadata hostname
