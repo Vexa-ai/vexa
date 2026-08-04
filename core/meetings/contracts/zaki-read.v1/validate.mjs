@@ -11,7 +11,29 @@ const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema(schema);
 
+// A collection page carries one order: `updated_at` descending, tie-broken by `id` descending.
+// A consumer refuses the whole envelope when the update clock rises, so the order is contract.
+function pageOrderErrors(items) {
+  if (!Array.isArray(items)) return [];
+
+  const errors = [];
+  for (const [index, item] of items.entries()) {
+    if (index === 0) continue;
+    const prior = items[index - 1];
+    const updated = Date.parse(item.updated_at);
+    const priorUpdated = Date.parse(prior.updated_at);
+    if (!Number.isFinite(updated) || !Number.isFinite(priorUpdated)) continue;
+    if (updated > priorUpdated) {
+      errors.push(`item ${index} rises in updated_at above the preceding item`);
+    } else if (updated === priorUpdated && item.id > prior.id) {
+      errors.push(`item ${index} breaks the id-descending tie order`);
+    }
+  }
+  return errors;
+}
+
 function semanticErrors(shape, data) {
+  if (shape === "IndexResponse") return pageOrderErrors(data?.items);
   if (shape !== "ItemResponse" || data?.item?.kind !== "transcript") return [];
   const turns = data.item.content?.turns;
   if (!Array.isArray(turns)) return [];

@@ -26,6 +26,20 @@ metadata only. Item responses contain one bounded content variant. Every success
 `{items|item, truncated, next_cursor?}` envelope. Cursors are opaque, stable for the underlying
 snapshot, and continue without overlap.
 
+## Collection ordering
+
+`/index` and `/search` return one order: `updated_at` descending, tie-broken by `id` descending
+(code-point order of the identifier). A cursor continues the same sorted snapshot, so `updated_at`
+never rises — not between two items of a page, and not from a page to its successor.
+
+`updated_at` is also the clock `/index` filters (`since`) and pages on. `occurred_at` orders
+nothing: a summary is written after the transcript it summarises and inherits the meeting's
+`occurred_at`, so items sharing one occurrence are separated by the update clock alone.
+
+A page whose `updated_at` rises is invalid, and a consumer rejects the envelope whole rather than
+the offending item — the read fails completely, it does not degrade. `validate.mjs` enforces both
+halves of the order on every `IndexResponse` golden.
+
 ## Sealed WP-15 verdicts
 
 1. `id`, `kind`, `title` and `updated_at` remain the common item metadata. `meeting_id`,
@@ -67,5 +81,5 @@ snapshot, and continue without overlap.
   excluded records cannot influence totals, page sizes or cursors.
 
 Goldens under `golden/` are the executable profile. Files containing `.invalid.` are independent
-negative controls and must be rejected by `validate.mjs`; transcript turn ordering and end-before-
-start ranges are semantic checks layered after JSON Schema conformance.
+negative controls and must be rejected by `validate.mjs`; collection page order, transcript turn
+ordering and end-before-start ranges are semantic checks layered after JSON Schema conformance.
