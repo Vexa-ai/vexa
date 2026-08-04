@@ -18,8 +18,10 @@ def test_engine_pool_kwargs_reads_env(monkeypatch):
     monkeypatch.setenv("DB_POOL_SIZE", "7")
     monkeypatch.setenv("DB_MAX_OVERFLOW", "3")
     kw = mdb.engine_pool_kwargs()
-    assert kw == {"pool_size": 7, "max_overflow": 3, "pool_pre_ping": True,
-                  "connect_args": {"server_settings": {"plan_cache_mode": "force_custom_plan"}}}
+    # Exact equality on purpose: NO connect_args/server_settings may reappear — asyncpg sends
+    # them in the startup packet and DO's managed pgbouncer fatals on plan_cache_mode there
+    # (staging pooler cutover, zaki-infra#260/#265). The #800 intent is a post-connect SET now.
+    assert kw == {"pool_size": 7, "max_overflow": 3, "pool_pre_ping": True}
 
 
 def test_engine_pool_kwargs_defaults(monkeypatch):
@@ -27,8 +29,24 @@ def test_engine_pool_kwargs_defaults(monkeypatch):
     monkeypatch.delenv("DB_POOL_SIZE", raising=False)
     monkeypatch.delenv("DB_MAX_OVERFLOW", raising=False)
     kw = mdb.engine_pool_kwargs()
-    assert kw == {"pool_size": 5, "max_overflow": 10, "pool_pre_ping": True,
-                  "connect_args": {"server_settings": {"plan_cache_mode": "force_custom_plan"}}}
+    assert kw == {"pool_size": 5, "max_overflow": 10, "pool_pre_ping": True}
+
+
+def test_force_custom_plans_is_a_plain_post_connect_set():
+    # The #800 plan-cache intent, kept: the listener issues exactly one ordinary SET through the
+    # AdaptedConnection await-bridge — never a startup parameter. No SQLAlchemy/Postgres needed.
+    executed = []
+
+    class FakeAsyncpgConn:
+        def execute(self, sql):
+            executed.append(sql)
+
+    class FakeAdapted:
+        def run_async(self, fn):
+            return fn(FakeAsyncpgConn())
+
+    mdb._force_custom_plans(FakeAdapted(), None)
+    assert executed == ["SET plan_cache_mode = force_custom_plan"]
 
 
 def test_build_engine_applies_pool(monkeypatch):
@@ -42,3 +60,8 @@ def test_build_engine_applies_pool(monkeypatch):
     engine = mdb.build_engine("postgresql+asyncpg://u:p@localhost:5432/vexa")
     assert engine.pool.size() == 7
     assert engine.pool._max_overflow == 3
+    # #800 survives the server_settings removal: the post-connect listener is registered on
+    # every engine the single seam builds.
+    from sqlalchemy import event
+
+    assert event.contains(engine.sync_engine, "connect", mdb._force_custom_plans)

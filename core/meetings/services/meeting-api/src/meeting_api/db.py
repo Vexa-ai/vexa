@@ -19,24 +19,52 @@ def engine_pool_kwargs() -> dict:
     """The pool kwargs every meeting-api ``create_async_engine`` call spreads.
 
     Deterministic (env → dict), so a unit test can assert the wiring without a live Postgres.
+
+    Deliberately carries NO ``connect_args``/``server_settings``: asyncpg sends
+    ``server_settings`` in the startup packet, and DO's managed pgbouncer (transaction mode)
+    fatals on any startup GUC outside its tracked set — ``unsupported startup parameter:
+    plan_cache_mode`` killed meeting-api's boot in the staging pooler cutover
+    (zaki-infra#260/#265). The #800 plan-cache intent lives on as a post-connect SET
+    (``_force_custom_plans`` below).
     """
     return {
         "pool_size": int(os.getenv("DB_POOL_SIZE", "5")),
         "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "10")),
         "pool_pre_ping": True,
-        # #800: every meeting-api statement arrives as an asyncpg prepared statement, and after
-        # warm-up Postgres may switch a parameterized plan to its GENERIC form. For the JSONB
-        # containment branches of list_meetings the generic plan cannot use the parameter to pick
-        # the GIN path and falls back to the backward created_at walk — re-creating at plan level
-        # exactly the storm the UNION rewrite removes at query level (observed live: sub-ms custom
-        # plans vs 100s+ generic plans on the same statement). Custom plans are forced per
-        # connection; the planning cost is noise against the queries this pool actually runs.
-        "connect_args": {"server_settings": {"plan_cache_mode": "force_custom_plan"}},
     }
+
+
+def _force_custom_plans(dbapi_connection, connection_record):
+    """Post-connect ``SET plan_cache_mode = force_custom_plan`` (#800, ex-``server_settings``).
+
+    #800: every meeting-api statement arrives as an asyncpg prepared statement, and after
+    warm-up Postgres may switch a parameterized plan to its GENERIC form. For the JSONB
+    containment branches of list_meetings the generic plan cannot use the parameter to pick
+    the GIN path and falls back to the backward created_at walk — re-creating at plan level
+    exactly the storm the UNION rewrite removes at query level (observed live: sub-ms custom
+    plans vs 100s+ generic plans on the same statement). Custom plans are forced per
+    connection; the planning cost is noise against the queries this pool actually runs.
+
+    Applied after connect — an ordinary query every pooler passes through — instead of asyncpg
+    ``server_settings``, which go in the startup packet and fatal DO's managed pgbouncer (see
+    ``engine_pool_kwargs``). Direct connections behave identically. Behind the transaction
+    pooler the SET is best-effort (no backend affinity) and also moot there: the pooled DSN
+    carries ``prepared_statement_cache_size=0``, so no prepared statement survives long enough
+    to go generic.
+
+    No SQLAlchemy import here (lazy-import discipline): ``run_async`` is the
+    ``AdaptedConnection`` bridge the asyncpg dialect hands every pool ``connect`` listener.
+    """
+    dbapi_connection.run_async(
+        lambda connection: connection.execute("SET plan_cache_mode = force_custom_plan")
+    )
 
 
 def build_engine(database_url: str):
     """Construct the async engine with the env-steered pool (the single seam)."""
+    from sqlalchemy import event
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    return create_async_engine(database_url, **engine_pool_kwargs())
+    engine = create_async_engine(database_url, **engine_pool_kwargs())
+    event.listen(engine.sync_engine, "connect", _force_custom_plans)
+    return engine
