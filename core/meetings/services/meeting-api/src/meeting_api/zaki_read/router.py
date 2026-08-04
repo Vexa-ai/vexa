@@ -601,7 +601,7 @@ def build_router(
                 if _parse_time(item["updated_at"]) <= snapshot
                 and (since_at is None or _parse_time(item["updated_at"]) >= since_at)
             ),
-            key=lambda item: (_parse_time(item["occurred_at"]), item["id"]),
+            key=lambda item: (_parse_time(item["updated_at"]), item["id"]),
             reverse=True,
         )
         page = items[offset:offset + bounded_limit]

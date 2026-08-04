@@ -133,7 +133,10 @@ def test_index_maps_real_store_records_to_metadata_only_contract_items():
     assert "private-native-id" not in response.text
 
 
-def test_index_orders_by_meeting_occurrence_not_later_reprocessing():
+def test_index_orders_by_update_time_so_reprocessing_floats_to_the_top():
+    """The index is an update feed: the page is ordered on the same clock it is
+    filtered and paged on (``updated_at``), so a meeting reprocessed today leads
+    the page even though it occurred before one already listed."""
     store = _store()
     store._meetings[41]["start_time"] = "2026-07-16T11:00:00+00:00"
     store._meetings[41]["end_time"] = "2026-07-16T12:00:00+00:00"
@@ -161,13 +164,45 @@ def test_index_orders_by_meeting_occurrence_not_later_reprocessing():
 
     assert response.status_code == 200
     items = response.json()["items"]
-    occurred = [datetime.fromisoformat(item["occurred_at"]) for item in items]
-    assert occurred == sorted(occurred, reverse=True)
+    updated = [datetime.fromisoformat(item["updated_at"]) for item in items]
+    assert updated == sorted(updated, reverse=True)
     assert {item["id"] for item in items[:3]} == {
-        "meeting:41",
-        "transcript:41",
-        "summary:41",
+        "meeting:42",
+        "transcript:42",
+        "summary:42",
     }
+    # The reprocessed meeting leads the page despite occurring EARLIER than the
+    # one behind it — occurrence order and update order genuinely disagree here.
+    occurred = [datetime.fromisoformat(item["occurred_at"]) for item in items]
+    assert occurred != sorted(occurred, reverse=True)
+
+
+def test_index_never_rises_in_update_time_within_one_occurrence():
+    """A page whose ``updated_at`` ever rises is refused by the read client.
+
+    A summary lands seconds AFTER the transcript it summarises and inherits the
+    meeting's ``occurred_at``, so every summarised meeting carries a group of
+    items that share one occurrence but not one update time. Ordering the page
+    on anything other than ``updated_at`` interleaves the newer summary behind
+    the older transcript and the whole read fails.
+    """
+    store = _store()
+    store._meetings[41]["data"]["summary"]["updated_at"] = "2026-07-16T10:06:30+00:00"
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/index?limit=200",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["id"] for item in items] == [
+        "summary:41",
+        "transcript:41",
+        "meeting:41",
+    ]
+    updated = [datetime.fromisoformat(item["updated_at"]) for item in items]
+    assert updated == sorted(updated, reverse=True)
 
 
 def test_index_uses_owner_metadata_projection_without_transcript_hydration():
