@@ -42,6 +42,12 @@ Call: include "vexa.imageRef" (dict "root" . "image" .Values.gateway.image "useG
 */}}
 {{- define "vexa.imageRef" -}}
 {{- $root := required "vexa.imageRef requires root" .root -}}
+{{- if $root.Values.sourceRevision -}}
+{{- $sealedRevision := required "OSS-SOURCE-REVISION is required when sourceRevision is set" (trim ($root.Files.Get "OSS-SOURCE-REVISION")) -}}
+{{- if ne $root.Values.sourceRevision $sealedRevision -}}
+{{- fail "sourceRevision does not match packaged OSS source" -}}
+{{- end -}}
+{{- end -}}
 {{- $image := required "vexa.imageRef requires image" .image -}}
 {{- $repository := required "image.repository is required" $image.repository -}}
 {{- $digest := default "" $image.digest -}}

@@ -4,6 +4,8 @@ set -euo pipefail
 HELM_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CHART="$HELM_DIR/charts/vexa"
 FIXTURE="$HELM_DIR/tests/fixtures/values-image-digests.yaml"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/vexa-image-digests.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
 
 if ! command -v helm >/dev/null 2>&1; then
   echo "SKIP: helm not installed"
@@ -40,6 +42,17 @@ for env_name in BROWSER_IMAGE AGENT_IMAGE AGENT_WORKER_IMAGE; do
   [[ "$ref" =~ @sha256:[0-9a-f]{64}$ ]] || fail "$env_name is not immutable: $ref"
 done
 echo "  OK: all rendered and spawned runtime images use repository@sha256"
+
+cp -R "$CHART" "$TMP/chart"
+sealed_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+printf '%s\n' "$sealed_revision" > "$TMP/chart/OSS-SOURCE-REVISION"
+helm template vexa "$TMP/chart" -n vexa -f "$TMP/chart/values-test.yaml" \
+  --set sourceRevision="$sealed_revision" >/dev/null
+if helm template vexa "$TMP/chart" -n vexa -f "$TMP/chart/values-test.yaml" \
+  --set sourceRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1; then
+  fail "wrong full-length OSS source revision rendered"
+fi
+echo "  OK: advertised OSS revision is bound to packaged source"
 
 expect_render_failure "truncated digest" --set gateway.image.tag= --set gateway.image.digest=sha256:abc
 expect_render_failure "uppercase digest" --set gateway.image.tag= --set gateway.image.digest=sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
