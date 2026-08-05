@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "effectiveAfterPullRequest": "__BOOTSTRAP_PR__",
+  "verifiers": [
+    "DmitriyG228"
+  ]
+}

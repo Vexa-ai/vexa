@@ -9,6 +9,23 @@
 
 **Delivers issue:** #
 
+## Contribution rights
+<!-- Select exactly ONE. This is a legal certification: an agent may explain the choices but
+     must not select one for you. See CONTRIBUTOR_RIGHTS.md. -->
+
+- [ ] **Independent:** I created this contribution, or otherwise have the right to submit it
+  under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.
+  <!-- rights:independent -->
+- [ ] **Employer/client authorization required:** an employer, client, or other entity owns or
+  may control this contribution. I am requesting Vexa's private corporate-authorization process.
+  <!-- rights:corporate -->
+- [ ] **Unsure:** I need a private rights review before merge.
+  <!-- rights:uncertain -->
+
+Every commit must also carry the contributor's own DCO `Signed-off-by` line. Selecting the
+independent path means no individual CLA is required. Corporate and unsure paths do not stop
+technical review, but they do block merge until resolved.
+
 ## Observation bundle (the record of your harnessed loop)
 <!-- One entry per component: what you ran, what you saw with your own eyes, what it told you
      about the next step. Your claim heartbeats are the natural front of this. A component that
