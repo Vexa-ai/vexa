@@ -40,7 +40,7 @@ spec:
       {{- end }}
       containers:
         - name: redis
-          image: "{{ .Values.redis.image }}"
+          image: {{ include "vexa.scalarImageRef" (dict "legacy" .Values.redis.image "repository" .Values.redis.imageRepository "digest" .Values.redis.imageDigest) | quote }}
           imagePullPolicy: IfNotPresent
           {{- /* v0.10.5 Pack C.5 — paired-durability invariant guard */}}
           {{- include "vexa.validateRedisDurability" . }}
