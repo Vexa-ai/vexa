@@ -337,6 +337,79 @@ export async function startCaptureBridge(
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
   await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
+
+    // ── The track→name VOTE resolver (SHARED by the Zoom per-track lane AND the gmeet lane) ──────────
+    // Both lanes are the SAME problem: anonymous per-participant audio channels + a decoupled, flicker-
+    // prone single-active-speaker glow (Zoom's DOM spotlight; gmeet's per-tile speaking indicator — its
+    // <audio> elements carry no participant name, per probeDom). Name each stable channel by VOTING: every
+    // clean moment (this channel is the loudest hot one + exactly one speaker lit) casts a channel<->name
+    // vote; the binding is the argmax. A wrong early sample (a glow flicker naming Jacob during Sue's turn)
+    // is ONE vote the true speaker outweighs — self-correcting. MARGIN hysteresis stops churn; 1:1-by-
+    // identity stops the flicker pasting one speaker's name onto another's channel; high-PURITY co-hold
+    // still allows two genuinely same-named people; a name frees on IDLE_RELEASE (leave / reconnect).
+    // Floor: a channel still needs the glow to name it correctly sometimes; a speaker never lit stays
+    // separated but unnamed. dom-active platforms (Zoom/Jitsi/gmeet) are 'exclusive'; Teams 'additive'.
+    const makeTrackNamer = (mode: 'additive' | 'exclusive'): any => ({
+      mode,
+      speaking: new Map<string, number>(),                 // active-speaker name → since (ms)
+      hot: new Map<number, { ts: number; e: number }>(),   // channel → last-energetic {ts, peak}
+      votes: new Map<number, Map<string, number>>(),       // channel → name → co-occurrence tally
+      names: new Map<number, string>(),                    // channel → committed name (= argmax vote)
+      HOT_MS: 600, MARGIN: 3, IDLE_RELEASE_MS: 8000, PURITY: 0.7,
+      onSpeak(name: string | null, tMs: number, isEnd: boolean): void {
+        if (!name) return;
+        if (isEnd) { this.speaking.delete(name); return; }
+        if (this.mode === 'exclusive') { this.speaking.clear(); this.speaking.set(name, tMs); }
+        else if (!this.speaking.has(name)) this.speaking.set(name, tMs);
+      },
+      markHot(ch: number, ts: number, e: number): void { this.hot.set(ch, { ts, e }); },
+      resolve(ch: number, ts: number): string | undefined {
+        // VOTE when THIS channel is the loudest hot one while exactly one speaker is lit.
+        let loud = -1, loudE = -1;
+        for (const [c, h] of this.hot) { if (ts - h.ts < this.HOT_MS && h.e > loudE) { loudE = h.e; loud = c; } }
+        const active = Array.from(this.speaking.keys()) as string[];
+        if (loud === ch && active.length === 1) {
+          const n = active[0];
+          let v = this.votes.get(ch); if (!v) { v = new Map(); this.votes.set(ch, v); }
+          v.set(n, (v.get(n) || 0) + 1);
+          this.rederive(ch, ts);
+        }
+        return this.names.get(ch);   // committed binding (undefined until the first confident bind)
+      },
+      rederive(ch: number, ts: number): void {
+        const v = this.votes.get(ch); if (!v) return;
+        let total = 0; for (const c of v.values()) total += c;
+        // 1:1 BY IDENTITY: a name committed to another still-active channel is that stream's identity and
+        // unavailable, no matter how many stray glow-flicker votes it collected here — UNLESS this channel's
+        // votes are high-PURITY (a genuine second same-named speaker). A name frees once its owner is idle.
+        const available = (name: string): boolean => {
+          let activeOwner = false;
+          for (const [c, n] of this.names) {
+            if (n !== name || c === ch) continue;
+            const h = this.hot.get(c);
+            if (h && ts - h.ts <= this.IDLE_RELEASE_MS) { activeOwner = true; break; }
+          }
+          if (!activeOwner) return true;
+          const vn = v.get(name) || 0;
+          return vn >= this.PURITY * total && vn >= this.MARGIN;
+        };
+        let best = '', bestN = -1;
+        for (const [n, c] of v) if (c > bestN && available(n)) { bestN = c; best = n; }
+        if (best === '') return;
+        const cur = this.names.get(ch);
+        if (best === cur) return;
+        const curN = cur ? (v.get(cur) || 0) : -1;
+        if (bestN < curN + this.MARGIN) return;   // hysteresis: real evidence, not glow churn
+        for (const [c, n] of this.names) {
+          if (n !== best || c === ch) continue;
+          const h = this.hot.get(c);
+          if (!h || ts - h.ts > this.IDLE_RELEASE_MS) this.names.delete(c);   // release idle owner only
+        }
+        this.names.set(ch, best);
+        w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + best + ' (' + bestN + ' votes)');
+      },
+    });
+
     if (isMixed) {
       // Zoom/Teams/Jitsi ride the WebRTC hook (installRemoteAudioHook, installed pre-nav), which mirrors
       // each remote participant's audio track into w.__vexaCapturedRemoteAudioStreams AND into a hidden
@@ -351,99 +424,11 @@ export async function startCaptureBridge(
       //     re-separate speakers, named by time-windowed hints. Kept until each platform's streams are
       //     seen live (streams ≈ participants → safe to flip to per-track; streams ≫ participants → slots).
       if (isPerTrack) {
-      // ── The track→name resolver ──────────────────────────────────────────────────────────────
-      // Zoom's remote audio is STABLE per participant: verified live that each speaker gets their OWN
-      // WebRTC stream (a permanent channel here), appearing when they first become active and never
-      // remapped or reused — 5 streams for 5 speakers, ch=3/ch=4 arriving only when the 4th/5th person
-      // first spoke. The unreliable part is the NAME: Zoom's active-speaker DOM is a sticky dominant-
-      // speaker spotlight (worse under screen-share) that lags/holds the wrong person. So the resolver's
-      // whole job is to attach each stable channel to the right name and DEFEND it against the flaky DOM:
-      //   • VOTE: every clean moment (this channel is the loudest hot one + exactly one speaker lit) casts
-      //     one channel<->name vote. The binding is the argmax — so a wrong early sample is a single vote
-      //     that the true speaker outweighs. SELF-CORRECTING: no bad first bind can lock in for the meeting.
-      //   • MARGIN hysteresis: a new leader must beat the current binding by MARGIN votes to flip, so the
-      //     sticky DOM's stray votes can't churn an established name (holds "Scott" while Zoom shows Justin).
-      //   • 1:1 BY IDENTITY: a name is another active channel's identity — the DOM can't paste "Justin"
-      //     onto Scott's channel even if it over-votes it there. It frees up only when its owner goes
-      //     long-idle (IDLE_RELEASE_MS) — so leave-then-rejoin-under-a-new-stream works. Exception: two
-      //     genuinely same-named people each earn the name with HIGH-PURITY votes → both are named (a
-      //     mixed minority — contamination — does not qualify).
-      // Floor: a channel still needs the DOM to name it correctly at least sometimes; a speaker Zoom never
-      // lights (e.g. throughout a screen-share) stays unknown — separated, but unnamed.
-      if (!w.__vexaTrackNamer) {
-        w.__vexaTrackNamer = {
-          mode: (isTeams ? 'additive' : 'exclusive') as 'additive' | 'exclusive',
-          speaking: new Map<string, number>(),                 // active-speaker name → since (ms)
-          hot: new Map<number, { ts: number; e: number }>(),   // channel → last-energetic {ts, peak}
-          votes: new Map<number, Map<string, number>>(),       // channel → name → co-occurrence tally
-          names: new Map<number, string>(),                    // channel → committed name (= argmax vote)
-          HOT_MS: 600, MARGIN: 3, IDLE_RELEASE_MS: 8000, PURITY: 0.7,
-          onSpeak(name: string | null, tMs: number, isEnd: boolean): void {
-            if (!name) return;
-            if (isEnd) { this.speaking.delete(name); return; }
-            if (this.mode === 'exclusive') { this.speaking.clear(); this.speaking.set(name, tMs); }
-            else if (!this.speaking.has(name)) this.speaking.set(name, tMs);
-          },
-          markHot(ch: number, ts: number, e: number): void { this.hot.set(ch, { ts, e }); },
-          resolve(ch: number, ts: number): string | undefined {
-            // VOTE whenever THIS channel is the loudest hot one while exactly one speaker is lit — a clean
-            // channel<->name co-occurrence. The binding is the argmax vote (rederive below), so a wrong
-            // early sample (the sticky DOM naming Justin during Scott's turn) is just ONE vote and gets
-            // outweighed as the true speaker accumulates — self-correcting, no permanent early lock-in.
-            let loud = -1, loudE = -1;
-            for (const [c, h] of this.hot) { if (ts - h.ts < this.HOT_MS && h.e > loudE) { loudE = h.e; loud = c; } }
-            const active = Array.from(this.speaking.keys()) as string[];
-            if (loud === ch && active.length === 1) {
-              const n = active[0];
-              let v = this.votes.get(ch); if (!v) { v = new Map(); this.votes.set(ch, v); }
-              v.set(n, (v.get(n) || 0) + 1);
-              this.rederive(ch, ts);
-            }
-            return this.names.get(ch);   // committed binding (undefined until the first confident bind)
-          },
-          rederive(ch: number, ts: number): void {
-            const v = this.votes.get(ch); if (!v) return;
-            let total = 0; for (const c of v.values()) total += c;
-            // A name is AVAILABLE to this channel if no OTHER active channel holds it (1:1 BY IDENTITY:
-            // a name is another stream's identity no matter how many stray sticky-DOM votes it collected
-            // here — raw-count 1:1 would let Scott's channel STEAL "Justin" when the sticky DOM over-votes
-            // it, which must not happen). The ONE exception: this channel's votes for the name are
-            // high-PURITY — it overwhelmingly IS this channel's own identity — which distinguishes a
-            // genuine SECOND same-named speaker (two "John Smith": pure votes on each → co-hold both)
-            // from contamination (a mixed minority on someone else's channel → stays blocked). A name
-            // also frees up once its owner goes long-idle (IDLE_RELEASE_MS — a leave / reconnect).
-            const available = (name: string): boolean => {
-              let activeOwner = false;
-              for (const [c, n] of this.names) {
-                if (n !== name || c === ch) continue;
-                const h = this.hot.get(c);
-                if (h && ts - h.ts <= this.IDLE_RELEASE_MS) { activeOwner = true; break; }
-              }
-              if (!activeOwner) return true;
-              const vn = v.get(name) || 0;
-              return vn >= this.PURITY * total && vn >= this.MARGIN;
-            };
-            // Best AVAILABLE name = argmax vote among names this channel may hold.
-            let best = '', bestN = -1;
-            for (const [n, c] of v) if (c > bestN && available(n)) { bestN = c; best = n; }
-            if (best === '') return;
-            const cur = this.names.get(ch);
-            if (best === cur) return;
-            const curN = cur ? (v.get(cur) || 0) : -1;
-            // Hysteresis: a new leader must beat the current binding by MARGIN before it flips — so a few
-            // stray sticky-DOM votes can't churn an established name, but real evidence still corrects it.
-            if (bestN < curN + this.MARGIN) return;
-            // Release only IDLE owners of the name (a leave/reconnect); keep active co-holders (duplicates).
-            for (const [c, n] of this.names) {
-              if (n !== best || c === ch) continue;
-              const h = this.hot.get(c);
-              if (!h || ts - h.ts > this.IDLE_RELEASE_MS) this.names.delete(c);
-            }
-            this.names.set(ch, best);
-            w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + best + ' (' + bestN + ' votes)');
-          },
-        };
-      }
+      // ── The track→name resolver (shared makeTrackNamer, defined above) ──
+      // Zoom's per-participant WebRTC streams are stable but anonymous; the DOM lights ONE dominant
+      // speaker at a time (exclusive) — worse under screen-share. Teams voice-outline can light several
+      // (additive). The vote resolver attaches each stable channel to the right name and defends it.
+      if (!w.__vexaTrackNamer) w.__vexaTrackNamer = makeTrackNamer(isTeams ? 'additive' : 'exclusive');
 
       // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
       // ONE shared AudioContext hosts every track's tap (Chromium hard-caps concurrent AudioContexts
@@ -586,19 +571,33 @@ export async function startCaptureBridge(
       // (Zoom's watcher lives in the per-track branch above — it feeds the resolver, not the mix.)
       return;
     }
-    // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
+    // gmeet lane: per-channel capture, named through the SAME vote resolver as Zoom. gmeet is the same
+    // shape — anonymous per-participant <audio> streams (each a stable channel index) + a decoupled per-
+    // tile speaking glow (probeDom confirmed the audio elements carry NO participant name). The old code
+    // stamped the RAW instantaneous glow, which flickers at turn onset (Sue's words → Jacob). Voting each
+    // element to its participant over time defends against that flicker. The glow lights one tile at a
+    // time → 'exclusive'.
     if (w.VexaBrowserUtils?.createGmeetCapture && !w.__vexaGmeetCapture) {
+      if (!w.__vexaTrackNamer) w.__vexaTrackNamer = makeTrackNamer('exclusive');
       w.__vexaGmeetSpeakers = w.__vexaGmeetSpeakers
         ?? w.VexaBrowserUtils.createGmeetSpeakers?.({ log: (m: string) => w.logBot?.('[PerSpeaker] ' + m) });
       w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
         log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
         onAudio: (index: number, pcm: Float32Array) => {
           w.__vexaGmeetSpeakers?.reportTrackAudio?.(index);
-          // Bind the glow name at capture time (the v1 producer's inversion): exactly-one-lit ⇒ name.
+          const ts = Date.now();
+          // The single lit tile is the current active speaker → feed it once per change; this element's
+          // peak energy marks it hot. resolve(index) is the VOTED name (stable, flicker-proof) — not the
+          // instantaneous glow. Unbound (early frames) → UNKNOWN, upgraded by the pipeline once it binds.
           const lit: string[] = w.__vexaGmeetSpeakers?.litNames?.() ?? [];
           const glow = lit.length === 1 ? lit[0] : undefined;
-          if (glow) w.__vexaNamedAudioData(index, glow, Array.from(pcm), Date.now());
-          else w.__vexaPerSpeakerAudioData(index, Array.from(pcm), Date.now());
+          if (glow && w.__vexaGmeetGlow !== glow) { w.__vexaTrackNamer.onSpeak(glow, ts, false); w.__vexaGmeetGlow = glow; }
+          let maxVal = 0;
+          for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > maxVal) maxVal = a; }
+          w.__vexaTrackNamer.markHot(index, ts, maxVal);
+          const name = w.__vexaTrackNamer.resolve(index, ts);
+          if (name) w.__vexaNamedAudioData(index, name, Array.from(pcm), ts);
+          else w.__vexaPerSpeakerAudioData(index, Array.from(pcm), ts);
         },
       });
       await w.__vexaGmeetCapture.start();
