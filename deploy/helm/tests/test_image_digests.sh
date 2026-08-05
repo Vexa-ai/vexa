@@ -47,7 +47,9 @@ expect_render_failure "wrong digest algorithm" --set gateway.image.tag= --set ga
 expect_render_failure "component digest plus component tag" --set gateway.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 expect_render_failure "component digest plus global tag" --set gateway.image.tag= --set gateway.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set global.imageTag=mutable
 expect_render_failure "scalar digest plus legacy tag" --set redis.imageDigest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set redis.imageRepository=redis
+expect_render_failure "scalar repository without digest" --set redis.imageRepository=redis-custom
 expect_render_failure "spawned digest plus legacy tag" --set runtime.browserImageDigest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set runtime.browserImageRepository=vexaai/vexa-bot --set runtime.browserImage=mutable:tag
 expect_render_failure "spawned digest plus global tag" --set runtime.browserImageDigest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set runtime.browserImageRepository=vexaai/vexa-bot --set runtime.browserImage= --set global.imageTag=mutable
+expect_render_failure "spawned repository without digest" --set runtime.browserImageRepository=vexaai/vexa-bot-custom
 
 echo "gate:helm-image-digests PASS"

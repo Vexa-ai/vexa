@@ -79,6 +79,9 @@ Call: include "vexa.imageRef" (dict "root" . "image" .Values.gateway.image "useG
 {{- end -}}
 {{- printf "%s@%s" $repository $digest -}}
 {{- else -}}
+{{- if $repository -}}
+{{- fail "imageRepository cannot be set without imageDigest" -}}
+{{- end -}}
 {{- required "legacy image is required when imageDigest is empty" $legacy -}}
 {{- end -}}
 {{- end -}}
@@ -149,7 +152,7 @@ Call: include "vexa.imageRef" (dict "root" . "image" .Values.gateway.image "useG
 {{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
 this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
 {{- define "vexa.botImage" -}}
-{{- if .Values.runtime.browserImageDigest -}}
+{{- if or .Values.runtime.browserImageDigest .Values.runtime.browserImageRepository -}}
 {{- if .Values.global.imageTag -}}
 {{- fail "runtime.browserImageDigest and global.imageTag cannot both be set" -}}
 {{- end -}}
@@ -165,7 +168,7 @@ vexaai/vexa-bot:v012
 
 {{/* The agent-api image ref (AGENT_IMAGE the runtime spawns workers from). global.imageTag wins. */}}
 {{- define "vexa.agentImage" -}}
-{{- if .Values.runtime.agentImageDigest -}}
+{{- if or .Values.runtime.agentImageDigest .Values.runtime.agentImageRepository -}}
 {{- if .Values.global.imageTag -}}
 {{- fail "runtime.agentImageDigest and global.imageTag cannot both be set" -}}
 {{- end -}}
@@ -179,7 +182,7 @@ vexaai/vexa-bot:v012
 
 {{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
 {{- define "vexa.agentWorkerImage" -}}
-{{- if .Values.runtime.agentWorkerImageDigest -}}
+{{- if or .Values.runtime.agentWorkerImageDigest .Values.runtime.agentWorkerImageRepository -}}
 {{- if .Values.global.imageTag -}}
 {{- fail "runtime.agentWorkerImageDigest and global.imageTag cannot both be set" -}}
 {{- end -}}
