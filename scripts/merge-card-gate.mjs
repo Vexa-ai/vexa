@@ -210,6 +210,31 @@ export function acceptanceFromIssues(issues) {
   return { ok: true, why: `every acceptance leg delivered on ${issues.map((i) => "#" + i.number).join(", ")}` };
 }
 
+// Contribution mode is the intake receipt's small, machine-readable front door. A normal
+// upstream shipping PR may deliver a prepared issue or evidence; a contributor-fork head is
+// still incubation until it explicitly enters through fork intake. Keep this parser pure so the
+// policy has fixture proof and cannot accidentally become an API-dependent convention.
+export function contributionReceiptFromBody(body, { isContributorFork = false } = {}) {
+  const text = body || "";
+  const match = text.match(/^\*\*Contribution mode:\*\*\s*`?([^`\n]+)`?\s*$/im);
+  if (!match) return { ok: false, why: "missing `Contribution mode` — choose prepared delivery, evidence capture, fork intake, or issue preparation" };
+  const mode = match[1].trim().toLowerCase();
+  const modes = new Set(["prepared delivery", "evidence capture", "fork intake", "issue preparation"]);
+  if (!modes.has(mode)) return { ok: false, why: `unknown contribution mode \`${mode}\`` };
+  if (isContributorFork && mode !== "fork intake")
+    return { ok: false, why: "contributor-fork head must enter through `fork intake`, then recut an accepted slice from current main" };
+  if (mode !== "fork intake") return { ok: true, why: `${mode} declared` };
+
+  const heading = /^##\s+Fork-intake receipt[ \t]*$/im.exec(text);
+  const afterHeading = heading ? text.slice(heading.index + heading[0].length) : "";
+  const nextHeading = afterHeading.search(/^##\s/m);
+  const section = nextHeading < 0 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const fields = ["Source", "Candidate slice / linked issue", "Target module or seam", "Harness or fixture range", "Human bar", "Concern classification"];
+  const missing = fields.filter((field) => !new RegExp(`^[-*]\\s+\\*\\*${field}:\\*\\*\\s+\\S`, "im").test(section));
+  if (missing.length) return { ok: false, why: `fork-intake receipt missing: ${missing.join(", ")}` };
+  return { ok: true, why: "fork intake receipt complete" };
+}
+
 // The PR's closing issues via GraphQL closingIssuesReferences — the same linkage GitHub acts on
 // at merge, so the row inspects exactly what the keyword will do. Injected into card() so the
 // verdict path stays offline-testable (the verdictFromRuns pattern).
@@ -260,8 +285,10 @@ async function card(num, { readClosing = readClosingIssues } = {}) {
 
   // ACCEPTANCE — what would this merge auto-close, and is every closed issue fully delivered?
   const acceptance = acceptanceFromIssues(readClosing(num));
+  const isContributorFork = pr.head?.repo?.full_name && pr.head.repo.full_name !== REPO;
+  const contribution = contributionReceiptFromBody(pr.body, { isContributorFork });
 
-  return { num, ok: valueOk && d.ok && (!acceptance || acceptance.ok), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance };
+  return { num, ok: valueOk && d.ok && (!acceptance || acceptance.ok) && contribution.ok, valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, contribution };
 }
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
@@ -280,6 +307,7 @@ function renderCard(c) {
     `|---|---|---|`,
     row("Value", c.valueOk, c.valueWhy),
     row("Diff", c.diffOk, c.diffWhy),
+    row("Contribution path", c.contribution.ok, c.contribution.why),
     // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
     ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
     ``,
