@@ -353,12 +353,12 @@ export async function startCaptureBridge(
         }
         if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          // Stamp the frame with the PAGE clock (Date.now() here runs in-page, same domain as the
-          // active-speaker hints' tMs). Without it, onPerSpeakerAudio falls back to Node RECEIPT time,
-          // which trails true audio by the ScriptProcessor buffer + CDP IPC + event-loop jitter — a
-          // variable ~1-3s offset that pushed ~3/4 of hints out of the binder's match window (mixed-lane
-          // misattribution). gmeet already passes Date.now() (line ~435); the mixed lane must too.
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm), Date.now())))
+          // Stamp each frame with the ACCUMULATED-AUDIO-TIME clock the capture provides (tsMs = the
+          // wall-clock of the audio the frame HOLDS — anchor + samples/rate — on the page clock, the same
+          // domain as the hints' tMs). Passing that through (not Node RECEIPT time, and not Date.now() at
+          // callback time which still carries the ~256ms ScriptProcessor buffer latency) is what lets the
+          // speaker-hint binder align frames to hints; without it ~3/4 of hints missed → misattribution.
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array, tsMs?: number) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm), tsMs)))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
