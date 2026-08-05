@@ -469,6 +469,8 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 - **Contributing** — [how delivery works](docs/docs/governance/delivery.mdx): prepared issues
   with acceptance tables that *guarantee* merge, and human validation credited as a first-class
   contribution (one page, law and how-to together).
+- **Contributor rights** — [one rights choice plus DCO](CONTRIBUTOR_RIGHTS.md) for individuals;
+  private, head-bound authorization when an employer or client owns the work.
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 
 Vexa is built in the open. If you self-host it, extend it, or run it air-gapped somewhere interesting,

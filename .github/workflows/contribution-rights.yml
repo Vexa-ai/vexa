@@ -1,0 +1,40 @@
+name: contribution-rights-driver
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  issue_comment:
+    types: [created, edited, deleted]
+  merge_group:
+  check_run:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+concurrency:
+  group: contribution-rights-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    if: >-
+      ${{
+        (github.event_name != 'issue_comment' || github.event.issue.pull_request != null) &&
+        (github.event_name != 'check_run' || (github.event.check_run.name == 'DCO' && github.event.check_run.app.slug == 'dco'))
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request_target is safe here: only trusted default-branch code is checked out,
+      # contributor code is never executed, and the token is limited to publishing this check.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Evaluate and publish the head-bound rights check
+        run: node scripts/contribution-rights-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

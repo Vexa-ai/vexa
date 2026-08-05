@@ -117,7 +117,8 @@
           "governance/index",
           "governance/architecture",
           "governance/arch-compliance",
-          "governance/delivery"
+          "governance/delivery",
+          "governance/contributor-rights"
         ]
       }
     ]
