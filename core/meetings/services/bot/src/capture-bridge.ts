@@ -603,6 +603,23 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
+      // STRUCTURAL-NAMING PROBE (temporary): dump probeDom() a handful of times so we can see whether
+      // each participant's <audio> element sits inside a tile carrying data-participant-id + name. If it
+      // does, gmeet naming can be a DIRECT structural read (audio→tile→name) instead of the flicker-prone
+      // instantaneous glow that misattributes at turn onset (Sue's words → Jacob). Logged as [gmeet-probe];
+      // remove once the naming design is settled.
+      if (w.__vexaGmeetSpeakers?.probeDom && w.__vexaGmeetProbeCount === undefined) {
+        w.__vexaGmeetProbeCount = 0;
+        const probe = (): void => {
+          try { w.logBot?.('[gmeet-probe] ' + JSON.stringify(w.__vexaGmeetSpeakers.probeDom())); }
+          catch (e: any) { w.logBot?.('[gmeet-probe] failed: ' + String(e)); }
+          if (++w.__vexaGmeetProbeCount >= 6 && w.__vexaGmeetProbeTimer) {
+            (globalThis as any).clearInterval(w.__vexaGmeetProbeTimer); w.__vexaGmeetProbeTimer = null;
+          }
+        };
+        probe();
+        w.__vexaGmeetProbeTimer = (globalThis as any).setInterval(probe, 20000); // 6× over ~2 min → catch active speakers
+      }
     }
   }, { isMixed: mixed, isPerTrack: perTrack, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
@@ -615,6 +632,7 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { if (w.__vexaGmeetProbeTimer) { (globalThis as any).clearInterval(w.__vexaGmeetProbeTimer); w.__vexaGmeetProbeTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
