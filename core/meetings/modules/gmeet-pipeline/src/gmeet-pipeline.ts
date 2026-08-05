@@ -92,11 +92,26 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
     void p.finally(() => inflight.delete(p));
   };
 
+  // The outstanding live draft per speaker (its window start → its segment_id). A draft is published
+  // under `key:round(startMs)`; when it confirms, whisper may place the segment start LATER (leading
+  // silence trimmed → the window advances) so the confirmed lands under a DIFFERENT id. Upsert-by-id
+  // then can't replace the draft, and since the turn is still open (finalizePendingDraft only runs on
+  // turn-CLOSE) the stale temp row dangles ("Sue's temp text made permanent but still showing"). Track
+  // the draft's id and RETRACT it whenever a confirmation supersedes it under a new id.
+  const lastDraftStart = new Map<string, number>();
   mgr.onSegmentConfirmed = (speakerId, speakerName, text, startMs, endMs, _segmentId, lang) => {
     if (!text.trim()) return;
-    opts.sink.segment(segOf(speakerName, speakerId, text, startMs, endMs, true, lang));
+    const seg = segOf(speakerName, speakerId, text, startMs, endMs, true, lang);
+    const draftStart = lastDraftStart.get(speakerId);
+    if (draftStart !== undefined) {
+      lastDraftStart.delete(speakerId);                       // this draft is now resolved
+      const draftId = `${speakerId}:${Math.round(draftStart)}`;
+      if (draftId !== seg.segment_id) opts.sink.retract?.([draftId]);   // superseded under a NEW id → drop it
+    }
+    opts.sink.segment(seg);
   };
   mgr.onSegmentPending = (speakerId, speakerName, text, startMs, lang) => {
+    if (text) lastDraftStart.set(speakerId, startMs); else lastDraftStart.delete(speakerId);   // empty ⇒ cleared
     opts.sink.draft?.({ ...segOf(speakerName, speakerId, text, startMs, startMs, false, lang), confidence: 0 });
   };
 

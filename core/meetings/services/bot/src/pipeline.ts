@@ -117,7 +117,11 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
  * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
  * rejection rather than letting it escape the lane's emit path.
  */
-function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => void): LaneTranscriptSink {
+function laneSink(
+  publish: TranscriptSink['publish'],
+  retract?: TranscriptSink['retract'],
+  onError?: (e: unknown) => void,
+): LaneTranscriptSink {
   const forward = (seg: LaneSegment): void => {
     void publish(toBotSegment(seg)).catch((e) => {
       (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(e);
@@ -126,6 +130,12 @@ function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => 
   return {
     segment: forward,
     draft: forward,
+    // The gmeet lane retracts a stale draft whose confirmed version supersedes it under a new id
+    // (leading-silence trim advanced the window) — forward it to the bot's retract egress so the
+    // terminal drops the lingering temp row. Omitted where the bot sink can't retract (append-only).
+    retract: retract ? (ids: string[]): void => { void retract(ids).catch((e) => {
+      (onError ?? ((err) => console.error(`[bot] pipeline: transcript retract rejected: ${String(err)}`)))(e);
+    }); } : undefined,
     finalize() { /* session end is a lifecycle.v1 concern, not a transcript.v1 segment */ },
   };
 }
@@ -167,7 +177,7 @@ function createGmeetBotPipeline(
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, sink.retract?.bind(sink), onError), config, onError });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
