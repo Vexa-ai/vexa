@@ -91,6 +91,16 @@ export class MediaRecorderChunker implements RecordingTap {
     return this.recorder;
   }
 
+  /** Force the recorder to emit a chunk NOW with everything buffered since the last timeslice —
+   *  without stopping. The tail-loss fix: on eviction Zoom navigates the page away (destroying the
+   *  recorder) before the next timeslice boundary, so the last partial (the final few seconds of
+   *  speech) never becomes a chunk. Flushing at the earliest end-signal (the mix going silent) turns
+   *  that partial into a real, immediately-uploaded chunk before the context dies. Idempotent + safe. */
+  flush(): void {
+    try { if (this.recorder && this.recorder.state === "recording") this.recorder.requestData(); }
+    catch (err: any) { blog(`[record-chunker] flush() requestData failed: ${err?.message || err}`); }
+  }
+
   async start(): Promise<void> {
     if (this.recorder) {
       blog("[record-chunker] start() called twice — ignoring");
@@ -277,11 +287,15 @@ class DynamicAudioMixer {
   private dest: MediaStreamAudioDestinationNode;
   private sources = new Map<string, { node: MediaStreamAudioSourceNode; stream: MediaStream }>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** Fired when the live-source count falls to 0 (all participant tracks ended — the meeting is
+   *  closing). The recording host uses it to flush the recorder's buffered tail before the page dies. */
+  private onEmpty: (() => void) | null;
 
-  constructor() {
+  constructor(onEmpty?: () => void) {
     this.ctx = new AudioContext();   // default (full) sample rate — NOT the 16 kHz transcription mix
     this.ctx.resume?.();
     this.dest = this.ctx.createMediaStreamDestination();
+    this.onEmpty = onEmpty ?? null;
   }
 
   get stream(): MediaStream { return this.dest.stream; }
@@ -302,12 +316,16 @@ class DynamicAudioMixer {
     // Prune truly-dead streams (all tracks ended) so a long meeting's track churn doesn't accumulate
     // source nodes. A still-live stream is KEPT even if its element left the DOM (the node holds the
     // stream ref and still pulls audio) — presence is not the liveness signal, the track state is.
+    const had = this.sources.size;
     for (const [id, entry] of this.sources) {
       if (entry.stream.getAudioTracks().some((t) => t.readyState === "live")) continue;
       try { entry.node.disconnect(); } catch { /* */ }
       this.sources.delete(id);
       blog(`[record-chunker] mix -stream (${this.sources.size} live)`);
     }
+    // Just went silent (all tracks ended → the meeting is closing) — flush the recorder's buffered tail
+    // NOW, before the platform navigates the page away and destroys the recorder mid-partial-timeslice.
+    if (had > 0 && this.sources.size === 0 && this.onEmpty) { try { this.onEmpty(); } catch { /* */ } }
   }
 
   start(): void {
@@ -349,7 +367,10 @@ export function createRecordingTap(opts: CreateRecordingTapOptions): RecordingTa
         // No ready stream ⇒ build a LIVE mix of the page's audio. Wait (bounded) for the first stream —
         // post-admission the participant / injected <audio> elements appear a beat late — so the
         // MediaRecorder's onStarted t=0 aligns with real audio; the rescan then follows the churn.
-        mixer = new DynamicAudioMixer();
+        // onEmpty → flush the recorder's buffered tail the instant the mix goes silent (meeting close),
+        // so the final partial timeslice (the last few seconds of speech) is a real chunk before the
+        // page navigates away on eviction. `chunker` is assigned just below and set by the time this fires.
+        mixer = new DynamicAudioMixer(() => chunker?.flush());
         let ready = false;
         for (let i = 0; i < 5; i++) {
           mixer.scan();
