@@ -60,6 +60,24 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
 - **Deployments to validate · docs surface · preferred validator** — the change isn't done
   until its docs move with it and someone is named to witness it.
 
+## Select your contribution mode before code
+
+Before creating a worktree or editing, name exactly one mode in your session ledger and PR:
+
+- **Prepare an issue** — turn a finding into the prepared issue that will become the PRD.
+- **Deliver a prepared issue** — claim one ready issue and implement its declared component(s).
+- **Capture evidence** — record and sanitize a fixture or live observation; do not infer a product
+  fix from it.
+- **Fork intake** — review an exploratory fork before it can be considered for integration.
+
+Forks are a valid place to explore. They are not integration candidates by default. A fork-intake
+receipt names its source, linked issue, one candidate value at a time, target module/seam,
+existing harness or fixture range, human bar, and a disposition for every concern: **already
+present**, **adapt**, **evidence only**, **obsolete**, or **unsafe**. A fork intake is review-only:
+never rebase, merge, or cherry-pick a whole stack. Recut an accepted slice from current main into
+a fresh, narrow delivery branch. If the receipt cannot name one seam and a proof path, stop and
+prepare the issue or capture evidence instead.
+
 ## Claiming — and say hello on Discord
 
 1. **Comment on the issue** to claim it (D14b).

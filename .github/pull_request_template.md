@@ -9,6 +9,19 @@
 
 **Delivers issue:** #
 
+**Contribution mode:** `prepared delivery` | `evidence capture` | `fork intake` | `issue preparation`
+<!-- Choose exactly one. A PR from a contributor fork must use `fork intake` until its reusable
+slice is recut onto current main. Existing prepared-delivery PRs may state `prepared delivery`. -->
+
+## Fork-intake receipt
+<!-- Required only for `fork intake`. Do not use this PR to merge a whole exploratory stack. -->
+- **Source:**
+- **Candidate slice / linked issue:**
+- **Target module or seam:**
+- **Harness or fixture range:**
+- **Human bar:**
+- **Concern classification:** already present | adapt | evidence only | obsolete | unsafe
+
 ## Observation bundle (the record of your harnessed loop)
 <!-- One entry per component: what you ran, what you saw with your own eyes, what it told you
      about the next step. Your claim heartbeats are the natural front of this. A component that

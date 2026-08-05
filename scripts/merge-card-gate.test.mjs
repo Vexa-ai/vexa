@@ -15,6 +15,7 @@ import {
   waitForTerminalValueFsm,
   openAcceptanceLegs,
   acceptanceFromIssues,
+  contributionReceiptFromBody,
 } from "./merge-card-gate.mjs";
 
 const run = (o) => ({ name: "value-fsm", started_at: "2026-07-16T20:07:14Z", ...o });
@@ -102,6 +103,44 @@ test("stuck in_progress → timeout → pending (caller red-cards, not green)", 
   });
   assert.equal(verdict, "pending");
   assert.notEqual(verdict, "success");
+});
+
+// ── contribution intake receipt — pure over PR body ─────────────────────────────────────────────
+
+const forkReceipt = [
+  "**Contribution mode:** `fork intake`",
+  "",
+  "## Fork-intake receipt",
+  "- **Source:** jbschooley/vexa",
+  "- **Candidate slice / linked issue:** recording continuity / #1003",
+  "- **Target module or seam:** canonical capture stream",
+  "- **Harness or fixture range:** source-churn replay",
+  "- **Human bar:** solo Zoom witness",
+  "- **Concern classification:** adapt",
+].join("\n");
+
+test("GREEN: complete fork intake receipt is accepted for a contributor-fork head", () => {
+  assert.deepEqual(contributionReceiptFromBody(forkReceipt, { isContributorFork: true }), {
+    ok: true, why: "fork intake receipt complete",
+  });
+});
+
+test("RED: contributor fork cannot present itself as direct prepared delivery", () => {
+  const result = contributionReceiptFromBody("**Contribution mode:** `prepared delivery`", { isContributorFork: true });
+  assert.equal(result.ok, false);
+  assert.match(result.why, /must enter through `fork intake`/);
+});
+
+test("RED: fork intake missing a proof field is rejected with the missing field", () => {
+  const result = contributionReceiptFromBody(forkReceipt.replace("- **Human bar:** solo Zoom witness\n", ""));
+  assert.equal(result.ok, false);
+  assert.match(result.why, /Human bar/);
+});
+
+test("GREEN: an upstream prepared delivery needs only its declared mode", () => {
+  assert.deepEqual(contributionReceiptFromBody("**Contribution mode:** `prepared delivery`"), {
+    ok: true, why: "prepared delivery declared",
+  });
 });
 
 // ── the ACCEPTANCE row — pure over closing-issue bodies, both house shapes (#712) ───────────────

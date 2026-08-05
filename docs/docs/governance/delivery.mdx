@@ -133,6 +133,17 @@ is DELIVER (anyone); `value-signed → merged` is the maintainer honoring the pr
 has its operational protocol below: [PREPARE](#prepare-protocol) (queue item → prepared
 issue) and [TAKE](#take-protocol) (delivered PR → verdict against the floor).
 
+**D-R1a — An exploratory fork enters through intake, not delivery.** Forks are welcome
+incubation: they can discover a symptom, collect evidence, and test a candidate shape without a
+shipping promise. Before any fork is presented for upstream integration, its author or an agent
+selects **fork intake** and emits a receipt: source, linked issue, one candidate value at a time,
+target module/seam, existing harness or fixture range, human bar, and a disposition for each
+concern (**already present · adapt · evidence only · obsolete · unsafe**). Intake is review-only:
+whole-stack rebase, merge, and cherry-pick are invalid outcomes. An accepted concern is recut
+from current main as a narrow prepared-issue delivery. · *Gate:* the PR contribution-mode receipt;
+a PR whose head is a contributor fork must declare `fork intake` and carry the receipt before it
+can satisfy the merge card.
+
 **D-R2 — The preparation function: prepare issues and keep the roadmap true.** Preparation is
 species-neutral; only the `ready` stamp is a maintainer act. The function's job: (a) turn raw
 input into prepared, isolated, harnessed issues within the intake SLA (D2b); (b) seed them onto
@@ -1041,6 +1052,7 @@ silence is released, never punished · every decline names its reopen condition 
 | D-L3 "flake" is earned | durable regression test on the fixed gate + the one-rerun rule in TAKE | **have** (#686 `deploy/helm/tests/test_template.sh`) / **TO BUILD** (rerun-discipline in the checks bot) |
 | D-L4 human placement — exactly twice + rehearsal | agent-rehearsable probe is the rehearsal; choke point 2 names the witness moment | **have** (choke point 2 named) / **TO BUILD** (#690 agent-rehearsable probe) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
+| D-R1a fork intake | PR contribution-mode receipt; contributor-fork heads require the fork-intake receipt at merge card | **have** (CI: `merge-card-gate`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
