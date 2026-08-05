@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "effectiveAfterPullRequest": "__BOOTSTRAP_PR__",
+  "effectiveAfterPullRequest": 1008,
   "verifiers": [
     "DmitriyG228"
   ]
