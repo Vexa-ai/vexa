@@ -450,22 +450,53 @@ def _mount_lifecycle(
                         persisted.get("status"),
                         persisted.get("data"),
                     )
+        change = None
         try:
             change = sink.apply_change(
                 body,
                 transition_source=transition_source,
                 force_terminal_on_destroy=force_terminal_on_destroy,
             )
-        except IllegalTransition as e:
-            return (
-                409,
-                {
-                    "status": "error", "detail": str(e),
-                    "connection_id": e.connection_id,
-                    "from": e.frm.value if e.frm is not None else None,
-                    "to": e.to.value,
-                },
-            )
+        except IllegalTransition as first_error:
+            # Multiple API replicas each hold an independent, non-durable FSM. A replica that saw
+            # `joining` can receive `completed` after another replica persisted `active`/`stopping`.
+            # Refresh only after the local edge is illegal: this lets durable state repair a stale
+            # replica without letting a lagging DB read regress a live in-process record.
+            persisted = None
+            if connection_id:
+                try:
+                    persisted = await meeting_repo.get_lifecycle_state_by_session(
+                        session_uid=connection_id
+                    )
+                except Exception as refresh_error:  # noqa: BLE001 — preserve truthful 409 below
+                    log_event("lifecycle_refresh_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"error": str(refresh_error)})
+            if persisted:
+                sink.store.rehydrate(
+                    connection_id,
+                    persisted.get("status"),
+                    persisted.get("data"),
+                    replace_stale=True,
+                )
+                try:
+                    change = sink.apply_change(
+                        body,
+                        transition_source=transition_source,
+                        force_terminal_on_destroy=force_terminal_on_destroy,
+                    )
+                except IllegalTransition as refreshed_error:
+                    first_error = refreshed_error
+            if change is None:
+                e = first_error
+                return (
+                    409,
+                    {
+                        "status": "error", "detail": str(e),
+                        "connection_id": e.connection_id,
+                        "from": e.frm.value if e.frm is not None else None,
+                        "to": e.to.value,
+                    },
+                )
         rec = change.record
         # Build + record the status_change envelope only on a REAL advance — an idempotent replay
         # (change.no_op, e.g. the bot's 3x terminal retry) must NOT double-count it. The persist, the
