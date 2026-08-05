@@ -917,7 +917,12 @@ export async function startCaptureBridge(
             if (pcm.length && Math.sqrt(sum / pcm.length) >= mainAudioEnergyRms) {
               w.__vexaMixEnergeticMs = (w.__vexaMixEnergeticMs || 0) + (pcm.length / 16000) * 1000;
             }
-            w.__vexaPerSpeakerAudioData(0, Array.from(pcm));
+            // Stamp the frame with the PAGE clock (Date.now() here runs in-page, same domain as the
+            // active-speaker hints' tMs). Without it, onPerSpeakerAudio falls back to Node RECEIPT time,
+            // which trails true audio by the ScriptProcessor buffer + CDP IPC + event-loop jitter — a
+            // variable ~1-3s offset that pushed ~3/4 of hints out of the binder's match window (mixed-lane
+            // misattribution). gmeet already passes Date.now(); the mixed lane must too.
+            w.__vexaPerSpeakerAudioData(0, Array.from(pcm), Date.now());
           };
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
             .then((cap: any) => {
