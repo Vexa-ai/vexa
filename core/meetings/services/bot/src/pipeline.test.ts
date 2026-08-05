@@ -212,7 +212,8 @@ async function main(): Promise<void> {
       cb = c;
       return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
     };
-    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
+    // teams stays on the mixed lane (zoom moved to per-track); retraction is a mixed-lane concern.
+    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, { createMixedTranscriber: factory });
     await pipe.start();
     const seg = (id: string, s: number, e: number) => ({ text: 't', startMs: s, endMs: e, language: 'en', segmentId: id });
 

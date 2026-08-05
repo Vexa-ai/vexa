@@ -31,7 +31,7 @@ import {
   type HintKind,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -277,8 +277,14 @@ export function createTranscribe(inv: Invocation): Transcribe {
 }
 
 /**
- * The composition-root factory: pick the lane on platform and wire stt + sink. Google Meet
- * uses the per-channel (overlap-safe, glow-named) lane; Zoom/Teams/Jitsi use the mixed lane.
+ * The composition-root factory: pick the lane on platform and wire stt + sink. Two engines:
+ *   • PER-CHANNEL (@vexa/gmeet-pipeline) — overlap-safe, name-at-onset. Google Meet (per-<audio>
+ *     channels) AND Zoom (per-WebRTC-track channels, confirmed multi-stream + stable; named
+ *     page-side by the track→name resolver). A track = one speaker, so overlap is separated by the
+ *     tracks themselves — no pyannote, no cluster naming.
+ *   • MIXED (@vexa/mixed-pipeline) — pyannote cut + time-windowed hint naming. Teams and Jitsi,
+ *     whose per-track topology is NOT yet witnessed live (a Teams active-speaker SLOT model would
+ *     defeat per-track). They flip to per-channel only once isPerTrackLanePlatform includes them.
  */
 export function createBotPipeline(
   inv: Invocation,
@@ -287,13 +293,13 @@ export function createBotPipeline(
     transcribe?: Transcribe;
     config?: SpeakerStreamManagerConfig;
     onError?: (e: unknown) => void;
-    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
-     *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
+    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects an observer
+     *  (pins what reaches the transcriber: name, kind, tMs). Only consulted on the mixed lane. */
     createMixedTranscriber?: MixedTranscriberFactory;
   } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
-  if (isMixedLanePlatform(inv.platform)) {
+  if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,

@@ -58,7 +58,9 @@ async function main(): Promise<void> {
   check("hintKindForPlatform('teams') == 'dom-outline'", hintKindForPlatform('teams') === 'dom-outline');
   check("hintKindForPlatform('zoom') == 'dom-active'", hintKindForPlatform('zoom') === 'dom-active');
   check("hintKindForPlatform('jitsi') == 'dom-active' (jitsi lane preserved)", hintKindForPlatform('jitsi') === 'dom-active');
-  for (const [platform, kind] of [['teams', 'dom-outline'], ['zoom', 'dom-active'], ['jitsi', 'dom-active']] as const) {
+  // Zoom is no longer on the mixed transcriber (it rides the per-track lane; its watcher→resolver
+  // path is covered by zoom-speaker-wiring.test.ts) — only teams/jitsi forward hints to recordHint.
+  for (const [platform, kind] of [['teams', 'dom-outline'], ['jitsi', 'dom-active']] as const) {
     const spy = spyFactory();
     const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
     await pipe.start();
