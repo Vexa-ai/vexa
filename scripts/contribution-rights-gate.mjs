@@ -7,10 +7,18 @@ const RIGHTS = ["independent", "corporate", "uncertain"];
 const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
 
 function selectedRights(body = "") {
+  const lines = body.split("\n");
   return RIGHTS.filter((right) => {
     const marker = `<!-- rights:${right} -->`;
-    const line = body.split("\n").find((candidate) => candidate.includes(marker)) || "";
-    return /^\s*-\s*\[[xX]\]/.test(line);
+    const markerIndex = lines.findIndex((candidate) => candidate.includes(marker));
+    if (markerIndex < 0) return false;
+    const markerLine = lines[markerIndex];
+    const checkboxLine = /^\s*-\s*\[[ xX]\]/.test(markerLine)
+      ? markerLine
+      : /^\s*<!-- rights:[a-z]+ -->\s*$/.test(markerLine) && markerIndex > 0
+        ? lines[markerIndex - 1]
+        : "";
+    return /^\s*-\s*\[[xX]\]/.test(checkboxLine);
   });
 }
 

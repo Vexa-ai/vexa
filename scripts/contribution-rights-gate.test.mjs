@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { evaluatePullRequest, run } from "./contribution-rights-gate.mjs";
@@ -38,6 +39,17 @@ test("requires exactly one declaration", () => {
   assert.equal(evaluatePullRequest(pr({ body: body("none") }), [], config).ok, false);
   const multiple = `${body("independent")}`.replace("[ ] An employer", "[x] An employer");
   assert.equal(evaluatePullRequest(pr({ body: multiple }), [], config).ok, false);
+});
+
+test("the checked independent choice in the repository template is accepted", () => {
+  const template = readFileSync(new URL("../.github/pull_request_template.md", import.meta.url), "utf8");
+  const selected = template.replace("- [ ] **Independent:**", "- [x] **Independent:**");
+  assert.equal(evaluatePullRequest(pr({ body: selected }), [], config).ok, true);
+});
+
+test("a marker on the immediately following line remains compatible", () => {
+  const splitMarker = body("independent").replace(" <!-- rights:independent -->", "\n  <!-- rights:independent -->");
+  assert.equal(evaluatePullRequest(pr({ body: splitMarker }), [], config).ok, true);
 });
 
 test("independent path passes without a CLA", () => {

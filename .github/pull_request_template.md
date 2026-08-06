@@ -13,16 +13,12 @@
 <!-- Select exactly ONE. This is a legal certification: an agent may explain the choices but
      must not select one for you. See CONTRIBUTOR_RIGHTS.md. -->
 
-- [ ] **Independent:** I created this contribution, or otherwise have the right to submit it
+- [ ] **Independent:** I created this contribution, or otherwise have the right to submit it <!-- rights:independent -->
   under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.
-  <!-- rights:independent -->
-- [ ] **Employer/client authorization required:** an employer, client, or other entity owns or
+- [ ] **Employer/client authorization required:** an employer, client, or other entity owns or <!-- rights:corporate -->
   may control this contribution. I will use Vexa's public blank-agreement index and private return
-  process described in
-  [CLA/README.md](https://github.com/Vexa-ai/vexa/blob/main/CLA/README.md).
-  <!-- rights:corporate -->
-- [ ] **Unsure:** I need a private rights review before merge.
-  <!-- rights:uncertain -->
+  process described in [CLA/README.md](https://github.com/Vexa-ai/vexa/blob/main/CLA/README.md).
+- [ ] **Unsure:** I need a private rights review before merge. <!-- rights:uncertain -->
 
 Every commit must also carry the contributor's own DCO `Signed-off-by` line. Selecting the
 independent path means no individual CLA is required. Corporate and unsure paths do not stop
