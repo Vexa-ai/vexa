@@ -61,6 +61,26 @@ export const teamsMeetingContainerSelectors: string[] = [
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
 
+/**
+ * Resolve a participant's display name from Teams' STABLE signal: the `data-tid` on the
+ * `[data-stream-type]` stream wrapper, e.g. `<div data-tid="Jane Doe" data-stream-type="Video">`.
+ * Teams' Fluent-UI class hashes churn every release (so class-based name selectors rot), but this
+ * attribute pair is durable. Anchor on the voice-level outline so we pick the stream nearest the
+ * actual speaking signal; otherwise search up (`closest`) then down (`querySelector`) from the tile.
+ * Returns `''` when no stream wrapper is found (caller then falls back to legacy selectors).
+ */
+export function teamsNameFromStream(element: HTMLElement): string {
+  const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+  const streamEl = (voiceOutline && voiceOutline.closest('[data-stream-type][data-tid]'))
+    || element.closest('[data-stream-type][data-tid]')
+    || element.querySelector('[data-stream-type][data-tid]');
+  if (streamEl) {
+    const name = (streamEl.getAttribute('data-tid') || '').trim();
+    if (name.length > 1 && name.length < 60) return name;
+  }
+  return '';
+}
+
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
@@ -120,6 +140,10 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   function extractName(element: HTMLElement): string {
+    // Primary: Teams' stable `data-tid`-on-`[data-stream-type]` name (survives Fluent
+    // class-hash churn). The hashed-class selectors below are legacy fallbacks that rot.
+    const streamName = teamsNameFromStream(element);
+    if (streamName) return streamName;
     const forbidden = [
       'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
       'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
@@ -178,27 +202,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   // ── Detection: voice-level outline + vdi-frame-occlusion ──
-  const _diagSeen = new Map<string, number>();
-  function _diagDumpTile(element: HTMLElement, voiceOutline: HTMLElement): void {
-    // DIAGNOSTIC (#speaker-split): `vdi-frame-occlusion` is a Teams VDI-mode class; the bot runs the
-    // STANDARD web client where it never appears, so nothing ever reads as speaking. Every tile has a
-    // voice-level-stream-outline element; the LIVE voice level shows in that element's own inline style
-    // / geometry (it collapses when silent, animates when the person talks). Dump per-participant so we
-    // can compare the speaking tile's outline against the silent ones and read off the real
-    // discriminator. Keyed by name so each participant prints ~once/6s (not one tile total). Remove with the fix.
-    try {
-      const now = Date.now();
-      let name = '(?)';
-      try { name = extractName(element) || '(?)'; } catch { /* identity in flux */ }
-      if ((_diagSeen.get(name) ?? 0) > now - 6000) return;
-      _diagSeen.set(name, now);
-      const r = voiceOutline.getBoundingClientRect();
-      log(`[DIAG] has-signal "${name}" — outline style="${voiceOutline.getAttribute('style') || ''}"`
-        + ` class="${voiceOutline.className || ''}" aria-hidden="${voiceOutline.getAttribute('aria-hidden') || ''}"`
-        + ` box=${Math.round(r.width)}x${Math.round(r.height)}`);
-    } catch { /* diagnostic must never throw */ }
-  }
-
+  // A participant's tile carries a `[data-tid="voice-level-stream-outline"]` element whenever it
+  // emits a voice-level signal; that element's class gains `vdi-frame-occlusion` while the person is
+  // actively speaking and drops it when they stop (verified live in the standard web client).
   function detectSpeakingState(element: HTMLElement): { isSpeaking: boolean; hasSignal: boolean } {
     const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
     if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
@@ -207,7 +213,6 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       if (current.classList.contains('vdi-frame-occlusion')) return { isSpeaking: true, hasSignal: true };
       current = current.parentElement;
     }
-    _diagDumpTile(element, voiceOutline);  // DIAGNOSTIC — remove with the fix
     return { isSpeaking: false, hasSignal: true };
   }
 

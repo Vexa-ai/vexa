@@ -9,6 +9,7 @@
  */
 export {
   createTeamsSpeakers,
+  teamsNameFromStream,
   teamsParticipantSelectors,
   teamsNameSelectors,
   teamsParticipantIdSelectors,
