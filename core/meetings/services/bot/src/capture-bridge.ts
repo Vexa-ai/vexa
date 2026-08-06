@@ -334,8 +334,21 @@ export async function startCaptureBridge(
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
       // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
       // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
+      // Teams delivers the COMPLETE meeting audio as a single server-side mix whose track id is prefixed
+      // "mainAudio" — witnessed live: the standard web client receives exactly ONE audio receiver. The
+      // bot is ALSO handed a redundant track (e.g. a dominant-speaker copy) whose audio is already inside
+      // that mix; combining both double-feeds every word to the transcriber → repeated words. So on Teams
+      // mix ONLY the mainAudio track. Jitsi keeps combining all tracks (its topology isn't witnessed).
       const setupMix = (): void => {
-        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
+        let streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>;
+        if (isTeams && streams.length) {
+          const mainAudio = streams.filter((s: any) => (s.getAudioTracks?.() || []).some((t: any) => String(t.id || '').toLowerCase().startsWith('mainaudio')));
+          if (!mainAudio.length && !w.__vexaTeamsNoMainWarned) {
+            w.__vexaTeamsNoMainWarned = true;
+            w.logBot?.('[mixed] Teams: no "mainAudio" track among ' + streams.length + ' stream(s) yet — waiting for the mix (never combine 2 → avoids doubling)');
+          }
+          streams = mainAudio;   // Teams: the server mix ALONE; combining a 2nd stream double-transcribes every word
+        }
         if (!streams.length) return;
         if (!w.__vexaMixCtx) {
           w.__vexaMixCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
