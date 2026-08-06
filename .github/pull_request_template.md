@@ -17,7 +17,9 @@
   under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.
   <!-- rights:independent -->
 - [ ] **Employer/client authorization required:** an employer, client, or other entity owns or
-  may control this contribution. I am requesting Vexa's private corporate-authorization process.
+  may control this contribution. I will use Vexa's public blank-agreement index and private return
+  process described in
+  [CLA/README.md](https://github.com/Vexa-ai/vexa/blob/main/CLA/README.md).
   <!-- rights:corporate -->
 - [ ] **Unsure:** I need a private rights review before merge.
   <!-- rights:uncertain -->

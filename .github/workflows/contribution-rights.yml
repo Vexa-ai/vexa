@@ -16,7 +16,9 @@ permissions:
   checks: write
 
 concurrency:
-  group: contribution-rights-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
+  # check_run events have no PR/issue number. Key them by their unique run id so an unrelated
+  # check completion cannot cancel the DCO event before it publishes dco-no-override.
+  group: contribution-rights-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha || github.event.check_run.id || github.run_id }}
   cancel-in-progress: true
 
 jobs:

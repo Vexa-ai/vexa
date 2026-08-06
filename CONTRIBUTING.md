@@ -16,6 +16,9 @@ one-call roadmap fetch, claiming, and the session rules. Security reports: [`SEC
 
 Every new pull request selects exactly one rights path: independent, employer/client-controlled,
 or unsure. Independent contributors sign each commit under DCO 1.1 and do **not** sign an
-individual CLA. Corporate or uncertain contributions enter private rights review while technical
-review continues; only merge waits. Read [`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md) for the
-exact choices, `git commit --signoff` workflow, safe remediation commands, and corporate process.
+individual CLA. For employer/client-controlled work, Vexa's
+[`CLA/` agreement index](CLA/README.md) publishes the current counsel-approved blank corporate
+agreement when available; the executed copy and legal correspondence return privately. Technical
+review continues while authorization is completed; only merge waits. Read
+[`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md) for the exact choices, `git commit --signoff`
+workflow, safe remediation commands, and corporate process.

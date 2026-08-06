@@ -32,13 +32,18 @@ success result.
 
 Choose this path when the contribution is assigned work, was prepared using controlled employer
 or client assets, is sponsored for upstream submission, or may otherwise be owned or controlled
-by another legal entity. Continue to sign your own commits under the DCO; Vexa will privately send
-the rights holder the current approved corporate agreement or a contribution-specific
-authorization. Technical review may continue while that happens, but merge waits.
+by another legal entity. Continue to sign your own commits under the DCO. Vexa publishes the
+current counsel-approved blank corporate agreement, when available, through the canonical
+[`CLA/` agreement index](CLA/README.md); a rights holder can download it without first asking Vexa
+for a private copy. Technical review may continue while authorization is completed, but merge
+waits.
 
-Start the private process by emailing [dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request
-URL and the rights holder's legal/IP contact. Do not attach executed agreements, signatures,
-addresses, employment documents, or private correspondence to a public issue or pull request.
+Have an authorized representative return the executed agreement privately to
+[dmitry@vexa.ai](mailto:dmitry@vexa.ai), with the pull-request URL and the contributors it covers.
+If the agreement index says that no agreement is currently published, use the same address to
+request a contribution-specific authorization route. Do not attach executed agreements,
+signatures, addresses, contributor rosters, employment documents, legal contacts, or private
+correspondence to a public issue or pull request.
 
 ### Unsure
 
@@ -130,4 +135,6 @@ Before activating the gate, repository administrators must:
 3. replace `__BOOTSTRAP_PR__` with this policy PR's number;
 4. require the `contribution-rights` check, with the ruleset bypass list set to none; and
 5. verify the private register, retention rule, return channel, and exact corporate agreement hash
-   with licensed counsel.
+   with licensed counsel; and
+6. publish the approved blank agreement through `CLA/README.md`, including its immutable blob URL,
+   version, effective date, and SHA-256, without publishing any executed copy or personal data.

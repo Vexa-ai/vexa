@@ -10,12 +10,16 @@ The canonical policy and operational commands live in
 | Path | Contributor action | Merge evidence |
 |---|---|---|
 | Independent | Select the declaration and sign each commit with `git commit --signoff` | Declaration plus the required DCO check; no individual CLA |
-| Employer/client-controlled | Select the corporate path and provide a legal/IP contact privately | Individual DCO plus a private authorization receipt bound to the current PR head |
+| Employer/client-controlled | Select the corporate path, download the current public blank agreement when available, and return the executed copy privately | Individual DCO plus a private authorization receipt bound to the current PR head |
 | Unsure | Select unsure as early as possible | Rights review resolves the path before merge |
 
 Technical review may continue during rights review. A later push invalidates a corporate
 verification, and only a designated verifier can bind a private receipt to the new head. Executed
 agreements, signatures, addresses, and employment information never belong in public PR comments.
+The canonical [`CLA/` agreement index](https://github.com/Vexa-ai/vexa/blob/main/CLA/README.md)
+publishes the current counsel-approved blank form and immutable version metadata when one is
+available; blank terms are public, while executed instruments and legal correspondence remain
+private.
 
 ## Agent-assisted flow
 
