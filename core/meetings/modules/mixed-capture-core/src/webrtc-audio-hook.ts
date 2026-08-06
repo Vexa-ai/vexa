@@ -35,6 +35,9 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
   win.__vexaRemoteAudioHookInstalled = true;
   win.__vexaInjectedAudioElements = win.__vexaInjectedAudioElements || [];
   win.__vexaCapturedRemoteAudioStreams = win.__vexaCapturedRemoteAudioStreams || [];
+  // Dedup: BOTH addEventListener('track') AND the ontrack-setter wrapper below fire handleTrack for the
+  // same RTCTrackEvent, so without this each remote track is mirrored twice (duplicate <audio> elements).
+  win.__vexaMirroredTrackIds = win.__vexaMirroredTrackIds || new Set();
   // Collect peer connections too (parity with screen-content.ts __vexa_peer_connections).
   win.__vexa_peer_connections = win.__vexa_peer_connections || [];
 
@@ -43,6 +46,8 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
   const handleTrack = (event: RTCTrackEvent) => {
     try {
       if (!event.track || event.track.kind !== 'audio') return;
+      if (win.__vexaMirroredTrackIds.has(event.track.id)) return;   // already mirrored (both track paths fire)
+      win.__vexaMirroredTrackIds.add(event.track.id);
       const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
 
       const audioEl = document.createElement('audio');
