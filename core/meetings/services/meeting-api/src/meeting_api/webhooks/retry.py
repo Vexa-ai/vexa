@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .delivery import build_headers
@@ -62,6 +63,16 @@ _CLAIM_AT = "_claimed_at"
 _CLAIM_TOKEN = "_claim"
 
 Transport = Callable[[str, bytes, Dict[str, str]], Awaitable[Any]]
+
+
+def _transport_error_category(error: Exception) -> str:
+    """Classify a transport failure without retaining attacker-controlled text."""
+    name = type(error).__name__.lower()
+    if "timeout" in name:
+        return "transport_timeout"
+    if "connect" in name or "network" in name:
+        return "transport_connection_error"
+    return "transport_exception"
 
 
 class RetryQueue:
@@ -101,9 +112,9 @@ class RetryQueue:
 async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optional[int], Optional[str]]:
     """Attempt one queued delivery.
 
-    Returns ``(success, status_code, error)``. ``success`` is True on a 2xx (or a
-    permanent 4xx → stop retrying); the status_code/error are surfaced so a permanently
-    failed entry can be dead-lettered with its last outcome.
+    Returns ``(success, status_code, error_category)``. ``success`` is True on a
+    2xx (or a permanent 4xx → stop retrying); status/error category are surfaced
+    so a permanently failed entry can be dead-lettered without exception text.
     """
     url = entry["url"]
     envelope = entry["payload"]
@@ -120,7 +131,7 @@ async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optiona
             return False, code, f"HTTP {code}"  # transient — re-enqueue
         return True, code, f"HTTP {code}"  # 4xx (non-429) — permanent, drop (don't re-enqueue)
     except Exception as e:  # noqa: BLE001 — transport error is transient
-        return False, None, str(e)
+        return False, None, _transport_error_category(e)
 
 
 async def _dead_letter(
@@ -161,11 +172,15 @@ async def _dead_letter(
     except Exception:  # noqa: BLE001 — never let logging wiring break the drain
         log_event = None
     if log_event is not None:
+        try:
+            target_host = urlsplit(str(record["url"] or "")).hostname or "?"
+        except Exception:  # noqa: BLE001 — telemetry must not break the queue
+            target_host = "?"
         log_event(
             "webhook_dead_lettered", audience="system", level="warning",
             span="webhook.retry_drain",
             fields={
-                "url": record["url"], "label": record["label"],
+                "target_host": target_host, "label": record["label"],
                 "attempts": record["attempts"], "reason": reason,
                 "last_status_code": status_code, "last_error": error,
                 "created_at": record["created_at"],

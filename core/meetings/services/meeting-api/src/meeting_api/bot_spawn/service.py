@@ -29,6 +29,12 @@ from typing import Any, Optional
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
+from ..service_authority import (
+    AllowAllServiceAuthority,
+    ServiceAuthorityDenied,
+    ServiceAuthorityRequest,
+    ServiceAuthorityUnavailable,
+)
 from .env_flags import env_flag
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .ports import (
@@ -142,6 +148,7 @@ async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
     *,
+    authority=None,
     user_id: int,
     platform: str,
     native_meeting_id: str,
@@ -177,6 +184,7 @@ async def request_bot(
     ``<= 0`` means the quota is DEPLETED (every spawn rejected) — 0 is never "unlimited"; ``None``
     means no cap was provided, so no pre-check.
     """
+    authority = authority or AllowAllServiceAuthority()
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
 
@@ -302,6 +310,51 @@ async def request_bot(
             )
             raise AuthSessionBusy(conflict["id"], auth_userdata_path)
 
+    # The service identity exists before any meeting row or workload. It is a
+    # per-run identity (not the database row id): continued runs reuse a
+    # meeting row but remain distinct delivered services and distinct billing
+    # settlements. The admitted decision is frozen into meeting.data and
+    # therefore travels with the terminal meeting projection.
+    connection_id = str(uuid.uuid4())
+    service_identity = f"meeting-session:{connection_id}"
+    active_concurrency = await repo.count_active_bots(
+        user_id=user_id,
+        exclude_meeting_id=(
+            reused_row["id"] if reused_row is not None else None
+        ),
+    )
+    if transcription_provider is None and authority.configured:
+        raise ServiceAuthorityUnavailable(
+            "configured service authority requires resolved service provenance"
+        )
+    authority_request = ServiceAuthorityRequest.admit(
+        user_id=user_id,
+        request_id=f"{service_identity}:admit",
+        service_identity=service_identity,
+        transcription_provider=transcription_provider or "none",
+        active_concurrency=active_concurrency,
+    )
+    authority_decision = await authority.decide(authority_request)
+    if (
+        authority_decision.enforced
+        and not authority_decision.allow
+    ):
+        raise ServiceAuthorityDenied(
+            authority_decision.reason,
+            authority_decision.decision_id,
+        )
+    authority_record = {
+        **authority_decision.to_record(),
+        "mode": authority.mode,
+        "service_mode": "bot",
+        "transcription_provider": authority_request.transcription_provider,
+        "lifecycle_contract_version":
+            authority_request.lifecycle_contract_version,
+        "last_boundary_at": None,
+        "last_decision_id": authority_decision.decision_id,
+        "teardown_confirmed": False,
+    }
+
     if reused_row is not None:
         # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not
         # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
@@ -327,6 +380,7 @@ async def request_bot(
                 "transcribe_enabled": transcribe_enabled,
                 "recording_enabled": recording_enabled,
                 "transcription_provider": transcription_provider,
+                "service_authority": authority_record,
             },
         )
     else:
@@ -337,6 +391,7 @@ async def request_bot(
         meeting_data["recording_enabled"] = recording_enabled
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
+        meeting_data["service_authority"] = authority_record
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
@@ -366,7 +421,6 @@ async def request_bot(
     meeting_id = row["id"]
 
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
-    connection_id = str(uuid.uuid4())
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
     internal_secret = internal_secret if internal_secret is not None else os.getenv(

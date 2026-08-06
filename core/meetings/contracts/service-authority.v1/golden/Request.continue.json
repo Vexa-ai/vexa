@@ -1,0 +1,12 @@
+{
+  "user_id": 41,
+  "action": "continue",
+  "request_id": "meeting-session-41:continue:2026-07-29T08:01:00+00:00",
+  "service_identity": "meeting-session-41",
+  "service_mode": "bot",
+  "transcription_provider": "vexa",
+  "lifecycle_contract_version": "2026-07-28",
+  "active_concurrency": 1,
+  "admitted_at": "2026-07-29T08:00:00+00:00",
+  "boundary_at": "2026-07-29T08:01:00+00:00"
+}

@@ -157,6 +157,7 @@ def create_app(
     # bot_spawn ports
     meeting_repo: Optional["_bot_spawn.MeetingRepo"] = None,
     runtime: Optional["_bot_spawn.RuntimeClient"] = None,
+    service_authority: Optional["object"] = None,
     # recordings ports
     recording_repo: Optional["_recordings.RecordingRepo"] = None,
     storage: Optional["_recordings.Storage"] = None,
@@ -167,6 +168,8 @@ def create_app(
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
+    # operator-owned terminal callback — boot-frozen destination, never user/meeting input
+    system_webhook_sink: Optional["object"] = None,
     # per-user delivery ledger (#841) — the queryable record GET /webhooks/deliveries reads. The
     # lifecycle callback records each delivery outcome here so the dashboard's Delivery History
     # reflects real deliveries, not just the Test button. None → in-memory fake (app-factory/tests).
@@ -218,6 +221,11 @@ def create_app(
         meeting_repo = _bot_spawn_fakes().InMemoryMeetingRepo()
     if runtime is None:
         runtime = _bot_spawn_fakes().FakeRuntimeClient()
+    if service_authority is None:
+        from .service_authority import AllowAllServiceAuthority
+
+        service_authority = AllowAllServiceAuthority()
+    app.state.service_authority = service_authority
 
     # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
@@ -233,11 +241,25 @@ def create_app(
     app.state.delivery_ledger = delivery_ledger
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
-                     delivery_ledger)
+    _mount_lifecycle(
+        app,
+        sink,
+        meeting_repo,
+        webhook_sink,
+        system_webhook_sink,
+        redis,
+        transcript_finalizer,
+        delivery_ledger,
+    )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
-    app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
+    app.include_router(
+        _bot_spawn.build_router(
+            meeting_repo,
+            runtime,
+            service_authority,
+        )
+    )
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
@@ -316,6 +338,7 @@ def _mount_lifecycle(
     sink: LifecycleSink,
     meeting_repo: "_bot_spawn.MeetingRepo",
     webhook_sink: "object" = None,
+    system_webhook_sink: "object" = None,
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
@@ -427,22 +450,53 @@ def _mount_lifecycle(
                         persisted.get("status"),
                         persisted.get("data"),
                     )
+        change = None
         try:
             change = sink.apply_change(
                 body,
                 transition_source=transition_source,
                 force_terminal_on_destroy=force_terminal_on_destroy,
             )
-        except IllegalTransition as e:
-            return (
-                409,
-                {
-                    "status": "error", "detail": str(e),
-                    "connection_id": e.connection_id,
-                    "from": e.frm.value if e.frm is not None else None,
-                    "to": e.to.value,
-                },
-            )
+        except IllegalTransition as first_error:
+            # Multiple API replicas each hold an independent, non-durable FSM. A replica that saw
+            # `joining` can receive `completed` after another replica persisted `active`/`stopping`.
+            # Refresh only after the local edge is illegal: this lets durable state repair a stale
+            # replica without letting a lagging DB read regress a live in-process record.
+            persisted = None
+            if connection_id:
+                try:
+                    persisted = await meeting_repo.get_lifecycle_state_by_session(
+                        session_uid=connection_id
+                    )
+                except Exception as refresh_error:  # noqa: BLE001 — preserve truthful 409 below
+                    log_event("lifecycle_refresh_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"error": str(refresh_error)})
+            if persisted:
+                sink.store.rehydrate(
+                    connection_id,
+                    persisted.get("status"),
+                    persisted.get("data"),
+                    replace_stale=True,
+                )
+                try:
+                    change = sink.apply_change(
+                        body,
+                        transition_source=transition_source,
+                        force_terminal_on_destroy=force_terminal_on_destroy,
+                    )
+                except IllegalTransition as refreshed_error:
+                    first_error = refreshed_error
+            if change is None:
+                e = first_error
+                return (
+                    409,
+                    {
+                        "status": "error", "detail": str(e),
+                        "connection_id": e.connection_id,
+                        "from": e.frm.value if e.frm is not None else None,
+                        "to": e.to.value,
+                    },
+                )
         rec = change.record
         # Build + record the status_change envelope only on a REAL advance — an idempotent replay
         # (change.no_op, e.g. the bot's 3x terminal retry) must NOT double-count it. The persist, the
@@ -572,6 +626,59 @@ def _mount_lifecycle(
             )
             if typed_envelope is not None:
                 app.state.typed_webhooks.append(typed_envelope)
+        # The operator callback is a separate trust boundary from a customer's
+        # webhook. It receives terminal service facts only, through a destination
+        # frozen by deployment config. A transient failure is retained by the
+        # sink's dedicated retry queue; it never falls back to a user URL.
+        if (
+            system_webhook_sink is not None
+            and typed_envelope is not None
+            and typed_envelope.get("event_type") in {
+                "meeting.completed",
+                "bot.failed",
+            }
+        ):
+            try:
+                result = await system_webhook_sink.deliver(
+                    typed_envelope,
+                    label=f"meeting:{meeting_row.get('id')}"
+                    if isinstance(meeting_row, dict)
+                    else f"session:{rec.connection_id}",
+                )
+                if result is not None:
+                    log_event(
+                        "system_webhook_delivery",
+                        audience="system",
+                        level=(
+                            "info"
+                            if result.status == "delivered"
+                            else "warning"
+                        ),
+                        span="lifecycle.callback",
+                        meeting_id=(
+                            meeting_row.get("id")
+                            if isinstance(meeting_row, dict)
+                            else None
+                        ),
+                        fields={
+                            "outcome": result.status,
+                            "event_type": typed_envelope.get("event_type"),
+                            "status_code": result.status_code,
+                        },
+                    )
+            except Exception as e:  # noqa: BLE001 — terminal fact stays in meeting storage
+                log_event(
+                    "system_webhook_delivery_failed",
+                    audience="system",
+                    level="warning",
+                    span="lifecycle.callback",
+                    meeting_id=(
+                        meeting_row.get("id")
+                        if isinstance(meeting_row, dict)
+                        else None
+                    ),
+                    fields={"error_type": type(e).__name__},
+                )
         # Deliver the sealed webhook.v1 envelopes (meeting.status_change + the typed event, if any)
         # to the user's configured endpoint (per-user config rides on meeting.data — set at spawn
         # from identity via the gateway; NO users-table read). The sink's per-user event filter
@@ -816,6 +923,7 @@ def _mount_lifecycle(
 
             await synthesize_terminal_for_dead_workload(
                 meeting_repo, workload_id, state, _drive_terminal,
+                event_at=body.get("at"),
                 log=_logging.getLogger("meeting_api.runtime.callback"),
             )
         except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the terminal backstop

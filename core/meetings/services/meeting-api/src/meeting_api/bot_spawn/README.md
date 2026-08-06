@@ -18,6 +18,8 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
 
 ## The flow (P2 core + P3 control-plane)
 construct the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
+→ mint a per-run service identity → **optional service-authority admission before any row/runtime
+effect (403 deny, 503 unavailable)**
 → **continue_meeting (reuse a TERMINAL prior row)** or insert a fresh `Meeting` row (status
 `requested`) → mint the MeetingToken + build the `invocation.v1` invocation → spawn the `runtime.v1`
 `WorkloadSpec` (`profile="meeting-bot"`; the invocation rides as the one `BOT_CONFIG` env var) →
@@ -50,3 +52,20 @@ Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.
+
+### Optional external service authority
+
+`VEXA_SERVICE_AUTHORITY_CONFIG` enables the sealed, policy-free
+`service-authority.v1` seam. The request contains authoritative user/service identity, service
+mode, frozen transcription provider, concurrency, and lifecycle timing—never an email, payment
+provider ID, price, balance, transcription URL, or credential. The exact JSON bytes are signed
+with `VEXA_SERVICE_AUTHORITY_SECRET`.
+
+The admitted decision is frozen in `meeting.data.service_authority`. A meeting-api-owned sweep
+asks again at every admitted-time + N-minute boundary. An enforced stop is persisted before the
+runtime teardown and converges after restart; repeated sweeps never apply the same decision twice.
+Observe-only sessions are never later reinterpreted as enforced sessions.
+
+No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
+cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
+a hosted hard-spend-cap claim.

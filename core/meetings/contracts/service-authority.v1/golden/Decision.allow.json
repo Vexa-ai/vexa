@@ -1,0 +1,10 @@
+{
+  "authority_version": "service-authority.v1",
+  "decision_id": "decision-allow-41",
+  "request_id": "meeting-session-41:admit",
+  "service_identity": "meeting-session-41",
+  "allow": true,
+  "reason": "allowed",
+  "decided_at": "2026-07-29T08:00:00Z",
+  "stop_scope": null
+}

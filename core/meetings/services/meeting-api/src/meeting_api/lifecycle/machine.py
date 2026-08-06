@@ -278,6 +278,8 @@ class MeetingStore:
         connection_id: str,
         persisted_status: Optional[str],
         persisted_data: Optional[Dict[str, Any]] = None,
+        *,
+        replace_stale: bool = False,
     ) -> MeetingRecord:
         """Seed (or reconcile) the in-memory record from the DB's CURRENT meeting status.
 
@@ -286,12 +288,12 @@ class MeetingStore:
         (without it, a terminal event arriving at an empty store would start at status=None and be
         rejected as an illegal transition).
 
-        Only seeds when the in-memory record has NO status yet (status is None) — a live record that
-        already advanced in-process is the source of truth and is never overwritten by a (possibly
-        staler) DB read.
+        Ordinarily this seeds only an empty record, so a lagging DB read cannot regress live local
+        state. ``replace_stale`` is reserved for the HTTP adapter after a local transition was proven
+        illegal; there the durable row may represent progress committed by another API replica.
         """
         rec = self.get_or_create(connection_id)
-        if rec.status is None:
+        if rec.status is None or replace_stale:
             seeded = bot_status_from_persisted(persisted_status)
             if seeded is not None:
                 rec.status = seeded
