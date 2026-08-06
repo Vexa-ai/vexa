@@ -57,6 +57,9 @@ export interface LayoutService {
   setActiveTab(tab: ActiveTab | null): void;
   /** switch which chat session the right rail shows (Sessions list / New chat) */
   setActiveSession(id: string): void;
+  /** Rename an already-open tab by its logical id (no-op if it isn't open). Lets a canvas set its
+   *  real title once its data loads — e.g. a meeting opened by `?meeting=<id>` before the list loaded. */
+  setTitle(id: string, title: string): void;
   setActiveList(id: string): void;
   toggleLeft(): void;
   toggleRight(): void;
@@ -148,6 +151,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
     setActiveTab(tab) { store.set((st) => ({ ...st, activeTab: tab })); },
     setActiveSession(id) { store.set((st) => ({ ...st, activeSession: id })); writeLS(LS_SESSION, id); },
+    setTitle(id, title) { const p = api?.getPanel(id); if (p && title) p.api.setTitle(title); },
     goBack() {
       const snap = hist.pop();
       if (!snap || !api) return false;
