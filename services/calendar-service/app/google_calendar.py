@@ -67,6 +67,49 @@ async def list_events(
         return resp.json()
 
 
+async def create_meet_event(
+    access_token: str,
+    *,
+    summary: str = "Aimable session",
+    description: str = "",
+    duration_minutes: int = 60,
+) -> dict:
+    """Create an ad-hoc Google Calendar event with a Google Meet link (AIM-1429
+    solo mode). Returns the created event dict; the Meet URL is read out of it
+    with ``extract_meeting_url``. Requires a WRITE calendar scope
+    (calendar.events) on the token — the read-only scope will 403 here.
+    """
+    import uuid
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    body = {
+        "summary": summary,
+        "description": description,
+        "start": {"dateTime": now.isoformat()},
+        "end": {"dateTime": (now + timedelta(minutes=duration_minutes)).isoformat()},
+        "conferenceData": {
+            "createRequest": {
+                # Unique per request so Google mints a fresh Meet space.
+                "requestId": uuid.uuid4().hex,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            EVENTS_URL,
+            params={"conferenceDataVersion": "1"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --- Meeting URL extraction ---
 
 MEETING_URL_PATTERNS = [
