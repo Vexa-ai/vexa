@@ -675,6 +675,7 @@ def _meeting_grounding(
         "title": str(m.get("title") or "").strip() or str(native),
         "platform": platform,
         "native": str(native),
+        "meeting_id": str(m.get("meeting_id") or native),   # the ROW id — the meeting's stable ?meeting= link
     }
 
     if phase == "prep":
