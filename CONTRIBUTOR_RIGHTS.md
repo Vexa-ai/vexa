@@ -59,6 +59,11 @@ revenue, procurement, or permission to use the organization's name or marks.
 
 ## Fixing a DCO failure
 
+On a published branch, prefer the failed DCO check's author-only remediation message when it is
+available. It adds the original author's certification in a new commit without rewriting shared
+history. Copy that message exactly; never use a maintainer override. An agent may prepare the
+remediation only after the named author explicitly approves it.
+
 For the latest commit:
 
 ```bash
