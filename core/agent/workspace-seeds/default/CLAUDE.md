@@ -28,6 +28,11 @@ to record, research, or restructure knowledge, you **write it into this repo** a
 
   You may add more frontmatter fields (role, company, tags, etc.) and a markdown body below the
   second `---`. Cross-reference other entities with `[[wikilinks]]` using their title.
+- **Meeting notes** (`kg/entities/meeting/*`) carry a `recording:` frontmatter field holding a markdown
+  link to each recorded session's recording & transcript:
+  `recording: [▶ Recording & transcript](/?meeting=<meeting_id>)` (the meeting's row id). A meeting can
+  have several sessions — when you continue a note for a later session, KEEP the earlier links and ADD
+  this session's after them. The client renders the frontmatter markdown link and opens the canvas from it.
 
 **Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
 `[[wikilinks]]` as clickable entity chips and workspace file paths (backticked or as markdown
