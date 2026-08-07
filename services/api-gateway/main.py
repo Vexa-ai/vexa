@@ -41,6 +41,9 @@ MCP_URL = os.getenv("MCP_URL")
 CALENDAR_SERVICE_URL = os.getenv("CALENDAR_SERVICE_URL")  # Optional — calendar-service
 AGENT_API_URL = os.getenv("AGENT_API_URL")  # Optional — agent-api for chat
 RUNTIME_API_URL = os.getenv("RUNTIME_API_URL", "http://runtime-api:8090")
+# Ad-hoc audio transcription passthrough (push-to-talk dictation, AIM-1145).
+TRANSCRIPTION_SERVICE_URL = os.getenv("TRANSCRIPTION_SERVICE_URL")
+TRANSCRIPTION_SERVICE_TOKEN = os.getenv("TRANSCRIPTION_SERVICE_TOKEN")
 
 # Public share-link settings (for "ChatGPT read from URL" flows)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
@@ -62,6 +65,7 @@ ROUTE_SCOPES = {
     "/b/": {"browser"},
     "/transcripts": {"tx"},
     "/meetings": {"tx"},
+    "/v1/audio": {"tx"},
 }
 
 # --- Validation at startup ---
@@ -284,7 +288,7 @@ logger = logging.getLogger("api_gateway")
 
 
 # --- Helper for Forwarding ---
-async def forward_request(client: httpx.AsyncClient, method: str, url: str, request: Request, *, require_auth: bool = True) -> Response:
+async def forward_request(client: httpx.AsyncClient, method: str, url: str, request: Request, *, require_auth: bool = True, extra_headers: dict[str, str] | None = None) -> Response:
     # Copy original headers, converting to a standard dict
     # Exclude host, content-length, transfer-encoding as they are handled by httpx/server
     excluded_headers = {"host", "content-length", "transfer-encoding"}
@@ -357,6 +361,10 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
                 )
 
     # Forward query parameters
+    if extra_headers:
+        for k, v in extra_headers.items():
+            headers[k.lower()] = v
+
     forwarded_params = dict(request.query_params)
 
     content = await request.body()
@@ -638,6 +646,16 @@ async def calendar_connect_proxy(request: Request):
     url = f"{CALENDAR_SERVICE_URL}/calendar/connect"
     return await forward_request(app.state.http_client, "POST", url, request)
 
+@app.post("/calendar/create-meeting",
+          tags=["Calendar"],
+          summary="Create an ad-hoc Google Meet on the user's calendar (solo mode)",
+          dependencies=[Depends(api_key_scheme)])
+async def calendar_create_meeting_proxy(request: Request):
+    if not CALENDAR_SERVICE_URL:
+        raise HTTPException(status_code=501, detail="Calendar service not configured")
+    url = f"{CALENDAR_SERVICE_URL}/calendar/create-meeting"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
 @app.get("/calendar/status",
          tags=["Calendar"],
          summary="Check calendar connection status",
@@ -814,6 +832,21 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
     """Forward request to Transcription Collector to get a transcript."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
+
+
+@app.post("/v1/audio/transcriptions",
+         tags=["Transcriptions"],
+         summary="Transcribe an ad-hoc audio clip (no meeting/bot)",
+         description="OpenAI-compatible passthrough to transcription-service for push-to-talk dictation. Requires a tx-scoped API key.",
+         dependencies=[Depends(api_key_scheme)])
+async def transcribe_audio_proxy(request: Request):
+    """Forward a multipart audio body to transcription-service and return its JSON."""
+    if not TRANSCRIPTION_SERVICE_URL:
+        raise HTTPException(status_code=501, detail="Transcription service not configured")
+    base = TRANSCRIPTION_SERVICE_URL.rstrip("/")
+    url = base if base.endswith("/v1/audio/transcriptions") else f"{base}/v1/audio/transcriptions"
+    extra = {"Authorization": f"Bearer {TRANSCRIPTION_SERVICE_TOKEN}"} if TRANSCRIPTION_SERVICE_TOKEN else None
+    return await forward_request(app.state.http_client, "POST", url, request, require_auth=True, extra_headers=extra)
 
 
 # --- Public Transcript Share Links (no API integration needed by client) ---
