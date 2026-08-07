@@ -24,6 +24,9 @@ The only thing that changes between platforms is the `platform` value.
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
       -d '{"platform":"zoom","native_meeting_id":"81234567890","bot_name":"Vexa"}'
     ```
+
+    Zoom joins via the **web client** in 0.12.x; the native SDK / OBF-token path is not
+    carried and returns with the Zoom track — see [Roadmap → Status](/roadmap/status).
   </Tab>
   <Tab title="Microsoft Teams">
     ```bash
