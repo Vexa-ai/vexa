@@ -122,5 +122,214 @@
         ]
       }
     ]
-  }
+  },
+  "redirects": [
+    {
+      "source": "/vexa-lite-deployment",
+      "destination": "/quickstart",
+      "permanent": false
+    },
+    {
+      "source": "/user_api_guide",
+      "destination": "/api/meetings"
+    },
+    {
+      "source": "/getting-started",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/api/bots",
+      "destination": "/api/meetings#send-a-bot-to-a-meeting"
+    },
+    {
+      "source": "/websocket",
+      "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/self-hosted-management",
+      "destination": "/authentication"
+    },
+    {
+      "source": "/recording-storage",
+      "destination": "/how-to/recordings"
+    },
+    {
+      "source": "/api/transcripts",
+      "destination": "/api/meetings#get-the-transcript"
+    },
+    {
+      "source": "/ui-dashboard",
+      "destination": "/sdks",
+      "permanent": false
+    },
+    {
+      "source": "/platforms/google-meet",
+      "destination": "/how-to/send-a-bot"
+    },
+    {
+      "source": "/scaling",
+      "destination": "/deployment-kubernetes"
+    },
+    {
+      "source": "/transcription-quality",
+      "destination": "/how-to/custom-stt"
+    },
+    {
+      "source": "/zoom-app-setup",
+      "destination": "/how-to/send-a-bot",
+      "permanent": false
+    },
+    {
+      "source": "/platforms/microsoft-teams",
+      "destination": "/how-to/send-a-bot"
+    },
+    {
+      "source": "/bot-overview",
+      "destination": "/core/meetings"
+    },
+    {
+      "source": "/platforms/zoom",
+      "destination": "/how-to/send-a-bot"
+    },
+    {
+      "source": "/integrations",
+      "destination": "/how-to/overview",
+      "permanent": false
+    },
+    {
+      "source": "/api/recordings",
+      "destination": "/api/meetings#recordings"
+    },
+    {
+      "source": "/speaker-identification",
+      "destination": "/api/meetings#speaker-attributed-transcripts"
+    },
+    {
+      "source": "/meeting-ids",
+      "destination": "/api/meetings#platforms"
+    },
+    {
+      "source": "/api/bots.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/token-scoping",
+      "destination": "/authentication#scopes"
+    },
+    {
+      "source": "/errors-and-retries",
+      "destination": "/api/errors"
+    },
+    {
+      "source": "/security",
+      "destination": "/security-compliance"
+    },
+    {
+      "source": "/api/transcripts.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/vexa-lite-deployment.md",
+      "destination": "/quickstart.md",
+      "permanent": false
+    },
+    {
+      "source": "/websocket.md",
+      "destination": "/how-to/stream-transcript.md"
+    },
+    {
+      "source": "/self-hosted-management.md",
+      "destination": "/authentication.md"
+    },
+    {
+      "source": "/user_api_guide.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/getting-started.md",
+      "destination": "/quickstart.md"
+    },
+    {
+      "source": "/api/recordings.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/recording-storage.md",
+      "destination": "/how-to/recordings.md"
+    },
+    {
+      "source": "/transcription-quality.md",
+      "destination": "/how-to/custom-stt.md"
+    },
+    {
+      "source": "/scaling.md",
+      "destination": "/deployment-kubernetes.md"
+    },
+    {
+      "source": "/platforms/google-meet.md",
+      "destination": "/how-to/send-a-bot.md"
+    },
+    {
+      "source": "/api-reference",
+      "destination": "/api/meetings",
+      "permanent": false
+    },
+    {
+      "source": "/platforms/zoom.md",
+      "destination": "/how-to/send-a-bot.md"
+    },
+    {
+      "source": "/speaker-identification.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/platforms/microsoft-teams.md",
+      "destination": "/how-to/send-a-bot.md"
+    },
+    {
+      "source": "/api-reference/transcription",
+      "destination": "/api/meetings#get-the-transcript",
+      "permanent": false
+    },
+    {
+      "source": "/bot-overview.md",
+      "destination": "/core/meetings.md"
+    },
+    {
+      "source": "/ui-dashboard.md",
+      "destination": "/sdks.md",
+      "permanent": false
+    },
+    {
+      "source": "/meeting-ids.md",
+      "destination": "/api/meetings.md"
+    },
+    {
+      "source": "/zoom-app-setup.md",
+      "destination": "/how-to/send-a-bot.md",
+      "permanent": false
+    },
+    {
+      "source": "/security.md",
+      "destination": "/security-compliance.md"
+    },
+    {
+      "source": "/errors-and-retries.md",
+      "destination": "/api/errors.md"
+    },
+    {
+      "source": "/token-scoping.md",
+      "destination": "/authentication.md"
+    },
+    {
+      "source": "/integrations.md",
+      "destination": "/how-to/overview.md",
+      "permanent": false
+    },
+    {
+      "source": "/self-hosting",
+      "destination": "/deployment",
+      "permanent": false
+    }
+  ]
 }
