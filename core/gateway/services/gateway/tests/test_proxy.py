@@ -80,6 +80,73 @@ def test_insufficient_scope_is_403():
     assert "scope" in r.json()["detail"].lower()
 
 
+def _bot_only():
+    """A `bot`-scoped token (no `tx`) — the key a headless bot-runner holds."""
+    return FakeAuthorizer(user={"user_id": 7, "scopes": ["bot"], "max_concurrent": 1})
+
+
+def test_bot_scope_reads_own_meetings():
+    """#1062: the SAME key that spawns a bot must read that bot's meetings. A `bot`-scoped token on
+    GET /meetings now passes (was a 403 — /meetings required `tx` only), forwarding to meeting-api,
+    which owner-scopes the rows to this user_id. Fixes the "send a bot → can't list its meetings" gap."""
+    client, downstream = _client(authorizer=_bot_only())
+    r = client.get("/meetings", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/meetings") and "meeting-api" in downstream.last["url"]
+    assert downstream.last["headers"]["x-user-id"] == "7"  # owner-scoped downstream, not client-set
+
+
+def test_bot_scope_reads_own_transcript_by_id():
+    """#1062: a `bot`-scoped token on GET /transcripts/by-id/{id} now passes (was 403 — /transcripts
+    required `tx` only). The by-row-id read is owner-scoped downstream, so the bot key reads ONLY the
+    transcript of a meeting this user owns. Completes the one-key "send a bot → read its transcript" flow."""
+    client, downstream = _client(authorizer=_bot_only())
+    r = client.get("/transcripts/by-id/1234", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/transcripts/by-id/1234")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_bot_scope_reads_own_native_transcript():
+    """#1062: same carve for the native-keyed transcript read GET /transcripts/{platform}/{native}."""
+    client, downstream = _client(authorizer=_bot_only())
+    r = client.get("/transcripts/google_meet/abc-defg-hij", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["url"].endswith("/transcripts/google_meet/abc-defg-hij")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_bot_scope_still_reads_bots():
+    """#1062 regression guard: widening /meetings + /transcripts to accept `bot` must not affect
+    /bots — a `bot`-scoped token still reaches its own /bots routes."""
+    client, _ = _client(authorizer=_bot_only())
+    assert client.get("/bots/status", headers=AUTH).status_code == 200
+
+
+def test_tx_only_token_still_denied_on_bots():
+    """#1062 regression guard: the fix must NOT weaken /bots. A `tx`-only token (transcription-only)
+    still 403s on a /bots route — scopes stay a real boundary; only the redundant strictness on the
+    user-scoped read routes is removed. (Duplicates test_insufficient_scope_is_403 as an explicit
+    #1062 non-regression anchor.)"""
+    client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code == 403
+    assert "scope" in r.json()["detail"].lower()
+
+
+def test_tx_scope_still_reads_meetings_and_transcripts():
+    """#1062 regression guard: `tx` remains a valid reader of /meetings + /transcripts (the fix ADDs
+    `bot` alongside `tx`, it does not replace it) — the existing transcription-only integration path
+    is untouched."""
+    client, downstream = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))
+    assert client.get("/meetings", headers=AUTH).status_code == 200
+    assert downstream.last["url"].endswith("/meetings")
+    assert client.get("/transcripts/by-id/1234", headers=AUTH).status_code == 200
+    assert downstream.last["url"].endswith("/transcripts/by-id/1234")
+
+
 def test_authed_request_passes_body_and_status_verbatim():
     """On success the downstream status + body are returned verbatim."""
     downstream = FakeDownstream(status_code=201, body={"id": 99, "platform": "google_meet"})
