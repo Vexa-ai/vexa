@@ -42,3 +42,18 @@ json.dump(d,open("package.json","w"),indent=2); open("package.json","a").write("
 PY
   fi
 fi
+
+# De-robot the Vexum surface (vexa-platform#239): noindex every docs.core.vexa.ai page.
+# PROJECTION-ONLY — pairs with the carve/overrides/docs-* files; the mono's docs.json
+# must never carry this key (it would noindex docs.vexa.ai).
+if [ -f docs/docs/docs.json ]; then
+  python3 - <<'PY'
+import json
+p = "docs/docs/docs.json"
+d = json.load(open(p))
+d["seo"] = {"metatags": {"robots": "noindex, nofollow"}}
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+print("derobot: seo.metatags.robots=noindex,nofollow stamped on docs.json")
+PY
+fi
