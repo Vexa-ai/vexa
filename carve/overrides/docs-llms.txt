@@ -1,0 +1,9 @@
+# Vexa — Vexum governance surface
+
+> docs.core.vexa.ai is the Vexum-governed FINOS contribution surface of Vexa, kept online for
+> human reviewers. It is intentionally excluded from search indexing and AI ingestion.
+
+The canonical documentation and the canonical machine index live at:
+
+- [Vexa documentation](https://docs.vexa.ai/)
+- [Canonical llms.txt](https://docs.vexa.ai/llms.txt)
