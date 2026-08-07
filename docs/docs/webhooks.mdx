@@ -1,0 +1,29 @@
+---
+title: "Webhooks"
+description: "User webhook delivery in 0.12.x — built and module-tested, unproven against a real external receiver."
+---
+
+<Warning>
+User webhooks are present in the codebase but have **never fired against a real external
+receiver** — module tests use an in-memory transport. Treat the feature as untested until a
+live delivery is proven. This page exists so the old `/webhooks` URL states that honestly
+instead of returning a 404 or redirecting to a page that implies a documented, working feature.
+</Warning>
+
+## What exists in code
+
+- Self-serve configuration (`PUT /user/webhook`): URL, secret, and event selection, with the
+  secret masked on read-back.
+- The `webhook.v1` delivery module: HMAC-signed payloads with a retry queue.
+
+## What has not been proven
+
+- No delivery has ever reached a real external receiver; all module tests run against an
+  in-memory transport.
+- There is no settings UI for webhook configuration.
+- Exactly-once emission and outage-durable retry are prepared as
+  [#519](https://github.com/Vexa-ai/vexa/issues/519) and
+  [#520](https://github.com/Vexa-ai/vexa/issues/520), whose acceptance tables carry the
+  live-receiver leg.
+
+The live status row for this feature is maintained on [Roadmap → Status](/roadmap/status).

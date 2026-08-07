@@ -1,0 +1,121 @@
+---
+title: "Vexa Lite (single container)"
+description: "The whole control plane in one container — process runtime backend, no Docker socket, two datastore sidecars."
+---
+
+Vexa Lite packs every control-plane service into a single image (`vexaai/vexa-lite`) and runs
+bots and agent workers as **in-container processes** (`RUNTIME_BACKEND=process`) — no Docker
+socket, no per-bot containers. Two sidecars carry state: Postgres and MinIO. Lite is one of the
+three supported deploy paths (lite · [compose](/deployment) · [Kubernetes](/deployment-kubernetes))
+and ships from the same images and contracts.
+
+## Quick start
+
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make lite
+```
+
+`make lite` (= `make -C deploy/lite all`) writes a minimal `.env` if you don't have one, pulls
+`vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present),
+starts the `vexa-lite-postgres` and `vexa-lite-minio` sidecars on the `vexa-lite-net` Docker
+network, boots the app container, waits on the gateway health endpoint, and probes the three
+front doors:
+
+| Front door | Port |
+|---|---|
+| **gateway** — the public REST API | `8056` |
+| **terminal** — the workbench UI | `3001` |
+| **agent-api** — the agent control plane (reached directly, not via the gateway) | `8100` |
+
+On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and `bot,tx`-scoped API
+keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
+`VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
+
+Transcription needs a backend: point `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`
+at a [transcription unit](/deployment#transcription-the-separate-gpu-unit), or run the bundled
+CPU sidecar:
+
+```bash
+# CPU Whisper (faster-whisper tiny.en, English-only) on :8083 — for trying it, not for real meetings
+make -C deploy/lite up LOCAL_STT=1
+make -C deploy/lite stt-smoke   # synthesizes speech in a container, asserts a transcript comes back
+```
+
+Without a transcription backend, bots join and capture but produce no text — a default
+`POST /bots` answers `503` unless the spawn opts out
+([capture-only](/how-to/send-a-bot#capture-only-no-stt)).
+
+## What's in the container
+
+One supervisord tree runs the services a compose deployment spreads across containers:
+
+| Program | Role |
+|---|---|
+| **gateway** (`:8056`), **terminal** (`:3001`), **agent-api** (`:8100`) | the three published front doors |
+| **meeting-api, admin-api, runtime** | loopback-only (`127.0.0.1`) — reach them with `docker exec` |
+| **valkey** | in-container Redis-compatible store, loopback-only |
+| **Xvfb · fluxbox · pulseaudio · x11vnc · noVNC** | the shared virtual display and audio graph bots run on |
+
+Bots and agent workers are **not** supervisord programs — the runtime spawns them as child
+processes, one per meeting and per agent dispatch. Inspect a running deployment with:
+
+```bash
+docker logs -f vexa-lite                            # all service logs go to stdout
+docker exec vexa-lite supervisorctl status          # the service tree
+docker exec vexa-lite ps aux | grep dist/index.js   # live bot processes
+```
+
+## Configuration
+
+Lite reads the repo-root `.env` (via `docker run --env-file`) plus the flags the Makefile sets
+explicitly. Every key in the [configuration reference](/configuration) applies; mind its warning
+about inline `# comments` in `.env` values — it exists because of Lite's `--env-file` semantics.
+
+If `~/.claude/.credentials.json` exists on the host, `make lite` mounts it read-only into the
+container so agents run on your Claude subscription without copying credentials into `.env`.
+
+## Persistence and upgrade
+
+State lives in the sidecars' named volumes and survives app-container replacement:
+
+| Data | Where |
+|---|---|
+| Users, meetings, transcripts (Postgres) | volume `vexa-lite-pgdata` |
+| Recordings + agent workspaces (MinIO) | volume `vexa-lite-miniodata` |
+| Valkey state and `/workspaces` scratch | **in-container, ephemeral** — mount `/var/lib/redis` yourself if you need it kept |
+
+Upgrading is re-running with a newer image: set `IMAGE_TAG` in `.env` (pin a specific release so
+deploys are reproducible), then `make lite` again — it replaces the app container and leaves the
+sidecars and their volumes untouched. Schema converges in-process on service startup; there is no
+separate migration step.
+
+```bash
+make -C deploy/lite down                                # containers go, volumes stay
+docker volume rm vexa-lite-pgdata vexa-lite-miniodata   # full wipe
+```
+
+## Is this install actually working? — `make probe SURFACE=lite`
+
+```bash
+make probe SURFACE=lite
+```
+
+The probe mints a key and drives the whole journey — spawn → boot → join → transcribe →
+live-view → stop. Lite runs the **real** bot in-process, so a dead meeting URL ends in a truthful
+named failure, never a fake green. The container also carries a Docker `HEALTHCHECK` on the
+gateway's `/health` (30s interval, 120s start period).
+
+## Limits vs compose and Kubernetes
+
+- **One shared display.** Bots share a single Xvfb — best for one browser session at a time.
+  Compose isolates bots in containers; the Helm chart gives each bot its own Pod.
+- **Ephemeral Valkey.** In-container with no volume by default.
+- **Agent API is not gateway-fronted.** Clients reach `:8100` directly; gateway-fronting is
+  roadmap.
+- **No MCP service.** The compose stack's `/mcp` surface does not exist in Lite.
+- **Sidecar ports are unpublished.** Postgres and the MinIO console are reachable only on the
+  Docker network, not from the host.
+
+Outgrown it? Switch to [compose](/deployment) — same images, same contracts. Per-feature honest
+status: [Roadmap → Status](/roadmap/status).

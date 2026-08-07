@@ -92,6 +92,7 @@
         "group": "Deployment & operations",
         "pages": [
           "deployment",
+          "deployment-lite",
           "deployment-kubernetes",
           "configuration",
           "authenticated-bots",
@@ -126,8 +127,7 @@
   "redirects": [
     {
       "source": "/vexa-lite-deployment",
-      "destination": "/quickstart",
-      "permanent": false
+      "destination": "/deployment-lite"
     },
     {
       "source": "/user_api_guide",
@@ -230,8 +230,7 @@
     },
     {
       "source": "/vexa-lite-deployment.md",
-      "destination": "/quickstart.md",
-      "permanent": false
+      "destination": "/deployment-lite.md"
     },
     {
       "source": "/websocket.md",
