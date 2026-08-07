@@ -93,14 +93,22 @@ async def create_meeting(user_id: int = Query(...), db: AsyncSession = Depends(g
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    oauth = ((user.data or {}).get("google_calendar", {}) or {}).get("oauth", {})
+    gc = (user.data or {}).get("google_calendar", {}) or {}
+    oauth = gc.get("oauth", {}) or {}
     refresh_token = oauth.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=400, detail="Calendar not connected")
 
+    # The refresh token is bound to the OAuth client that issued it, so we must
+    # refresh with that per-user client (falling back to env), mirroring sync.py
+    # — using the wrong client returns invalid_client / 400 from Google.
+    client = gc.get("client", {}) or {}
+    client_id = client.get("client_id") or GOOGLE_CLIENT_ID
+    client_secret = client.get("client_secret") or GOOGLE_CLIENT_SECRET
+
     try:
         access_token, _ = await refresh_access_token(
-            GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, refresh_token
+            client_id, client_secret, refresh_token
         )
         event = await create_meet_event(access_token, summary="Aimable session")
     except Exception as e:
