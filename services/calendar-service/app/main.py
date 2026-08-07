@@ -13,8 +13,16 @@ from meeting_api.database import get_db, init_db
 from meeting_api.models import CalendarEvent
 from admin_models.models import User
 from app.sync import sync_user_calendar, schedule_upcoming_bots
+from app.google_calendar import (
+    create_meet_event,
+    detect_platform,
+    extract_meeting_url,
+    refresh_access_token,
+)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 SYNC_INTERVAL_SECONDS = int(os.getenv("SYNC_INTERVAL_SECONDS", "300"))
 
 logging.basicConfig(level=LOG_LEVEL)
@@ -72,6 +80,50 @@ async def connect_calendar(user_id: int = Query(...), db: AsyncSession = Depends
     """Trigger initial sync after OAuth connection."""
     count = await sync_user_calendar(user_id, db)
     return {"status": "connected", "events_synced": count}
+
+
+@app.post("/calendar/create-meeting")
+async def create_meeting(user_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """Create an ad-hoc Google Meet on the user's own calendar and return the
+    join link (AIM-1429 solo mode). Reuses the user's connected-calendar token,
+    so all Google/meeting logic stays in this service. Requires a WRITE calendar
+    scope (calendar.events) on the token — the read-only scope will 403."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    gc = (user.data or {}).get("google_calendar", {}) or {}
+    oauth = gc.get("oauth", {}) or {}
+    refresh_token = oauth.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Calendar not connected")
+
+    # The refresh token is bound to the OAuth client that issued it, so we must
+    # refresh with that per-user client (falling back to env), mirroring sync.py
+    # — using the wrong client returns invalid_client / 400 from Google.
+    client = gc.get("client", {}) or {}
+    client_id = client.get("client_id") or GOOGLE_CLIENT_ID
+    client_secret = client.get("client_secret") or GOOGLE_CLIENT_SECRET
+
+    try:
+        access_token, _ = await refresh_access_token(
+            client_id, client_secret, refresh_token
+        )
+        event = await create_meet_event(access_token, summary="Aimable session")
+    except Exception as e:
+        logger.error(f"create-meeting failed for user {user_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to create Meet: {e}")
+
+    url = extract_meeting_url(event)
+    if not url:
+        raise HTTPException(status_code=502, detail="Google did not return a Meet link")
+
+    return {
+        "meeting_url": url,
+        "platform": detect_platform(url),
+        "event_id": event.get("id"),
+    }
 
 
 @app.get("/calendar/status")
