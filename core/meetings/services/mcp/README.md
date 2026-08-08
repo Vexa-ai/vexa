@@ -114,5 +114,10 @@ caller's `X-API-Key`; fail-closed 401; downstream status/detail passthrough).
 - ✅ delivered — 9 tools + 4 prompts over the v0.12 public API, streamable-HTTP `/mcp` mount
 - ✅ delivered — auth passthrough (Bearer / raw Authorization / X-API-Key → gateway `X-API-Key`)
 - ✅ delivered — compose service (`mcp`, port 8010) + healthcheck
-- ⬜ planned — gateway-fronted `/mcp` (streamed forward at the edge)
+- 🟡 shipped, unwitnessed — gateway-fronted `/mcp` (streamed forward at the edge, #795). The
+  forward is in the gateway and in compose, and is module-tested (streamed relay, verbatim status,
+  typed 502/504) — but no real MCP client has completed a session against it (#888). See
+  [Gateway exposure](#gateway-exposure) above, which this line contradicted while it read "planned".
+- ⬜ not deployed — helm/hosted. The chart carries no MCP service and no `/mcp` route, so the
+  capability is self-hosted-compose-only today (#1035).
 - ⬜ planned — the blocked tool set above, as the REST routes reach parity
