@@ -32,7 +32,9 @@ rewritten merely to add sign-offs.
 
 - The ordinary contributor makes one explicit legal choice and uses standard Git sign-off.
 - Corporate authorization becomes attributable, private, and invalidated by code changes.
-- DCO App installation, required-check configuration, a private register, and licensed-counsel
-  approval of the corporate instrument remain activation prerequisites outside the repository.
+- DCO App installation, required-check configuration, a private register, and maintainer adoption
+  of the corporate instrument — a standard text from a recognized trusted party, minimally adapted,
+  with its exact version and SHA-256 pinned — remain activation prerequisites outside the
+  repository.
 - A bootstrap PR can prove the deterministic machinery locally; a post-merge canary PR is required
   to witness GitHub event, Check Runs, DCO App, and branch-protection behavior end to end.
