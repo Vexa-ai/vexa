@@ -47,6 +47,10 @@ export interface TranscriptionClientConfig {
    *  (Groq, vLLM, gateways) need their served name; the bundled unit ignores it (its model is
    *  the unit's own MODEL_SIZE). Default: "whisper-1". */
   model?: string;
+  /** Request word-level timestamps via `timestamp_granularities`. Some backends (Groq)
+   *  reject this param with 400; the confidence filter does not need words (it scores
+   *  on avg_logprob / no_speech_prob / compression_ratio). Default: false. */
+  wordTimestamps?: boolean;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -99,6 +103,7 @@ export class TranscriptionClient {
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
   private model: string;
+  private wordTimestamps: boolean;
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint, accepting BOTH accepted shapes:
     // a bare base ("https://api.openai.com") and a full endpoint URL
@@ -121,6 +126,7 @@ export class TranscriptionClient {
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
     this.model = config.model ?? 'whisper-1';
+    this.wordTimestamps = config.wordTimestamps ?? false;
   }
 
   /**
@@ -201,12 +207,14 @@ export class TranscriptionClient {
       ));
     }
 
-    // Request word-level timestamps
-    parts.push(Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="timestamp_granularities"\r\n\r\n` +
-      `word\r\n`
-    ));
+    // Request word-level timestamps (only when explicitly enabled — Groq rejects this param)
+    if (this.wordTimestamps) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="timestamp_granularities"\r\n\r\n` +
+        `word\r\n`
+      ));
+    }
 
     // Max speech segment duration (controls how often Whisper splits segments)
     if (this.maxSpeechDurationSec !== undefined) {
