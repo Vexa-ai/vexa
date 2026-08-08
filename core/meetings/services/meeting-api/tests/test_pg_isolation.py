@@ -256,7 +256,10 @@ async def test_jsonb_containment_typed_values_on_real_postgres(pg_store, probe, 
 
     from meeting_api.sessions.models import Meeting
 
-    store, sf = pg_store
+    # The adapter is not called here on purpose: `list_meetings` grows its `custom_filter=` argument
+    # with #1064/#1067, which is not on main yet. What IS pinned is the predicate that filter
+    # compiles to, executed on the real engine (see gap 1 in the PR body).
+    _store, sf = pg_store
     a_id = await _seed_meeting(sf, user_id=USER_A, native=SHARED_NATIVE, data={"custom": CUSTOM})
     b_id = await _seed_meeting(sf, user_id=USER_B, native=SHARED_NATIVE, data={"custom": CUSTOM})
 
@@ -292,7 +295,7 @@ async def test_containment_probe_must_be_a_jsonb_object_not_a_double_encoded_str
 
     from meeting_api.sessions.models import Meeting
 
-    store, sf = pg_store
+    _store, sf = pg_store
     a_id = await _seed_meeting(sf, user_id=USER_A, native=SHARED_NATIVE, data={"custom": CUSTOM})
     needle = {"custom": {"score": 42}}
 
