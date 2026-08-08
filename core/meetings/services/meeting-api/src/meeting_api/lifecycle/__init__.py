@@ -20,7 +20,18 @@ rejects illegal transitions.
   ``meeting.status_change`` webhook body.
 * ``build_status_change_envelope`` (P3a) — wrap a ``StatusChange`` as a sealed ``webhook.v1``
   ``Envelope`` (event_type ``meeting.status_change``).
+* ``JoinFailureReason`` / ``JoinFailureAttribution`` (#1059/#1058) — the two evidence axes a
+  ``failed`` pre-active meeting carries in ``data.join_evidence``: WHAT happened and WHO it belongs
+  to. ``classify_join_failure`` / ``attribute_join_failure`` derive them; ``build_join_evidence``
+  assembles the persisted block.
 """
+from .join_evidence import (
+    JoinFailureAttribution,
+    JoinFailureReason,
+    attribute_join_failure,
+    build_join_evidence,
+    classify_join_failure,
+)
 from .machine import (
     BotStatus,
     CompletionReason,
@@ -63,6 +74,11 @@ __all__ = [
     "MeetingStore",
     "StatusChange",
     "TransitionSource",
+    "JoinFailureAttribution",
+    "JoinFailureReason",
+    "attribute_join_failure",
+    "build_join_evidence",
+    "classify_join_failure",
     "LeaveCommandPublisher",
     "JoinRetryController",
     "RetryClass",
