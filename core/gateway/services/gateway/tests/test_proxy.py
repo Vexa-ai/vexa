@@ -286,6 +286,30 @@ def test_native_meeting_mutate_forwards_to_meeting_api():
     assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij")
 
 
+def test_native_meeting_metadata_amend_forwards_to_meeting_api():
+    """#1064: PATCH /meetings/{platform}/{native}/metadata forwards verbatim to meeting-api (which
+    merges the body into data['custom'], owner-scoped). The 3-segment path never shadows the 2-segment
+    native PATCH — both resolve. Negative control: before #1064 there was no such route → gateway 404."""
+    client, downstream = _client()
+    r = client.patch("/meetings/google_meet/abc-defg-hij/metadata", headers=AUTH,
+                     json={"project": "apollo", "tags": ["sales"]})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij/metadata")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_bot_scope_can_amend_own_metadata():
+    """#1064 stacks on #1062: the SAME bot-scoped key that spawned a meeting can amend its metadata —
+    /meetings is in ROUTE_SCOPES ({tx, bot}), so the PATCH …/metadata subpath is reachable by a bot key,
+    owner-scoped downstream (never a 403 the way it would have been if /meetings were tx-only)."""
+    client, downstream = _client(authorizer=_bot_only())
+    r = client.patch("/meetings/google_meet/abc-defg-hij/metadata", headers=AUTH,
+                     json={"project": "apollo"})
+    assert r.status_code == 200
+    assert downstream.last["headers"]["x-user-id"] == "7"  # owner-scoped downstream
+
+
 def test_native_meeting_mutate_passes_downstream_404_verbatim():
     """An unknown/unowned native id → meeting-api 404; the gateway returns it verbatim (not a
     gateway-minted 404 for a missing route)."""

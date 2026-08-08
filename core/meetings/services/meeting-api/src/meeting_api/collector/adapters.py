@@ -420,7 +420,10 @@ class SqlAlchemyTranscriptStore:
         return await self._merge_live_segments(pg)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            custom_filter=None):
+        import json as _json
+
         from sqlalchemy import cast, func, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
@@ -481,6 +484,16 @@ class SqlAlchemyTranscriptStore:
                 .where(Meeting.id.in_(select(ids.c.id)))
                 .order_by(Meeting.created_at.desc())
             )
+            # #1064: agent-owned metadata filter. Containment on the WHOLE `data` column
+            # (`data @> {"custom": {...}}`) so the existing whole-column GIN index `ix_meeting_data_gin`
+            # serves it — a sub-object `data->'custom' @> …` probe could not use that index. Applied on
+            # the outer query (once), after the access union has decided visibility.
+            if custom_filter:
+                stmt = stmt.where(
+                    Meeting.data.op("@>")(
+                        cast(_json.dumps({"custom": dict(custom_filter)}), JSONB)
+                    )
+                )
             if list_view:
                 # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
                 # with a default page size (an explicit `limit` still wins) and over-fetch one row past
@@ -819,6 +832,42 @@ class SqlAlchemyTranscriptStore:
         return await self._mutate_docs(
             user_id, platform, native_meeting_id, lambda docs: _remove_doc(docs, path)
         )
+
+    async def merge_custom_metadata(self, user_id, platform, native_meeting_id, metadata):
+        """#1064: owner-scoped atomic read→modify→write MERGE into ``meeting.data['custom']`` under ONE
+        ``SELECT … FOR UPDATE`` row lock — the SAME no-clobber discipline the recordings flow uses
+        (``recordings/service.mutate_recordings``): the lock spans read-through-commit and the mutator
+        touches ONLY the ``custom`` key, so a concurrent recording/finalize write of ``data['recordings']``
+        (or a config write) can neither be lost nor clobber this. Returns the updated ``custom`` object,
+        or ``None`` when the user owns no such meeting."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..metadata import merge_custom
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                )
+                .order_by(Meeting.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            custom = merge_custom(data.get("custom"), metadata)
+            data["custom"] = custom
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return custom
 
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
         """Owner-scoped atomic write of the INTENT status (``idle`` / ``scheduled``) onto the

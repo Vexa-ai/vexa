@@ -60,9 +60,26 @@ class TranscriptStore(Protocol):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         member_workspaces: "Optional[set[str]]" = None,
+        custom_filter: "Optional[dict]" = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
-        (the body of ``MeetingListResponse``)."""
+        (the body of ``MeetingListResponse``).
+
+        ``custom_filter`` (#1064): when set, restrict the list to meetings whose ``data['custom']``
+        CONTAINS every ``{key: value}`` pair — a Postgres JSONB containment (``data @> {'custom':
+        {...}}``, served by the existing whole-column GIN index ``ix_meeting_data_gin``). So an agent
+        retrieves exactly the meetings it classified with a given attribute."""
+        ...
+
+    async def merge_custom_metadata(
+        self, user_id: int, platform: str, native_meeting_id: str, metadata: dict
+    ) -> "Optional[dict]":
+        """OWNER-scoped atomic MERGE of ``metadata`` into the meeting's ``data['custom']`` (#1064).
+
+        A shallow merge (amend, not replace): keys in ``metadata`` overwrite, keys already present in
+        ``data['custom']`` survive, and the sibling ``data`` keys (``recording`` / ``config`` / …) are
+        never touched. Returns the updated ``custom`` object, or ``None`` when the user owns no such
+        meeting (the route maps ``None`` → 404)."""
         ...
 
     async def authorize_subscribe(

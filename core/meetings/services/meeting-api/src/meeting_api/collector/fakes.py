@@ -173,7 +173,8 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            custom_filter=None):
         from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
 
@@ -182,6 +183,17 @@ class InMemoryTranscriptStore:
             return (m["user_id"] == user_id
                     or user_id in (data.get("transcript_viewers") or [])
                     or data.get("workspace_id") in mws)
+
+        def custom_matches(m):
+            # #1064: mirror the adapter's `data @> {"custom": {...}}` containment — every filter pair
+            # must be present in data['custom'] with an equal value. Query values arrive as strings, so
+            # compare stringwise (a stored string "X" matches; a stored number would not, exactly like
+            # JSONB string containment).
+            if not custom_filter:
+                return True
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            custom = data.get("custom") if isinstance(data.get("custom"), dict) else {}
+            return all(k in custom and str(custom[k]) == str(v) for k, v in custom_filter.items())
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)
@@ -190,6 +202,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and custom_matches(m)
         ]
         # newest first (by created_at desc, then id desc as a stable tiebreak)
         rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
@@ -314,6 +327,20 @@ class InMemoryTranscriptStore:
         docs = _remove_doc(list(data.get("docs", [])), path)
         data["docs"] = docs
         return docs
+
+    async def merge_custom_metadata(self, user_id, platform, native_meeting_id, metadata):
+        """#1064: owner-scoped shallow MERGE into ``data['custom']`` — the in-memory twin of the
+        SqlAlchemy store's row-locked merge. Touches only the ``custom`` key, so sibling ``data`` keys
+        (recording/config/…) are preserved. ``None`` when the user owns no such meeting."""
+        from ..metadata import merge_custom
+
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        data = self._meetings[mid]["data"]
+        custom = merge_custom(data.get("custom"), metadata)
+        data["custom"] = custom
+        return custom
 
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
         mid = self._find(user_id, platform, native_meeting_id)

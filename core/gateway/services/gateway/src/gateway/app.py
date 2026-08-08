@@ -465,6 +465,16 @@ def create_app(
     async def delete_native_meeting(platform: str, native_meeting_id: str, request: Request):
         return await _forward("DELETE", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
 
+    # agent-owned metadata AMEND (#1064): PATCH /meetings/{platform}/{native}/metadata merges the body
+    # into the meeting's data['custom'] (owner-scoped in meeting-api). Thin passthrough; the 3-segment
+    # path never shadows the 2-segment native PATCH above. /meetings is in ROUTE_SCOPES ({tx, bot}), so
+    # a bot-scoped key (which spawned the meeting) can attach + amend its own metadata (stacks on #1062).
+    @app.patch("/meetings/{platform}/{native_meeting_id}/metadata")
+    async def amend_meeting_metadata(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "PATCH", _meeting(f"/meetings/{platform}/{native_meeting_id}/metadata"), request
+        )
+
     # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
     # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
     # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.

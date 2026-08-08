@@ -28,6 +28,7 @@ import uuid
 from typing import Any, Optional
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
+from ..metadata import merge_custom
 from ..obs import log_event
 from ..service_authority import (
     AllowAllServiceAuthority,
@@ -172,6 +173,10 @@ async def request_bot(
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    # Agent-owned metadata (#1064): a validated flat-ish object the caller attaches at spawn. Persisted
+    # under the RESERVED meeting.data['custom'] namespace (a sibling of recording/config), so it can be
+    # filtered on later (GET /meetings?custom.*) and never clobbers the recording/lifecycle writers.
+    metadata: Optional[dict] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -374,14 +379,21 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
+        reopen_patch: dict[str, Any] = {
+            "transcribe_enabled": transcribe_enabled,
+            "recording_enabled": recording_enabled,
+            "transcription_provider": transcription_provider,
+            "service_authority": authority_record,
+        }
+        # #1064: a continued run may (re)attach its classification; MERGE it over any prior custom so a
+        # re-meet keeps the original attachment unless a key is explicitly overwritten.
+        if metadata:
+            reopen_patch["custom"] = merge_custom(
+                (reused_row.get("data") or {}).get("custom"), metadata
+            )
         row = await repo.reopen_meeting(
             meeting_id=reused_row["id"],
-            data_patch={
-                "transcribe_enabled": transcribe_enabled,
-                "recording_enabled": recording_enabled,
-                "transcription_provider": transcription_provider,
-                "service_authority": authority_record,
-            },
+            data_patch=reopen_patch,
         )
     else:
         meeting_data: dict[str, Any] = {}
@@ -392,6 +404,11 @@ async def request_bot(
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record
+        # #1064: agent-owned metadata → the reserved data['custom'] namespace. Written alongside the
+        # spawn keys in the SAME create, so it lands atomically with the row and never races a later
+        # recording/lifecycle write of a sibling data key.
+        if metadata:
+            meeting_data["custom"] = dict(metadata)
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path

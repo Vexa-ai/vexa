@@ -21,6 +21,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..metadata import MetadataError, validate_custom_metadata
 from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
@@ -386,6 +387,17 @@ def build_router(
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
 
+        # Agent-owned metadata (#1064): an optional flat-ish object the caller attaches at spawn,
+        # persisted under the reserved meeting.data['custom'] namespace so it never clobbers
+        # data.recording / data.config. Validated at the boundary (flat, size-capped) → 422 on abuse.
+        custom_metadata = None
+        raw_metadata = body.get("metadata")
+        if raw_metadata is not None:
+            try:
+                custom_metadata = validate_custom_metadata(raw_metadata)
+            except MetadataError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
         try:
             meeting = await request_bot(
                 repo,
@@ -411,6 +423,7 @@ def build_router(
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
+                metadata=custom_metadata,
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
