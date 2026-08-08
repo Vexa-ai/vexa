@@ -194,6 +194,44 @@ def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
     return list(reversed(kept)), False
 
 
+#: Stages at which the bot had NOT yet reported reaching the waiting room. Used to answer
+#: "did it ever reach the lobby?" from the FSM's own history — the single most load-bearing
+#: discriminator in the taxonomy (#1058: lobby expiry vs never-got-there).
+_PRE_LOBBY_STAGES = frozenset({FailureStage.REQUESTED, FailureStage.JOINING})
+
+
+def _capture_join_evidence(
+    rec: "MeetingRecord", event: Dict[str, Any], frm: Optional[BotStatus]
+) -> Optional[Dict[str, Any]]:
+    """Best-effort typed evidence for a `failed` terminal (#1059/#1058). NEVER raises.
+
+    `reached_lobby` is answered from the record's OWN history, not the payload: a bot that reported
+    `awaiting_admission` is a bot that stood in the waiting room, whatever its terminal event later
+    claims about its stage (the orchestrator stamps a fixed `awaiting_admission` on every
+    non-admitted verdict). Same discipline as `failure_stage`: derive server-side, never trust a
+    stale payload field (FM-003).
+    """
+    try:
+        from .join_evidence import evidence_from_event
+
+        reached_lobby = (
+            BotStatus.AWAITING_ADMISSION in rec.history
+            or BotStatus.NEEDS_HELP in rec.history
+            or frm in (BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP)
+        )
+        if rec.failure_stage is FailureStage.ACTIVE:
+            # A bot that reached `active` was ADMITTED — whatever killed it afterwards (a pipeline
+            # fault, an eviction) is not a join failure. The join taxonomy has nothing truthful to
+            # say about it, so it says nothing rather than filing it under `unknown`.
+            return None
+        stage = rec.failure_stage.value if rec.failure_stage is not None else None
+        return evidence_from_event(
+            event, stage=stage, reached_lobby=reached_lobby, reason_text=rec.reason
+        )
+    except Exception:  # noqa: BLE001 — evidence is a report about a finished run; never fail on it
+        return None
+
+
 class IllegalTransition(Exception):
     """Raised when a lifecycle event would drive an illegal FSM transition.
 
@@ -243,6 +281,10 @@ class MeetingRecord:
     #: What degraded the meeting without ending it — today the STT backend refusing chunks
     #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
     stt_fault: Optional[Dict[str, Any]] = None
+    #: WHY a pre-active run never reached the meeting (#1059/#1058) — the typed
+    #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
+    #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
+    join_evidence: Optional[Dict[str, Any]] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -266,6 +308,17 @@ class MeetingRecord:
             d["completion_reason"] = self.completion_reason.value
         if self.failure_stage is not None:
             d["failure_stage"] = self.failure_stage.value
+        # THE REASON, AT THE TOP LEVEL (#1059). Every producer already stamps one — the bot on each
+        # terminal it emits, the reconcile sweep with the probe's own answer — and the record has
+        # carried it on `self.reason` all along. It just never landed anywhere a reader looks: the
+        # only projection was `last_error.reason`, a key the list view DROPS
+        # (`projection.LIST_OMIT_KEYS`) and which `data->>'reason'` cannot see. That is the whole
+        # mechanism behind "all 83 join_failure rows carry reason: None" — not a missing report, a
+        # missing projection. Hoisting it costs nothing and makes the failure decomposable by query.
+        if self.reason is not None:
+            d["reason"] = self.reason
+        if self.join_evidence is not None:
+            d["join_evidence"] = dict(self.join_evidence)
         if self.error_details is not None:
             d["last_error"] = {
                 "exit_code": self.exit_code,
@@ -492,6 +545,14 @@ class LifecycleSink:
                 rec.error_details = (
                     f"Bot exited with code {rec.exit_code}; reason: {rec.reason}"
                 )
+            # TYPED join evidence (#1058) — the diagnostic axis alongside the sealed
+            # `completion_reason`, so the ~20s platform refusal and the ~13min lobby expiry that
+            # both read `join_failure` become two countable populations. Prefer the producer's own
+            # verdict (the bot holds the platform signal and the stage timings); derive one from the
+            # record when it sent none, so a reconcile-driven or runtime-destroy terminal is
+            # evidenced too. FAIL-OPEN by contract: this is a REPORT about a run that has already
+            # ended, and no fault in it may alter the terminal the FSM is recording.
+            rec.join_evidence = _capture_join_evidence(rec, event, frm)
 
         # Terminal forensics → record.data (parent caps bot_logs, trims oldest-first).
         if to in _TERMINAL:

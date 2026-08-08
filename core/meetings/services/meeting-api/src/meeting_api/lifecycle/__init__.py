@@ -23,7 +23,18 @@ rejects illegal transitions.
 * ``Disposition`` / ``disposition`` / ``may_dispatch_again`` — what a TERMINAL row leaves owed to
   its calendar occurrence (served · user-stopped · retry). The one table deciding whether a bot may
   go back into a meeting it has already been in; ``calendar_sync`` asks it before recreating a row.
+* ``JoinFailureReason`` / ``JoinFailureAttribution`` (#1059/#1058) — the two evidence axes a
+  ``failed`` pre-active meeting carries in ``data.join_evidence``: WHAT happened and WHO it belongs
+  to. ``classify_join_failure`` / ``attribute_join_failure`` derive them; ``build_join_evidence``
+  assembles the persisted block.
 """
+from .join_evidence import (
+    JoinFailureAttribution,
+    JoinFailureReason,
+    attribute_join_failure,
+    build_join_evidence,
+    classify_join_failure,
+)
 from .machine import (
     BotStatus,
     CompletionReason,
@@ -71,6 +82,11 @@ __all__ = [
     "MeetingStore",
     "StatusChange",
     "TransitionSource",
+    "JoinFailureAttribution",
+    "JoinFailureReason",
+    "attribute_join_failure",
+    "build_join_evidence",
+    "classify_join_failure",
     "LeaveCommandPublisher",
     "JoinRetryController",
     "RetryClass",
