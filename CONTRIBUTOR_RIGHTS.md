@@ -96,8 +96,7 @@ Historical review is risk-based:
   attestation from the original contributor;
 - employer-owned or corporate-directed work requires a corporate authorization covering named
   pull requests or commit SHAs; and
-- material work that cannot be cleared is replaced or removed, unless licensed counsel documents
-  a different disposition.
+- material work that cannot be cleared is replaced or removed.
 
 Vexa never rewrites history merely to insert a sign-off and never signs for a contributor.
 
@@ -129,5 +128,5 @@ Before activating the gate, repository administrators must:
 2. enable GitHub's compulsory sign-off for web-based commits;
 3. replace `__BOOTSTRAP_PR__` with this policy PR's number;
 4. require the `contribution-rights` check, with the ruleset bypass list set to none; and
-5. verify the private register, retention rule, return channel, and exact corporate agreement hash
-   with licensed counsel.
+5. verify the private register, retention rule, return channel, and exact corporate agreement
+   hash.
