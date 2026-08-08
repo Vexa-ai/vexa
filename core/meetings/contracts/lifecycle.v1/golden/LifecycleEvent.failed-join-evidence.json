@@ -1,0 +1,22 @@
+{
+  "connection_id": "sess-uid",
+  "status": "failed",
+  "timestamp": "2026-08-08T10:23:07.000Z",
+  "exit_code": 1,
+  "failure_stage": "awaiting_admission",
+  "completion_reason": "awaiting_admission_timeout",
+  "reason": "Bot is still in the Google Meet waiting room after timeout — host did not admit",
+  "join_evidence": {
+    "reason": "admission_timeout",
+    "attribution": "host_action",
+    "source": "bot",
+    "stage": "awaiting_admission",
+    "detail": "Bot is still in the Google Meet waiting room after timeout — host did not admit",
+    "timings": {
+      "time_to_lobby_ms": 7000,
+      "time_in_lobby_ms": 780000,
+      "total_ms": 787000
+    },
+    "lobby_budget_ms": 600000
+  }
+}

@@ -23,10 +23,12 @@ import {
   canTransition,
   isTerminal,
 } from './contracts.js';
+import { buildJoinEvidence } from './join-evidence.js';
 import type {
   JoinDriver,
   JoinOutcome,
   JoinResult,
+  JoinSignals,
   Pipeline,
   LifecycleSink,
   ActsSource,
@@ -85,6 +87,44 @@ export interface MeetingResult {
  *  driver supplied one, survives to the terminal lifecycle row). */
 function normalizeJoin(r: JoinOutcome | JoinResult): JoinResult {
   return typeof r === 'string' ? { outcome: r } : r;
+}
+
+/**
+ * The `join_evidence` block for a pre-active terminal (#1059, #1058) — WHAT failed, WHO it belongs
+ * to, the stage timings, and the platform's own signal.
+ *
+ * WRAPPED, not trusted. `buildJoinEvidence` is already total, and this wraps it again because the
+ * guarantee has to hold at the call site too: a fault in DESCRIBING a failed run must never change
+ * how that run ends. The worst case here is a terminal event without the evidence block — exactly
+ * what production emitted before this existed — and never a different terminal, a delayed one, or
+ * a throw out of an exit path.
+ */
+function joinEvidenceFor(
+  outcome: Exclude<JoinOutcome, 'admitted'> | 'stopped',
+  stage: 'requested' | 'joining' | 'awaiting_admission',
+  signals: JoinSignals | undefined,
+  detail: string | undefined,
+): Partial<LifecycleEvent> {
+  try {
+    const evidence = buildJoinEvidence(outcome, stage, {
+      ...(signals ?? {}),
+      ...(detail !== undefined ? { detail } : {}),
+    });
+    return evidence ? { join_evidence: evidence } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Ask the driver for the signals it gathered, on the paths where no `JoinResult` came back (a raw
+ *  throw, or a pre-active abort). Optional + best-effort: a driver without it, or one that throws
+ *  from it, simply yields a less precise classification. */
+function driverSignals(join: JoinDriver): JoinSignals | undefined {
+  try {
+    return join.lastSignals?.();
+  } catch {
+    return undefined;
+  }
 }
 
 /** Map a non-admitted join verdict to the terminal completion_reason. */
@@ -207,6 +247,8 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         // best-effort and must not mask the exit.
         const unreachable = ['meeting_api_callback', 'redis'];
         cur = 'failed';
+        const unreachableDetail =
+          `${CONTROL_PLANE_UNREACHABLE}: control plane unreachable at boot (${unreachable.join(', ')}); refused to join`;
         await deps.lifecycle.emit({
           ...base,
           status: 'failed',
@@ -215,8 +257,12 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           completion_reason: 'join_failure',
           infra_fault: CONTROL_PLANE_UNREACHABLE,
           unreachable_channels: unreachable,
-          reason: `${CONTROL_PLANE_UNREACHABLE}: control plane unreachable at boot (${unreachable.join(', ')}); refused to join`,
+          reason: unreachableDetail,
           exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
+          // Ours, unambiguously — the bot never reached the meeting page because OUR control plane
+          // was down. `control_plane_unreachable` is a navigation marker, so this classifies
+          // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
+          ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
         }).catch(() => { /* the channel that would carry this is the one that is down */ });
         return { exitCode: CONTROL_PLANE_UNREACHABLE_EXIT, status: 'failed', completionReason: 'join_failure' };
       }
@@ -242,6 +288,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
     let joinReason: string | undefined;
+    let joinSignals: JoinSignals | undefined;
     try {
       // Race the (possibly long, lobby-blocked) join against a pre-active abort. A stop/SIGTERM in the
       // waiting room resolves `aborted` → we stop waiting, WITHDRAW the join request, and terminate —
@@ -261,19 +308,32 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           new Promise<void>((resolve) => setTimeout(resolve, 8000)),
         ]);
         const stage = cur === 'awaiting_admission' ? 'awaiting_admission' : 'joining';
+        const abortDetail = 'stopped while awaiting admission (withdrew the join request)';
         await emit('failed', {
           failure_stage: stage, completion_reason: 'stopped',
-          reason: 'stopped while awaiting admission (withdrew the join request)', exit_code: 0,
+          reason: abortDetail, exit_code: 0,
+          // `stopped_before_admission` → attribution `user_action`. This row shares its `failed`
+          // status with real defects, and counting it as one is precisely how a raw failed-status
+          // rate stops meaning anything: the user ended this run themselves.
+          ...joinEvidenceFor('stopped', stage, driverSignals(deps.join), abortDetail),
         });
         unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
       outcome = raced.result.outcome;
       joinReason = raced.result.reason;
+      joinSignals = raced.result.signals;
       await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
       unsubscribe();
-      await emit('failed', { failure_stage: 'joining', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
+      // A raw throw out of the join (browser crash, navigation error, an unrecognised platform).
+      // The driver parked its measurements before re-raising, so even this path is evidenced —
+      // typically as `navigation_failure` (system_fault) off the transport marker in the message.
+      const crashDetail = String(e);
+      await emit('failed', {
+        failure_stage: 'joining', completion_reason: 'join_failure', reason: crashDetail, exit_code: 1,
+        ...joinEvidenceFor('error', 'joining', driverSignals(deps.join), crashDetail),
+      });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     if (outcome !== 'admitted') {
@@ -285,7 +345,16 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // (the AdmissionError text — e.g. the Zoom "auth_required" / "host not started" cause); fall
       // back to a derived line so NO reasonless terminal can ever leave this branch.
       const reasonText = joinReason ?? `join ended without admission: ${outcome} → ${reason}`;
-      await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, reason: reasonText, exit_code: 1 });
+      // The stage is DERIVED from where the bot actually got to, not stamped `awaiting_admission`
+      // regardless (which it used to be, and which claims a lobby the bot may never have seen). The
+      // control plane re-derives it server-side anyway (FM-003), so a truthful payload simply stops
+      // the two from disagreeing — and it is the field the taxonomy reads to tell a lobby expiry
+      // from a bot that never got there, the exact conflation #1058 measured.
+      const stage = cur === 'awaiting_admission' || cur === 'needs_help' ? 'awaiting_admission' : 'joining';
+      await emit('failed', {
+        failure_stage: stage, completion_reason: reason, reason: reasonText, exit_code: 1,
+        ...joinEvidenceFor(outcome, stage, joinSignals, reasonText),
+      });
       return { exitCode: 1, status: 'failed', completionReason: reason };
     }
     if (cur !== 'active') await emit('active');   // the join driver may already have reported active
