@@ -1,0 +1,39 @@
+---
+title: "Share a transcript into ChatGPT"
+description: "Public transcript share links were a 0.10.x capability — contract-sealed but not served in 0.12. What exists today, and what replaced them."
+---
+
+<Warning>
+**Honest status:** the public share-link flow this page once documented is **not available in 0.12**.
+The endpoint is contract-sealed but mounted nowhere. Tracking: [#541](https://github.com/Vexa-ai/vexa/issues/541)
+(sealed-vs-served reconcile) · demand record: [#1078](https://github.com/Vexa-ai/vexa/issues/1078).
+</Warning>
+
+## What this page used to describe (0.10.x)
+
+Vexa could mint a **public, unauthenticated, short-lived URL** for a transcript:
+
+1. An authenticated call created a share id; the transcript was rendered as plain text and stored under a TTL (default 15 minutes).
+2. The response returned a URL of the form `/public/transcripts/<share_id>.txt`.
+3. You handed that URL to ChatGPT — *"Read from this URL so I can ask questions about it"* — and ChatGPT fetched it directly, avoiding paste-length limits.
+
+## What is true in 0.12 today
+
+- `GET /public/transcripts/{share_id}.txt` is **sealed in the API contract but not served** by any component. A URL of that shape will not resolve on a 0.12 deployment.
+- A share endpoint exists under the same name — `POST /meetings/{platform}/{native_meeting_id}/share` — but it does something different: it mints a token that **another authenticated Vexa user** redeems (`POST /transcripts/share/accept`). It is user-to-user sharing inside a Vexa deployment, not a public URL, and an external assistant cannot consume it.
+
+## What you can do today
+
+To get a transcript into ChatGPT or any assistant right now:
+
+- **Fetch and paste/upload:** retrieve the transcript with an API key carrying the `tx` scope —
+  `GET /transcripts/{platform}/{native_meeting_id}` — and paste or upload the text into your assistant.
+- **Share to a teammate inside Vexa:** use the 0.12 share/accept flow above (both sides authenticated).
+
+## If you need the public link back
+
+Demand for this page is measured and sustained, a substantial share of it from AI agents. Whether to
+re-mount the public leg is a product and security decision — unauthenticated transcript URLs need deliberate
+TTL and identifier design — and it is being weighed on the release scope via
+[#541](https://github.com/Vexa-ai/vexa/issues/541). If this capability matters to you, say so there: demand
+comments on that issue are exactly the evidence the decision consumes.

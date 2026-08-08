@@ -1,0 +1,147 @@
+---
+title: "Automate meeting summaries with n8n"
+description: "Calendar → bot → transcript → summary → Slack, with no backend to write or host."
+---
+
+If you already run n8n, you can have meeting notes land in Slack without writing or hosting any
+code. Vexa supplies two plain HTTP calls — send a bot, fetch the transcript — and n8n does the rest.
+
+A community template already wires the whole path:
+[**Automated meeting summaries: Google Meet to Slack with Vexa.ai and GPT-4o**](https://n8n.io/workflows/7072-automated-meeting-summaries-google-meet-to-slack-with-vexaai-and-gpt-4o/)
+(workflow 7072). Import it, then read the warning below before your first run.
+
+<Warning>
+**The published template points at a base URL that no longer exists.** Its HTTP nodes are built
+against `gateway.dev.vexa.ai`. The hosted API is **`https://api.cloud.vexa.ai`**. Until the
+template is updated, swap the base URL in every Vexa HTTP node after importing — otherwise the
+first node fails and the run stops there. This is the single most common reason this workflow
+doesn't start.
+
+The template is published on the n8n.io gallery by a community author, so we can't edit it
+directly.
+</Warning>
+
+## What you need
+
+- A running n8n (cloud or self-hosted).
+- A Vexa API key and a base URL ([Authentication](/authentication)):
+
+  | Deployment | `API_BASE` |
+  |---|---|
+  | Hosted | `https://api.cloud.vexa.ai` |
+  | Self-hosted (`make all` / compose) | `http://localhost:18056` (`API_GATEWAY_HOST_PORT`) |
+
+  Self-hosting? n8n must be able to reach that host — see the [self-host note](#self-hosted-variant).
+- A model credential for the summarization step (the template uses GPT-4o) and a Slack credential.
+
+Every Vexa call authenticates with the `X-API-Key` header. Store the key as an n8n **credential**,
+not inline in a node.
+
+## The five steps
+
+<Steps>
+  <Step title="Trigger on the calendar event">
+    The template starts from a **Google Calendar** trigger and pulls the Meet link off the event.
+
+    <Note>
+    Users have reported the Google Calendar trigger firing only on the oldest matching event, which
+    stalls the workflow when several meetings queue up. If you hit that, filter the trigger more
+    narrowly (single calendar, near-term window) or drive the workflow from a Schedule trigger that
+    queries the calendar itself.
+
+    You can also skip this step entirely — see [Let Vexa do the
+    calendar part](#let-vexa-do-the-calendar-part).
+    </Note>
+  </Step>
+
+  <Step title="Send the bot">
+    One `POST`. If you have the join URL, send it directly and let the API parse out the platform
+    and meeting id:
+
+    ```http
+    POST {{API_BASE}}/bots
+    X-API-Key: {{your key}}
+    Content-Type: application/json
+
+    {"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Vexa"}
+    ```
+
+    Or name the parts explicitly:
+
+    ```json
+    {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "bot_name": "Vexa"}
+    ```
+
+    `native_meeting_id` is the id **inside** the join URL (`abc-defg-hij`), not the whole URL. A URL
+    that isn't a recognizable meeting link is refused with a `422`. Zoom, Teams, and Jitsi work the
+    same way with a different `platform` — see [Send a bot](/how-to/send-a-bot).
+
+    On Meet and Teams the bot may sit in the lobby until a host admits it.
+  </Step>
+
+  <Step title="Wait for the meeting to finish">
+    Give the call time to happen. A **Wait** node set to the meeting's scheduled duration is the
+    simplest approach; polling the transcript on an interval and continuing once segments stop
+    arriving is the more responsive one.
+  </Step>
+
+  <Step title="Fetch the transcript">
+    ```http
+    GET {{API_BASE}}/transcripts/google_meet/abc-defg-hij
+    X-API-Key: {{your key}}
+    ```
+
+    ```json
+    {
+      "segments": [
+        { "speaker": "Jane Liu", "text": "Let's lock the renewal pricing by July 1.",
+          "start": 12.4, "end": 15.1, "language": "en", "completed": true, "confidence": 0.93 }
+      ]
+    }
+    ```
+
+    Segments are **speaker-attributed**, so your summary can name who committed to what. Segments
+    are also readable *while the meeting runs* if you'd rather stream than wait — see
+    [Stream a transcript](/how-to/stream-transcript).
+  </Step>
+
+  <Step title="Summarize and post">
+    Flatten `segments[]` into `speaker: text` lines, hand them to your model node, and post the
+    result with the Slack node. Nothing here is Vexa-specific — the transcript is ordinary JSON.
+  </Step>
+</Steps>
+
+## Let Vexa do the calendar part
+
+The calendar trigger is the most fragile node in the workflow, and you may not need it. Vexa can
+import your calendar itself and **auto-join** meetings at their start time — no trigger, no
+`POST /bots` on your side. The workflow then reduces to *wait → fetch transcript → summarize →
+post*.
+
+See [Sync your calendar](/how-to/calendar-sync) and [Plan a meeting](/how-to/plan-a-meeting). Sending
+a bot to a link you already planned upgrades the same meeting record — it never creates a duplicate.
+
+## Self-hosted variant
+
+Everything above works unchanged against a self-hosted deployment; only `API_BASE` differs. The
+constraint is reachability:
+
+- **n8n and Vexa on the same host** — point n8n at `http://localhost:18056`.
+- **n8n in Docker, Vexa on the host** — `http://host.docker.internal:18056`, or put both on one
+  Docker network and use the gateway's service name.
+- **n8n cloud, Vexa self-hosted** — the gateway must be reachable from the internet over HTTPS.
+  Terminate TLS at a reverse proxy in front of it; don't expose the gateway port directly.
+
+See [Deployment](/deployment) and [Configuration](/configuration).
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| First HTTP node fails immediately | The template's stale `gateway.dev.vexa.ai` base URL. Swap it for `api.cloud.vexa.ai`. |
+| `503` from `POST /bots` | No transcription backend configured. Default spawns require STT — see [Configuration](/configuration#transcription-stt). |
+| `422` from `POST /bots` | `meeting_url` isn't a recognizable meeting link, or `platform` and `meeting_url` disagree. |
+| Transcript empty | The bot may still be in the lobby, or the meeting hasn't produced audio yet. Check bot status before fetching. |
+| Only the oldest calendar event ever fires | The Google Calendar trigger behaviour noted above. Narrow the trigger or use Vexa's calendar sync instead. |
+
+More at [Troubleshooting](/troubleshooting).
