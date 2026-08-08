@@ -36,6 +36,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..metadata import MetadataError, parse_custom_filter, validate_custom_metadata
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -189,16 +190,19 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        # #1064: agent-owned metadata filter — ?custom.<key>=<value> (or ?custom_<key>=) restricts the
+        # list to meetings whose data['custom'] contains every pair (JSONB containment in the store).
+        custom_filter = parse_custom_filter(request.query_params) or None
         meetings, _has_more = await store.list_meetings(
             user_id, status=status, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces, list_view=True,
+            member_workspaces=member_workspaces, list_view=True, custom_filter=custom_filter,
         )
         log_event(
             "meetings_listed",
             audience="user",
             span="meetings.list",
             user_id=user_id,
-            fields={"count": len(meetings)},
+            fields={"count": len(meetings), "custom_filter": sorted(custom_filter) if custom_filter else []},
         )
         return JSONResponse(content={"meetings": meetings})
 
@@ -532,6 +536,42 @@ def build_router(
             "status": "deleted", "id": meeting_id,
             "platform": platform, "native_meeting_id": native_meeting_id,
         })
+
+    # --- PATCH /meetings/{platform}/{native_meeting_id}/metadata → amend agent-owned metadata (#1064).
+    # OWNER-scoped. MERGES the body into data['custom'] (never replaces) under the store's row lock, so
+    # a post-hoc amend adds/updates keys without wiping what was attached at spawn and without touching
+    # sibling data keys (recording/config). A 3-segment path — never shadows the 2-segment native PATCH
+    # above (FastAPI matches on the full pattern). Body is validated at the boundary → 422 on abuse. ---
+    @router.patch("/meetings/{platform}/{native_meeting_id}/metadata")
+    async def patch_meeting_metadata(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        try:
+            metadata = validate_custom_metadata(payload)
+        except MetadataError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        if not metadata:
+            raise HTTPException(status_code=422, detail="metadata must be a non-empty object")
+        custom = await store.merge_custom_metadata(user_id, platform, native_meeting_id, metadata)
+        if custom is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        log_event(
+            "meeting_metadata_amended", audience="user", span="meetings.metadata.amend",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"keys": sorted(metadata.keys())},
+        )
+        return JSONResponse(content={"custom": custom})
 
     # --- GET /bots/{platform}/{native_meeting_id}/chat (#579 C3, sealed api.v1 ChatMessagesResponse).
     # Thin HONEST restore: the route + owner boundary are real (unowned/unknown native → 404), but

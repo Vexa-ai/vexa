@@ -19,6 +19,53 @@ import json
 from typing import Optional
 
 
+def _json_type(v) -> str:
+    """The JSON type-class of a Python value, for TYPE-STRICT JSONB comparison. ``bool`` is checked
+    before ``int`` (a ``bool`` IS an ``int`` in Python, but JSON ``true`` ≠ JSON ``1``); ``int`` and
+    ``float`` share the single JSON ``number`` type."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "number"
+    if isinstance(v, str):
+        return "string"
+    if isinstance(v, (list, tuple)):
+        return "array"
+    if isinstance(v, dict):
+        return "object"
+    return "other"
+
+
+def _json_scalar_eq(a, b) -> bool:
+    """TYPE-STRICT JSON scalar equality — the equality Postgres JSONB uses. ``3 == "3"`` is FALSE
+    (number vs string), ``True == 1`` is FALSE (bool vs number), ``None == None`` is TRUE. ``int`` and
+    ``float`` compare within the single JSON ``number`` type (``3 == 3.0``)."""
+    if _json_type(a) != _json_type(b):
+        return False
+    return a == b
+
+
+def _jsonb_scalar_contains(stored, probe) -> bool:
+    """Model the adapter's per-key OR of two containment probes for a SCALAR ``probe`` (the query
+    wire only ever yields a single scalar per key):
+    ``data @> {"custom":{k: v}}`` OR ``data @> {"custom":{k: [v]}}``. Three cases:
+
+      * ``stored`` is an ARRAY → matched by the ``[v]`` probe: TRUE iff ``probe`` equals
+        (type-strictly) some element (the tag-filter case). NOTE Postgres' bare
+        ``["sales","q3"] @> "sales"`` exception is TOP-LEVEL ONLY — nested under a key it is FALSE,
+        which is exactly why the adapter emits the second, array-shaped probe;
+      * ``stored`` is an OBJECT → a scalar is never contained in an object → FALSE;
+      * ``stored`` is a SCALAR → type-strict equality (number 3 does not contain string "3").
+    """
+    if isinstance(stored, (list, tuple)):
+        return any(_json_scalar_eq(el, probe) for el in stored)
+    if isinstance(stored, dict):
+        return False
+    return _json_scalar_eq(stored, probe)
+
+
 def _segment_to_api(seg: dict) -> dict:
     """A stored segment → api.v1 ``TranscriptionSegment`` (start/end/text/language required)."""
     out = {
@@ -173,7 +220,8 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            custom_filter=None):
         from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
 
@@ -182,6 +230,19 @@ class InMemoryTranscriptStore:
             return (m["user_id"] == user_id
                     or user_id in (data.get("transcript_viewers") or [])
                     or data.get("workspace_id") in mws)
+
+        def custom_matches(m):
+            # #1064: mirror the adapter's per-key OR of two containments FAITHFULLY —
+            # `data @> {"custom":{k: v}}` (stored scalar, TYPE-STRICT: number 3 does NOT contain
+            # string "3", bool True ≠ number 1) OR `data @> {"custom":{k: [v]}}` (stored array,
+            # element membership). `custom_filter` values arrive already coerced to their JSON scalar
+            # type (`metadata.coerce_filter_value`), so this is a typed comparison, NOT a stringwise one.
+            if not custom_filter:
+                return True
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            custom = data.get("custom") if isinstance(data.get("custom"), dict) else {}
+            return all(k in custom and _jsonb_scalar_contains(custom[k], v)
+                       for k, v in custom_filter.items())
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)
@@ -190,6 +251,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and custom_matches(m)
         ]
         # newest first (by created_at desc, then id desc as a stable tiebreak)
         rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
@@ -314,6 +376,20 @@ class InMemoryTranscriptStore:
         docs = _remove_doc(list(data.get("docs", [])), path)
         data["docs"] = docs
         return docs
+
+    async def merge_custom_metadata(self, user_id, platform, native_meeting_id, metadata):
+        """#1064: owner-scoped shallow MERGE into ``data['custom']`` — the in-memory twin of the
+        SqlAlchemy store's row-locked merge. Touches only the ``custom`` key, so sibling ``data`` keys
+        (recording/config/…) are preserved. ``None`` when the user owns no such meeting."""
+        from ..metadata import merge_custom
+
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        data = self._meetings[mid]["data"]
+        custom = merge_custom(data.get("custom"), metadata)
+        data["custom"] = custom
+        return custom
 
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
         mid = self._find(user_id, platform, native_meeting_id)
