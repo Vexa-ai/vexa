@@ -19,6 +19,50 @@ import json
 from typing import Optional
 
 
+def _json_type(v) -> str:
+    """The JSON type-class of a Python value, for TYPE-STRICT JSONB comparison. ``bool`` is checked
+    before ``int`` (a ``bool`` IS an ``int`` in Python, but JSON ``true`` ≠ JSON ``1``); ``int`` and
+    ``float`` share the single JSON ``number`` type."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "number"
+    if isinstance(v, str):
+        return "string"
+    if isinstance(v, (list, tuple)):
+        return "array"
+    if isinstance(v, dict):
+        return "object"
+    return "other"
+
+
+def _json_scalar_eq(a, b) -> bool:
+    """TYPE-STRICT JSON scalar equality — the equality Postgres JSONB uses. ``3 == "3"`` is FALSE
+    (number vs string), ``True == 1`` is FALSE (bool vs number), ``None == None`` is TRUE. ``int`` and
+    ``float`` compare within the single JSON ``number`` type (``3 == 3.0``)."""
+    if _json_type(a) != _json_type(b):
+        return False
+    return a == b
+
+
+def _jsonb_scalar_contains(stored, probe) -> bool:
+    """Model Postgres ``stored @> probe`` for a SCALAR ``probe`` (the query wire only ever yields a
+    single scalar per key). Three cases, mirroring JSONB containment exactly:
+
+      * ``stored`` is an ARRAY → the array-contains-primitive exception: TRUE iff ``probe`` equals
+        (type-strictly) some element (``["sales","q3"] @> "sales"`` is TRUE — the tag-filter case);
+      * ``stored`` is an OBJECT → a scalar is never contained in an object → FALSE;
+      * ``stored`` is a SCALAR → type-strict equality (number 3 does not contain string "3").
+    """
+    if isinstance(stored, (list, tuple)):
+        return any(_json_scalar_eq(el, probe) for el in stored)
+    if isinstance(stored, dict):
+        return False
+    return _json_scalar_eq(stored, probe)
+
+
 def _segment_to_api(seg: dict) -> dict:
     """A stored segment → api.v1 ``TranscriptionSegment`` (start/end/text/language required)."""
     out = {
@@ -185,15 +229,17 @@ class InMemoryTranscriptStore:
                     or data.get("workspace_id") in mws)
 
         def custom_matches(m):
-            # #1064: mirror the adapter's `data @> {"custom": {...}}` containment — every filter pair
-            # must be present in data['custom'] with an equal value. Query values arrive as strings, so
-            # compare stringwise (a stored string "X" matches; a stored number would not, exactly like
-            # JSONB string containment).
+            # #1064: mirror the adapter's `data @> {"custom": {...}}` containment FAITHFULLY — Postgres
+            # JSONB `@>` is TYPE-STRICT (number 3 does NOT contain string "3", bool True ≠ number 1) and
+            # has the array-contains-primitive exception (a stored array matches a scalar probe that is
+            # one of its elements). `custom_filter` values arrive already coerced to their JSON scalar
+            # type (`metadata.coerce_filter_value`), so this is a typed comparison, NOT a stringwise one.
             if not custom_filter:
                 return True
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
             custom = data.get("custom") if isinstance(data.get("custom"), dict) else {}
-            return all(k in custom and str(custom[k]) == str(v) for k, v in custom_filter.items())
+            return all(k in custom and _jsonb_scalar_contains(custom[k], v)
+                       for k, v in custom_filter.items())
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)

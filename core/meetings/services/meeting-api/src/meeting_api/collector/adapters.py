@@ -488,6 +488,15 @@ class SqlAlchemyTranscriptStore:
             # (`data @> {"custom": {...}}`) so the existing whole-column GIN index `ix_meeting_data_gin`
             # serves it — a sub-object `data->'custom' @> …` probe could not use that index. Applied on
             # the outer query (once), after the access union has decided visibility.
+            #
+            # `custom_filter` values arrive already COERCED to their JSON scalar type
+            # (`metadata.coerce_filter_value` at the request boundary): `priority=3` is the number 3,
+            # `billable=true` is the bool True, `x=null` is None. So `json.dumps` below emits a typed
+            # JSON scalar and `@>` (which is TYPE-STRICT — number 3 does NOT contain string "3") matches
+            # the stored value. A scalar probe against a stored ARRAY still matches by element containment
+            # (`{"tags": ["sales","q3"]} @> {"tags": "sales"}` is TRUE — the primary tag-filter use case).
+            # Accepted wart: a numeric/bool/null-looking wire value is probed as that scalar; there is no
+            # wire syntax to force a string match on "3" (see coerce_filter_value).
             if custom_filter:
                 stmt = stmt.where(
                     Meeting.data.op("@>")(

@@ -237,6 +237,117 @@ def test_unfiltered_list_returns_all():
     assert len(r.json()["meetings"]) == 2
 
 
+# ── typed filters: the wire value is coerced to its JSON scalar type and the match is TYPE-STRICT ──
+# (mirrors production Postgres JSONB `@>`: number 3 does NOT contain string "3"; a stored array
+#  matches a scalar probe by element containment. Regression net for B1 — the false-green filter gap
+#  where the fake stringified both sides and every filter test used only string values.)
+
+def test_filter_numeric_is_type_strict():
+    store = InMemoryTranscriptStore()
+    # One meeting stores priority as the JSON NUMBER 3; the other as the JSON STRING "3".
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="num-mtg",
+                       status="active", created_at="2026-06-20T09:00:00Z",
+                       data={"custom": {"priority": 3}})
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="str-mtg",
+                       status="active", created_at="2026-06-20T09:05:00Z",
+                       data={"custom": {"priority": "3"}})
+    r = _client(store=store).get("/meetings?custom.priority=3", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    # `priority=3` probes the NUMBER 3 → matches only the number-stored row, never the string "3" row.
+    assert [m["native_meeting_id"] for m in r.json()["meetings"]] == ["num-mtg"]
+
+
+def test_filter_bool_is_type_strict():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="billable-mtg",
+                       status="active", created_at="2026-06-20T09:00:00Z",
+                       data={"custom": {"billable": True}})
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="notbillable-mtg",
+                       status="active", created_at="2026-06-20T09:05:00Z",
+                       data={"custom": {"billable": False}})
+    # A row that stored the NUMBER 1 must NOT satisfy `billable=true` (bool ≠ number, like JSONB).
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="one-mtg",
+                       status="active", created_at="2026-06-20T09:10:00Z",
+                       data={"custom": {"billable": 1}})
+    r = _client(store=store).get("/meetings?custom.billable=true", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert [m["native_meeting_id"] for m in r.json()["meetings"]] == ["billable-mtg"]
+
+
+def test_filter_null_is_type_strict():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="null-mtg",
+                       status="active", created_at="2026-06-20T09:00:00Z",
+                       data={"custom": {"note": None}})
+    # A row storing the STRING "null" must NOT match the JSON `null` probe.
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="strnull-mtg",
+                       status="active", created_at="2026-06-20T09:05:00Z",
+                       data={"custom": {"note": "null"}})
+    r = _client(store=store).get("/meetings?custom.note=null", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert [m["native_meeting_id"] for m in r.json()["meetings"]] == ["null-mtg"]
+
+
+def test_filter_array_membership():
+    store = InMemoryTranscriptStore()
+    # The PRIMARY agent use case: filter by tag. A scalar probe matches a stored LIST by element
+    # containment (`["sales","q3"] @> "sales"`), exactly like production JSONB.
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="tagged-mtg",
+                       status="active", created_at="2026-06-20T09:00:00Z",
+                       data={"custom": {"tags": ["sales", "q3"]}})
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="other-mtg",
+                       status="active", created_at="2026-06-20T09:05:00Z",
+                       data={"custom": {"tags": ["marketing"]}})
+    r = _client(store=store).get("/meetings?custom.tags=sales", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert [m["native_meeting_id"] for m in r.json()["meetings"]] == ["tagged-mtg"]
+
+
+# ── coerce + containment-payload pin (SQL-construction layer) ─────────────────────────────────────
+# No table-creating real-Postgres fixture exists in this suite (only a schema-less advisory-lock
+# skipif convention), so per the plan we pin the coerce logic at the SQL-construction layer instead
+# of inventing fragile DB scaffolding: the wire value is coerced to its JSON scalar type, and the
+# containment payload the store casts to JSONB (`data @> json.dumps({"custom": {...}})`) therefore
+# carries a correctly-TYPED scalar (number 3, not string "3").
+
+def test_coerce_filter_value_order_and_warts():
+    from meeting_api.metadata import coerce_filter_value
+
+    assert coerce_filter_value("null") is None
+    assert coerce_filter_value("NULL") is None            # case-insensitive
+    assert coerce_filter_value("true") is True
+    assert coerce_filter_value("False") is False          # case-insensitive
+    assert coerce_filter_value("3") == 3 and isinstance(coerce_filter_value("3"), int)
+    assert coerce_filter_value("3") is not True           # int, not bool (bool checked first, "3"≠true)
+    assert coerce_filter_value("0") == 0 and isinstance(coerce_filter_value("0"), int)
+    assert coerce_filter_value("3.5") == 3.5 and isinstance(coerce_filter_value("3.5"), float)
+    assert coerce_filter_value("apollo") == "apollo"
+    # Accepted-wart edges: Python-only numeric spellings and non-finite stay STRINGS (valid-JSON-only).
+    assert coerce_filter_value("1_000") == "1_000"
+    assert coerce_filter_value("0x10") == "0x10"
+    assert coerce_filter_value("inf") == "inf"
+    assert coerce_filter_value("nan") == "nan"
+    assert coerce_filter_value("Infinity") == "Infinity"
+    assert coerce_filter_value("3-things") == "3-things"
+
+
+def test_parse_custom_filter_containment_payload_is_typed():
+    import json as _json
+
+    from meeting_api.metadata import parse_custom_filter
+
+    # The store builds `data @> CAST(json.dumps({"custom": <filter>}) AS JSONB)` — assert the payload
+    # carries the correctly-typed JSON scalar for each kind (number/bool/null/string), never "3".
+    for raw, expected_payload in [
+        ({"custom.priority": "3"}, '{"custom": {"priority": 3}}'),
+        ({"custom.billable": "true"}, '{"custom": {"billable": true}}'),
+        ({"custom.note": "null"}, '{"custom": {"note": null}}'),
+        ({"custom.project": "apollo"}, '{"custom": {"project": "apollo"}}'),
+    ]:
+        parsed = parse_custom_filter(raw)
+        assert _json.dumps({"custom": dict(parsed)}) == expected_payload
+
+
 # ── cross-user isolation: A's filter never returns B's meetings ──────────────────────────────────
 
 def test_filter_cross_user_isolation():
