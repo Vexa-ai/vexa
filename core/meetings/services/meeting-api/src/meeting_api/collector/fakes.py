@@ -48,11 +48,14 @@ def _json_scalar_eq(a, b) -> bool:
 
 
 def _jsonb_scalar_contains(stored, probe) -> bool:
-    """Model Postgres ``stored @> probe`` for a SCALAR ``probe`` (the query wire only ever yields a
-    single scalar per key). Three cases, mirroring JSONB containment exactly:
+    """Model the adapter's per-key OR of two containment probes for a SCALAR ``probe`` (the query
+    wire only ever yields a single scalar per key):
+    ``data @> {"custom":{k: v}}`` OR ``data @> {"custom":{k: [v]}}``. Three cases:
 
-      * ``stored`` is an ARRAY → the array-contains-primitive exception: TRUE iff ``probe`` equals
-        (type-strictly) some element (``["sales","q3"] @> "sales"`` is TRUE — the tag-filter case);
+      * ``stored`` is an ARRAY → matched by the ``[v]`` probe: TRUE iff ``probe`` equals
+        (type-strictly) some element (the tag-filter case). NOTE Postgres' bare
+        ``["sales","q3"] @> "sales"`` exception is TOP-LEVEL ONLY — nested under a key it is FALSE,
+        which is exactly why the adapter emits the second, array-shaped probe;
       * ``stored`` is an OBJECT → a scalar is never contained in an object → FALSE;
       * ``stored`` is a SCALAR → type-strict equality (number 3 does not contain string "3").
     """
@@ -229,10 +232,10 @@ class InMemoryTranscriptStore:
                     or data.get("workspace_id") in mws)
 
         def custom_matches(m):
-            # #1064: mirror the adapter's `data @> {"custom": {...}}` containment FAITHFULLY — Postgres
-            # JSONB `@>` is TYPE-STRICT (number 3 does NOT contain string "3", bool True ≠ number 1) and
-            # has the array-contains-primitive exception (a stored array matches a scalar probe that is
-            # one of its elements). `custom_filter` values arrive already coerced to their JSON scalar
+            # #1064: mirror the adapter's per-key OR of two containments FAITHFULLY —
+            # `data @> {"custom":{k: v}}` (stored scalar, TYPE-STRICT: number 3 does NOT contain
+            # string "3", bool True ≠ number 1) OR `data @> {"custom":{k: [v]}}` (stored array,
+            # element membership). `custom_filter` values arrive already coerced to their JSON scalar
             # type (`metadata.coerce_filter_value`), so this is a typed comparison, NOT a stringwise one.
             if not custom_filter:
                 return True

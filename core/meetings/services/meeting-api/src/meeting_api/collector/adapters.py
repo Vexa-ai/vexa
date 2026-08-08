@@ -422,9 +422,7 @@ class SqlAlchemyTranscriptStore:
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             custom_filter=None):
-        import json as _json
-
-        from sqlalchemy import cast, func, select, union_all
+        from sqlalchemy import and_, cast, func, or_, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
@@ -491,17 +489,31 @@ class SqlAlchemyTranscriptStore:
             #
             # `custom_filter` values arrive already COERCED to their JSON scalar type
             # (`metadata.coerce_filter_value` at the request boundary): `priority=3` is the number 3,
-            # `billable=true` is the bool True, `x=null` is None. So `json.dumps` below emits a typed
-            # JSON scalar and `@>` (which is TYPE-STRICT — number 3 does NOT contain string "3") matches
-            # the stored value. A scalar probe against a stored ARRAY still matches by element containment
-            # (`{"tags": ["sales","q3"]} @> {"tags": "sales"}` is TRUE — the primary tag-filter use case).
+            # `billable=true` is the bool True, `x=null` is None. `@>` is TYPE-STRICT (the number 3 does
+            # NOT contain the string "3"), so the typed probe matches the stored value exactly.
             # Accepted wart: a numeric/bool/null-looking wire value is probed as that scalar; there is no
             # wire syntax to force a string match on "3" (see coerce_filter_value).
+            #
+            # TWO probes OR-ed per key, because Postgres' "array contains a primitive" exception applies
+            # ONLY at the TOP level, never nested: `{"tags":["sales","q3"]} @> {"tags":"sales"}` is FALSE
+            # (verified on PG 16). So the tag-filter use case needs an explicit ARRAY probe:
+            #   data @> {"custom":{k: v}}    → stored SCALAR, type-strict equality
+            #   data @> {"custom":{k: [v]}}  → stored ARRAY, element membership (tags)
+            # Both are whole-column containments, so both still use `ix_meeting_data_gin`. Keys are
+            # AND-ed (every pair must match), matching the fake's `_jsonb_scalar_contains`.
+            #
+            # Each probe binds the dict ITSELF, never `json.dumps(...)`: SQLAlchemy's JSONB bind
+            # processor serializes the parameter, so a pre-serialized string binds as a jsonb STRING
+            # scalar, and `object @> string` is silently FALSE for every row.
             if custom_filter:
                 stmt = stmt.where(
-                    Meeting.data.op("@>")(
-                        cast(_json.dumps({"custom": dict(custom_filter)}), JSONB)
-                    )
+                    and_(*[
+                        or_(
+                            Meeting.data.op("@>")(cast({"custom": {k: v}}, JSONB)),
+                            Meeting.data.op("@>")(cast({"custom": {k: [v]}}, JSONB)),
+                        )
+                        for k, v in custom_filter.items()
+                    ])
                 )
             if list_view:
                 # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response

@@ -66,9 +66,11 @@ class TranscriptStore(Protocol):
         (the body of ``MeetingListResponse``).
 
         ``custom_filter`` (#1064): when set, restrict the list to meetings whose ``data['custom']``
-        CONTAINS every ``{key: value}`` pair — a Postgres JSONB containment (``data @> {'custom':
-        {...}}``, served by the existing whole-column GIN index ``ix_meeting_data_gin``). So an agent
-        retrieves exactly the meetings it classified with a given attribute."""
+        CONTAINS every ``{key: value}`` pair. Each pair is two OR-ed Postgres JSONB containments —
+        ``data @> {'custom': {k: v}}`` (stored scalar, type-strict) OR ``data @> {'custom': {k: [v]}}``
+        (stored array, element membership: the tag-filter case) — both served by the existing
+        whole-column GIN index ``ix_meeting_data_gin``. So an agent retrieves exactly the meetings it
+        classified with a given attribute, whether it stored that attribute as a scalar or a list."""
         ...
 
     async def merge_custom_metadata(
