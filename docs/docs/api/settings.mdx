@@ -1,0 +1,229 @@
+---
+title: "Settings API"
+description: "Configure your account over the API — model credentials, transcription backend, webhooks, calendar. Secrets are masked on read-back."
+---
+
+Everything the Terminal's **Settings** panel writes is also an ordinary API call. This page is the
+reference for the self-serve configuration surface: **per-user** settings, read and written with your
+own API key, on the same authenticated edge as every other route.
+
+<Note>
+**There is no single `/settings` endpoint.** Settings are per-domain routes under `/user/*` — one
+resource per concern (`/user/models`, `/user/transcription`, `/user/webhook`, `/user/calendar`).
+`GET /settings` returns `404` on every deployment; there is no aggregate read and no aggregate write.
+</Note>
+
+## Base URL & auth
+
+| | |
+|---|---|
+| Hosted | `https://api.cloud.vexa.ai` |
+| Self-hosted | `http://localhost:18056` (the gateway; `API_GATEWAY_HOST_PORT`, default `18056`) |
+
+```bash
+-H "X-API-Key: <API_KEY>"
+```
+
+**No scope is required.** Unlike `/bots` and `/transcripts`, the `/user/*` routes carry no scope
+requirement — any valid key may manage its own account's settings, and only its own. The gateway
+resolves the key to a user and injects that identity downstream; you cannot name another user's
+account in a request. See [Authentication](/authentication).
+
+## The surface at a glance
+
+| What you're configuring | Routes | Secrets involved |
+|---|---|---|
+| **Model credential** — which model, and whose key pays for it | `GET` · `PUT /user/models` | `api_key` |
+| **Transcription backend** — the STT service your bots use | `GET` · `PUT /user/transcription` | `token` |
+| **Webhooks** — where signed meeting events are POSTed | `GET` · `PUT /user/webhook`, `GET /user/webhook/deliveries` | `webhook_secret` |
+| **Calendar sync** — the ICS feed Vexa imports meetings from | `GET` · `PUT /user/calendar`, `GET` · `POST /user/calendar/sync` — documented under [Meetings API → Calendar](/api/meetings#calendar-sync) | `ics_url` |
+| **API keys themselves** | minted by an admin, not here — see [Authentication](/authentication) | the key |
+
+## How a settings write behaves
+
+Three rules hold across every route on this page.
+
+1. **`PUT` is a partial update, not a replace.** Only the fields present in the body change. Omitted
+   fields keep their stored value.
+2. **An empty string clears a field.** `{"model": ""}` removes the stored `model` and falls back to
+   the next tier. Clearing every field of a config removes it entirely.
+3. **Secrets are write-only.** A secret is accepted in the clear on `PUT` and never echoed back.
+   Reads return a masked form (`********abcd` — the last four characters) plus a boolean saying
+   whether one is set. There is no route that returns a stored secret.
+
+The `PUT` returns the same masked read-back shape the `GET` returns, so one call is enough to write
+and confirm.
+
+## Models
+
+The model credential your chat turns and meeting agents run on.
+
+```bash GET /user/models
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/models"
+```
+
+```json
+{
+  "mode": "custom",
+  "model": "claude-sonnet-4-5",
+  "meeting_model": "claude-haiku-4-5",
+  "base_url": "https://llm.example.com/v1",
+  "api_key_set": true,
+  "api_key": "********f0a1"
+}
+```
+
+<ParamField body="mode" type="string">
+`subscription` — use the deployment's brokered credential (a mounted Claude Code subscription or a
+deployment-level API key). `custom` — use your own Anthropic-/OpenAI-compatible endpoint (a LiteLLM
+or OpenRouter gateway, a self-hosted open-weights model). Any other value is refused with `422`.
+</ParamField>
+<ParamField body="model" type="string">Model name for chat turns.</ParamField>
+<ParamField body="meeting_model" type="string">Model name for meeting-time work, when it should differ from `model`.</ParamField>
+<ParamField body="base_url" type="string">Endpoint for `custom` mode. Must be an `http`/`https` URL with a hostname, else `422`.</ParamField>
+<ParamField body="api_key" type="string">Your provider key. Write-only — reads return `api_key_set` plus the masked `api_key`.</ParamField>
+
+```bash PUT /user/models
+curl -X PUT "$API_BASE/user/models" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"custom","base_url":"https://llm.example.com/v1","api_key":"sk-…"}'
+```
+
+```bash PUT /user/models — clear one field, keep the rest
+curl -X PUT "$API_BASE/user/models" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"meeting_model":""}'
+```
+
+**Resolution order is per field: your setting, then the deployment's default, then the environment.**
+Each field resolves independently — setting only `model` leaves `base_url` resolving from the
+deployment tier. Which credential is appropriate for your licensing situation is a separate question
+with a real answer: see [Model credentials & licensing](/model-credentials-licensing).
+
+## Transcription
+
+The speech-to-text backend your bots send audio to. Setting it here overrides the deployment's
+`TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN` for **your** meetings only.
+
+```bash GET /user/transcription
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/transcription"
+```
+
+```json
+{ "url": "https://stt.example.com/v1", "token_set": true, "token": "********9c3d" }
+```
+
+<ParamField body="url" type="string">STT endpoint. Must be an `http`/`https` URL with a hostname, else `422`.</ParamField>
+<ParamField body="token" type="string">Bearer token for that endpoint. Write-only — masked on read.</ParamField>
+
+```bash PUT /user/transcription
+curl -X PUT "$API_BASE/user/transcription" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://stt.example.com/v1","token":"…"}'
+```
+
+If no transcription backend resolves at any tier, a default `POST /bots` answers **`503`** naming the
+unset keys rather than spawning a bot that will never transcribe. Bringing your own STT — including
+the Whisper-compatible shapes that work — is walked through in [Use your own STT](/how-to/custom-stt).
+
+## Webhooks
+
+Where Vexa POSTs signed meeting events.
+
+```bash GET /user/webhook
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
+```
+
+```json
+{
+  "webhook_url": "https://hooks.example.com/vexa",
+  "webhook_secret_set": true,
+  "webhook_secret": "********2b7e",
+  "webhook_events": { "meeting.completed": true }
+}
+```
+
+<ParamField body="webhook_url" type="string" required>Absolute destination URL. Required on `PUT`.</ParamField>
+<ParamField body="webhook_secret" type="string">HMAC secret for signing the envelope. Write-only — masked on read. Omit it on a later `PUT` to keep the stored one.</ParamField>
+<ParamField body="webhook_events" type="object">Map of event name to boolean, e.g. `{"meeting.completed": true}`. Omit to leave the current selection untouched.</ParamField>
+
+```bash PUT /user/webhook
+curl -X PUT "$API_BASE/user/webhook" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"webhook_url":"https://hooks.example.com/vexa","webhook_secret":"…",
+       "webhook_events":{"meeting.completed":true}}'
+```
+
+### Delivery history
+
+```bash GET /user/webhook/deliveries
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook/deliveries?limit=50"
+```
+
+```json
+{
+  "deliveries": [
+    { "event_type": "meeting.completed", "event_id": "evt_…", "target_host": "hooks.example.com",
+      "outcome": "delivered", "status_code": 200, "attempt": 0, "meeting_id": 4821,
+      "created_at": "2026-08-08T09:14:22Z" }
+  ]
+}
+```
+
+Newest first. `limit` is `1`–`500`, default `100`; the ledger keeps a recent window per user
+(100 rows), not an audit log of all time. `outcome` is one of `delivered` · `queued` · `suppressed` ·
+`blocked` · `failed`.
+
+**A row carries the target *host*, never the full URL and never the secret** — a webhook URL can
+carry a token in its path or query, and a delivery record does not need it.
+
+<Warning>
+**Honest status.** The user-webhook path is built and module-tested — self-serve config, the
+`webhook.v1` HMAC envelope, the retry queue, this delivery ledger — but it has **never been fired
+against a real external receiver**; the module tests use an in-memory transport, and there is no
+settings UI for it in the Terminal yet. Treat it as untested until you have proven a live delivery
+into your own endpoint. Exactly-once emission and outage-durable retry are tracked as
+[#519](https://github.com/Vexa-ai/vexa/issues/519) / [#520](https://github.com/Vexa-ai/vexa/issues/520).
+The live status row is maintained on [Roadmap → Status](/roadmap/status).
+</Warning>
+
+## Calendar
+
+`GET` · `PUT /user/calendar` and `GET` · `POST /user/calendar/sync` follow the same idioms — the ICS
+URL is a secret, masked to host plus last four on read-back; `{"ics_url": null}` disconnects. They are
+documented with the meeting flow they belong to, in
+[Meetings API → Calendar sync](/api/meetings#calendar-sync) and
+[Sync your calendar](/how-to/calendar-sync).
+
+## Platform-wide defaults are not on the public API
+
+An operator can set **deployment-wide** defaults for the same two config domains — the tier that
+resolves under a user's own settings. That tier is deliberately **not exposed on the public API**: it
+is reachable only from the Terminal's admin surface, which proxies to an internal, internal-secret-gated
+route on the identity service. A non-admin sees `404`, indistinguishable from the route being absent.
+
+If you are self-hosting and want to set the defaults for everyone, use the Terminal's setup wizard or
+**Settings → Models**, or set them in the deployment environment — see
+[Configuration](/configuration). There is no public REST call for it, and pointing an agent at
+`/api/admin/settings/...` against the gateway will not work: that path belongs to the Terminal web
+app, not to the API.
+
+## Errors
+
+| Status | When |
+|---|---|
+| `401` | missing or invalid `X-API-Key` |
+| `404` | you addressed a route that does not exist — including `/settings` itself, and the admin tier when you are not an admin |
+| `422` | `mode` outside `subscription`/`custom`; a `base_url`/`url` that isn't an `http(s)` URL with a hostname; any value over 2048 characters |
+
+Full vocabulary at [Errors](/api/errors).
+
+## Verifying a setting actually works
+
+Writing a credential and having it *resolve* are two different things. The Terminal's Settings panel
+tests the **effective** configuration — the same user-then-deployment-then-environment resolution a
+real chat turn or bot spawn applies — and reports the failure with the remedy named. Use it after any
+change here; a `200` from `PUT` means stored, not reachable.
+
+If a setting looks right and behaviour disagrees, [Troubleshooting](/troubleshooting) covers the
+common causes.

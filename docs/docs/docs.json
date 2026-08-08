@@ -87,6 +87,7 @@
         "pages": [
           "api/meetings",
           "api/agent",
+          "api/settings",
           "api/errors"
         ]
       },
