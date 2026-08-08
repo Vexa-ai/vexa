@@ -8,9 +8,13 @@ const oldSha = "b".repeat(40);
 const config = { effectiveAfterPullRequest: 100, verifiers: ["rights-verifier"] };
 const body = (selected) => `
 ## Contribution rights
-- [${selected === "independent" ? "x" : " "}] I own this contribution. <!-- rights:independent -->
-- [${selected === "corporate" ? "x" : " "}] An employer or client owns or controls it. <!-- rights:corporate -->
-- [${selected === "uncertain" ? "x" : " "}] I am unsure. <!-- rights:uncertain -->
+- [${selected === "independent" ? "x" : " "}] I own this contribution.
+  This description wraps like the production pull-request template.
+  <!-- rights:independent -->
+- [${selected === "corporate" ? "x" : " "}] An employer or client owns or controls it.
+  <!-- rights:corporate -->
+- [${selected === "uncertain" ? "x" : " "}] I am unsure.
+  <!-- rights:uncertain -->
 `;
 const pr = (overrides = {}) => ({ number: 101, body: body("independent"), head: { sha }, ...overrides });
 const decision = ({ type = "verified", head = sha, login = "rights-verifier", receipt = "VCR-2026-0001", created = 1 } = {}) => ({
@@ -44,6 +48,11 @@ test("independent path passes without a CLA", () => {
   const verdict = evaluatePullRequest(pr(), [], config);
   assert.equal(verdict.ok, true);
   assert.match(verdict.summary, /separately required DCO/);
+});
+
+test("accepts a marker on the checkbox line for backwards compatibility", () => {
+  const inline = "- [x] I own this contribution. <!-- rights:independent -->";
+  assert.equal(evaluatePullRequest(pr({ body: inline }), [], config).ok, true);
 });
 
 test("uncertain path opens review and blocks merge", () => {

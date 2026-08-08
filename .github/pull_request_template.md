@@ -13,6 +13,9 @@
 <!-- Select exactly ONE. This is a legal certification: an agent may explain the choices but
      must not select one for you. See CONTRIBUTOR_RIGHTS.md. -->
 
+> **Select exactly one.** GitHub checkboxes are not radio buttons; selecting zero or multiple
+> choices fails the required `contribution-rights` check.
+
 - [ ] **Independent:** I created this contribution, or otherwise have the right to submit it
   under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.
   <!-- rights:independent -->
