@@ -20,6 +20,12 @@ describe("sttEndpoint — the shared TRANSCRIPTION_SERVICE_URL rule", () => {
     expect(sttEndpoint(`${full}/`)).toBe(full);
   });
 
+  it("does NOT double-v1 a base that already ends with /v1", () => {
+    // Groq's documented base is https://api.groq.com/openai/v1 — an operator naturally
+    // includes /v1. Appending /v1/audio/transcriptions would produce /v1/v1/... → 404.
+    expect(sttEndpoint("https://api.groq.com/openai/v1")).toBe(`https://api.groq.com/openai/v1/audio/transcriptions`);
+  });
+
   it("returns empty for an unset value so the route can answer 503", () => {
     expect(sttEndpoint("")).toBe("");
     expect(sttEndpoint("   ")).toBe("");

@@ -100,10 +100,19 @@ export class TranscriptionClient {
   private minSilenceDurationMs: number | undefined;
   private model: string;
   constructor(config: TranscriptionClientConfig) {
-    // Ensure serviceUrl ends with the transcriptions endpoint
+    // Ensure serviceUrl ends with the transcriptions endpoint, accepting BOTH accepted shapes:
+    // a bare base ("https://api.openai.com") and a full endpoint URL
+    // ("https://api.openai.com/v1/audio/transcriptions"). Also handles a base that already
+    // carries the /v1 prefix (e.g. "https://api.groq.com/openai/v1") — appending blindly
+    // would double-path into /v1/v1/... → 404.
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
     if (!this.serviceUrl.endsWith('/v1/audio/transcriptions')) {
-      this.serviceUrl += '/v1/audio/transcriptions';
+      const overlap = '/v1';
+      if (this.serviceUrl.endsWith(overlap)) {
+        this.serviceUrl += '/audio/transcriptions';
+      } else {
+        this.serviceUrl += '/v1/audio/transcriptions';
+      }
     }
     this.apiToken = config.apiToken;
     this.maxRetries = config.maxRetries ?? 3;
