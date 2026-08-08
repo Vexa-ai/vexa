@@ -1,0 +1,70 @@
+---
+title: "Billing & credit balance"
+description: "How the credit balance, plan fees, top-ups, and per-minute usage billing work on vexa.ai"
+---
+
+Billing on [vexa.ai](https://vexa.ai) has two separate money surfaces. Knowing
+which one a charge touches removes almost every surprise:
+
+1. **Credit balance** — prepaid credit that pays for *usage*.
+2. **Your card** — pays for *plan fees* directly.
+
+## Credit balance
+
+Your credit balance (Account → Balance) is everything Vexa owes you in
+credit:
+
+- **Top-up and welcome credit** — the welcome credit plus any Add Funds
+  top-ups. Spent **only on metered usage** (bot minutes and Vexa-served
+  transcription minutes), applied automatically when usage is invoiced.
+- **Refund credit** — e.g. the automatically prorated refund for unused plan
+  time when you switch plans. This part applies to **your next invoice of any
+  kind**, including plan fees.
+
+New charges never draw from your balance directly: plan/subscription fees and
+one-off invoices charge your saved payment method, and any refund credit you
+hold is then applied against them automatically.
+
+<Note>
+If you subscribe to a plan and your credit balance does not change — that is
+expected. Plan fees and credit balance are separate by design.
+</Note>
+
+## Top-ups
+
+**Add Funds** (Account → Balance) charges your card or Link wallet once and
+adds the amount to your credit balance as a paid credit. Minimum top-up is $2.
+
+## Usage pricing
+
+Usage is billed **per minute, rounded up once per meeting** (not per minute
+of the meeting).
+
+On **Pay-as-you-go**:
+
+| Meter | Rate |
+|---|---|
+| Bot runtime | $0.30 / bot hour |
+| Vexa-served real-time transcription | +$0.20 / hour |
+| Your own transcription endpoint | no Vexa transcription charge |
+
+The **Individual** plan ($12/mo) includes one concurrent bot with real-time
+transcription; its monthly fee is charged to your card.
+
+## Switching plans
+
+Plan switches take effect immediately and start a **new billing period**:
+
+- Unused time on the old plan is returned automatically as prorated Stripe
+  credit toward your next invoices.
+- Usage details in the Account page show the current billing period; usage
+  recorded under a previous plan's period may not be listed there, but it
+  remains recorded and billed correctly.
+
+## Where to check what happened
+
+- **Account → Balance** — current credit and the running usage total for the
+  period.
+- **Account → Billing History** — every payment, credit, and invoice, newest
+  first.
+- **Manage billing** — the Stripe portal for payment methods and invoices.
