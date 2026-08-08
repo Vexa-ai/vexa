@@ -31,7 +31,8 @@
           "how-to/send-a-bot",
           "how-to/stream-transcript",
           "how-to/custom-stt",
-          "how-to/recordings"
+          "how-to/recordings",
+          "interactive-bots"
         ]
       },
       {
@@ -329,6 +330,14 @@
       "source": "/self-hosting",
       "destination": "/deployment",
       "permanent": false
+    },
+    {
+      "source": "/api/interactive-bots",
+      "destination": "/interactive-bots"
+    },
+    {
+      "source": "/api/interactive-bots.md",
+      "destination": "/interactive-bots.md"
     }
   ]
 }
