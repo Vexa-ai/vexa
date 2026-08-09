@@ -150,6 +150,61 @@ minio:
   mc:    { digest: "sha256:<64 hex>", image: { repository: registry.example.internal/mirror/mc } }
 ```
 
+## Testing #1005 + #1006 on your own cluster (validation branch)
+
+`deploy/helm/values-oenb-validation.yaml` is a ready-to-edit values file for validating both fixes
+on a quota-controlled, mirror-only cluster. Replace every `REPLACE-ME.registry.internal` with your
+registry and install with `-f`.
+
+**Point it at your own registry.** The #1005 fix is Python under `core/runtime/`, so it exists only
+inside a **rebuilt runtime image** — no published tag contains it. Build it from this branch, push it
+to your registry, and set `runtime.image.repository` / `.tag` to that copy:
+
+```bash
+docker build -t <your-registry>/vexa/v012-runtime:<your-tag> core/runtime
+docker push     <your-registry>/vexa/v012-runtime:<your-tag>
+```
+
+#1006 is chart-only, so it needs no rebuild — it works against images you already mirror.
+
+> ### ⚠️ `global.imageTag` silently overrides the runtime tag
+>
+> The runtime Deployment renders
+> `image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"`.
+>
+> **If `global.imageTag` is set, it wins over `runtime.image.tag` — with no error and no warning.**
+> Setting it to a release tag (the natural move on a mirror-only install, since it pins every other
+> image at once) gives you the **old runtime without the #1005 fix** while your values file appears
+> to pin the fixed one. Every Pod goes Running, your spawned bots still declare no resources, the
+> quota still rejects them, and you conclude the fix is broken — having never run it.
+>
+> Either leave `global.imageTag` **unset**, or set it to **the same tag you built the runtime with**.
+> Then confirm what you actually got, before trusting any spawn:
+>
+> ```bash
+> kubectl -n <ns> get deploy <release>-vexa-runtime \
+>   -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+> ```
+>
+> (Tracked upstream as [#1001](https://github.com/Vexa-ai/vexa/issues/1001) — a digest helper for
+> long-running Deployments — which is still open.)
+
+Confirm the sizing reached the runtime too — four entries, all non-empty:
+
+```bash
+kubectl -n <ns> get deploy <release>-vexa-runtime -o json \
+  | jq '.spec.template.spec.containers[0].env[]
+        | select(.name|test("^RUNTIME_(BOT|AGENT_WORKER)_(CPU|MEMORY_MB)$"))'
+```
+
+Empty strings mean the chart values did not land, and the spawned Pods will declare nothing —
+exactly the pre-#1005 behaviour.
+
+**The `minio-init` hook Job is the trap that bites before either fix does.** It is a post-install
+hook, so on a quota-controlled namespace it is rejected, retried forever, and `helm install --wait`
+**hangs** while every Deployment sits Running — a failure that looks nothing like a quota problem.
+Size it via `minio.mc.resources` (defaulted in this branch, absent from `main`).
+
 ## Validate (no cluster)
 
 ```bash

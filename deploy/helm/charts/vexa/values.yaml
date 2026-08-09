@@ -474,6 +474,14 @@ minio:
     image:
       repository: minio/mc
       tag: RELEASE.2025-08-13T08-35-41Z
+    # The bucket-init hook Job's OWN sizing. A quota-controlled namespace (ResourceQuota naming
+    # requests.cpu/requests.memory/limits.cpu/limits.memory, or a restricted OpenShift project)
+    # rejects a Pod that declares nothing — and this Job retries forever, so `helm install --wait`
+    # hangs instead of failing. It is a hook Job, so neither #1005 (runtime-spawned Pods) nor the
+    # per-component `resources:` blocks covered it. Set to {} to emit nothing.
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits:   { cpu: 200m, memory: 128Mi }
   accessKey: vexa-access-key
   secretKey: vexa-secret-key
   bucket: vexa

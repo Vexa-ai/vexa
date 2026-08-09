@@ -33,6 +33,13 @@ spec:
           whole control plane came up, then the bucket-init Job reached for Docker Hub. */}}
           image: {{ include "vexa.minioClientImage" . | quote }}
           imagePullPolicy: IfNotPresent
+          {{- /* This hook Job is a Pod like any other: a namespace whose ResourceQuota names
+          requests.cpu/limits.memory REJECTS it when it declares nothing, and because it is a
+          post-install hook the Job retries forever and `helm install --wait` never returns while
+          every long-running Deployment sits Running. #1005 sized the runtime-SPAWNED Pods; this
+          Job is neither a Deployment nor runtime-spawned, so it was missed by both. */}}
+          resources:
+            {{- toYaml .Values.minio.mc.resources | nindent 12 }}
           # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
           # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.
           # Hardcoded 5s sleep races MinIO startup → `mc mb` runs against an

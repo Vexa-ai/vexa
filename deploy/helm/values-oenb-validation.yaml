@@ -1,0 +1,129 @@
+# =====================================================================================
+# VALIDATION VALUES — Vexa-ai/vexa#1005 (spawned-Pod resources) + #1006 (mirror-only images)
+#
+# THIS IS NOT A RELEASE ARTEFACT. It exists so ONE person can install this branch on a
+# quota-controlled, mirror-only cluster and check that the two fixes behave. Do not carry
+# it into production values.
+#
+# -------------------------------------------------------------------------------------
+# ⚠️  READ THIS FIRST — THE ONE WAY THIS TEST SILENTLY LIES TO YOU  ⚠️
+# -------------------------------------------------------------------------------------
+# The runtime Deployment renders its image as:
+#
+#     image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag |
+#              default .Values.runtime.image.tag }}"
+#
+# `global.imageTag`, WHEN SET, OVERRIDES `runtime.image.tag` — silently. There is no
+# error, no warning, and every Pod still goes Running.
+#
+# So if you set `global.imageTag: v0.12.18` (the natural thing to do on a mirror-only
+# install, because it pins every OTHER image at once) you get the OLD runtime, WITHOUT
+# the #1005 fix, while this file appears to have pinned the fixed one. Your spawned bot
+# Pods then declare no resources, your quota rejects them, and you conclude the fix does
+# not work — when in fact you never ran it.
+#
+# YOU HAVE EXACTLY TWO SAFE CHOICES:
+#
+#   (A) Leave `global.imageTag` UNSET (this file's default — the `global:` block below
+#       deliberately does not define it). Every other image then uses its own default
+#       tag, and the runtime uses `runtime.image.tag` below.
+#
+#   (B) Set `global.imageTag` to THE SAME test tag you built the runtime with, and make
+#       sure your registry serves that tag for every other Vexa image too.
+#
+# Anything else — a global.imageTag that differs from runtime.image.tag — produces a
+# GREEN-BUT-WRONG result. Verify with the one command in the VERIFY block at the bottom
+# BEFORE you trust any spawn.
+#
+# (The underlying hole is Vexa-ai/vexa#1001 — a digest helper for long-running
+# Deployments — which is still open. Until it lands, this override is load-bearing.)
+# =====================================================================================
+
+global:
+  # NOTE THE ABSENCE. `imageTag` is intentionally NOT set here — see choice (A) above.
+  # Uncomment ONLY to exercise choice (B), and only with the identical tag used below.
+  # imageTag: "oenb-val-1005-1006"
+
+  # A mirror-only cluster pulls from its own registry; add the pull secret that reaches it.
+  imagePullSecrets: []
+  # imagePullSecrets:
+  #   - name: internal-registry-pull
+
+  # `Always` is the chart default. On a mirror-only cluster that is usually what you want.
+  # Set `IfNotPresent` if you side-loaded the image onto the nodes instead of pushing it
+  # to a registry (that is what our own local validation did — see the PR description).
+  imagePullPolicy: Always
+
+runtime:
+  backend: k8s
+
+  # ---- #1005: the runtime image that CONTAINS the fix -------------------------------
+  # The #1005 fix is PYTHON, in core/runtime/. It only exists inside a REBUILT runtime
+  # image. No published tag contains it today. Point these at wherever your Harbor holds
+  # the image you (or we) built from this branch.
+  image:
+    repository: REPLACE-ME.registry.internal/vexa/v012-runtime
+    tag: oenb-val-1005-1006          # ← overridden by global.imageTag if that is set. See banner.
+
+  # ---- #1005: sizing for the Pods the runtime SPAWNS ---------------------------------
+  # NOT `runtime.resources` (which sizes the runtime Deployment itself). One value per
+  # dimension sets BOTH the request and the limit → Guaranteed QoS.
+  #
+  # memoryMb is a HARD CEILING: a workload exceeding it is OOM-killed. Nothing was
+  # enforced before #1005, so we have no measured figure for a real meeting. START HIGH
+  # and tighten — do not discover the ceiling as a dropped meeting.
+  workloadResources:
+    meetingBot:
+      cpu: 2                          # → requests/limits cpu: 2000m
+      memoryMb: 4096                  # → requests/limits memory: 4096Mi  (chart default 2048 is dev-sized)
+    agentWorker:
+      cpu: 0.5                        # → requests/limits cpu: 500m
+      memoryMb: 1024                  # → requests/limits memory: 1024Mi
+
+  # ---- #1006: the three runtime-spawned images your mirror must hold -----------------
+  # These are NEVER an `image:` field in any rendered manifest — the chart hands them to
+  # the runtime as env and the runtime creates those Pods later. `kubectl get deploy -o yaml`
+  # will never name them, so a mirror populated by reading the manifests WILL miss them and
+  # fail at the first meeting, not at install.
+  #
+  # An explicit full reference WINS and global.imageTag never rewrites it (that is the #1006
+  # fix). Prefer digests for the bot.
+  browserImage: "REPLACE-ME.registry.internal/vexa/vexa-bot:v012"        # the bot, ~3.6 GB
+  agentImage: "REPLACE-ME.registry.internal/vexa/v012-agent-api:v012"
+  agentWorkerImage: "REPLACE-ME.registry.internal/vexa/v012-agent-worker:v012"
+
+# ---- The fourth easily-missed pull, and a quota trap -------------------------------
+# The post-install `minio-init` hook Job. On a quota-controlled namespace it is REJECTED
+# unless it declares resources, and because it is a hook that retries forever,
+# `helm install --wait` HANGS while every Deployment sits happily Running. This branch
+# adds the `resources` block below; upstream main does not have it yet.
+minio:
+  mc:
+    reference: "REPLACE-ME.registry.internal/mirror/mc:RELEASE.2025-08-13T08-35-41Z"
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits:   { cpu: 200m, memory: 128Mi }
+  image:
+    repository: REPLACE-ME.registry.internal/mirror/minio
+    tag: latest
+
+# =====================================================================================
+# VERIFY — run BOTH before you trust any result.
+#
+# 1. Did the runtime you actually got contain the fix?  (catches the global.imageTag trap)
+#
+#      kubectl -n <ns> get deploy <release>-vexa-runtime \
+#        -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+#
+#    It MUST print the repository:tag you set above. If it prints anything else,
+#    global.imageTag overrode you — STOP, you are about to test the old runtime.
+#
+# 2. Did the sizing reach the runtime?
+#
+#      kubectl -n <ns> get deploy <release>-vexa-runtime -o json \
+#        | jq '.spec.template.spec.containers[0].env[]
+#              | select(.name|test("^RUNTIME_(BOT|AGENT_WORKER)_(CPU|MEMORY_MB)$"))'
+#
+#    Expect four entries, all NON-EMPTY. Empty strings mean the values did not land and
+#    the spawned Pods will declare nothing — exactly the pre-#1005 behaviour.
+# =====================================================================================
