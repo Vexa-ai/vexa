@@ -108,6 +108,24 @@
    ]
   },
   {
+   "key": "RUNTIME_K8S_POD_SECURITY_CONTEXT",
+   "class": "defaulted",
+   "default": "(unset \u2014 the chart renders this env only when runtime.workloadSecurityContext.pod is set; unset or {} \u21d2 no securityContext is emitted on the spawned Pod)",
+   "description": "k8s backend: JSON PodSecurityContext stamped onto every SPAWNED Pod's spec. A bare `kubectl run` bot/agent Pod inherits nothing from the runtime Deployment and today carries NO security context at all \u2014 the likeliest rejection on a namespace enforcing OpenShift restricted-v2 or the upstream Pod Security restricted profile (#1102). Default-absent is deliberate: the images carry no Dockerfile USER (0 of 15) and run as root, so a defaulted runAsNonRoot would break every existing install. Malformed JSON is fatal at spawn",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT",
+   "class": "defaulted",
+   "default": "(unset \u2014 the chart renders this env only when runtime.workloadSecurityContext.container is set; unset or {} \u21d2 no securityContext is emitted on the spawned container)",
+   "description": "k8s backend: JSON container SecurityContext stamped onto the SPAWNED Pod's container, merged by container name alongside the workspace volumeMounts. Same contract and same default-absent guarantee as RUNTIME_K8S_POD_SECURITY_CONTEXT (#1102). Ordering dependency noted in k8s_backend.pod_overrides: `kubectl run --overrides` replaces the containers LIST wholesale, so this knob is only safe to switch on once the whole-manifest submission from #1005 (PR #1093) lands",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",

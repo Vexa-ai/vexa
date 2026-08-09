@@ -255,6 +255,102 @@ def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
     assert ov["spec"]["nodeSelector"] == _SEL
 
 
+# ── spawned-workload security context: configurable, default ABSENT ──────────
+#
+# A spawned Pod carries NO securityContext today, which is the likeliest reason a restricted
+# admission policy (OpenShift restricted-v2 / Pod Security "restricted") rejects it. The seam below
+# lets an operator declare one. It DEFAULTS TO ABSENT on purpose: this repo's images carry no
+# Dockerfile `USER`, so they run as root, and a defaulted runAsNonRoot would break every existing
+# install. Whether the images tolerate an arbitrary non-root UID is untested and tracked separately.
+
+_POD_SC = {"runAsNonRoot": True, "runAsUser": 1000740000,
+           "seccompProfile": {"type": "RuntimeDefault"}}
+_CTR_SC = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
+
+
+def _sc_env(*, pod=None, container=None, **kw):
+    e = _env(**kw) if kw else {}
+    if pod is not None:
+        e["RUNTIME_K8S_POD_SECURITY_CONTEXT"] = json.dumps(pod)
+    if container is not None:
+        e["RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT"] = json.dumps(container)
+    return e
+
+
+def test_k8s_pod_overrides_default_emits_no_security_context():
+    """THE DEFAULT-ABSENT GUARANTEE. Unset, and the chart's empty default (`{}` → the template emits
+    no env at all; `"{}"` if one ever reaches us) both produce a spec with no securityContext at any
+    level — byte-identical to the pre-seam spawn. This is the assertion that keeps the fix from
+    shipping a break to every operator whose root-running images start fine today."""
+    assert pod_overrides({}, container_name="x") is None
+    assert pod_overrides({"RUNTIME_K8S_POD_SECURITY_CONTEXT": "{}",
+                          "RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT": "{}"},
+                         container_name="x") is None
+    # and with another seam present, the spec still carries no security context anywhere
+    ov = pod_overrides(_sc_env(pod={}, container={}, source="vexa-agent-workspaces"),
+                       container_name="vexa-worker-u1")
+    assert "securityContext" not in ov["spec"]
+    assert "securityContext" not in ov["spec"]["containers"][0]
+
+
+def test_k8s_pod_overrides_pod_level_security_context_needs_no_containers_entry():
+    """A POD-level security context is a pod-scoped field, so it merges without touching the
+    containers LIST — the same property that makes tolerations/nodeSelector safe under
+    `kubectl run --overrides`, whose JSON merge replaces that list wholesale."""
+    ov = pod_overrides(_sc_env(pod=_POD_SC), container_name="vexa-mtg-9")
+    assert ov["spec"]["securityContext"] == _POD_SC
+    assert "containers" not in ov["spec"]                  # list untouched ⇒ image/env/command survive
+
+
+def test_k8s_pod_overrides_container_level_security_context_rides_the_named_container():
+    """A CONTAINER-level security context is container-scoped, so it must ride a containers entry —
+    keyed BY NAME, exactly like the workspace-mount seam it shares the entry with."""
+    ov = pod_overrides(_sc_env(container=_CTR_SC), container_name="vexa-mtg-9")
+    (container,) = ov["spec"]["containers"]
+    assert container["name"] == "vexa-mtg-9"
+    assert container["securityContext"] == _CTR_SC
+    assert "volumeMounts" not in container                 # no PVC ⇒ no mounts, security context stands
+
+
+def test_k8s_pod_overrides_security_context_coexists_with_every_other_seam():
+    """All four seams in one spawn — workspace mounts, scheduling, pod- and container-level security
+    context — with the two container-scoped fields sharing ONE by-name entry rather than two."""
+    ov = pod_overrides(
+        {**_sched_env(tolerations=_TOL, node_selector=_SEL, source="vexa-agent-workspaces"),
+         **_sc_env(pod=_POD_SC, container=_CTR_SC)},
+        container_name="vexa-worker-u1",
+    )
+    spec = ov["spec"]
+    assert spec["securityContext"] == _POD_SC
+    assert spec["tolerations"] == _TOL and spec["nodeSelector"] == _SEL
+    assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "vexa-agent-workspaces"
+    (container,) = spec["containers"]                      # ONE entry, not one per container-scoped seam
+    assert container["securityContext"] == _CTR_SC
+    assert container["volumeMounts"][0]["mountPath"] == "/workspaces/u1"
+
+
+def test_k8s_pod_overrides_malformed_security_context_json_fails_loud():
+    """Same contract as the scheduling knobs: a security context silently dropped is a Pod rejected at
+    admission with a cause the operator cannot see, so malformed input raises at spawn."""
+    with pytest.raises(ValueError, match="RUNTIME_K8S_POD_SECURITY_CONTEXT"):
+        pod_overrides({"RUNTIME_K8S_POD_SECURITY_CONTEXT": "{not json"}, container_name="x")
+    with pytest.raises(ValueError, match="RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT"):
+        pod_overrides({"RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT": "[1,2]"}, container_name="x")
+
+
+def test_k8s_start_overlays_runtime_process_security_context_env(monkeypatch):
+    """The security context is a property of the RUNTIME deployment (the operator installing the
+    chart), not of the workload spec built per-workload by meeting-api/agent-api — so it rides the
+    same process-env overlay the scheduling constraints do."""
+    from runtime_kernel.k8s_backend import _runtime_scheduling_env
+    monkeypatch.setenv("RUNTIME_K8S_POD_SECURITY_CONTEXT", json.dumps(_POD_SC))
+    monkeypatch.setenv("RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT", json.dumps(_CTR_SC))
+    overlay = _runtime_scheduling_env()
+    ov = pod_overrides({**_env(source="vexa-agent-workspaces"), **overlay}, container_name="w")
+    assert ov["spec"]["securityContext"] == _POD_SC
+    assert ov["spec"]["containers"][0]["securityContext"] == _CTR_SC
+
+
 # ── process: shares the host FS — no binds, but N-mount aware (parity) ────────
 
 def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
