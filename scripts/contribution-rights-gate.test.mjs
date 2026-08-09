@@ -40,6 +40,36 @@ test("requires exactly one declaration", () => {
   assert.equal(evaluatePullRequest(pr({ body: multiple }), [], config).ok, false);
 });
 
+// Regression: the fixture above puts each marker on its checkbox line, but
+// .github/PULL_REQUEST_TEMPLATE.md wraps the label and leaves the marker on a continuation line.
+// Matching only the marker's own line reported zero selections for every correctly ticked PR, and
+// because `contribution-rights` is not a required check the gate failed unnoticed on every pull
+// request from activation until 2026-08-09.
+const templateShapedBody = (selected) => `
+## Contribution rights
+
+- [${selected === "independent" ? "x" : " "}] **Independent:** I created this contribution, or otherwise have the right to submit it
+  under Apache-2.0, and it is not owned or controlled by an employer, client, or other entity.
+  <!-- rights:independent -->
+- [${selected === "corporate" ? "x" : " "}] **Employer/client authorization required:** an employer, client, or other entity owns or
+  may control this contribution. I am requesting Vexa's private corporate-authorization process.
+  <!-- rights:corporate -->
+- [${selected === "uncertain" ? "x" : " "}] **Unsure:** I need a private rights review before merge.
+  <!-- rights:uncertain -->
+`;
+
+test("reads a declaration whose marker sits on a continuation line", () => {
+  assert.equal(evaluatePullRequest(pr({ body: templateShapedBody("independent") }), [], config).ok, true);
+  assert.equal(evaluatePullRequest(pr({ body: templateShapedBody("none") }), [], config).ok, false);
+  const both = templateShapedBody("independent").replace("[ ] **Employer", "[x] **Employer");
+  assert.equal(evaluatePullRequest(pr({ body: both }), [], config).ok, false);
+});
+
+test("does not attribute an orphaned marker to an earlier list item", () => {
+  const orphan = "## Contribution rights\n\n- [x] Some other checked item\n\n  <!-- rights:independent -->\n";
+  assert.equal(evaluatePullRequest(pr({ body: orphan }), [], config).ok, false);
+});
+
 test("independent path passes without a CLA", () => {
   const verdict = evaluatePullRequest(pr(), [], config);
   assert.equal(verdict.ok, true);
