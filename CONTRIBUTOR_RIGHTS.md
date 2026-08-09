@@ -32,13 +32,20 @@ success result.
 
 Choose this path when the contribution is assigned work, was prepared using controlled employer
 or client assets, is sponsored for upstream submission, or may otherwise be owned or controlled
-by another legal entity. Continue to sign your own commits under the DCO; Vexa will privately send
-the rights holder the current approved corporate agreement or a contribution-specific
-authorization. Technical review may continue while that happens, but merge waits.
+by another legal entity. Continue to sign your own commits under the DCO. Technical review may
+continue while authorization is arranged, but merge waits.
 
-Start the private process by emailing [dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request
-URL and the rights holder's legal/IP contact. Do not attach executed agreements, signatures,
-addresses, employment documents, or private correspondence to a public issue or pull request.
+The normal route is self-serve: forward
+[`CLA/employer-authorization-template.md`](CLA/employer-authorization-template.md) to whoever
+handles open-source approvals where you work. It is a short letter they fill in, sign, and email
+to [dmitry@vexa.ai](mailto:dmitry@vexa.ai) — it grants Vexa nothing beyond what Apache-2.0 already
+provides, and there are no terms in it to negotiate. You sign nothing beyond your own DCO
+sign-off.
+
+If you cannot reach your own approvers, or they would rather hear from Vexa directly, email
+[dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request URL and the rights holder's legal/IP
+contact instead. Do not attach executed agreements, signatures, addresses, employment documents,
+or private correspondence to a public issue or pull request.
 
 ### Unsure
 

@@ -1,16 +1,25 @@
 # Corporate contribution authorization
 
-Do not commit executed agreements or personal information here. A contributor selects the
-corporate path in the pull-request template and emails [dmitry@vexa.ai](mailto:dmitry@vexa.ai)
-with the PR URL and the rights holder's legal/IP contact. Vexa then supplies the current
-adopted corporate agreement or contribution-specific authorization through the private
-return channel.
+When an employer, client, or other organization may own or control your contribution, the normal
+route is a short authorization letter you forward to your own open-source approvers:
+**[`employer-authorization-template.md`](employer-authorization-template.md)**. There is nothing
+to negotiate in it — Section 5 of the Apache License 2.0 already places contributions under the
+project's license, and the letter confirms only that the submitter is authorized to make one.
 
-The public repository records only an opaque `VCR-YYYY-NNNN` receipt bound to the exact PR and
-head SHA. Vexa's corporate agreement is adapted from The Apache Software Foundation's Corporate
-CLA (v r190612). A version becomes operative only when Vexa adopts it and pins its SHA-256 here;
-until a pinned hash appears in the table below, no text in this directory is an executable
-agreement.
+If you cannot reach your own approvers, email [dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the
+pull-request URL and the rights holder's legal/IP contact, and Vexa will start the exchange
+instead.
+
+Do not commit executed agreements or personal information here. The public repository records
+only an opaque `VCR-YYYY-NNNN` receipt bound to the exact PR and head SHA.
+
+## If your legal team requires a signed agreement on file
+
+Some corporate legal departments will not approve a contribution without a contributor agreement
+on record, whatever the license says. For that case Vexa's corporate agreement is adapted from
+The Apache Software Foundation's Corporate CLA (v r190612). A version becomes operative only when
+Vexa adopts it and pins its SHA-256 here; until a pinned hash appears in the table below, no text
+in this directory is an executable agreement.
 
 ## Agreement versions
 
