@@ -49,12 +49,13 @@ ids, set the exact served name.
 ## Example: FunASR or SenseVoice
 
 <Note>
-**Client path validated; complete meeting deployment still needs a witness.** Vexa's actual
-`TranscriptionClient` has been run against the FunASR 1.3.26 OpenAI-compatible server with
-SenseVoice on CPU. Chinese, English, Cantonese, Japanese, Korean, and concatenated Chinese-English
-samples all produced non-empty transcripts, verbose segments, and duration metadata. A bot-in-meeting
-run and the `platform_settings` override path remain unwitnessed and are tracked in
-[#863](https://github.com/Vexa-ai/vexa/issues/863).
+**Client path validated upstream; complete meeting deployment still needs a witness.** The FunASR
+maintainers ran Vexa's own `TranscriptionClient` against the FunASR 1.3.26 OpenAI-compatible server
+with SenseVoice on CPU ([#928](https://github.com/Vexa-ai/vexa/pull/928)). Chinese, English,
+Cantonese, Japanese, Korean, and concatenated Chinese-English samples all produced non-empty
+transcripts, verbose segments, and duration metadata. **No Vexa maintainer has reproduced this** — a
+bot-in-meeting run and the `platform_settings` override path remain unwitnessed on either side, and
+are tracked in [#863](https://github.com/Vexa-ai/vexa/issues/863).
 </Note>
 
 Self-hosted FunASR/SenseVoice gateways are reported to be a good fit when you need local Chinese,
