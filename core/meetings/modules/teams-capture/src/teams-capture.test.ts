@@ -8,6 +8,7 @@
  */
 import {
   createTeamsChat,
+  teamsNameFromStream,
   teamsParticipantSelectors,
   teamsNameSelectors,
   teamsParticipantIdSelectors,
@@ -106,6 +107,37 @@ check('container selectors fall back to body', teamsMeetingContainerSelectors.in
   const got = firstChatMessage(e('body', {}, [ e('div', { 'data-tid': 'chat-pane-list' }, [ wrapper ]) ]));
   check('chat: sender climbed from the group wrapper', got?.sender === 'Tariq B');
   check('chat: text intact', got?.text === 'the actual message text');
+}
+
+// ── Speaker name resolution: Teams' stable `data-tid` on the [data-stream-type] wrapper ──
+// (the hashed-class name selectors rot every Teams release; this attribute pair is durable).
+{
+  const outline = () => e('div', { 'data-tid': 'voice-level-stream-outline' });
+  // name sits on the [data-stream-type] wrapper that ancestors the voice outline
+  const tile = e('div', { 'data-tid': 'video-tile' }, [
+    e('div', { 'data-tid': 'Jane Doe', 'data-stream-type': 'Video' }, [ e('div', {}, [ outline() ]) ]),
+  ]);
+  check('teams name from data-tid on [data-stream-type]', teamsNameFromStream(tile as any) === 'Jane Doe');
+
+  // anchors on the stream nearest the voice outline — NOT the first [data-stream-type] in DOM order
+  const multi = e('div', {}, [
+    e('div', { 'data-tid': 'Bob Stone', 'data-stream-type': 'Video' }, []),
+    e('div', { 'data-tid': 'Jane Doe', 'data-stream-type': 'Video' }, [ outline() ]),
+  ]);
+  check('teams name anchors on the speaking stream, not DOM order', teamsNameFromStream(multi as any) === 'Jane Doe');
+
+  // no stream wrapper → '' so the caller falls back to the legacy selectors
+  check('teams name empty when no [data-stream-type] wrapper', teamsNameFromStream(e('div', {}, [ e('span', {}) ]) as any) === '');
+
+  // A STABLE attribute is not evidence its value is a person. Control-label /
+  // timer / machine-token shapes are refused on this path exactly as on every
+  // other one: unknown beats a confident wrong name.
+  for (const machine of ['video-stream-2', 'voice-level-stream-outline', 'videoTile', 'mic_off', '05:14', '12345']) {
+    const rogue = e('div', {}, [
+      e('div', { 'data-tid': machine, 'data-stream-type': 'Video' }, [ outline() ]),
+    ]);
+    check(`teams name rejects control-shaped data-tid "${machine}"`, teamsNameFromStream(rogue as any) === '');
+  }
 }
 
 if (failed) { console.error(`\n❌ teams-capture: ${failed} checks FAILED.`); process.exit(1); }
