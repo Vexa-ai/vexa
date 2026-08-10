@@ -12,6 +12,50 @@ import { stopGoogleRecording } from "../_host";
 import { leaveBrowserClick as googleLeaveBrowserClick } from "../shared/leave-click";
 export { googleLeaveBrowserClick };
 
+// Guards a one-time DOM dump per notice (tuning aid) so a lingering match doesn't spam the log.
+const _gmeetNoticeDumped = new Set<string>();
+
+/**
+ * Dismiss BENIGN Google Meet notices that linger over the call — e.g. the "Microphone muted by system"
+ * snackbar (heading + advisory text, closed by an X icon, NOT a text button). They don't block the bot
+ * but stay on screen and land in the server-side video recording. NOT consent gates (the Gemini "take
+ * notes" prompt is escalated, never auto-clicked).
+ *
+ * Anchored on the notice's distinctive TEXT (Meet's class names are randomized), then clicks its close
+ * control inside the tightest card that carries both the text and a button. Safe to poll: instant checks
+ * (timeout:0), no-ops when absent. Add a row to `dismissTargets` for a new notice.
+ */
+export async function dismissGoogleMeetPopups(page: Page): Promise<void> {
+  // Benign "your hardware isn't set up" snackbars Meet queues for a bot with no real mic/camera —
+  // each a card with a heading + advisory, closed by an X icon (verified live: clicking the X
+  // dismisses it, and Meet then surfaces the next one). NOT consent/removal — those are handled elsewhere.
+  const dismissTargets = [
+    { text: /microphone muted by system|muted by (your )?system/i, label: "mic muted by system" },
+    { text: /camera not found|make sure your camera/i, label: "camera not found" },
+  ];
+
+  for (const { text, label } of dismissTargets) {
+    try {
+      // The card = the tightest element carrying the notice text AND its own button (the X). Ancestors
+      // also contain the text, so .last() picks the innermost — the snackbar itself, not the page.
+      const card = page.locator("div").filter({ hasText: text }).filter({ has: page.locator("button") }).last();
+      if (!(await card.isVisible({ timeout: 0 }).catch(() => false))) continue;
+
+      if (!_gmeetNoticeDumped.has(label)) {                     // one-time structure dump for tuning
+        _gmeetNoticeDumped.add(label);
+        const html = await card.evaluate((el) => (el as HTMLElement).outerHTML.slice(0, 1200)).catch(() => "");
+        log(`[Google Meet] notice "${label}" DOM: ${html}`);
+      }
+
+      // Prefer a close/dismiss-labelled control; fall back to the card's sole button (the X icon).
+      const labelled = card.getByRole("button", { name: /close|dismiss|got it|ok/i });
+      const btn = (await labelled.count().catch(() => 0)) ? labelled.first() : card.getByRole("button").last();
+      await btn.click({ timeout: 0 });
+      log(`[Google Meet] Dismissed "${label}" popup`);
+    } catch { /* not present, or the click missed — retried next poll */ }
+  }
+}
+
 // Prepare for recording by exposing necessary functions
 export async function prepareForRecording(page: Page, botConfig: BotConfig): Promise<void> {
   // Expose the logBot function to the browser context
