@@ -20,7 +20,13 @@ export type {
   TeamsSpeakers,
   TeamsSpeakersOptions,
   TeamsSpeakerIdentity,
+  TeamsSpeakerHealth,
+  TeamsSpeakingIndicator,
   TeamsNameUnresolvedObservation,
+  TeamsSignalAbsentObservation,
+  TeamsIndicatorFiredObservation,
+  TeamsIndicatorSilentObservation,
+  TeamsProducerObservation,
 } from './msteams-speakers.js';
 export {
   TEAMS_PRODUCER_DOM_TRACE_SCHEMA,
