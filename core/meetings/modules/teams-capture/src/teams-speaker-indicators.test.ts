@@ -184,13 +184,24 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   check('animation: indicator-fired names inline-style-motion',
     fired.length === 1 && fired[0].indicator === 'inline-style-motion', JSON.stringify(fired));
 
-  // Speech stops: the style signature holds still, so nothing fires and the
-  // 200ms hysteresis admits the closing transition.
+  // Speaking is a LEVEL, not an edge. A sample observing no change is the gap
+  // BETWEEN two voice-bar updates, not the end of the turn, so the edge is held
+  // for indicatorHoldMs. Reading it raw is exactly what killed the hint path:
+  // the level flapped at the sampling rate and the debounce cancelled every
+  // pending emit.
   h.advance(250);
   frame();
   await settle();
+  check('animation: a quiet sample inside the hold does NOT end the turn',
+    h.hints.length === 1, JSON.stringify(h.hints));
 
-  check('animation: END emitted after the style stops moving',
+  // Speech stops: the hold expires, the level drops, the 200ms hysteresis
+  // admits the closing transition.
+  h.advance(500);
+  frame();
+  await settle();
+
+  check('animation: END emitted once the hold expires',
     h.hints.length === 2 && h.hints[1].isEnd === true, JSON.stringify(h.hints));
   check('animation: END carries the same name', h.hints[1]?.name === 'Alpha Example');
   check('animation: health reports one speaking transition', h.watcher.health().transitions === 1,
@@ -239,12 +250,18 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     fired[0]?.detail === '___speaking-1a2b', JSON.stringify(fired[0]));
   check('class-token-delta: START emitted', h.hints.length === 1 && h.hints[0].isEnd === false);
 
-  // Removing the token is not activity — only additions count.
+  // Removing the token is not activity — only additions count. Like every edge
+  // candidate this one is held, so the turn closes when the hold expires.
   h.advance(250);
   outline!.setAttribute('class', '');
   frame();
   await settle();
-  check('class-token-delta: a removed token closes the turn rather than re-firing',
+  check('class-token-delta: a removed token does not end the turn inside the hold',
+    h.hints.length === 1, JSON.stringify(h.hints));
+  h.advance(500);
+  frame();
+  await settle();
+  check('class-token-delta: the turn closes once the hold expires',
     h.hints.length === 2 && h.hints[1].isEnd === true, JSON.stringify(h.hints));
   check('class-token-delta: still exactly one indicator-fired',
     ofType(h.observations, 'indicator-fired').length === 1);
@@ -375,6 +392,60 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     JSON.stringify(ofType(h.observations, 'indicator-silent')));
   check('regression: diagnostics never crossed into the hint stream', h.hints.length === 0);
   h.watcher.destroy();
+}
+
+// ── 6. REALISTIC CADENCE — the shape every other block above was blind to ────
+// Every check above drives exactly ONE sample per DOM change. A real page does
+// not: rAF samples at ~60fps while a voice bar updates every ~150ms, so ~8 of
+// every 9 samples observe no change at all. That gap is where the hint path
+// died — the level flapped, and because the 300ms debounce is longer than the
+// 200ms hysteresis, each pending emit was cancelled by the opposite transition.
+// Measured before the fix, here and in headless Chromium alike: transitions=3,
+// indicator-fired x3, onSpeaking never called.
+//
+// So this block uses REAL timers, a REAL 16ms frame interval and the REAL 300ms
+// debounce and wall clock. It is the only block whose failure mode matches
+// production, which is why it does not get to use the injected clock.
+{
+  const { tile, outline } = makeTile('cadence', 'Alice Real', { outline: true });
+  installDocument([tile]);
+  rafQueue = [];
+  const hints: Array<{ name: string; isEnd: boolean }> = [];
+  const observations: TeamsProducerObservation[] = [];
+  const logs: string[] = [];
+  const frameTimer = setInterval(frame, 16);          // the ~60fps sampler
+  const watcher = createTeamsSpeakers({
+    selfName: 'Vexa',                                  // default debounceMs (300)
+    heartbeatMs: 100_000,
+    indicatorSilentMs: 600_000,
+    log: (m) => logs.push(m),
+    onSpeaking: (name, _id, isEnd) => hints.push({ name, isEnd }),
+    onObservation: (o) => observations.push(o),
+  });
+  const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  await wait(700);
+  for (let i = 0; i < 10; i++) {                       // voice bar: 10 updates @150ms
+    outline!.setAttribute('style', `transform:scaleY(${(0.2 + i * 0.07).toFixed(2)})`);
+    await wait(150);
+  }
+  await wait(1500);                                    // silence
+  clearInterval(frameTimer);
+
+  const starts = hints.filter((h) => !h.isEnd);
+  const ends = hints.filter((h) => h.isEnd);
+  check('cadence: exactly one START crossed onSpeaking', starts.length === 1, JSON.stringify(hints));
+  check('cadence: exactly one END crossed onSpeaking', ends.length === 1, JSON.stringify(hints));
+  check('cadence: START precedes END', hints[0]?.isEnd === false && hints[1]?.isEnd === true, JSON.stringify(hints));
+  check('cadence: the hint carries the resolved name', hints.every((h) => h.name === 'Alice Real'), JSON.stringify(hints));
+  check('cadence: SPEAKER_START reached the log', logs.some((l) => l.includes('SPEAKER_START')), JSON.stringify(logs.filter((l) => l.includes('SPEAKER'))));
+  check('cadence: the turn is ONE transition, not one per bar update',
+    watcher.health().transitions === 1, JSON.stringify(watcher.health()));
+  check('cadence: one indicator-fired, naming inline-style-motion',
+    ofType(observations, 'indicator-fired').length === 1
+    && (ofType(observations, 'indicator-fired')[0] as any).indicator === 'inline-style-motion',
+    JSON.stringify(ofType(observations, 'indicator-fired')));
+  watcher.destroy();
 }
 
 if (failed) { console.error(`\n❌ teams speaker indicators: ${failed} checks FAILED.`); process.exit(1); }
