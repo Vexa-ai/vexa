@@ -278,6 +278,11 @@ export interface TeamsSpeakersOptions {
   /** Window after which observable-but-never-speaking is reported as a contract
    * violation (ms). Default 60000. */
   indicatorSilentMs?: number;
+  /** How long an EDGE-shaped indicator (a style or class change) is held as a
+   * speaking LEVEL (ms). Default 400 — comfortably longer than the gap between
+   * two voice-bar updates, so a 60fps sampler does not read silence between
+   * them, and short enough that the closing END lands promptly. */
+  indicatorHoldMs?: number;
   /** Clock injection, so silence windows are testable without sleeping. */
   now?: () => number;
 }
@@ -298,6 +303,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const debounceMs = opts.debounceMs ?? 300;
   const heartbeatMs = opts.heartbeatMs ?? 2000;
   const indicatorSilentMs = opts.indicatorSilentMs ?? 60_000;
+  const indicatorHoldMs = opts.indicatorHoldMs ?? 400;
   const now = opts.now ?? (() => Date.now());
 
   // ── Coverage accounting (Gate A) ──
@@ -387,11 +393,29 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   //    indicator. Guessing its replacement is how we got here, so instead every
   //    candidate below is evaluated, the FIRST that fires wins, and the module
   //    reports WHICH one fired. A live run then tells us the truth.
+  //
+  //    Candidates come in two shapes and the difference is LOAD-BEARING.
+  //    `vdi-occlusion` and `aria-state` are LEVELS — they answer "is this tile
+  //    speaking right now" on any sample. `inline-style-motion` and
+  //    `class-token-delta` are EDGES — they answer "did something just change",
+  //    which is true on exactly the one sample that observes the change and
+  //    false on every sample in between. Speaking is a level, so an edge used
+  //    raw makes the state machine oscillate at the sampling rate; with rAF at
+  //    ~60fps and a voice bar updating every ~150ms only 1 sample in 9 reads
+  //    speaking. The 200ms hysteresis then admits an alternating transition
+  //    roughly every 200ms, and because the 300ms debounce is LONGER than that,
+  //    every pending emit is cancelled by the opposite transition before it can
+  //    fire. Measured, twice — a real headless-Chromium run and a shim at a
+  //    realistic frame cadence: transitions=3, indicator-fired x3, onSpeaking
+  //    NEVER called, no SPEAKER_START line at all. Diagnostics alive, hint path
+  //    dead. So an edge is HELD for `indicatorHoldMs` and read as a level.
   interface TileSignalMemory {
     primed: boolean;               // first sample only records; it never fires
     style: string;                 // last inline-style signature of the outline
     styleSignatures: number;       // distinct signatures this tile has ever shown
     classTokens: Set<string>;      // last class tokens on outline + ancestors
+    edgeFiredAt: Map<TeamsSpeakingIndicator, number>;   // edge → level hold
+    edgeDetail: Map<TeamsSpeakingIndicator, string>;
   }
   const signalMemory = new Map<HTMLElement, TileSignalMemory>();
   const CLASS_DELTA_ANCESTOR_LIMIT = 8;   // vdi-occlusion still walks to the root
@@ -439,6 +463,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   interface IndicatorContext { tile: HTMLElement; outline: HTMLElement; memory: TileSignalMemory }
   interface IndicatorCandidate {
     name: TeamsSpeakingIndicator;
+    /** 'level' answers "speaking now"; 'edge' answers "just changed" and is
+     *  held for indicatorHoldMs so it can be read as a level. */
+    kind: 'level' | 'edge';
     test: (ctx: IndicatorContext) => { fired: boolean; detail?: string };
   }
 
@@ -447,6 +474,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       // Kept verbatim, walk to the root included: it fired at least once
       // historically, and removing it would destroy the only evidence we have.
       name: 'vdi-occlusion',
+      kind: 'level',
       test: ({ outline }) => {
         let current: HTMLElement | null = outline;
         while (current) {
@@ -471,6 +499,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       // attributes speech to the wrong person rather than to nobody. A tile that
       // has genuinely animated clears the floor within two frames.
       name: 'inline-style-motion',
+      kind: 'edge',
       test: ({ outline, memory }) => {
         const signature = (outline.getAttribute('style') || '').replace(/\s+/g, ' ').trim();
         const changed = signature !== memory.style;
@@ -482,6 +511,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     },
     {
       name: 'aria-state',
+      kind: 'level',
       test: ({ tile, outline }) => ({
         fired: ariaSaysSpeaking(outline, true) || ariaSaysSpeaking(tile, false),
       }),
@@ -492,6 +522,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       // WHICH token, so if Teams' real indicator is a class we do not know about,
       // one live meeting names it for us.
       name: 'class-token-delta',
+      kind: 'edge',
       test: ({ outline, memory }) => {
         const tokens = classTokensOf(boundedChain(outline));
         const previous = memory.classTokens;
@@ -517,16 +548,35 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
     let memory = signalMemory.get(element);
     if (!memory) {
-      memory = { primed: false, style: '', styleSignatures: 0, classTokens: new Set<string>() };
+      memory = {
+        primed: false, style: '', styleSignatures: 0, classTokens: new Set<string>(),
+        edgeFiredAt: new Map(), edgeDetail: new Map(),
+      };
       signalMemory.set(element, memory);
     }
+    const at = now();
     let indicator: TeamsSpeakingIndicator | undefined;
     let detail: string | undefined;
     // EVERY candidate runs even after one has fired: the stateful ones must
     // refresh their memory on every sample or they fire spuriously on the next.
     for (const candidate of indicatorCandidates) {
       const result = candidate.test({ tile: element, outline: voiceOutline, memory });
-      if (result.fired && !indicator) { indicator = candidate.name; detail = result.detail; }
+      let active = result.fired;
+      let activeDetail = result.detail;
+      if (candidate.kind === 'edge') {
+        // Hold the edge so it reads as a level between two voice-bar updates.
+        // Without this the level is true on 1 sample in 9 and the debounce
+        // cancels every pending emit — the dead hint path, measured.
+        if (result.fired) {
+          memory.edgeFiredAt.set(candidate.name, at);
+          if (result.detail) memory.edgeDetail.set(candidate.name, result.detail);
+          else memory.edgeDetail.delete(candidate.name);
+        }
+        const firedAt = memory.edgeFiredAt.get(candidate.name);
+        active = firedAt !== undefined && (at - firedAt) <= indicatorHoldMs;
+        activeDetail = active ? memory.edgeDetail.get(candidate.name) : undefined;
+      }
+      if (active && !indicator) { indicator = candidate.name; detail = activeDetail; }
     }
     memory.primed = true;
     return { isSpeaking: Boolean(indicator), hasSignal: true, indicator, detail };
