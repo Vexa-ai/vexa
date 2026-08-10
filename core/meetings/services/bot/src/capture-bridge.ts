@@ -376,7 +376,26 @@ export async function startCaptureBridge(
             log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
             onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
               w.__vexaSpeakerHint?.(name, tMs, isEnd),
+            // Typed producer DIAGNOSTICS — signal-absent / indicator-fired /
+            // indicator-silent / name-unresolved. They are logged, never turned
+            // into a hint: a diagnostic that becomes a name is a fabricated name.
+            onObservation: (o: Record<string, unknown>) =>
+              w.logBot?.('[TeamsSpeakers] observation ' + JSON.stringify(o)),
           });
+          // Coverage + liveness of the WHO signal, alongside the hint counters.
+          // The failure this exists for was silent: 3 of 4 tiles unobservable and
+          // zero speaking transitions, with nothing in the logs saying so.
+          w.__vexaTeamsHealthTimer = (globalThis as any).setInterval(() => {
+            try {
+              const h = w.__vexaTeamsSpeakers?.health?.();
+              if (h) {
+                w.logBot?.(
+                  `[TeamsSpeakers] health found=${h.found} observable=${h.observable} `
+                  + `named=${h.named} name-unresolved=${h.nameUnresolved} transitions=${h.transitions}`,
+                );
+              }
+            } catch { /* observability must never break capture */ }
+          }, 30_000);
         }
       }
       if (isJitsi) {
@@ -449,6 +468,7 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
