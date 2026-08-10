@@ -67,13 +67,49 @@ const TEAMS_CONTROL_LABELS = new Set([
   'mute', 'unmute',
 ].map(value => value.replace(/[_\s-]+/g, ' ')));
 const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+// Machine identifiers Teams also carries in `data-tid` / label attributes: hyphen- or
+// underscore-joined token chains (`video-stream-2`, `voice-level-stream-outline`), camelCase
+// single tokens (`videoTile`), and pure digit runs. A human display name is none of these.
+// The attribute being STABLE is not evidence that its value is a person's name — accepting
+// one would be a confident wrong answer, which is strictly worse than unknown.
+// `Anne-Marie` and `Jean-Luc Picard` survive (capitalized / spaced); an all-lowercase
+// hyphenated string is refused, which fails toward unknown rather than toward invention.
+const TEAMS_MACHINE_TOKEN =
+  /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
 
 function isTeamsDisplayNameCandidate(value: string): boolean {
   const candidate = value.trim();
   if (candidate.length <= 1 || candidate.length >= 50) return false;
   const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
   return !TEAMS_CONTROL_LABELS.has(normalized)
-    && !TEAMS_TIMER_LABEL.test(normalized);
+    && !TEAMS_TIMER_LABEL.test(normalized)
+    && !TEAMS_MACHINE_TOKEN.test(candidate);
+}
+
+/**
+ * Resolve a participant's display name from Teams' STABLE signal: the `data-tid` on the
+ * `[data-stream-type]` stream wrapper, e.g. `<div data-tid="Jane Doe" data-stream-type="Video">`.
+ * Teams' Fluent-UI class hashes churn every release (so class-based name selectors rot), but this
+ * attribute pair is durable. Anchor on the voice-level outline so we pick the stream nearest the
+ * actual speaking signal; otherwise search up (`closest`) then down (`querySelector`) from the tile.
+ * Returns `''` when no stream wrapper is found (caller then falls back to the legacy selectors).
+ *
+ * The value is passed through the SAME control-label/timer guard as every other name path: a
+ * `data-tid="video-stream-2"`-shaped attribute must never become a confident wrong name. Stability
+ * of the attribute is not evidence that its value is a human's name.
+ *
+ * Origin: Jacob Schooley, Vexa-ai/vexa#1024 (commit 6fab915e); the guard is added here.
+ */
+export function teamsNameFromStream(element: HTMLElement): string {
+  const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+  const streamEl = (voiceOutline && (voiceOutline as any).closest?.('[data-stream-type][data-tid]'))
+    || (element as any).closest?.('[data-stream-type][data-tid]')
+    || element.querySelector('[data-stream-type][data-tid]');
+  if (streamEl) {
+    const name = ((streamEl as HTMLElement).getAttribute('data-tid') || '').trim();
+    if (isTeamsDisplayNameCandidate(name)) return name;
+  }
+  return '';
 }
 
 /** Resolve the display name carried by one participant tile.
@@ -86,6 +122,10 @@ export function extractTeamsSpeakerName(
   element: HTMLElement,
   opts?: { structuralFallback?: boolean },
 ): string {
+  // Primary: Teams' stable `data-tid`-on-`[data-stream-type]` name (survives Fluent
+  // class-hash churn). The hashed-class selectors below are legacy fallbacks that rot.
+  const streamName = teamsNameFromStream(element);
+  if (streamName) return streamName;
   for (const selector of teamsNameSelectors) {
     const nameElement = element.querySelector(selector) as HTMLElement | null;
     if (!nameElement) continue;
