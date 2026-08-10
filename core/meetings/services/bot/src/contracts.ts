@@ -40,6 +40,9 @@ export interface LifecycleEvent {
   connection_id: string;
   container_id?: string;
   status: BotStatus;
+  /** Time the producer observed this lifecycle transition. Callback receipt time is not an
+   *  admission/departure clock: delivery may be delayed or retried. */
+  timestamp?: string;
   reason?: string;
   exit_code?: number;
   completion_reason?: CompletionReason;

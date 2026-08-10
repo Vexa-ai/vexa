@@ -36,6 +36,9 @@ _INTERNAL_DATA_KEYS = frozenset({
     "webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_secrets",
     "webhook_events", "webhook_url", "outbound_events",
     "bot_container_id", "container_name",
+    # Internal rating input. Consumers receive only the privacy-safe, frozen
+    # `service_provenance` projection assembled at terminal finalization.
+    "transcription_provider",
 })
 
 
@@ -140,6 +143,58 @@ class DeliveryResult:
 Transport = Callable[[str, bytes, Dict[str, str]], Awaitable[Any]]
 
 
+async def _deliver_signed(
+    *,
+    transport: Transport,
+    queue: "Any",
+    url: str,
+    envelope: Dict[str, Any],
+    webhook_secret: Optional[str],
+    label: str,
+    metadata: Optional[Dict[str, Any]],
+) -> DeliveryResult:
+    """Deliver one already-authorized destination with the shared wire semantics.
+
+    Destination policy belongs to the caller: ``WebhookSink`` applies the
+    customer SSRF guard first, while the operator-owned system sink freezes and
+    validates its destination at boot. Both paths share signing, status
+    classification and retry payloads here.
+    """
+    payload_bytes = json.dumps(envelope).encode()
+    ts = str(int(time.time()))
+    headers = build_headers(webhook_secret, payload_bytes, timestamp=ts)
+
+    try:
+        resp = await transport(url, payload_bytes, headers)
+        code = getattr(resp, "status_code", 0)
+        if code < 300:
+            return DeliveryResult(status="delivered", status_code=code)
+        if code >= 500 or code == 429:
+            raise _RetryableStatus(code)
+        return DeliveryResult(
+            status="failed",
+            status_code=code,
+            error=f"HTTP {code}",
+        )
+    except Exception as e:  # noqa: BLE001 — transport failures are retryable
+        code = e.code if isinstance(e, _RetryableStatus) else None
+        if queue is not None:
+            await queue.enqueue(
+                url=url,
+                envelope=envelope,
+                webhook_secret=webhook_secret,
+                label=label,
+                metadata=metadata,
+            )
+            return DeliveryResult(
+                status="queued",
+                status_code=code,
+                queued=True,
+                error=str(e),
+            )
+        return DeliveryResult(status="failed", status_code=code, error=str(e))
+
+
 class WebhookSink:
     """The port: build → SSRF-guard → event-filter → deliver → enqueue-on-failure.
 
@@ -181,29 +236,16 @@ class WebhookSink:
         except SSRFError as e:
             return DeliveryResult(status="blocked", error=str(e))
 
-        payload_bytes = json.dumps(envelope).encode()
-        ts = str(int(time.time()))
-        headers = build_headers(webhook_secret, payload_bytes, timestamp=ts)
-
         # 3. Deliver. 2xx → delivered. 5xx/429/transport-error → enqueue for retry.
-        try:
-            resp = await self.transport(url, payload_bytes, headers)
-            code = getattr(resp, "status_code", 0)
-            if code < 300:
-                return DeliveryResult(status="delivered", status_code=code)
-            if code >= 500 or code == 429:
-                raise _RetryableStatus(code)
-            # 4xx (except 429) — permanent failure, do not retry.
-            return DeliveryResult(status="failed", status_code=code, error=f"HTTP {code}")
-        except Exception as e:  # noqa: BLE001 — any transport error is retryable
-            code = e.code if isinstance(e, _RetryableStatus) else None
-            if self.queue is not None:
-                await self.queue.enqueue(
-                    url=url, envelope=envelope, webhook_secret=webhook_secret,
-                    label=label, metadata=metadata,
-                )
-                return DeliveryResult(status="queued", status_code=code, queued=True, error=str(e))
-            return DeliveryResult(status="failed", status_code=code, error=str(e))
+        return await _deliver_signed(
+            transport=self.transport,
+            queue=self.queue,
+            url=url,
+            envelope=envelope,
+            webhook_secret=webhook_secret,
+            label=label,
+            metadata=metadata,
+        )
 
 
 class _RetryableStatus(Exception):

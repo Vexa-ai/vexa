@@ -21,7 +21,19 @@ join). The machine-checked
 impl enforces it (lean: no separate harness, B8).
 
 ## Shape
-`LifecycleEvent` (`$defs`): `connection_id` + `status` always; state-dependent `reason · exit_code ·
-completion_reason · failure_stage · bot_logs · bot_resources · speaker_events` (terminal forensics).
+`LifecycleEvent` (`$defs`): `connection_id` + `status` always; the shipping producer also stamps
+`timestamp`, the UTC time it observed the transition, before transport retries. That producer time
+is the lifecycle fact used for admitted-to-departed runtime; callback receipt time is never a
+service-duration clock. State-dependent fields are `reason · exit_code · completion_reason ·
+failure_stage · bot_logs · bot_resources · speaker_events` (terminal forensics).
+
+At the terminal boundary, meeting-api freezes a privacy-safe `service_provenance` projection:
+admission/departure times, bot outcome, transcription provider (`vexa · customer · none`),
+transcription outcome, and contract version. Provider ownership is selected when the bot is
+created; it is never reconstructed later from a URL or current user setting. Endpoint URLs,
+credentials, and tokens never enter the projection. A legacy meeting without frozen provider
+ownership remains unresolved for downstream billing. An admitted mixed-version session whose
+lifecycle event lacks a producer timestamp is likewise unresolved: receiver time remains useful
+for operations, but retry latency makes it invalid for rating.
 
 No auth token (transport-layer), no tenancy fields (deferred). Goldens validated by `gate:schema`.

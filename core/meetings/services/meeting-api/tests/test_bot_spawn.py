@@ -347,7 +347,7 @@ def test_post_bots_transcribe_with_settings_stt_passes(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
 
     async def fake_resolve(user_id):
-        return {"url": "https://stt-settings.example.com"}
+        return {"url": "https://stt-settings.example.com", "provider": "customer"}
 
     monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
 
@@ -358,6 +358,8 @@ def test_post_bots_transcribe_with_settings_stt_passes(monkeypatch):
     assert r.status_code == 201, r.text
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-settings.example.com"
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "customer"
 
 
 # ── Settings → transcription backend: the configured STT (user pref > platform) beats the env ────
@@ -373,7 +375,7 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
 
     async def fake_resolve(user_id):
         assert user_id == USER
-        return {"url": "https://stt-mine.example.com"}
+        return {"url": "https://stt-mine.example.com", "provider": "customer"}
 
     monkeypatch.setenv("TRANSCRIPTION_MODEL", "env-model")
 
@@ -387,6 +389,8 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
     assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
     assert "transcriptionServiceToken" not in inv  # env token does NOT leak to the custom backend
     assert "transcriptionModel" not in inv  # env model names the ENV backend's model — same rule
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "customer"
 
 
 async def test_request_bot_env_transcription_stays_without_settings(monkeypatch):
@@ -404,6 +408,122 @@ async def test_request_bot_env_transcription_stays_without_settings(monkeypatch)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
     assert inv["transcriptionServiceToken"] == "tok-env"
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "vexa"
+
+
+async def test_request_bot_disabled_transcription_freezes_none_provider(monkeypatch):
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+
+    repo = InMemoryMeetingRepo()
+    await request_bot(
+        repo,
+        FakeRuntimeClient(),
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="disabled-tx",
+        transcribe_enabled=False,
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "none"
+
+
+async def test_request_bot_disabled_transcription_ignores_configured_provider(monkeypatch):
+    from meeting_api.bot_spawn import service as spawn_service
+
+    async def fake_resolve(_user_id):
+        return {"url": "https://stt-mine.example.com", "provider": "customer"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    await request_bot(
+        repo,
+        FakeRuntimeClient(),
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="disabled-configured-tx",
+        transcribe_enabled=False,
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+
+    row = next(iter(repo._meetings.values()))
+    assert row["data"]["transcription_provider"] == "none"
+
+
+async def test_request_bot_does_not_guess_provider_for_legacy_settings_response(monkeypatch):
+    """A mixed-version identity response may have a URL but no provenance.
+
+    The spawn may proceed for compatibility, but billing provenance must remain unresolved:
+    inferring from the URL would turn an unknown customer endpoint into a Vexa charge.
+    """
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+
+    async def fake_resolve(user_id):
+        return {"url": "https://legacy-settings.example.com"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    await request_bot(
+        repo,
+        FakeRuntimeClient(),
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="legacy-provider",
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+
+    row = next(iter(repo._meetings.values()))
+    assert "transcription_provider" not in row["data"]
+
+
+async def test_continue_meeting_refreezes_provider_for_the_new_session(monkeypatch):
+    from meeting_api.bot_spawn import service as spawn_service
+
+    selected = {"provider": "customer"}
+
+    async def fake_resolve(_user_id):
+        return {
+            "url": "https://configured.example.com",
+            "provider": selected["provider"],
+        }
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    first = await request_bot(
+        repo,
+        runtime,
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="continued-provider",
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+    assert repo._meetings[first["id"]]["data"]["transcription_provider"] == "customer"
+
+    repo.set_status(first["id"], "completed")
+    selected["provider"] = "vexa"
+    await request_bot(
+        repo,
+        runtime,
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="continued-provider",
+        continue_meeting=True,
+        redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+
+    assert repo._meetings[first["id"]]["data"]["transcription_provider"] == "vexa"
 
 
 async def test_request_bot_env_transcription_model_rides_invocation(monkeypatch):

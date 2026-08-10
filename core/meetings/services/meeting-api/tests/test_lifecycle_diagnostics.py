@@ -126,7 +126,8 @@ def test_terminal_cause_attribution(row):
     assert len(trail) == len(prefix) + 2  # joining + prefix + terminal
     assert trail[0] == {
         "from": None, "to": "joining",
-        "timestamp": trail[0]["timestamp"], "source": "bot_callback",
+        "timestamp": trail[0]["timestamp"], "timestamp_source": "receiver",
+        "source": "bot_callback",
     }
     last = trail[-1]
     assert last["to"] == terminal_status

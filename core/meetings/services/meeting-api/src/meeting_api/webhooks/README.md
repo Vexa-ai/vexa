@@ -16,6 +16,9 @@ webhooks.py}`, reimplemented clean. The wire shape is sealed in `meetings/contra
   events in their `webhook_events` map (default: `meeting.completed`). Suppressed before any HTTP.
 - **Scopes** — `WebhookSink.deliver(..., scope=)`: `per-client` applies the filter; `system`
   (billing/analytics) bypasses it.
+- **Operator terminal callback** — `SystemWebhookSink` freezes one deployment-owned destination at
+  boot and accepts only `meeting.completed` / `bot.failed`. In-cluster HTTP needs an explicit
+  operator opt-in. It never consumes a user URL, and customer delivery retains the SSRF guard.
 - **Retry** (`retry.py`) — a `RetryQueue` over a Redis list (`webhook:retry_queue`); a 5xx/429/
   transport-error enqueues; `drain_retry_queue` is one worker sweep (exponential `BACKOFF_SCHEDULE`
   = 1m·5m·30m·2h, 24h max-age). The eval drives the clock forward — no real sleeps.

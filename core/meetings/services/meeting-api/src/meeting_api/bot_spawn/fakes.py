@@ -180,7 +180,7 @@ class InMemoryMeetingRepo:
             else:
                 m["data"][k] = v
 
-    async def reopen_meeting(self, *, meeting_id) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         row = self._meetings[meeting_id]
         row["status"] = "requested"
         row["end_time"] = None
@@ -188,6 +188,11 @@ class InMemoryMeetingRepo:
         # Clear the prior terminal attribution but KEEP the row + its transcripts/recordings.
         for k in ("completion_reason", "failure_stage"):
             row["data"].pop(k, None)
+        for key, value in (data_patch or {}).items():
+            if value is None:
+                row["data"].pop(key, None)
+            else:
+                row["data"][key] = value
         self.reopened.append(meeting_id)
         return dict(row)
 
@@ -218,6 +223,18 @@ class InMemoryMeetingRepo:
             return None
         row = self._meetings.get(sess["meeting_id"])
         return row["status"] if row else None
+
+    async def get_lifecycle_state_by_session(self, *, session_uid) -> Optional[dict]:
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None:
+            return None
+        return {
+            "status": row["status"],
+            "data": dict(row.get("data") or {}),
+        }
 
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         row = next(
@@ -261,6 +278,149 @@ class InMemoryMeetingRepo:
             and m["platform"] != "browser_session"   # infra excluded (parent meetings.py:1091)
             and m["id"] != exclude_meeting_id
         )
+
+    async def list_service_authority_sessions(self) -> list[dict]:
+        """Active rows carrying a per-run authority identity."""
+        return [
+            dict(m)
+            for m in self._meetings.values()
+            if m["status"] in ("active", "needs_help")
+            and isinstance(m.get("data", {}).get("service_authority"), dict)
+            and m["data"]["service_authority"].get("mode")
+            in ("enforce", "observe")
+        ]
+
+    async def record_service_authority_decision(
+        self,
+        *,
+        meeting_id,
+        request,
+        decision,
+    ) -> bool:
+        row = self._meetings.get(meeting_id)
+        if row is None:
+            return False
+        metadata = row.get("data", {}).get("service_authority")
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("service_identity")
+            != request.service_identity
+        ):
+            return False
+        boundary = request.boundary_at.isoformat()
+        if metadata.get("last_boundary_at") == boundary:
+            if metadata.get("last_decision_id") != decision.decision_id:
+                raise ValueError(
+                    "service-authority boundary decision conflicts"
+                )
+            return False
+        if metadata.get("last_boundary_at"):
+            from datetime import datetime
+
+            previous = datetime.fromisoformat(
+                metadata["last_boundary_at"].replace("Z", "+00:00")
+            )
+            if previous >= request.boundary_at:
+                return False
+        metadata.update(decision.to_record())
+        metadata["last_boundary_at"] = boundary
+        metadata["last_decision_id"] = decision.decision_id
+        if (
+            decision.enforced
+            and not decision.allow
+            and decision.stop_scope == "billable_service"
+        ):
+            metadata["teardown_confirmed"] = False
+            row["data"]["stop_requested"] = True
+            row["status"] = "stopping"
+        return True
+
+    async def list_service_authority_teardowns(self) -> list[dict]:
+        out = []
+        for row in self._meetings.values():
+            metadata = row.get("data", {}).get("service_authority")
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("enforced") is True
+                and metadata.get("allow") is False
+                and metadata.get("stop_scope") == "billable_service"
+                and metadata.get("teardown_confirmed") is not True
+            ):
+                out.append({
+                    "id": row["id"],
+                    "bot_container_id": row.get("bot_container_id"),
+                    "decision_id": metadata.get("decision_id"),
+                })
+        return out
+
+    async def claim_service_authority_teardown(
+        self,
+        *,
+        meeting_id,
+        claim_id,
+        claimed_at,
+        lease_seconds,
+    ) -> Optional[dict]:
+        from datetime import datetime, timezone
+
+        row = self._meetings.get(meeting_id)
+        metadata = (
+            row.get("data", {}).get("service_authority")
+            if row is not None
+            else None
+        )
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("enforced") is not True
+            or metadata.get("allow") is not False
+            or metadata.get("stop_scope") != "billable_service"
+            or metadata.get("teardown_confirmed") is True
+        ):
+            return None
+        prior_claim = metadata.get("teardown_claim_id")
+        prior_at = metadata.get("teardown_claimed_at")
+        if prior_claim and prior_at:
+            try:
+                prior_time = datetime.fromisoformat(
+                    prior_at.replace("Z", "+00:00"),
+                ).astimezone(timezone.utc)
+            except (TypeError, ValueError):
+                return None
+            if (claimed_at - prior_time).total_seconds() < lease_seconds:
+                return None
+        metadata["teardown_claim_id"] = claim_id
+        metadata["teardown_claimed_at"] = claimed_at.isoformat()
+        return {
+            "id": row["id"],
+            "bot_container_id": row.get("bot_container_id"),
+            "decision_id": metadata.get("decision_id"),
+            "claim_id": claim_id,
+        }
+
+    async def confirm_service_authority_teardown(
+        self,
+        *,
+        meeting_id,
+        decision_id,
+        claim_id,
+    ) -> bool:
+        row = self._meetings.get(meeting_id)
+        metadata = (
+            row.get("data", {}).get("service_authority")
+            if row is not None
+            else None
+        )
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("decision_id") != decision_id
+            or metadata.get("teardown_claim_id") != claim_id
+            or metadata.get("teardown_confirmed") is True
+        ):
+            return False
+        metadata["teardown_confirmed"] = True
+        metadata["teardown_claim_id"] = None
+        metadata["teardown_claimed_at"] = None
+        return True
 
     async def list_stale_nonterminal(
         self, *, stop_grace: float, active_grace: float, preactive_grace: Optional[float] = None
@@ -340,8 +500,9 @@ class FakeRuntimeClient:
         return {"workloadId": spec["workloadId"], "state": "starting"}
 
     async def delete_workload(self, workload_id: str) -> None:
-        # Mirrors the HTTP adapter: an id the kernel doesn't track raises WorkloadUnknown (404) —
-        # termination UNCONFIRMED. With the default (no map) every teardown is tracked + confirmed.
+        # Mirrors the HTTP adapter: an id the kernel doesn't track raises WorkloadUnknown (404).
+        # Absence is NOT evidence the underlying workload stopped; every caller must preserve that
+        # distinction until it has a positive destroyed/teardown observation.
         if self._workloads is not None and workload_id not in self._workloads:
             raise WorkloadUnknown(workload_id)
         # Record the teardown so the partial-spawn test asserts the orphaned workload was torn down.

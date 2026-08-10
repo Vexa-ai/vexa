@@ -1,0 +1,10 @@
+{
+  "user_id": 41,
+  "action": "admit",
+  "request_id": "meeting-session-41:admit",
+  "service_identity": "meeting-session-41",
+  "service_mode": "bot",
+  "transcription_provider": "customer",
+  "lifecycle_contract_version": "2026-07-28",
+  "active_concurrency": 0
+}

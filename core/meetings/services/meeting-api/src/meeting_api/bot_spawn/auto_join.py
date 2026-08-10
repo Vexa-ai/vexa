@@ -26,6 +26,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from ..obs import log_event
+from ..service_authority import (
+    ServiceAuthorityDenied,
+    ServiceAuthorityUnavailable,
+)
 from .ports import MaxBotsExceeded, QuotaExceeded, SpawnFailed
 from .service import DuplicateMeeting, request_bot
 
@@ -92,6 +96,7 @@ async def auto_join_tick(
     repo,
     runtime,
     *,
+    authority=None,
     fetch_bot_context: Optional[Callable[[int], Awaitable[Optional[dict]]]] = None,
     publish_status: Optional[Callable[..., Awaitable[None]]] = None,
     transcribe_gate: Optional[Callable[[], Optional[str]]] = None,
@@ -182,6 +187,7 @@ async def auto_join_tick(
         try:
             await request_bot(
                 repo, runtime,
+                authority=authority,
                 user_id=user_id,
                 platform=row["platform"],
                 native_meeting_id=row["native_meeting_id"],
@@ -199,6 +205,15 @@ async def auto_join_tick(
             continue
         except (MaxBotsExceeded, QuotaExceeded) as e:
             await _stamp_error(row, str(e) or "bot concurrency limit reached")
+            continue
+        except ServiceAuthorityDenied as e:
+            await _stamp_error(
+                row,
+                f"service not allowed ({e.reason}; decision {e.decision_id})",
+            )
+            continue
+        except ServiceAuthorityUnavailable:
+            await _stamp_error(row, "service authority unavailable")
             continue
         except SpawnFailed as e:
             await _stamp_error(row, str(e) or "bot workload failed to start")

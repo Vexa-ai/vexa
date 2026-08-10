@@ -130,7 +130,7 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
-    async def reopen_meeting(self, *, meeting_id) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
@@ -146,6 +146,11 @@ class SqlAlchemyMeetingRepo:
             data = dict(m.data) if isinstance(m.data, dict) else {}
             for k in ("completion_reason", "failure_stage"):
                 data.pop(k, None)
+            for key, value in (data_patch or {}).items():
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
             m.data = data
             flag_modified(m, "data")
             # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
@@ -169,6 +174,26 @@ class SqlAlchemyMeetingRepo:
                 await db.execute(select(Meeting.status).where(Meeting.id == sess.meeting_id))
             ).scalars().first()
             return status
+
+    async def get_lifecycle_state_by_session(self, *, session_uid) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting.status, Meeting.data)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(MeetingSession.session_uid == session_uid)
+                )
+            ).first()
+            if row is None:
+                return None
+            return {
+                "status": row.status,
+                "data": dict(row.data) if isinstance(row.data, dict) else {},
+            }
 
     async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
         """The meeting + latest session for a workload id — used by the runtime callback (CC5) to drive a
@@ -530,6 +555,233 @@ class SqlAlchemyMeetingRepo:
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
+
+    async def list_service_authority_sessions(self) -> list[dict]:
+        """Active admitted sessions carrying the frozen generic authority identity."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.status.in_(("active", "needs_help")),
+                    )
+                )
+            ).scalars().all()
+            return [
+                _row_to_dict(row)
+                for row in rows
+                if isinstance(row.data, dict)
+                and isinstance(row.data.get("service_authority"), dict)
+                and row.data["service_authority"].get("mode")
+                in ("enforce", "observe")
+            ]
+
+    async def record_service_authority_decision(
+        self,
+        *,
+        meeting_id,
+        request,
+        decision,
+    ) -> bool:
+        """Persist one request-bound boundary decision under a row lock."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting)
+                    .where(Meeting.id == meeting_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if row is None:
+                return False
+            data = dict(row.data) if isinstance(row.data, dict) else {}
+            metadata = data.get("service_authority")
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("service_identity")
+                != request.service_identity
+            ):
+                return False
+            metadata = dict(metadata)
+            boundary = request.boundary_at.isoformat()
+            prior_boundary = metadata.get("last_boundary_at")
+            if prior_boundary == boundary:
+                if metadata.get("last_decision_id") != decision.decision_id:
+                    raise ValueError(
+                        "service-authority boundary decision conflicts"
+                    )
+                return False
+            if prior_boundary:
+                prior = datetime.fromisoformat(
+                    prior_boundary.replace("Z", "+00:00")
+                )
+                if prior >= request.boundary_at:
+                    return False
+            metadata.update(decision.to_record())
+            metadata["last_boundary_at"] = boundary
+            metadata["last_decision_id"] = decision.decision_id
+            if (
+                decision.enforced
+                and not decision.allow
+                and decision.stop_scope == "billable_service"
+            ):
+                metadata["teardown_confirmed"] = False
+                data["stop_requested"] = True
+                row.status = "stopping"
+            data["service_authority"] = metadata
+            row.data = data
+            flag_modified(row, "data")
+            await db.commit()
+            return True
+
+    async def list_service_authority_teardowns(self) -> list[dict]:
+        """Durable stop intents that still lack a confirmed runtime teardown."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.status.in_((
+                            "active",
+                            "needs_help",
+                            "stopping",
+                        )),
+                    )
+                )
+            ).scalars().all()
+            out = []
+            for row in rows:
+                data = row.data if isinstance(row.data, dict) else {}
+                metadata = data.get("service_authority")
+                if (
+                    isinstance(metadata, dict)
+                    and metadata.get("enforced") is True
+                    and metadata.get("allow") is False
+                    and metadata.get("stop_scope")
+                    == "billable_service"
+                    and metadata.get("teardown_confirmed") is not True
+                ):
+                    out.append({
+                        "id": row.id,
+                        "bot_container_id": row.bot_container_id,
+                        "decision_id": metadata.get("decision_id"),
+                    })
+            return out
+
+    async def claim_service_authority_teardown(
+        self,
+        *,
+        meeting_id,
+        claim_id,
+        claimed_at,
+        lease_seconds,
+    ) -> Optional[dict]:
+        """Lease one stop intent under a row lock so replicas cannot race it."""
+        from datetime import timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting)
+                    .where(Meeting.id == meeting_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if row is None:
+                return None
+            data = dict(row.data) if isinstance(row.data, dict) else {}
+            metadata = data.get("service_authority")
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("enforced") is not True
+                or metadata.get("allow") is not False
+                or metadata.get("stop_scope") != "billable_service"
+                or metadata.get("teardown_confirmed") is True
+            ):
+                return None
+            metadata = dict(metadata)
+            prior_claim = metadata.get("teardown_claim_id")
+            prior_at = metadata.get("teardown_claimed_at")
+            if prior_claim and prior_at:
+                try:
+                    prior_time = datetime.fromisoformat(
+                        prior_at.replace("Z", "+00:00"),
+                    ).astimezone(timezone.utc)
+                except (TypeError, ValueError):
+                    return None
+                if (
+                    claimed_at.astimezone(timezone.utc) - prior_time
+                ).total_seconds() < lease_seconds:
+                    return None
+            metadata["teardown_claim_id"] = claim_id
+            metadata["teardown_claimed_at"] = claimed_at.isoformat()
+            data["service_authority"] = metadata
+            row.data = data
+            flag_modified(row, "data")
+            await db.commit()
+            return {
+                "id": row.id,
+                "bot_container_id": row.bot_container_id,
+                "decision_id": metadata.get("decision_id"),
+                "claim_id": claim_id,
+            }
+
+    async def confirm_service_authority_teardown(
+        self,
+        *,
+        meeting_id,
+        decision_id,
+        claim_id,
+    ) -> bool:
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting)
+                    .where(Meeting.id == meeting_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if row is None:
+                return False
+            data = dict(row.data) if isinstance(row.data, dict) else {}
+            metadata = data.get("service_authority")
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("decision_id") != decision_id
+                or metadata.get("teardown_claim_id") != claim_id
+                or metadata.get("teardown_confirmed") is True
+            ):
+                return False
+            metadata = dict(metadata)
+            metadata["teardown_confirmed"] = True
+            metadata["teardown_claim_id"] = None
+            metadata["teardown_claimed_at"] = None
+            data["service_authority"] = metadata
+            row.data = data
+            flag_modified(row, "data")
+            await db.commit()
+            return True
 
     async def create_session(self, *, meeting_id, session_uid) -> None:
         async with self._session_factory() as db:

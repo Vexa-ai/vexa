@@ -1,0 +1,27 @@
+services:
+  authority-fixture:
+    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    entrypoint: ["python", "/fixture/service_authority_fixture.py"]
+    environment:
+      - AUTHORITY_SECRET=compose-service-authority-fixture-secret
+    volumes:
+      - ./tests/service_authority_fixture.py:/fixture/service_authority_fixture.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9880/health').status==200 else 1)"
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [vexa]
+
+  meeting-api:
+    environment:
+      - VEXA_SERVICE_AUTHORITY_CONFIG={"url":"http://authority-fixture:9880/v1/service-authority","contract_version":"service-authority.v1","timeout_ms":2000,"response_max_age_seconds":30,"failure_policy":"closed","mode":"enforce"}
+      - VEXA_SERVICE_AUTHORITY_SECRET=compose-service-authority-fixture-secret
+      - SERVICE_AUTHORITY_SWEEP_INTERVAL_S=1
+    depends_on:
+      authority-fixture:
+        condition: service_healthy

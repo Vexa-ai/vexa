@@ -308,6 +308,28 @@ def test_rehydration_in_memory_record_wins_over_stale_db():
     assert r.json()["meeting_status"] == "completed"
 
 
+def test_illegal_local_edge_refreshes_newer_db_state_from_another_replica():
+    """A replica stuck at `joining` must accept the terminal after another replica persisted
+    `stopping`; the durable row repairs the stale local FSM instead of returning 409 forever."""
+    repo = InMemoryMeetingRepo()
+    meeting = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+
+    # Another meeting-api replica observed admission and the user's stop request.
+    repo.set_status(meeting["id"], "stopping")
+
+    response = _post(
+        client,
+        connection_id="sess-uid",
+        status="completed",
+        exit_code=0,
+        completion_reason="stopped",
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["meeting_status"] == "completed"
+
+
 # ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
 # ║ 4. MALFORMED CALLBACKS                                                                          ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════════════╝

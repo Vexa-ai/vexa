@@ -75,7 +75,8 @@ workspace mount** — worker Pods get one `subPath` + `readOnly` volumeMount per
 against the store PVC (the same per-mount isolation the Docker backend enforces with volume-subpath
 binds). The in-cluster substrate — ServiceAccount + RBAC to create Pods, the store PVC — ships as the
 **Helm chart** in `deploy/helm`. The simplest self-hosted paths remain **Docker Compose** (`make all`)
-and the one-container **lite** (`make lite`) — see [Deployment](/deployment). Code:
+— see [Deployment](/deployment) — and the one-container **lite** (`make lite`) — see
+[Vexa Lite](/deployment-lite). Code:
 `core/runtime/src/runtime_kernel/k8s_backend.py` + `mounts.py:k8s_volume_mounts` (Pod spec) vs
 `docker_backend.py` (the reference bind + credential path).</Note>
 

@@ -87,10 +87,12 @@ class MeetingRepo(Protocol):
         ``create_meeting`` pre-check sequence on the fresh-insert path."""
         ...
 
-    async def reopen_meeting(self, *, meeting_id: int) -> dict:
+    async def reopen_meeting(
+        self, *, meeting_id: int, data_patch: Optional[dict] = None
+    ) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
-        survive). Returns the updated row."""
+        survive), and freeze the new session's service-selection facts. Returns the updated row."""
         ...
 
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
@@ -127,12 +129,60 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def list_service_authority_sessions(self) -> list[dict]:
+        """Active admitted rows carrying a frozen service-authority identity."""
+        ...
+
+    async def record_service_authority_decision(
+        self,
+        *,
+        meeting_id: int,
+        request: Any,
+        decision: Any,
+    ) -> bool:
+        """Append the next monotonic boundary decision; return whether it was new."""
+        ...
+
+    async def list_service_authority_teardowns(self) -> list[dict]:
+        """Denied stop intents whose runtime teardown is not yet confirmed."""
+        ...
+
+    async def claim_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        claim_id: str,
+        claimed_at: Any,
+        lease_seconds: float,
+    ) -> Optional[dict]:
+        """Lease one pending teardown under storage serialization."""
+        ...
+
+    async def confirm_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        decision_id: str,
+        claim_id: str,
+    ) -> bool:
+        """Mark one matching stop intent confirmed; replay returns false."""
+        ...
+
     async def get_status_by_session(self, *, session_uid: str) -> Optional[str]:
         """Resolve ``session_uid`` (== the bot's ``connectionId``) → the meeting's CURRENT persisted
         status string, or ``None`` for an unknown session. Used to REHYDRATE the in-memory lifecycle
         FSM after a meeting-api restart (LIFECYCLE-409): the in-memory store is non-durable, so the
         callback reconciles a fresh/empty record against the DB's real status BEFORE applying the
         bot's event (else a terminal event on an empty store creates a status=None record and 409s)."""
+        ...
+
+    async def get_lifecycle_state_by_session(self, *, session_uid: str) -> Optional[dict]:
+        """Return the persisted lifecycle state needed to restore the FSM after restart.
+
+        Shape: ``{"status": str, "data": dict}``. The transition trail is part of the durable
+        lifecycle fact: restoring only the current status would erase the producer-observed
+        admission time when the terminal callback arrives after a process restart.
+        """
         ...
 
     async def update_meeting_status(

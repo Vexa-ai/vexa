@@ -148,6 +148,84 @@ def test_meeting_completed_emitted_with_post_meeting_envelope(goldens):
     assert "webhook_url" not in m["data"]
 
 
+def test_meeting_completed_exposes_frozen_privacy_safe_service_provenance():
+    repo, sink = InMemoryMeetingRepo(), _CaptureSink()
+    seeded = _seed(repo, session_uid="sess-uid", data={
+        "webhook_url": "https://hook.example/x",
+        "webhook_events": dict(_ALL_EVENTS),
+        "transcribe_enabled": True,
+        "transcription_provider": "customer",
+    })
+
+    async def finalizer(meeting_id):
+        assert meeting_id == seeded["id"]
+        return 3
+
+    client = TestClient(
+        create_app(
+            meeting_repo=repo,
+            webhook_sink=sink,
+            transcript_finalizer=finalizer,
+        )
+    )
+    for event in (
+        {"connection_id": "sess-uid", "status": "joining",
+         "timestamp": "2026-07-28T10:00:00.000Z"},
+        {"connection_id": "sess-uid", "status": "active",
+         "timestamp": "2026-07-28T10:05:00.000Z"},
+        {"connection_id": "sess-uid", "status": "completed",
+         "completion_reason": "stopped", "timestamp": "2026-07-28T10:30:00.000Z"},
+    ):
+        _post(client, event)
+
+    completed = sink.calls[-1]["envelope"]["data"]["meeting"]
+    assert completed["service_provenance"] == {
+        "bot_admitted_at": "2026-07-28T10:05:00.000Z",
+        "bot_departed_at": "2026-07-28T10:30:00.000Z",
+        "bot_outcome": "served",
+        "transcription_provider": "customer",
+        "transcription_outcome": "served",
+        "lifecycle_contract_version": "2026-07-28",
+    }
+    assert "transcription_provider" not in completed["data"]
+    assert "transcription_service_url" not in repr(completed)
+    assert repo._meetings[seeded["id"]]["data"]["segments_captured"] == 3
+
+
+def test_finalization_failure_never_claims_vexa_transcription_was_served():
+    repo, sink = InMemoryMeetingRepo(), _CaptureSink()
+    _seed(repo, session_uid="sess-uid", data={
+        "webhook_url": "https://hook.example/x",
+        "webhook_events": dict(_ALL_EVENTS),
+        "transcribe_enabled": True,
+        "transcription_provider": "vexa",
+    })
+
+    async def failed_finalizer(_meeting_id):
+        raise RuntimeError("durable transcript unavailable")
+
+    client = TestClient(
+        create_app(
+            meeting_repo=repo,
+            webhook_sink=sink,
+            transcript_finalizer=failed_finalizer,
+        )
+    )
+    for event in (
+        {"connection_id": "sess-uid", "status": "joining",
+         "timestamp": "2026-07-28T10:00:00.000Z"},
+        {"connection_id": "sess-uid", "status": "active",
+         "timestamp": "2026-07-28T10:05:00.000Z"},
+        {"connection_id": "sess-uid", "status": "completed",
+         "completion_reason": "stopped", "timestamp": "2026-07-28T10:30:00.000Z"},
+    ):
+        _post(client, event)
+
+    provenance = sink.calls[-1]["envelope"]["data"]["meeting"]["service_provenance"]
+    assert provenance["transcription_provider"] == "vexa"
+    assert provenance["transcription_outcome"] == "failed"
+
+
 def test_bot_failed_emitted_on_terminal_failure(goldens):
     client, sink = _wired_client()
     _post(client, goldens["joining"])
