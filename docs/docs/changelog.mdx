@@ -3,7 +3,7 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.18 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.21 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
 > 📌 **These docs reflect Vexa `v0.12.18`** — the latest released control-plane. Older self-hosts
@@ -747,6 +747,49 @@ probe), not inferred from planning docs.
   Lite venvs (admin-api, runtime, meeting-api, gateway, agent) now pass `--python 3.12`, matching the
   `FROM python:3.12-slim` every compose image (and helm, which ships those images) already pinned.
   Compose and helm never shared the exposure.
+
+- **Every deploy surface now runs Valkey 8.1.9 instead of Redis (#653).** Vexa Lite, Docker
+  Compose, and Helm all use [Valkey](https://valkey.io) — the Linux Foundation's BSD-3 fork of
+  Redis 7.2.4 — for the bus, scheduler, and per-dispatch streams. This gives every surface (Lite
+  included) `XAUTOCLAIM` orphan-reclaim parity, and moves off source-available Redis ≥7.4
+  (RSALv2/SSPLv1). The store is wire-compatible (RESP): `REDIS_URL` and every `redis.*` config key
+  are unchanged, so existing overrides keep working. See [Deployment](/deployment).
+- **Two new license/parity gates close the class the audit exposed (#653).** `gate:image-licenses`
+  audits container-image pins and image-baked binaries (which `gate:licenses` never saw), and
+  `gate:runtime-parity` asserts every surface's engine version supports the RESP commands the code
+  actually calls — the rung that catches a backing store shipped without a capability the code
+  assumes.
+
+Release promotion now assigns moving image aliases by copying the authenticated
+registry manifest bytes and media type exactly, then reads back all frozen
+descriptors. Single-platform images can no longer be silently wrapped in a new
+index, and `:latest` is checked as an unchanged negative control unless its
+promotion was explicitly requested.
+
+- **Start here: hosted now runs Vexa 0.12 for meeting bots and transcription (#954).** The Overview
+  page no longer says hosted [vexa.ai](https://vexa.ai) is on the 0.10 line. It states the current
+  boundary: hosted runs 0.12 for meeting bots and transcription but does not include the agent
+  runtime — agents and the full stack require [self-hosting](/deployment).
+
+- **Meeting completion now reports the service that actually ran (#984).** Lifecycle events carry
+  producer-observed transition times, and completed meetings expose privacy-safe bot runtime and
+  transcription-provider outcomes so hosted billing can distinguish Vexa transcription from a
+  customer endpoint without inspecting configuration or credentials.
+
+- **Self-hosted deployments can opt into an external service authority without importing hosted
+  billing policy (#988).** Meeting-api can now ask a signed, versioned authority before bot spawn
+  and at each one-minute active-service boundary; stock OSS remains explicit allow-all when the
+  integration is unset. See [Configuration](/configuration#optional-service-authority).
+
+- **Operators can route terminal meeting facts to one signed, boot-frozen system callback (#992).**
+  The optional destination accepts only `meeting.completed` and `bot.failed`, has its own
+  retry/dead-letter lane, and may explicitly target an in-cluster HTTP service without weakening
+  the SSRF guard on customer-configured webhooks. See
+  [Configuration](/configuration#operator-terminal-callback).
+
+- **Admin identity reads now resolve an existing user by authoritative ID (#994).** Internal
+  service consumers can bind admission and lifecycle work to the authenticated numeric user
+  identity without falling back to email or creating a user as a side effect.
 
 ## Versioning
 
