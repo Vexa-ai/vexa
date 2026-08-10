@@ -32,7 +32,8 @@
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
-          "n8n"
+          "n8n",
+          "interactive-bots"
         ]
       },
       {
@@ -332,6 +333,14 @@
       "source": "/self-hosting",
       "destination": "/deployment",
       "permanent": false
+    },
+    {
+      "source": "/api/interactive-bots",
+      "destination": "/interactive-bots"
+    },
+    {
+      "source": "/api/interactive-bots.md",
+      "destination": "/interactive-bots.md"
     }
   ]
 }
