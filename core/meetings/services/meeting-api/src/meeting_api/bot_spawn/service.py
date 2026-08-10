@@ -723,6 +723,9 @@ async def request_bot(
     token = mint_meeting_token(
         meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
     )
+    # Recording captures audio always; video only when RECORD_VIDEO is set (default AUDIO-ONLY, so a
+    # plain deployment carries no encode cost). captureModes drives the bot's ffmpeg recorder.
+    record_video = env_flag("RECORD_VIDEO")
     invocation = build_invocation(
         meeting_id=meeting_id,
         platform=platform,
@@ -743,7 +746,7 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
-        capture_modes=(["audio", "video"] if recording_enabled else None),
+        capture_modes=((["audio", "video"] if record_video else ["audio"]) if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
         # record still yields a fixture. Both ride the same upload endpoint below.
         capture_signal_enabled=capture_signal_enabled,
@@ -774,10 +777,20 @@ async def request_bot(
         raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
     # 5. Spawn over runtime.v1.
+    # Recording knobs for the server-side ffmpeg recorder: sourced from the meeting-api process env so a
+    # deployment tunes encode (CPU vs GPU), capture resolution, segment length, and audio source per host.
+    # The bot reads these in RecordingCaptureService (defaults: software libx264 H.264/mp4, 1920x1080,
+    # 15s segments, record_sink.monitor). Only forwarded when set — unset ⇒ the bot's defaults, so
+    # audio-only / no-GPU deployments carry no extra env.
+    video_env: dict[str, str] = {}
+    for _k in ("VIDEO_HWACCEL", "RECORD_VIDEO_CODEC", "RECORD_AUDIO_CODEC", "VIDEO_RESOLUTION", "RECORD_SEGMENT_SECONDS", "RECORD_AUDIO_SOURCE"):
+        if os.getenv(_k):
+            video_env[_k] = os.environ[_k]
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
         callback_url=f"{meeting_api_url}/runtime/callback",
+        extra_env=video_env or None,
     )
     try:
         result = await runtime.create_workload(spec)

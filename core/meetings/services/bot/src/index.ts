@@ -35,7 +35,8 @@ import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { startFfmpegRecording, wantsVideoCapture } from './video-recording.js';
+import { launchBrowser, startCaptureBridge, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -44,7 +45,6 @@ import type {
   LifecycleSink,
   TranscriptSink,
   ActsSource,
-  RecordingSink,
 } from './ports.js';
 
 /** A console-only lifecycle sink — used for self-host (no `meetingApiCallbackUrl`) and as the
@@ -195,7 +195,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
-  const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
+  // ffmpeg-for-all recording: one ffmpeg captures audio (+video) → live DASH, the SOLE recording
+  // path for both audio-only and A+V meetings (no browser MediaRecorder, no separate x11grab).
+  const useFfmpegRecording = !!inv.recordingEnabled;
   // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
   // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
   // enables it without a control plane (the local hot-loop path).
@@ -257,7 +259,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran
     // the page.evaluate on the BLANK pre-navigation page (no VexaBrowserUtils, no audio), and the
     // subsequent goto to the meeting URL destroyed that context — so capture never attached. (L4.)
-    const sess = session, bp = botPipeline, rec = recording;
+    const sess = session, bp = botPipeline;
     restartCapture = () => {
       void restartMixedCapture(sess.page)
         .then((requested) => console.log(`[bot] capture restart ${requested ? 'requested' : 'not applicable (no mixed rescan)'}`))
@@ -288,7 +290,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
       startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
-      startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
+      // ffmpeg-for-all recording: ONE ffmpeg captures the meeting audio (always) plus the Xvfb display
+      // (when video is requested) → live DASH. Runs in the seam so it starts post-admission — on the
+      // live meeting, not the pre-join page — and its stop is driven from pipeline teardown.
+      startRecording: useFfmpegRecording
+        ? async () => startFfmpegRecording(inv, wantsVideoCapture(inv), (m) => console.log(`[bot] ${m}`))
+        : undefined,
       engine: bp,
       onFault: (stage, e) => {
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
@@ -317,7 +324,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     pipeline,
     acts,
     aloneness,
-    recording: recording as RecordingSink | undefined,
+    recording: undefined,   // ffmpeg-for-all owns recording via the pipeline seam; no orchestrator sink
     reachability,
     degraded: () => sttFaults.report(),
   });
@@ -333,7 +340,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     return result.exitCode;
   } finally {
     releaseSignals();
-    // Tear down the pipeline (capture bridge + recording + engine) + browser (best-effort — a
+    // Tear down the pipeline (capture bridge + recording + video + engine) + browser (best-effort — a
     // teardown failure must not change the exit code). The orchestrator already stopped the pipeline
     // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
     // path that skipped the orchestrator's teardown. (#593)
