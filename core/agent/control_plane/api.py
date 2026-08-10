@@ -1316,19 +1316,46 @@ def create_app(
     def create_routine(body: RoutineCreate, request: Request):
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
+        subject = subject_of(request)
         try:
             routine = routines_mod.make_routine(
-                subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
+                subject=subject,
+                name=body.name,
+                cron=body.cron,
+                prompt=body.prompt,
+                routine_id=workspace_routines_mod.routine_id_for_workspace_file(subject, body.name),
             )
-            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
+            workspace_routines_mod.write_routine_file(
+                subject,
+                body.name,
+                cron=body.cron,
+                prompt=body.prompt,
+                workspaces_dir=wsr.root,
+            )
+            workspace_routines_mod.reconcile_workspace_routines(
+                subject,
+                scheduler=scheduler,
+                invocations_url=invocations_url,
+                workspaces_dir=wsr.root,
+            )
         except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
             raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
-        job = scheduler.schedule(job_spec)
+        job = next(
+            (
+                candidate
+                for candidate in scheduler.list_jobs(limit=1000)
+                if (candidate.get("metadata") or {}).get("routine_id") == routine["id"]
+                and (candidate.get("metadata") or {}).get("owner") == subject
+            ),
+            None,
+        )
+        if job is None:
+            raise HTTPException(status_code=500, detail="routine was not scheduled")
         ran_now = False
         if body.run_now:
             # Fire one immediate run via the dispatcher (no HTTP hop) so the author sees a result now.
             try:
-                dispatcher.dispatch(job_spec["request"]["body"])
+                dispatcher.dispatch(job["request"]["body"])
                 ran_now = True
             except Exception:  # noqa: BLE001 — the routine is still scheduled even if the demo run fails
                 ran_now = False
@@ -1379,11 +1406,26 @@ def create_app(
         if scheduler is None:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         subject = subject_of(request)
-        for job in scheduler.list_jobs():
+        matches = []
+        for job in scheduler.list_jobs(limit=1000):
             meta = job.get("metadata") or {}
             if meta.get("routine_id") == routine_id and meta.get("owner") == subject:
+                matches.append(job)
+        if matches:
+            names = {
+                (job.get("metadata") or {}).get("name")
+                for job in matches
+                if (job.get("metadata") or {}).get("name")
+            }
+            for job in matches:
                 scheduler.cancel_job(job["job_id"])
-                return {"ok": True, "routine_id": routine_id}
+            for name in names:
+                workspace_routines_mod.remove_routine_file(
+                    subject,
+                    name,
+                    workspaces_dir=wsr.root,
+                )
+            return {"ok": True, "routine_id": routine_id}
         raise HTTPException(status_code=404, detail="unknown routine")
 
     # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 dispatch →
