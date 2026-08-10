@@ -341,6 +341,46 @@
     {
       "source": "/api/interactive-bots.md",
       "destination": "/interactive-bots.md"
+    },
+    {
+      "source": "/ws/events",
+      "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/ws/events.md",
+      "destination": "/how-to/stream-transcript.md"
+    },
+    {
+      "source": "/local-webhook-development",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/local-webhook-development.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/how-to/webhooks",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/how-to/webhooks.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/api/webhooks",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/api/webhooks.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/cookbook/share-transcript-url",
+      "destination": "/chatgpt-transcript-share-links"
+    },
+    {
+      "source": "/cookbook/share-transcript-url.md",
+      "destination": "/chatgpt-transcript-share-links.md"
     }
   ]
 }
