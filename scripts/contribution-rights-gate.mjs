@@ -6,11 +6,23 @@ import { pathToFileURL } from "node:url";
 const RIGHTS = ["independent", "corporate", "uncertain"];
 const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
 
+// The rights marker may sit on the checkbox line itself, or -- as the repository's own pull-request
+// template writes it -- on a continuation line of the same list item. Locate the marker, then walk
+// back to the checkbox of the item it belongs to. Matching only the marker's own line silently
+// reports zero selections for every correctly filled template.
 function selectedRights(body = "") {
+  const lines = body.split("\n");
   return RIGHTS.filter((right) => {
     const marker = `<!-- rights:${right} -->`;
-    const line = body.split("\n").find((candidate) => candidate.includes(marker)) || "";
-    return /^\s*-\s*\[[xX]\]/.test(line);
+    const markerIndex = lines.findIndex((candidate) => candidate.includes(marker));
+    if (markerIndex === -1) return false;
+    for (let index = markerIndex; index >= 0; index -= 1) {
+      const checkbox = lines[index].match(/^\s*-\s*\[([ xX])\]/);
+      if (checkbox) return checkbox[1].toLowerCase() === "x";
+      // A blank line ends the list item; never attribute a marker to an earlier item.
+      if (!lines[index].trim()) return false;
+    }
+    return false;
   });
 }
 

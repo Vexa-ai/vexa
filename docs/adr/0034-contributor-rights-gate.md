@@ -13,7 +13,8 @@ corporate evidence because it can survive later pushes and does not identify a p
 
 New pull requests choose exactly one of three paths: independent, employer/client-controlled, or
 unsure. Independent contributors use DCO 1.1 per commit and no individual CLA. Corporate work uses
-the same individual DCO plus a private corporate agreement or narrow authorization. The public
+the same individual DCO plus a short employer authorization letter the contributor forwards to
+their own approvers; Vexa publishes no contributor agreement and asks no one to sign one. The public
 gate accepts only a designated verifier's opaque receipt decision naming the PR and exact head SHA.
 A push invalidates that verification. Rights review can proceed alongside technical review; merge
 is the only blocked transition.
@@ -32,7 +33,9 @@ rewritten merely to add sign-offs.
 
 - The ordinary contributor makes one explicit legal choice and uses standard Git sign-off.
 - Corporate authorization becomes attributable, private, and invalidated by code changes.
-- DCO App installation, required-check configuration, a private register, and licensed-counsel
-  approval of the corporate instrument remain activation prerequisites outside the repository.
+- DCO App installation, required-check configuration, a private register, and maintainer adoption
+  of the corporate instrument — a standard text from a recognized trusted party, minimally adapted,
+  with its exact version and SHA-256 pinned — remain activation prerequisites outside the
+  repository.
 - A bootstrap PR can prove the deterministic machinery locally; a post-merge canary PR is required
   to witness GitHub event, Check Runs, DCO App, and branch-protection behavior end to end.

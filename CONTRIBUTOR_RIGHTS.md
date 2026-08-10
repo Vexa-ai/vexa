@@ -32,13 +32,19 @@ success result.
 
 Choose this path when the contribution is assigned work, was prepared using controlled employer
 or client assets, is sponsored for upstream submission, or may otherwise be owned or controlled
-by another legal entity. Continue to sign your own commits under the DCO; Vexa will privately send
-the rights holder the current approved corporate agreement or a contribution-specific
-authorization. Technical review may continue while that happens, but merge waits.
+by another legal entity. Continue to sign your own commits under the DCO. Technical review may
+continue while authorization is arranged, but merge waits.
 
-Start the private process by emailing [dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request
-URL and the rights holder's legal/IP contact. Do not attach executed agreements, signatures,
-addresses, employment documents, or private correspondence to a public issue or pull request.
+The normal route is self-serve: forward
+[`CLA/employer-authorization-template.md`](CLA/employer-authorization-template.md) to whoever
+handles open-source approvals where you work. It is a short letter they fill in, sign, and email
+to [dmitry@vexa.ai](mailto:dmitry@vexa.ai) — it adds no terms beyond what Apache-2.0 already
+provides. You sign nothing beyond your own DCO sign-off.
+
+If you cannot reach your own approvers, or they would rather hear from Vexa directly, email
+[dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request URL and the rights holder's legal/IP
+contact instead. Do not attach executed agreements, signatures, addresses, employment documents,
+or private correspondence to a public issue or pull request.
 
 ### Unsure
 
@@ -86,6 +92,49 @@ change global Git identity, add another person's sign-off, or rewrite/push histo
 human's explicit approval. The desired experience is one conscious legal choice and no Git
 ceremony.
 
+### Making sign-off automatic (agent runbook)
+
+Once — and only once — the human has chosen a rights path, an agent should set the working copy up
+so the human never handles DCO mechanics again.
+
+Git has no `commit.signoff` setting. `format.signOff` exists but affects `format-patch` only, and
+Git's own documentation notes that adding the trailer "should be a conscious act." That caution is
+satisfied by the human's explicit choice of rights path; what follows just carries it forward
+consistently. Install a repository-local hook:
+
+```bash
+cat > .git/hooks/prepare-commit-msg <<'HOOK'
+#!/bin/sh
+name=$(git config user.name)
+email=$(git config user.email)
+[ -n "$name" ] && [ -n "$email" ] || exit 0
+grep -qsF "Signed-off-by: $name <$email>" "$1" && exit 0
+printf '\nSigned-off-by: %s <%s>\n' "$name" "$email" >> "$1"
+HOOK
+chmod +x .git/hooks/prepare-commit-msg
+```
+
+It is repository-local (`.git/hooks` is never committed, so it reaches no one else), uses the
+contributor's own configured identity rather than an agent-supplied one, is idempotent, and exits
+quietly if the identity is unset rather than writing a malformed trailer.
+
+Verify before relying on it, since a silent hook failure looks identical to success:
+
+```bash
+git commit --allow-empty -m "dco hook check" && git log -1 --format=%B | grep "Signed-off-by:"
+```
+
+Then drop the check commit with `git reset --hard HEAD~1`.
+
+Repairing commits that predate the hook is covered under *Fixing a DCO failure* above. An agent may
+run those commands on a branch only the human uses; on a shared branch it must ask first, because
+the repair rewrites history.
+
+**The line an agent does not cross:** it may install and verify the mechanism, and it may repair its
+own or the human's unsigned commits after the rights path is chosen. It may not choose that path,
+and it may not sign for anyone else — including adding a `Signed-off-by` naming a person who has
+not made that certification themselves.
+
 ## Previously merged contributions
 
 Missing DCO evidence does not by itself prove that an Apache-2.0 contribution is unlicensed.
@@ -96,8 +145,7 @@ Historical review is risk-based:
   attestation from the original contributor;
 - employer-owned or corporate-directed work requires a corporate authorization covering named
   pull requests or commit SHAs; and
-- material work that cannot be cleared is replaced or removed, unless licensed counsel documents
-  a different disposition.
+- material work that cannot be cleared is replaced or removed.
 
 Vexa never rewrites history merely to insert a sign-off and never signs for a contributor.
 
@@ -129,5 +177,4 @@ Before activating the gate, repository administrators must:
 2. enable GitHub's compulsory sign-off for web-based commits;
 3. replace `__BOOTSTRAP_PR__` with this policy PR's number;
 4. require the `contribution-rights` check, with the ruleset bypass list set to none; and
-5. verify the private register, retention rule, return channel, and exact corporate agreement hash
-   with licensed counsel.
+5. verify the private register, retention rule, and return channel.
