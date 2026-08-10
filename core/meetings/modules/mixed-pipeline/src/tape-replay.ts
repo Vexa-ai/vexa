@@ -68,9 +68,23 @@ async function main(): Promise<void> {
   let emit!: (ev: BoundaryEvent) => void;
   /** Every publish call, in order — the naive "one row per publish" view. */
   const writes: { id: string; speaker: string; text: string; completed: boolean }[] = [];
-  /** The collector's durable view: UPSERT on segment id (its unique key with meeting_id). */
+  /** The collector's durable view: UPSERT on segment id (its unique key with meeting_id), and
+   *  DELETE on a retract. */
   const durable = new Map<string, { speaker: string; text: string }>();
   const renames: { from: string; to: string; n: number }[] = [];
+  let retracted = 0;
+
+  // The bot's pending reconciliation, mirrored from services/bot/src/pipeline.ts. The mixed lane
+  // republishes its whole surviving pending tail each pass, so an id that DROPS OUT of the block
+  // has been superseded — the bot diffs the set and retracts the departed ids, which the collector
+  // turns into a DELETE. The harness drives the transcriber directly, so it has to stand in for
+  // that leg too, or it measures a durable store the product does not actually have.
+  let pendingIds = new Set<string>();
+  const reconcilePending = (pending: { segmentId: string }[]): void => {
+    const next = new Set(pending.map((c) => c.segmentId));
+    for (const id of pendingIds) if (!next.has(id)) { durable.delete(id); retracted++; }
+    pendingIds = next;
+  };
 
   const tc = await ChunkedTranscriber.create({
     language: 'en',
@@ -88,12 +102,14 @@ async function main(): Promise<void> {
     },
     publish: (speaker, confirmed, pending) => {
       for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); durable.set(c.segmentId, { speaker, text: c.text }); }
+      reconcilePending(pending ?? []);
       for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text }); }
     },
     publishPending: (speaker, segs) => {
+      reconcilePending(segs);
       for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text }); }
     },
-    clearPending: () => {},
+    clearPending: () => { reconcilePending([]); },
     rename: (oldS, newS, segs) => {
       renames.push({ from: oldS, to: newS, n: segs.length });
       for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); durable.set(s.segmentId, { speaker: newS, text: s.text }); }
@@ -141,6 +157,7 @@ async function main(): Promise<void> {
   const texts = new Set([...durable.values()].map((v) => v.text));
   console.log(`\nDUPLICATION`);
   console.log(`  publish calls (naive one-row-per-publish): ${writes.length}`);
+  console.log(`  draft ids RETRACTED by the bot's pending reconcile : ${retracted}`);
   console.log(`  durable rows after UPSERT on segment_id  : ${durable.size}`);
   console.log(`  distinct texts among durable rows        : ${texts.size}`);
   const dupIds = [...durable.keys()].filter((id) => /:p\d+$/.test(id));
