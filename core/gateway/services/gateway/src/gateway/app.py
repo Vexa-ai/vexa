@@ -127,6 +127,7 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/recordings"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}/master"): BOT_OR_TX,
+    ("GET", "/recordings/{recording_id}/hls/{path:path}"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}/media/{media_file_id}/raw"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}/media/{media_file_id}/download"): BOT_OR_TX,
     # Destruction is not a read, so it does not inherit the reads' scope. A `tx` key is handed out
@@ -588,6 +589,12 @@ def create_app(
     @app.get("/recordings/{recording_id}/master")
     async def get_recording_master(recording_id: int, request: Request):
         return await _forward("GET", _meeting(f"/recordings/{recording_id}/master"), request)
+
+    # MPEG-DASH bundle: manifest.mpd (built on demand — video + Opus audio from the chunks, no transcode)
+    # and its relative segments (init.mp4, chunk-NNNNN.m4s). Native Safari + hls.js stream these.
+    @app.get("/recordings/{recording_id}/hls/{path:path}")
+    async def get_recording_hls(recording_id: int, path: str, request: Request):
+        return await _forward("GET", _meeting(f"/recordings/{recording_id}/hls/{path}"), request)
 
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")

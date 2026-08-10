@@ -45,9 +45,21 @@ export function getLocaleBrowserArgs(): string[] {
 }
 
 export const JOIN_BROWSER_ARGS: readonly string[] = [
+  // Fill the recording frame: the browser opens fullscreen at 0,0 sized to the Xvfb screen (1920x1080,
+  // see the bot entrypoint) so the x11grab video capture sees the meeting edge-to-edge — no window
+  // chrome, tabs, or desktop border in the recording. Harmless for audio-only bots.
+  "--window-position=0,0",
+  "--window-size=1920,1080",
+  "--start-fullscreen",
   "--incognito",
   "--no-sandbox",
-  "--disable-setuid-sandbox",
+  // NOTE: deliberately NO --test-type here. It hides Chromium's "unsupported command-line flag:
+  // --no-sandbox" banner (which overlays the server-side recording), but it is an automation signal
+  // that correlated with Google Meet not surfacing the bot for admission — a bot that can't get into
+  // the meeting is worse than a banner in the recording, so the banner is tolerated for now. The banner
+  // must be suppressed some OTHER way (e.g. a recording-side crop/overlay), not via --test-type.
+  // (--disable-setuid-sandbox also stays removed: redundant with --no-sandbox, and it only added a
+  // second flag name to that same banner.)
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",

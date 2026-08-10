@@ -15,8 +15,12 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import subprocess
+import tempfile
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
@@ -329,3 +333,230 @@ def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[s
     if exp is not None and int(datetime.now(timezone.utc).timestamp()) > int(exp):
         raise ValueError("MeetingToken expired")
     return claims
+
+
+# ── ffmpeg-for-all: live MPEG-DASH storage + the on-demand combined download ──────────────────────
+
+def _hls_content_type(rel: str) -> str:
+    if rel.endswith(".m3u8"):
+        return "application/vnd.apple.mpegurl"
+    if rel.endswith(".m4s") or rel.endswith(".mp4"):
+        return "video/mp4"
+    return "application/octet-stream"
+
+
+async def upload_hls_file(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    token_meeting_id: Optional[int],
+    session_uid: str,
+    relpath: str,
+    data: bytes,
+    is_final: bool = False,
+    started_at: Optional[str] = None,
+    has_video: Optional[bool] = None,
+) -> dict:
+    """Store ONE live-HLS file (``init.mp4``, ``chunk-<NNNNN>.m4s``, or ``playlist.m3u8``) for a
+    recording under ``recordings/{u}/{rec}/{sid}/hls/<relpath>`` — verbatim, since the playlist's
+    relative URIs must resolve. On the playlist (and the final marker) (re)register the recording's
+    ``hls`` media-file + ``playback_url.hls`` so GET /recordings and the player find it. The bot's
+    ffmpeg produced HLS-native segments, so there is NO server-side assembly. Returns
+    ``{recording_id, meeting_id, status}``; ``{"status": "pending"}`` when the session isn't known
+    yet (bot retries)."""
+    if ".." in relpath or relpath.startswith("/"):
+        raise SessionNotFound("bad HLS relpath")
+    session = await repo.find_session(session_uid)
+    if session is None:
+        return {"status": "pending"}
+    meeting_id = session["meeting_id"]
+    if token_meeting_id is not None and meeting_id != token_meeting_id:
+        raise SessionNotFound("MeetingToken meeting_id does not match the session's meeting")
+    owner = await repo.owner_of(meeting_id)
+
+    # Resolve a STABLE recording_id BEFORE storing, ensuring the recording row exists on EVERY upload —
+    # not just the playlist. HLS files can arrive in any order (an init/chunk before the first playlist),
+    # and every one must land under the SAME .../{recording_id}/.../hls/ prefix so the playlist's relative
+    # URIs resolve. On the playlist (and the final marker) also (re)stamp the `hls` media-file +
+    # playback_url.hls so GET /recordings and the player find it; `is_final` completes the recording.
+    is_playlist = relpath == "playlist.m3u8"
+
+    def _fold(recs):
+        ex = next((r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None)
+        others = [r for r in recs if not (r.get("session_uid") == session_uid and r.get("source") == "bot")]
+        rec = dict(ex) if ex else {
+            "id": new_recording_numeric_id(), "meeting_id": meeting_id, "user_id": owner or 0,
+            "session_uid": session_uid, "source": "bot", "status": "in_progress",
+            "created_at": _now_iso(), "completed_at": None, "media_files": [],
+        }
+        if is_final:
+            rec["status"] = "completed"
+            rec["completed_at"] = _now_iso()
+        if is_playlist or is_final:
+            playlist_key = f"recordings/{owner or 0}/{rec['id']}/{session_uid}/hls/playlist.m3u8"
+            prior = next((m for m in (rec.get("media_files") or []) if m.get("type") == "hls"), None)
+            mfs = [m for m in (rec.get("media_files") or []) if m.get("type") != "hls"]
+            mfs.append({
+                "id": (prior or {}).get("id") or new_recording_numeric_id(),
+                "type": "hls", "format": "m3u8", "storage_path": playlist_key, "is_final": is_final,
+                # Anchor to the recorder's true t=0 (ffmpeg start) the bot sends, NOT the receive time of
+                # this (first) playlist — which lands a whole segment late and drags transcript sync back.
+                "first_chunk_at": (prior or {}).get("first_chunk_at") or started_at or _now_iso(),
+                # Whether this recording captured video — the player renders a <video> vs an audio control.
+                "has_video": has_video if has_video is not None else (prior or {}).get("has_video", False),
+            })
+            rec["media_files"] = mfs
+            pb = dict(rec.get("playback_url") or {})
+            pb["hls"] = f"/recordings/{rec['id']}/hls/playlist.m3u8"
+            rec["playback_url"] = pb
+        return others + [rec], {"recording_id": rec["id"]}
+
+    result = await repo.mutate_recordings(meeting_id, _fold)
+    recording_id = (result or {}).get("recording_id")
+
+    prefix = f"recordings/{owner or 0}/{recording_id}/{session_uid}/hls"
+    await storage.upload(f"{prefix}/{relpath}", data, content_type=_hls_content_type(relpath))
+    return {"recording_id": recording_id, "meeting_id": meeting_id, "status": "ok"}
+
+
+def _ffmpeg_hls_to_mp4(hls_files: dict[str, bytes]) -> Optional[bytes]:
+    """Remux a bot recording's live-HLS (playlist.m3u8 + init/chunk segments) into ONE self-contained
+    downloadable mp4 via ffmpeg — video is always stream-COPIED (same codec as the recording). Blocking —
+    call via ``asyncio.to_thread``. Returns the mp4 bytes, or ``None`` if ffmpeg is missing/fails (the
+    caller then leaves the HLS stream as the only playback source).
+
+    ffmpeg reads the playlist and its segments straight from the temp dir (paths are relative). Audio
+    defaults to ``copy`` (zero transcode → the download's audio matches the recording); set
+    RECORDING_COMBINED_AUDIO_CODEC to an ffmpeg encoder name (e.g. ``aac``, ``libopus``) to TRANSCODE it.
+    """
+    if "playlist.m3u8" not in hls_files:
+        return None
+    override = os.getenv("RECORDING_COMBINED_AUDIO_CODEC", "").strip().lower()
+    acodec = override or "copy"
+    with tempfile.TemporaryDirectory() as d:
+        for rel, data in hls_files.items():
+            p = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(p) or d, exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(data)
+        opath = os.path.join(d, "combined.mp4")
+        cmd = [
+            "ffmpeg", "-y",
+            # -copyts + -start_at_zero: keep the HLS's already-aligned A/V timestamps and rebase to 0.
+            # Without them ffmpeg's fMP4/HLS demuxer mis-offsets the AUDIO track to the first segment
+            # boundary (~25 s) on a plain copy — the HLS itself is aligned (audio & video both start
+            # ~0.1 s, so it plays synced in a browser) but the remuxed download would open with ~25 s of
+            # silent, out-of-sync video. Verified on a real recording: audio start_time 0.000000 with
+            # these flags vs 24.8 without (holds for both -c:a copy and a transcode override).
+            "-copyts", "-start_at_zero",
+            "-allowed_extensions", "ALL",
+            "-i", os.path.join(d, "playlist.m3u8"),
+            "-c:v", "copy",
+            "-c:a", acodec,
+            "-movflags", "+faststart",
+            opath,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True)
+        except FileNotFoundError:
+            log_event("recording_combined_ffmpeg_missing", audience="system", level="error", span="recordings.combined")
+            return None
+        if proc.returncode != 0 or not os.path.exists(opath):
+            log_event(
+                "recording_combined_mux_failed", audience="system", level="error", span="recordings.combined",
+                fields={"stderr": (proc.stderr or b"").decode("utf-8", "replace")[-500:]},
+            )
+            return None
+        with open(opath, "rb") as f:
+            return f.read()
+
+
+def _hls_download_key(playlist_key: str) -> str:
+    """The combined-download object, a sibling of the ``hls/`` dir: ``.../combined/combined.mp4``."""
+    base = playlist_key.rsplit("/hls/", 1)[0]
+    return f"{base}/combined/combined.mp4"
+
+
+async def finalize_hls_download(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    meeting_id: int,
+    recording_id: int,
+    muxer: Callable[[dict], Optional[bytes]] = _ffmpeg_hls_to_mp4,
+) -> Optional[str]:
+    """Remux a bot recording's live-HLS into ONE downloadable mp4 (ENABLE_COMBINED_RECORDING) and stamp
+    a synthetic ``combined`` media-file + ``playback_url.combined`` so the /master + /raw routes serve it
+    by type. Idempotent + cached: reuses the combined object if present. Returns the combined key, or
+    ``None`` when the recording has no HLS media-file yet (or ffmpeg failed). ``muxer`` is injectable so
+    tests exercise the storage/JSONB orchestration without ffmpeg."""
+    recordings = await repo.get_recordings(meeting_id)
+    rec = next((r for r in recordings if r.get("id") == recording_id), None)
+    if rec is None:
+        return None
+    hmf = next((m for m in rec.get("media_files", []) if m.get("type") == "hls"), None)
+    playlist_key = (hmf or {}).get("storage_path")
+    if not playlist_key:
+        return None
+    combined_key = _hls_download_key(playlist_key)
+
+    if not await storage.exists(combined_key):
+        prefix = playlist_key.rsplit("/", 1)[0]  # .../hls
+        keys = await storage.list(prefix)
+        if not keys:
+            return None
+        hls_files: dict[str, bytes] = {}
+        for k in keys:
+            rel = k[len(prefix) + 1:]  # strip "prefix/"
+            if rel:
+                hls_files[rel] = await storage.get(k)
+        combined_bytes = await asyncio.to_thread(muxer, hls_files)
+        if not combined_bytes:
+            return None
+        await storage.upload(combined_key, combined_bytes, content_type="video/mp4")
+
+    def _stamp(recs):
+        r = next((x for x in recs if x.get("id") == recording_id), None)
+        if r is None:
+            return recs, None
+        mfs = r.setdefault("media_files", [])
+        cmf = next((m for m in mfs if m.get("type") == "combined"), None)
+        if cmf is None:
+            cmf = {"id": new_recording_numeric_id(), "type": "combined"}
+            mfs.append(cmf)
+        cmf.update({
+            "format": "mp4",
+            "storage_path": combined_key,
+            "is_final": True,
+            "finalized_at": _now_iso(),
+            "finalized_by": "recording_finalizer.hls_download",
+        })
+        pb = dict(r.get("playback_url") or {})
+        pb["combined"] = f"/recordings/{recording_id}/master?type=combined"
+        r["playback_url"] = pb
+        others = [x for x in recs if x.get("id") != recording_id]
+        return others + [r], combined_key
+
+    return await repo.mutate_recordings(meeting_id, _stamp)
+
+
+async def hls_download_ready_key(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    meeting_id: int,
+    recording_id: int,
+) -> Optional[str]:
+    """Fast, NO-MUX check: return the combined-download key IF it already exists in storage (stamping
+    its synthetic media-file so /raw serves it), else None. The READ path uses this so a page load never
+    blocks on (or restarts) the seconds-to-minutes ffmpeg remux — that runs in the background via
+    ``finalize_hls_download``, which short-circuits on ``storage.exists`` (so this only stamps)."""
+    recordings = await repo.get_recordings(meeting_id)
+    rec = next((r for r in recordings if r.get("id") == recording_id), None)
+    hmf = next((m for m in (rec or {}).get("media_files", []) if m.get("type") == "hls"), None) if rec else None
+    playlist_key = (hmf or {}).get("storage_path")
+    if not playlist_key:
+        return None
+    if not await storage.exists(_hls_download_key(playlist_key)):
+        return None
+    return await finalize_hls_download(repo, storage, meeting_id=meeting_id, recording_id=recording_id)
