@@ -9,6 +9,8 @@
  */
 export {
   createTeamsSpeakers,
+  extractTeamsSpeakerName,
+  teamsNameFromStream,
   teamsParticipantSelectors,
   teamsNameSelectors,
   teamsParticipantIdSelectors,
