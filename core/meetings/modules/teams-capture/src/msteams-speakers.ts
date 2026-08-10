@@ -60,10 +60,82 @@ export const teamsMeetingContainerSelectors: string[] = [
 ];
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
+const TEAMS_CONTROL_LABELS = new Set([
+  'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
+  'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
+  'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
+  'mute', 'unmute',
+].map(value => value.replace(/[_\s-]+/g, ' ')));
+const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+
+function isTeamsDisplayNameCandidate(value: string): boolean {
+  const candidate = value.trim();
+  if (candidate.length <= 1 || candidate.length >= 50) return false;
+  const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
+  return !TEAMS_CONTROL_LABELS.has(normalized)
+    && !TEAMS_TIMER_LABEL.test(normalized);
+}
+
+/** Resolve the display name carried by one participant tile.
+ *
+ * Stable attributes are the preferred path. Teams may also render the visible
+ * label as a text-only leaf whose classes are opaque atomic hashes, so the
+ * fallback scans leaves only and applies the same exact-token/timer guard.
+ */
+export function extractTeamsSpeakerName(
+  element: HTMLElement,
+  opts?: { structuralFallback?: boolean },
+): string {
+  for (const selector of teamsNameSelectors) {
+    const nameElement = element.querySelector(selector) as HTMLElement | null;
+    if (!nameElement) continue;
+    let nameText = nameElement.textContent ||
+      (nameElement as any).innerText ||
+      nameElement.getAttribute('title') ||
+      nameElement.getAttribute('aria-label');
+    if (!nameText || !nameText.trim()) continue;
+    nameText = nameText.trim();
+    // Control labels are rejected as whole normalized tokens. Substring
+    // matching would erase real names such as Michael and Micah.
+    if (isTeamsDisplayNameCandidate(nameText)) return nameText;
+  }
+  const ariaLabel = element.getAttribute('aria-label');
+  if (ariaLabel && ariaLabel.includes('name')) {
+    const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
+    if (m && m[1]) {
+      const nameText = m[1].trim();
+      if (isTeamsDisplayNameCandidate(nameText)) return nameText;
+    }
+  }
+  if (opts?.structuralFallback === false) return '';
+  const leaves = element.querySelectorAll('*');
+  for (let i = 0; i < leaves.length; i++) {
+    const leaf = leaves[i] as HTMLElement;
+    if (leaf.children.length !== 0) continue;
+    const text = (leaf.textContent || '').trim();
+    if (
+      text.toLocaleLowerCase() !== text.toLocaleUpperCase()
+      && isTeamsDisplayNameCandidate(text)
+    ) return text;
+  }
+  return '';
+}
 
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
+}
+
+/** A Teams voice-outline edge that was observed but could not safely become a
+ * speaker hint because the tile's display name was unresolved. This is a
+ * producer observation, not a hint: consumers must never infer a name from it. */
+export interface TeamsNameUnresolvedObservation {
+  type: 'name-unresolved';
+  platform: 'teams';
+  signal: 'dom-outline';
+  reason: 'resolver-empty';
+  edge: 'start' | 'end';
+  tMs: number;
 }
 
 export interface TeamsSpeakersOptions {
@@ -72,9 +144,15 @@ export interface TeamsSpeakersOptions {
   /** Debounced speaking state change: isEnd=false → started speaking,
    *  isEnd=true → stopped. tMs = wall-clock at emit. */
   onSpeaking: (name: string, id: string, isEnd: boolean, tMs: number) => void;
+  /** Fail-loud producer observation emitted before an unresolved-name edge is
+   * withheld from the hint stream. It contains no DOM text or display name. */
+  onNameUnresolved?: (observation: TeamsNameUnresolvedObservation) => void;
   log?: (msg: string) => void;
   /** Debounce for state-change emission (ms). Default 300 — matches the bot. */
   debounceMs?: number;
+  /** Heartbeat interval (ms). Default 2000; exposed so deterministic producer
+   * validators can advance this contract without wall-clock sleeps. */
+  heartbeatMs?: number;
 }
 
 export interface TeamsSpeakers {
@@ -89,6 +167,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
   const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
+  const heartbeatMs = opts.heartbeatMs ?? 2000;
 
   interface Identity { id: string; name: string; element: HTMLElement }
 
@@ -119,34 +198,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     return id!;
   }
 
-  function extractName(element: HTMLElement): string {
-    const forbidden = [
-      'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
-      'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
-      'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
-    ];
-    for (const selector of teamsNameSelectors) {
-      const nameElement = element.querySelector(selector) as HTMLElement | null;
-      if (!nameElement) continue;
-      let nameText = nameElement.textContent ||
-        (nameElement as any).innerText ||
-        nameElement.getAttribute('title') ||
-        nameElement.getAttribute('aria-label');
-      if (!nameText || !nameText.trim()) continue;
-      nameText = nameText.trim();
-      if (forbidden.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
-      if (nameText.length > 1 && nameText.length < 50) return nameText;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel && ariaLabel.includes('name')) {
-      const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
-      if (m && m[1]) {
-        const nameText = m[1].trim();
-        if (nameText.length > 1 && nameText.length < 50) return nameText;
-      }
-    }
-    return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
-  }
+  const extractName = (element: HTMLElement): string => extractTeamsSpeakerName(element);
 
   function getIdentity(element: HTMLElement): Identity {
     let identity = cache.get(element);
@@ -205,14 +257,67 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const observers = new Map<HTMLElement, MutationObserver[]>();
   const rafHandles = new Map<string, number>();
   const speakingStates = new Map<string, SpeakingState>();
+  // One diagnostic episode per participant: a bootstrap-silent tile is not an
+  // identity failure, and a 2s heartbeat is not a fresh edge. A real unresolved
+  // start opens the episode; its unresolved end closes it.
+  const unresolvedEpisodes = new Set<string>();
+  // A named END is admissible only after this producer actually emitted the
+  // matching named START (either on the edge or as a speaking heartbeat).
+  const namedEpisodes = new Set<string>();
   let destroyed = false;
+
+  function emitUnresolved(edge: 'start' | 'end', identity: Identity): void {
+    if (edge === 'start') {
+      namedEpisodes.delete(identity.id);
+      unresolvedEpisodes.add(identity.id);
+    }
+    else unresolvedEpisodes.delete(identity.id);
+    const observation: TeamsNameUnresolvedObservation = {
+      type: 'name-unresolved',
+      platform: 'teams',
+      signal: 'dom-outline',
+      reason: 'resolver-empty',
+      edge,
+      tMs: Date.now(),
+    };
+    try {
+      opts.onNameUnresolved?.(observation);
+    } catch {
+      log(`[TeamsSpeakers] name-unresolved-delivery-failed edge=${edge}`);
+    }
+    log(
+      `[TeamsSpeakers] name-unresolved reason=${observation.reason} ` +
+      `signal=${observation.signal} edge=${edge}`,
+    );
+  }
+
+  function emitNamedStart(identity: Identity): void {
+    unresolvedEpisodes.delete(identity.id);
+    opts.onSpeaking(identity.name, identity.id, false, Date.now());
+    namedEpisodes.add(identity.id);
+  }
 
   function emit(state: SpeakingState, identity: Identity): void {
     if (state === 'unknown' || destroyed) return;
-    if (!identity.name) return;   // unresolved name → don't emit a nameless/GUID hint
+    const edge = state === 'speaking' ? 'start' : 'end';
+    // Identity painting after an unresolved START is not retrospective named
+    // testimony. Unless a named START was emitted, close the typed episode.
+    if (edge === 'end' && unresolvedEpisodes.has(identity.id)) {
+      emitUnresolved('end', identity);
+      return;
+    }
+    if (!identity.name) identity.name = extractName(identity.element);
+    if (!identity.name) {
+      if (edge === 'end') return;
+      emitUnresolved('start', identity);
+      return;   // unresolved name stays unknown; never emit a nameless/GUID hint
+    }
+    unresolvedEpisodes.delete(identity.id);
     if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
+    if (edge === 'end' && !namedEpisodes.delete(identity.id)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
-    opts.onSpeaking(identity.name, identity.id, state !== 'speaking', Date.now());
+    if (edge === 'start') emitNamedStart(identity);
+    else opts.onSpeaking(identity.name, identity.id, true, Date.now());
   }
 
   function checkAndEmit(identity: Identity): void {
@@ -334,11 +439,13 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       for (const ident of cache.values()) {
         if (ident.id !== id) continue;
         if (!ident.name) ident.name = extractName(ident.element);   // name may have rendered since
-        if (ident.name) opts.onSpeaking(ident.name, ident.id, false, Date.now());
+        if (ident.name) {
+          emitNamedStart(ident);
+        }
         break;
       }
     }
-  }, 2000) as unknown as number;
+  }, heartbeatMs) as unknown as number;
 
   return {
     getSpeaking(): string[] {
@@ -362,6 +469,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       debounceTimers.clear();
       states.clear();
       speakingStates.clear();
+      unresolvedEpisodes.clear();
+      namedEpisodes.clear();
       cache.clear();
     },
   };

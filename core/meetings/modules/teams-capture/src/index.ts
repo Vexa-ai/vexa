@@ -14,6 +14,27 @@ export {
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
 } from './msteams-speakers.js';
-export type { TeamsSpeakers, TeamsSpeakersOptions, TeamsSpeakerIdentity } from './msteams-speakers.js';
+export type {
+  TeamsSpeakers,
+  TeamsSpeakersOptions,
+  TeamsSpeakerIdentity,
+  TeamsNameUnresolvedObservation,
+} from './msteams-speakers.js';
+export {
+  TEAMS_PRODUCER_DOM_TRACE_SCHEMA,
+  TEAMS_PRODUCER_DOM_TRACE_MAX_RECORDS,
+  TEAMS_PRODUCER_DOM_TRACE_MAX_TILES,
+  teamsProducerDomTraceNameTokens,
+  parseTeamsProducerDomTrace,
+  serializeTeamsProducerDomTrace,
+  TeamsProducerDomTraceAdmissionError,
+} from './producer-dom-trace.js';
+export type {
+  TeamsProducerDomTrace,
+  TeamsProducerDomTraceAdmissionCode,
+  TeamsProducerDomTraceHeader,
+  TeamsProducerDomTraceTileState,
+  TeamsProducerDomTraceNameToken,
+} from './producer-dom-trace.js';
 export { createTeamsChat } from './teams-chat.js';
 export type { TeamsChat, TeamsChatMessage } from './teams-chat.js';
