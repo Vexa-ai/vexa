@@ -420,7 +420,7 @@ of the PR's observation bundle, the loop's narration written as it happens. · *
 
 Five orthogonal dimensions; a tag is a claim, and the bots keep every claim true. **Exactly one
 `state:`, exactly one `kind:` on prepared work, any number of `area:`, `P0` only when
-production-critical, `good-first` only when truly zero-prerequisite.**
+production-critical, `good first issue` only when truly zero-prerequisite.**
 
 | Dimension | Tags | Rule |
 |---|---|---|
@@ -428,7 +428,7 @@ production-critical, `good-first` only when truly zero-prerequisite.**
 | `declined:` | `out-of-scope` · `superseded` · `wont-fix` · `too-far` · `stale` | exactly one, on closed-without-merge only (D17) |
 | `kind:` | `fix-request` · `evaluation-request` · `probe` | the prepared ask's contract shape; legacy `type: bug\|feature\|docs` stays as the raw signal's nature — an issue carries both |
 | `area:` | existing taxonomy + `security` | routing; any number |
-| flags | `P0` · `good-first` | strict meanings; never inflate |
+| flags | `P0` · `good first issue` · `help wanted` | strict meanings; never inflate. **Canonical spellings — `good first issue` and `help wanted`, with spaces, are the only accepted forms** (GitHub's newcomer-discovery UI promotes exactly these names); hyphenated or underscored variants (`good-first`, `good-first-issue`, `help-wanted`) are never created and never applied |
 
 Invariants the bots enforce: one `state:` at all times; illegal transitions reverted; `ready`
 maintainer-only on a passing template check; `claimed` only with a live lease; a PR merges only if
