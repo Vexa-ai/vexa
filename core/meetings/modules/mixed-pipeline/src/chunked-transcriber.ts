@@ -113,6 +113,10 @@ const SHORT_UI_SWITCH_GAP_MS = Number((typeof process !== 'undefined' && process
  *  Hysteresis, so two near-tied names cannot thrash segment by segment. Tunable via
  *  VEXA_REATTRIBUTE_MIN_CONFIDENCE. */
 const REATTRIBUTE_MIN_CONFIDENCE = Number((typeof process !== 'undefined' && process.env?.VEXA_REATTRIBUTE_MIN_CONFIDENCE) || 0.75);
+/** Share of the lit-time over a turn's window that ONE name must hold before the late-box
+ *  claim will hand it that turn. Below this the tiles disagree too much to name the turn from
+ *  the UI alone and it stays provisional ("Speaker"). Tunable via VEXA_CLAIM_MIN_SHARE. */
+const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.VEXA_CLAIM_MIN_SHARE) || 0.6);
 
 export interface ChunkSegment {
   text: string;
@@ -376,7 +380,35 @@ export class ChunkedTranscriber {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
       if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
-      if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
+      // Late-box gap. The turn could not be window-matched, and the claim used to go to
+      // WHICHEVER NAME'S HINT HAPPENED TO FIRE — regardless of whether that name was lit
+      // during the turn at all. On Teams, where the tile lights on NOISE, a participant who
+      // is TYPING emits hints continuously and therefore won this race almost every time.
+      // That is what produced m24's label distribution (Jacob 65 : Dmitry 1 on a balanced
+      // two-speaker conversation) and it is fabrication: an unnameable turn was given a
+      // confident name chosen by timing rather than by evidence.
+      //
+      // Claim by the accumulated lit-time over the TURN's own window instead, and only when
+      // one name holds a clear plurality of it (CLAIM_MIN_SHARE). When both tiles were lit
+      // through the turn — the genuinely ambiguous case Teams cannot disambiguate from one
+      // mixed stream — the turn stays provisional and publishes as "Speaker". Unknown stays
+      // unknown.
+      //
+      // The genuine late-box gap is the case where NO tile was lit during the turn at all —
+      // the platform reported the speaker only after the fact. That one still claims for the
+      // hint that just fired, exactly as before. The change bites only when the turn window
+      // DOES carry hint evidence, which is precisely when "whoever fired last" was choosing
+      // against the record.
+      let claimName: string | null = null;
+      if (u.t1 >= claimFrom) {
+        const evidence = this.binder.support({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+        if (evidence.length === 0) claimName = name;                       // true late box — unchanged
+        else {
+          const lead = evidence.find((s) => !blocked.has(s.name));
+          if (lead && lead.share >= CLAIM_MIN_SHARE) claimName = lead.name;   // the record, not the race
+        }
+      }
+      if (claimName && !blocked.has(claimName)) { this.claimTurn(u.clusterId, claimName); matchedNow = true; }
       else still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
