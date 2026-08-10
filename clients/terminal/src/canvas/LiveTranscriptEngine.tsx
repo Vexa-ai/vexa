@@ -13,11 +13,18 @@
 import { useEffect, useRef, useState } from "react";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
 import { entityColor } from "../ui-kit/docLinks";
+import { usePlaybackSync } from "./playbackSync";
 
 export interface EngineTag { label: string; kind: string }
 export interface EngineEntity { id?: string; label: string; kind: string; docPath?: string }
 export interface EngineSignal { id: string; kind: string; label: string }
-export interface EngineSegment { speaker?: string; text: string; tsMs?: number; id?: string; completed?: boolean; tags?: EngineTag[] }
+export interface EngineSegment { speaker?: string; text: string; ts?: number | string; tsMs?: number; id?: string; completed?: boolean; tags?: EngineTag[] }
+
+/** Relative seconds → m:ss, the recording-clock label a recorded line seeks to. */
+function fmtClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 export interface EngineActions {
   research?(entity: { id?: string; name: string; kind: string }): void;
@@ -137,12 +144,15 @@ function BlockText({ text, entities, actions }: { text: string; entities?: Engin
 
 export function LiveTranscriptEngine({
   segments,
+  live: isLive,
   emptyLabel = "Waiting for transcript…",
   entities,
   signals,
   actions,
 }: {
   segments: EngineSegment[];
+  /** Live meeting → auto-scroll follows the growing transcript. */
+  live?: boolean;
   emptyLabel?: string;
   entities?: EngineEntity[];
   signals?: EngineSignal[];
@@ -150,12 +160,12 @@ export function LiveTranscriptEngine({
 }) {
   // Confirmed (completed !== false) = stable. Merge consecutive same-speaker confirmed segments into
   // flowing blocks; keyword tags accumulate per block. Pending (completed === false) = the live edge.
-  const blocks: { speaker?: string; tsMs?: number; text: string; key: string; tags: EngineTag[] }[] = [];
+  const blocks: { speaker?: string; ts?: number | string; tsMs?: number; text: string; key: string; tags: EngineTag[] }[] = [];
   for (const s of segments) {
     if (s.completed === false) continue;
     const last = blocks[blocks.length - 1];
     if (last && last.speaker === s.speaker) { last.text += " " + s.text; if (s.tags) last.tags.push(...s.tags); }
-    else blocks.push({ speaker: s.speaker, tsMs: s.tsMs, text: s.text, key: s.id ?? `b${blocks.length}`, tags: [...(s.tags ?? [])] });
+    else blocks.push({ speaker: s.speaker, ts: s.ts, tsMs: s.tsMs, text: s.text, key: s.id ?? `b${blocks.length}`, tags: [...(s.tags ?? [])] });
   }
   const lastPending = [...segments].reverse().find((s) => s.completed === false);
   const live = (lastPending?.text ?? "").trim();
@@ -165,17 +175,89 @@ export function LiveTranscriptEngine({
   const liveJoinsLast = !!live && !!lastBlock && lastBlock.speaker === liveSpeaker;
   const liveOwnBlock = !!live && !liveJoinsLast;
 
+  const sync = usePlaybackSync();
+  const clickable = !!sync?.hasPlayer;   // a recording is loaded → lines seek it on click
+
+  // Each block's start in RELATIVE seconds (the media clock). A RECORDED line's `ts` is an ABSOLUTE epoch
+  // (seconds); anchor it to the recording's TRUE start when the player knows it (recStartMs = end −
+  // duration), else the earliest line. Live lines carry relative `ts` + absolute `tsMs`; they have no
+  // player, so anchorSec ≈ their own earliest value and startSec is unused (live display uses tsMs).
+  const tsSecOf = (b: { ts?: number | string }): number | undefined => {
+    const t = typeof b.ts === "string" ? parseFloat(b.ts) : b.ts;
+    return typeof t === "number" && Number.isFinite(t) ? t : undefined;
+  };
+  const minTsSec = blocks.reduce<number | null>((m, b) => { const t = tsSecOf(b); return t != null ? (m == null ? t : Math.min(m, t)) : m; }, null);
+  const maxTsSec = blocks.reduce<number | null>((m, b) => { const t = tsSecOf(b); return t != null ? (m == null ? t : Math.max(m, t)) : m; }, null);
+  const recStartSec = (sync?.recStartMs != null && Number.isFinite(sync.recStartMs)) ? sync.recStartMs / 1000 : null;
+  // Trust the player's recording-start anchor only when it's a sane lower bound within the meeting span —
+  // a PRE-FIX recording carries a bogus first_chunk_at (master-assembly time, well after the meeting), and
+  // anchoring to that would collapse every line to 0. Otherwise fall back to the earliest line.
+  const anchorSec = (recStartSec != null && (maxTsSec == null || recStartSec <= maxTsSec + 60)) ? recStartSec : minTsSec;
+  const anchorMs = blocks.reduce<number | null>((m, b) => (typeof b.tsMs === "number" ? (m == null ? b.tsMs : Math.min(m, b.tsMs)) : m), null);
+  const startSecOf = (b: { ts?: number | string; tsMs?: number }): number | undefined => {
+    const t = tsSecOf(b);
+    if (t != null && anchorSec != null) return Math.max(0, t - anchorSec);
+    return typeof b.tsMs === "number" && anchorMs != null ? (b.tsMs - anchorMs) / 1000 : undefined;
+  };
+  // Read by the playback subscriber (which is set up once) — always the latest block times.
+  const startSecsRef = useRef<(number | undefined)[]>([]);
+  startSecsRef.current = blocks.map(startSecOf);
+
+  // ── Live auto-scroll: stick to the bottom while pinned there; detach on scroll-up, re-attach at bottom.
+  const [pinned, setPinned] = useState(true);
+  const pinnedRef = useRef(true); pinnedRef.current = pinned;
+  useEffect(() => {
+    const el = sync?.scrollerRef.current;
+    if (!isLive || !el) return;
+    const onScroll = () => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 120;
+      if (nearBottom !== pinnedRef.current) setPinned(nearBottom);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [isLive, sync]);
+  useEffect(() => {
+    const el = sync?.scrollerRef.current;
+    if (!isLive || !el || !pinnedRef.current) return;
+    requestAnimationFrame(() => { const s = sync?.scrollerRef.current; if (s && pinnedRef.current) s.scrollTop = s.scrollHeight; });
+  }, [isLive, sync, blocks.length, live]);
+
+  // ── Playback follow (recorded): track the block under the play head; re-render only when it CHANGES.
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const activeElRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!clickable || !sync) { setActiveIdx(-1); return; }
+    let cur = -1;
+    const findActive = (sec: number): number => {
+      const secs = startSecsRef.current;
+      let idx = -1;
+      for (let i = 0; i < secs.length; i++) { const s = secs[i]; if (typeof s === "number") { if (s <= sec + 0.25) idx = i; else break; } }
+      return idx;
+    };
+    return sync.subscribeTime((sec, playing) => {
+      const idx = (playing || sec > 0.05) ? findActive(sec) : -1;
+      if (idx !== cur) { cur = idx; setActiveIdx(idx); }
+    });
+  }, [clickable, sync]);
+  // Ease the active line into view when it changes (not on every tick).
+  useEffect(() => {
+    if (activeIdx < 0) return;
+    requestAnimationFrame(() => activeElRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }, [activeIdx]);
+
   if (!blocks.length && !live) {
     return <div style={{ color: "var(--t3)", fontSize: 13, padding: "8px 2px" }}>{emptyLabel}</div>;
   }
 
-  const head = (speaker?: string, tsMs?: number) =>
+  const head = (speaker?: string, tsMs?: number, startSec?: number) =>
     speaker ? (
       <div style={{ fontSize: 12, fontWeight: 700, color: "var(--t2)", marginBottom: 3 }}>
         {speaker}
-        {typeof tsMs === "number" && (
+        {typeof tsMs === "number" ? (
           <span style={{ fontWeight: 400, color: "var(--t3)", marginLeft: 8 }}>{new Date(tsMs).toLocaleTimeString()}</span>
-        )}
+        ) : typeof startSec === "number" ? (
+          <span style={{ fontWeight: 400, color: clickable ? "var(--accent)" : "var(--t3)", marginLeft: 8, fontVariantNumeric: "tabular-nums" }}>{fmtClock(startSec)}</span>
+        ) : null}
       </div>
     ) : null;
 
@@ -209,7 +291,7 @@ export function LiveTranscriptEngine({
           const hue = SIGNAL_HUE[sig.kind] ?? "var(--t2)";
           return (
             <button key={sig.id} type="button" title={`${sig.kind}: ${sig.label}`}
-              onClick={() => actions?.onSignal?.(sig)}
+              onClick={(e) => { e.stopPropagation(); actions?.onSignal?.(sig); }}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11,
                 color: hue, border: `1px solid ${hue}`, background: "transparent", borderRadius: 6,
@@ -228,9 +310,23 @@ export function LiveTranscriptEngine({
     <div style={{ display: "flex", flexDirection: "column", gap: 13, maxWidth: 760 }}>
       {blocks.map((b, idx) => {
         const isLast = idx === blocks.length - 1;
+        const startSec = startSecOf(b);
+        const isActive = idx === activeIdx;
+        const canSeek = clickable && typeof startSec === "number";
         return (
-          <div key={b.key}>
-            {head(b.speaker, b.tsMs)}
+          <div
+            key={b.key}
+            ref={isActive ? activeElRef : undefined}
+            onClick={canSeek ? () => sync!.seekTo(startSec!) : undefined}
+            title={canSeek ? `Jump to ${fmtClock(startSec!)}` : undefined}
+            style={{
+              cursor: canSeek ? "pointer" : undefined,
+              borderLeft: `2px solid ${isActive ? "var(--accent)" : "transparent"}`,
+              background: isActive ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
+              borderRadius: 6, padding: "2px 8px", margin: "0 -8px", transition: "background 120ms",
+            }}
+          >
+            {head(b.speaker, b.tsMs, startSec)}
             <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6 }}>
               <BlockText text={b.text} entities={entities} actions={actions} />
               {isLast && liveJoinsLast && (
@@ -243,11 +339,25 @@ export function LiveTranscriptEngine({
         );
       })}
       {liveOwnBlock && (
-        <div>
+        <div style={{ padding: "2px 8px", margin: "0 -8px" }}>
           {head(liveSpeaker)}
           <div style={{ fontSize: 13.5, color: "var(--t3)", lineHeight: 1.6, fontStyle: "italic" }}>{live} …</div>
           {signalBadges(true)}
         </div>
+      )}
+      {isLive && !pinned && (
+        <button
+          type="button"
+          onClick={() => { const s = sync?.scrollerRef.current; if (s) s.scrollTop = s.scrollHeight; setPinned(true); }}
+          style={{
+            position: "sticky", bottom: 8, alignSelf: "center", cursor: "pointer",
+            background: "var(--accent)", color: "var(--on-accent)", border: "none",
+            borderRadius: 999, padding: "4px 13px", fontSize: 12, fontWeight: 600,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.22)",
+          }}
+        >
+          ↓ Jump to latest
+        </button>
       )}
     </div>
   );
