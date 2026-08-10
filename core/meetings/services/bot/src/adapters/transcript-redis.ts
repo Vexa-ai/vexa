@@ -16,6 +16,7 @@
 import { createClient } from 'redis';
 import type { TranscriptSegment } from '../contracts.js';
 import type { TranscriptSink } from '../ports.js';
+import { makeLazyConnect } from './redis-lazy-connect.js';
 
 /** The redis stream the collector consumes (durable transcript.v1 feed). */
 export const TRANSCRIPTION_STREAM = 'transcription_segments';
@@ -82,30 +83,23 @@ export function redisClientFrom(redisUrl: string): LiveRedisTranscriptClient {
   client.on('error', (err: unknown) => {
     console.error(`[bot] redis (transcript) error: ${(err as Error)?.message ?? String(err)}`);
   });
-  let connected = false;
-  const ensure = async (): Promise<void> => {
-    if (!connected) {
-      await client.connect();
-      connected = true;
-    }
-  };
+  // Idempotent lazy connect (shared with the acts subscriber): concurrent first-use callers share
+  // ONE connect(), so the "Socket already opened" first-use race can't recur. See redis-lazy-connect.ts.
+  const lazy = makeLazyConnect(client);
   return {
     async xAdd(key, id, fields) {
-      await ensure();
+      await lazy.ensure();
       return client.xAdd(key, id, fields);
     },
     async publish(channel, message) {
-      await ensure();
+      await lazy.ensure();
       return client.publish(channel, message);
     },
     async connect() {
-      await ensure();
+      await lazy.ensure();
     },
     async quit() {
-      if (connected) {
-        await client.quit();
-        connected = false;
-      }
+      await lazy.quit();
     },
   };
 }

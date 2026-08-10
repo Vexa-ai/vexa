@@ -102,6 +102,9 @@ def build_production_app():
 
     runtime_http = httpx.AsyncClient(timeout=30.0)
     runtime_client = HttpRuntimeClient(runtime_http, runtime_api_url)
+    from .service_authority import build_service_authority_from_env
+
+    service_authority = build_service_authority_from_env()
 
     recording_repo = SqlAlchemyRecordingRepo(session_factory)
     storage = S3Storage(
@@ -124,6 +127,16 @@ def build_production_app():
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
+    from .webhooks import build_system_webhook_from_env
+
+    system_webhook_sink = build_system_webhook_from_env(redis_client)
+
+    # #841: the per-user delivery ledger — the queryable record GET /webhooks/deliveries serves.
+    # A per-user capped Redis list; the lifecycle callback records each delivery outcome so the
+    # dashboard's Delivery History reflects real deliveries, not just its own Test button.
+    from .webhooks import RedisDeliveryLedger
+
+    delivery_ledger = RedisDeliveryLedger(redis_client)
 
     # Completion finalization: when the lifecycle FSM lands on a terminal status the callback runs
     # this — flush the meeting's remaining redis segments to Postgres (threshold 0) + persist the
@@ -131,8 +144,8 @@ def build_production_app():
     # the next db-writer tick happens to run`).
     from .collector.db_writer import finalize_meeting
 
-    async def _transcript_finalizer(meeting_id: int) -> None:
-        await finalize_meeting(redis_client, transcript_store, meeting_id)
+    async def _transcript_finalizer(meeting_id: int) -> int:
+        return await finalize_meeting(redis_client, transcript_store, meeting_id)
 
     # Calendar-sync user edges (GET/POST /user/calendar/sync): the SAME one-user pass the
     # background sweep runs, on demand — paste-a-feed gets an immediate result instead of a
@@ -174,6 +187,7 @@ def build_production_app():
         redis=segment_bus,
         meeting_repo=meeting_repo,
         runtime=runtime_client,
+        service_authority=service_authority,
         recording_repo=recording_repo,
         storage=storage,
         token_secret=token_secret,
@@ -181,6 +195,8 @@ def build_production_app():
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
+        system_webhook_sink=system_webhook_sink,
+        delivery_ledger=delivery_ledger,
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
@@ -188,6 +204,8 @@ def build_production_app():
 
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        service_authority=service_authority,
+        system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
     )
     return app
@@ -204,7 +222,7 @@ def _minio_endpoint_url() -> str:
 
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
-    session_factory=None,
+    service_authority=None, system_webhook_sink=None, session_factory=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -237,6 +255,11 @@ def _attach_background_loops(
     db_writer_interval = float(
         os.getenv("DB_WRITER_INTERVAL_S", os.getenv("BACKGROUND_TASK_INTERVAL", "10"))
     )
+    # #893: the self-healing keyspace SCAN is OFF the 10s hot path. The active_meetings set is
+    # authoritative in steady state, so a tick sweeps the set alone; the O(keyspace) scan that
+    # self-heals a set/hash divergence runs only on startup + every this-many seconds. The per-tick
+    # scan saturated redis and starved /health, restarting healthy pods.
+    db_writer_reconcile_interval = float(os.getenv("DB_WRITER_RECONCILE_INTERVAL_S", "300"))
     # Stop-reconcile backstop: a meeting whose bot was told to leave but never sent its own terminal
     # callback would stay `stopping` forever. After a grace window, complete it through the same
     # lifecycle callback the bot uses — so the FSM, webhook, and ws status frame all fire identically.
@@ -244,17 +267,32 @@ def _attach_background_loops(
     stop_interval = float(os.getenv("STOP_RECONCILE_INTERVAL_S", "15"))
     # GENERAL reconcile: ANY non-terminal status whose bot is gone (its row quiet past the grace) is
     # converged to a terminal state through the same lifecycle callback. `stopping` uses stop_grace
-    # (a stop was requested); `active`/etc. use `active_grace`. The active-reap is ADDITIONALLY gated on
-    # runtime WORKLOAD liveness (reconcile.py `_bot_workload_gone`): a meeting whose bot workload is still
+    # (a stop was requested); `active`/etc. use `active_grace`. The reap is ADDITIONALLY gated on
+    # runtime WORKLOAD liveness (reconcile.py `_probe_bot_workload`): a meeting whose bot workload is still
     # alive is NEVER reaped, even past the grace — so a quiet-but-live (silent) bot is safe regardless of
     # this window. With that gate in place, 300s is a SANE default again (the 86400 env stopgap, which
     # only worked because it disabled the time-based reap entirely, is no longer needed).
     active_grace = float(os.getenv("RECONCILE_ACTIVE_GRACE_S", "300"))
+    # A bot that has NOT yet reached the meeting gets its OWN, longer window (#862). The control plane
+    # hands every spawn a lobby budget (`waitingRoomTimeout`) and the bot reports `awaiting_admission`
+    # exactly ONCE before polling silently for the rest of it — so a HEALTHY bot waiting to be let in
+    # is indistinguishable from a dead one for the whole wait, and OUR patience has to outlast the
+    # deadline WE issued. Hence a floor DERIVED from that budget (+60s of headroom for the bot's own
+    # terminal callback to land) rather than a second number free to drift under it. The liveness
+    # gate is the primary defence; this is the belt for an inconclusive probe.
+    from .lifecycle.reconcile import default_preactive_grace
+
+    preactive_grace = float(
+        os.getenv("RECONCILE_PREACTIVE_GRACE_S", str(default_preactive_grace()))
+    )
     # Bounded untracked escalation (the zombie-loop fix): a meeting whose workload stays UNTRACKED
     # (runtime 404) CONTINUOUSLY past this window — no runtime re-adoption, no bot callback — is
     # presumed lost (runtime restart on the process backend / external removal) and advanced to
     # `failed` with the evidence note, instead of retrying an error + dead DELETE every sweep forever.
     untracked_grace = float(os.getenv("MEETING_UNTRACKED_GRACE_SEC", "600"))
+    service_authority_interval = float(
+        os.getenv("SERVICE_AUTHORITY_SWEEP_INTERVAL_S", "15")
+    )
 
     # #527: per-loop liveness heartbeats. A loop hung inside an await stops stamping, so /health can
     # SEE a dead consumer that would otherwise look alive (live WS keeps flowing on a SEPARATE path —
@@ -311,16 +349,25 @@ def _attach_background_loops(
         if not hasattr(transcript_store, "upsert_segments"):
             return  # a store without a durable sink (bare fake) — nothing to flush into
 
-        async def _tick():
-            await db_writer_tick(redis_client, transcript_store)
+        # #893: reconcile (the O(keyspace) self-healing scan) only on the FIRST tick — catch any
+        # mid-upgrade orphan hash on boot — then at most every db_writer_reconcile_interval seconds.
+        # Every other tick sweeps the authoritative active_meetings set alone, no scan.
+        last_reconcile = [0.0]  # 0 ⇒ the first tick reconciles
+
+        async def _tick(reconcile: bool):
+            await db_writer_tick(redis_client, transcript_store, reconcile=reconcile)
 
         while True:
+            now = _time.monotonic()
+            do_reconcile = (now - last_reconcile[0]) >= db_writer_reconcile_interval
             try:
-                await _guarded("db-writer", _tick)  # #637: one flush per interval across replicas
+                await _guarded("db-writer", lambda: _tick(do_reconcile))  # #637: one flush/interval
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("db-writer tick failed")
+            if do_reconcile:
+                last_reconcile[0] = now  # bound the scan cadence per replica, run or guarded-skip
             ticks["db-writer"] = _time.monotonic()  # #527: alive this iteration
             await asyncio.sleep(db_writer_interval)
 
@@ -340,6 +387,8 @@ def _attach_background_loops(
 
         async def _tick():
             await drain_retry_queue(redis_client, _transport)
+            if system_webhook_sink is not None:
+                await system_webhook_sink.drain()
 
         while True:
             try:
@@ -388,7 +437,7 @@ def _attach_background_loops(
                 await reconcile_stale_nonterminal_sweep(
                     meeting_repo, runtime, _post_lifecycle,
                     stop_grace=stop_grace, active_grace=active_grace, log=log,
-                    untracked_grace=untracked_grace,
+                    preactive_grace=preactive_grace, untracked_grace=untracked_grace,
                 )
             await reconcile_stale_stopping_sweep(
                 meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
@@ -402,6 +451,41 @@ def _attach_background_loops(
             except Exception:
                 log.exception("stop-reconcile tick failed")
             await asyncio.sleep(stop_interval)
+
+    async def _service_authority_loop() -> None:
+        if (
+            service_authority is None
+            or not getattr(service_authority, "configured", False)
+            or meeting_repo is None
+            or runtime is None
+        ):
+            return
+        from .service_authority import run_service_authority_sweep
+
+        async def _tick():
+            observation = await run_service_authority_sweep(
+                meeting_repo,
+                runtime,
+                service_authority,
+            )
+            if observation.faults:
+                log.warning(
+                    "service-authority sweep faults=%s decisions=%s "
+                    "teardowns_confirmed=%s",
+                    observation.faults,
+                    observation.decisions,
+                    observation.teardowns_confirmed,
+                )
+
+        while True:
+            try:
+                await _guarded("service-authority", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("service-authority sweep failed")
+            ticks["service-authority"] = _time.monotonic()
+            await asyncio.sleep(service_authority_interval)
 
     # Auto-join: "scheduled" means the bot joins. The sweep spawns a bot for every scheduled row
     # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
@@ -458,6 +542,7 @@ def _attach_background_loops(
         async def _tick():
             await auto_join_tick(
                 meeting_repo, runtime,
+                authority=service_authority,
                 fetch_bot_context=fetch_bot_context,
                 publish_status=publish_status,
                 lead_s=auto_join_lead, grace_s=auto_join_grace,
@@ -528,6 +613,10 @@ def _attach_background_loops(
             asyncio.create_task(_db_writer_loop(), name="db-writer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
+            asyncio.create_task(
+                _service_authority_loop(),
+                name="service-authority",
+            ),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
         ]

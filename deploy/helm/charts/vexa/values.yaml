@@ -43,13 +43,16 @@ global:
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
-# VEXA_DISPATCH_SIGNING_KEY, VEXA_BOT_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-# ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
+# VEXA_SERVICE_AUTHORITY_SECRET, VEXA_SYSTEM_WEBHOOK_SECRET, VEXA_DISPATCH_SIGNING_KEY,
+# VEXA_BOT_API_KEY, ANTHROPIC_API_KEY,
+# ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
 secrets:
   existingSecretName: ""
   adminApiToken: "CHANGE_ME"        # admin-api auth + MeetingToken signing (== meeting-api ADMIN_TOKEN)
   internalApiSecret: ""             # gateway↔admin-api↔meeting-api internal calls (default vexa-internal-secret)
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots
+  serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
+  systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
@@ -178,6 +181,15 @@ meetingApi:
     port: 8080
   defaultBotName: ""        # server-side fallback when POST /bots omits bot_name
   transcriptionServiceUrl: ""   # STT endpoint the spawned bot transcribes against (empty ⇒ capture only)
+  # Optional service-authority.v1 adapter JSON. Empty preserves stock OSS allow-all. A configured
+  # authority must use failure_policy=closed and mode=enforce|observe; the secret lives under
+  # secrets.serviceAuthoritySecret or the existing Secret key VEXA_SERVICE_AUTHORITY_SECRET.
+  serviceAuthorityConfig: ""
+  # Optional boot-frozen operator callback for terminal meeting facts. This is separate from
+  # customer webhook configuration; private HTTP requires the explicit deployment opt-in.
+  systemWebhookUrl: ""
+  systemWebhookAllowPrivateHttp: "false"
+  systemWebhookTimeoutSeconds: "10"
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
   # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.
@@ -224,6 +236,8 @@ runtime:
     confirmThreshold: ""
     maxBufferSec: ""
     idleTimeoutSec: ""
+  # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
+  aloneSilenceWindowMs: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
@@ -365,7 +379,10 @@ postgres:
 
 redis:
   enabled: true
-  image: redis:7-alpine
+  # Valkey (BSD-3 fork of Redis 7.2.4) — engine parity with Lite/compose and off source-available
+  # Redis ≥7.4. Wire-compatible (RESP): the `redis.*` keys, redisConfig.url, and the durability
+  # helper are unchanged so existing values overrides keep working; only the engine swaps (#653).
+  image: valkey/valkey:8-alpine
   service:
     port: 6379
   persistence:

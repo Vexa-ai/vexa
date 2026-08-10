@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/meetings/service-authority.v1/service-authority.schema.json",
+  "title": "Vexa service authority v1",
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_id",
+        "action",
+        "request_id",
+        "service_identity",
+        "service_mode",
+        "transcription_provider",
+        "lifecycle_contract_version",
+        "active_concurrency"
+      ],
+      "properties": {
+        "user_id": { "type": "integer", "minimum": 1 },
+        "action": { "enum": ["admit", "continue"] },
+        "request_id": { "type": "string", "minLength": 1 },
+        "service_identity": { "type": "string", "minLength": 1 },
+        "service_mode": { "const": "bot" },
+        "transcription_provider": {
+          "enum": ["vexa", "customer", "none"]
+        },
+        "lifecycle_contract_version": { "const": "2026-07-28" },
+        "active_concurrency": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admitted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "boundary_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "action": { "const": "admit" } },
+            "required": ["action"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["admitted_at"] },
+                { "required": ["boundary_at"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "action": { "const": "continue" } },
+            "required": ["action"]
+          },
+          "then": {
+            "required": ["admitted_at", "boundary_at"]
+          }
+        }
+      ]
+    },
+    "Decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_version",
+        "decision_id",
+        "request_id",
+        "service_identity",
+        "allow",
+        "reason",
+        "decided_at"
+      ],
+      "properties": {
+        "authority_version": { "const": "service-authority.v1" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string", "minLength": 1 },
+        "service_identity": { "type": "string", "minLength": 1 },
+        "allow": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1 },
+        "decided_at": { "type": "string", "format": "date-time" },
+        "stop_scope": {
+          "type": ["string", "null"],
+          "enum": ["billable_service", null]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "allow": { "const": true } },
+            "required": ["allow"]
+          },
+          "then": {
+            "properties": { "stop_scope": { "type": "null" } }
+          }
+        }
+      ]
+    }
+  }
+}

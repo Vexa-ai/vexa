@@ -58,6 +58,17 @@ def test_fixture_normal():
     assert {e["source"] for e in rec.status_transition} == {"bot_callback"}
 
 
+def test_fixture_uses_producer_timestamp_for_transition_fact():
+    sink = LifecycleSink(store=MeetingStore())
+    emitted_at = "2026-07-28T10:00:10.000Z"
+
+    rec = sink.apply(
+        {"connection_id": "sess-time", "status": "joining", "timestamp": emitted_at}
+    )
+
+    assert rec.status_transition[-1]["timestamp"] == emitted_at
+
+
 # ── 2. start-then-immediate-user-stop ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("stop_at", ["joining", "awaiting_admission"])

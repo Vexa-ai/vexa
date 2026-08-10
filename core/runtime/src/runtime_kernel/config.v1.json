@@ -114,6 +114,13 @@
    "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
   },
   {
+   "key": "BOT_ALONE_SILENCE_WINDOW_MS",
+   "class": "defaulted",
+   "default": "600000",
+   "description": "active-phase remote-audio silence window before completed(left_alone); forwarded to spawned bots when set",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "BOT_SPEAKER_MIN_AUDIO_SEC",
    "class": "defaulted",
    "default": "(unset — bot default)",

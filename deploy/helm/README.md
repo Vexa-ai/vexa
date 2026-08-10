@@ -2,7 +2,7 @@
 
 The `helm` target of the lite/compose/helm trio: the full v0.12 stack as a Kubernetes release —
 the control plane **gateway · admin-api · meeting-api · runtime · agent-api**, the **terminal** web
-UI, and infra (`postgres:17` · `redis:7` · `minio` + a `minio-init` bucket Job). The **terminal** is
+UI, and infra (`postgres:17` · `valkey:8` · `minio` + a `minio-init` bucket Job). The **terminal** is
 the human front door (Next.js; proxies `/ws` → gateway and REST/login → agent-api/admin-api
 server-side); the gateway stays the API front door for programmatic use. The difference from compose
 is the **spawn substrate**: on k8s the `runtime` launches the bot and agent-worker as **Pods** (via

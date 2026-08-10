@@ -17,7 +17,33 @@
  * Google's bot-detection layer and directly cause the "You can't join this meeting"
  * interstitial on datacenter egress IPs. Meet uses valid TLS; init-scripts inject via
  * CDP (unaffected by CSP). --disable-blink-features=AutomationControlled replaces them.
+ *
+ * #856 (2026-07-23): the browser UI locale is now PINNED. We never used to tell
+ * the browser what language to be, so Google Meet localised from Accept-Language
+ * or IP geolocation and served non-English lobbies on EU/other egress — the root
+ * cause of the join-button-not-found class (#846). `--lang` / `--accept-lang`
+ * pin Chrome's own UI + Accept-Language header; the Playwright context `locale`
+ * (remote-browser/browser.ts) pins navigator.language. The pinned value is a
+ * deployment knob — BOT_UI_LOCALE, default en-US — so a deployment that genuinely
+ * wants another UI language can set it. This is what makes the English lobby
+ * selectors correct BY CONSTRUCTION rather than lucky.
  */
+
+/** The pinned browser UI locale (#856). Deployment knob; default en-US. */
+export function resolveBotUiLocale(): string {
+  const v = (process.env.BOT_UI_LOCALE || "").trim();
+  return v.length > 0 ? v : "en-US";
+}
+
+/** `--lang` / `--accept-lang` flags for the pinned UI locale (#856). Kept out of
+ *  the static array below because they resolve an env knob at call time. */
+export function getLocaleBrowserArgs(): string[] {
+  const locale = resolveBotUiLocale();
+  const primaryLang = locale.split("-")[0];
+  const acceptLang = primaryLang && primaryLang !== locale ? `${locale},${primaryLang}` : locale;
+  return [`--lang=${locale}`, `--accept-lang=${acceptLang}`];
+}
+
 export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--incognito",
   "--no-sandbox",
@@ -44,7 +70,9 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--disable-site-isolation-trials",
 ];
 
-/** The canonical join launch args, as a fresh mutable array per call. */
+/** The canonical join launch args, as a fresh mutable array per call. Includes
+ *  the pinned-locale flags (#856) so every launch path — production bot and the
+ *  debug harness — is byte-identical and speaks the same UI language. */
 export function getJoinBrowserArgs(): string[] {
-  return [...JOIN_BROWSER_ARGS];
+  return [...JOIN_BROWSER_ARGS, ...getLocaleBrowserArgs()];
 }

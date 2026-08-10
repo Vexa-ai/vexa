@@ -13,6 +13,7 @@
 import { createClient } from 'redis';
 import { actsChannel, parseAct, type Act } from '../contracts.js';
 import type { ActsSource } from '../ports.js';
+import { makeLazyConnect } from './redis-lazy-connect.js';
 
 /** The minimal subscriber surface the source needs — injected so the adapter is offline-provable.
  *  `subscribe(channel, cb)` delivers each raw message string to `cb`. */
@@ -82,30 +83,23 @@ export function redisActsClientFrom(redisUrl: string): LiveRedisActsClient {
   client.on('error', (err: unknown) => {
     console.error(`[bot] redis (acts) error: ${(err as Error)?.message ?? String(err)}`);
   });
-  let connected = false;
-  const ensure = async (): Promise<void> => {
-    if (!connected) {
-      await client.connect();
-      connected = true;
-    }
-  };
+  // Idempotent lazy connect (shared with the transcript writer): concurrent first-use callers share
+  // ONE connect(), so the "Socket already opened" first-use race can't recur. See redis-lazy-connect.ts.
+  const lazy = makeLazyConnect(client);
   return {
     async subscribe(channel, cb) {
-      await ensure();
+      await lazy.ensure();
       // node-redis v4: subscribe(channel, listener) — listener receives the message string.
       await client.subscribe(channel, (message: string) => cb(message));
     },
     async unsubscribe(channel) {
-      if (connected) await client.unsubscribe(channel);
+      if (client.isOpen) await client.unsubscribe(channel);
     },
     async connect() {
-      await ensure();
+      await lazy.ensure();
     },
     async quit() {
-      if (connected) {
-        await client.quit();
-        connected = false;
-      }
+      await lazy.quit();
     },
   };
 }

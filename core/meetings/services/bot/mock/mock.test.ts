@@ -19,6 +19,7 @@ import { canTransition, type Act, type BotStatus, type CompletionReason, type Li
 import type { ActsSource, LifecycleSink, TranscriptSink } from '../src/ports.js';
 import type { Invocation } from '../src/config.js';
 import { SCENARIOS, type Scenario, type ScenarioName, fakeJoinDriver, fakePipeline, mockSegment } from './scenarios.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource } from '../src/aloneness.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -60,6 +61,7 @@ const EXPECT: Record<ScenarioName, Expect> = {
   'join-timeout':    { status: 'failed', reason: 'awaiting_admission_timeout', stage: 'awaiting_admission' },
   'reject':          { status: 'failed', reason: 'awaiting_admission_rejected', stage: 'awaiting_admission' },
   'crash':           { status: 'failed', reason: 'join_failure', stage: 'active' },
+  'silence-left-alone': { status: 'completed', reason: 'left_alone' },
 };
 
 async function drive(sc: Scenario, exp: Expect) {
@@ -77,7 +79,12 @@ async function drive(sc: Scenario, exp: Expect) {
     segGapMs: 1,
     endAfterMs: sc.endAfterMs != null ? 15 : undefined,   // fast self-end; immediate-stop keeps undefined → backend drives it
   });
-  const o = createOrchestrator(INV, { lifecycle, join, pipeline, acts });
+  const activity = createRemoteAudioActivityTap();
+  const aloneness = sc.silenceAlone
+    ? createSilenceAlonenessSource({ activity, windowMs: 15, pollMs: 1, log: () => {} })
+    : { onAlone() { return () => {}; } };
+  if (sc.silenceAlone) activity.ready();
+  const o = createOrchestrator(INV, { lifecycle, join, pipeline, acts, aloneness });
   stopRef = o.stop;
   const runP = o.run();
   if (exp.leaveAfter != null) setTimeout(() => { void o.handle({ action: 'leave' } as Act); }, exp.leaveAfter);

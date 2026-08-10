@@ -49,7 +49,7 @@ jobs:
       # only lane these files run in. Kept here, beside the gates they cover, rather than in the
       # node job, whose install/build cost buys them nothing.
       - name: gate script tests
-        run: node --test scripts/*.test.mjs
+        run: node --test scripts/*.test.mjs release/*.test.mjs
 
   python:
     runs-on: ubuntu-latest

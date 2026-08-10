@@ -13,6 +13,14 @@
       "status": "completed",
       "completion_reason": "stopped",
       "failure_stage": null,
+      "service_provenance": {
+        "bot_admitted_at": "2026-06-18T10:00:00.000Z",
+        "bot_departed_at": "2026-06-18T10:42:00.000Z",
+        "bot_outcome": "served",
+        "transcription_provider": "customer",
+        "transcription_outcome": "served",
+        "lifecycle_contract_version": "2026-07-28"
+      },
       "start_time": "2026-06-18T10:00:00.000Z",
       "end_time": "2026-06-18T10:42:00.000Z",
       "data": { "name": "Weekly sync" },

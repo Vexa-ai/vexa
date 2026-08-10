@@ -8,10 +8,13 @@ The golden identity flow against an ephemeral Postgres, asserting the REAL admin
   invalid scope 422 → admin-tier auth enforced.
 """
 import asyncio
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from admin_api.app import db as app_db
 from admin_api.app.main import create_app
@@ -126,6 +129,367 @@ def test_new_user_defaults_to_3_bots(client):
     assert v["max_concurrent"] == 3
 
 
+def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={
+            "email": "by-id@vexa.ai",
+            "name": "By ID",
+            "max_concurrent_bots": 7,
+        },
+    ).json()
+    assert created["data"] == {}
+
+    found = client.get(f"/admin/users/{created['id']}", headers=_admin())
+    assert found.status_code == 200, found.text
+    assert found.json() == created
+
+    token = client.post(
+        f"/admin/users/{created['id']}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    updated = client.put(
+        "/user/webhook",
+        headers={"X-API-Key": token},
+        json={
+            "webhook_url": "https://example.com/by-id",
+            "webhook_secret": "never-return-this",
+            "webhook_events": {"meeting.completed": True},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"] == {
+        "webhook_url": "https://example.com/by-id",
+        "webhook_events": {"meeting.completed": True},
+    }
+    assert "never-return-this" not in updated.text
+
+    found = client.get(f"/admin/users/{created['id']}", headers=_admin())
+    assert found.status_code == 200, found.text
+    assert found.json()["data"] == updated.json()["data"]
+    assert "never-return-this" not in found.text
+
+    assert client.get(f"/admin/users/{created['id']}").status_code == 403
+    assert (
+        client.get(
+            f"/admin/users/{created['id']}",
+            headers={"X-Admin-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+
+    missing = client.get("/admin/users/999999", headers=_admin())
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "User not found"}
+
+    users_after = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "by-id@vexa.ai"},
+    )
+    assert users_after.status_code == 200
+    assert users_after.json() == found.json()
+
+
+def test_admin_patch_user_merges_entitlement_without_erasing_private_data(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "entitlement@vexa.ai", "max_concurrent_bots": 3},
+    ).json()
+    user_id = created["id"]
+    token = client.post(
+        f"/admin/users/{user_id}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    webhook = client.put(
+        "/user/webhook",
+        headers={"X-API-Key": token},
+        json={
+            "webhook_url": "https://example.com/entitlement",
+            "webhook_secret": "private-hook-secret",
+            "webhook_events": {"meeting.completed": True},
+        },
+    )
+    assert webhook.status_code == 200, webhook.text
+
+    patched = client.patch(
+        f"/admin/users/{user_id}",
+        headers=_admin(),
+        json={
+            "max_concurrent_bots": 25,
+            "data": {
+                "subscription_tier": "commitment_25",
+                "billing_contract_version": 1,
+            },
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == {
+        "webhook_url": "https://example.com/entitlement",
+        "webhook_events": {"meeting.completed": True},
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+    }
+    assert "private-hook-secret" not in patched.text
+
+    validated = client.post(
+        "/internal/validate",
+        headers={"X-Internal-Secret": INTERNAL_SECRET},
+        json={"token": token},
+    )
+    assert validated.status_code == 200, validated.text
+    assert validated.json()["max_concurrent"] == 25
+    assert validated.json()["webhook_secret"] == "private-hook-secret"
+
+    for headers, body, expected in (
+        ({}, {"max_concurrent_bots": 5}, 403),
+        ({"X-Admin-API-Key": "wrong"}, {"max_concurrent_bots": 5}, 403),
+        (_admin(), {}, 422),
+        (_admin(), {"max_concurrent_bots": -1}, 422),
+        (_admin(), {"email": "other@vexa.ai"}, 422),
+        (_admin(), {"data": {"webhook_url": "https://attacker.invalid"}}, 422),
+        (_admin(), {"data": {"memberships": []}}, 422),
+    ):
+        rejected = client.patch(
+            f"/admin/users/{user_id}",
+            headers=headers,
+            json=body,
+        )
+        assert rejected.status_code == expected, rejected.text
+
+    missing = client.patch(
+        "/admin/users/999999",
+        headers=_admin(),
+        json={"max_concurrent_bots": 5},
+    )
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "User not found"}
+
+    unchanged = client.get(
+        f"/admin/users/{user_id}",
+        headers=_admin(),
+    ).json()
+    assert unchanged["max_concurrent_bots"] == 25
+    assert unchanged["data"] == patched.json()["data"]
+
+
+def test_admin_patch_serializes_with_concurrent_foreign_data_update(
+    client,
+    pg_url,
+):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "concurrent-entitlement@vexa.ai"},
+    ).json()
+    user_id = created["id"]
+    engine = create_engine(pg_url)
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(
+            text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"),
+            {"user_id": user_id},
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                client.patch,
+                f"/admin/users/{user_id}",
+                headers=_admin(),
+                json={
+                    "max_concurrent_bots": 25,
+                    "data": {
+                        "subscription_tier": "commitment_25",
+                        "billing_contract_version": 1,
+                    },
+                },
+            )
+            waiting = False
+            deadline = time.monotonic() + 5
+            with engine.connect() as observer:
+                while time.monotonic() < deadline:
+                    waiting = bool(observer.execute(text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM pg_stat_activity "
+                        "  WHERE pid <> pg_backend_pid() "
+                        "    AND state = 'active' "
+                        "    AND wait_event_type = 'Lock' "
+                        "    AND query ILIKE '%FROM users%' "
+                        "    AND query ILIKE '%FOR UPDATE%'"
+                        ")"
+                    )).scalar_one())
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+            assert waiting, "admin patch did not acquire the row-lock contract"
+            connection.execute(
+                text(
+                    "UPDATE users "
+                    "SET data = data || CAST(:foreign_patch AS jsonb) "
+                    "WHERE id = :user_id"
+                ),
+                {
+                    "user_id": user_id,
+                    "foreign_patch": json.dumps({
+                        "webhook_url": "https://example.com/concurrent",
+                        "webhook_events": {"meeting.completed": True},
+                    }),
+                },
+            )
+            transaction.commit()
+            patched = future.result(timeout=5)
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == {
+        "webhook_url": "https://example.com/concurrent",
+        "webhook_events": {"meeting.completed": True},
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+    }
+
+
+def test_user_webhook_serializes_with_concurrent_platform_billing_update(
+    client,
+    pg_url,
+):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "concurrent-user-settings@vexa.ai"},
+    ).json()
+    user_id = created["id"]
+    token_value = client.post(
+        f"/admin/users/{user_id}/tokens?scope=bot",
+        headers=_admin(),
+    ).json()["token"]
+    engine = create_engine(pg_url)
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(
+            text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"),
+            {"user_id": user_id},
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                client.put,
+                "/user/webhook",
+                headers={"X-API-Key": token_value},
+                json={
+                    "webhook_url": "https://example.com/user-settings",
+                    "webhook_secret": "test-webhook-secret",
+                    "webhook_events": {"meeting.completed": True},
+                },
+            )
+            waiting = False
+            deadline = time.monotonic() + 5
+            with engine.connect() as observer:
+                while time.monotonic() < deadline:
+                    waiting = bool(observer.execute(text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM pg_stat_activity "
+                        "  WHERE pid <> pg_backend_pid() "
+                        "    AND state = 'active' "
+                        "    AND wait_event_type = 'Lock' "
+                        "    AND query ILIKE '%FROM users%' "
+                        "    AND query ILIKE '%FOR UPDATE%'"
+                        ")"
+                    )).scalar_one())
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+            assert waiting, "user webhook update did not acquire the row-lock contract"
+            connection.execute(
+                text(
+                    "UPDATE users "
+                    "SET data = data || CAST(:billing_patch AS jsonb) "
+                    "WHERE id = :user_id"
+                ),
+                {
+                    "user_id": user_id,
+                    "billing_patch": json.dumps({
+                        "subscription_tier": "commitment_25",
+                        "billing_contract_version": 1,
+                    }),
+                },
+            )
+            transaction.commit()
+            updated = future.result(timeout=5)
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"] == {
+        "subscription_tier": "commitment_25",
+        "billing_contract_version": 1,
+        "webhook_url": "https://example.com/user-settings",
+        "webhook_events": {"meeting.completed": True},
+    }
+    masked = client.get(
+        "/user/webhook",
+        headers={"X-API-Key": token_value},
+    )
+    assert masked.status_code == 200, masked.text
+    assert masked.json() == {
+        "webhook_url": "https://example.com/user-settings",
+        "webhook_secret_set": True,
+        "webhook_secret": "********cret",
+        "webhook_events": {"meeting.completed": True},
+    }
+
+
+def test_admin_patch_accepts_the_typed_platform_billing_contract(client):
+    created = client.post(
+        "/admin/users",
+        headers=_admin(),
+        json={"email": "billing-contract@vexa.ai"},
+    ).json()
+    billing_data = {
+        "updated_by_webhook": 1_777_777_777,
+        "stripe_customer_id": "cus_test_contract",
+        "stripe_subscription_id": "sub_test_bot",
+        "stripe_tx_subscription_id": "sub_test_tx",
+        "stripe_payment_method_id": "pm_test_contract",
+        "subscription_status": "active",
+        "subscription_tier": "commitment_25",
+        "subscription_cancel_at_period_end": False,
+        "subscription_cancellation_date": None,
+        "subscription_current_period_start": 1_777_000_000,
+        "subscription_current_period_end": 1_779_000_000,
+        "tx_subscription_status": "active",
+        "tx_subscription_tier": "transcription_api",
+        "tx_subscription_cancel_at_period_end": False,
+        "tx_subscription_cancellation_date": None,
+        "tx_subscription_current_period_start": 1_777_000_000,
+        "tx_subscription_current_period_end": 1_779_000_000,
+        "transcription_enabled": True,
+        "billing_contract_version": 1,
+        "billing_catalog_version": "2026-07-28",
+        "pending_commitment_tier": None,
+        "pending_commitment_effective_at": None,
+    }
+    patched = client.patch(
+        f"/admin/users/{created['id']}",
+        headers=_admin(),
+        json={"max_concurrent_bots": 25, "data": billing_data},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["max_concurrent_bots"] == 25
+    assert patched.json()["data"] == billing_data
+
+
 def test_internal_validate_requires_secret(client):
     """HMAC internal-secret REQUIRED — a missing/wrong X-Internal-Secret is rejected 403."""
     # Mint a token to validate.
@@ -184,6 +548,44 @@ def test_invalid_scope_422(client):
     r = client.post(f"/admin/users/{user_id}/tokens?scope=superadmin", headers=_admin())
     assert r.status_code == 422
     assert "Invalid scope" in r.json()["detail"]
+
+
+def test_mint_scopes_from_json_body(client):
+    """#922: body ``{"scopes":["bot","tx"]}`` must be honored — not silently dropped to ["bot"]."""
+    user_id = client.post("/admin/users", headers=_admin(),
+                          json={"email": "body-scopes@vexa.ai"}).json()["id"]
+    r = client.post(
+        f"/admin/users/{user_id}/tokens",
+        headers=_admin(),
+        json={"scopes": ["bot", "tx"]},
+    )
+    assert r.status_code == 201, r.text
+    assert set(r.json()["scopes"]) == {"bot", "tx"}
+
+
+def test_mint_unknown_body_field_422(client):
+    """#922: an unsupported body field is refused (422), never silently dropped."""
+    user_id = client.post("/admin/users", headers=_admin(),
+                          json={"email": "body-extra@vexa.ai"}).json()["id"]
+    r = client.post(
+        f"/admin/users/{user_id}/tokens",
+        headers=_admin(),
+        json={"scopes": ["bot"], "not_a_field": True},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_mint_body_scopes_win_over_query(client):
+    """When both body and query supply scopes, the body wins."""
+    user_id = client.post("/admin/users", headers=_admin(),
+                          json={"email": "body-wins@vexa.ai"}).json()["id"]
+    r = client.post(
+        f"/admin/users/{user_id}/tokens?scopes=bot",
+        headers=_admin(),
+        json={"scopes": ["bot", "tx"]},
+    )
+    assert r.status_code == 201, r.text
+    assert set(r.json()["scopes"]) == {"bot", "tx"}
 
 
 def test_admin_tier_auth_enforced(client):

@@ -28,6 +28,13 @@
    "targets": ["helm", "lite"]
   },
   {
+   "key": "MCP_URL",
+   "class": "defaulted",
+   "default": "http://mcp:8010",
+   "description": "MCP service base URL — the streamable-HTTP transport fronted under /mcp (GET streams the SSE leg, POST forwards buffered)",
+   "targets": ["compose"]
+  },
+  {
    "key": "REDIS_URL",
    "class": "defaulted",
    "default": "redis://redis:6379/0",

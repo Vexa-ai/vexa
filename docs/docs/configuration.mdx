@@ -17,11 +17,12 @@ are public.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TRANSCRIPTION_SERVICE_URL` | — | STT service URL, e.g. `http://<gpu-host>:8083`. Give it the **base URL** (canonical) or the full `…/v1/audio/transcriptions` endpoint — every consumer appends the path only when it is missing, so both shapes behave identically. Point it at the bundled service you deploy separately (`deploy/transcription`) or any OpenAI-compatible endpoint. Unset → bots join and record but produce no transcript. |
+| `TRANSCRIPTION_SERVICE_URL` | — | STT service URL, e.g. `http://<gpu-host>:8083`. Give it the **base URL** (canonical) or the full `…/v1/audio/transcriptions` endpoint — every consumer appends the path only when it is missing, so both shapes behave identically. Point it at the bundled service you deploy separately (`deploy/transcription`) or any OpenAI-compatible endpoint. Unset + default `transcribe_enabled=true` → `POST /bots` answers **503** naming the missing keys (not a silent empty transcript). |
 | `TRANSCRIPTION_SERVICE_TOKEN` | — | STT auth token — must match the `API_TOKEN` of your `deploy/transcription` unit, or a token from `vexa.ai/account`. |
 | `TRANSCRIPTION_MODEL` | `whisper-1` | STT model id sent on every transcription request (the OpenAI-compatible `model` field). **Set it when the backend validates model ids** — Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1` / `gpt-4o-transcribe`), vLLM/LiteLLM (the served name) — or every request fails `model_not_found`. Ignored by the bundled `deploy/transcription` unit, whose model is its own `MODEL_SIZE`. |
-| `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's transcription when `POST /bots` does not say. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
+| `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's `transcribe_enabled` when `POST /bots` does not say. Resolution: **explicit request body wins** → else this env → else `true`. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
 | `RECORDING_ENABLED` | `true` | Deployment-level default for a spawn's recording when `POST /bots` does not say. Same empty-means-default rule as above. |
+| `BOT_ALONE_SILENCE_WINDOW_MS` | `600000` | Active-phase remote-audio silence window before the bot leaves with `completed(left_alone)`. Forwarded to spawned bots. A request's `automatic_leave.max_time_left_alone` overrides it. |
 | `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
 | `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
 | `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
@@ -58,6 +59,46 @@ key. Compose tolerates a trailing `# comment`, but `docker run --env-file` (whic
 does **not** strip it — the comment becomes part of the value, so `TERMINAL_PORT=13000  # the UI`
 sets the port to the literal string `13000  # the UI`.
 </Warning>
+
+## Optional service authority
+
+Stock self-hosted Vexa has no external service authority and continues to admit bots exactly as
+before. Operators who need an independently owned admission/active-service policy can opt into the
+sealed `service-authority.v1` boundary:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_SERVICE_AUTHORITY_CONFIG` | — | Compact JSON containing a credential-free `url`, `contract_version: "service-authority.v1"`, `timeout_ms`, `response_max_age_seconds`, `failure_policy: "closed"`, and `mode: "enforce"` or `"observe"`. HTTPS is required except for loopback/in-cluster HTTP. |
+| `VEXA_SERVICE_AUTHORITY_SECRET` | — | HMAC-SHA256 secret for the exact timestamped request bytes. Required only when the config is set; keep it in the deployment secret store. |
+| `SERVICE_AUTHORITY_SWEEP_INTERVAL_S` | `15` | Poll cadence for discovering due active-service boundaries. Decisions remain anchored to admitted time plus whole minutes, so changing the poll cadence does not change the billable boundary. |
+
+The request contains service identity, authoritative user ID, service mode, frozen transcription
+provider, concurrency, and lifecycle timestamps. It deliberately contains no email, customer or
+payment-provider identifier, price, balance, transcription endpoint URL, or credential. A
+configured authority that is unavailable, malformed, stale, or bound to another request fails
+closed before a new bot is spawned. During active service, its stop intent is committed before
+runtime teardown and resumed after restart.
+
+`mode: "observe"` records decisions without refusing or stopping service. It is useful for rollout,
+but it is not evidence that a hard service control is enforced. A session admitted in one mode is
+never reinterpreted under another mode after a deployment change.
+
+## Operator terminal callback
+
+An operator can send terminal service facts to one deployment-owned system endpoint. This is
+separate from a user's webhook configuration: the URL is frozen at boot, cannot be supplied by an
+API caller or meeting payload, and receives only `meeting.completed` and `bot.failed`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_SYSTEM_WEBHOOK_URL` | — | Absolute operator-owned endpoint for terminal `webhook.v1` envelopes. HTTPS is required unless private HTTP is explicitly enabled. URLs with credentials, query strings or fragments are rejected. |
+| `VEXA_SYSTEM_WEBHOOK_SECRET` | — | HMAC-SHA256 secret for the exact timestamped envelope bytes. Required with the URL and stored only in the deployment secret store. |
+| `VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP` | `false` | Explicitly permits a private/in-cluster HTTP destination such as a billing service on the Compose/Kubernetes network. It does not change customer webhook SSRF protection. |
+| `VEXA_SYSTEM_WEBHOOK_TIMEOUT_S` | `10` | Bounded delivery timeout, greater than zero and at most 60 seconds. |
+
+Transient delivery failures enter a dedicated retry/dead-letter queue and retain the same
+deterministic event ID. Customer webhook destinations continue through DNS/IP validation and cannot
+redirect this operator callback. Leave all four values unset for the stock OSS behavior.
 
 ## Secrets & identity
 

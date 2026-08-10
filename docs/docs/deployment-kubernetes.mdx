@@ -15,7 +15,7 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | gateway · admin-api · meeting-api · agent-api · runtime | Deployments (RollingUpdate, `maxUnavailable: 0`) |
 | terminal (web workbench) | Deployment + ingress |
 | postgres | StatefulSet (or point values at your managed DB) |
-| redis · minio | Deployments (+ minio init Job) |
+| redis (Valkey) · minio | Deployments (+ minio init Job) |
 | DB migrations | Job |
 | pgbouncer | optional connection pooling |
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
@@ -164,18 +164,21 @@ actually exist — dead `collector-<oldhash>` names are expected to disappear wi
 TTL. For k8s you can eliminate the churn at the source by pinning a stable per-replica identity via
 `COLLECTOR_CONSUMER_NAME` (e.g. a StatefulSet ordinal) so a restart re-uses the same consumer.
 
-<Warning>
-**Orphan reclaim requires Redis 6.2 or newer** — `XAUTOCLAIM` does not exist before it. On an
-older Redis the reclaim disables itself and logs once at startup; everything else (normal
-`XREADGROUP` consumption, per-pod identity, `pending_depth`) is unaffected. The cost is narrow but
-real: if a replica dies mid-batch, that batch stays pending instead of being drained by a peer, so
-run a single replica on Redis < 6.2 or upgrade Redis. Check yours with `redis-server --version`.
+<Note>
+**Every surface now ships Valkey 8.x**, which has `XAUTOCLAIM` — so orphan reclaim is active
+everywhere Vexa ships, including Vexa Lite (compose, helm, and Lite all run Valkey, the Linux
+Foundation BSD-3 fork of Redis 7.2.4; see [the changelog](/changelog) and #653). Reclaim, per-pod
+identity, and ghost-consumer pruning all work on the shipped stack. Check yours with
+`valkey-server --version`.
 
-This bites Vexa Lite in particular: its bundled Redis is **6.0.16**, so a Lite box never reclaims.
-Lite runs one meeting-api, so nothing is lost — but do not read the paragraph above as a guarantee
-that holds on every backing store. Ghost-consumer pruning degrades the same way: if the backing
-Redis rejects `XINFO CONSUMERS`, the prune logs once and no-ops, leaving the consume path untouched.
-</Warning>
+The degradation path below still exists as a safety net for a *bring-your-own* backing store older
+than the floor: on a Redis/Valkey without `XAUTOCLAIM` the reclaim disables itself and logs once at
+startup; everything else (normal `XREADGROUP` consumption, `pending_depth`) is unaffected. The cost
+is narrow but real — if a replica dies mid-batch on such a store, that batch stays pending instead of
+being drained by a peer, so run a single replica or move to a store with `XAUTOCLAIM` (Redis ≥ 6.2 /
+Valkey ≥ 7.2). Ghost-consumer pruning degrades the same way: if the backing store rejects `XINFO
+CONSUMERS`, the prune logs once and no-ops, leaving the consume path untouched.
+</Note>
 
 ## In-cluster self-addressing
 

@@ -1,6 +1,6 @@
 name: vexa-v012
 # v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
-# postgres:17 + redis:7 + minio + minio-init infra, then the four long-running Python services —
+# postgres:17 + valkey:8 + minio + minio-init infra, then the four long-running Python services —
 # admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
 # Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
 # `condition: service_healthy` so the bring-up is ordered + observable.
@@ -11,10 +11,13 @@ name: vexa-v012
 services:
   # ─── Infrastructure ───────────────────────────────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # Valkey (Linux Foundation BSD-3 fork of Redis 7.2.4): parity with the Lite witness surface
+    # and off source-available Redis ≥7.4 (RSALv2/SSPLv1). Wire-compatible (RESP) — the service
+    # name, REDIS_URL, and every consumer stay put; only the engine changes (#653).
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -139,6 +142,7 @@ services:
       - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
       # Optional low-latency tuning for the Google Meet speaker-stream pipeline. Empty values keep
       # the bot defaults; runtime forwards configured values to spawned bot containers.
+      - BOT_ALONE_SILENCE_WINDOW_MS=${BOT_ALONE_SILENCE_WINDOW_MS:-}
       - BOT_SPEAKER_MIN_AUDIO_SEC=${BOT_SPEAKER_MIN_AUDIO_SEC:-}
       - BOT_SPEAKER_SUBMIT_INTERVAL_SEC=${BOT_SPEAKER_SUBMIT_INTERVAL_SEC:-}
       - BOT_SPEAKER_CONFIRM_THRESHOLD=${BOT_SPEAKER_CONFIRM_THRESHOLD:-}
@@ -326,6 +330,13 @@ services:
       - BOT_S3_BUCKET=${BOT_S3_BUCKET:-}
       - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
       - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
+      # Optional operator-owned service-authority.v1 boundary. Empty is explicit OSS allow-all.
+      - VEXA_SERVICE_AUTHORITY_CONFIG=${VEXA_SERVICE_AUTHORITY_CONFIG:-}
+      - VEXA_SERVICE_AUTHORITY_SECRET=${VEXA_SERVICE_AUTHORITY_SECRET:-}
+      - VEXA_SYSTEM_WEBHOOK_URL=${VEXA_SYSTEM_WEBHOOK_URL:-}
+      - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
+      - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
+      - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -363,6 +374,11 @@ services:
     environment:
       - ADMIN_API_URL=http://admin-api:8001
       - MEETING_API_URL=http://meeting-api:8080
+      # The MCP streamable-HTTP front door (#795): the gateway proxies /mcp here — GET (the SSE
+      # stream) relayed on the streaming client, every other method on the buffered forward.
+      # NOT a depends_on: mcp itself depends on the gateway (GATEWAY_URL), and compose refuses a
+      # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
+      - MCP_URL=http://mcp:8010
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -404,7 +420,9 @@ services:
 
   # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
   # services/mcp). Stateless: every tool call forwards the caller's key to the gateway as
-  # X-API-Key; exposed on its OWN host port (no gateway /mcp forward yet — see the service README).
+  # X-API-Key. Fronted at the gateway edge under /mcp (#795) — an MCP client points at the
+  # gateway's public port like every other Vexa client. The direct host port below stays for
+  # local debugging (bypasses the edge, so it bypasses the edge's auth too).
   mcp:
     build:
       context: ../../core/meetings/services/mcp

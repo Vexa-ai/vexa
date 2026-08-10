@@ -19,6 +19,7 @@ the conformance harness never imports it — it injects its own in-process fakes
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from .obs import TRACE_HEADER, get_trace_id
@@ -26,23 +27,42 @@ from .ports import AuthUnavailable
 
 
 class HttpxDownstreamClient:
-    """``DownstreamClient`` over an ``httpx.AsyncClient`` — forwards to meeting-api /
-    transcription-collector and returns the response (status + content + headers) verbatim."""
+    """``DownstreamClient`` over ``httpx.AsyncClient``\\ s — forwards to meeting-api / agent-api /
+    admin-api / mcp and returns the response (status + content + headers) verbatim.
 
-    def __init__(self, client):
+    TWO clients, because the two legs have opposite notions of "healthy":
+
+      * ``client``        — the BUFFERED request/response leg. A bounded read timeout is correct
+        here: a control-plane call that stops speaking is a fault.
+      * ``stream_client`` — the STREAMING leg (SSE). ``read=None``: a stream that is silent is a
+        stream with nothing to push, not a fault. Forcing the buffered client's bounded read
+        timeout onto a relayed stream is what manufactured #795's gateway-side 503s, and it also
+        parked each held-open stream in the buffered pool for the whole timeout.
+    """
+
+    def __init__(self, client, stream_client=None):
         self._client = client
+        self._stream_client = stream_client if stream_client is not None else client
 
     async def request(self, method, url, *, headers=None, params=None, content=None):
         return await self._client.request(
             method, url, headers=headers, params=params or None, content=content
         )
 
-    async def stream(self, method, url, *, headers=None, params=None, content=None):
-        """Open a streaming downstream request and yield the body chunks (SSE — agent chat).
-        The httpx stream is a context manager; we hold it open for the life of the generator so
-        the gateway can relay each chunk to its client as it arrives."""
-        async with self._client.stream(
+    @asynccontextmanager
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+        """Open a streaming downstream request and yield the response HEAD (status + headers)
+        while the body is still arriving. The httpx stream is a context manager; it stays open
+        for the life of this block so the gateway can relay each chunk as it arrives."""
+        async with self._stream_client.stream(
             method, url, headers=headers, params=params or None, content=content
+        ) as resp:
+            yield resp
+
+    async def stream(self, method, url, *, headers=None, params=None, content=None):
+        """The byte relay over ``open_stream`` — the caller mints its own envelope (agent SSE)."""
+        async with self.open_stream(
+            method, url, headers=headers, params=params, content=content
         ) as resp:
             async for chunk in resp.aiter_bytes():
                 yield chunk
@@ -132,6 +152,9 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
       • forward_client — the proxy hop; long-lived, generous timeout, larger pool.
       • auth_client    — the admin-api /internal/validate hop ONLY; short timeout, its own pool,
         so validation latency is decoupled from downstream load and can never be starved by it.
+      • stream_client  — the SSE relay leg (#795); connect/write/pool stay bounded, ``read=None``
+        because a silent stream is a healthy stream. Its own pool, so streams held open for hours
+        never consume a buffered-forward slot.
     """
     import httpx
 
@@ -143,8 +166,12 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
         timeout=5.0,
         limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
     )
+    stream_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
     authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
-    downstream = HttpxDownstreamClient(forward_client)
+    downstream = HttpxDownstreamClient(forward_client, stream_client=stream_client)
     return authorizer, downstream
 
 
@@ -175,6 +202,8 @@ def build_production_app(
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
     agent_api_url = os.getenv("AGENT_API_URL", "http://agent-api:8100")
+    # #795: the MCP service, fronted at the gateway edge under /mcp (streamable-HTTP transport).
+    mcp_url = os.getenv("MCP_URL", "http://mcp:8010")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
     # #495: authorizer + downstream over SEPARATE httpx pools (see build_auth_and_downstream).
@@ -194,6 +223,7 @@ def build_production_app(
         meeting_api_url=meeting_api_url,
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
+        mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 

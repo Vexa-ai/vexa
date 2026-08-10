@@ -74,6 +74,14 @@ export CARVE_MAILMAP="$MONO/carve/mailmap.txt"
 # Each line: "<override-file-under-carve/overrides/>  <dest-path-in-carve>"
 export CARVE_OVERRIDES=(
   "Makefile:Makefile"          # compose-only entrypoint (mono's references removed deploy/lite)
+  # De-robot the Vexum surface (vexa-platform#239): docs.core.vexa.ai stays up for
+  # humans, invisible to robots. These four files + the docs.json seo transform in
+  # transform.sh are PROJECTION-ONLY — they must never appear in the mono's docs/docs
+  # (they would noindex docs.vexa.ai).
+  "docs-robots.txt:docs/docs/robots.txt"          # Disallow: / (replaces generated allow-all)
+  "docs-sitemap.xml:docs/docs/sitemap.xml"        # empty urlset (replaces 51-URL generated map)
+  "docs-llms.txt:docs/docs/llms.txt"              # Vexum-scoped stub → canonical docs.vexa.ai
+  "docs-llms-full.txt:docs/docs/llms-full.txt"    # same stub (generated one is the full 555KB dup)
 )
 
 # --- Deterministic transforms applied after materialize ----------------------

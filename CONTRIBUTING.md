@@ -11,3 +11,11 @@ never on whether you show up — but showing up makes everything smoother.
 
 Working with an agent, or in a checkout? Start at [`AGENTS.md`](AGENTS.md) — intake, the
 one-call roadmap fetch, claiming, and the session rules. Security reports: [`SECURITY.md`](SECURITY.md).
+
+## Rights and DCO — one choice, then automatic
+
+Every new pull request selects exactly one rights path: independent, employer/client-controlled,
+or unsure. Independent contributors sign each commit under DCO 1.1 and do **not** sign an
+individual CLA. Corporate or uncertain contributions enter private rights review while technical
+review continues; only merge waits. Read [`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md) for the
+exact choices, `git commit --signoff` workflow, safe remediation commands, and corporate process.

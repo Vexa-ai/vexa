@@ -11,7 +11,7 @@
  * Because the orchestrator + adapters are the real ones, the backend sees prod-identical lifecycle.v1
  * emission, and the mock CANNOT emit off-contract (P5/P16, ARCH §5). A scenario drives one backend
  * behaviour: normal · join-timeout · reject · crash · immediate-stop · continue · speak-ack ·
- * emit-n-segments · slow-join · recording. Selected by env `MOCK_SCENARIO` at the composition root.
+ * emit-n-segments · slow-join · recording · silence-left-alone. Selected by env `MOCK_SCENARIO`.
  */
 import type { JoinDriver, JoinOutcome, Pipeline, TranscriptSink } from '../src/ports.js';
 import type { CompletionReason, TranscriptSegment } from '../src/contracts.js';
@@ -19,7 +19,8 @@ import type { Invocation } from '../src/config.js';
 
 export type ScenarioName =
   | 'normal' | 'join-timeout' | 'reject' | 'crash' | 'immediate-stop'
-  | 'continue' | 'speak-ack' | 'emit-n-segments' | 'slow-join' | 'recording';
+  | 'continue' | 'speak-ack' | 'emit-n-segments' | 'slow-join' | 'recording'
+  | 'silence-left-alone';
 
 export interface Scenario {
   name: ScenarioName;
@@ -36,6 +37,8 @@ export interface Scenario {
   /** self-end the active phase after N ms → completed(stopped). undefined ⇒ wait for the backend
    *  (an acts.v1 `leave` on DELETE /bots, or SIGTERM) — the immediate-stop path. */
   endAfterMs?: number;
+  /** Use the real silence AlonenessSource instead of a no-op source. */
+  silenceAlone?: boolean;
 }
 
 /** The scenario registry. Live timings; the fidelity test overrides them to run in milliseconds. */
@@ -50,6 +53,7 @@ export const SCENARIOS: Record<ScenarioName, Scenario> = {
   'join-timeout':    { name: 'join-timeout',    join: 'timeout' },
   'reject':          { name: 'reject',          join: 'rejected' },
   'crash':           { name: 'crash',           join: 'admitted', crashOnStart: true },
+  'silence-left-alone': { name: 'silence-left-alone', join: 'admitted', silenceAlone: true },
 };
 
 export function getScenario(name: string | undefined): Scenario {

@@ -43,10 +43,15 @@ def _spawn(stack, user_id, scenario, *, native_id=None, max_bots=5):
     # before any FSM runs. The mock fakes the pipeline and emits its transcript segments regardless,
     # so every dataflow assertion below still proves the collector path.
     native_id = native_id or f"mk-{scenario}-{uuid.uuid4().hex[:6]}"
+    payload = {
+        "platform": "google_meet", "native_meeting_id": native_id, "bot_name": f"mock:{scenario}",
+        "transcribe_enabled": False,
+    }
+    if scenario == "silence-left-alone":
+        payload["automatic_leave"] = {"max_time_left_alone": 250}
     code, body = post_json(
         f"{stack.meeting_api}/bots",
-        {"platform": "google_meet", "native_meeting_id": native_id, "bot_name": f"mock:{scenario}",
-         "transcribe_enabled": False},
+        payload,
         headers={"x-user-id": str(user_id), "x-user-limits": str(max_bots)},
     )
     assert code == 201, f"POST /bots mock:{scenario} → {code} {body}"
@@ -139,6 +144,20 @@ def test_mock_normal_full_lifecycle(stack):
         time.sleep(2)
     assert keys, f"normal recording chunk not in minio for user {user_id}"
     print(f"\n[mock/normal] completed · {segs} transcript seg(s) · recording in minio ({len(keys)} obj)")
+
+
+# ── silence-left-alone: automatic_leave → invocation → real monitor → lifecycle terminal ─────────
+
+@mock_only
+def test_mock_silence_left_alone(stack):
+    user_id = _create_user(stack, max_bots=5)
+    native_id, _ = _spawn(stack, user_id, "silence-left-alone")
+    m = _wait_meeting(stack, user_id, native_id, statuses=TERMINAL, timeout=60, poll=0.25)
+    if not m or m["status"] not in TERMINAL:
+        _diag(stack, native_id, m)
+    assert m and m["status"] == "completed", f"silence-left-alone did not complete: {m}"
+    assert m["reason"] == "left_alone", f"silence-left-alone reason={m['reason']!r}"
+    print("\n[mock/silence-left-alone] automatic_leave → completed(left_alone)")
 
 
 # ── reject / crash / timeout: failed + attributable reason (P18) ───────────────────────────────────

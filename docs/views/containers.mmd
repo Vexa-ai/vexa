@@ -22,6 +22,12 @@ flowchart LR
   subgraph runtime_system["runtime"]
     runtime["runtime"]
   end
+  subgraph service_authority_system["service authority"]
+    service_authority["external service authority"]
+  end
+  subgraph system_webhook_system["system webhook"]
+    system_webhook["operator terminal callback"]
+  end
   subgraph platform["platform"]
     redis["redis"]
     postgres["postgres"]
@@ -36,10 +42,13 @@ flowchart LR
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
+  meeting_api -->|"HTTPS"| service_authority
+  meeting_api -->|"HTTP(S)"| system_webhook
   agent_api -->|"HTTPS"| runtime
   mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
+  gateway -->|"HTTPS"| mcp
   gateway -->|"HTTPS"| admin_api
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway

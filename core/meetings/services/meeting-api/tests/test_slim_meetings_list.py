@@ -259,3 +259,47 @@ def test_get_meeting_by_id_still_refuses_a_non_owner():
     mid = _seed_heavy(store, nid="private-1")
     r = _client(store).get(f"/meetings/{mid}", headers={"x-user-id": "999"})
     assert r.status_code == 404, "a non-owner must not read another user's meeting"
+
+
+# ── the sealed api.v1 MeetingResponse hoists completion_reason/failure_stage from `data` ────────────
+# MeetingResponse declares `completion_reason` and `failure_stage` at TOP LEVEL, but their values
+# live in the `data` jsonb (the lifecycle FSM writes them there). The list projection strips `data`
+# down to light keys — so unless the row hoists them like `_meeting_projection_from_row` does, the
+# sealed fields are dead. This pins the hoist on both the list row and the detail row.
+
+def test_list_row_hoists_completion_reason_and_failure_stage():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-1", status="completed",
+        data={"completion_reason": "left_alone", "failure_stage": "post_active"},
+    )
+    r = _client(store).get("/meetings", headers=HEADERS)
+    assert r.status_code == 200
+    (row,) = r.json()["meetings"]
+    # the sealed top-level fields carry the values that live in `data`…
+    assert row["completion_reason"] == "left_alone"
+    assert row["failure_stage"] == "post_active"
+
+
+def test_detail_row_hoists_completion_reason_and_failure_stage():
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-2", status="failed",
+        data={"completion_reason": "left_alone", "failure_stage": "joining"},
+    )
+    r = _client(store).get(f"/meetings/{mid}", headers=HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["completion_reason"] == "left_alone"
+    assert body["failure_stage"] == "joining"
+
+
+def test_row_completion_fields_are_none_when_absent_from_data():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="term-3", status="active",
+        data={"title": "no terminal fields here"},
+    )
+    (row,) = _client(store).get("/meetings", headers=HEADERS).json()["meetings"]
+    assert row["completion_reason"] is None
+    assert row["failure_stage"] is None

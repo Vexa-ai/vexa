@@ -87,10 +87,12 @@ class MeetingRepo(Protocol):
         ``create_meeting`` pre-check sequence on the fresh-insert path."""
         ...
 
-    async def reopen_meeting(self, *, meeting_id: int) -> dict:
+    async def reopen_meeting(
+        self, *, meeting_id: int, data_patch: Optional[dict] = None
+    ) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
-        survive). Returns the updated row."""
+        survive), and freeze the new session's service-selection facts. Returns the updated row."""
         ...
 
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
@@ -108,6 +110,16 @@ class MeetingRepo(Protocol):
         """Record the kernel-assigned workload id/name on the meeting and return the updated row."""
         ...
 
+    async def fail_meeting(
+        self, *, meeting_id: int, reason: str, failure_stage: str = "requested"
+    ) -> Optional[dict]:
+        """Mark a meeting ``failed`` BY ID (no session_uid), stamping ``reason``/``failure_stage`` into
+        ``meeting.data`` — the spawn-time failure path (#718). A workload dead on arrival is refused
+        BEFORE the ``MeetingSession`` exists, so the session-keyed ``update_meeting_status`` cannot
+        reach the row; this fails it directly so no ``requested`` row lingers for the reaper to flip
+        reason-less. Returns the updated row (or ``None`` for an unknown id)."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 
@@ -117,12 +129,60 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def list_service_authority_sessions(self) -> list[dict]:
+        """Active admitted rows carrying a frozen service-authority identity."""
+        ...
+
+    async def record_service_authority_decision(
+        self,
+        *,
+        meeting_id: int,
+        request: Any,
+        decision: Any,
+    ) -> bool:
+        """Append the next monotonic boundary decision; return whether it was new."""
+        ...
+
+    async def list_service_authority_teardowns(self) -> list[dict]:
+        """Denied stop intents whose runtime teardown is not yet confirmed."""
+        ...
+
+    async def claim_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        claim_id: str,
+        claimed_at: Any,
+        lease_seconds: float,
+    ) -> Optional[dict]:
+        """Lease one pending teardown under storage serialization."""
+        ...
+
+    async def confirm_service_authority_teardown(
+        self,
+        *,
+        meeting_id: int,
+        decision_id: str,
+        claim_id: str,
+    ) -> bool:
+        """Mark one matching stop intent confirmed; replay returns false."""
+        ...
+
     async def get_status_by_session(self, *, session_uid: str) -> Optional[str]:
         """Resolve ``session_uid`` (== the bot's ``connectionId``) → the meeting's CURRENT persisted
         status string, or ``None`` for an unknown session. Used to REHYDRATE the in-memory lifecycle
         FSM after a meeting-api restart (LIFECYCLE-409): the in-memory store is non-durable, so the
         callback reconciles a fresh/empty record against the DB's real status BEFORE applying the
         bot's event (else a terminal event on an empty store creates a status=None record and 409s)."""
+        ...
+
+    async def get_lifecycle_state_by_session(self, *, session_uid: str) -> Optional[dict]:
+        """Return the persisted lifecycle state needed to restore the FSM after restart.
+
+        Shape: ``{"status": str, "data": dict}``. The transition trail is part of the durable
+        lifecycle fact: restoring only the current status would erase the producer-observed
+        admission time when the terminal callback arrives after a process restart.
+        """
         ...
 
     async def update_meeting_status(
@@ -250,3 +310,29 @@ class DuplicateMeeting(Exception):
     Raised by ``MeetingRepo.create_meeting_guarded`` (the atomic dedup) — either because the in-txn
     dedup query found an active row, or because the unique partial index on active rows rejected the
     concurrent insert (the DB-level backstop). Re-exported from ``service`` for the router's mapping."""
+
+
+# Statuses in which the bot has NOT yet reached the meeting. Their row goes quiet by DESIGN — a bot
+# parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
+# lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
+PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+def reconcile_grace_for_status(
+    status: Optional[str],
+    stop_grace: float,
+    active_grace: float,
+    preactive_grace: Optional[float] = None,
+) -> float:
+    """The reconcile window a stale row is measured against — the ONE definition both the SQL adapter
+    and the in-memory fake read, so the two listings can never drift.
+
+      * ``stopping``   → ``stop_grace``      (a stop was requested: clear it fast)
+      * PRE-ACTIVE     → ``preactive_grace`` (must OUTLAST the lobby budget we issued — #862)
+      * everything else→ ``active_grace``    (a bot-present row: a longer idle before we look)
+    """
+    if status == "stopping":
+        return stop_grace
+    if status in PRE_ACTIVE_MEETING_STATUSES:
+        return active_grace if preactive_grace is None else preactive_grace
+    return active_grace

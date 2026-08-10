@@ -21,13 +21,16 @@ import {
   type LifecycleEvent,
   type Act,
   canTransition,
+  isTerminal,
 } from './contracts.js';
 import type {
   JoinDriver,
   JoinOutcome,
+  JoinResult,
   Pipeline,
   LifecycleSink,
   ActsSource,
+  AlonenessSource,
   RecordingSink,
   ControlPlaneProbe,
 } from './ports.js';
@@ -37,6 +40,7 @@ export interface OrchestratorDeps {
   join: JoinDriver;
   pipeline: Pipeline;
   acts: ActsSource;
+  aloneness: AlonenessSource;
   /** Optional — recording is gated by invocation.recordingEnabled; the core only closes it. */
   recording?: RecordingSink;
   /** Optional (#530) — the SECONDARY control-plane channel probe (redis), consulted only when
@@ -44,6 +48,18 @@ export interface OrchestratorDeps {
    *  treated as reachable (conservative: never abort on an un-probeable channel), so the gate
    *  never turns a missing probe into a join refusal. */
   reachability?: ControlPlaneProbe;
+  /** Optional — what DEGRADED the meeting without ending it (today: STT refusing every chunk).
+   *  Consulted once, when a TERMINAL event is built, and merged onto it. A meeting whose STT
+   *  backend was dead used to reach `completed` indistinguishable from a silent room: the faults
+   *  were typed and attributed all the way to the composition root and then died in a
+   *  console.error, so the emptiest possible transcript arrived with no reason attached (the #807
+   *  shape). Rides lifecycle.v1 exactly as `infra_fault` does — the contract is
+   *  additionalProperties:true, so this is additive.
+   *  Returns `undefined` when nothing degraded. MUST NOT throw. */
+  degraded?: () => Record<string, unknown> | undefined;
+  /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
+   *  before the lifecycle adapter performs any HTTP retry. */
+  now?: () => string;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -64,6 +80,13 @@ export interface MeetingResult {
   completionReason?: CompletionReason;
 }
 
+/** Normalize a driver's join return — a bare `JoinOutcome` or a `JoinResult` — into `{ outcome,
+ *  reason? }` so the orchestrator has ONE shape to reason about (and the reason text, when the
+ *  driver supplied one, survives to the terminal lifecycle row). */
+function normalizeJoin(r: JoinOutcome | JoinResult): JoinResult {
+  return typeof r === 'string' ? { outcome: r } : r;
+}
+
 /** Map a non-admitted join verdict to the terminal completion_reason. */
 const OUTCOME_FAIL: Record<Exclude<JoinOutcome, 'admitted'>, CompletionReason> = {
   rejected: 'awaiting_admission_rejected',
@@ -79,11 +102,23 @@ export interface RunOptions {
   maxActiveMs?: number;
 }
 
+/** Required ports — missing any of these used to surface as a raw TypeError deep in `run()`. */
+const REQUIRED_PORTS = ['lifecycle', 'join', 'pipeline', 'acts', 'aloneness'] as const;
+
+function assertRequiredPorts(deps: OrchestratorDeps): void {
+  for (const name of REQUIRED_PORTS) {
+    if (deps[name] == null) {
+      throw new Error(`orchestrator: required port '${name}' is missing`);
+    }
+  }
+}
+
 /**
  * Build the meeting orchestrator. Returns `run()` (drives the machine to a terminal state)
  * and `handle(act)` (the acts.v1 entrypoint the ActsSource adapter — or a test — feeds).
  */
 export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
+  assertRequiredPorts(deps);
   const base: { connection_id: string; container_id?: string } = {
     connection_id: inv.connectionId ?? '',
     ...(inv.container_name ? { container_id: inv.container_name } : {}),
@@ -91,20 +126,39 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   const recordingKey = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
 
   let cur: BotStatus = 'joining';
+  const eventTime = (): string => deps.now?.() ?? new Date().toISOString();
 
   const emit = async (status: BotStatus, extra: Partial<LifecycleEvent> = {}): Promise<void> => {
     if (status !== cur && !canTransition(cur, status)) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
     }
     cur = status;
-    await deps.lifecycle.emit({ ...base, status, ...extra });
+    // A terminal event is the LAST thing anyone hears from this bot — if the meeting was degraded,
+    // it says so here or the reason dies with the container. A reporter fault must never change the
+    // exit path (P18: report, but never at the cost of the report itself).
+    let degraded: Record<string, unknown> | undefined;
+    if (isTerminal(status) && deps.degraded) {
+      try { degraded = deps.degraded(); } catch { degraded = undefined; }
+    }
+    await deps.lifecycle.emit({
+      ...base,
+      status,
+      timestamp: extra.timestamp ?? eventTime(),
+      ...extra,
+      ...(degraded ?? {}),
+    });
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
   // needs no transition guard. When the sink can report reachability we consult it; otherwise the
   // event is emitted normally and treated as reachable (self-host / test sinks have no gate).
   const emitJoining = async (extra: Partial<LifecycleEvent>): Promise<boolean> => {
-    const ev: LifecycleEvent = { ...base, status: 'joining', ...extra };
+    const ev: LifecycleEvent = {
+      ...base,
+      status: 'joining',
+      timestamp: extra.timestamp ?? eventTime(),
+      ...extra,
+    };
     if (deps.lifecycle.emitReachable) return (await deps.lifecycle.emitReachable(ev)) === 'reachable';
     await deps.lifecycle.emit(ev);
     return true;
@@ -123,10 +177,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   let signalAbort: ((r: CompletionReason) => void) | null = null;
   const aborted = new Promise<CompletionReason>((res) => { signalAbort = res; });
 
-  // acts.v1 dispatch. `leave` ends the run; reconfigure + voice acts are handled by the
-  // live pipeline adapter (no-op for the machine; voice agent is DEFERRED this increment).
+  // acts.v1 dispatch. A `leave` command routes through `stop()` — the SAME phase-aware decision the
+  // SIGTERM seam uses — so a Stop is honored NO MATTER the phase it arrives in: ACTIVE ⇒ graceful
+  // leave; PRE-ACTIVE (still knocking in the lobby) ⇒ abort the join → WITHDRAW the ask-to-join
+  // request (#889). Routing `leave` straight to `signalEnd` used to only end the ACTIVE phase, so a
+  // lobby `leave` did nothing. reconfigure + voice acts are handled by the live pipeline adapter
+  // (no-op for the machine; voice agent is DEFERRED this increment).
   async function handle(act: Act): Promise<void> {
-    if (act.action === 'leave') signalEnd?.('stopped');
+    if (act.action === 'leave') stop('stopped');
   }
 
   async function run(opts: RunOptions = {}): Promise<MeetingResult> {
@@ -152,6 +210,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         await deps.lifecycle.emit({
           ...base,
           status: 'failed',
+          timestamp: eventTime(),
           failure_stage: 'requested',
           completion_reason: 'join_failure',
           infra_fault: CONTROL_PLANE_UNREACHABLE,
@@ -174,14 +233,22 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       });
       return reportChain;
     };
+    // Subscribe to the command bus BEFORE the join race (#889). A user Stop is delivered as a `leave`
+    // command on the bot's channel; when it arrives while the bot is still knocking in the lobby, the
+    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
+    // through stop() → the pre-active abort race → withdraw. Subscribing only AFTER admission (the old
+    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
+    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
+    const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
+    let joinReason: string | undefined;
     try {
       // Race the (possibly long, lobby-blocked) join against a pre-active abort. A stop/SIGTERM in the
       // waiting room resolves `aborted` → we stop waiting, WITHDRAW the join request, and terminate —
       // rather than SIGKILLing a bot that is still asking to join (the waiting-room orphan). The race
       // yields a tagged result so the abort branch narrows cleanly (no symbol-vs-JoinOutcome union).
-      const raced = await Promise.race<{ aborted: false; outcome: JoinOutcome } | { aborted: true }>([
-        deps.join.join(report).then((o) => ({ aborted: false as const, outcome: o })),
+      const raced = await Promise.race<{ aborted: false; result: JoinResult } | { aborted: true }>([
+        deps.join.join(report).then((o) => ({ aborted: false as const, result: normalizeJoin(o) })),
         aborted.then(() => ({ aborted: true as const })),
       ]);
       if (raced.aborted) {
@@ -198,22 +265,32 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           failure_stage: stage, completion_reason: 'stopped',
           reason: 'stopped while awaiting admission (withdrew the join request)', exit_code: 0,
         });
+        unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
-      outcome = raced.outcome;
+      outcome = raced.result.outcome;
+      joinReason = raced.result.reason;
       await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
+      unsubscribe();
       await emit('failed', { failure_stage: 'joining', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     if (outcome !== 'admitted') {
       const reason = OUTCOME_FAIL[outcome];
-      await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, exit_code: 1 });
+      unsubscribe();
+      // ALWAYS stamp a human `reason` text (#926). A non-admitted verdict carries a completion_reason
+      // enum, but the terminal row also needs the human cause or meeting-api synthesizes the
+      // uninformative "Bot exited with code 1; reason: None". Prefer the driver's own message
+      // (the AdmissionError text — e.g. the Zoom "auth_required" / "host not started" cause); fall
+      // back to a derived line so NO reasonless terminal can ever leave this branch.
+      const reasonText = joinReason ?? `join ended without admission: ${outcome} → ${reason}`;
+      await emit('failed', { failure_stage: 'awaiting_admission', completion_reason: reason, reason: reasonText, exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: reason };
     }
     if (cur !== 'active') await emit('active');   // the join driver may already have reported active
 
-    // ── active: start the engine, wire removal + acts + the optional time cap ──
+    // ── active: start the engine, wire removal + aloneness + the optional time cap (acts already subscribed) ──
     try {
       await deps.pipeline.start();
     } catch (e) {
@@ -221,11 +298,12 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // strand a ghost participant. Best-effort; never masks the failure.
       deps.recording?.close(recordingKey);
       await deps.join.leave('pipeline_start_failed').catch(() => { /* best-effort */ });
+      unsubscribe();
       await emit('failed', { failure_stage: 'active', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     const stopRemoval = deps.join.onRemoval(() => signalEnd?.('evicted'));
-    const unsubscribe = deps.acts.subscribe(handle);
+    const stopAloneness = deps.aloneness.onAlone(() => signalEnd?.('left_alone'));
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
       : null;
@@ -235,6 +313,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // ── graceful teardown (best-effort; never masks the completion reason) ──
     if (cap) clearTimeout(cap);
     unsubscribe();
+    stopAloneness();
     stopRemoval();
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);

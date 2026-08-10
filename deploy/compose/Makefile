@@ -89,10 +89,20 @@ dev:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
 	IMAGE_TAG=dev $(COMPOSE) up -d --build
-	IMAGE_TAG=dev $(COMPOSE) build agent-worker  # profiles:[build-only] keeps it out of `up`
-	@$(MAKE) --no-print-directory _bot_check
-	@$(MAKE) --no-print-directory _creds_check
-	@$(MAKE) --no-print-directory _access
+	@# Every remaining step must RUN and the target must exit non-zero naming EVERY gap. A failed
+	@# agent-worker build (a transient apt flake, #716) must NOT abort BEFORE the bot-image check —
+	@# that is exactly how a stack came up "healthy" but spawned dead bots with no signal (#718 C4).
+	@fail=""; \
+	 IMAGE_TAG=dev $(COMPOSE) build agent-worker || fail="$$fail agent-worker-build"; \
+	 $(MAKE) --no-print-directory _bot_check BOT_CHECK_STRICT=1 || fail="$$fail bot-image-missing"; \
+	 $(MAKE) --no-print-directory _creds_check; \
+	 $(MAKE) --no-print-directory _access; \
+	 if [ -n "$$fail" ]; then \
+	   echo ""; \
+	   echo "✗ make dev did not fully succeed —$$fail (see the messages above)."; \
+	   echo "  The stack is up, but spawned bots may fail to start until every item above is resolved."; \
+	   exit 1; \
+	 fi
 
 ## digest-audit — the #569 negative control: every vexaai/*:$IMAGE_TAG image on this host must
 ## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a
@@ -149,6 +159,11 @@ bot:
 ## _bot_check — FAIL LOUD if the meeting bot image isn't built locally. The bot is built here, never
 ## pulled (the published vexaai/vexa-bot:dev is the old 0.10 line). Without this the failure was silent:
 ## bots sat in `requested` and the meeting was reaped to `completed`/0-segments. Now it is screamingly visible.
+##
+## BOT_CHECK_STRICT=1 turns the warning into a non-zero EXIT (used by `dev` — an aborted build must never
+## leave a stack that spawns dead bots with no signal, #718 C4). `up` calls it warn-only (the published
+## image is pulled elsewhere), so the shared default stays a warning. Check-and-instruct only — it prints
+## the `make bot` / `docker pull` line and NEVER forces a 3.6GB pull mid-`make dev`.
 _bot_check:
 	@_bi=$$(grep -E '^BROWSER_IMAGE=' .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
 	 if [ -n "$$_bi" ] && ! docker image inspect "$$_bi" >/dev/null 2>&1; then \
@@ -163,6 +178,7 @@ _bot_check:
 	   echo "      Bots will FAIL TO JOIN until the image exists."; \
 	   echo "═══════════════════════════════════════════════════════════"; \
 	   echo ""; \
+	   if [ -n "$(BOT_CHECK_STRICT)" ]; then exit 1; fi; \
 	 fi
 
 ## _creds_check — WARN (never fail) when .env leaves a capability unconfigured: empty STT creds mean

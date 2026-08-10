@@ -1,0 +1,10 @@
+{
+  "authority_version": "service-authority.v1",
+  "decision_id": "decision-stop-41",
+  "request_id": "meeting-session-41:continue:2026-07-29T08:01:00+00:00",
+  "service_identity": "meeting-session-41",
+  "allow": false,
+  "reason": "opaque_limit",
+  "decided_at": "2026-07-29T08:01:00Z",
+  "stop_scope": "billable_service"
+}

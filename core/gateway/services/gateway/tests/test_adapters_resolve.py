@@ -34,6 +34,32 @@ def test_build_wires_separate_pools():
     assert authorizer._client.timeout != downstream._client.timeout
 
 
+def test_build_wires_a_dedicated_unbounded_read_stream_client():
+    """#795 — the SSE relay leg gets its OWN client, with ``read=None``.
+
+    The buffered client's bounded read timeout is correct for request/response legs and WRONG for
+    a relayed stream: an MCP ``GET /mcp`` SSE stream sends its headers and then idles until the
+    server has something to push, so a bounded read timeout fires on a perfectly healthy stream —
+    and ``httpx.TimeoutException ⊂ httpx.RequestError``, which is how the deployed gateway turned
+    it into ``503 MCP service unavailable``. Its own pool also keeps hours-long streams from
+    consuming buffered-forward slots. Collapsing the two clients back into one turns this RED."""
+    _, downstream = build_auth_and_downstream(ADMIN, "http://meeting-api:8080")
+    assert downstream._stream_client is not downstream._client, "the stream leg needs its own pool"
+    stream_timeout = downstream._stream_client.timeout
+    assert stream_timeout.read is None, "a silent stream is a healthy stream — no read deadline"
+    # …while the legs that CAN hang stay bounded.
+    assert stream_timeout.connect is not None and stream_timeout.write is not None
+    assert stream_timeout.pool is not None
+    assert downstream._client.timeout.read is not None, "the buffered leg keeps its read deadline"
+
+
+def test_downstream_client_defaults_to_one_client_when_no_stream_client_given():
+    """The adapter stays constructible with a single client (the conformance/unit wiring)."""
+    client = httpx.AsyncClient()
+    downstream = HttpxDownstreamClient(client)
+    assert downstream._stream_client is client
+
+
 def _authorizer(handler):
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return AdminApiAuthorizer(client, ADMIN, "http://meeting-api:8080")

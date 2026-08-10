@@ -17,6 +17,7 @@ import { createRedisTranscriptSink, redisClientFrom } from '../src/adapters/tran
 import { createRedisActsSource, redisActsClientFrom } from '../src/adapters/acts-redis.js';
 import type { ActsSource, LifecycleSink, TranscriptSink } from '../src/ports.js';
 import { getScenario, fakeJoinDriver, fakePipeline, mockSegment } from './scenarios.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from '../src/aloneness.js';
 
 function consoleLifecycleSink(): LifecycleSink {
   return { async emit(e: LifecycleEvent) { console.log(`[mock] lifecycle.v1 ${e.status}${e.completion_reason ? ` (${e.completion_reason})` : ''}${e.failure_stage ? ` @${e.failure_stage}` : ''}`); } };
@@ -107,7 +108,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   });
   const acts: ActsSource = teeSpeak(liveActs, transcript, inv);
 
-  const orchestrator = createOrchestrator(inv, { lifecycle, join, pipeline, acts });
+  const activity = createRemoteAudioActivityTap();
+  const aloneness = scenario.silenceAlone
+    ? createSilenceAlonenessSource({
+        activity,
+        windowMs: resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env),
+        log: (message) => console.log(`[mock] ${message}`),
+      })
+    : { onAlone() { return () => {}; } };
+  if (scenario.silenceAlone) activity.ready();
+  const orchestrator = createOrchestrator(inv, { lifecycle, join, pipeline, acts, aloneness });
   stopRef = orchestrator.stop;
 
   const onSignal = () => orchestrator.stop('stopped');

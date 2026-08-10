@@ -508,6 +508,57 @@ async def test_http_runtime_client_delete_404_raises_workload_unknown():
     assert ok.deleted == ["http://runtime:8090/workloads/mtg-2-d93eee39"]
 
 
+async def test_http_runtime_client_create_refuses_dead_workload():
+    """#718 C1/C2 at the production HTTP boundary: create_workload raises SpawnFailed when the kernel
+    answers a non-201 (carrying the kernel's reason) OR a 201 whose BODY is a dead workload
+    (state=stopped/start_failed). A live 201 (state=starting) returns the body cleanly."""
+    import pytest
+
+    from meeting_api.bot_spawn.adapters import HttpRuntimeClient
+    from meeting_api.bot_spawn.ports import SpawnFailed
+
+    class _Resp:
+        def __init__(self, status_code, body=None, text=""):
+            self.status_code = status_code
+            self._body = body if body is not None else {}
+            self.text = text
+
+        def json(self):
+            return self._body
+
+    class _StubHttp:
+        def __init__(self, resp):
+            self._resp = resp
+
+        async def post(self, url, json=None, timeout=None):
+            return self._resp
+
+    spec = {"workloadId": "mtg-1-abc", "profile": "meeting-bot", "env": {}}
+
+    # C1 path: the kernel's 502 (naming the absent image) → SpawnFailed carrying that reason.
+    dead502 = HttpRuntimeClient(
+        _StubHttp(_Resp(502, {"detail": "No such image: vexaai/vexa-bot:dev"})), "http://runtime:8090"
+    )
+    with pytest.raises(SpawnFailed) as ei502:
+        await dead502.create_workload(spec)
+    assert "No such image" in str(ei502.value)
+
+    # C2 belt: a 201 with a dead body (a kernel that still 201s) → SpawnFailed naming the stopReason.
+    dead201 = HttpRuntimeClient(
+        _StubHttp(_Resp(201, {"workloadId": "mtg-1-abc", "state": "stopped", "stopReason": "start_failed"})),
+        "http://runtime:8090",
+    )
+    with pytest.raises(SpawnFailed) as ei201:
+        await dead201.create_workload(spec)
+    assert "start_failed" in str(ei201.value)
+
+    # A live spawn (201 + running/starting) returns cleanly.
+    live = HttpRuntimeClient(
+        _StubHttp(_Resp(201, {"workloadId": "mtg-1-abc", "state": "starting"})), "http://runtime:8090"
+    )
+    assert (await live.create_workload(spec))["state"] == "starting"
+
+
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 # (b3) CC5 — a workload that DIES before the bot reports drives the meeting to `failed` (no hang).
 # ──────────────────────────────────────────────────────────────────────────────────────────────

@@ -18,8 +18,10 @@ with one command.
 - On Apple Silicon: arm64 images are published best-effort (not yet CI-validated) — see
   [Deployment](/deployment#quick-start-docker-compose) for details.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
-  [self-host transcription](/deployment#air-gapped) on a GPU. Without it, bots join and record but
-  produce no transcript.
+  [self-host transcription](/deployment#air-gapped) on a GPU. Default spawns **require** STT and
+  answer `503` when it is unset; capture-only is `{"transcribe_enabled": false}` on `POST /bots`
+  (or `TRANSCRIBE_ENABLED=false` for the whole deployment). See
+  [Configuration](/configuration#transcription-stt).
 
 ## 1. Install and start
 

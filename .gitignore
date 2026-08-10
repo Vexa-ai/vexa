@@ -28,3 +28,6 @@ docs/views/*
 
 # transcription service downloaded model weights (runtime cache)
 deploy/transcription/models/
+
+# Release working handoff notes are local-only (per-version); witness.json stays tracked.
+releases/*/HANDOFF.md

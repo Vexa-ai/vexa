@@ -47,17 +47,22 @@ curl -X POST "$ADMIN/admin/users" \
   -d '{"email":"jane@acme.com","name":"Jane","max_concurrent_bots":2}'
 # → {"id":1,"email":"jane@acme.com","name":"Jane","max_concurrent_bots":2}
 
-# 2. mint a key for that user id
-curl -X POST "$ADMIN/admin/users/1/tokens?scopes=bot,tx" \
-  -H "X-Admin-API-Key: $ADMIN_TOKEN"
+# 2. mint a key for that user id (JSON body preferred)
+curl -X POST "$ADMIN/admin/users/1/tokens" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"scopes":["bot","tx"]}'
 # → {"id":7,"token":"vxa_bot_...","user_id":1,"scopes":["bot","tx"]}
+
+# query form still works: ?scopes=bot,tx or ?scope=bot
 ```
 
 The returned `token` is your `X-API-Key`. **It is shown once** — store it.
 
 ## Scopes
 
-A key carries one or more scopes. Pass `scope=<one>` or `scopes=<a>,<b>` when minting.
+A key carries one or more scopes. Pass them in the JSON body as `{"scopes":["bot","tx"]}`, or as
+query `scope=<one>` / `scopes=<a>,<b>`. The body wins when both are present. An unknown body field
+is refused with `422` — never silently dropped.
 
 | Scope | Grants |
 |---|---|

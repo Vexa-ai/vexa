@@ -127,9 +127,23 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
                 data={"stop_requested": True},
             )
         # Publish the leave command — an ACTIVE (listening) bot honours it, leaves, emits its terminal event.
-        await publisher.publish(
-            leave_command_channel(meeting_id), json.dumps(leave_command_payload(meeting_id))
-        )
+        # #809: this is a GENUINELY Redis-dependent path (pub/sub is the only delivery). During a Redis
+        # outage it must fail NARROWLY per-request (503, retryable) — not as an opaque 500 stack trace,
+        # and never process-wide. The `stopping` mark above is already persisted to Postgres, so the
+        # stop-reconcile sweep still converges the meeting when Redis returns; a 503 tells the caller to
+        # retry the leave once the cache is back.
+        try:
+            await publisher.publish(
+                leave_command_channel(meeting_id), json.dumps(leave_command_payload(meeting_id))
+            )
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001 — Redis unreachable → narrow, retryable failure
+            raise HTTPException(
+                status_code=503,
+                detail="stop command bus (redis) unavailable; the stop is recorded and will "
+                       "reconcile when redis returns — retry to re-issue the leave",
+            ) from e
         # GUARANTEE no orphan: a stop must not rely solely on a fire-and-forget command the bot may never
         # receive. A BOOTING bot (status in _BOOTING_STATUSES) has likely not subscribed yet → directly
         # tear its workload down (it has nothing to finalize). Best-effort: logged, never fails the stop.

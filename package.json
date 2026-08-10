@@ -1,6 +1,6 @@
 {
   "name": "vexa",
-  "version": "0.12.15",
+  "version": "0.12.18",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -38,6 +38,8 @@
     "gate:stack": "node scripts/gates.mjs stack",
     "gate:node": "node scripts/gates.mjs node",
     "gate:licenses": "node scripts/gates.mjs licenses",
+    "gate:image-licenses": "node scripts/gates.mjs image-licenses",
+    "gate:runtime-parity": "node scripts/gates.mjs runtime-parity",
     "gate:calm": "npx -y @finos/calm-cli@1.47.1 validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json",
     "gates": "node scripts/gates.mjs all",
     "observe": "node core/meetings/eval/src/observe.mjs",

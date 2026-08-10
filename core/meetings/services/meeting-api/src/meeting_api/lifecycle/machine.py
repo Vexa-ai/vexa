@@ -213,6 +213,9 @@ class MeetingRecord:
     bot_logs: Optional[List[str]] = None
     bot_logs_truncated: bool = False
     bot_resources: Optional[Dict[str, Any]] = None
+    #: What degraded the meeting without ending it — today the STT backend refusing chunks
+    #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
+    stt_fault: Optional[Dict[str, Any]] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -249,6 +252,8 @@ class MeetingRecord:
             d["bot_resources"] = dict(self.bot_resources)
         if self.stop_requested:
             d["stop_requested"] = True
+        if self.stt_fault is not None:
+            d["stt_fault"] = dict(self.stt_fault)
         return d
 
 
@@ -268,7 +273,14 @@ class MeetingStore:
             self._records[connection_id] = rec
         return rec
 
-    def rehydrate(self, connection_id: str, persisted_status: Optional[str]) -> MeetingRecord:
+    def rehydrate(
+        self,
+        connection_id: str,
+        persisted_status: Optional[str],
+        persisted_data: Optional[Dict[str, Any]] = None,
+        *,
+        replace_stale: bool = False,
+    ) -> MeetingRecord:
         """Seed (or reconcile) the in-memory record from the DB's CURRENT meeting status.
 
         The store is in-memory, so a fresh process starts empty; seeding the record's status from the
@@ -276,15 +288,21 @@ class MeetingStore:
         (without it, a terminal event arriving at an empty store would start at status=None and be
         rejected as an illegal transition).
 
-        Only seeds when the in-memory record has NO status yet (status is None) — a live record that
-        already advanced in-process is the source of truth and is never overwritten by a (possibly
-        staler) DB read.
+        Ordinarily this seeds only an empty record, so a lagging DB read cannot regress live local
+        state. ``replace_stale`` is reserved for the HTTP adapter after a local transition was proven
+        illegal; there the durable row may represent progress committed by another API replica.
         """
         rec = self.get_or_create(connection_id)
-        if rec.status is None:
+        if rec.status is None or replace_stale:
             seeded = bot_status_from_persisted(persisted_status)
             if seeded is not None:
                 rec.status = seeded
+            if isinstance(persisted_data, dict):
+                trail = persisted_data.get("status_transition")
+                if isinstance(trail, list):
+                    rec.status_transition = [
+                        dict(entry) for entry in trail if isinstance(entry, dict)
+                    ]
         return rec
 
     def __len__(self) -> int:  # pragma: no cover - trivial
@@ -435,16 +453,28 @@ class LifecycleSink:
                 rec.bot_logs, rec.bot_logs_truncated = _trim_bot_logs(list(event["bot_logs"]))
             if event.get("bot_resources"):
                 rec.bot_resources = dict(event["bot_resources"])
+            # WHY a transcript is short or empty. The bot counts STT failures across the meeting
+            # and reports them once, here — without it a meeting whose backend refused every chunk
+            # completes indistinguishable from a silent room (the zero-segment shape). Additive on
+            # lifecycle.v1 (additionalProperties: true), same as infra_fault.
+            if event.get("stt_fault"):
+                rec.stt_fault = dict(event["stt_fault"])
 
         rec.status = to
         rec.history.append(to)
         rec.last_transition_source = transition_source
 
         # Append the status_transition[] trail entry (parent's update_meeting_status entry).
+        producer_timestamp = event.get("timestamp")
         entry: Dict[str, Any] = {
             "from": frm.value if frm is not None else None,
             "to": to.value,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            # The producer observed admission/departure. Callback receipt time may be delayed by
+            # retries, so it cannot be the billing clock. Legacy events without event time retain
+            # the server fallback but will not satisfy the provenance contract used for billing.
+            "timestamp": producer_timestamp
+            or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp_source": "producer" if producer_timestamp else "receiver",
             "source": transition_source.value,
         }
         if rec.reason is not None and to in _TERMINAL:

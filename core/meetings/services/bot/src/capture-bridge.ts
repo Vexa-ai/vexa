@@ -41,6 +41,7 @@ import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
+import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
@@ -54,6 +55,12 @@ export function rmsOf(pcm: Float32Array): number {
   let s = 0;
   for (let i = 0; i < pcm.length; i++) s += pcm[i] * pcm[i];
   return Math.sqrt(s / pcm.length);
+}
+
+/** The activity observer sits only on REMOTE browser capture callbacks. The local speak/TTS
+ * path never calls it, so bot speech cannot extend the meeting's silence window. */
+export function makeRemoteAudioEnergyTap(activity?: RemoteAudioActivityTap) {
+  return (pcm: Float32Array): void => activity?.observeRemoteEnergy(rmsOf(pcm));
 }
 
 /**
@@ -257,6 +264,8 @@ export async function startCaptureBridge(
   /** In-meeting chat sink (jitsi lane) — each captured chat message crosses here;
    *  the composition root publishes it as a transcript.v1 `source:'chat'` segment. */
   onChat?: (sender: string, text: string) => void,
+  /** Active-phase silence signal. It remains unavailable until page capture reports ready. */
+  activity?: RemoteAudioActivityTap,
 ): Promise<() => Promise<void>> {
   const mixed = isMixedLanePlatform(inv.platform);
   const jitsi = inv.platform === 'jitsi';
@@ -268,6 +277,7 @@ export async function startCaptureBridge(
   // is OPTIONAL + zero-overhead when unset (makeTelemetryTap short-circuits to a single truthiness
   // check), so the proven O6 capture path is byte-for-byte unchanged. captureFrame is fire-and-forget.
   const tee = makeTelemetryTap(lane, telemetry);
+  const observeRemoteAudio = makeRemoteAudioEnergyTap(activity);
 
   // ── Node-side frame sink: one capture.v1 frame crossing the Playwright boundary. ──
   // The page serializes PCM as a plain number[] (Array.from(Float32Array)); we restore the
@@ -276,6 +286,7 @@ export async function startCaptureBridge(
   const onPerSpeakerAudio = (speakerIndex: number, samples: number[], tsMs?: number): void => {
     const pcm = new Float32Array(samples);
     const ts = tsMs ?? Date.now();
+    observeRemoteAudio(pcm);
     tee(speakerIndex, pcm, ts);                                 // O-TEL-1: tap BEFORE the pipeline
     if (mixed) pipeline.feedMixedAudio(pcm, ts);
     else pipeline.feedAudio(speakerIndex, undefined, pcm, ts); // glow name is bound page-side in the v1 producer; channel index here
@@ -284,6 +295,7 @@ export async function startCaptureBridge(
   const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[], tsMs?: number): void => {
     const pcm = new Float32Array(samples);
     const ts = tsMs ?? Date.now();
+    observeRemoteAudio(pcm);
     tee(channel, pcm, ts, glowName);                            // O-TEL-1: tap BEFORE the pipeline
     pipeline.feedAudio(channel, glowName, pcm, ts);
   };
@@ -304,6 +316,9 @@ export async function startCaptureBridge(
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
+  await page.exposeFunction('__vexaRemoteAudioReady', (): void => activity?.ready()).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
@@ -340,7 +355,10 @@ export async function startCaptureBridge(
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
-            .then(() => w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)'))
+            .then(async () => {
+              await w.__vexaRemoteAudioReady?.();
+              w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');
+            })
             .catch((e: any) => { w.__vexaMixedCapture = null; w.logBot?.('[mixed] capture start failed: ' + String(e)); });
         }
       };
@@ -418,6 +436,7 @@ export async function startCaptureBridge(
         },
       });
       await w.__vexaGmeetCapture.start();
+      await w.__vexaRemoteAudioReady?.();
     }
   }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
@@ -426,6 +445,7 @@ export async function startCaptureBridge(
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
+    activity?.unavailable();
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }

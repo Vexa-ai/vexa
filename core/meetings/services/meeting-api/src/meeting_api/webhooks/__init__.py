@@ -14,6 +14,7 @@ in `meetings/contracts/webhook.v1`.
 * ``WebhookSink`` — the port: build → SSRF-guard → filter → deliver → enqueue-on-failure.
 * ``RetryQueue`` — the fakeredis-backed exponential-backoff retry queue.
 * ``drain_retry_queue`` — the retry-worker sweep (the worker loop's one tick).
+* ``SystemWebhookSink`` — one boot-frozen operator destination for terminal service facts.
 * ``WEBHOOK_API_VERSION`` / ``RETRY_QUEUE_KEY`` / ``BACKOFF_SCHEDULE`` — frozen constants.
 """
 from .delivery import (
@@ -27,6 +28,12 @@ from .delivery import (
     sign_payload,
     verify_signature,
 )
+from .ledger import (
+    DEFAULT_MAX_PER_USER,
+    InMemoryDeliveryLedger,
+    RedisDeliveryLedger,
+    build_delivery_record,
+)
 from .retry import (
     BACKOFF_SCHEDULE,
     MAX_AGE_SECONDS,
@@ -35,6 +42,13 @@ from .retry import (
     drain_retry_queue,
 )
 from .ssrf import SSRFError, validate_webhook_url
+from .system import (
+    SYSTEM_DEAD_LETTER_KEY,
+    SYSTEM_PROCESSING_KEY,
+    SYSTEM_RETRY_QUEUE_KEY,
+    SystemWebhookSink,
+    build_system_webhook_from_env,
+)
 
 __all__ = [
     "WEBHOOK_API_VERSION",
@@ -51,6 +65,15 @@ __all__ = [
     "RETRY_QUEUE_KEY",
     "RetryQueue",
     "drain_retry_queue",
+    "DEFAULT_MAX_PER_USER",
+    "InMemoryDeliveryLedger",
+    "RedisDeliveryLedger",
+    "build_delivery_record",
     "SSRFError",
     "validate_webhook_url",
+    "SYSTEM_DEAD_LETTER_KEY",
+    "SYSTEM_PROCESSING_KEY",
+    "SYSTEM_RETRY_QUEUE_KEY",
+    "SystemWebhookSink",
+    "build_system_webhook_from_env",
 ]

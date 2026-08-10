@@ -45,6 +45,16 @@ on:
         required: false
         default: false
         type: boolean
+      promote_repository:
+        description: "Alias all frozen repositories, or one exact owner/name repair target"
+        required: false
+        default: all
+        type: string
+      validation_leg:
+        description: "Validation scope: all, or compose for an isolated harness rerun"
+        required: false
+        default: all
+        type: string
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -66,6 +76,31 @@ on:
         required: false
         default: false
         type: boolean
+      promote_repository:
+        description: "Alias scope"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - vexaai/v012-admin-api
+          - vexaai/v012-runtime
+          - vexaai/v012-agent-worker
+          - vexaai/v012-agent-api
+          - vexaai/v012-meeting-api
+          - vexaai/v012-gateway
+          - vexaai/v012-mcp
+          - vexaai/v012-terminal
+          - vexaai/vexa-bot
+          - vexaai/vexa-lite
+      validation_leg:
+        description: "Validation scope"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - compose
 
 permissions:
   contents: read
@@ -110,42 +145,33 @@ jobs:
           if [ "$BARE" != "$BASE" ]; then PRE=true; else PRE=false; fi
           { echo "version=$VERSION"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
           echo "✓ validating published set $VERSION (prerelease=$PRE)"
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Every published manifest resolves and carries required platforms
+      - uses: actions/checkout@v4
+      - name: Registry validator controls
+        run: node --test scripts/registry-candidate-validate.test.mjs
+      - name: Every frozen descriptor resolves through authenticated registry reads
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # `imagetools inspect` prints no Platform line for classic-driver (schema-v2)
-          # manifests even when the registry descriptor says linux/amd64 — the bot image
-          # is built on the classic driver by design, so read the registry descriptor
-          # instead; it is authoritative for both manifest shapes.
-          for img in $ALL_IMAGES; do
-            echo "== $img:$VERSION"
-            # NOTE: a `IMG=... cmd | python3` prefix binds the var only to the first
-            # pipeline command — python3 would KeyError. Export it instead.
-            export IMG="$img"
-            docker manifest inspect -v "$img:$VERSION" | python3 -c "
-          import os, sys, json
-          img = os.environ['IMG']
-          d = json.load(sys.stdin)
-          items = d if isinstance(d, list) else [d]
-          plats = {(m.get('Descriptor', {}).get('platform', {}).get('os'),
-                    m.get('Descriptor', {}).get('platform', {}).get('architecture'))
-                   for m in items}
-          required = {('linux', 'amd64')}
-          if img != 'vexaai/vexa-bot':
-            required.add(('linux', 'arm64'))
-          missing = required - plats
-          if missing:
-            print(f'missing platforms: {sorted(missing)}', file=sys.stderr)
-            sys.exit(1)
-          " || { echo "::error ::$img:$VERSION missing required platform manifest(s) — is the set published?"; exit 1; }
-          done
-          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present with required platforms"
+          case "$VERSION" in
+            v0.12.18)
+              EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
+              EXPECTED_TOP_DESCRIPTORS=10
+              EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            *)
+              echo "::error ::$VERSION has no reviewed, packet-bound candidate-map identity"
+              exit 1
+              ;;
+          esac
+          node scripts/registry-candidate-validate.mjs \
+            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --tag "$VERSION" \
+            --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+            --expected-top-descriptors "$EXPECTED_TOP_DESCRIPTORS" \
+            --expected-platform-identities "$EXPECTED_PLATFORM_IDENTITIES"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
@@ -155,6 +181,7 @@ jobs:
   # Runs in PARALLEL with the validate legs; it gates promote, not the validate signal.
   image-identity:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -263,6 +290,7 @@ jobs:
   # the working tree.
   validate-compose:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' || inputs.validation_leg == 'compose' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -278,6 +306,39 @@ jobs:
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
         run: cp deploy/compose/.env.example deploy/compose/.env
+      # Runtime uses the Docker Engine create API with pull disabled. Prove the daemon contract
+      # red→green here, then leave the exact published bot bytes resident for stack-test.
+      - name: Prove and preload the published bot image for runtime spawn
+        env:
+          BOT_REF: vexaai/vexa-bot:${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          RED_NAME="vexa-bot-preload-red-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          GREEN_NAME="vexa-bot-preload-green-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$RED_NAME" "$GREEN_NAME" >/dev/null 2>&1 || true' EXIT
+
+          # RED: an absent image plus Docker create --pull=never is the exact 404 class that
+          # validate-compose previously observed through runtime.
+          docker image rm -f "$BOT_REF" >/dev/null 2>&1 || true
+          if docker create --pull=never --name "$RED_NAME" "$BOT_REF" \
+              >/tmp/vexa-bot-preload-red.out 2>/tmp/vexa-bot-preload-red.err; then
+            echo "::error title=bot-preload-red::Docker create unexpectedly succeeded without a local $BOT_REF"
+            exit 1
+          fi
+          grep -Eq 'No such image|not found locally' /tmp/vexa-bot-preload-red.err \
+            || { cat /tmp/vexa-bot-preload-red.err; echo "::error title=bot-preload-red::expected the absent-image 404 class"; exit 1; }
+          echo "✓ red control: Docker create cannot spawn absent $BOT_REF with pull disabled"
+
+          # GREEN: pull once, create with pull still disabled, and assert Docker attached the
+          # container to the exact local image ID resolved from the published reference.
+          docker pull "$BOT_REF"
+          EXPECTED_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$BOT_REF")"
+          REPO_DIGEST="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BOT_REF")"
+          GREEN_CID="$(docker create --pull=never --name "$GREEN_NAME" "$BOT_REF")"
+          ACTUAL_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$GREEN_CID")"
+          test "$ACTUAL_IMAGE_ID" = "$EXPECTED_IMAGE_ID" \
+            || { echo "::error title=bot-preload-green::spawn imageID $ACTUAL_IMAGE_ID != pulled imageID $EXPECTED_IMAGE_ID"; exit 1; }
+          echo "✓ green control: $REPO_DIGEST preloaded; Docker create used imageID $ACTUAL_IMAGE_ID"
       # The compose agent-worker service is a build-only profile — `up`/`pull` skip it, and the
       # runtime spawns workers through the docker socket API. Pre-pull the PUBLISHED worker image so
       # the runtime's presence check finds it and this leg exercises the published worker bytes.
@@ -298,6 +359,7 @@ jobs:
 
   validate-mock-fsm:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -336,6 +398,7 @@ jobs:
   # failure (a compat surface regressing, or a recorded break silently un-breaking) turns this red.
   validate-v010-compat:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -372,6 +435,7 @@ jobs:
 
   validate-bot-spawn:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -409,6 +473,7 @@ jobs:
 
   validate-lite:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -468,6 +533,7 @@ jobs:
   # (concurrent-bots needs the bot image). Gates promote + guarantees with the amd64 legs.
   validate-arm64:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -546,6 +612,7 @@ jobs:
 
   validate-helm-k3s:
     needs: resolve
+    if: ${{ inputs.validation_leg == 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -741,29 +808,50 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
       PROMOTE_LATEST: ${{ inputs.promote_latest == true }}
+      PROMOTE_REPOSITORY: ${{ inputs.promote_repository }}
+      EXPECTED_MAP_SHA256: 80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
     steps:
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Promote :v012 (and :latest only when explicitly requested)
+      - uses: actions/checkout@v4
+      - name: Manifest-preserving promotion and exact readback
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           move() {
-            local dst="$1:$2" src="$1:$VERSION"
-            case "$dst" in
+            local image="$1" target="$2"
+            case "$image:$target" in
               vexaai/vexa-bot:dev|vexaai/vexa-bot:latest|*:dev)
-                echo "::error ::constitutional guard: refusing to move $dst (vexa-bot:{dev,latest} belong to the 0.10 line; :dev is never moved by release CI)"
+                echo "::error ::constitutional guard: refusing to move $image:$target (vexa-bot:{dev,latest} belong to the 0.10 line; :dev is never moved by release CI)"
                 exit 1;;
             esac
-            echo "→ $dst ⇐ $src"
-            docker buildx imagetools create -t "$dst" "$src"
+            local unchanged=()
+            if [ "$target" = "v012" ] && [ "$PROMOTE_LATEST" != "true" ]; then
+              unchanged=(--assert-unchanged-tag latest)
+            fi
+            node scripts/registry-manifest-alias.mjs \
+              --candidate-map "releases/$VERSION/candidate-images.json" \
+              --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+              --repository "$image" \
+              --source-tag "$VERSION" \
+              --target-tag "$target" \
+              "${unchanged[@]}"
           }
-          for img in $ALL_IMAGES; do
+
+          if [ "$PROMOTE_REPOSITORY" = "all" ]; then
+            images="$ALL_IMAGES"
+          elif grep -Fxq "$PROMOTE_REPOSITORY" < <(tr ' ' '\n' <<<"$ALL_IMAGES"); then
+            images="$PROMOTE_REPOSITORY"
+          else
+            echo "::error ::$PROMOTE_REPOSITORY is not a frozen release repository"
+            exit 1
+          fi
+
+          for img in $images; do
             move "$img" v012
           done
           if [ "$PROMOTE_LATEST" = "true" ]; then
-            for img in $ALL_IMAGES; do
+            for img in $images; do
               if [ "$img" = "vexaai/vexa-bot" ]; then
                 echo "· skipping vexaai/vexa-bot:latest (constitutional guard — 0.10 line)"
                 continue
@@ -773,3 +861,11 @@ jobs:
           else
             echo "· :latest untouched (promote_latest not requested)"
           fi
+
+          node scripts/registry-candidate-validate.mjs \
+            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --tag v012 \
+            --expected-map-stable-tag "$VERSION" \
+            --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
+            --expected-top-descriptors 10 \
+            --expected-platform-identities 19
