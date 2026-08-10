@@ -210,14 +210,27 @@ export class ClusterNameBinder {
     return this.windowMatch(commit);
   }
 
-  private windowMatch(commit: CommitInfo): { name: string; confidence: number } | null {
-    // Hints are already lag-corrected at insert, so the commit window only
-    // needs tolerance slack.
+  /** The raw hint evidence over a commit window: how many ms each name's tile was lit inside
+   *  it, strongest first, with each name's SHARE of the total lit time. This is what
+   *  `windowMatch` aggregates before applying its accept gates. It is exposed because a caller
+   *  about to attribute an otherwise-UNNAMEABLE turn should consult the accumulated evidence
+   *  rather than whichever tile happened to light most recently. Returns [] when nothing
+   *  overlaps the window — it never invents a name. */
+  support(commit: CommitInfo): { name: string; supportMs: number; share: number }[] {
+    const agg = this.aggregate(commit);
+    let total = 0;
+    for (const a of agg.values()) total += a.supportMs;
+    return [...agg.entries()]
+      .map(([name, a]) => ({ name, supportMs: a.supportMs, share: total > 0 ? a.supportMs / total : 0 }))
+      .sort((a, b) => b.supportMs - a.supportMs);
+  }
+
+  /** Per-name lit-time over the commit window (± tolerance/support slack), flicker-debounced. */
+  private aggregate(commit: CommitInfo): Map<string, { ms: number; supportMs: number; lastStart: number }> {
     const windowStart = commit.tStartMs - this.matchToleranceMs;
     const windowEnd = commit.tEndMs + this.matchToleranceMs;
     const supportStart = commit.tStartMs - HINT_SUPPORT_SLACK_MS;
     const supportEnd = commit.tEndMs + HINT_SUPPORT_SLACK_MS;
-    const commitDur = Math.max(1, commit.tEndMs - commit.tStartMs);
     const agg = new Map<string, { ms: number; supportMs: number; lastStart: number }>();
 
     for (const log of this.turns.values()) {
@@ -235,6 +248,12 @@ export class ClusterNameBinder {
         agg.set(turn.name, a);
       }
     }
+    return agg;
+  }
+
+  private windowMatch(commit: CommitInfo): { name: string; confidence: number } | null {
+    const commitDur = Math.max(1, commit.tEndMs - commit.tStartMs);
+    const agg = this.aggregate(commit);
     if (agg.size === 0) return null;
 
     // Most overlap-ms wins; on a near-tie (within RECENCY_TIE_MS) the MORE RECENT
