@@ -179,3 +179,16 @@ body {
 /* a soft entrance for the conversation as it first appears */
 @keyframes vx-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .vx-fade-up { animation: vx-fade-up .22s ease both; }
+
+/* Recorded-meeting view: video player + transcript. Stacked by default (player on top, transcript
+   scrolls below). Goes side-by-side only when (a) the player is showing VIDEO — an audio-only control
+   bar must never steal the transcript's width — and (b) the PANE is wide enough. The trigger is a
+   CONTAINER query, not @media, so it measures the meeting's own pane (via container-type on the view
+   root): put two meetings side-by-side and each shrinking pane falls back to stacked on its own. The
+   transcript <main> stays flex:1/overflow:auto in both — it's the scroller either way. */
+.rec-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rec-layout > .rec-player { flex: none; }
+@container (min-width: 1100px) {
+  .rec-layout.rec-has-video { flex-direction: row; align-items: stretch; }
+  .rec-layout.rec-has-video > .rec-player { width: min(44cqw, 620px); min-height: 0; overflow-y: auto; }
+}

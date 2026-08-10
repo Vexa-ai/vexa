@@ -1,10 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
+import { PlaybackSyncProvider } from "./playbackSync";
+import { RecordingPlayer } from "./RecordingPlayer";
 import { useMeetingNotes } from "./notes";
 import { deriveProcessingView } from "./processingView";
 import { MeetingScopeProvider, MeetingSourceProvider, useEntities, useMeeting, useSignals } from "./useMeeting";
@@ -13,9 +15,9 @@ export const MEETING_CANVAS_CONTENT_INSET = 18;
 
 /** ONE render engine for both modes (P23: the terminal RENDERS, it does not re-derive). The toggle picks
  *  the SOURCE — raw segments vs the cleaned processed mirror — not a different renderer. */
-function RawTranscript() {
+function RawTranscript({ live }: { live?: boolean }) {
   const { transcript } = useMeeting();
-  return <LiveTranscriptEngine segments={transcript.segments} />;
+  return <LiveTranscriptEngine segments={transcript.segments} live={live} />;
 }
 
 // Map a copilot signal's loose context/kind onto the badge taxonomy (decision / action-item /
@@ -31,7 +33,7 @@ function signalKind(raw: string | undefined): string {
 
 /** PROCESSED v2 = the cleaned mirror with INLINE entity highlights (clickable → research / open entity
  *  doc) and actionable copilot SIGNAL badges, all through the SAME engine. */
-function ProcessedTranscript() {
+function ProcessedTranscript({ live }: { live?: boolean }) {
   const notes = useMeetingNotes();
   const entityItems = useEntities();
   const signalItems = useSignals();
@@ -61,6 +63,7 @@ function ProcessedTranscript() {
   return (
     <LiveTranscriptEngine
       segments={segments}
+      live={live}
       emptyLabel="Processing transcript…"
       entities={entities}
       signals={signals}
@@ -92,6 +95,8 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   // while naming the kg doc by the native.
   const nativeId = meeting.nativeId;
 
+  const scrollerRef = useRef<HTMLElement>(null);
+
   // null = untouched → follow the default (which can flip once the durable notes hydrate).
   const [override, setOverride] = useState<boolean | null>(null);
   const processing = deriveProcessingView({ override, live, hasNotes, durableTerminal });
@@ -115,7 +120,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   const label = effectiveLive ? `Processing ${processing ? "on" : "off"}` : (processing ? "Processed" : "Raw");
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)", containerType: "inline-size" }}>
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: `8px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
         <button
           type="button"
@@ -136,11 +141,25 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
         <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>
       </div>
       <MeetingHealthBanner />
-      <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-        <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
-          {processing ? <ProcessedTranscript /> : <RawTranscript />}
+      <PlaybackSyncProvider scrollerRef={scrollerRef}>
+        {/* Player + transcript: stacked by default, side-by-side on wide screens (.rec-layout, globals.css)
+            so a wide viewport gives the transcript its own column instead of a full-width video hiding it.
+            The player stays put while the transcript scrolls; it's inside the provider so it can register
+            its seek handler for the transcript. The recording is ONE muxed HLS stream (audio + video, or
+            audio-only) — no track toggle. */}
+        <div className={`rec-layout${durableTerminal ? " rec-has-video" : ""}`}>
+          {durableTerminal && (
+            <div className="rec-player" style={{ padding: `4px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
+              <RecordingPlayer meetingId={meetingId} title={meeting.title} />
+            </div>
+          )}
+          <main ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+            <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
+              {processing ? <ProcessedTranscript live={effectiveLive} /> : <RawTranscript live={effectiveLive} />}
+            </div>
+          </main>
         </div>
-      </main>
+      </PlaybackSyncProvider>
     </div>
   );
 }
