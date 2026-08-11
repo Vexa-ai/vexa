@@ -190,13 +190,20 @@ async function main(): Promise<void> {
   const rosterFromTape = observationsPath ? loadRosterNames(observationsPath) : [];
   const coverageFromTape = observationsPath ? loadRosterCoverage(observationsPath) : [];
   const rosterSupplied = (arg('roster') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  // `--no-captions` withholds the caption lane as NAME EVIDENCE while leaving it available as the
+  // scoring oracle. That separation is the whole point of the flag: it answers "could this meeting
+  // have been named without ever touching the participants' captions?" — a question about whether
+  // the bot needs to change visible meeting state at all — without giving up the reference the
+  // answer is checked against.
   const captionsPath = arg('captions') ?? siblingSidecar(TAPE!, 'captions');
   const captions = captionsPath ? loadCaptions(captionsPath) : [];
+  const captionsAsEvidence = !process.argv.includes('--no-captions');
   console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s), ${transport.length} transport transition(s), ${captions.length} caption(s)`);
   if (rosterFromTape.length) console.log(`roster: ${rosterFromTape.length} observed sighting(s) from the tape`);
   if (coverageFromTape.length) console.log(`roster coverage: ${JSON.stringify(coverageFromTape.map((c) => `${c.named}/${c.participants}`))}`);
   if (rosterSupplied.length) console.log(`roster: ${JSON.stringify(rosterSupplied)} SUPPLIED BY --roster (stand-in for the roster sensor, which postdates this tape)`);
   console.log(`language: ${language ?? 'auto (whisper decides, as the live bot did)'}`);
+  if (!captionsAsEvidence) console.log(`captions: WITHHELD as name evidence (--no-captions); still used as the scoring oracle`);
   console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
 
   let emit!: (ev: BoundaryEvent) => void;
@@ -346,7 +353,7 @@ async function main(): Promise<void> {
   for (const ev of transport) evs.push({ t: ev.tMs, run: () => tc.recordTransportEvent(ev) });
   // Captions are name evidence for a track. Only settled entries: an entry still being refined can
   // still change its author, and evidence that can change is not evidence.
-  for (const c of captions) if (c.stable) evs.push({ t: c.t, run: () => tc.recordCaption(c.name, c.t) });
+  if (captionsAsEvidence) for (const c of captions) if (c.stable) evs.push({ t: c.t, run: () => tc.recordCaption(c.name, c.t) });
   // Roster names ride the timeline where the sensor observed them; a supplied stand-in is delivered
   // repeatedly from the first frame, which is what a scan every couple of seconds looks like.
   for (const r of rosterFromTape) evs.push({ t: r.tMs, run: () => tc.recordRosterName(r.name, r.tMs) });

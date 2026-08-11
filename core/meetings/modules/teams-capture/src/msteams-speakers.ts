@@ -43,6 +43,45 @@ export const teamsParticipantSelectors: string[] = [
   '.roster-item',
 ];
 
+/**
+ * The ROSTER PANEL — a DOM surface separate from the video tiles.
+ *
+ * Every name path in this file rode the participant TILES, and on meeting 37 that turned out to be
+ * a single point of failure: the page degraded to one tile with no voice outline, the tile-based
+ * roster walk resolved nothing, and a meeting with a named participant sitting in the roster
+ * published as "Speaker A". The panel is a different subtree with a different lifecycle — it
+ * survives gallery layouts that drop tiles entirely.
+ *
+ * NOTE ON WHAT THIS DELIBERATELY DOES NOT DO: it never OPENS the panel. Clicking the roster button
+ * changes what the humans in the meeting see, and the same ruling that is retiring the captions
+ * lane applies here — the bot reads the page, it does not operate it. A closed panel yields nothing
+ * and says so, which is the honest outcome and is what `name-sources-absent` exists to report.
+ */
+export const teamsRosterPanelSelectors: string[] = [
+  '[data-tid="roster"]',
+  '[data-tid="people-pane"]',
+  '[data-tid="roster-section"]',
+  '[data-tid*="participant-list"]',
+  '[aria-label*="Participants"]',
+  '[aria-label*="People"]',
+  '[role="tree"][aria-label*="articipant"]',
+  '#roster-container',
+  '.ts-calling-roster',
+];
+
+/** One entry inside that panel. Kept separate from the tile selectors: a roster row has no video,
+ *  no voice outline and a different shape, and conflating the two is what made the tile surface
+ *  look like the only surface. */
+export const teamsRosterEntrySelectors: string[] = [
+  '[data-tid="roster-participant"]',
+  '[data-tid*="roster-item"]',
+  '[data-tid*="participantRosterListItem"]',
+  '[role="treeitem"]',
+  '[role="listitem"]',
+  '.roster-list-item',
+  '.ts-calling-roster-item',
+];
+
 export const teamsNameSelectors: string[] = [
   // Look for the actual name div structure
   'div[class*="___2u340f0"]', // The actual name div class pattern
@@ -190,6 +229,39 @@ export function teamsNameFromStream(element: HTMLElement): string {
     if (isTeamsDisplayNameCandidate(name)) return name;
   }
   return '';
+}
+
+/**
+ * Read the participant names the ROSTER PANEL is showing, if it is open.
+ *
+ * Returns [] when the panel is absent — which is a fact worth having, not a failure to paper over:
+ * it is precisely the m37 state, and the caller reports it rather than silently naming nobody.
+ * Names go through `isTeamsDisplayNameCandidate` like every other path in this file, so the panel
+ * cannot introduce a name the tiles would have been refused.
+ */
+export function readTeamsRosterPanel(root: ParentNode = document): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const panelSel of teamsRosterPanelSelectors) {
+    let panels: Element[] = [];
+    try { panels = Array.from(root.querySelectorAll(panelSel)); } catch { continue; }
+    for (const panel of panels) {
+      for (const entrySel of teamsRosterEntrySelectors) {
+        let entries: Element[] = [];
+        try { entries = Array.from(panel.querySelectorAll(entrySel)); } catch { continue; }
+        for (const entry of entries) {
+          if (!(entry instanceof HTMLElement)) continue;
+          // Same resolution order as a tile, minus the stream wrapper a roster row does not have:
+          // stable attributes first, then the structural leaf scan (#1121) as the rot-proof floor.
+          const name = extractTeamsSpeakerName(entry);
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          names.push(name);
+        }
+      }
+    }
+  }
+  return names;
 }
 
 /** Resolve the display name carried by one participant tile.
@@ -379,13 +451,41 @@ export interface TeamsRosterCoverageObservation {
   tMs: number;
 }
 
+/**
+ * The module saying it has NO WAY to name anybody.
+ *
+ * Meeting 37 shipped a whole conversation as "Speaker A" and nothing in the run said why. The tiles
+ * had degraded to one element with no voice outline, the roster resolved nothing, and the caption
+ * lane had failed on the Teams side — three independent name sources all dark at once, and the
+ * transcript looked merely anonymous rather than broken. Refusing to guess is correct; refusing to
+ * guess SILENTLY is not, because the two are indistinguishable to whoever reads the transcript.
+ *
+ * Emitted once per window, and only while the meeting is actually producing audio — a silent room
+ * with nobody speaking has nothing to name and is not a fault.
+ */
+export interface TeamsNameSourcesAbsentObservation {
+  type: 'name-sources-absent';
+  platform: 'teams';
+  /** Participant-shaped tiles the scan matched (m37: 1). */
+  tiles: number;
+  /** …of which carried the voice-level outline, the only ones that can ever hint (m37: 0). */
+  observable: number;
+  /** Distinct names the ROSTER PANEL yielded (m37: 0). */
+  rosterPanelNames: number;
+  /** Distinct names any surface has yielded all session (m37: 0). */
+  namesKnown: number;
+  windowMs: number;
+  tMs: number;
+}
+
 export type TeamsProducerObservation =
   | TeamsNameUnresolvedObservation
   | TeamsSignalAbsentObservation
   | TeamsIndicatorFiredObservation
   | TeamsIndicatorSilentObservation
   | TeamsRosterNameObservation
-  | TeamsRosterCoverageObservation;
+  | TeamsRosterCoverageObservation
+  | TeamsNameSourcesAbsentObservation;
 
 /** Coverage + liveness of the WHO signal, for a caller that wants to surface it. */
 export interface TeamsSpeakerHealth {
@@ -758,6 +858,28 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     log('[TeamsSpeakers] signal-absent reason=outline-missing signal=dom-outline');
   }
 
+  /**
+   * Report having no way to name anyone. Rate-limited to one per window: the condition persists for
+   * as long as the page stays degraded, and a line per scan would bury the fact it is reporting.
+   */
+  function checkNameSources(): void {
+    const at = now();
+    if (at - nameSourcesAbsentAt < indicatorSilentMs) return;
+    // Something must have been observable to name in the first place: a scan that found no tiles at
+    // all is a page that has not rendered yet, not a naming failure.
+    if (coverage.found === 0) return;
+    if (rosterSeen.size > 0 || transitions > 0) return;   // some surface has produced a name
+    nameSourcesAbsentAt = at;
+    deliver({
+      type: 'name-sources-absent', platform: 'teams',
+      tiles: coverage.found, observable: coverage.observable,
+      rosterPanelNames: lastPanelCount, namesKnown: rosterSeen.size,
+      windowMs: indicatorSilentMs, tMs: at,
+    });
+    log(`[TeamsSpeakers] NAME-SOURCES-ABSENT tiles=${coverage.found} observable=${coverage.observable} `
+      + `roster-panel=${lastPanelCount} — no tile can hint and no surface has yielded a name`);
+  }
+
   function emitIndicatorFired(indicator: TeamsSpeakingIndicator, detail?: string): void {
     const observation: TeamsIndicatorFiredObservation = {
       type: 'indicator-fired',
@@ -947,6 +1069,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const rosterSeen = new Map<string, number>();
   let scanCounter = 0;
   let lastCoverageKey = '';
+  let lastPanelCount = 0;
+  let nameSourcesAbsentAt = 0;
   function emitRosterName(name: string): void {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
@@ -982,6 +1106,15 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         }
       });
     }
+    // SECOND SURFACE: the roster panel, if the meeting has it open. Read after the tiles and merged
+    // into the same stream — a name is a name whichever surface showed it — but counted separately,
+    // because "the tiles are gone and the panel saved us" is exactly the state worth being able to
+    // see in a fixture afterwards.
+    let panelNames: string[] = [];
+    try { panelNames = readTeamsRosterPanel(document); } catch { panelNames = []; }
+    for (const n of panelNames) if (!isSelfDisplayName(n, opts.selfName)) namesThisScan.add(n);
+    lastPanelCount = panelNames.length;
+
     // Emit once per name per scan (a name matched by two selectors is one participant).
     for (const n of namesThisScan) emitRosterName(n);
     // …and say how much of the roster this scan could read. Reported on CHANGE rather than every
@@ -998,6 +1131,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     coverage.found = found;
     coverage.observable = observable;
     coverage.roster = rosterSeen.size;
+    checkNameSources();
     log(`🔍 [TeamsSpeakers] Scanned ${found} participants, observing ${observable} with signal (signal-absent ${found - observable})`);
     if (!coverageWarned && found > 0 && (observable / found) < 0.5) {
       coverageWarned = true;
