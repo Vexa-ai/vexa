@@ -20,13 +20,38 @@ class InMemoryStorage:
     def __init__(self):
         self.blobs: dict[str, bytes] = {}
         self.content_types: dict[str, str] = {}
+        # Object mtimes (epoch seconds). The budget janitor evicts oldest-first, so a fake that
+        # cannot express age could not drive that decision at all. ``upload`` stamps a monotonically
+        # increasing counter (upload order IS age order); ``touch`` sets one explicitly.
+        self.mtimes: dict[str, float] = {}
+        self._clock = 0.0
+        self.deleted: list[str] = []
 
     async def upload(self, key: str, data: bytes, *, content_type: str) -> None:
         self.blobs[key] = data
         self.content_types[key] = content_type
+        self._clock += 1.0
+        self.mtimes[key] = self._clock
+
+    def touch(self, key: str, when: float) -> None:
+        """Set an object's mtime (epoch seconds) so a test can order tapes by age explicitly."""
+        self.mtimes[key] = when
 
     async def list(self, prefix: str) -> list[str]:
         return sorted(k for k in self.blobs if k.startswith(prefix))
+
+    async def list_detailed(self, prefix: str) -> list[dict]:
+        return [
+            {"key": k, "size": len(self.blobs[k]), "last_modified": self.mtimes.get(k, 0.0)}
+            for k in sorted(self.blobs)
+            if k.startswith(prefix)
+        ]
+
+    async def delete(self, key: str) -> None:
+        self.blobs.pop(key, None)
+        self.content_types.pop(key, None)
+        self.mtimes.pop(key, None)
+        self.deleted.append(key)
 
     async def get(self, key: str) -> bytes:
         return self.blobs[key]

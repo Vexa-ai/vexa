@@ -94,6 +94,41 @@ class S3Storage:
         except ClientError:
             return False
 
+    async def list_detailed(self, prefix: str) -> list[dict]:
+        """Key + Size + LastModified per object, paginated to exhaustion like ``list``.
+
+        Size and LastModified ride the SAME response as the keys, so the janitor's whole sweep costs
+        one paginated listing instead of a head_object per tape.
+        """
+        out: list[dict] = []
+        token: Optional[str] = None
+        while True:
+            kw = {"Bucket": self._bucket, "Prefix": prefix}
+            if token is not None:
+                kw["ContinuationToken"] = token
+            resp = await self._run(self._c().list_objects_v2, **kw)
+            for o in resp.get("Contents", []):
+                lm = o.get("LastModified")
+                out.append({
+                    "key": o["Key"],
+                    "size": int(o.get("Size") or 0),
+                    # boto3 hands back a tz-aware datetime; normalize to epoch seconds here so the
+                    # janitor's ordering never depends on a backend's datetime flavour.
+                    "last_modified": lm.timestamp() if lm is not None else 0.0,
+                })
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+            if not token:
+                raise RuntimeError(
+                    f"list_objects_v2 reported IsTruncated with no NextContinuationToken "
+                    f"(prefix={prefix!r}); object listing may be incomplete"
+                )
+        return sorted(out, key=lambda o: o["key"])
+
+    async def delete(self, key: str) -> None:
+        await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
+
 
 class SqlAlchemyRecordingRepo:
     """``RecordingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
