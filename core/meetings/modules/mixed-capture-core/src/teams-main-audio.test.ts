@@ -8,7 +8,7 @@
  *
  * Run: npx tsx src/teams-main-audio.test.ts
  */
-import { selectTeamsMixStreams, type StreamLike } from './teams-main-audio.js';
+import { selectTeamsMixStreams, mainAudioProvedSilent, type StreamLike } from './teams-main-audio.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -80,6 +80,42 @@ const stream = (...ids: string[]): StreamLike => ({ getAudioTracks: () => ids.ma
 {
   const r = selectTeamsMixStreams([], { firstMissMs: null, nowMs: 1_000_000 });
   check('no streams at all is handled without throwing', r.streams.length === 0, r.outcome);
+}
+
+// ── 8. PRESENCE IS NOT LIVENESS. The mix appeared, was captured, and carried pure silence.
+// Observed live on staging 2026-08-11: three remote tracks mirrored, the mainAudio pick connected,
+// and not one word ever transcribed — no boundaries, no turns, every speaker hint missed. ──
+{
+  check('a mix that has never been captured is NOT yet silent (no premature abandon)',
+    mainAudioProvedSilent({ captureStartedMs: null, energeticMs: 0, nowMs: 1_000_000 }) === false);
+  check('inside the silence window it is given the benefit of the doubt',
+    mainAudioProvedSilent({ captureStartedMs: 1_000_000, energeticMs: 0, nowMs: 1_010_000, silenceMs: 20_000 }) === false);
+  check('a mix that carried ANY energy is never abandoned, however quiet the room since',
+    mainAudioProvedSilent({ captureStartedMs: 1_000_000, energeticMs: 40, nowMs: 9_000_000, silenceMs: 20_000 }) === false);
+  check('captured past the window with zero energy is proved dead',
+    mainAudioProvedSilent({ captureStartedMs: 1_000_000, energeticMs: 0, nowMs: 1_020_000, silenceMs: 20_000 }) === true);
+}
+
+// ── 9. The verdict changes the pick: a PRESENT but silent mix falls back to every track. ──
+{
+  const all = [stream('abc-1'), stream('mainAudio-0'), stream('def-2')];
+  const healthy = selectTeamsMixStreams(all, { firstMissMs: null, nowMs: 1_000_000 });
+  check('while the mix looks alive it is still preferred alone',
+    healthy.outcome === 'main-audio' && healthy.streams.length === 1, healthy.outcome);
+
+  const dead = selectTeamsMixStreams(all,
+    { firstMissMs: null, nowMs: 1_000_000, mainAudioSilent: true, mainAudioCapturedMs: 21_000 });
+  check('a mix proved silent is abandoned for ALL tracks',
+    dead.outcome === 'fallback-all' && dead.streams.length === 3, `${dead.outcome}/${dead.streams.length}`);
+  check('and it says why, naming the tracks so the pick is diagnosable',
+    dead.observation?.kind === 'main-audio-silent' && (dead.observation as any).capturedMs === 21_000
+      && (dead.observation?.trackIds || []).includes('mainAudio-0'),
+    JSON.stringify(dead.observation));
+
+  const rescans = [1_000_000, 1_002_000, 1_004_000].map((now) =>
+    selectTeamsMixStreams(all, { firstMissMs: null, nowMs: now, mainAudioSilent: true, mainAudioCapturedMs: 21_000 }));
+  check('the silent fallback re-reports on every rescan too (no one-shot latch)',
+    rescans.every((r) => r.observation?.kind === 'main-audio-silent'));
 }
 
 if (failed) { console.error(`\n❌ teams-main-audio: ${failed} check(s) FAILED.`); process.exit(1); }
