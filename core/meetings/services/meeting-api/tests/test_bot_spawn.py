@@ -60,6 +60,51 @@ def test_invocation_carries_stt_creds_when_provided():
     assert "transcriptionServiceUrl" not in build_invocation(**base)
 
 
+# ── O-TEL-1 fixture collection: captureSignalEnabled end-to-end through the spawn ────────────────
+
+_INV_BASE = dict(meeting_id=1, platform="google_meet",
+                 meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
+                 native_meeting_id="abc-defg-hij", connection_id="conn-1",
+                 redis_url="redis://redis:6379/0")
+
+
+def test_invocation_carries_capture_signal_enabled_and_strips_only_none():
+    """The kill switch travels as an explicit ``false``, not as an omission.
+
+    ``build_invocation`` strips ``None`` — so an omitted flag would leave the bot on its own
+    ``VEXA_CAPTURE_SIGNAL`` env default, which is exactly the wrong outcome for a spawn whose
+    operator has just turned collection OFF. ``False`` is not ``None``, so it survives the strip;
+    this pins that, because the day it stops being true nothing else would notice.
+    """
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(_INV_BASE, token=token)
+
+    on = build_invocation(**base, capture_signal_enabled=True)
+    conforms_invocation(on)
+    assert on["captureSignalEnabled"] is True
+
+    off = build_invocation(**base, capture_signal_enabled=False)
+    conforms_invocation(off)
+    assert off["captureSignalEnabled"] is False, "the kill switch must ride as false, not vanish"
+
+    # Unset (the desktop / local composition root) → omitted, so the bot keeps its env default.
+    assert "captureSignalEnabled" not in build_invocation(**base)
+
+
+def test_invocation_tape_is_independent_of_recording_enabled():
+    """A meeting nobody asked to record still yields a fixture — the two flags are orthogonal, and
+    the sealed contract says so ("the transcript/recording paths are unaffected either way")."""
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    inv = build_invocation(**dict(_INV_BASE, token=token),
+                           recording_enabled=False, capture_signal_enabled=True,
+                           recording_upload_url="http://meeting-api:8080/internal/recordings/upload")
+    conforms_invocation(inv)
+    assert inv["recordingEnabled"] is False and inv["captureSignalEnabled"] is True
+    # The tape rides the SAME upload endpoint the recording chunks use, so a non-recording spawn
+    # still needs the URL — without it the bot has a tape and nowhere to put it.
+    assert inv["recordingUploadUrl"].endswith("/internal/recordings/upload")
+
+
 def test_invocation_carries_stt_model_when_provided():
     """#522: a validating OpenAI-compatible backend (Groq, vLLM) needs its served model id on
     every request. The deployment's choice rides the sealed invocation; absent → omitted, and
@@ -341,15 +386,16 @@ def test_post_bots_transcribe_without_stt_fails_loud(monkeypatch):
 
 
 def test_post_bots_transcribe_with_settings_stt_passes(monkeypatch):
-    """Settings-configured backend (monkeypatched _resolve_transcription_backend) → spawn proceeds."""
+    """Settings-configured backend (monkeypatched bot-context) → spawn proceeds."""
     from meeting_api.bot_spawn import service as spawn_service
 
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
 
     async def fake_resolve(user_id):
-        return {"url": "https://stt-settings.example.com", "provider": "customer"}
+        return {"transcription": {"url": "https://stt-settings.example.com",
+                                  "provider": "customer"}}
 
-    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
 
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
@@ -375,11 +421,12 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
 
     async def fake_resolve(user_id):
         assert user_id == USER
-        return {"url": "https://stt-mine.example.com", "provider": "customer"}
+        return {"transcription": {"url": "https://stt-mine.example.com",
+                                  "provider": "customer"}}
 
     monkeypatch.setenv("TRANSCRIPTION_MODEL", "env-model")
 
-    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     await request_bot(repo, runtime, user_id=USER, platform="google_meet",
@@ -437,9 +484,10 @@ async def test_request_bot_disabled_transcription_ignores_configured_provider(mo
     from meeting_api.bot_spawn import service as spawn_service
 
     async def fake_resolve(_user_id):
-        return {"url": "https://stt-mine.example.com", "provider": "customer"}
+        return {"transcription": {"url": "https://stt-mine.example.com",
+                                  "provider": "customer"}}
 
-    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
     repo = InMemoryMeetingRepo()
     await request_bot(
         repo,
@@ -467,9 +515,9 @@ async def test_request_bot_does_not_guess_provider_for_legacy_settings_response(
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
 
     async def fake_resolve(user_id):
-        return {"url": "https://legacy-settings.example.com"}
+        return {"transcription": {"url": "https://legacy-settings.example.com"}}
 
-    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
     repo = InMemoryMeetingRepo()
     await request_bot(
         repo,
@@ -491,12 +539,12 @@ async def test_continue_meeting_refreezes_provider_for_the_new_session(monkeypat
     selected = {"provider": "customer"}
 
     async def fake_resolve(_user_id):
-        return {
+        return {"transcription": {
             "url": "https://configured.example.com",
             "provider": selected["provider"],
-        }
+        }}
 
-    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     first = await request_bot(
@@ -840,3 +888,48 @@ def test_native_meeting_id_with_url_chars_is_422_not_join_failure(monkeypatch):
         "passcode": "X8hcQVTnGNpGelJLSv",
     })
     assert ok.status_code == 201, f"bare id + separate passcode was refused: {ok.text}"
+
+
+# ── O-TEL-1: what the spawn resolves when identity answers, and when it does not ─────────────────
+
+async def test_spawn_defaults_capture_signal_on_when_identity_is_unreachable(monkeypatch):
+    """No ADMIN_API_URL / a 500 / an admin-api that predates the field → the tape still runs.
+
+    The failure this forbids is silent: a transient identity blip turns fixture collection off
+    fleet-wide, prod looks entirely healthy, and nobody notices until someone asks why no fixtures
+    arrived. The bot-context lookup is best-effort by contract, so its failure mode must be the
+    product default, not the absence of one.
+    """
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="ctx-unreachable", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["captureSignalEnabled"] is True
+
+
+@pytest.mark.parametrize("ctx,expected,slug", [
+    ({"capture_signal": True}, True, "on"),
+    ({"capture_signal": False}, False, "off"),
+    ({}, True, "absent"),                     # an older admin-api has no such key → default ON
+    ({"capture_signal": "false"}, True, "str"),   # only a real boolean false is the kill switch
+])
+async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, expected, slug):
+    """One hop, two readers: the same best-effort bot-context call feeds the STT backend AND the
+    tape flag. The string case is deliberate — identity normalizes the settings string into a real
+    boolean, so a string arriving here means a contract drift, and defaulting ON is the safe read."""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    async def fake_ctx(_user_id):
+        return ctx
+
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_ctx)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id=f"ctx-{slug}", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["captureSignalEnabled"] is expected
