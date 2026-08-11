@@ -133,6 +133,10 @@ export class TrackNamer {
 
   private upTo = 0;
   private newest = 0;
+  /** The earliest instant any signal described. The integrator starts HERE, not at whenever it was
+   *  first ticked — a namer first ticked late would otherwise silently discard the meeting's
+   *  opening evidence, which is exactly the evidence that names a speaker fastest. */
+  private origin: number | null = null;
   private episode: { trackId: string; name: string; start: number } | null = null;
 
   constructor(opts: TrackNamerOptions = {}) {
@@ -150,6 +154,7 @@ export class TrackNamer {
   /** The transport says a source became (in)audible. */
   setTrackActive(trackId: string, active: boolean, tMs: number): void {
     this.newest = Math.max(this.newest, tMs);
+    this.noteOrigin(tMs);
     const spans = this.span(this.trackSpans, trackId);
     const last = spans[spans.length - 1];
     if (active) {
@@ -218,10 +223,15 @@ export class TrackNamer {
   reset(): void {
     this.trackSpans.clear(); this.nameSpans.clear(); this.evidence.clear();
     this.named.clear(); this.owner.clear(); this.order = [];
-    this.upTo = 0; this.newest = 0; this.episode = null;
+    this.upTo = 0; this.newest = 0; this.origin = null; this.episode = null;
   }
 
   // ── the integrator ────────────────────────────────────────────────────────────────────────────
+
+  /** Every interval start passes through here, so the origin cannot be missed. */
+  private noteOrigin(t: number): void {
+    if (this.origin === null || t < this.origin) this.origin = t;
+  }
 
   private span(m: Map<string, Interval[]>, key: string): Interval[] {
     let a = m.get(key);
@@ -231,6 +241,7 @@ export class TrackNamer {
 
   private paint(name: string, at: number, graceMs: number, kind: NameEvidenceKind, isEnd: boolean): void {
     this.newest = Math.max(this.newest, at + HINT_LAG_MS);
+    this.noteOrigin(at);
     const spans = this.span(this.nameSpans, name);
     const last = spans[spans.length - 1];
     if (isEnd) { if (last && last.end > at) last.end = Math.max(at, last.start); return; }
@@ -240,6 +251,7 @@ export class TrackNamer {
 
   private paintSpan(name: string, from: number, to: number, kind: NameEvidenceKind): void {
     if (to <= from) return;
+    this.noteOrigin(from);
     const spans = this.span(this.nameSpans, name);
     const last = spans[spans.length - 1];
     if (last && last.end >= from) { last.end = Math.max(last.end, to); return; }
@@ -252,8 +264,8 @@ export class TrackNamer {
    * are hundreds of them in an hour-long meeting, so the cost is noise beside one Whisper call.
    */
   private advance(horizon: number): void {
+    if (this.upTo === 0) this.upTo = this.origin ?? horizon;
     if (!(horizon > this.upTo)) return;
-    if (this.upTo === 0) this.upTo = horizon;   // first call establishes the origin, credits nothing
     const edges = new Set<number>([horizon]);
     const consider = (iv: Interval): void => {
       if (iv.start > this.upTo && iv.start <= horizon) edges.add(iv.start);
