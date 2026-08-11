@@ -83,7 +83,7 @@ export const TRACK_NAME_ROSTER_SETTLE_MS = envNumber('VEXA_TRACK_NAME_ROSTER_SET
  * right place to close this. But this file binds a name to a human being on the strength of an
  * argument from absence, and the m34 meeting is what that costs when the input is polluted: the
  * roster contained our OWN BOT, elimination had exactly one track and one name left, and a bot's
- * name went onto a person's speech. A rule that reasons from "nothing else it could be" must check
+ * name went onto a person's speech. A rule whose premise is 'nothing else it could be' must check
  * that what remains is a person, or its premise is doing no work at all.
  *
  * Platform-agnostic by construction: no Teams vocabulary, just the shapes that are never humans.
