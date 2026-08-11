@@ -349,7 +349,7 @@ console.log('\n── teardown upload ──');
   });
   check('absent sidecars are skipped, not failed',
     out.uploaded.join(',') === 'captured-signal'
-      && out.skipped.join(',') === 'stt,captions,csrc,observations' && out.failed.length === 0,
+      && out.skipped.join(',') === 'stt,captions,csrc,observations,botlog,transcript' && out.failed.length === 0,
     JSON.stringify(out));
 }
 {

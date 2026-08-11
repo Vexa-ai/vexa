@@ -179,7 +179,19 @@ SIGNAL_ROOT_PREFIX = f"{_SIGNAL_PREFIX}/"
 # line by line, so the tape would stop replaying the moment a Teams meeting produced a caption.
 # Adding a caption or transition record to the contract is a v2 decision, not a side effect of
 # wiring a lane.
-SIGNAL_TAPE_PARTS = ("captured-signal", "stt", "captions", "csrc", "observations")
+#
+# `botlog` and `transcript` are the two parts that are not signal at all. The first is what the bot
+# SAID about its own run — the commentary a human debugs from, which until now lived only in a pod
+# deleted minutes later, so every "why did it do that?" began by asking for a log nobody still had.
+# It is also the ONLY part that may arrive TRUNCATED (with the drop named inside it) rather than
+# skipped: nothing folds a log, a human reads it. The second is the transcript a viewer was
+# actually left with after every retraction — a fold over the publish stream that every consumer
+# performs and nobody stored, so "what did this meeting say?" could only be answered by re-running
+# it against a redis that no longer exists.
+SIGNAL_TAPE_PARTS = ("captured-signal", "stt", "captions", "csrc", "observations", "botlog", "transcript")
+# Not every part is JSONL — the bot log is plain text, and its key must carry its real extension or
+# a curator who downloads it gets a file their tools will try to parse a line at a time as JSON.
+SIGNAL_TAPE_PART_FORMATS = {"botlog": "txt"}
 # Promotion marker: an object beside a tape meaning "this one is in the regression library, keep
 # it". A marker OBJECT rather than a DB flag so the janitor stays PURE STORAGE — it needs no DB
 # session, and a promoted tape survives even if its meeting row is gone.

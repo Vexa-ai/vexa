@@ -24,7 +24,7 @@
  */
 import { createClient } from 'redis';
 import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
-import type { Act, LifecycleEvent } from './contracts.js';
+import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
@@ -32,7 +32,7 @@ import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redi
 import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
-import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
@@ -176,7 +176,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // subscribe surfaces the error and the orchestrator drives to a clean terminal `failed`.
   const transcriptClient = redisClientFrom(inv.redisUrl);
   const actsClient = redisActsClientFrom(inv.redisUrl);
-  const transcript: TranscriptSink = createRedisTranscriptSink({
+  const liveTranscript: TranscriptSink = createRedisTranscriptSink({
     client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
   });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
@@ -198,6 +198,15 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       ? createCaptureSignalRecorder(inv)
       : null;
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  // The bot's own commentary, teed beside the tape. Started HERE — before the browser launches —
+  // because the lines that explain a failed join are the ones emitted before anything else exists.
+  const botLog = signalRecorder ? startBotLogSidecar(signalRecorder.botlogPath) : null;
+  // The transcript a VIEWER is left with, folded live and written once at teardown. Every consumer
+  // performs this fold (upsert by segment id, delete on retract) and nobody stored the result, so
+  // "what did this meeting actually say?" could only be answered by re-running it against a redis
+  // that no longer exists by then.
+  const snapshot = signalRecorder ? wrapTranscriptWithSnapshot<TranscriptSegment, TranscriptSink>(liveTranscript, signalRecorder.transcriptPath) : null;
+  const transcript: TranscriptSink = snapshot ?? liveTranscript;
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
   const sttFaults = createSttFaultReporter();
@@ -311,6 +320,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // path that skipped the orchestrator's teardown. (#593)
     await pipeline.stop().catch(() => { /* best-effort */ });
     await signalRecorder?.close().catch(() => { /* best-effort */ });
+    // The two teardown sidecars, written BEFORE the upload reads the directory. Both are
+    // best-effort by construction: a diagnostic that can change how a meeting ended is worse than
+    // no diagnostic. The log tap is released first so the snapshot's own line lands in the file.
+    await snapshot?.writeSnapshot().catch(() => { /* best-effort */ });
+    botLog?.stop();
     // O-TEL-1: ship the tape AFTER close() (the file is flushed and finalized there) and BEFORE the
     // process exits, because the container's disk dies with it. Best-effort by construction —
     // uploadSignalTapes never throws and never rejects, so nothing here can revise the exit code the
