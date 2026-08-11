@@ -22,6 +22,7 @@ from ..obs import log_event
 from ..recording_codec import build_recording_master
 from .jsonb import (
     SIGNAL_TAPE_PARTS,
+    SIGNAL_TAPE_PART_FORMATS,
     apply_chunk_to_recording,
     chunk_storage_key,
     master_storage_key,
@@ -31,7 +32,8 @@ from .jsonb import (
 from .ports import RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
-_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "jsonl": "application/x-ndjson"}
+_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "jsonl": "application/x-ndjson",
+                  "txt": "text/plain; charset=utf-8"}
 
 # The ``media_type`` that means "a captured-signal tape, not playable media" (O-TEL-1).
 SIGNAL_MEDIA_TYPE = "signal"
@@ -173,9 +175,14 @@ async def upload_signal_tape(
         raise InvalidSignalTape(
             f"unknown signal tape part {part!r}; known: {list(SIGNAL_TAPE_PARTS)}"
         )
-    if media_format != SIGNAL_MEDIA_FORMAT:
+    # Most parts are JSONL; the bot log is plain text. The expected format is a property of the
+    # PART, not of the caller, so an uploader cannot choose an extension — the key would otherwise
+    # be caller-shaped, and a curator downloading `botlog.jsonl` would get a text file their tools
+    # try to parse a line at a time as JSON.
+    expected = SIGNAL_TAPE_PART_FORMATS.get(part, SIGNAL_MEDIA_FORMAT)
+    if media_format != expected:
         raise InvalidSignalTape(
-            f"signal tapes are {SIGNAL_MEDIA_FORMAT}, got {media_format!r}"
+            f"signal tape part {part!r} is {expected}, got {media_format!r}"
         )
 
     session = await repo.find_session(session_uid)

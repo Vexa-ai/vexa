@@ -46,6 +46,140 @@ export type CaptureSignalSink = CaptionCapableSink & CsrcCapableSink & Observati
  *  meeting-api's SIGNAL_TAPE_PARTS — the name lands in an object key server-side. */
 export type SidecarPart = 'captions' | 'csrc' | 'observations';
 
+/** Bytes of bot log kept per session before the middle is dropped. */
+export const DEFAULT_MAX_BOTLOG_BYTES = 50 * 1024 * 1024;
+/** Of that budget, how much is held back for the TAIL. The head is written straight through; once
+ *  it is full the tail rolls in memory, so the file that lands is head + marker + tail. */
+const BOTLOG_TAIL_FRACTION = 0.2;
+
+/**
+ * Tee the bot's own log to `<session>.botlog.txt`.
+ *
+ * A stored fixture could always reproduce what the bot HEARD and, since the observations sidecar,
+ * some of what it NOTICED — but the running commentary that a human actually debugs from (which
+ * spine armed, which name resolved, which window was skipped and why) lived only in a pod that is
+ * deleted minutes later. Every "why did it do that?" therefore began by asking for a log nobody
+ * still had.
+ *
+ * THIS FILE IS THE ONE EXCEPTION to whole-or-absent. Every other artefact is skipped rather than
+ * truncated, because half a tape reads to a replay exactly like a complete one — a missing fixture
+ * turned into a lying fixture. A log is not replay input: nothing consumes it as a record of what
+ * happened, a human reads it, and a human reading `[…] N bytes dropped […]` is not misled by it.
+ * So a 6-hour meeting keeps its opening and its ending, and says so in the middle.
+ */
+export function startBotLogSidecar(
+  path: string,
+  opts: { maxBytes?: number; console?: Partial<Console>; now?: () => number } = {},
+): { stop: () => void; bytes: () => number; truncated: () => boolean } {
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BOTLOG_BYTES;
+  const headBudget = Math.max(1, Math.floor(maxBytes * (1 - BOTLOG_TAIL_FRACTION)));
+  const tailBudget = Math.max(1, maxBytes - headBudget);
+  const target = (opts.console ?? console) as Record<string, (...a: unknown[]) => void>;
+  const methods = ['log', 'info', 'warn', 'error', 'debug'] as const;
+  const original: Partial<Record<string, (...a: unknown[]) => void>> = {};
+  let head = 0;
+  let dropped = 0;
+  let tail: string[] = [];
+  let tailBytes = 0;
+  let stopped = false;
+  let faults = 0;
+
+  try { mkdirSync(dirname(path), { recursive: true }); } catch { /* best-effort */ }
+
+  const write = (line: string): void => {
+    if (head + line.length <= headBudget) {
+      head += line.length;
+      try { appendFileSync(path, line, 'utf8'); } catch (e) { if (faults++ < 3) original.error?.(`[bot] botlog write failed: ${String(e)}`); }
+      return;
+    }
+    // Past the head budget the tail ROLLS: the newest `tailBudget` bytes survive, everything
+    // between the two is counted and named rather than silently missing.
+    tail.push(line);
+    tailBytes += line.length;
+    while (tailBytes > tailBudget && tail.length > 1) { dropped += tail[0].length; tailBytes -= tail.shift()!.length; }
+  };
+
+  const fmt = (level: string, args: unknown[]): string => {
+    const body = args.map((a) => {
+      if (typeof a === 'string') return a;
+      try { return JSON.stringify(a); } catch { return String(a); }
+    }).join(' ');
+    return `${new Date(opts.now?.() ?? Date.now()).toISOString()} ${level} ${body}\n`;
+  };
+
+  for (const m of methods) {
+    const prev = target[m];
+    if (typeof prev !== 'function') continue;
+    original[m] = prev;
+    target[m] = (...args: unknown[]): void => {
+      try { write(fmt(m.toUpperCase(), args)); } catch { /* a log tap must never break the bot */ }
+      prev.apply(target, args);
+    };
+  }
+
+  return {
+    bytes: () => head + tailBytes,
+    truncated: () => dropped > 0,
+    stop(): void {
+      if (stopped) return;
+      stopped = true;
+      for (const m of methods) if (original[m]) target[m] = original[m]!;
+      if (tail.length === 0) return;
+      const marker = `\n───── ${dropped} bytes of log dropped here (session exceeded the ${maxBytes}-byte cap; head and tail kept) ─────\n\n`;
+      try { appendFileSync(path, marker + tail.join(''), 'utf8'); } catch { /* best-effort */ }
+      tail = [];
+    },
+  };
+}
+
+/**
+ * The transcript AS A VIEWER WOULD HAVE BEEN LEFT WITH IT — `<session>.transcript.jsonl`.
+ *
+ * The bot's egress is an append-only stream of publishes plus retractions, so the durable state is
+ * a fold over that stream, not any single message in it. Every consumer performs that fold
+ * (the collector upserts by segment id and deletes on retract) and until now nobody stored the
+ * RESULT beside the tape — which meant answering "what did this meeting actually say?" required
+ * re-running the fold from redis, in an environment that no longer exists.
+ *
+ * So the fold is done here, live, and written once at teardown: drafts that confirmed appear under
+ * their confirmed id, drafts that were superseded do not appear at all, and a rename shows only
+ * its final name. It is a SNAPSHOT, never an audit trail — the publish stream is the audit trail,
+ * and `--out-writes` in the replay harness is how it is read.
+ */
+export function wrapTranscriptWithSnapshot<
+  S extends { segment_id: string; start?: number },
+  T extends { publish(segment: S): Promise<void>; retract?(ids: string[]): Promise<void> },
+>(sink: T, path: string, log: (m: string) => void = (m) => console.log(`[bot] transcript-snapshot: ${m}`)): T & { writeSnapshot: () => Promise<number> } {
+  const durable = new Map<string, S>();
+  const wrapped = {
+    ...sink,
+    async publish(segment: S): Promise<void> {
+      if (segment?.segment_id) durable.set(segment.segment_id, { ...segment });
+      return sink.publish(segment);
+    },
+    ...(sink.retract
+      ? {
+        async retract(ids: string[]): Promise<void> {
+          for (const id of ids) durable.delete(id);
+          return sink.retract!(ids);
+        },
+      }
+      : {}),
+    async writeSnapshot(): Promise<number> {
+      const rows = [...durable.values()].sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+      try {
+        mkdirSync(dirname(path), { recursive: true });
+        if (rows.length > 0) await appendFile(path, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+        log(`${rows.length} row(s) → ${path}`);
+      } catch (e) {
+        log(`write failed: ${String(e)}`);
+      }
+      return rows.length;
+    },
+  };
+  return wrapped as T & { writeSnapshot: () => Promise<number> };
+}
+
 /**
  * The build that produced this tape.
  *
@@ -111,6 +245,11 @@ export interface CaptureSignalRecorder {
    * `observation` is the producer's own payload, VERBATIM — this file never re-interprets it.
    */
   observationsPath: string;
+  /** The bot's own log beside the tape — `<session>.botlog.txt`. See startBotLogSidecar for why
+   *  this is the ONE artefact that is truncated rather than skipped. */
+  botlogPath: string;
+  /** The transcript a viewer was left with — `<session>.transcript.jsonl` (retract-aware). */
+  transcriptPath: string;
   /** Bytes admitted to the tape so far (the header plus every recorded line, sidecars included). */
   bytesWritten(): number;
   /** True once the size cap stopped the writer. The MEETING is unaffected — see `admit`. */
@@ -264,6 +403,8 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   const captionsPath = path.replace(/\.captured-signal\.jsonl$/, '.captions.jsonl');
   const csrcPath = path.replace(/\.captured-signal\.jsonl$/, '.csrc.jsonl');
   const observationsPath = path.replace(/\.captured-signal\.jsonl$/, '.observations.jsonl');
+  const botlogPath = path.replace(/\.captured-signal\.jsonl$/, '.botlog.txt');
+  const transcriptPath = path.replace(/\.captured-signal\.jsonl$/, '.transcript.jsonl');
 
   const headerLine = JSON.stringify(sessionHeader(inv, startedAt)) + '\n';
   let writer: SignalWriter | null = null;
@@ -452,6 +593,8 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
     captionsPath,
     csrcPath,
     observationsPath,
+    botlogPath,
+    transcriptPath,
     bytesWritten: () => written,
     isCapped: () => capped,
     async close(): Promise<void> {

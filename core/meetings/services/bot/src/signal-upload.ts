@@ -33,7 +33,7 @@ import { DEFAULT_MAX_TAPE_BYTES, signalEvent, type CaptureSignalRecorder } from 
  *  they are the WHOLE captured signal of a meeting, which is the point: a replay that is missing
  *  one of them cannot reproduce the decision the live bot made — nor, without the observations,
  *  what the bot noticed going wrong while it made it. */
-export type TapePart = 'captured-signal' | 'stt' | 'captions' | 'csrc' | 'observations';
+export type TapePart = 'captured-signal' | 'stt' | 'captions' | 'csrc' | 'observations' | 'botlog' | 'transcript';
 
 /** Deliver ONE tape file. Throws on failure; the caller logs and drops. Injected in tests. */
 export type TapeUploader = (part: TapePart, filePath: string, size: number) => Promise<void>;
@@ -82,7 +82,7 @@ export async function uploadSignalTapes(
     // The local hot-loop path (VEXA_CAPTURE_SIGNAL=1, no control plane) lands here every run, so it
     // is one quiet line naming the reason rather than a failure.
     signalEvent('tape-upload-skipped', { reason: 'no recordingUploadUrl in the invocation' });
-    summary.skipped.push('captured-signal', 'stt', 'captions', 'csrc', 'observations');
+    summary.skipped.push('captured-signal', 'stt', 'captions', 'csrc', 'observations', 'botlog', 'transcript');
     return summary;
   }
   const upload = opts.upload
@@ -100,6 +100,12 @@ export async function uploadSignalTapes(
     // What the capture path noticed. Absent only where nothing was ever observed — which is
     // itself unusual enough to be worth seeing in the skip list.
     ['observations', recorder.observationsPath],
+    // The bot's own running commentary. The ONE part that may arrive truncated (with the drop
+    // named inside it) rather than skipped: a log is read by a human, not folded by a replay.
+    ['botlog', recorder.botlogPath],
+    // The transcript a viewer was left with, after every retraction. Absent when the session
+    // published nothing — a silent room, or a lane that never started.
+    ['transcript', recorder.transcriptPath],
   ];
 
   for (const [part, filePath] of files) {
@@ -158,19 +164,23 @@ export function streamingTapeUploader(inv: Invocation, url: string, timeoutMs: n
 
   return (part, filePath, size) => new Promise<void>((resolve, reject) => {
     const boundary = `----VexaSignalTape${Date.now()}${part}`;
+    // The format is a property of the PART, and the server enforces the same table: the bot log is
+    // text, everything else is JSONL. Sending 'jsonl' for a text file would land it under a key
+    // whose extension lies about its contents.
+    const mediaFormat = part === 'botlog' ? 'txt' : 'jsonl';
     const metadata = JSON.stringify({
       meeting_id: meetingId,
       session_uid: sessionUid,
       media_type: 'signal',
-      media_format: 'jsonl',
+      media_format: mediaFormat,
       part,
       file_size_bytes: size,
     });
     const preamble = Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\n` +
       `Content-Type: application/json\r\n\r\n${metadata}\r\n` +
-      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${part}.jsonl"\r\n` +
-      `Content-Type: application/x-ndjson\r\n\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${part}.${mediaFormat}"\r\n` +
+      `Content-Type: ${mediaFormat === 'txt' ? 'text/plain; charset=utf-8' : 'application/x-ndjson'}\r\n\r\n`,
     );
     const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
 
