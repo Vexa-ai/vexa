@@ -276,9 +276,13 @@ jobs:
           fi
           # Full builds may reuse the stable cache; replacement candidates do not
           # spend pull quota or trust mutable cache state from that repository.
+          # The release version is stamped INTO the image: it lands in every captured-signal tape
+          # header, so a fixture collected in prod names the build that produced it long after the
+          # deployment is gone.
           DOCKER_BUILDKIT=1 docker build \
             -f core/meetings/services/bot/Dockerfile \
             "${CACHE_ARGS[@]}" \
+            --build-arg "VEXA_IMAGE_VERSION=$VERSION" \
             -t "vexaai/vexa-bot:$VERSION" \
             .
           docker push "vexaai/vexa-bot:$VERSION"
