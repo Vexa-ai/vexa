@@ -327,7 +327,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -342,12 +342,20 @@ export async function startCaptureBridge(
       const setupMix = (): void => {
         let streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>;
         if (isTeams && streams.length) {
-          const mainAudio = streams.filter((s: any) => (s.getAudioTracks?.() || []).some((t: any) => String(t.id || '').toLowerCase().startsWith('mainaudio')));
-          if (!mainAudio.length && !w.__vexaTeamsNoMainWarned) {
-            w.__vexaTeamsNoMainWarned = true;
-            w.logBot?.('[mixed] Teams: no "mainAudio" track among ' + streams.length + ' stream(s) yet — waiting for the mix (never combine 2 → avoids doubling)');
+          // selectTeamsMixStreams (bundled via VexaBrowserUtils) prefers the server mix and FAILS OPEN
+          // if it never appears — see its doc for why an unconditional preference is the more
+          // dangerous bug. Kept out of this callback so the page and its unit test run one
+          // implementation; a hand-copied twin here would drift from the test on the first edit.
+          const select = w.VexaBrowserUtils?.selectTeamsMixStreams;
+          if (select) {
+            const sel = select(streams, { firstMissMs: w.__vexaTeamsNoMainSince ?? null, nowMs: Date.now(), graceMs: mainAudioGraceMs });
+            if (sel.outcome === 'main-audio') { w.__vexaTeamsNoMainSince = null; }
+            else { w.__vexaTeamsNoMainSince = w.__vexaTeamsNoMainSince || Date.now(); }
+            // Re-emitted on EVERY falling-back rescan, deliberately: the latched one-shot warning it
+            // replaces meant a bot capturing the wrong thing said so once and looked healthy after.
+            if (sel.observation) w.logBot?.('[mixed] observation ' + JSON.stringify(sel.observation));
+            streams = sel.streams;
           }
-          streams = mainAudio;   // Teams: the server mix ALONE; combining a 2nd stream double-transcribes every word
         }
         if (!streams.length) return;
         if (!w.__vexaMixCtx) {
@@ -470,7 +478,9 @@ export async function startCaptureBridge(
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName,
+      // How long the Teams lane waits for the server mix before capturing every track instead.
+      mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000) }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
