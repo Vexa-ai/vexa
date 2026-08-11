@@ -71,6 +71,7 @@ import {
 import {
   createMixedAudioCapture,
   installRemoteAudioHook,
+  selectTeamsMixStreams,
 } from ${JSON.stringify(MIXED)};
 import {
   createRecordingTap,
@@ -98,6 +99,7 @@ const VexaBrowserUtils = {
   // ── mixed lane (zoom/teams single combined stream) ──
   createMixedAudioCapture,   // capture-bridge.ts: w.VexaBrowserUtils.createMixedAudioCapture
   installRemoteAudioHook,
+  selectTeamsMixStreams,     // capture-bridge.ts setupMix: Teams mix vs fail-open (one impl, unit-tested)
   // ── recording (all platforms): MediaRecorder → recording.v1 chunks ──
   createRecordingTap,        // capture-bridge.ts: w.VexaBrowserUtils.createRecordingTap
   // ── jitsi lane (dominant-speaker naming hints + chat over the app's own state) ──
@@ -151,7 +153,7 @@ console.log(`✅ Browser utilities bundle created: ${OUT} (${bytes} bytes)`);
 console.log('📦 window.VexaBrowserUtils exposes:');
 console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1 / pickBoundName');
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
-console.log('  - createMixedAudioCapture / installRemoteAudioHook');
+console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
 console.log('  - createTeamsSpeakers / createZoomSpeakers');
 console.log('  - window.performLeaveAction');
