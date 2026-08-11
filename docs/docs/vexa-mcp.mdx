@@ -7,7 +7,14 @@ description: "Vexa's meeting capabilities as MCP tools — working on self-hoste
 **Read the boundary before you wire anything.** The MCP server is real, runs as its own service,
 and is fronted by the gateway at `/mcp` on **self-hosted Docker Compose from 0.12.18 onward**. It is
 **not available on hosted [vexa.ai](https://vexa.ai), and not available on Kubernetes** — the Helm
-chart does not deploy the service at all, so there is no `/mcp` route there to point a client at.
+chart does not deploy the service at all, so there is no MCP server there to point a client at.
+
+**Probing hosted will mislead you.** `api.cloud.vexa.ai/mcp` answers **`401`, not `404`**, on both
+`GET` and `POST`. The gateway registers the route unconditionally, so its auth layer replies before
+the forward is ever attempted — a 401 there means *the gateway has the route compiled in*, never
+that an MCP server is running behind it. A valid key gets you as far as the forward, which the
+chart points nowhere: it deploys no MCP service and sets no `MCP_URL`, leaving the gateway's default
+of `http://mcp:8010`.
 
 The gateway forward is module-tested (streamed relay, verbatim status, typed 502/504) but the
 transport has **not been proven against a real MCP client end-to-end**
