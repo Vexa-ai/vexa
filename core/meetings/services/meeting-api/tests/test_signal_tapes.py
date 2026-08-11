@@ -36,6 +36,11 @@ SESSION_UID = "conn-abc"
 TAPE = b'{"type":"captured_signal_header","v":1}\n{"seq":0,"pcm":"AA=="}\n'
 STT_TAPE = b'{"at":"2026-08-11T00:00:00Z","ok":true,"text":"hello"}\n'
 CAPTION_TAPE = b'{"type":"caption","t":1,"platform":"teams","name":"Jacob","text":"hi","stable":true,"lane":"mixed"}\n'
+CSRC_TAPE = b'{"type":"csrc","t":1,"csrc":424242,"active":true,"lane":"mixed"}\n'
+OBSERVATION_TAPE = (
+    b'{"type":"observation","t":1,"source":"csrc","lane":"mixed",'
+    b'"observation":{"kind":"csrc-poll-error"}}\n'
+)
 
 
 def _seeded():
@@ -82,18 +87,20 @@ async def test_signal_tape_lands_in_its_own_keyspace_and_is_not_a_recording():
 
 async def test_every_tape_part_shares_one_prefix():
     """The frame tape and its sidecars are ONE fixture — audio, speaker hints, STT round-trips and
-    Teams captions together are what lets a replay reproduce the decision the live bot made. They
-    must land together, or a curator reconstructs the pairing by hand and the janitor (which evicts
-    by prefix) treats them as unrelated objects."""
+    Teams captions, transport transitions and the capture path's own observations together are what
+    lets a replay reproduce the decision the live bot made — and what it noticed while making it.
+    They must land together, or a curator reconstructs the pairing by hand and the janitor (which
+    evicts by prefix) treats them as unrelated objects."""
     repo, storage = _seeded()
     keys = []
-    for part, data in (("captured-signal", TAPE), ("stt", STT_TAPE), ("captions", CAPTION_TAPE)):
+    for part, data in (("captured-signal", TAPE), ("stt", STT_TAPE), ("captions", CAPTION_TAPE),
+                       ("csrc", CSRC_TAPE), ("observations", OBSERVATION_TAPE)):
         r = await upload_signal_tape(repo, storage, token_meeting_id=None,
                                      session_uid=SESSION_UID, data=data, part=part)
         keys.append(r["storage_path"])
     assert len({k.rsplit("/", 1)[0] for k in keys}) == 1, keys
     assert sorted(k.rsplit("/", 1)[-1] for k in keys) == [
-        "captions.jsonl", "captured-signal.jsonl", "stt.jsonl",
+        "captions.jsonl", "captured-signal.jsonl", "csrc.jsonl", "observations.jsonl", "stt.jsonl",
     ]
 
 
