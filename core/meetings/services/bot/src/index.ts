@@ -33,6 +33,7 @@ import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
@@ -300,6 +301,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // path that skipped the orchestrator's teardown. (#593)
     await pipeline.stop().catch(() => { /* best-effort */ });
     await signalRecorder?.close().catch(() => { /* best-effort */ });
+    // O-TEL-1: ship the tape AFTER close() (the file is flushed and finalized there) and BEFORE the
+    // process exits, because the container's disk dies with it. Best-effort by construction —
+    // uploadSignalTapes never throws and never rejects, so nothing here can revise the exit code the
+    // orchestrator already returned. Runs inside the 30s SIGTERM grace: one attempt, streamed, with
+    // its own timeout, so a slow object store cannot ride the grace all the way to a SIGKILL.
+    await uploadSignalTapes(signalRecorder, { inv });
     if (session) await session.close().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the
     // exit code; they may never have connected if redis was unreachable).

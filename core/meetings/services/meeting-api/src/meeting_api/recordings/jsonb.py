@@ -166,10 +166,16 @@ def master_storage_key(chunk_key: str, media_format: str) -> str:
 # object in the deployment to find them. A top-level prefix keeps the sweep O(tapes).
 _SIGNAL_PREFIX = "signal"
 SIGNAL_ROOT_PREFIX = f"{_SIGNAL_PREFIX}/"
-# The two files one bot session leaves: the frame/hint tape, and the STT round-trip tape the bot
-# writes beside it. A CLOSED set — the part name lands in an object key, so it is never
+# The files one bot session leaves: the frame/hint tape, the STT round-trip sidecar, and the Teams
+# closed-caption sidecar. A CLOSED set — the part name lands in an object key, so it is never
 # caller-shaped (the session_uid in the key is already constrained by find_session).
-SIGNAL_TAPE_PARTS = ("captured-signal", "stt")
+#
+# `stt` and `captions` are SIDECARS rather than record types inside the tape because
+# captured-signal.v1 is sealed at three records (SessionHeader · CapturedFrame · HintEvent): a
+# fourth would make every stored session fail its own contract, and the replay loader validates
+# line by line, so the tape would stop replaying the moment a Teams meeting produced a caption.
+# Adding a caption record to the contract is a v2 decision, not a side effect of wiring a lane.
+SIGNAL_TAPE_PARTS = ("captured-signal", "stt", "captions")
 # Promotion marker: an object beside a tape meaning "this one is in the regression library, keep
 # it". A marker OBJECT rather than a DB flag so the janitor stays PURE STORAGE — it needs no DB
 # session, and a promoted tape survives even if its meeting row is gone.
