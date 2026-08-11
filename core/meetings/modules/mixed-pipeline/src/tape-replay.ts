@@ -230,7 +230,15 @@ async function main(): Promise<void> {
   // The lane is asynchronous: a heartbeat enqueues work a promise chain drains later, so the clock
   // must let that chain settle before it moves again — otherwise the next heartbeat runs against a
   // state the live lane never passed through.
-  const drain = async (): Promise<void> => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
+  // "Settle" must include the MODEL, not just the microtask queue: the segmenter's inference takes
+  // tens of milliseconds, and a driver that advanced past it would hand the lane boundaries at
+  // different audio positions than a live run did — a divergence manufactured by the harness and
+  // then blamed on the lane. (Measured on m24: without this, 130 rows real vs 128 virtual.)
+  let settleLane: (() => Promise<void>) | null = null;
+  const drain = async (): Promise<void> => {
+    for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
+    if (settleLane) { await settleLane(); await new Promise((r) => setImmediate(r)); }
+  };
   const firstTs = Math.min(
     ...[frames.length ? frames[0].ts : Infinity, hints.length ? hints[0].t : Infinity,
         transport.length ? transport[0].tMs : Infinity].filter((x) => Number.isFinite(x)),
@@ -319,6 +327,7 @@ async function main(): Promise<void> {
     log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
   });
 
+  settleLane = () => tc.settled();
   // ── Drive the tape in TIMESTAMP order across all three streams: audio, hints, and the
   // recorded turn boundaries. Each carries its own capture ts, so no wall-clock pacing is
   // needed and the replay stays deterministic. ──

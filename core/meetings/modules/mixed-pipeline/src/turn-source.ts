@@ -102,6 +102,13 @@ export interface TurnSource {
   onTransportEvent?(ev: TransportEvent): void;
   /** Close whatever is open, at `tMs`. Called on teardown and when authority moves elsewhere. */
   flush(tMs: number): void;
+  /** Resolves once this source has no work in flight. Production never calls it — the lane feeds
+   *  frames fire-and-forget on purpose, so a slow model cannot back up the capture path. A replay
+   *  driver DOES call it, because "let the lane settle" has to include the model: the segmenter's
+   *  inference takes tens of milliseconds and a driver that ran ahead of it would deliver
+   *  boundaries at different points in the audio than a live run did, which is a divergence in the
+   *  harness masquerading as one in the lane. */
+  settled?(): Promise<void>;
   reset(): void;
   health(): TurnSourceHealth;
 }
@@ -131,6 +138,8 @@ export interface SegmenterBoundary {
 export class PyannoteTurnSource implements TurnSource {
   readonly kind = 'pyannote' as const;
   private edges = 0;
+  /** Inference promises handed out and not yet resolved. Counted, never awaited by the lane. */
+  private inFlight = new Set<Promise<unknown>>();
 
   private constructor(
     private readonly cb: TurnSourceCallbacks,
@@ -169,7 +178,16 @@ export class PyannoteTurnSource implements TurnSource {
   }
 
   onAudio(pcm: Float32Array, tsMs: number): void {
-    this.segmenter?.appendFrame(pcm, tsMs).catch((e: any) => this.log(`segmenter error: ${e?.message}`));
+    const p = this.segmenter?.appendFrame(pcm, tsMs);
+    if (!p) return;
+    // Tracked, NOT awaited: the lane must never block capture on the model. The set exists purely
+    // so a replay driver can wait for what the wall clock would have given the model anyway.
+    this.inFlight.add(p);
+    void p.catch((e: any) => this.log(`segmenter error: ${e?.message}`)).finally(() => this.inFlight.delete(p));
+  }
+
+  async settled(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight]);
   }
 
   flush(): void { /* the transcriber's closing pass owns the final close, exactly as before */ }
@@ -223,6 +241,12 @@ interface OpenTurn { t0: number; trackId?: string; contested: boolean; tracks: S
  */
 export class CsrcTurnSource implements TurnSource {
   readonly kind = 'csrc' as const;
+
+  /** The transport spine has no asynchronous work at all — every edge is derived synchronously from
+   *  an event that already happened. It is why THIS spine replays byte-identically under either
+   *  clock, and the pyannote spine (a real model, inferring on its own schedule) does not. */
+  async settled(): Promise<void> { /* nothing is ever in flight */ }
+
 
   private readonly hysteresisMs: number;
   private readonly log: (m: string) => void;
