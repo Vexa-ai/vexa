@@ -13,6 +13,8 @@ export {
   teamsNameSelectors,
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
+  plausibleNameFromLeaves,
+  TEAMS_NAME_FORBIDDEN,
 } from './msteams-speakers.js';
 export type { TeamsSpeakers, TeamsSpeakersOptions, TeamsSpeakerIdentity } from './msteams-speakers.js';
 export { createTeamsChat } from './teams-chat.js';

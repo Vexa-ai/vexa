@@ -12,6 +12,7 @@ import {
   teamsNameSelectors,
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
+  plausibleNameFromLeaves,
 } from './index.js';
 
 let failed = 0;
@@ -80,6 +81,50 @@ check('participant selectors are a non-empty string[]', teamsParticipantSelector
 check('name selectors non-empty', teamsNameSelectors.length > 0);
 check('participant-id selectors include [data-tid]', teamsParticipantIdSelectors.includes('[data-tid]'));
 check('container selectors fall back to body', teamsMeetingContainerSelectors.includes('body'));
+
+// ── plausibleNameFromLeaves: the rot-proof name path ──────────────────────────
+// Captured from a live Teams meeting (2026-08): the roster tile carries NO data-tid,
+// title or aria-label, and the name div's only marker is an obfuscated build-specific
+// class. The previously hardcoded `___2u340f0` had rotted to `___12zni01`, which
+// suppressed every speaker hint and collapsed the transcript to a single 'Speaker'.
+{
+  const tile = e('div', { class: '___1504rl1 f1euv43f ftuwxu6 f4d9j23', role: 'menuitem' }, [
+    e('div', { class: '___12zni01 f1cmbuwj fv6wr3j fz5stix f1p9o1ba' }, [
+      t('div', 'Priya Nair', { class: '___12zni01 f1cmbuwj fv6wr3j fz5stix f1p9o1ba' }),
+    ]),
+  ]);
+  check('name: live 2026-08 roster tile resolves despite the rotted class',
+    plausibleNameFromLeaves(tile as never) === 'Priya Nair');
+
+  // A future obfuscated class must not regress it — structure, not the hash, is the key.
+  const rotated = e('div', { class: '___zzzzzz9 whatever', role: 'menuitem' }, [
+    t('div', 'Tariq Baig', { class: '___future0 abc' }),
+  ]);
+  check('name: survives a further class rotation',
+    plausibleNameFromLeaves(rotated as never) === 'Tariq Baig');
+
+  // Control affordances share the tile and must never win.
+  const noisy = e('div', {}, [
+    t('span', 'mic_off', {}),
+    t('span', '10:42 AM', {}),
+    t('span', '2', {}),
+    t('div', 'Priya Nair', {}),
+  ]);
+  check('name: skips control labels, timestamps and bare digits',
+    plausibleNameFromLeaves(noisy as never) === 'Priya Nair');
+
+  // No resolvable name → empty, so emit() still suppresses rather than inventing a GUID.
+  const empty = e('div', {}, [t('span', 'mic_off', {}), t('span', '', {})]);
+  check('name: unresolvable stays empty (no hint is better than a wrong hint)',
+    plausibleNameFromLeaves(empty as never) === '');
+
+  // A wrapper's concatenated text must never win over its leaves.
+  const nested = e('div', {}, [
+    e('div', {}, [t('span', 'Priya Nair', {}), t('span', 'Presenting', {})]),
+  ]);
+  check('name: leaf wins over concatenated wrapper text',
+    plausibleNameFromLeaves(nested as never) === 'Priya Nair');
+}
 
 // ── createTeamsChat extraction ────────────────────────────────────────────────
 {

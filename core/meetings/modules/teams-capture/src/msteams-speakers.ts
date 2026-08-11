@@ -61,6 +61,57 @@ export const teamsMeetingContainerSelectors: string[] = [
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
 
+/** Control-affordance labels that share a tile with the display name and must never be
+ *  mistaken for it. Matched as case-insensitive substrings. */
+export const TEAMS_NAME_FORBIDDEN: string[] = [
+  'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
+  'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
+  'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
+];
+
+/** First leaf-text fragment in `element` that can plausibly be a display name.
+ *  
+ *  Teams renders the display name in a div whose only distinguishing
+ *  attribute is a build-specific obfuscated class like '___2u340f0'with no data-tid, title or 
+ *  aria-label to key on.
+ *  
+ *  Leaves only ('childElementCount === 0'), so a wrapper's concatenated text can never win.
+ *  De-duplicated, because Teams nests the same name twice. Rejects control labels, bare
+ *  timestamps, and any fragment without a letter in it. 
+ */
+export function plausibleNameFromLeaves(
+  element: { querySelectorAll(sel: string): ArrayLike<{ childElementCount: number; textContent: string | null }> },
+  forbidden: string[] = TEAMS_NAME_FORBIDDEN,
+): string {
+  const seen = new Set<string>();
+  const leaves = element.querySelectorAll('*');
+
+  for (let i = 0; i < leaves.length; i++) {
+    const el = leaves[i];
+
+    // skip non-leaf elements
+    if (el.childElementCount !== 0) continue; 
+
+    const text = (el.textContent || '').trim();
+
+    // skip duplicate text
+    if (!text || seen.has(text)) continue; 
+
+    seen.add(text);
+
+    // skip text that probably isn't a name
+    if (text.length < 2 || text.length > 50) continue;
+    if (!/\p{L}/u.test(text)) continue;                       // digits/glyphs only → not a name
+    if (/^\d{1,2}:\d{2}/.test(text)) continue;                // "10:42 AM"
+
+    // skip text that contains forbidden substrings
+    const lower = text.toLowerCase();
+    if (forbidden.some((sub) => lower.includes(sub.toLowerCase()))) continue;
+    return text;
+  }
+  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+}
+
 export interface TeamsSpeakerIdentity {
   id: string;
   name: string;
@@ -120,11 +171,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   function extractName(element: HTMLElement): string {
-    const forbidden = [
-      'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
-      'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
-      'camera', 'camera_off', 'share', 'chat', 'participant', 'user',
-    ];
+    const forbidden = TEAMS_NAME_FORBIDDEN;
     for (const selector of teamsNameSelectors) {
       const nameElement = element.querySelector(selector) as HTMLElement | null;
       if (!nameElement) continue;
@@ -145,7 +192,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         if (nameText.length > 1 && nameText.length < 50) return nameText;
       }
     }
-    return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+    // Structural fallback — the durable path; see plausibleNameFromLeaves.
+    return plausibleNameFromLeaves(element, forbidden);
   }
 
   function getIdentity(element: HTMLElement): Identity {
