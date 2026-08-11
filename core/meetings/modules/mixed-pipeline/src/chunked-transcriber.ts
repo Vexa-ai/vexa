@@ -752,6 +752,14 @@ export class ChunkedTranscriber {
     };
   }
 
+  /** Resolves once no turn source has work in flight. A REPLAY-DRIVER seam: production never waits
+   *  on the model, and this changes nothing about when frames are fed — only about when a harness
+   *  is allowed to believe the lane has caught up. */
+  async settled(): Promise<void> {
+    await this.pyannoteSource?.settled?.();
+    await this.csrcSource?.settled?.();
+  }
+
   /** Session end: flush the carried span and close the open turn. Resolves
    *  AFTER the final turn has published — callers that publish session_end
    *  (the bot's graceful leave) must await it or the closing words are lost. */
