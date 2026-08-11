@@ -10,3 +10,5 @@
 export { createMixedAudioCapture } from './mixed-audio.js';
 export type { MixedAudioCapture, MixedAudioOptions } from './mixed-audio.js';
 export { installRemoteAudioHook } from './webrtc-audio-hook.js';
+export { selectTeamsMixStreams, TEAMS_MAIN_AUDIO_GRACE_MS } from './teams-main-audio.js';
+export type { TeamsMixSelection, MainAudioAbsentObservation, StreamLike } from './teams-main-audio.js';
