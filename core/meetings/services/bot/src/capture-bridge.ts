@@ -359,13 +359,25 @@ export function makeTeamsCaptionSink(
   };
 }
 
-/** Captions are switched ON at join by default (founder ruling): captions are per-USER in Teams,
- *  so the bot can enable them for itself regardless of the meeting's own settings, and the CC lane
- *  is worthless if it only ever sees meetings where a human already turned them on. The env var is
- *  a KILL SWITCH, not an opt-in — set VEXA_TEAMS_ENABLE_CAPTIONS=0 for a deployment that must not
- *  touch the meeting UI at all. Enable never gates the join: it runs fire-and-forget after capture
- *  is wired, and every failure is an observation, not an error. */
-const TEAMS_ENABLE_CAPTIONS = process.env.VEXA_TEAMS_ENABLE_CAPTIONS !== '0';
+/**
+ * Captions are OFF by default (founder ruling, 2026-08-11), reversing the earlier default.
+ *
+ * Enabling them meant the bot clicking through the meeting's own UI — changing what the humans in
+ * the room see — to obtain a name source. That trade is no longer worth making, because it was
+ * measured and the source turned out to be redundant: replaying the m30, m34 and m36 tapes with
+ * caption evidence WITHHELD produced byte-identical naming on all three (m34's per-track evidence
+ * 7132/10372/82831 ms either way, m36's 46923 ms either way). Every track that captions helped name
+ * was already named by the DOM and the roster. The lane paid a visible intrusion for nothing.
+ *
+ * The code path is kept and unchanged, behind this flag: set VEXA_TEAMS_ENABLE_CAPTIONS=1 to switch
+ * it back on. It is a second, independent attribution source and is worth having available — for a
+ * tenant whose outline never renders, or the next time a fixture argues for it. What it may no
+ * longer do is switch itself on in somebody's meeting by default.
+ *
+ * A meeting where captions are already on is unaffected: this governs whether the BOT enables them,
+ * not whether the reader consumes what it finds.
+ */
+const TEAMS_ENABLE_CAPTIONS = process.env.VEXA_TEAMS_ENABLE_CAPTIONS === '1';
 /** How many times to try the menu path before giving up (each attempt is ~3 s of UI waits). */
 const TEAMS_ENABLE_CAPTIONS_ATTEMPTS = Math.max(1, Number(process.env.VEXA_TEAMS_ENABLE_CAPTIONS_ATTEMPTS || 3));
 
@@ -1012,10 +1024,9 @@ export async function startCaptureBridge(
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
-  // Switch captions ON at join (founder ruling), fire-and-forget: the capture path above is
-  // already wired and streaming, so this cannot delay it, and a tenant that blocks captions costs
-  // a few seconds of background clicking and nothing else. The voice-level-outline watcher runs
-  // regardless — captions are the SECOND source, never a replacement for the first.
+  // Captions are OFF by default now: the bot does not touch the meeting's UI to get a name source
+  // it was measured not to need (see TEAMS_ENABLE_CAPTIONS). Opt back in with
+  // VEXA_TEAMS_ENABLE_CAPTIONS=1; the reader still consumes captions a meeting already has on.
   if (inv.platform === 'teams' && TEAMS_ENABLE_CAPTIONS) {
     void runTeamsCaptionEnable(page, undefined, undefined, undefined, onObservation)
       .catch(() => { /* the helper already swallows + observes */ });
