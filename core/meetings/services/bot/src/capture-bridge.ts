@@ -121,6 +121,242 @@ export function makeSpeakerHintSink(
   };
 }
 
+/** One Teams live-caption entry as it crosses the capture bridge — the caption lane's
+ *  captured-signal record. Teams' OWN ASR attributes each caption to a named participant, so this
+ *  is an ALTERNATIVE speaker-attribution SOURCE to the voice-level-outline hints; in THIS
+ *  iteration it is observation data only. It is deliberately NOT a `HintEvent`: a hint feeds the
+ *  name binder, and a caption that silently became one would change attribution behaviour under
+ *  cover of a diagnostic. `t` shares the audio frames' epoch-ms clock. */
+export interface TeamsCaptionRecord {
+  type: 'caption';
+  t: number;
+  platform: 'teams';
+  name: string;
+  text: string;
+  /** false ⇒ flushed mid-refinement at teardown (the meeting's tail), not settled. */
+  stable: boolean;
+  lane: 'mixed';
+}
+
+/** A telemetry sink that can ALSO store caption records. Structural and OPTIONAL: the recorder in
+ *  telemetry.ts does not implement `captureCaption` yet (that file is another session's surface
+ *  today), so captions currently land on the bot's log only, and the tape write lights up the
+ *  moment the recorder grows the method — with no change here. Duck-typed through a named type
+ *  rather than an inline cast, so the shape the recorder must implement is written down. */
+export type CaptionCapableSink = TelemetrySink & { captureCaption?: (caption: TeamsCaptionRecord) => void };
+
+/**
+ * Build the Teams caption sink — the EXACT closure the bridge exposes as `__vexaTeamsCaption`,
+ * factored out like makeSpeakerHintSink / makeTelemetryTap so it is offline-provable WITHOUT a
+ * Playwright page.
+ *
+ * CLOCK CONTRACT is the hint sink's, for the same reason: the page stamps Date.now() (epoch), and
+ * a page emitting a non-epoch time would store captions against a clock nothing else shares — so
+ * an implausible skew is re-stamped Node-side and warned LOUDLY rather than silently kept.
+ *
+ * Never throws into the capture path: a caption is a diagnostic, and a diagnostic that can break a
+ * meeting is worse than no diagnostic at all.
+ */
+export function makeTeamsCaptionSink(
+  telemetry?: CaptionCapableSink,
+  log: (m: string) => void = (m) => console.log(m),
+  warn: (m: string) => void = (m) => console.warn(m),
+): { sink: (name: string, text: string, tMs?: number, stable?: boolean) => void; count: () => number; stored: () => number } {
+  let count = 0;
+  let stored = 0;
+  return {
+    count: () => count,
+    stored: () => stored,
+    sink: (name: string, text: string, tMs?: number, stable?: boolean): void => {
+      count++;
+      let t = tMs ?? Date.now();
+      const skew = Math.abs(t - Date.now());
+      if (skew > HINT_MAX_SKEW_MS) {
+        warn(`[bot] caption-clock-skew: caption tMs=${t} is ${Math.round(skew / 1000)}s off the epoch audio clock — page emitted a non-epoch timestamp; re-stamping (name=${name})`);
+        t = Date.now();
+      }
+      const record: TeamsCaptionRecord = { type: 'caption', t, platform: 'teams', name, text, stable: stable !== false, lane: 'mixed' };
+      if (typeof telemetry?.captureCaption === 'function') {
+        try { telemetry.captureCaption(record); stored++; }
+        catch { /* telemetry must not break capture */ }
+      }
+      log(`[bot] teams-caption ${record.stable ? 'stable' : 'partial'} ${name}: ${text.slice(0, 80)}`);
+    },
+  };
+}
+
+/** Captions are switched ON at join by default (founder ruling): captions are per-USER in Teams,
+ *  so the bot can enable them for itself regardless of the meeting's own settings, and the CC lane
+ *  is worthless if it only ever sees meetings where a human already turned them on. The env var is
+ *  a KILL SWITCH, not an opt-in — set VEXA_TEAMS_ENABLE_CAPTIONS=0 for a deployment that must not
+ *  touch the meeting UI at all. Enable never gates the join: it runs fire-and-forget after capture
+ *  is wired, and every failure is an observation, not an error. */
+const TEAMS_ENABLE_CAPTIONS = process.env.VEXA_TEAMS_ENABLE_CAPTIONS !== '0';
+/** How many times to try the menu path before giving up (each attempt is ~3 s of UI waits). */
+const TEAMS_ENABLE_CAPTIONS_ATTEMPTS = Math.max(1, Number(process.env.VEXA_TEAMS_ENABLE_CAPTIONS_ATTEMPTS || 3));
+
+/** Outcome of one enable attempt. `already-on` and `clicked` are successes; `failed` carries WHY,
+ *  because "captions never appeared" has two very different causes — the menu path changed, or the
+ *  tenant blocks captions — and only the reason distinguishes them on the first live run. */
+export interface TeamsCaptionEnableResult {
+  outcome: 'already-on' | 'clicked' | 'failed';
+  reason?: 'more-button-unreachable' | 'menu-item-not-found' | 'error';
+  /** Bounded, human-readable context (the visible menu items, or the error string). */
+  detail?: string;
+}
+
+/** The typed observation the bridge logs when captions could not be switched on. It mirrors the
+ * page-side caption observations' shape so both halves of the CC lane read as one stream in the
+ * logs — it is declared HERE rather than imported because the bot may not import the page-side
+ * brick (gate:isolation); page code crosses this boundary as plain values only. */
+export interface TeamsCaptionsEnableFailedObservation {
+  type: 'captions-enable-failed';
+  platform: 'teams';
+  signal: 'closed-caption';
+  reason: 'more-button-unreachable' | 'menu-item-not-found' | 'error';
+  attempts: number;
+  detail?: string;
+  tMs: number;
+}
+
+/**
+ * Turn Teams live captions ON for the BOT's own session — ported from v0.10.6/v0.10.7
+ * `services/vexa-bot/core/src/platforms/msteams/captions.ts` (byte-identical across those tags).
+ *
+ * Flow, both menu shapes the 0.10 bot met live:
+ *   GUEST menu: More → "Captions" (a direct item)
+ *   HOST menu:  More → "Language and speech" → "…live captions"
+ * The renderer wrapper is checked afterwards, but its ABSENCE is not failure: Teams mounts it only
+ * once somebody has spoken, so the authority on whether captions are live is the page-side
+ * watcher's `captions-active`, not this function.
+ *
+ * NEVER throws to the caller and NEVER blocks the join: it is invoked fire-and-forget after the
+ * capture path is already wired, an open menu is dismissed with Escape on any failure, and every
+ * outcome is a log line.
+ */
+export async function enableTeamsLiveCaptions(page: Page, log: (m: string) => void = (m) => console.log(m)): Promise<TeamsCaptionEnableResult> {
+  const WRAPPER = '[data-tid="closed-caption-renderer-wrapper"]';
+  try {
+    // The evaluate bodies below run IN THE BROWSER; this file type-checks against the Node lib, so
+    // DOM globals are reached through globalThis exactly as the capture wiring does.
+    if (await page.evaluate((sel) => !!(globalThis as any).document.querySelector(sel), WRAPPER)) {
+      log('[bot] teams-captions: already enabled');
+      return { outcome: 'already-on' };
+    }
+    // Step 1 — open the meeting toolbar's More menu (stable id first, aria-label fallbacks).
+    try {
+      await page.locator('#callingButtons-showMoreBtn, button[aria-label="More"], button[aria-label="More options"]')
+        .first().click({ timeout: 8000 });
+    } catch (e) {
+      await page.keyboard.press('Escape').catch(() => { /* best-effort */ });
+      return { outcome: 'failed', reason: 'more-button-unreachable', detail: String(e).slice(0, 200) };
+    }
+    await page.waitForTimeout(1000);
+
+    // Step 2 — guest path (a direct "Captions" item) then host path (the submenu).
+    const opened = await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const items: any[] = Array.prototype.slice
+        .call(doc.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'))
+        .filter((el: any) => el.offsetParent !== null);
+      for (const el of items) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        if (text === 'captions' || text === 'show live captions' || text === 'turn on live captions') {
+          el.click();
+          return { clicked: (el.textContent || '').trim(), path: 'direct' as const, available: '' };
+        }
+      }
+      for (const el of items) {
+        const text = (el.textContent || '').toLowerCase();
+        if (text.includes('language') && text.includes('speech')) {
+          el.click();
+          return { clicked: (el.textContent || '').trim(), path: 'submenu' as const, available: '' };
+        }
+      }
+      return { clicked: null, path: 'none' as const, available: items.map((el: any) => (el.textContent || '').trim().slice(0, 40)).join(' | ') };
+    });
+    if (!opened.clicked) {
+      // The visible menu is carried out verbatim (bounded): when the client renames the item, this
+      // line is what tells us the new name instead of another blind live run.
+      await page.keyboard.press('Escape').catch(() => { /* best-effort */ });
+      return { outcome: 'failed', reason: 'menu-item-not-found', detail: opened.available.slice(0, 300) };
+    }
+    log(`[bot] teams-captions: clicked "${opened.clicked}" (${opened.path})`);
+    await page.waitForTimeout(1000);
+
+    if (opened.path === 'submenu') {
+      const sub = await page.evaluate(() => {
+        const doc = (globalThis as any).document;
+        const items: any[] = Array.prototype.slice
+          .call(doc.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'));
+        for (const el of items) {
+          if ((el.textContent || '').toLowerCase().includes('live captions') && el.offsetParent) {
+            el.click();
+            return (el.textContent || '').trim();
+          }
+        }
+        return null;
+      });
+      log(sub ? `[bot] teams-captions: clicked submenu "${sub}"` : '[bot] teams-captions: live-captions item not in the submenu');
+      await page.waitForTimeout(1500);
+    }
+
+    const on = await page.evaluate((sel) => !!(globalThis as any).document.querySelector(sel), WRAPPER);
+    // The wrapper mounts only once somebody speaks, so "not yet" is not failure — the page-side
+    // watcher reports captions-active the moment it appears, and IT is the authority.
+    log(on
+      ? '[bot] teams-captions: enabled (renderer wrapper present)'
+      : '[bot] teams-captions: menu clicked, renderer wrapper not present yet — the watcher will report it');
+    return { outcome: 'clicked' };
+  } catch (e) {
+    await page.keyboard.press('Escape').catch(() => { /* best-effort */ });
+    return { outcome: 'failed', reason: 'error', detail: String(e).slice(0, 200) };
+  }
+}
+
+/**
+ * Run the enable flow at join with a short retry, then report. The retry exists because the Teams
+ * toolbar is not present the instant the bot lands (the meeting UI settles over a few seconds) —
+ * but it is BOUNDED and asynchronous, so a meeting whose tenant blocks captions costs us a few
+ * seconds of background clicking and nothing else.
+ *
+ * A failure is a typed `captions-enable-failed` OBSERVATION on the same log stream as the
+ * page-side caption observations — never an exception, never a lifecycle failure. The DOM
+ * voice-level watcher is running in parallel throughout and is entirely unaffected by any of this.
+ */
+export async function runTeamsCaptionEnable(
+  page: Page,
+  log: (m: string) => void = (m) => console.log(m),
+  attempts: number = TEAMS_ENABLE_CAPTIONS_ATTEMPTS,
+  waitBetweenMs = 5000,
+): Promise<TeamsCaptionEnableResult> {
+  let last: TeamsCaptionEnableResult = { outcome: 'failed', reason: 'error', detail: 'not attempted' };
+  for (let i = 1; i <= attempts; i++) {
+    last = await enableTeamsLiveCaptions(page, log).catch((e): TeamsCaptionEnableResult =>
+      ({ outcome: 'failed', reason: 'error', detail: String(e).slice(0, 200) }));
+    if (last.outcome !== 'failed') {
+      log(`[bot] teams-captions: enable ${last.outcome} on attempt ${i}/${attempts}`);
+      return last;
+    }
+    log(`[bot] teams-captions: enable attempt ${i}/${attempts} failed (${last.reason}) — ${last.detail ?? ''}`);
+    if (i < attempts) await page.waitForTimeout(waitBetweenMs).catch(() => { /* page may be closing */ });
+  }
+  const observation: TeamsCaptionsEnableFailedObservation = {
+    type: 'captions-enable-failed',
+    platform: 'teams',
+    signal: 'closed-caption',
+    reason: last.reason ?? 'error',
+    attempts,
+    detail: last.detail,
+    tMs: Date.now(),
+  };
+  // Same line shape as the page-side caption observations, so the CC lane reads as one stream.
+  log(`[TeamsCaptions] observation ${JSON.stringify(observation)}`);
+  log('[bot] teams-captions: could not switch captions on — continuing on the voice-level-outline '
+    + 'watcher alone (the join and the transcript are unaffected)');
+  return last;
+}
+
 /** Path (in the bot container image) to the prebuilt page-side capture bundle that defines
  *  window.VexaBrowserUtils (createGmeetCapture / createGmeetSpeakers / mixed taps). Mirrors
  *  production's browser-utils.global.js; injected via addInitScript so it is present on every
@@ -302,12 +538,17 @@ export async function startCaptureBridge(
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
   // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
   const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
+  // Teams live captions (best-effort, DIAGNOSTIC): Teams' own ASR names the speaker, which is a
+  // second, independent attribution source to the voice-level outline. It goes to the tape + the
+  // log and NOWHERE else — deliberately not into pipeline.recordHint, so this iteration cannot
+  // change a single transcript.
+  const { sink: onTeamsCaption, count: captionsBridgeCrossed } = makeTeamsCaptionSink(telemetry);
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
   const countersTimer = mixed ? setInterval(() => {
     const c = pipeline.hintCounters;
-    console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
+    console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0} teams-captions=${captionsBridgeCrossed()}`);
   }, 30_000) : null;
   countersTimer?.unref?.();   // observability only — never holds the process open
 
@@ -316,6 +557,7 @@ export async function startCaptureBridge(
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
+  await page.exposeFunction('__vexaTeamsCaption', onTeamsCaption).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaRemoteAudioReady', (): void => activity?.ready()).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
@@ -416,7 +658,42 @@ export async function startCaptureBridge(
                 );
               }
             } catch { /* observability must never break capture */ }
+            try {
+              const c = w.__vexaTeamsCaptions?.health?.();
+              if (c) {
+                w.logBot?.(
+                  `[TeamsCaptions] health present=${c.present} wrapper=${c.wrapperSelector ?? 'none'} `
+                  + `authors=${c.authors} texts=${c.texts} emitted=${c.emitted} unresolved=${c.unresolved} self=${c.self}`,
+                );
+              }
+            } catch { /* observability must never break capture */ }
           }, 30_000);
+        }
+        // Teams live captions — a SECOND, independent attribution source, read only when the
+        // meeting already has captions on. We never switch them on: clicking meeting UI mid-join
+        // is how joins break, and this iteration buys observation, not behaviour. Everything about
+        // it is best-effort — an init throw is caught, logged ONCE, and the bot carries on exactly
+        // as it does today. The one thing the first live meeting must answer is whether the 0.10
+        // selectors still match, which is why captions-found / captions-absent are logged.
+        if (w.VexaBrowserUtils?.createTeamsCaptions && !w.__vexaTeamsCaptions) {
+          try {
+            w.__vexaTeamsCaptions = w.VexaBrowserUtils.createTeamsCaptions({
+              selfName: botName,
+              log: (m: string) => w.logBot?.('[TeamsCaptions] ' + m),
+              // DIAGNOSTIC ONLY: this crosses to the captured-signal tape + the log. It is NOT
+              // wired to __vexaSpeakerHint — a caption that quietly became a hint would change
+              // speaker attribution while claiming to observe it.
+              onCaption: (c: { speaker: string; text: string; tMs: number; stable: boolean }) =>
+                w.__vexaTeamsCaption?.(c.speaker, c.text, c.tMs, c.stable),
+              onObservation: (o: Record<string, unknown>) =>
+                w.logBot?.('[TeamsCaptions] observation ' + JSON.stringify(o)),
+            });
+          } catch (e: any) {
+            w.__vexaTeamsCaptions = null;
+            w.logBot?.('[TeamsCaptions] init failed — continuing without captions: ' + String(e));
+          }
+        } else if (!w.VexaBrowserUtils?.createTeamsCaptions) {
+          w.logBot?.('[TeamsCaptions] not in the browser bundle — continuing without captions');
         }
       }
       if (isJitsi) {
@@ -484,6 +761,14 @@ export async function startCaptureBridge(
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
+  // Switch captions ON at join (founder ruling), fire-and-forget: the capture path above is
+  // already wired and streaming, so this cannot delay it, and a tenant that blocks captions costs
+  // a few seconds of background clicking and nothing else. The voice-level-outline watcher runs
+  // regardless — captions are the SECOND source, never a replacement for the first.
+  if (inv.platform === 'teams' && TEAMS_ENABLE_CAPTIONS) {
+    void runTeamsCaptionEnable(page).catch(() => { /* the helper already swallows + observes */ });
+  }
+
   // Stop fn: tear the page-side capture down on teardown (best-effort; the page may be closing).
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
@@ -493,6 +778,9 @@ export async function startCaptureBridge(
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
+      // destroy() flushes a caption still mid-refinement as stable:false — the meeting's last
+      // words survive here or nowhere, which is why the flush lives in the stop path.
+      try { w.__vexaTeamsCaptions?.destroy?.(); w.__vexaTeamsCaptions = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
       try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
