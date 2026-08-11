@@ -17,8 +17,9 @@
  *
  *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turns <turns.psv> [--gt <gt.json>]
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { ChunkedTranscriber, type BoundarySource } from './index.js';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import type { BoundaryEvent } from './pyannote-segmenter.js';
 
 const arg = (name: string): string | undefined => {
@@ -70,7 +71,7 @@ async function main(): Promise<void> {
   const writes: { id: string; speaker: string; text: string; completed: boolean }[] = [];
   /** The collector's durable view: UPSERT on segment id (its unique key with meeting_id), and
    *  DELETE on a retract. */
-  const durable = new Map<string, { speaker: string; text: string }>();
+  const durable = new Map<string, { speaker: string; text: string; startMs: number; endMs: number }>();
   const renames: { from: string; to: string; n: number }[] = [];
   let retracted = 0;
 
@@ -86,13 +87,31 @@ async function main(): Promise<void> {
     pendingIds = next;
   };
 
+  // STT. --stt-url (+ VEXA_STT_TOKEN in the environment, never on the command line) drives the
+  // REAL production TranscriptionClient — the same class services/bot/src/pipeline.ts builds in
+  // createTranscribe, so the words below come from the same Whisper the live bot used. Without
+  // --stt-url a deterministic stub stands in: one marker word per second of submitted audio,
+  // growing by a STABLE PREFIX as each pass resubmits a longer span, or LocalAgreement would
+  // never confirm and the draft/confirm transition under measurement would never happen.
+  const sttUrl = arg('stt-url');
+  const client = sttUrl
+    ? new TranscriptionClient({ serviceUrl: sttUrl, apiToken: process.env.VEXA_STT_TOKEN, model: arg('stt-model') })
+    : null;
+  let sttCalls = 0, sttFailures = 0;
   const tc = await ChunkedTranscriber.create({
     language: 'en',
-    // Stub STT: one marker word per second of submitted audio. Text quality is not under
-    // test — but the words must GROW BY A STABLE PREFIX as each pass resubmits a longer
-    // span, or LocalAgreement never confirms anything and the draft/confirm transition
-    // (the whole point of the duplication measurement) never happens.
-    transcribe: async (pcm: Float32Array) => {
+    transcribe: async (pcm: Float32Array, prompt?: string) => {
+      if (client) {
+        sttCalls++;
+        try {
+          return await client.transcribe(pcm, 'en', prompt);
+        } catch (e) {
+          // A failed STT call is a REAL event, not a reason to substitute fake words — count it
+          // and return nothing, exactly as an empty transcription would behave in the lane.
+          sttFailures++;
+          return { text: '', language: 'en', duration: pcm.length / 16000, segments: [] };
+        }
+      }
       const secs = Math.max(1, Math.floor(pcm.length / 16000));
       const text = Array.from({ length: secs }, (_, i) => `w${i}`).join(' ');
       return {
@@ -101,18 +120,18 @@ async function main(): Promise<void> {
       };
     },
     publish: (speaker, confirmed, pending) => {
-      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); durable.set(c.segmentId, { speaker, text: c.text }); }
+      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs }); }
       reconcilePending(pending ?? []);
-      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text }); }
+      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
     },
     publishPending: (speaker, segs) => {
       reconcilePending(segs);
-      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text }); }
+      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
     },
     clearPending: () => { reconcilePending([]); },
     rename: (oldS, newS, segs) => {
       renames.push({ from: oldS, to: newS, n: segs.length });
-      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); durable.set(s.segmentId, { speaker: newS, text: s.text }); }
+      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs }); }
     },
     makeSegmenter: async (onBoundary): Promise<BoundarySource> => {
       emit = onBoundary;
@@ -173,18 +192,45 @@ async function main(): Promise<void> {
   console.log(`  turns holding BOTH a draft id and a confirmed id: ${shadowed}`);
 
   // ── ATTRIBUTION ──
-  const byTime: { t: number; speaker: string }[] = [];
-  for (const [id, v] of durable) {
-    const m = /^turn:(\d+):/.exec(id);
-    const tn = m ? turns.find((x) => x.turn === Number(m[1])) : undefined;
-    if (tn) byTime.push({ t: tn.t0, speaker: v.speaker });
-  }
+  const byTime: { id: string; t: number; end: number; speaker: string; text: string }[] = [];
+  for (const [id, v] of durable) byTime.push({ id, t: v.startMs, end: v.endMs, speaker: v.speaker, text: v.text });
   byTime.sort((a, b) => a.t - b.t);
   const tally = new Map<string, number>();
   for (const r of byTime) tally.set(r.speaker, (tally.get(r.speaker) ?? 0) + 1);
   console.log(`\nATTRIBUTION`);
   console.log(`  label distribution: ${JSON.stringify(Object.fromEntries(tally))}`);
   console.log(`  renames issued: ${renames.length}`);
+  if (client) console.log(`  REAL STT: ${sttCalls} call(s), ${sttFailures} failure(s)`);
+
+  // ── The readable transcript: one line per FINAL (post-retract) segment. ──
+  const out = arg('out');
+  if (out) {
+    const t0Ms = byTime.length ? byTime[0].t : 0;
+    const clock = (ms: number): string => {
+      const s2 = Math.max(0, Math.round((ms - t0Ms) / 1000));
+      return `${String(Math.floor(s2 / 60)).padStart(2, '0')}:${String(s2 % 60).padStart(2, '0')}`;
+    };
+    const lines = byTime.map((r) => `[${clock(r.t)}] ${/^seg_\d+$/.test(r.speaker) ? 'Speaker' : r.speaker}: ${r.text}`);
+    writeFileSync(out, lines.join('\n') + '\n');
+    console.log(`\nwrote ${lines.length} transcript line(s) → ${out}`);
+  }
+
+  // The same rows, machine-readable, so a durable store can be loaded from the SAME run that
+  // produced the text render above. STT output varies between runs, so the two artefacts have
+  // to come from one run or they describe different transcripts. `Speaker` is written out here
+  // exactly as the render shows it — a provisional seg_N is not a display name.
+  const outJson = arg('out-json');
+  if (outJson) {
+    const rows = byTime.map((r) => ({
+      segment_id: r.id,
+      start_epoch_s: r.t / 1000,
+      end_epoch_s: r.end / 1000,
+      speaker: /^seg_\d+$/.test(r.speaker) ? 'Speaker' : r.speaker,
+      text: r.text,
+    }));
+    writeFileSync(outJson, JSON.stringify(rows, null, 2) + '\n');
+    console.log(`wrote ${rows.length} JSON row(s) → ${outJson}`);
+  }
 
   const gtPath = arg('gt');
   if (gtPath) {
