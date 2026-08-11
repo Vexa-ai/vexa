@@ -303,8 +303,12 @@ export class TrackNamer {
   }
 
   /** The roster's casing for a name, when the roster has seen it. Otherwise the name unchanged —
-   *  inventing a capitalisation nobody rendered would be a different kind of guess. */
-  private canonicalCase(name: string): string {
+   *  inventing a capitalisation nobody rendered would be a different kind of guess.
+   *
+   *  PUBLIC because every naming path needs it, not only the track spine: the DOM tiles render
+   *  "leo (Unverified)" and the roster renders "Leo (Unverified)", and a transcript that carries
+   *  both is a transcript with one person in it twice. */
+  canonicalCase(name: string): string {
     return this.canonical.get(name.toLowerCase()) ?? name;
   }
 

@@ -214,6 +214,27 @@ export interface ChunkedTranscriberCallbacks {
    *  beside the tape, so a replay can answer WHICH SPINE produced a transcript, which is otherwise
    *  unrecoverable from the transcript itself. */
   onObservation?: (o: TurnSourceObservation) => void;
+  /**
+   * VIRTUAL TIME — a harness seam, not a behaviour switch.
+   *
+   * Two things in this lane are driven by the wall clock rather than by audio time: the 1 s
+   * heartbeat that ticks/rolls/finalizes the open turn, and the TTL that commits a pending tail
+   * when no voiced update has arrived. They are why a replay had to run at 1x to reproduce a
+   * cadence defect — a turn transcribed in several growing passes live is transcribed in ONE pass
+   * when the tape is fired instantly, and the defects that live in the cadence vanish.
+   *
+   * Injecting the clock lets a replay drive those same code paths from the TAPE'S OWN timestamps
+   * and execute in seconds. The time CONSTANTS are untouched — this changes what "now" means, not
+   * what the lane does with it. Production leaves it undefined and uses Date.now/setInterval.
+   */
+  clock?: LaneClock;
+}
+
+/** The wall-clock dependencies of the lane, in one injectable surface. */
+export interface LaneClock {
+  now(): number;
+  /** Register the lane's periodic heartbeat. Returns its canceller. */
+  setHeartbeat(fn: () => void, everyMs: number): () => void;
 }
 
 /** The lane's account of which spine it is running on, and why it changed. */
@@ -281,7 +302,8 @@ interface Turn {
   /** Set once this turn has been counted as an orphan (resolveName runs many times per turn). */
   orphanCounted?: boolean;
   /** Every track audible at some point inside this turn's span (transport spine). One entry means
-   *  the span is unambiguous even when the transport declined to own it. */
+   *  the span is unambiguous even when the transport declined to own it. `undefined` means the
+   *  spine never got to say — which is NOT the same as "nobody else was there". */
   spanTracks?: string[];
   /** The transport's live edge for the OPEN turn: audio up to here belongs to it and no further.
    *  Absent ⇒ read to the newest audio frame, which is what the pyannote spine has always done. */
@@ -355,6 +377,9 @@ export class ChunkedTranscriber {
   /** The open turn. */
   private turn: Turn | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private cancelHeartbeat: (() => void) | null = null;
+  /** The lane's "now". Wall clock in production; the tape's clock under a virtual-time replay. */
+  private now: () => number = () => Date.now();
 
   /** Turns published under a provisional segmentation id, awaiting hint evidence. */
   private unresolved: UnresolvedTurn[] = [];
@@ -377,6 +402,7 @@ export class ChunkedTranscriber {
     this.log = cb.log || (() => { /* silent */ });
     this.mode = cb.turnSource ?? 'pyannote';
     this.graceMs = cb.turnSourceGraceMs ?? TURN_SOURCE_GRACE_MS;
+    if (cb.clock) this.now = () => cb.clock!.now();
     this.trackNamer = new TrackNamer({
       selfName: cb.selfName,
       onNamed: (trackId, name) => this.onTrackNamed(trackId, name),
@@ -430,7 +456,7 @@ export class ChunkedTranscriber {
     //    cadence (latency decoupled from boundary timing),
     //  - ROLL: bound the unconfirmed Whisper window — an over-long open turn
     //    (continuous speech, stalled stability) force-rolls into a fresh turn.
-    t.idleTimer = setInterval(() => {
+    const heartbeat = (): void => {
       if (t.pumping) return;
       // Liveness: an item enqueued during the pump's closing pass misses the
       // drain loop; with no further boundaries nothing would re-pump it.
@@ -448,7 +474,7 @@ export class ChunkedTranscriber {
       // TTL idle-finalize: pending exists but no voiced update for CONFIRM_TTL_MS
       // (speaker paused / segmenter didn't close on continuous live audio) → commit
       // what we have by closing the turn, instead of holding it for the 3rd pass.
-      if (t.turn.pendingTail.length > 0 && Date.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
+      if (t.turn.pendingTail.length > 0 && t.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
         t.queue.push({ kind: 'close', t1: t.latestAudioMs });
         // On the transport spine the pause that triggered this is a pause, NOT the end of the
         // speaker's turn — the transport has not said they stopped. Reopen on the same track so
@@ -461,7 +487,11 @@ export class ChunkedTranscriber {
         t.queue.push('tick');
         void t.pump();
       }
-    }, 1000);
+    };
+    // ONE heartbeat, through the clock seam. Identical body either way — a virtual-time replay
+    // must exercise the same branches in the same order, or it is measuring a different lane.
+    if (cb.clock) t.cancelHeartbeat = cb.clock.setHeartbeat(heartbeat, 1000);
+    else t.idleTimer = setInterval(heartbeat, 1000);
     t.log(`[ChunkedTranscriber] ready (segmentation-cut turns, hints-only naming, LocalAgreement-3 confirmation + TTL finalize)`);
     return t;
   }
@@ -690,7 +720,8 @@ export class ChunkedTranscriber {
 
   /** Late-box claim: repaint a provisional turn's published segments under `name`
    *  (the speaker whose box just lit). Same path as a binder rename. */
-  private claimTurn(clusterId: string, name: string): void {
+  private claimTurn(clusterId: string, rawName: string): void {
+    const name = this.render(rawName);
     const old = this.clusterName.get(clusterId) ?? clusterId;
     if (old === name) return;
     this.clusterName.set(clusterId, name);
@@ -728,6 +759,7 @@ export class ChunkedTranscriber {
     if (this.disposed) return;
     this.disposed = true;
     if (this.idleTimer) { clearInterval(this.idleTimer); this.idleTimer = null; }
+    if (this.cancelHeartbeat) { this.cancelHeartbeat(); this.cancelHeartbeat = null; }
     // Settle the namer's remaining evidence BEFORE the closing pass: a name earned in the
     // meeting's last seconds must still repaint what it owns while the rename path is alive.
     this.trackNamer.finish();
@@ -886,7 +918,7 @@ export class ChunkedTranscriber {
       clusterId: item.segId, turnId: this.turnCounter++,
       t0, t1: t0, confirmedUpToMs: coverFrom,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
-      lastVoicedWallMs: Date.now(), resolvedName: null,
+      lastVoicedWallMs: this.now(), resolvedName: null,
       ...(item.trackId ? { trackId: item.trackId } : {}),
       ...(item.contested ? { contested: true } : {}),
     };
@@ -1002,7 +1034,7 @@ export class ChunkedTranscriber {
       if (closing) await this.closeOut(turn);
       return;
     }
-    turn.lastVoicedWallMs = Date.now();   // voiced update arrived — resets the TTL idle-finalize
+    turn.lastVoicedWallMs = this.now();   // voiced update arrived — resets the TTL idle-finalize
 
     // LocalAgreement-N (shared confirm core, @vexa/transcribe-buffer): confirm whole
     // leading segments whose words are stable across N (default 3) consecutive
@@ -1117,6 +1149,15 @@ export class ChunkedTranscriber {
     }
   }
 
+  /** The one rendering rule, applied to every name this lane publishes whatever path produced it:
+   *  if the roster showed this person, use the roster's casing. The tiles and the roster disagree
+   *  about capitalisation ("leo" vs "Leo"), and on the full m30 tape that put ONE participant into
+   *  the transcript under TWO labels — 34 rows as "Leo (Unverified)" and 18 as "leo (Unverified)",
+   *  which reads as two people. Never invents a capitalisation nobody rendered. */
+  private render(name: string): string {
+    return this.trackNamer.canonicalCase(name);
+  }
+
   private resolveName(turn: Turn): string {
     // ── THE TRANSPORT PATH ────────────────────────────────────────────────────────────────────
     // A turn that carries a trackId does not go through ANY of the machinery below. That machinery
@@ -1188,9 +1229,9 @@ export class ChunkedTranscriber {
     if (turn.blockedNames?.has(r.speakerName)) return turn.resolvedName ?? turn.clusterId;
     if (!turn.resolvedName) {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
-      turn.resolvedName = r.speakerName;
+      turn.resolvedName = this.render(r.speakerName);
       turn.resolvedConfidence = r.confidence;
-      return r.speakerName;
+      return turn.resolvedName;
     }
     if (r.speakerName === turn.resolvedName) {
       turn.resolvedConfidence = r.confidence;
@@ -1199,10 +1240,10 @@ export class ChunkedTranscriber {
     if (r.source === 'window-match' && r.confidence >= REATTRIBUTE_MIN_CONFIDENCE) {
       this.log(`[ChunkedTranscriber] re-attributed ${turn.clusterId}: "${turn.resolvedName}" → "${r.speakerName}" (conf ${r.confidence.toFixed(2)}) over the grown turn window`);
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
-      turn.resolvedName = r.speakerName;
+      turn.resolvedName = this.render(r.speakerName);
       turn.resolvedConfidence = r.confidence;
-      this.claimTurn(turn.clusterId, r.speakerName);   // repaint what this turn already published
-      return r.speakerName;
+      this.claimTurn(turn.clusterId, turn.resolvedName);   // repaint what this turn already published
+      return turn.resolvedName;
     }
     return turn.resolvedName;
   }
@@ -1213,7 +1254,13 @@ export class ChunkedTranscriber {
   private containingTrack(turn: Turn): string | null {
     // resolveName runs on every submission, so count the ORPHAN once rather than once per pass.
     if (!turn.orphanCounted) { turn.orphanCounted = true; this.orphanTurns++; }
-    const candidates = new Set<string>(turn.spanTracks ?? []);
+    // UNKNOWN IS NOT EMPTY. The spine reports a turn's track membership when it closes it — but the
+    // TTL finalize can close a turn first, and then that report never lands. Treating the missing
+    // report as "no other track was audible" let the adjacency rule name a 5.4-second CROSSTALK
+    // span on the m30 tape after both speakers had been talking through the whole of it. If the
+    // spine never told us, we do not know, and we do not guess.
+    if (turn.spanTracks === undefined) return null;
+    const candidates = new Set<string>(turn.spanTracks);
     if (candidates.size === 0
       && this.lastClosedTrackId
       && turn.t0 - this.lastClosedEndMs <= ORPHAN_ADJACENT_MS
