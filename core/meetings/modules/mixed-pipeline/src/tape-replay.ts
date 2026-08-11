@@ -66,18 +66,23 @@ interface Hint { t: number; name: string; isEnd: boolean }
 
 // ── Load the tape. A tape may carry MORE THAN ONE header (the capture restarted mid-session);
 // every non-header line is a record, and records are either audio frames or hints. ──
-function loadTape(path: string): { frames: Frame[]; hints: Hint[] } {
+function loadTape(path: string): { frames: Frame[]; hints: Hint[]; language: string | null } {
   const frames: Frame[] = [];
   const hints: Hint[] = [];
+  let language: string | null = null;
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (!line) continue;
     let r: any;
     try { r = JSON.parse(line); } catch { continue; }
-    if (r.type === 'captured_signal_header') continue;
+    // The header records what the LIVE bot was configured with. A replay that hard-codes a
+    // language transcribes a different meeting than the one on the tape: forcing 'en' onto a
+    // Russian conversation makes Whisper TRANSLATE it, and every word-level comparison against the
+    // original then measures the harness rather than the lane.
+    if (r.type === 'captured_signal_header') { if (typeof r.language === 'string' && r.language) language = r.language; continue; }
     if (r.type === 'hint') { if (r.name) hints.push({ t: r.t, name: r.name, isEnd: !!r.isEnd }); continue; }
     if (typeof r.pcm === 'string' && typeof r.ts === 'number') frames.push({ ts: r.ts, pcm: r.pcm });
   }
-  return { frames, hints };
+  return { frames, hints, language };
 }
 
 /** The transport sidecar: one transition per line, plus its own mini-header (skipped). */
@@ -128,7 +133,11 @@ const pcmOf = (f: Frame): Float32Array => {
 };
 
 async function main(): Promise<void> {
-  const { frames, hints } = loadTape(TAPE!);
+  const { frames, hints, language: tapeLanguage } = loadTape(TAPE!);
+  // `--language auto` (or a tape whose header says nothing) leaves it to Whisper, which is what a
+  // bot with no configured language does live.
+  const langArg = arg('language') ?? tapeLanguage ?? 'auto';
+  const language = langArg === 'auto' ? undefined : langArg;
   const turns = TURNS ? loadTurns(TURNS) : [];
   const csrcPath = TURN_SOURCE === 'csrc' || TURN_SOURCE === 'auto'
     ? (arg('csrc') ?? siblingSidecar(TAPE!, 'csrc'))
@@ -144,6 +153,7 @@ async function main(): Promise<void> {
   const captionsPath = arg('captions') ?? siblingSidecar(TAPE!, 'captions');
   const captions = captionsPath ? loadCaptions(captionsPath) : [];
   console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s), ${transport.length} transport transition(s), ${captions.length} caption(s)`);
+  console.log(`language: ${language ?? 'auto (whisper decides, as the live bot did)'}`);
   console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
 
   let emit!: (ev: BoundaryEvent) => void;
@@ -180,23 +190,23 @@ async function main(): Promise<void> {
     : null;
   let sttCalls = 0, sttFailures = 0;
   const tc = await ChunkedTranscriber.create({
-    language: 'en',
+    ...(language ? { language } : {}),
     transcribe: async (pcm: Float32Array, prompt?: string) => {
       if (client) {
         sttCalls++;
         try {
-          return await client.transcribe(pcm, 'en', prompt);
+          return await client.transcribe(pcm, language, prompt);
         } catch (e) {
           // A failed STT call is a REAL event, not a reason to substitute fake words — count it
           // and return nothing, exactly as an empty transcription would behave in the lane.
           sttFailures++;
-          return { text: '', language: 'en', duration: pcm.length / 16000, segments: [] };
+          return { text: '', language: language ?? 'en', duration: pcm.length / 16000, segments: [] };
         }
       }
       const secs = Math.max(1, Math.floor(pcm.length / 16000));
       const text = Array.from({ length: secs }, (_, i) => `w${i}`).join(' ');
       return {
-        text, language: 'en', language_probability: 0.99, duration: pcm.length / 16000,
+        text, language: language ?? 'en', language_probability: 0.99, duration: pcm.length / 16000,
         segments: [{ text, start: 0, end: pcm.length / 16000, no_speech_prob: 0.01, avg_logprob: -0.2, compression_ratio: 1.1 } as any],
       };
     },
