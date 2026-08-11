@@ -523,7 +523,13 @@ export class TrackNamer {
 
   /** Can this track's leading candidate be believed yet? */
   private evaluate(trackId: string, atMs: number): void {
-    if (this.named.has(trackId)) return;
+    const existing = this.named.get(trackId);
+    // A track named by ELIMINATION may still be re-examined, for one purpose only: to upgrade the
+    // record when direct evidence arrives for the same name. Elimination can beat the evidence path
+    // to the punch — on the m36 tape a track was labelled [elimination] while holding 46.9 s of its
+    // own unambiguous DOM evidence, so the audit trail understated its own confidence and read as
+    // the weaker claim. The NAME never changes here; only the account of how it was reached.
+    if (existing && existing.source === 'evidence') return;
     const byName = this.evidence.get(trackId);
     if (!byName) return;
     // EVIDENCE FOR SOMEONE ELSE'S NAME IS NOT DISAGREEMENT. A track accrues time for a name that
@@ -550,11 +556,26 @@ export class TrackNamer {
     const total = ranked.reduce((s, e) => s + e.supportMs, 0);
     const share = total > 0 ? lead.supportMs / total : 0;
     if (share < this.minShare) return;                        // this track's tiles disagree
-    if (this.owner.has(lead.name)) return;                    // that person is already someone else
+    const holder = this.owner.get(lead.name) ?? this.owner.get(this.canonicalCase(lead.name));
+    if (holder !== undefined && holder !== trackId) return;   // that person is already someone else
     // Exclusivity the other way: does this track hold the clear majority of that NAME's evidence?
     let nameTotal = 0;
     for (const [, m] of this.evidence) { const e = m.get(lead.name); if (e) nameTotal += e.supportMs; }
     if (nameTotal > 0 && lead.supportMs / nameTotal < this.minOwnerShare) return;
+    if (existing) {
+      // Same name, better provenance: upgrade in place. A DIFFERENT name is never accepted — an
+      // elimination that has already been published is not overturned by later evidence, it is a
+      // contradiction worth seeing rather than silently resolving.
+      if (existing.name !== this.canonicalCase(lead.name) && existing.name !== lead.name) {
+        this.log(`track ${trackId} evidence names "${lead.name}" but it was already eliminated to "${existing.name}" — keeping the published name`);
+        return;
+      }
+      existing.source = 'evidence';
+      existing.confidence = share;
+      existing.evidence = ranked;
+      this.log(`track ${trackId} upgraded to [evidence] (${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s))`);
+      return;
+    }
     this.bind(trackId, lead.name, 'evidence', share, ranked, atMs,
       `${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)}`);
   }
