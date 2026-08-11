@@ -164,6 +164,9 @@ const TAIL_DEDUP_REACH_MS = 4000;
  *  re-asserted about every 2 s, so a second either way catches the current speaker without reaching
  *  into the neighbouring turn. Tunable via VEXA_CONTESTED_HINT_TOLERANCE_MS. */
 const CONTESTED_HINT_TOLERANCE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_CONTESTED_HINT_TOLERANCE_MS) || 1000);
+/** Tile re-assertions a participant must have somewhere in the meeting before the tiles may be used
+ *  to rule FOR or AGAINST them in a contested span. */
+const CONTESTED_MIN_TILE_EVIDENCE = Number((typeof process !== 'undefined' && process.env?.VEXA_CONTESTED_MIN_TILE_EVIDENCE) || 3);
 /** Comparison tokens: case- and punctuation-insensitive, so "глюнки." matches "глюнки". */
 const tokens = (t: string): string[] => (t.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
 const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
@@ -1298,7 +1301,6 @@ export class ChunkedTranscriber {
     const src = this.csrcSource;
     if (!src || this.authoritative !== 'csrc') return [{ name: fallbackName, ...seg }];
     const words = seg.words?.filter((w) => typeof w.start === 'number' && (w.word ?? '').trim());
-    if (!words || words.length === 0) return [{ name: fallbackName, ...seg }];
 
     const nameAt = (tMs: number): string => {
       const o = src.ownerAt(tMs);
@@ -1314,16 +1316,37 @@ export class ChunkedTranscriber {
         // sees the outline move; the speaker re-emits one every couple of seconds while the held
         // source emits nothing. A strict majority within a second either side decides it, and two
         // people genuinely talking at once still tie and still resolve to nobody.
-        const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS)
-          ?? this.trackNamer.litNameAt(tMs);
-        if (lit) {
-          for (const t of src.tracksAudibleAt(tMs)) {
-            if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+        // THE TILES ONLY GET A VOTE IF THEY CAN TESTIFY ABOUT EVERYONE IN THE MIX. On the m30 tape
+        // the outline lights for exactly ONE of the two participants for the whole meeting, so a
+        // tile majority there says "leo" no matter who is speaking — one-sided by construction, and
+        // reading the other man's silence as absence put nine wrong names into the transcript the
+        // first time this rule ran. A signal that has never once named someone cannot be evidence
+        // that they are not the one talking.
+        const audible = src.tracksAudibleAt(tMs);
+        const everyoneTestified = audible.every((t) => {
+          const n = this.trackNamer.nameFor(t);
+          return n !== null && this.trackNamer.hintEvidenceFor(n) >= CONTESTED_MIN_TILE_EVIDENCE;
+        });
+        if (everyoneTestified) {
+          const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS)
+            ?? this.trackNamer.litNameAt(tMs);
+          if (lit) {
+            for (const t of audible) {
+              if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+            }
           }
         }
       }
       return PROVISIONAL_SPEAKER;
     };
+
+    // WITHOUT word timestamps the segment is still a span, and the span still has an owner. Falling
+    // back to the turn's own name here meant a decoder that returns no words could never resolve a
+    // contested span at all — every one of them would publish as "Speaker" no matter how clearly the
+    // tiles said who was talking. Ask once, for the whole segment, at its midpoint.
+    if (!words || words.length === 0) {
+      return [{ name: nameAt((seg.startMs + seg.endMs) / 2), ...seg }];
+    }
 
     const out: Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> = [];
     for (const w of words) {
