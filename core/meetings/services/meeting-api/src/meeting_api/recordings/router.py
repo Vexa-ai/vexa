@@ -19,7 +19,15 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import JSONResponse, Response
 
 from .ports import RecordingRepo, Storage
-from .service import SessionNotFound, _verify_meeting_token, finalize_master, upload_chunk
+from .service import (
+    SIGNAL_MEDIA_TYPE,
+    InvalidSignalTape,
+    SessionNotFound,
+    _verify_meeting_token,
+    finalize_master,
+    upload_chunk,
+    upload_signal_tape,
+)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -140,6 +148,33 @@ def build_router(
             raise HTTPException(status_code=422, detail="session_uid required (flat field or metadata)")
         media_type = media_type or meta.get("media_type") or "audio"
         media_format = media_format or meta.get("media_format") or meta.get("format") or "wav"
+        # O-TEL-1 — a captured-signal tape rides this same endpoint (one internal upload edge, one
+        # set of credentials, one network path already open from every bot) but takes a DIFFERENT
+        # server path: no JSONB fold, no chunking, no master. See service.upload_signal_tape.
+        if media_type == SIGNAL_MEDIA_TYPE:
+            part = str(meta.get("part") or "")
+            bearer = _bearer_token(authorization)
+            internal_secret = os.getenv("INTERNAL_API_SECRET")
+            token_meeting_id = None
+            if not (internal_secret and bearer == internal_secret):
+                try:
+                    claims = _verify_meeting_token(bearer, secret=token_secret)
+                except ValueError as e:
+                    raise HTTPException(status_code=401,
+                                        detail=f"Invalid recording upload token: {e}")
+                token_meeting_id = int(claims["meeting_id"])
+            try:
+                receipt = await upload_signal_tape(
+                    repo, storage,
+                    token_meeting_id=token_meeting_id,
+                    session_uid=session_uid, data=await file.read(),
+                    part=part, media_format=media_format,
+                )
+            except InvalidSignalTape as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except SessionNotFound as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            return JSONResponse(content=receipt)
         chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")
