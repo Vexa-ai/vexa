@@ -68,6 +68,10 @@ export interface TurnClosedEvent {
   t1: number;
   trackId?: string;
   contested?: boolean;
+  /** Every track that was audible at any point inside this span. For an owned turn that is the one
+   *  track; for a contested one it is all of them — which is what lets a consumer tell an orphan
+   *  with a single unambiguous neighbour from genuine crosstalk. */
+  tracks?: string[];
   reason: TurnCloseReason;
 }
 
@@ -200,7 +204,7 @@ export interface CsrcTurnSourceOptions {
   log?: (m: string) => void;
 }
 
-interface OpenTurn { t0: number; trackId?: string; contested: boolean }
+interface OpenTurn { t0: number; trackId?: string; contested: boolean; tracks: Set<string> }
 
 /**
  * The transport as the turn spine.
@@ -322,12 +326,12 @@ export class CsrcTurnSource implements TurnSource {
       const same = desiredContested
         ? this.open.contested
         : (!this.open.contested && this.open.trackId === desiredTrack && desiredTrack !== undefined);
-      if (same) return;
+      if (same) { for (const c of this.active) this.open.tracks.add(String(c)); return; }
       this.closeOpen(tEdge, this.open.contested || desiredContested ? 'contest-edge'
         : (this.active.size === 0 ? 'transport-inactive' : 'speaker-change'));
     }
     if (this.active.size === 0) return;
-    this.open = { t0: tEdge, trackId: desiredTrack, contested: desiredContested };
+    this.open = { t0: tEdge, trackId: desiredTrack, contested: desiredContested, tracks: new Set([...this.active].map(String)) };
     if (desiredContested) this.contestedTurns++;
     this.edges++;
     this.cb.turnOpened({ t0: tEdge, ...(desiredTrack ? { trackId: desiredTrack } : {}), ...(desiredContested ? { contested: true } : {}) });
@@ -342,6 +346,7 @@ export class CsrcTurnSource implements TurnSource {
       t0: o.t0, t1: Math.max(t1, o.t0), reason,
       ...(o.trackId ? { trackId: o.trackId } : {}),
       ...(o.contested ? { contested: true } : {}),
+      tracks: [...o.tracks],
     });
   }
 

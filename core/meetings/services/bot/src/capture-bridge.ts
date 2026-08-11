@@ -192,6 +192,11 @@ export function makeObservationSink(
   lane: 'gmeet' | 'mixed',
   telemetry?: ObservationCapableSink,
   warn: (m: string) => void = (m) => console.warn(m),
+  /** The ONE observation the lane consumes rather than merely stores: a roster display name.
+   *  Everything else here stays a diagnostic. Called with the re-stamped time, after storage, for
+   *  the same reason the transport edges are — a fixture that lacks what the run acted on cannot
+   *  reproduce the run. */
+  consumeRosterName?: (name: string, tMs: number) => void,
 ): { sink: (source: string, obs: unknown, tMs?: number) => void; crossed: () => number; stored: () => number } {
   let crossed = 0;
   let stored = 0;
@@ -212,6 +217,12 @@ export function makeObservationSink(
       if (typeof telemetry?.captureObservation === 'function') {
         try { telemetry.captureObservation({ type: 'observation', t, source, lane, observation: payload }); stored++; }
         catch { /* telemetry must not break capture */ }
+      }
+      // A roster name is WHO IS IN THE ROOM. It is not a hint and carries no time of speech, so it
+      // can never attribute a turn on its own — it supplies canonical casing and it is what lets the
+      // namer conclude, when one track and one name are all that remain, that they are each other.
+      if (payload.type === 'roster-name' && typeof payload.name === 'string' && payload.name) {
+        try { consumeRosterName?.(payload.name, t); } catch { /* never breaks capture */ }
       }
     },
   };
@@ -719,7 +730,10 @@ export async function startCaptureBridge(
   // Every typed observation the capture path produces, teed to the fixture instead of dying with
   // the pod. Page-side producers call __vexaObservation alongside their existing log line; the
   // Node-side ones (the caption-enable outcome) call this sink directly.
-  const { sink: onObservation, crossed: obsBridgeCrossed } = makeObservationSink(lane, telemetry);
+  const { sink: onObservation, crossed: obsBridgeCrossed } = makeObservationSink(
+    lane, telemetry, undefined,
+    mixed ? (name, tMs) => pipeline.recordRosterName?.(name, tMs) : undefined,
+  );
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.

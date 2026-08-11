@@ -270,11 +270,43 @@ export interface TeamsIndicatorSilentObservation {
   tMs: number;
 }
 
+/**
+ * A display name the ROSTER shows — a participant who is in this meeting, whether or not they are
+ * currently speaking and whether or not their tile carries a voice outline.
+ *
+ * Every other name in this module answers "who is speaking NOW", which is a question about the
+ * voice-level signal and therefore silent about anyone the outline cannot see. The roster answers a
+ * different question — "who is in the room" — and that is the one an elimination argument needs: on
+ * the m30 fixture the outline named exactly ONE of two participants for the entire meeting, so the
+ * other could never be named from speaking evidence no matter how long anyone listened.
+ *
+ * It is emitted as an OBSERVATION, not a hint. A roster name says nothing about time, so treating
+ * one as a speaking hint would attribute a turn to somebody merely for being present — the exact
+ * fabrication this package exists to refuse. What may consume it is stated at the consumer: the
+ * track namer, and only under a rule that binds a name to a track when no other pairing is possible.
+ *
+ * The name goes through `isTeamsDisplayNameCandidate` like every other name path, the local
+ * participant is excluded, and each name is emitted for the first few scans it appears in rather
+ * than on every heartbeat — enough for a consumer to require corroboration, bounded so an hour-long
+ * meeting does not write thousands of identical lines into the fixture.
+ */
+export interface TeamsRosterNameObservation {
+  type: 'roster-name';
+  platform: 'teams';
+  /** The display name exactly as the roster renders it — including any " (Unverified)" suffix.
+   *  That suffix is Teams' own statement about the participant, not noise for us to tidy away. */
+  name: string;
+  /** Which scan produced it (1-based), so a consumer can require N sightings across M rescans. */
+  scan: number;
+  tMs: number;
+}
+
 export type TeamsProducerObservation =
   | TeamsNameUnresolvedObservation
   | TeamsSignalAbsentObservation
   | TeamsIndicatorFiredObservation
-  | TeamsIndicatorSilentObservation;
+  | TeamsIndicatorSilentObservation
+  | TeamsRosterNameObservation;
 
 /** Coverage + liveness of the WHO signal, for a caller that wants to surface it. */
 export interface TeamsSpeakerHealth {
@@ -289,6 +321,9 @@ export interface TeamsSpeakerHealth {
   /** How many times ANY tile entered the speaking state. The live failure this
    * accounting exists for reported zero here across a whole meeting. */
   transitions: number;
+  /** Distinct display names the roster has shown — including participants the voice
+   *  outline can never see, who are the whole point of collecting it. */
+  roster: number;
 }
 
 export interface TeamsSpeakersOptions {
@@ -312,6 +347,9 @@ export interface TeamsSpeakersOptions {
   /** Window after which observable-but-never-speaking is reported as a contract
    * violation (ms). Default 60000. */
   indicatorSilentMs?: number;
+  /** How many scans a roster name is re-emitted for before it goes quiet (default 3). A consumer
+   *  requiring N corroborations needs at least N; anything beyond that is repetition in a fixture. */
+  rosterEmitScans?: number;
   /** How long an EDGE-shaped indicator (a style or class change) is held as a
    * speaking LEVEL (ms). Default 400 — comfortably longer than the gap between
    * two voice-bar updates, so a 60fps sampler does not read silence between
@@ -338,13 +376,14 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const heartbeatMs = opts.heartbeatMs ?? 2000;
   const indicatorSilentMs = opts.indicatorSilentMs ?? 60_000;
   const indicatorHoldMs = opts.indicatorHoldMs ?? 400;
+  const rosterEmitScans = opts.rosterEmitScans ?? 3;
   const now = opts.now ?? (() => Date.now());
 
   // ── Coverage accounting (Gate A) ──
   // Every tile the selectors match is COUNTED, whether or not it is observable.
   // The old code returned silently on a missing outline, so 3 of 4 participants
   // were invisible: not observed, not named, and not reported as missing.
-  const coverage = { found: 0, observable: 0 };
+  const coverage = { found: 0, observable: 0, roster: 0 };
   let transitions = 0;          // entries into the speaking state, cumulative
   let lastSpeakingAt = now();   // anchor for the indicator-silent window
   let coverageWarned = false;
@@ -819,22 +858,50 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     checkAndEmit(identity);
   }
 
+  // ── The ROSTER: who is in the room, regardless of whether they can be heard ──
+  // Counted per name across scans. A tile with no voice outline still carries a display name, and
+  // that name is precisely what the speaking path can never report — which is why this walks EVERY
+  // matched tile rather than only the observable ones.
+  const rosterSeen = new Map<string, number>();
+  let scanCounter = 0;
+  function emitRosterName(name: string): void {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    if (!isTeamsDisplayNameCandidate(trimmed)) return;          // the one guard every name path uses
+    if (selfLower && trimmed.toLowerCase() === selfLower) return;   // never report ourselves
+    const seenCount = (rosterSeen.get(trimmed) ?? 0) + 1;
+    rosterSeen.set(trimmed, seenCount);
+    if (seenCount > rosterEmitScans) return;                    // corroborated enough; stop repeating
+    deliver({ type: 'roster-name', platform: 'teams', name: trimmed, scan: seenCount, tMs: now() });
+    log(`[TeamsSpeakers] roster-name sighting ${seenCount}/${rosterEmitScans}`);
+  }
+
   function scanAndObserveAll(): void {
     const allSelectors = [...teamsParticipantSelectors, '[role="menuitem"]'];
     const seen = new WeakSet<HTMLElement>();
     let found = 0; let observable = 0;
+    scanCounter++;
+    const namesThisScan = new Set<string>();
     for (const selector of allSelectors) {
       document.querySelectorAll(selector).forEach(el => {
         if (el instanceof HTMLElement && !seen.has(el)) {
           seen.add(el);
           found++;
+          // The roster walk is deliberately BEFORE the signal gate: a participant whose tile has no
+          // voice outline is invisible to every other path in this file, and they are exactly the
+          // person an elimination argument is for.
+          const rosterName = extractTeamsSpeakerName(el);
+          if (rosterName) namesThisScan.add(rosterName);
           if (hasRequiredSignal(el)) { observable++; observeParticipant(el); }
           else emitSignalAbsent(el);   // counted and reported, never hinted
         }
       });
     }
+    // Emit once per name per scan (a name matched by two selectors is one participant).
+    for (const n of namesThisScan) emitRosterName(n);
     coverage.found = found;
     coverage.observable = observable;
+    coverage.roster = rosterSeen.size;
     log(`🔍 [TeamsSpeakers] Scanned ${found} participants, observing ${observable} with signal (signal-absent ${found - observable})`);
     if (!coverageWarned && found > 0 && (observable / found) < 0.5) {
       coverageWarned = true;
@@ -922,6 +989,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         named,
         nameUnresolved,
         transitions,
+        roster: coverage.roster,
       };
     },
     destroy(): void {

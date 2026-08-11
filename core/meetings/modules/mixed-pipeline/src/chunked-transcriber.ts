@@ -136,6 +136,14 @@ const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.V
  *  first transition. If none arrives within this much audio, the transport is disarmed for the
  *  session and one `turn-source-fallback` observation says so. Tunable via VEXA_TURN_SOURCE_GRACE_MS. */
 const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_TURN_SOURCE_GRACE_MS) || 20_000);
+/** ORPHAN CONTAINMENT. A turn that carries no track — a span the transport could not assign — is
+ *  published as "Speaker". Some of those are genuinely unassignable (two people talking at once);
+ *  others sit entirely inside one speaker's run with nobody else audible anywhere in them, and
+ *  calling those "Speaker" is a gap we can close without guessing. An orphan inherits a track's name
+ *  only when EXACTLY ONE track is a candidate: audible somewhere in the span, or the immediately
+ *  preceding turn if the orphan begins within this window of it. Two candidates and it stays
+ *  honest. Tunable via VEXA_ORPHAN_ADJACENT_MS. */
+const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
 
 export interface ChunkSegment {
   text: string;
@@ -266,6 +274,11 @@ interface Turn {
   /** Two or more sources were audible across this span. The mix cannot be split, so this turn is
    *  published unattributed — never merged into either speaker's name. */
   contested?: boolean;
+  /** Set once this turn has been counted as an orphan (resolveName runs many times per turn). */
+  orphanCounted?: boolean;
+  /** Every track audible at some point inside this turn's span (transport spine). One entry means
+   *  the span is unambiguous even when the transport declined to own it. */
+  spanTracks?: string[];
   /** The transport's live edge for the OPEN turn: audio up to here belongs to it and no further.
    *  Absent ⇒ read to the newest audio frame, which is what the pyannote spine has always done. */
   edgeMs?: number;
@@ -304,6 +317,12 @@ export class ChunkedTranscriber {
   private trackClusters = new Map<string, Set<string>>();
   /** The track that owned the previously closed turn — gap reclaim may not cross a speaker change. */
   private lastClosedTrackId: string | undefined;
+  /** Where the previous turn ended — the adjacency half of the orphan-containment test. */
+  private lastClosedEndMs = 0;
+  /** Orphans offered to containment, and those it accepted. Reported, so the rule's own refusal
+   *  rate is visible rather than assumed. */
+  private orphanTurns = 0;
+  private orphanContained = 0;
   private contestedTurns = 0;
 
   private ring: RingFrame[] = [];
@@ -480,6 +499,14 @@ export class ChunkedTranscriber {
     this.trackNamer.recordCaption(name, tMs);
   }
 
+  /** A name the ROSTER shows — who is in the room, which is a different question from who is
+   *  speaking. Never a turn edge and never a hint: it supplies the canonical casing, and it is what
+   *  makes the namer's elimination rule possible for a participant the tiles never light for. */
+  recordRosterName(name: string, tMs?: number): void {
+    if (this.disposed || !name) return;
+    this.trackNamer.recordRosterName(name, tMs);
+  }
+
   /** 'auto' only: the transport gets `graceMs` of audio to say something, then it is disarmed for
    *  the session. One observation, not one per frame. */
   private armingWatchdog(): void {
@@ -535,6 +562,7 @@ export class ChunkedTranscriber {
       },
       turnClosed: (ev) => {
         if (!mine()) return;
+        if (this.turn && ev.tracks) this.turn.spanTracks = ev.tracks;
         // A segmenter's speech-end lands a little early and needs a trailing STT pad; a transport
         // deactivation already carries the sensor's own 400ms inactivity window, so padding it
         // again would only feed Whisper more silence.
@@ -659,14 +687,16 @@ export class ChunkedTranscriber {
   stats(): {
     commits: number; turns: number; queued: number; unresolved: number; suppressed: number;
     binder: ReturnType<ClusterNameBinder['stats']>;
-    spine: 'pyannote' | 'csrc'; contested: number;
+    spine: 'pyannote' | 'csrc'; contested: number; orphans: number; orphansContained: number;
     tracks: ReturnType<TrackNamer['stats']>;
     sources: Record<string, unknown>;
   } {
     return {
       commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length,
       unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats(),
-      spine: this.authoritative, contested: this.contestedTurns, tracks: this.trackNamer.stats(),
+      spine: this.authoritative, contested: this.contestedTurns,
+      orphans: this.orphanTurns, orphansContained: this.orphanContained,
+      tracks: this.trackNamer.stats(),
       sources: {
         pyannote: this.pyannoteSource?.health(),
         ...(this.csrcSource ? { csrc: this.csrcSource.health() } : {}),
@@ -1052,6 +1082,7 @@ export class ChunkedTranscriber {
     // The transport spine remembers who just finished — the gap-reclaim rule in openTurnApply
     // needs it to refuse to carry one speaker's tail into the next speaker's window.
     if (turn.trackId || turn.contested) this.lastClosedTrackId = turn.trackId;
+    this.lastClosedEndMs = Math.max(this.lastClosedEndMs, turn.t1);
     // A transport turn is NEVER queued for the late hint claim. Its name is the track's name and
     // arrives (or does not) through the TrackNamer's retroactive rename; letting it also sit in the
     // unresolved queue would re-open the per-hint race on the one path built to be free of it. A
@@ -1078,7 +1109,26 @@ export class ChunkedTranscriber {
     // the only open question is that speaker's name, and that is answered once per meeting by the
     // TrackNamer against evidence, not once per turn against timing. The old paths are untouched
     // and still carry the pyannote lane.
-    if (turn.contested) return turn.clusterId;          // two voices in one mix — nobody's name
+    if (turn.contested || (turn.spanTracks && !turn.trackId)) {
+      // ORPHAN CONTAINMENT. The transport declined to own this span. Before publishing it as
+      // "Speaker", ask whether the span was ambiguous or merely unowned: exactly one candidate
+      // track — audible somewhere inside it, or the turn immediately before it — means there was
+      // never a second person it could have been. Two candidates is real crosstalk and it stays
+      // unattributed, which on the m30 fixture is all three of them.
+      const contained = this.containingTrack(turn);
+      if (contained) {
+        turn.trackId = contained;
+        const label = this.trackNamer.labelFor(contained);
+        turn.resolvedName = label;
+        let keys = this.trackClusters.get(contained);
+        if (!keys) { keys = new Set(); this.trackClusters.set(contained, keys); }
+        keys.add(turn.clusterId);   // so a later name repaints this span too
+        this.orphanContained++;
+        this.log(`[ChunkedTranscriber] orphan ${turn.clusterId} contained by track ${contained} → "${label}"`);
+        return label;
+      }
+      return turn.clusterId;                            // two voices in one mix — nobody's name
+    }
     if (turn.trackId) {
       const label = this.trackNamer.labelFor(turn.trackId);
       turn.resolvedName = label;
@@ -1138,6 +1188,22 @@ export class ChunkedTranscriber {
       return r.speakerName;
     }
     return turn.resolvedName;
+  }
+
+  /** The ONE track an orphan span can only have belonged to, or null. Candidates are every track
+   *  audible inside the span plus — when the orphan opens right after it — the previous turn's
+   *  track. More than one candidate is a refusal, always. */
+  private containingTrack(turn: Turn): string | null {
+    // resolveName runs on every submission, so count the ORPHAN once rather than once per pass.
+    if (!turn.orphanCounted) { turn.orphanCounted = true; this.orphanTurns++; }
+    const candidates = new Set<string>(turn.spanTracks ?? []);
+    if (candidates.size === 0
+      && this.lastClosedTrackId
+      && turn.t0 - this.lastClosedEndMs <= ORPHAN_ADJACENT_MS
+      && turn.t0 >= this.lastClosedEndMs) {
+      candidates.add(this.lastClosedTrackId);
+    }
+    return candidates.size === 1 ? [...candidates][0] : null;
   }
 
   private isRealSpeakerName(name: string): boolean {

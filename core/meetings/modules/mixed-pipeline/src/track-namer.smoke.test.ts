@@ -19,7 +19,7 @@ const check = (name: string, cond: boolean, detail?: string): void => {
 };
 
 /** A namer with the lag switched OFF, so a test can state times in audio terms. */
-const namer = (over: Partial<ConstructorParameters<typeof TrackNamer>[0]> = {}) =>
+const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer>[0]>> = {}) =>
   new TrackNamer({ settleMs: 0, minEpisodeMs: 600, corroborations: 2, ...over });
 
 // ── 1) Stable letters when nothing names anybody ────────────────────────────────────────────────
@@ -108,7 +108,99 @@ const namer = (over: Partial<ConstructorParameters<typeof TrackNamer>[0]> = {}) 
     `${n.labelFor('201')} vs ${n.labelFor('1266')}`);
 }
 
-// ── 5) Captions are a second, independent naming source ─────────────────────────────────────────
+// ── 5) THE ELIMINATION RULE — and everything it must refuse ─────────────────────────────────────
+{
+  // The m30 story exactly: two tracks, and a roster that knows both people while the tiles only
+  // ever light for one of them. Leo is named from evidence; Dmitry can only be reached by
+  // elimination, because nothing in the meeting ever says his name AND a time together.
+  const named: Array<[string, string]> = [];
+  const n = namer({ onNamed: (t, nm) => named.push([t, nm]), rosterSightings: 2 });
+  n.noteHeard('201');
+  n.noteHeard('1266');
+  for (const nm of ['leo (Unverified)', 'Dmitry Grankin']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  check('two unnamed tracks and two unclaimed names ⇒ elimination REFUSES',
+    n.nameFor('201') === null && n.nameFor('1266') === null, JSON.stringify(n.stats().how));
+  // Now Leo earns 1266 from real evidence.
+  for (const t0 of [10_000, 30_000]) {
+    n.setTrackActive('1266', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('leo (Unverified)', t + 1000);
+    n.setTrackActive('1266', false, t0 + 4000);
+  }
+  n.tick(60_000);
+  check('1266 is leo, from evidence', n.naming('1266')?.source === 'evidence', JSON.stringify(n.stats().how));
+  check('…and 201 is now the ONLY unnamed track against the ONLY unclaimed name ⇒ it fires',
+    n.nameFor('201') === 'Dmitry Grankin' && n.naming('201')?.source === 'elimination',
+    JSON.stringify(n.stats().how));
+  check('the elimination is announced, so what it named gets repainted like any other name',
+    named.some(([t, nm]) => t === '201' && nm === 'Dmitry Grankin'), JSON.stringify(named));
+}
+{
+  // THE TRAP. Three people, three names, nobody nameable from evidence. A rule that paired anything
+  // here would be printing a human's name off a coin toss.
+  const n = namer({ rosterSightings: 2 });
+  for (const t of ['a', 'b', 'c']) n.noteHeard(t);
+  for (const nm of ['Ana', 'Bo', 'Cy']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  check('3 unnamed tracks + 3 unclaimed names ⇒ NOTHING fires',
+    ['a', 'b', 'c'].every((t) => n.nameFor(t) === null), JSON.stringify(n.stats().how));
+  // Two named leaves one track and one name — that IS decidable.
+  n.recordRosterName('Ana', 200);
+  const m = namer({ rosterSightings: 2 });
+  m.noteHeard('a'); m.noteHeard('b');
+  for (const nm of ['Ana', 'Bo', 'Cy']) { m.recordRosterName(nm, 0); m.recordRosterName(nm, 100); }
+  check('one unnamed track but TWO unclaimed names ⇒ still refuses (the other direction)',
+    m.nameFor('a') === null && m.nameFor('b') === null, JSON.stringify(m.stats().how));
+}
+{
+  // A roster name sighted once is not a participant — a rotting selector can produce one.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('solo');
+  n.recordRosterName('Flicker', 0);
+  check('an uncorroborated roster name cannot pair with anything',
+    n.nameFor('solo') === null, JSON.stringify(n.stats().roster));
+  n.recordRosterName('Flicker', 100);
+  check('a second sighting makes it usable', n.nameFor('solo') === 'Flicker', JSON.stringify(n.stats().how));
+}
+{
+  // Elimination never overrides evidence: a named track is never revisited.
+  const n = namer({ rosterSightings: 2 });
+  n.setTrackActive('1', true, 0);
+  n.recordHint('Ana', 1000);
+  n.setTrackActive('1', false, 2000);
+  n.setTrackActive('1', true, 10_000);
+  n.recordHint('Ana', 11_000);
+  n.setTrackActive('1', false, 12_000);
+  n.tick(20_000);
+  for (const nm of ['Ana', 'Someone Else']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  check('a track named from evidence is never re-let by elimination',
+    n.nameFor('1') === 'Ana' && n.naming('1')?.source === 'evidence', JSON.stringify(n.stats().how));
+}
+{
+  // Casing comes from the roster, and ONLY from the roster. The " (Unverified)" suffix is Teams'
+  // own statement about the participant and is never tidied away.
+  const n = namer({ rosterSightings: 2 });
+  n.setTrackActive('9', true, 0);
+  n.recordHint('leo (Unverified)', 1000);
+  n.setTrackActive('9', false, 2000);
+  n.setTrackActive('9', true, 10_000);
+  n.recordHint('leo (Unverified)', 11_000);
+  n.setTrackActive('9', false, 12_000);
+  n.tick(20_000);
+  check('before the roster speaks, the tile\'s own casing stands', n.nameFor('9') === 'leo (Unverified)');
+  n.recordRosterName('Leo (Unverified)', 100);
+  check('the roster\'s canonical casing is adopted, suffix intact',
+    n.nameFor('9') === 'Leo (Unverified)', String(n.nameFor('9')));
+  const m = namer({ rosterSightings: 2 });
+  m.setTrackActive('9', true, 0);
+  m.recordHint('bob smith', 1000);
+  m.setTrackActive('9', false, 2000);
+  m.setTrackActive('9', true, 10_000);
+  m.recordHint('bob smith', 11_000);
+  m.setTrackActive('9', false, 12_000);
+  m.tick(20_000);
+  check('with no roster sighting, no capitalisation is invented', m.nameFor('9') === 'bob smith', String(m.nameFor('9')));
+}
+
+// ── 6) Captions are a second, independent naming source ─────────────────────────────────────────
 {
   const n = namer();
   n.setTrackActive('4', true, 0);
