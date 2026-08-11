@@ -437,8 +437,8 @@ export interface TeamsRosterNameObservation {
  * resolved a display name.
  *
  * A scan that sees four tiles and names two is not a roster of two people — it is a roster of four
- * with two missing, and nothing in the names themselves says so. Any consumer reasoning from "these
- * are the people in the meeting" needs this or its premise is silently false, which is precisely
+ * with two missing, and nothing in the names themselves says so. Any consumer whose premise is
+ * 'these are the people in the meeting' needs this, or that premise is silently false — precisely
  * how the m34 meeting put a bot's name on a human.
  */
 export interface TeamsRosterCoverageObservation {
