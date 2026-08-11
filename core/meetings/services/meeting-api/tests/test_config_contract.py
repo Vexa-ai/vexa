@@ -379,10 +379,10 @@ def test_settings_backend_is_not_blocked_by_the_env_backends_verdict(monkeypatch
                        "reason": "unauthorized — env backend is broken"})
 
     async def _settings_backend(user_id):
-        return {"url": "http://user-stt.test", "token": "user-token"}
+        return {"transcription": {"url": "http://user-stt.test", "token": "user-token"}}
 
     from meeting_api.bot_spawn import service as svc
-    monkeypatch.setattr(svc, "_resolve_transcription_backend", _settings_backend)
+    monkeypatch.setattr(svc, "_fetch_bot_context", _settings_backend)
     r = _client().post("/bots", headers=HEADERS,
                        json={"platform": "google_meet", "native_meeting_id": "settings-stt"})
     assert r.status_code == 201, f"the env verdict must not gate a Settings backend: {r.text}"

@@ -81,11 +81,14 @@ _URL_TEMPLATES = {
 }
 
 
-async def _resolve_transcription_backend(user_id: int) -> dict:
-    """The Settings-configured transcription backend for this spawn: admin-api's bot-context
-    resolves user pref > platform setting into ``{"transcription": {url, token}}``. Best-effort
-    by contract — identity unreachable / unset ADMIN_API_URL degrades to the process env (the
-    pre-Settings behaviour), never blocks a spawn. The token crosses ONLY this internal hop."""
+async def _fetch_bot_context(user_id: int) -> dict:
+    """The whole per-user spawn context from admin-api (``/internal/users/{id}/bot-context``).
+
+    Best-effort BY CONTRACT — identity unreachable / non-200 / unset ADMIN_API_URL returns ``{}``
+    and every caller below degrades to its own default. A lookup failure must NEVER block a spawn;
+    that property is why this is one call whose result is read by two resolvers rather than two
+    calls that can each fail differently.
+    """
     admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
     internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
     if not (admin_api_url and internal_secret):
@@ -101,10 +104,30 @@ async def _resolve_transcription_backend(user_id: int) -> dict:
         if r.status_code != 200:
             return {}
         body = r.json()
-        transcription = body.get("transcription") if isinstance(body, dict) else None
-        return transcription if isinstance(transcription, dict) else {}
+        return body if isinstance(body, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _transcription_from_context(ctx: dict) -> dict:
+    """The Settings-configured transcription backend out of a bot-context body: admin-api resolves
+    user pref > platform setting into ``{"transcription": {url, token, provider}}``. Absent →
+    ``{}``, and the spawn keeps the process env (the pre-Settings behaviour). The token crosses ONLY
+    that internal hop."""
+    transcription = ctx.get("transcription")
+    return transcription if isinstance(transcription, dict) else {}
+
+
+def _capture_signal_from_context(ctx: dict) -> bool:
+    """Whether this spawn tapes its raw captured-signal stream — DEFAULT ON.
+
+    admin-api resolves user > platform_settings > default-on and ALWAYS states the key, so anything
+    other than an explicit ``False`` here means we could not read a decision: unreachable identity,
+    an older admin-api that predates the field, or an unset ADMIN_API_URL. All of those default ON,
+    because prod meetings are the fixture source and a transient identity blip must not silently
+    turn collection off fleet-wide. The kill switch is an explicit ``false``, nothing else.
+    """
+    return ctx.get("capture_signal") is not False
 
 
 def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str]:
@@ -201,7 +224,11 @@ async def request_bot(
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
-    configured = await _resolve_transcription_backend(user_id)
+    bot_context = await _fetch_bot_context(user_id)
+    configured = _transcription_from_context(bot_context)
+    # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
+    # Default ON: only an explicit false from identity stops the tape.
+    capture_signal_enabled = _capture_signal_from_context(bot_context)
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
@@ -457,6 +484,9 @@ async def request_bot(
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
+        # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
+        # record still yields a fixture. Both ride the same upload endpoint below.
+        capture_signal_enabled=capture_signal_enabled,
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
         userdata_s3_path=auth_userdata_path,
