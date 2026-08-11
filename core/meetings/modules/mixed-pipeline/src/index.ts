@@ -16,12 +16,14 @@
  * and the name is resolved per TRACK, not per turn. There is NO speaker clustering on either.
  */
 export { ChunkedTranscriber } from './chunked-transcriber.js';
-export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource, TurnSourceObservation } from './chunked-transcriber.js';
+export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource, TurnSourceObservation, LaneClock } from './chunked-transcriber.js';
 export { PyannoteTurnSource, CsrcTurnSource, CSRC_HYSTERESIS_MS, CSRC_DEATH_MS } from './turn-source.js';
 export type {
   TurnSource, TurnSourceCallbacks, TurnSourceHealth, TransportEvent, TurnCloseReason,
   TurnOpenedEvent, TurnGrownEvent, TurnClosedEvent,
 } from './turn-source.js';
+export { VirtualClock } from './virtual-clock.js';
+export type { VirtualClockOptions } from './virtual-clock.js';
 export { TrackNamer, speakerLabel } from './track-namer.js';
 export type { TrackNaming, TrackEvidence, TrackNamerOptions } from './track-namer.js';
 export { PyannoteSegmenter } from './pyannote-segmenter.js';

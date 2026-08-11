@@ -30,7 +30,7 @@
  *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turn-source csrc --stt-url …
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { ChunkedTranscriber, type BoundarySource } from './index.js';
+import { ChunkedTranscriber, VirtualClock, type BoundarySource } from './index.js';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import type { BoundaryEvent } from './pyannote-segmenter.js';
 import type { TransportEvent } from './turn-source.js';
@@ -227,6 +227,18 @@ async function main(): Promise<void> {
   // --stt-url a deterministic stub stands in: one marker word per second of submitted audio,
   // growing by a STABLE PREFIX as each pass resubmits a longer span, or LocalAgreement would
   // never confirm and the draft/confirm transition under measurement would never happen.
+  // The lane is asynchronous: a heartbeat enqueues work a promise chain drains later, so the clock
+  // must let that chain settle before it moves again — otherwise the next heartbeat runs against a
+  // state the live lane never passed through.
+  const drain = async (): Promise<void> => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
+  const firstTs = Math.min(
+    ...[frames.length ? frames[0].ts : Infinity, hints.length ? hints[0].t : Infinity,
+        transport.length ? transport[0].tMs : Infinity].filter((x) => Number.isFinite(x)),
+  );
+  const clock = process.argv.includes('--virtual-time')
+    ? new VirtualClock({ startMs: Number.isFinite(firstTs) ? firstTs : Date.now(), drain })
+    : null;
+
   const sttUrl = arg('stt-url');
   const client = sttUrl
     ? new TranscriptionClient({ serviceUrl: sttUrl, apiToken: process.env.VEXA_STT_TOKEN, model: arg('stt-model') })
@@ -302,6 +314,7 @@ async function main(): Promise<void> {
     // The bot is a participant in every meeting it records; without its own name the namer cannot
     // tell it from a person in the roster. Defaults to the name our bots actually join under.
     selfName: arg('self-name') ?? 'Vexa',
+    ...(clock ? { clock: { now: () => clock.now(), setHeartbeat: (fn, ms) => clock.setHeartbeat(fn, ms) } } : {}),
     onObservation: (o) => { spineEvents.push(o); console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`); },
     log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
   });
@@ -342,7 +355,13 @@ async function main(): Promise<void> {
   // commit window is a fraction of a second — are invisible without it. `--realtime` replays the
   // tape at its captured rate (1x; ~7 min for m24); without it only structure/duplication is
   // meaningful.
+  // THREE TIERS, one harness.
+  //   (default)        instant, no clock — event logic only. Naming iterations live here.
+  //   --virtual-time   the tape's own clock drives the lane's heartbeat and TTL, so cadence-class
+  //                    behaviour is reproduced EXACTLY, in seconds instead of minutes.
+  //   --realtime       1x against the wall. The final confirmation pass, not an iteration tool.
   const realtime = process.argv.includes('--realtime');
+  const virtualTime = process.argv.includes('--virtual-time');
   const t0 = evs[0]?.t ?? 0;
   const wall0 = Date.now();
   for (let i = 0; i < evs.length; i++) {
@@ -350,9 +369,19 @@ async function main(): Promise<void> {
       const due = wall0 + (evs[i].t - t0);
       const wait = due - Date.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    } else if (clock) {
+      // Move the lane's clock to THIS event's own time, firing every heartbeat due on the way.
+      await clock.advanceTo(evs[i].t);
     }
     evs[i].run();
-    if (!realtime && i % 200 === 0) await new Promise((r) => setImmediate(r));   // let the async pump drain
+    if (clock) await drain();
+    else if (!realtime && i % 200 === 0) await new Promise((r) => setImmediate(r));   // let the async pump drain
+  }
+  if (clock) {
+    // Let the tail play out: the lane's TTL finalize and its roll are heartbeat-driven, and a tape
+    // that simply stops would leave the last turn's pending tail unexamined.
+    await clock.advanceTo(evs.length ? evs[evs.length - 1].t + 30_000 : clock.now());
+    console.log(`virtual time: ${clock.heartbeatsFired()} heartbeat(s) fired across the tape`);
   }
   await tc.dispose();
 
