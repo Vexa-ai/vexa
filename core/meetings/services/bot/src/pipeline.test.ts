@@ -177,12 +177,24 @@ async function main(): Promise<void> {
 
     const junk = sink.published.find((s) => s.segment_id === 'turn:54:0');
     const real = sink.published.find((s) => s.segment_id === 'turn:55:0');
-    check('unattributed turn: speaker is the stable "Speaker" label, not the seg_N cluster id',
-      junk?.speaker === 'Speaker', JSON.stringify(junk));
+    // Founder ruling (rc.3 witness call): a row we could not attribute publishes an EMPTY speaker.
+    // "Speaker" advertised a failed claim to the customer in their own transcript; a blank reads as
+    // continuation. The refusal is not hidden — speaker_key below still carries the track identity,
+    // and the observations sidecar carries why — it just stops being addressed to the reader.
+    check('unattributed turn: speaker is EMPTY, never the seg_N id and never a "Speaker" placeholder',
+      junk?.speaker === '', JSON.stringify(junk));
     check('unattributed turn: segment_id keeps the unique turn key (late-attribution repaint anchor)',
       junk?.segment_id === 'turn:54:0', junk?.segment_id);
-    check('unattributed turn: speaker_key keeps the unique turn key (NOT collapsed to "Speaker")',
+    check('unattributed turn: speaker_key keeps the unique turn key — the identity survives the blank',
       junk?.speaker_key === 'turn:54:0', junk?.speaker_key);
+    // The letter tracks are the other spelling of "a distinct person we could not name", and the
+    // founder's ruling was about unknown speakers plural — they blank too.
+    cb!.publish('Speaker B', [{ text: 'and this', startMs: 3000, endMs: 4000, language: 'en', segmentId: 'turn:56:0' }], []);
+    await sleep(20);
+    const letter = sink.published.find((s) => s.segment_id === 'turn:56:0');
+    check('a letter track ("Speaker B") also publishes an empty speaker',
+      letter?.speaker === '', JSON.stringify(letter));
+    check('…and keeps its own identity in speaker_key', letter?.speaker_key === 'turn:56:0', letter?.speaker_key);
     check('no seg_N string ever leaks as a display speaker across the mixed lane',
       sink.published.every((s) => !/^seg_\d+$/.test(s.speaker ?? '')), JSON.stringify(sink.published.map((s) => s.speaker)));
     check('a REAL speaker name passes through the boundary untouched',
