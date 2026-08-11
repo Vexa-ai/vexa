@@ -44,6 +44,22 @@ class Storage(Protocol):
         ``get_object`` so seeking fetches only the requested window, not the whole object."""
         ...
 
+    async def list_detailed(self, prefix: str) -> list[dict]:
+        """``[{key, size, last_modified}]`` under ``prefix`` — key, byte size and mtime in ONE call.
+
+        The captured-signal budget janitor needs all three for every tape to decide what to evict.
+        Doing that with ``list`` plus a ``size``/head per key would be one network round-trip per
+        object on a sweep that runs on a timer; ``list_objects_v2`` already returns Size and
+        LastModified in the listing, so the port exposes what the backend gives away for free.
+        """
+        ...
+
+    async def delete(self, key: str) -> None:
+        """Remove ONE object. The only destructive operation on this port, used solely by the
+        captured-signal budget janitor — stated here rather than reached for through the concrete
+        client, so the blast radius is visible in the interface."""
+        ...
+
 
 @runtime_checkable
 class RecordingRepo(Protocol):

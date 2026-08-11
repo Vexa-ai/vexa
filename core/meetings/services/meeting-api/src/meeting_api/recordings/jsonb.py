@@ -152,3 +152,45 @@ def master_storage_key(chunk_key: str, media_format: str) -> str:
     finalizer's ``_chunk_prefix(storage_path) + '/master.<fmt>'``)."""
     prefix = chunk_key.rsplit("/", 1)[0]
     return f"{prefix}/master.{media_format}"
+
+
+# ── captured-signal tapes (O-TEL-1) ─────────────────────────────────────────────────────────────
+# A tape is NOT a recording. It is an internal fixture — the raw captured-signal.v1 stream a bot
+# teed for offline replay — and it deliberately does NOT fold into ``meeting.data['recordings']``:
+# folding would make a "recording" appear in ``GET /recordings`` for every meeting the user never
+# asked to record, carrying a media_files entry no player can open.
+#
+# Its keyspace is TOP-LEVEL ``signal/`` rather than a ``signal/`` folder nested inside a recording's
+# prefix. That is the janitor's constraint, not an aesthetic one: the budget sweep lists every tape
+# in the bucket on a timer, and a nested layout would force it to page through every recording chunk
+# object in the deployment to find them. A top-level prefix keeps the sweep O(tapes).
+_SIGNAL_PREFIX = "signal"
+SIGNAL_ROOT_PREFIX = f"{_SIGNAL_PREFIX}/"
+# The two files one bot session leaves: the frame/hint tape, and the STT round-trip tape the bot
+# writes beside it. A CLOSED set — the part name lands in an object key, so it is never
+# caller-shaped (the session_uid in the key is already constrained by find_session).
+SIGNAL_TAPE_PARTS = ("captured-signal", "stt")
+# Promotion marker: an object beside a tape meaning "this one is in the regression library, keep
+# it". A marker OBJECT rather than a DB flag so the janitor stays PURE STORAGE — it needs no DB
+# session, and a promoted tape survives even if its meeting row is gone.
+SIGNAL_PROMOTED_MARKER = "PROMOTED"
+
+
+def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> str:
+    """The prefix holding ONE bot session's tape (both parts + any promotion marker).
+
+    Keyed by the SESSION, not by a recording id: a tape exists for meetings that were never
+    recorded, so there is often no recording to hang it off, and minting a synthetic recording id
+    would only create a second identifier for the same thing. ``meeting_id`` is the join back to the
+    meeting row; ``session_uid`` (the bot's connectionId) is what a curator actually looks up.
+    """
+    return f"{_SIGNAL_PREFIX}/{user_id}/{meeting_id}/{session_uid}/"
+
+
+def signal_tape_key(*, user_id: int, meeting_id: int, session_uid: str, part: str,
+                    media_format: str = "jsonl") -> str:
+    """The object key for one tape part. ``part`` MUST be in ``SIGNAL_TAPE_PARTS``."""
+    if part not in SIGNAL_TAPE_PARTS:
+        raise ValueError(f"unknown signal tape part {part!r}; known: {list(SIGNAL_TAPE_PARTS)}")
+    prefix = signal_tape_prefix(user_id=user_id, meeting_id=meeting_id, session_uid=session_uid)
+    return f"{prefix}{part}.{media_format}"
