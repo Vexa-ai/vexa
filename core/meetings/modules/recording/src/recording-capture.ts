@@ -161,8 +161,14 @@ export class RecordingCaptureService {
     return [
       '-f', 'hls',
       '-hls_time', this.segTime,
-      '-hls_list_size', '0',            // keep EVERY segment in the playlist (VOD, no sliding window)
-      '-hls_playlist_type', 'vod',      // writes #EXT-X-ENDLIST on clean finalize → seekable VOD
+      '-hls_list_size', '0',            // keep EVERY segment in the playlist (no sliding window)
+      // event (not vod): ffmpeg writes playlist.m3u8 INCREMENTALLY as each segment lands — the bot
+      // uploads it on every change (upload_hls_file registers the hls media-file on ANY playlist
+      // upload, not just the final one), so a HARD-killed bot still leaves a playable playlist +
+      // segments on the server. vod writes the playlist ONLY at clean finalize, so a crash loses the
+      // whole recording. A clean SIGTERM still appends #EXT-X-ENDLIST (→ seekable VOD); a crashed
+      // recording plays from the last-uploaded playlist.
+      '-hls_playlist_type', 'event',
       '-hls_segment_type', 'fmp4',      // CMAF fMP4 segments (native Safari + hls.js)
       '-hls_flags', 'independent_segments',
       '-hls_fmp4_init_filename', 'init.mp4',
