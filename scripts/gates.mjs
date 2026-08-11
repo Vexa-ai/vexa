@@ -219,7 +219,13 @@ function gateSchema() {
   if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
   for (const d of contracts) {
     try { execSync(`node ${JSON.stringify(join(d, "validate.mjs"))} --check`, { stdio: "pipe" }); }
-    catch (e) { return fail([`schema ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+    catch (e) {
+      // e.stdout is a zero-length Buffer (truthy) when the child wrote only to stderr — length-check both.
+      const out = (e.stdout?.length ? e.stdout : e.stderr?.length ? e.stderr : e).toString();
+      const hint = /ERR_MODULE_NOT_FOUND/.test(out)
+        ? "\n  hint: contract validators need dev dependencies — run `npm install` first" : "";
+      return fail([`schema ${rel(d)}:\n${out}${hint}`]);
+    }
   }
   console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);
   return true;
