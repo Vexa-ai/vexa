@@ -160,6 +160,10 @@ const TAIL_DEDUP_CHARS = 120;
 const TAIL_DEDUP_MIN_TOKENS = 3;
 /** Only windows starting this close behind the confirmed boundary can be re-emitting it. */
 const TAIL_DEDUP_REACH_MS = 4000;
+/** How far either side of a contested instant to count tile re-assertions. A speaker's outline is
+ *  re-asserted about every 2 s, so a second either way catches the current speaker without reaching
+ *  into the neighbouring turn. Tunable via VEXA_CONTESTED_HINT_TOLERANCE_MS. */
+const CONTESTED_HINT_TOLERANCE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_CONTESTED_HINT_TOLERANCE_MS) || 1000);
 /** Comparison tokens: case- and punctuation-insensitive, so "глюнки." matches "глюнки". */
 const tokens = (t: string): string[] => (t.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
 const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
@@ -1300,9 +1304,18 @@ export class ChunkedTranscriber {
       const o = src.ownerAt(tMs);
       if (o.trackId) return this.trackNamer.labelFor(o.trackId);
       if (o.contested) {
-        // The transport says two people are audible. The tiles get the casting vote — but only if
-        // they name exactly one person AND that person owns one of the tracks in the mix.
-        const lit = this.trackNamer.litNameAt(tMs);
+        // The transport says two sources are audible — but on the staging Jacob call that claim was
+        // mostly the mixer HOLDING a source open, not two people speaking: both tracks read active
+        // across 2% of the meeting yet produced 22% of the rows, all of them refused, all of them
+        // in the middle of one man's continuous speech. Asking whether a tile was LIT could not
+        // separate them, because a lit interval survives silence by construction.
+        //
+        // So ask which tile was being RE-ASSERTED instead. A hint event is emitted when the watcher
+        // sees the outline move; the speaker re-emits one every couple of seconds while the held
+        // source emits nothing. A strict majority within a second either side decides it, and two
+        // people genuinely talking at once still tie and still resolve to nobody.
+        const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS)
+          ?? this.trackNamer.litNameAt(tMs);
         if (lit) {
           for (const t of src.tracksAudibleAt(tMs)) {
             if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
