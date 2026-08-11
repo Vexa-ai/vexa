@@ -781,7 +781,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -802,7 +802,27 @@ export async function startCaptureBridge(
           // implementation; a hand-copied twin here would drift from the test on the first edit.
           const select = w.VexaBrowserUtils?.selectTeamsMixStreams;
           if (select) {
-            const sel = select(streams, { firstMissMs: w.__vexaTeamsNoMainSince ?? null, nowMs: Date.now(), graceMs: mainAudioGraceMs });
+            // PRESENCE IS NOT LIVENESS. A mainAudio track that appears and then carries pure silence
+            // passes the absence check forever, so the bot captures nothing while the real tracks sit
+            // mirrored and unused — and the lane's own csrc→pyannote watchdog cannot rescue it,
+            // because that demotion needs ENERGETIC audio to fire. Latch the verdict once (so the
+            // pick cannot oscillate as the fallback's own audio arrives) and keep reporting it.
+            const provedSilent = w.VexaBrowserUtils?.mainAudioProvedSilent;
+            if (!w.__vexaTeamsMainAudioDead && provedSilent?.({
+              captureStartedMs: w.__vexaMixCaptureStartedMs ?? null,
+              energeticMs: w.__vexaMixEnergeticMs || 0,
+              nowMs: Date.now(),
+              silenceMs: mainAudioSilenceMs,
+            })) {
+              w.__vexaTeamsMainAudioDead = true;
+            }
+            const sel = select(streams, {
+              firstMissMs: w.__vexaTeamsNoMainSince ?? null,
+              nowMs: Date.now(),
+              graceMs: mainAudioGraceMs,
+              mainAudioSilent: !!w.__vexaTeamsMainAudioDead,
+              mainAudioCapturedMs: w.__vexaMixCaptureStartedMs ? Date.now() - w.__vexaMixCaptureStartedMs : 0,
+            });
             if (sel.outcome === 'main-audio') { w.__vexaTeamsNoMainSince = null; }
             else { w.__vexaTeamsNoMainSince = w.__vexaTeamsNoMainSince || Date.now(); }
             // Re-emitted on EVERY falling-back rescan, deliberately: the latched one-shot warning it
@@ -843,7 +863,20 @@ export async function startCaptureBridge(
         }
         if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
+          // Meter the mix as it is captured: the silence verdict above needs to know whether the
+          // stream we PICKED ever carried sound, and this callback is the only place that sees it.
+          const meterAndForward = (pcm: Float32Array): void => {
+            if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
+              w.__vexaMixCaptureStartedMs = Date.now();
+            }
+            let sum = 0;
+            for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+            if (pcm.length && Math.sqrt(sum / pcm.length) >= mainAudioEnergyRms) {
+              w.__vexaMixEnergeticMs = (w.__vexaMixEnergeticMs || 0) + (pcm.length / 16000) * 1000;
+            }
+            w.__vexaPerSpeakerAudioData(0, Array.from(pcm));
+          };
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
@@ -1020,7 +1053,10 @@ export async function startCaptureBridge(
     }
   }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName,
       // How long the Teams lane waits for the server mix before capturing every track instead.
-      mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000) }).catch((e) => {
+      mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000),
+      // How long a PICKED mix may stay wholly silent before the lane abandons it for every track.
+      mainAudioSilenceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_SILENCE_MS || 20000),
+      mainAudioEnergyRms: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_ENERGY_RMS || 0.006) }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
