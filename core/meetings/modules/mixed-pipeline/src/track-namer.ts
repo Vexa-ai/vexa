@@ -76,6 +76,36 @@ export const TRACK_NAME_ROSTER_SIGHTINGS = envNumber('VEXA_TRACK_NAME_ROSTER_SIG
  *  passes through states that look decidable and are not. */
 export const TRACK_NAME_ROSTER_SETTLE_MS = envNumber('VEXA_TRACK_NAME_ROSTER_SETTLE_MS', 5000);
 
+/**
+ * Names that must never become a speaker, checked HERE as well as at the platform guard.
+ *
+ * The producer's guard (teams-capture's isTeamsDisplayNameCandidate) is the door, and it is the
+ * right place to close this. But this file binds a name to a human being on the strength of an
+ * argument from absence, and the m34 meeting is what that costs when the input is polluted: the
+ * roster contained our OWN BOT, elimination had exactly one track and one name left, and a bot's
+ * name went onto a person's speech. A rule that reasons from "nothing else it could be" must check
+ * that what remains is a person, or its premise is doing no work at all.
+ *
+ * Platform-agnostic by construction: no Teams vocabulary, just the shapes that are never humans.
+ */
+const PLACEHOLDER_NAMES = new Set([
+  'unknown user', 'unknown', 'unknown participant', 'guest', 'guest user', 'anonymous',
+  'anonymous user', 'participant', 'unidentified', 'unbekannter benutzer', 'gast',
+  'utilisateur inconnu', 'invite', 'invité', 'usuario desconocido', 'invitado',
+  'utente sconosciuto', 'ospite', 'onbekende gebruiker', 'okänd användare',
+  'nieznany użytkownik', 'неизвестный пользователь', 'гость', 'участник',
+]);
+
+/** Teams' qualifiers, stripped for identity comparison only — never for display. */
+export function normalizeNameForIdentity(value: string): string {
+  return (value || '')
+    .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|гость)\)\s*$/giu, '')
+    .replace(/\s+\(\d+\)\s*$/, '')
+    .replace(/\s+\d+$/, '')
+    .trim()
+    .toLowerCase();
+}
+
 export type NameEvidenceKind = 'dom' | 'caption';
 
 export interface TrackEvidence {
@@ -110,6 +140,9 @@ export interface TrackNamerOptions {
   onNamed?: (trackId: string, name: string) => void;
   /** Roster sightings required before elimination may use a name. */
   rosterSightings?: number;
+  /** OUR OWN display name. A bot is in every meeting it records and appears in the roster like any
+   *  participant; without this the lane cannot tell its own name from a person's. */
+  selfName?: string;
   /** Quiet period the roster must show before an elimination is drawn from it. */
   rosterSettleMs?: number;
   log?: (m: string) => void;
@@ -133,6 +166,7 @@ export class TrackNamer {
   private readonly settleMs: number;
   private readonly rosterSightings: number;
   private readonly rosterSettleMs: number;
+  private readonly selfName: string;
   private readonly log: (m: string) => void;
   onNamed?: (trackId: string, name: string) => void;
 
@@ -151,12 +185,19 @@ export class TrackNamer {
   private roster = new Map<string, number>();
   /** When the roster last showed a name it had never shown before. */
   private rosterChangedAt = -Infinity;
+  /** Names the roster showed that no human can hold (our bot, a placeholder). Their PRESENCE is
+   *  what matters: a set containing one is a set elimination cannot reason over. */
+  private rosterPolluted = new Set<string>();
+  /** The producer's own account of whether it could name everyone it could see. */
+  private rosterCoverage: { named: number; participants: number } | null = null;
   /** lowercased name → the roster's own casing, so a tile that renders "leo" and a roster that
    *  renders "Leo" do not become two people, and the rendered form is the one Teams considers
    *  canonical. Never rewrites the name itself — a " (Unverified)" suffix is Teams' statement. */
   private canonical = new Map<string, string>();
   /** First-heard order → the stable Speaker A/B/C fallback label. */
   private order: string[] = [];
+  /** The letter each unnamed track is currently rendered under, so a shift can be repainted. */
+  private letters = new Map<string, string>();
 
   private upTo = 0;
   private newest = 0;
@@ -174,6 +215,7 @@ export class TrackNamer {
     this.settleMs = opts.settleMs ?? TRACK_NAME_SETTLE_MS;
     this.rosterSightings = opts.rosterSightings ?? TRACK_NAME_ROSTER_SIGHTINGS;
     this.rosterSettleMs = opts.rosterSettleMs ?? TRACK_NAME_ROSTER_SETTLE_MS;
+    this.selfName = normalizeNameForIdentity(opts.selfName ?? '');
     this.onNamed = opts.onNamed;
     this.log = opts.log ?? (() => { /* silent */ });
   }
@@ -196,13 +238,13 @@ export class TrackNamer {
 
   /** A DOM tile lit (or explicitly went dark). */
   recordHint(name: string, tMs: number, isEnd = false): void {
-    if (!name) return;
+    if (!name || this.unnameable(name)) return;
     this.paint(name, tMs - HINT_LAG_MS, HINT_GRACE_MS, 'dom', isEnd);
   }
 
   /** The platform's own captions attributed speech to `name` at `tMs`. */
   recordCaption(name: string, tMs: number): void {
-    if (!name) return;
+    if (!name || this.unnameable(name)) return;
     // A caption describes the speech BEFORE its timestamp, so it paints backwards.
     this.paintSpan(name, tMs - CAPTION_LAG_MS - CAPTION_WINDOW_MS, tMs - CAPTION_LAG_MS, 'caption');
     this.newest = Math.max(this.newest, tMs);
@@ -219,6 +261,17 @@ export class TrackNamer {
   recordRosterName(name: string, tMs?: number): void {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
+    // A bot or a placeholder in the roster does not merely fail to name its own track — it makes
+    // the whole set unusable for elimination, because "the only name left" is only an argument if
+    // every name in the set could have been a person. Recorded as POLLUTION rather than dropped, so
+    // the refusal is visible instead of looking like an empty roster.
+    if (this.unnameable(trimmed)) {
+      if (!this.rosterPolluted.has(trimmed)) {
+        this.rosterPolluted.add(trimmed);
+        this.log(`roster carries a name no human can hold — elimination is off for this meeting`);
+      }
+      return;
+    }
     if (!this.roster.has(trimmed)) this.rosterChangedAt = Math.max(tMs ?? this.newest, this.newest);
     this.roster.set(trimmed, (this.roster.get(trimmed) ?? 0) + 1);
     this.canonical.set(trimmed.toLowerCase(), trimmed);
@@ -237,10 +290,35 @@ export class TrackNamer {
     this.eliminate(tMs ?? this.upTo);
   }
 
+  /** Is this a name no human can be published under — a placeholder the platform uses when it does
+   *  not know who someone is, or our own bot? Applied to EVERY naming path, not only elimination:
+   *  a placeholder that reaches the transcript looks attributed, so nothing downstream ever asks
+   *  again, which makes it worse than an honest blank. */
+  private unnameable(name: string): boolean {
+    const id = normalizeNameForIdentity(name);
+    if (!id) return true;
+    if (PLACEHOLDER_NAMES.has(id)) return true;
+    if (PLACEHOLDER_NAMES.has(name.trim().toLowerCase())) return true;
+    return !!this.selfName && id === this.selfName;
+  }
+
   /** The roster's casing for a name, when the roster has seen it. Otherwise the name unchanged —
    *  inventing a capitalisation nobody rendered would be a different kind of guess. */
   private canonicalCase(name: string): string {
     return this.canonical.get(name.toLowerCase()) ?? name;
+  }
+
+  /**
+   * The producer's own account of how much of the roster it could actually read: how many
+   * participants it saw, and how many of those it could put a name to.
+   *
+   * Elimination is an argument from a COMPLETE set, so it needs to know when the set is not. A scan
+   * that sees four tiles and names two is not a roster of two people — it is a roster of four with
+   * two missing, and the difference is invisible from the names alone.
+   */
+  recordRosterCoverage(named: number, participants: number, tMs?: number): void {
+    this.rosterCoverage = { named, participants };
+    if (tMs !== undefined) this.newest = Math.max(this.newest, tMs);
   }
 
   /** Move the integrator's clock (called on every audio frame — cheap when nothing moved). */
@@ -268,7 +346,26 @@ export class TrackNamer {
   labelFor(trackId: string): string {
     const n = this.nameFor(trackId);
     if (n) return n;
-    return speakerLabel(this.noteHeard(trackId));
+    this.noteHeard(trackId);
+    // Letters run over the UNNAMED tracks only, in first-heard order. Numbering by absolute track
+    // order instead produced a transcript showing "Speaker B" with no Speaker A anywhere in it —
+    // the reader is left hunting for a speaker who does not exist, because A had meanwhile earned a
+    // real name. When a track is named it releases its letter and the rest close up (relabel), and
+    // those rows repaint through the same path a rename uses.
+    const unnamed = this.order.filter((t) => !this.named.has(t));
+    const i = unnamed.indexOf(trackId);
+    return speakerLabel(i < 0 ? unnamed.length : i);
+  }
+
+  /** Re-render the letters after a track leaves the unnamed pool, repainting what shifted. */
+  private relabelUnnamed(): void {
+    const unnamed = this.order.filter((t) => !this.named.has(t));
+    unnamed.forEach((trackId, i) => {
+      const label = speakerLabel(i);
+      if (this.letters.get(trackId) === label) return;
+      this.letters.set(trackId, label);
+      this.onNamed?.(trackId, label);
+    });
   }
 
   /** Register a track in first-heard order (idempotent); returns its index. */
@@ -287,6 +384,7 @@ export class TrackNamer {
   stats(): {
     tracks: number; named: number; evidence: Record<string, Record<string, number>>;
     roster: Record<string, number>; how: Record<string, string>;
+    rosterPolluted: string[]; rosterCoverage: { named: number; participants: number } | null;
   } {
     const ev: Record<string, Record<string, number>> = {};
     for (const [track, m] of this.evidence) {
@@ -295,12 +393,17 @@ export class TrackNamer {
     }
     const how: Record<string, string> = {};
     for (const [t, n] of this.named) how[t] = `${n.name} [${n.source}]`;
-    return { tracks: this.order.length, named: this.named.size, evidence: ev, roster: this.rosterNames(), how };
+    return {
+      tracks: this.order.length, named: this.named.size, evidence: ev, roster: this.rosterNames(), how,
+      rosterPolluted: [...this.rosterPolluted],
+      rosterCoverage: this.rosterCoverage,
+    };
   }
 
   reset(): void {
     this.trackSpans.clear(); this.nameSpans.clear(); this.evidence.clear();
-    this.named.clear(); this.owner.clear(); this.roster.clear(); this.canonical.clear(); this.order = [];
+    this.named.clear(); this.owner.clear(); this.roster.clear(); this.canonical.clear();
+    this.rosterPolluted.clear(); this.rosterCoverage = null; this.order = []; this.letters.clear();
     this.upTo = 0; this.newest = 0; this.origin = null; this.episode = null;
   }
 
@@ -427,7 +530,9 @@ export class TrackNamer {
     if (display !== name) this.owner.set(display, trackId);
     this.noteHeard(trackId);
     this.log(`track ${trackId} → "${display}" [${source}] (${why})`);
+    this.letters.delete(trackId);
     this.onNamed?.(trackId, display);
+    this.relabelUnnamed();
     // A binding can complete the last pairing, so the elimination is re-tested after every one.
     this.eliminate(atMs);
   }
@@ -454,6 +559,16 @@ export class TrackNamer {
    * Silence in a 3-and-3 meeting is the correct answer, not a gap to close later.
    */
   private eliminate(atMs: number): void {
+    // POLLUTION. If the roster showed even one name that no human can hold — our own bot, a
+    // platform placeholder — then "the only name left" is not an argument about people. On the m34
+    // meeting the roster held our bot, exactly one track and one name remained, and a BOT'S NAME
+    // WAS PUT ON A HUMAN'S SPEECH. One polluted entry disables the rule for the meeting.
+    if (this.rosterPolluted.size > 0) return;
+    // INCOMPLETENESS. Elimination's premise is that the roster lists everyone; if the producer saw
+    // participants it could not name, the unclaimed set is missing people and the "only one left"
+    // is an artefact of what we failed to read. m34 again: four tiles, two names — and the two it
+    // could not name included the human the rule then mislabelled.
+    if (this.rosterCoverage && this.rosterCoverage.named < this.rosterCoverage.participants) return;
     const unnamed = this.order.filter((t) => !this.named.has(t));
     if (unnamed.length !== 1) return;
     // A ROSTER THAT IS STILL FILLING IS NOT A ROSTER YOU CAN ELIMINATE AGAINST. Sightings arrive one

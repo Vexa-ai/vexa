@@ -115,6 +115,22 @@ function loadRosterNames(path: string): { name: string; tMs: number }[] {
   return out;
 }
 
+/** The producer's roster-coverage statements, from the observations sidecar. */
+function loadRosterCoverage(path: string): { named: number; participants: number; tMs: number }[] {
+  const out: { named: number; participants: number; tMs: number }[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line) continue;
+    let r: any;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (r.type !== 'observation') continue;
+    const o = r.observation;
+    if (!o || o.type !== 'roster-coverage') continue;
+    if (typeof o.named !== 'number' || typeof o.participants !== 'number') continue;
+    out.push({ named: o.named, participants: o.participants, tMs: typeof r.t === 'number' ? r.t : 0 });
+  }
+  return out;
+}
+
 /** The caption sidecar: the platform's own ASR, with its own attribution. Used as name evidence,
  *  and (with --cc-oracle) as the thing we are scored against. */
 function loadCaptions(path: string): { t: number; name: string; text: string; stable: boolean }[] {
@@ -172,11 +188,13 @@ async function main(): Promise<void> {
   // from the operator rather than from the meeting must never be mistaken for one the bot observed.
   const observationsPath = arg('observations') ?? siblingSidecar(TAPE!, 'observations');
   const rosterFromTape = observationsPath ? loadRosterNames(observationsPath) : [];
+  const coverageFromTape = observationsPath ? loadRosterCoverage(observationsPath) : [];
   const rosterSupplied = (arg('roster') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const captionsPath = arg('captions') ?? siblingSidecar(TAPE!, 'captions');
   const captions = captionsPath ? loadCaptions(captionsPath) : [];
   console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s), ${transport.length} transport transition(s), ${captions.length} caption(s)`);
   if (rosterFromTape.length) console.log(`roster: ${rosterFromTape.length} observed sighting(s) from the tape`);
+  if (coverageFromTape.length) console.log(`roster coverage: ${JSON.stringify(coverageFromTape.map((c) => `${c.named}/${c.participants}`))}`);
   if (rosterSupplied.length) console.log(`roster: ${JSON.stringify(rosterSupplied)} SUPPLIED BY --roster (stand-in for the roster sensor, which postdates this tape)`);
   console.log(`language: ${language ?? 'auto (whisper decides, as the live bot did)'}`);
   console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
@@ -228,8 +246,24 @@ async function main(): Promise<void> {
           return { text: '', language: language ?? 'en', duration: pcm.length / 16000, segments: [] };
         }
       }
+      // The stub's words carry the VOICE, derived from the window's amplitude. Emitting the same
+      // marker text for every turn makes each turn's text a substring of the previous turn's
+      // prompt, so the lane's own prompt-echo guard (correctly) drops it — and the replay then
+      // measures the stub instead of the lane. Real speakers produce different words; so does this.
+      // The token is derived from the window's OPENING SAMPLES, which is what makes it both stable
+      // and unique: a turn resubmits from the same start as it grows (so the prefix is stable and
+      // LocalAgreement can confirm), while a different turn starts at different audio (so its words
+      // differ). Emitting the same marker for every turn made each turn's text a substring of the
+      // previous turn's prompt, and the lane's prompt-echo guard correctly dropped it — five of
+      // fourteen turns published nothing, which reads as a lane defect and is a stub artefact.
+      let sum = 0;
+      for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+      const voice = Math.round(Math.sqrt(sum / Math.max(1, pcm.length)) * 100);
+      let sig = 0;
+      for (let i = 0; i < Math.min(64, pcm.length); i++) sig = (sig * 31 + Math.round(pcm[i] * 1000)) | 0;
+      const tag = Math.abs(sig % 9973);
       const secs = Math.max(1, Math.floor(pcm.length / 16000));
-      const text = Array.from({ length: secs }, (_, i) => `w${i}`).join(' ');
+      const text = Array.from({ length: secs }, (_, i) => `v${voice}s${tag}w${i}`).join(' ');
       return {
         text, language: language ?? 'en', language_probability: 0.99, duration: pcm.length / 16000,
         segments: [{ text, start: 0, end: pcm.length / 16000, no_speech_prob: 0.01, avg_logprob: -0.2, compression_ratio: 1.1 } as any],
@@ -265,6 +299,9 @@ async function main(): Promise<void> {
     // (m29 carries 201.6s of audio across a 913s meeting) — so a default 20s of audio can be
     // minutes of meeting. Overridable for that reason.
     ...(arg('grace-ms') ? { turnSourceGraceMs: Number(arg('grace-ms')) } : {}),
+    // The bot is a participant in every meeting it records; without its own name the namer cannot
+    // tell it from a person in the roster. Defaults to the name our bots actually join under.
+    selfName: arg('self-name') ?? 'Vexa',
     onObservation: (o) => { spineEvents.push(o); console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`); },
     log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
   });
@@ -291,6 +328,7 @@ async function main(): Promise<void> {
   // Roster names ride the timeline where the sensor observed them; a supplied stand-in is delivered
   // repeatedly from the first frame, which is what a scan every couple of seconds looks like.
   for (const r of rosterFromTape) evs.push({ t: r.tMs, run: () => tc.recordRosterName(r.name, r.tMs) });
+  for (const c of coverageFromTape) evs.push({ t: c.tMs, run: () => tc.recordRosterCoverage(c.named, c.participants, c.tMs) });
   if (rosterSupplied.length && frames.length) {
     for (let i = 0; i < 3; i++) {
       const at = frames[Math.min(i * 5, frames.length - 1)].ts;
@@ -352,6 +390,7 @@ async function main(): Promise<void> {
   console.log(`  turn sources: ${JSON.stringify(st.sources)}`);
   console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named — ${JSON.stringify(st.tracks.how)}`);
   console.log(`  track evidence: ${JSON.stringify(st.tracks.evidence)}; roster: ${JSON.stringify(st.tracks.roster)}`);
+  console.log(`  roster refused: ${JSON.stringify(st.tracks.rosterPolluted)}; coverage: ${JSON.stringify(st.tracks.rosterCoverage)}`);
   console.log(`  orphan spans: ${st.orphansContained}/${st.orphans} contained by a single track (the rest were genuinely ambiguous)`);
   if (spineEvents.length) console.log(`  spine changes: ${spineEvents.map((e) => `${e.from}→${e.to}(${e.reason})`).join(', ')}`);
   const namedRows = byTime.filter((r) => !isUnattributed(r.speaker)).length;

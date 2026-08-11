@@ -268,6 +268,19 @@ export class CsrcTurnSource implements TurnSource {
     if (ev.active) {
       // A reactivation inside the hysteresis window is the same turn continuing — cancel the close.
       this.pendingClose.delete(ev.csrc);
+      // A DIFFERENT source starting is positive evidence that whoever was trailing off has
+      // finished. The hysteresis exists to bridge ONE speaker's own packet gaps (DTX, jitter); if
+      // it is allowed to run past the moment the next speaker starts, every clean handoff is
+      // reported as two people audible at once — which publishes as an unattributable contested
+      // span and shreds the turn either side of it. On the adversarial m34 fixture, whose speakers
+      // never actually overlap, that alone manufactured 8 contested turns out of 21. So retire the
+      // others' pending closes AT THE INSTANT THEY STOPPED, before this activation is admitted.
+      for (const [csrc, t1] of [...this.pendingClose]) {
+        if (csrc === ev.csrc) continue;
+        this.pendingClose.delete(csrc);
+        this.active.delete(csrc);
+        this.reconcile(Math.min(t1, ev.tMs));
+      }
       if (!this.active.has(ev.csrc)) {
         this.active.add(ev.csrc);
         this.reconcile(ev.tMs);
