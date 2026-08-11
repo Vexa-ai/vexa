@@ -218,6 +218,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
       onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
+      // The lane's own observations — today, WHICH TURN SPINE it is running on and why that
+      // changed. A transcript carries no trace of that, so without this line a stored fixture
+      // cannot say whether it is scoring the transport anchor or the fallback that replaced it.
+      onObservation: (source, obs, tMs) => {
+        try {
+          signalRecorder?.sink.captureObservation?.({
+            type: 'observation', t: tMs ?? Date.now(), source, lane: 'mixed', observation: obs,
+          });
+        } catch { /* an observation must never disturb the meeting */ }
+      },
     });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected

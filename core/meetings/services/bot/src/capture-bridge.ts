@@ -234,6 +234,10 @@ export function makeObservationSink(
 export function makeCsrcSink(
   telemetry?: CsrcCapableSink,
   warn: (m: string) => void = (m) => console.warn(m),
+  /** The mixed lane's turn spine. Receives the RE-STAMPED record, so the pipeline and the stored
+   *  sidecar can never disagree about when an edge happened — which is the whole basis on which a
+   *  replay reproduces a live run. Optional: the gmeet lane has no server-side mix to consult. */
+  consume?: (ev: { csrc: number; active: boolean; tMs: number; audioLevel?: number }) => void,
 ): {
   sink: (csrc: number, active: boolean, tMs?: number, audioLevel?: number, rtpTimestamp?: number) => void;
   crossed: () => number;
@@ -261,6 +265,10 @@ export function makeCsrcSink(
         try { telemetry.captureCsrc(record); stored++; }
         catch { /* telemetry must not break capture */ }
       }
+      // The lane consumes the edge AFTER it is stored: an edge the live run acted on but the
+      // fixture does not contain is an edge no replay can ever reproduce.
+      try { consume?.({ csrc, active, tMs: t, ...(typeof audioLevel === 'number' ? { audioLevel } : {}) }); }
+      catch { /* the spine must not break capture either */ }
     },
   };
 }
@@ -305,6 +313,9 @@ export function makeTeamsCaptionSink(
   telemetry?: CaptionCapableSink,
   log: (m: string) => void = (m) => console.log(m),
   warn: (m: string) => void = (m) => console.warn(m),
+  /** The caption AUTHOR, as name evidence for a transport track. Only the name and the time cross:
+   *  the caption TEXT is Teams' ASR and never becomes our transcript. */
+  consumeName?: (name: string, tMs: number) => void,
 ): { sink: (name: string, text: string, tMs?: number, stable?: boolean) => void; count: () => number; stored: () => number } {
   let count = 0;
   let stored = 0;
@@ -324,6 +335,8 @@ export function makeTeamsCaptionSink(
         try { telemetry.captureCaption(record); stored++; }
         catch { /* telemetry must not break capture */ }
       }
+      // Only a SETTLED caption is evidence: a mid-refinement entry can still change its author.
+      if (record.stable && name) { try { consumeName?.(name, t); } catch { /* never break capture */ } }
       log(`[bot] teams-caption ${record.stable ? 'stable' : 'partial'} ${name}: ${text.slice(0, 80)}`);
     },
   };
@@ -688,15 +701,21 @@ export async function startCaptureBridge(
   // mixed lane "who is lit" hint (Zoom/Teams active-speaker → the namer's time window).
   // Epoch-clock-guarded + counted; see makeSpeakerHintSink for the clock contract.
   const { sink: onSpeakerHint, crossed: hintsBridgeCrossed } = makeSpeakerHintSink(pipeline, undefined, telemetry);
-  // Teams live captions (best-effort, DIAGNOSTIC): Teams' own ASR names the speaker, which is a
-  // second, independent attribution source to the voice-level outline. It goes to the tape + the
-  // log and NOWHERE else — deliberately not into pipeline.recordHint, so this iteration cannot
-  // change a single transcript.
-  const { sink: onTeamsCaption, count: captionsBridgeCrossed } = makeTeamsCaptionSink(telemetry);
+  // Teams live captions: Teams' own ASR names the speaker, which is a second, independent naming
+  // source beside the voice-level outline. The AUTHOR (never the text) is now offered to the lane
+  // as evidence for a transport TRACK — still not to pipeline.recordHint, because a caption is not
+  // a turn and the binder's per-turn window is exactly the machinery the track spine avoids.
+  const { sink: onTeamsCaption, count: captionsBridgeCrossed } = makeTeamsCaptionSink(
+    telemetry, undefined, undefined,
+    mixed ? (name, tMs) => pipeline.recordCaptionName?.(name, tMs) : undefined,
+  );
   // The transport sensor's edges (mixed lane, every platform): RTP contributing-source
-  // activations/deactivations. Like the captions they go to the tape + the counters and NOWHERE
-  // else — not one transcript changes while only this iteration is deployed.
-  const { sink: onCsrc, crossed: csrcBridgeCrossed } = makeCsrcSink(telemetry);
+  // activations/deactivations. They are stored AND fed to the lane, where they are the turn SPINE —
+  // never a name. A1 deliberately stopped short of this hop; A2 is the hop.
+  const { sink: onCsrc, crossed: csrcBridgeCrossed } = makeCsrcSink(
+    telemetry, undefined,
+    mixed ? (ev) => pipeline.recordTransportEvent?.(ev) : undefined,
+  );
   // Every typed observation the capture path produces, teed to the fixture instead of dying with
   // the pod. Page-side producers call __vexaObservation alongside their existing log line; the
   // Node-side ones (the caption-enable outcome) call this sink directly.
