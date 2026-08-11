@@ -1244,14 +1244,21 @@ export class ChunkedTranscriber {
       const t1 = spanStart + (w.end ?? w.start) * 1000;
       const name = nameAt((t0 + t1) / 2);
       const last = out[out.length - 1];
+      // Concatenate the tokens VERBATIM. Whisper's word tokens carry their own leading space, and a
+      // suffix like "-то" carries none precisely because it must not have one — re-joining trimmed
+      // tokens with a space produced "что -то" in the founder's transcript. The decoder already
+      // knows where the spaces go; the only trimming happens at a piece's outer edges.
       if (last && last.name === name) {
-        last.text += (last.text.endsWith(' ') ? '' : ' ') + w.word.trim();
+        last.text += w.word;
         last.endMs = Math.max(last.endMs, t1);
       } else {
-        out.push({ name, text: w.word.trim(), startMs: t0, endMs: Math.max(t1, t0 + 1), language: seg.language });
+        out.push({ name, text: w.word, startMs: t0, endMs: Math.max(t1, t0 + 1), language: seg.language });
       }
     }
-    if (out.length === 0) return [{ name: fallbackName, ...seg }];
+    for (const piece of out) piece.text = piece.text.trim();
+    const kept = out.filter((piece) => piece.text.length > 0);
+    if (kept.length === 0) return [{ name: fallbackName, ...seg }];
+    out.length = 0; out.push(...kept);
     // Clip to the segment's own bounds so nothing published moves outside the audio it came from.
     out[0].startMs = Math.min(out[0].startMs, seg.startMs);
     out[out.length - 1].endMs = Math.max(out[out.length - 1].endMs, seg.endMs);
