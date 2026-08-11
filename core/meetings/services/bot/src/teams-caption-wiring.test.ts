@@ -129,12 +129,14 @@ const page = {
 } as never;
 
 const hints: Array<{ name: string; tMs: number; isEnd: boolean }> = [];
+const captionNames: Array<{ name: string; tMs: number }> = [];
 const pipeline: BotPipeline = {
   async start() { /* not driven */ },
   async stop() { /* not driven */ },
   feedAudio() { /* not driven */ },
   feedMixedAudio() { /* not driven */ },
   recordHint: (name, tMs, isEnd) => hints.push({ name, tMs, isEnd: !!isEnd }),
+  recordCaptionName: (name, tMs) => captionNames.push({ name, tMs }),
 };
 const captured: TeamsCaptionRecord[] = [];
 const telemetry: CaptionCapableSink = { captureFrame() { /* unused */ }, captureCaption: (c) => captured.push(c) };
@@ -169,7 +171,15 @@ check('teardown: the entry still mid-refinement is flushed by the stop path, mar
   captured.length === 2 && captured[1].name === 'Sven Olsen' && captured[1].stable === false,
   JSON.stringify(captured));
 
-// The whole point of the iteration: observation, not behaviour.
+// A2: the caption AUTHOR is now offered to the lane as evidence for a transport TRACK — the name
+// and the time only. Two things must still hold. The TEXT never crosses (it is Teams' ASR, not
+// ours), and no caption becomes a naming HINT: the binder resolves per TURN over a window, which
+// is precisely the race the track spine exists to leave behind.
+check('the settled caption author reached the lane as track-name evidence',
+  captionNames.length === 1 && captionNames[0].name === 'Priya Nair'
+  && captionNames[0].tMs === captured[0]?.t, JSON.stringify(captionNames));
+check('a caption still mid-refinement is NOT evidence — its author can still change',
+  captionNames.every((c) => c.name !== 'Sven Olsen'), JSON.stringify(captionNames));
 check('isolation: NO caption reached pipeline.recordHint — captions are not naming hints here',
   hints.length === 0, JSON.stringify(hints));
 

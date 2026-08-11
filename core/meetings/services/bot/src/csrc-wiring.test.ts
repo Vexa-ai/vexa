@@ -144,12 +144,14 @@ const page = {
 } as never;
 
 const hints: Array<{ name: string; tMs: number; isEnd: boolean }> = [];
+const spine: Array<{ csrc: number; active: boolean; tMs: number }> = [];
 const pipeline: BotPipeline = {
   async start() { /* not driven */ },
   async stop() { /* not driven */ },
   feedAudio() { /* not driven */ },
   feedMixedAudio() { /* not driven */ },
   recordHint: (name, tMs, isEnd) => hints.push({ name, tMs, isEnd: !!isEnd }),
+  recordTransportEvent: (ev) => spine.push({ csrc: ev.csrc, active: ev.active, tMs: ev.tMs }),
 };
 const transitions: CsrcRecord[] = [];
 const observations: ObservationRecord[] = [];
@@ -195,8 +197,17 @@ check('teardown flushes the still-open turn as a deactivation',
   JSON.stringify(transitions));
 check('teardown released the poller', !g.__vexaCsrcPoll);
 
-// The whole point of the iteration: observation, not behaviour.
-check('isolation: NO transition and no observation reached pipeline.recordHint',
+// A2: the edge now REACHES THE LANE, as the turn SPINE. What must still never happen is a
+// transition arriving as a naming HINT — it carries a source id, not a person, and the binder
+// would have to invent the person. The lane and the sidecar must also see the SAME stamped time,
+// or a replay scores a run the live bot never had.
+check('the transport edge reached the lane as a spine event (A1 teed it to the tape only)',
+  spine.length === transitions.length && spine.length >= 2
+  && spine[0].csrc === 424242 && spine[0].active === true, JSON.stringify(spine));
+check('the spine and the stored sidecar agree on WHEN each edge happened',
+  spine.every((e, i) => transitions[i] && transitions[i].t === e.tMs && transitions[i].active === e.active),
+  `${JSON.stringify(spine.map((s) => s.tMs))} vs ${JSON.stringify(transitions.map((t) => t.t))}`);
+check('isolation: NO transition reached pipeline.recordHint — a csrc is an id, never a name',
   hints.length === 0, JSON.stringify(hints));
 
 (g as any).setInterval = realSetInterval;
