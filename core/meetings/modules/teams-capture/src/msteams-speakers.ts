@@ -178,6 +178,27 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   // ── Detection: voice-level outline + vdi-frame-occlusion ──
+  const _diagSeen = new Map<string, number>();
+  function _diagDumpTile(element: HTMLElement, voiceOutline: HTMLElement): void {
+    // DIAGNOSTIC (#speaker-split): `vdi-frame-occlusion` is a Teams VDI-mode class; the bot runs the
+    // STANDARD web client where it never appears, so nothing ever reads as speaking. Every tile has a
+    // voice-level-stream-outline element; the LIVE voice level shows in that element's own inline style
+    // / geometry (it collapses when silent, animates when the person talks). Dump per-participant so we
+    // can compare the speaking tile's outline against the silent ones and read off the real
+    // discriminator. Keyed by name so each participant prints ~once/6s (not one tile total). Remove with the fix.
+    try {
+      const now = Date.now();
+      let name = '(?)';
+      try { name = extractName(element) || '(?)'; } catch { /* identity in flux */ }
+      if ((_diagSeen.get(name) ?? 0) > now - 6000) return;
+      _diagSeen.set(name, now);
+      const r = voiceOutline.getBoundingClientRect();
+      log(`[DIAG] has-signal "${name}" — outline style="${voiceOutline.getAttribute('style') || ''}"`
+        + ` class="${voiceOutline.className || ''}" aria-hidden="${voiceOutline.getAttribute('aria-hidden') || ''}"`
+        + ` box=${Math.round(r.width)}x${Math.round(r.height)}`);
+    } catch { /* diagnostic must never throw */ }
+  }
+
   function detectSpeakingState(element: HTMLElement): { isSpeaking: boolean; hasSignal: boolean } {
     const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
     if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
@@ -186,6 +207,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       if (current.classList.contains('vdi-frame-occlusion')) return { isSpeaking: true, hasSignal: true };
       current = current.parentElement;
     }
+    _diagDumpTile(element, voiceOutline);  // DIAGNOSTIC — remove with the fix
     return { isSpeaking: false, hasSignal: true };
   }
 

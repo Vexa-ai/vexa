@@ -31,7 +31,7 @@ import {
   type HintKind,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -117,7 +117,11 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
  * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
  * rejection rather than letting it escape the lane's emit path.
  */
-function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => void): LaneTranscriptSink {
+function laneSink(
+  publish: TranscriptSink['publish'],
+  retract?: TranscriptSink['retract'],
+  onError?: (e: unknown) => void,
+): LaneTranscriptSink {
   const forward = (seg: LaneSegment): void => {
     void publish(toBotSegment(seg)).catch((e) => {
       (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(e);
@@ -126,6 +130,12 @@ function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => 
   return {
     segment: forward,
     draft: forward,
+    // The gmeet lane retracts a stale draft whose confirmed version supersedes it under a new id
+    // (leading-silence trim advanced the window) — forward it to the bot's retract egress so the
+    // terminal drops the lingering temp row. Omitted where the bot sink can't retract (append-only).
+    retract: retract ? (ids: string[]): void => { void retract(ids).catch((e) => {
+      (onError ?? ((err) => console.error(`[bot] pipeline: transcript retract rejected: ${String(err)}`)))(e);
+    }); } : undefined,
     finalize() { /* session end is a lifecycle.v1 concern, not a transcript.v1 segment */ },
   };
 }
@@ -167,7 +177,7 @@ function createGmeetBotPipeline(
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, sink.retract?.bind(sink), onError), config, onError });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
@@ -201,15 +211,38 @@ function createMixedBotPipeline(
     }
   };
 
+  // The mixed lane's pending tail is a FULL-REPLACE block: the ChunkedTranscriber republishes the whole
+  // surviving tail each pass, shrinking it as segments confirm (under NEW `turn:N:{seq}` ids) and emptying
+  // it when the turn closes. The bot's egress is an append-only stream the terminal upserts by id, so a
+  // pending id that DROPS OUT of the block is never removed → it lingers as a stale "unattached" draft
+  // (and an over-read past the turn boundary re-appears when the next turn transcribes the same audio).
+  // Diff the pending id set each pass and RETRACT the departed ids so the terminal + durable store drop
+  // them, leaving only the clean confirmed segments. One turn is open at a time (the pump serializes), so
+  // a single set tracks the whole lane.
+  let pendingIds = new Set<string>();
+  const reconcilePending = (pending: ChunkSegment[]): void => {
+    const next = new Set(pending.map((c) => c.segmentId));
+    const retracted: string[] = [];
+    for (const id of pendingIds) if (!next.has(id)) retracted.push(id);
+    pendingIds = next;
+    if (retracted.length > 0 && sink.retract) {
+      void sink.retract(retracted).catch((e) => {
+        (onError ?? ((err) => console.error(`[bot] pipeline(mixed): retract rejected: ${String(err)}`)))(e);
+      });
+    }
+  };
+
   const ensure = (): Promise<MixedTranscriber> => {
     if (transcriber) return Promise.resolve(transcriber);
     if (!creating) {
       creating = createTranscriber({
         transcribe,
-        // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail.
-        publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); publish(speaker, pending, false); },
-        publishPending: (speaker, segments) => publish(speaker, segments, false),
-        clearPending: () => { /* the bot's transcript.v1 egress is append-only; drafts self-replace by id */ },
+        // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail. Reconcile the
+        // pending block FIRST so a draft that just confirmed (or dropped out) is retracted, not orphaned.
+        publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); reconcilePending(pending); publish(speaker, pending, false); },
+        publishPending: (speaker, segments) => { reconcilePending(segments); publish(speaker, segments, false); },
+        // The turn's pending is gone (moved to another name / tail emptied / turn closed) → retract it.
+        clearPending: () => { reconcilePending([]); },
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
         language,
         onError,
@@ -254,8 +287,14 @@ export function createTranscribe(inv: Invocation): Transcribe {
 }
 
 /**
- * The composition-root factory: pick the lane on platform and wire stt + sink. Google Meet
- * uses the per-channel (overlap-safe, glow-named) lane; Zoom/Teams/Jitsi use the mixed lane.
+ * The composition-root factory: pick the lane on platform and wire stt + sink. Two engines:
+ *   • PER-CHANNEL (@vexa/gmeet-pipeline) — overlap-safe, name-at-onset. Google Meet (per-<audio>
+ *     channels) AND Zoom (per-WebRTC-track channels, confirmed multi-stream + stable; named
+ *     page-side by the track→name resolver). A track = one speaker, so overlap is separated by the
+ *     tracks themselves — no pyannote, no cluster naming.
+ *   • MIXED (@vexa/mixed-pipeline) — pyannote cut + time-windowed hint naming. Teams and Jitsi,
+ *     whose per-track topology is NOT yet witnessed live (a Teams active-speaker SLOT model would
+ *     defeat per-track). They flip to per-channel only once isPerTrackLanePlatform includes them.
  */
 export function createBotPipeline(
   inv: Invocation,
@@ -264,13 +303,13 @@ export function createBotPipeline(
     transcribe?: Transcribe;
     config?: SpeakerStreamManagerConfig;
     onError?: (e: unknown) => void;
-    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
-     *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
+    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects an observer
+     *  (pins what reaches the transcriber: name, kind, tMs). Only consulted on the mixed lane. */
     createMixedTranscriber?: MixedTranscriberFactory;
   } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
-  if (isMixedLanePlatform(inv.platform)) {
+  if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,

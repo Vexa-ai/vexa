@@ -692,6 +692,31 @@ class SqlAlchemyTranscriptStore:
             pipe.expire(hash_key, ttl)
             await pipe.execute()
 
+    async def delete_segments(self, meeting_id, segment_ids) -> None:
+        # Retraction: withdraw superseded/over-extended pending drafts by segment id. Two legs mirror the
+        # append path — HDEL the live hash so an UN-flushed draft never reaches Postgres, and DELETE any
+        # rows the db-writer already flushed. Keyed on (meeting_id, segment_id). Idempotent.
+        ids = [str(s) for s in (segment_ids or []) if s]
+        if not ids:
+            return
+        # Leg 1: drop from the redis flush hash (before the db-writer persists an un-flushed draft).
+        if self._redis is not None:
+            from .db_writer import segments_hash_key
+            try:
+                await self._redis.hdel(segments_hash_key(meeting_id), *ids)
+            except Exception:  # noqa: BLE001 — best-effort; the DB delete is the durable backstop
+                pass
+        # Leg 2: delete any already-flushed rows.
+        from sqlalchemy import bindparam
+        from sqlalchemy import text as sql_text
+
+        stmt = sql_text(
+            "DELETE FROM transcriptions WHERE meeting_id = :mid AND segment_id IN :sids"
+        ).bindparams(bindparam("sids", expanding=True))
+        async with self._session_factory() as db:
+            await db.execute(stmt, {"mid": int(meeting_id), "sids": ids})
+            await db.commit()
+
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink — UPSERT a batch of flushed segments into ``transcriptions``
         on the segment identity ``(meeting_id, segment_id)`` (the partial unique index

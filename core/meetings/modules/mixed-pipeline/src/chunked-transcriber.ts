@@ -672,10 +672,20 @@ export class ChunkedTranscriber {
     // The whole turn span is adjudicated once closed — later commits
     // (overlap duplicates) must not re-transcribe any of it.
     this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.t1, turn.confirmedUpToMs);
-    if (turn.seq === 0 && turn.allConfirmed.length === 0 && turn.pendingTail.length > 0) {
-      // Closing pass produced nothing but drafts existed — never lose a turn.
+    if (turn.pendingTail.length > 0) {
+      // NEVER LOSE A TURN. The closing pass yielded nothing new, but drafts are still pending —
+      // live-edge speech past the last committed boundary. Promote them to CONFIRMED before the
+      // clearPending below retracts them; otherwise that speech is DELETED from the live view AND
+      // the durable store (the pending-retract path). This covers the seq>0 case (a turn that
+      // already confirmed earlier segments and closed with a dangling tail via one of submitTurn's
+      // yielded-nothing early returns) — the previous guard only rescued a never-confirmed turn,
+      // so a confirmed-then-dangling turn silently lost its trailing words. Continue the segment
+      // numbering from turn.seq so the promoted ids never collide with turn:${id}:0..seq-1.
       const name = this.resolveName(turn);
-      const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
+      const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${turn.seq + i}` }));
+      turn.seq += promoted.length;
+      // publish(confirmed, []) republishes these as completed AND reconciles pending→[], so the
+      // matching turn:${id}:p* drafts are retracted in the same breath (text moves p*→confirmed).
       this.cb.publish(name, promoted, []);
       this.rememberPublishedSpeaker(name, promoted[promoted.length - 1]?.endMs);
       turn.allConfirmed.push(...promoted);
@@ -688,6 +698,7 @@ export class ChunkedTranscriber {
       // PUBLISHED, or the next turn re-transcribes the promoted audio and
       // the same sentence appears under two turns.
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, promoted[promoted.length - 1].endMs);
+      turn.pendingTail = [];
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);

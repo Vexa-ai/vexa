@@ -675,6 +675,7 @@ def _meeting_grounding(
         "title": str(m.get("title") or "").strip() or str(native),
         "platform": platform,
         "native": str(native),
+        "meeting_id": str(m.get("meeting_id") or native),   # the ROW id — the meeting's stable ?meeting= link
     }
 
     if phase == "prep":
@@ -1864,6 +1865,13 @@ def create_app(
                             "completed": seg.get("completed", True),
                             "id": seg.get("segment_id")}, cursor())
 
+            def retract_event(payload):
+                """A `retract` marker (the collector withdrew superseded/over-extended pending drafts) →
+                a `retract` SSE event so the terminal drops those segment ids from the live view."""
+                ids = payload.get("segment_ids") or []
+                if ids:
+                    yield ({"type": "retract", "segment_ids": ids}, cursor())
+
             def note_events(entry_fields):
                 """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
                 (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
@@ -1888,6 +1896,15 @@ def create_app(
                         ending_at = _time.monotonic()
                         last.pop(tkey, None)
                         continue
+                    if payload.get("type") == "retract":
+                        yield from retract_event(payload)
+                        continue
+                    # A real segment AFTER a session_end in the replay tail means a NEW session resumed
+                    # on this reused meeting-row stream (tc:meeting:{id} is shared across a meeting's
+                    # sessions). The prior end must NOT close the current live view — without this reset
+                    # a stale session_end seeds `ending=True` and fires a premature `meeting-end`, so the
+                    # terminal shows "Meeting ended" over a still-live meeting.
+                    ending = False
                     yield from seg_events(payload)
             if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
                 output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
@@ -1916,7 +1933,13 @@ def create_app(
                             live.drop(session_uid)  # leaves the terminal's live-meetings feed
                             yield ({"type": "meeting-end"}, cursor())
                             return
-                        continue  # the final beat is still writing — keep draining
+                        # The final beat is still writing — keep draining. But this branch polls every
+                        # 1.5s and yields NOTHING, so a drain that waits out the copilot (up to the 45s
+                        # cap) goes silent well past the terminal's 20s SSE watchdog → the browser
+                        # force-reconnects mid-drain ("stream disconnected" banner + a re-replayed
+                        # session_end). Emit a ping so a healthy drain stays visibly alive.
+                        yield ({"type": "ping"}, cursor())
+                        continue
                     idle += 15000
                     if idle >= 600000:
                         return
@@ -1928,11 +1951,26 @@ def create_app(
                         last[stream] = entry_id
                         if stream == tkey:
                             payload = json.loads(fields.get("payload", "{}"))
-                            if payload.get("type") == "session_end":
+                            ptype = payload.get("type")
+                            if ptype == "session_end":
                                 ending = True            # don't end yet — drain the final beat first
                                 ending_at = _time.monotonic()
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
+                            # A NEW session resumed on this REUSED row (tc:meeting:{id} is shared across a
+                            # meeting's sessions): a `session_start` marker — or any real segment — arriving
+                            # after a prior `session_end` means the meeting is LIVE again. Clear a stale
+                            # `ending` so the ≤45s drain never fires a premature `meeting-end` over it (the
+                            # terminal showed "Meeting ended" on a still-live meeting). Mirrors the seed's
+                            # reset at connect; without it the live loop kept `ending=True` because it only
+                            # ever SET the flag, never cleared it.
+                            if ending:
+                                ending = False
+                            if ptype == "session_start":
+                                continue                 # marker only — nothing to render
+                            if ptype == "retract":
+                                yield from retract_event(payload)
+                                continue
                             yield from seg_events(payload)
                         elif stream == pkey:
                             yield from note_events(fields)

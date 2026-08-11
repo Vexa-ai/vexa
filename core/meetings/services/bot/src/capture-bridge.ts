@@ -37,7 +37,7 @@ import {
 } from '@vexa/remote-browser';
 import { getJoinBrowserArgs } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
-import { isMixedLanePlatform, type Invocation } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
@@ -268,6 +268,8 @@ export async function startCaptureBridge(
   activity?: RemoteAudioActivityTap,
 ): Promise<() => Promise<void>> {
   const mixed = isMixedLanePlatform(inv.platform);
+  const perTrack = isPerTrackLanePlatform(inv.platform);   // Zoom: per-track through the per-channel lane
+  const useMix = mixed && !perTrack;                        // Teams/Jitsi: the pyannote mixed lane
   const jitsi = inv.platform === 'jitsi';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
 
@@ -288,8 +290,12 @@ export async function startCaptureBridge(
     const ts = tsMs ?? Date.now();
     observeRemoteAudio(pcm);
     tee(speakerIndex, pcm, ts);                                 // O-TEL-1: tap BEFORE the pipeline
-    if (mixed) pipeline.feedMixedAudio(pcm, ts);
-    else pipeline.feedAudio(speakerIndex, undefined, pcm, ts); // glow name is bound page-side in the v1 producer; channel index here
+    // Teams/Jitsi (useMix): one combined stream → the pyannote mixed lane. Zoom + gmeet: per-channel —
+    // an unbound track (name not yet resolved) arrives with no name → the per-channel lane opens the
+    // turn UNKNOWN and upgrades it the moment the resolver binds (gmeet-pipeline onset-adopt); the
+    // named path is __vexaNamedAudioData.
+    if (useMix) pipeline.feedMixedAudio(pcm, ts);
+    else pipeline.feedAudio(speakerIndex, undefined, pcm, ts);
   };
   // gmeet: the v1 producer stamps the glow name page-side; this named variant carries it through.
   const onNamedAudio = (channel: number, glowName: string | undefined, samples: number[], tsMs?: number): void => {
@@ -305,7 +311,9 @@ export async function startCaptureBridge(
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);
   // bridge-crossed / pipeline-received / binder matched|missed are Node-side.
-  const countersTimer = mixed ? setInterval(() => {
+  // Only the pyannote mixed lane exposes hintCounters (the binder's hop tally). The per-channel
+  // lane names tracks page-side (the resolver), so there is no binder to count — skip the line.
+  const countersTimer = pipeline.hintCounters ? setInterval(() => {
     const c = pipeline.hintCounters;
     console.log(`[bot] hint-counters bridge-crossed=${hintsBridgeCrossed()} pipeline-received=${c?.received ?? 0} binder-matched=${c?.matched ?? 0} binder-missed=${c?.missed ?? 0}`);
   }, 30_000) : null;
@@ -327,13 +335,172 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
+
+    // ── The track→name VOTE resolver (SHARED by the Zoom per-track lane AND the gmeet lane) ──────────
+    // Both lanes are the SAME problem: anonymous per-participant audio channels + a decoupled, flicker-
+    // prone single-active-speaker glow (Zoom's DOM spotlight; gmeet's per-tile speaking indicator — its
+    // <audio> elements carry no participant name, per probeDom). Name each stable channel by VOTING: every
+    // clean moment (this channel is the loudest hot one + exactly one speaker lit) casts a channel<->name
+    // vote; the binding is the argmax. A wrong early sample (a glow flicker naming Jacob during Sue's turn)
+    // is ONE vote the true speaker outweighs — self-correcting. MARGIN hysteresis stops churn; 1:1-by-
+    // identity stops the flicker pasting one speaker's name onto another's channel; high-PURITY co-hold
+    // still allows two genuinely same-named people; a name frees on IDLE_RELEASE (leave / reconnect).
+    // Floor: a channel still needs the glow to name it correctly sometimes; a speaker never lit stays
+    // separated but unnamed. dom-active platforms (Zoom/Jitsi/gmeet) are 'exclusive'; Teams 'additive'.
+    const makeTrackNamer = (mode: 'additive' | 'exclusive'): any => ({
+      mode,
+      speaking: new Map<string, number>(),                 // active-speaker name → since (ms)
+      hot: new Map<number, { ts: number; e: number }>(),   // channel → last-energetic {ts, peak}
+      votes: new Map<number, Map<string, number>>(),       // channel → name → co-occurrence tally
+      names: new Map<number, string>(),                    // channel → committed name (= argmax vote)
+      HOT_MS: 600, MARGIN: 3, IDLE_RELEASE_MS: 8000, PURITY: 0.7,
+      onSpeak(name: string | null, tMs: number, isEnd: boolean): void {
+        if (!name) return;
+        if (isEnd) { this.speaking.delete(name); return; }
+        if (this.mode === 'exclusive') { this.speaking.clear(); this.speaking.set(name, tMs); }
+        else if (!this.speaking.has(name)) this.speaking.set(name, tMs);
+      },
+      markHot(ch: number, ts: number, e: number): void { this.hot.set(ch, { ts, e }); },
+      resolve(ch: number, ts: number): string | undefined {
+        // VOTE when THIS channel is the loudest hot one while exactly one speaker is lit.
+        let loud = -1, loudE = -1;
+        for (const [c, h] of this.hot) { if (ts - h.ts < this.HOT_MS && h.e > loudE) { loudE = h.e; loud = c; } }
+        const active = Array.from(this.speaking.keys()) as string[];
+        if (loud === ch && active.length === 1) {
+          const n = active[0];
+          let v = this.votes.get(ch); if (!v) { v = new Map(); this.votes.set(ch, v); }
+          v.set(n, (v.get(n) || 0) + 1);
+          this.rederive(ch, ts);
+        }
+        return this.names.get(ch);   // committed binding (undefined until the first confident bind)
+      },
+      rederive(ch: number, ts: number): void {
+        const v = this.votes.get(ch); if (!v) return;
+        let total = 0; for (const c of v.values()) total += c;
+        // 1:1 BY IDENTITY: a name committed to another still-active channel is that stream's identity and
+        // unavailable, no matter how many stray glow-flicker votes it collected here — UNLESS this channel's
+        // votes are high-PURITY (a genuine second same-named speaker). A name frees once its owner is idle.
+        const available = (name: string): boolean => {
+          let activeOwner = false;
+          for (const [c, n] of this.names) {
+            if (n !== name || c === ch) continue;
+            const h = this.hot.get(c);
+            if (h && ts - h.ts <= this.IDLE_RELEASE_MS) { activeOwner = true; break; }
+          }
+          if (!activeOwner) return true;
+          const vn = v.get(name) || 0;
+          return vn >= this.PURITY * total && vn >= this.MARGIN;
+        };
+        let best = '', bestN = -1;
+        for (const [n, c] of v) if (c > bestN && available(n)) { bestN = c; best = n; }
+        if (best === '') return;
+        const cur = this.names.get(ch);
+        if (best === cur) return;
+        const curN = cur ? (v.get(cur) || 0) : -1;
+        if (bestN < curN + this.MARGIN) return;   // hysteresis: real evidence, not glow churn
+        for (const [c, n] of this.names) {
+          if (n !== best || c === ch) continue;
+          const h = this.hot.get(c);
+          if (!h || ts - h.ts > this.IDLE_RELEASE_MS) this.names.delete(c);   // release idle owner only
+        }
+        this.names.set(ch, best);
+        w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + best + ' (' + bestN + ' votes)');
+      },
+    });
+
     if (isMixed) {
-      // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
-      // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
-      // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
-      // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
+      // Zoom/Teams/Jitsi ride the WebRTC hook (installRemoteAudioHook, installed pre-nav), which mirrors
+      // each remote participant's audio track into w.__vexaCapturedRemoteAudioStreams AND into a hidden
+      // <audio data-vexa-injected> element (that latter copy is what the recorder taps — untouched by
+      // either path below). Two transcription topologies split here:
+      //   • PER-TRACK (Zoom — confirmed live: multi-stream, stable per-participant, 0 teardowns): capture
+      //     EACH track on its OWN channel and name it from the active-speaker hints, through the SAME
+      //     per-channel, name-at-onset engine Google Meet uses. A track = one speaker (ground truth), so
+      //     overlap is separated by the tracks themselves.
+      //   • MIXED (Teams/Jitsi — per-track topology NOT yet witnessed; Teams may use remapped active-
+      //     speaker SLOTS): combine every track into ONE stream and let @vexa/mixed-pipeline (pyannote)
+      //     re-separate speakers, named by time-windowed hints. Kept until each platform's streams are
+      //     seen live (streams ≈ participants → safe to flip to per-track; streams ≫ participants → slots).
+      if (isPerTrack) {
+      // ── The track→name resolver (shared makeTrackNamer, defined above) ──
+      // Zoom's per-participant WebRTC streams are stable but anonymous; the DOM lights ONE dominant
+      // speaker at a time (exclusive) — worse under screen-share. Teams voice-outline can light several
+      // (additive). The vote resolver attaches each stable channel to the right name and defends it.
+      if (!w.__vexaTrackNamer) w.__vexaTrackNamer = makeTrackNamer(isTeams ? 'additive' : 'exclusive');
+
+      // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
+      // ONE shared AudioContext hosts every track's tap (Chromium hard-caps concurrent AudioContexts
+      // at 6 — a per-track context would drop the 7th+ participant in a large meeting). Each track gets
+      // its own ScriptProcessor on that context; the bot page is headless with no UI to stutter, so the
+      // many-node cost that retired ScriptProcessor on the user's busy meeting page does not apply here.
+      // The accumulated-audio-time clock (anchor + samples/rate, the SAME the mix path proved) stamps
+      // every frame on the page clock = the hints' clock, so the resolver can correlate energy with the
+      // active-speaker signal and the per-channel lane times turns correctly.
+      const setupPerTrack = (): void => {
+        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
+        if (!streams.length) return;
+        if (!w.__vexaTrackCtx) {
+          w.__vexaTrackCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
+          w.__vexaTrackCtx.resume?.();
+          w.__vexaTrackCaps = new Map();
+          w.__vexaTrackNextCh = 0;
+        }
+        const ctx = w.__vexaTrackCtx;
+        const SR = 16000, SILENCE = 0.005;
+        for (const s of streams) {
+          if (!s || w.__vexaTrackCaps.has(s.id)) continue;
+          const ch: number = w.__vexaTrackNextCh++;
+          try {
+            const src = ctx.createMediaStreamSource(s);
+            const proc = ctx.createScriptProcessor(4096, 1, 1);
+            const startMs = Date.now();
+            let processed = 0;
+            proc.onaudioprocess = (e: any): void => {
+              const input = e.inputBuffer.getChannelData(0) as Float32Array;
+              const ts = startMs + (processed / SR) * 1000;   // wall-clock of this frame's first sample
+              processed += input.length;                       // count ALL samples (silent too) → no drift
+              let maxVal = 0;
+              for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
+              if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)
+              w.__vexaTrackNamer.markHot(ch, ts, maxVal);      // peak energy → the dominant-slot ranking
+              const name = w.__vexaTrackNamer.resolve(ch, ts);
+              const arr = Array.from(input);                   // copy — the input buffer is reused
+              if (name) w.__vexaNamedAudioData(ch, name, arr, ts);
+              else w.__vexaPerSpeakerAudioData(ch, arr, ts);
+            };
+            src.connect(proc);
+            proc.connect(ctx.destination);                     // pull the processor (it outputs silence)
+            w.__vexaTrackCaps.set(s.id, { ch, src, proc });
+            w.logBot?.('[pertrack] capturing ch=' + ch + ' (' + w.__vexaTrackCaps.size + ' track(s))');
+            w.__vexaRemoteAudioReady?.();
+          } catch (e: any) { w.logBot?.('[pertrack] track setup failed ch=' + ch + ': ' + String(e)); }
+        }
+      };
+      setupPerTrack();
+      w.__vexaMixRescan = (globalThis as any).setInterval(setupPerTrack, 2000); // pick up late-joining tracks
+      // Zoom's active-speaker DOM watcher — the WHO signal the resolver correlates with per-track energy
+      // (also teed to __vexaSpeakerHint for telemetry; the pipeline's recordHint is a no-op on this lane).
+      if (isZoom && w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
+        let lastActive: string | null = null;
+        w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+          selfName: botName,
+          log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
+          onSpeakerChange: (name: string | null) => {
+            const tMs = Date.now();
+            if (name) { w.__vexaTrackNamer?.onSpeak(name, tMs, false); w.__vexaSpeakerHint?.(name, tMs, false); }
+            else if (lastActive) { w.__vexaTrackNamer?.onSpeak(lastActive, tMs, true); w.__vexaSpeakerHint?.(lastActive, tMs, true); }
+            lastActive = name;
+          },
+        });
+      }
+      return;
+      }
+      // ── MIXED lane (Teams/Jitsi): one combined stream + active-speaker hints, pyannote naming ──
+      // Kept until each platform's per-track topology is witnessed live (see the split note above). A
+      // Teams slot-remap OR a single mixed stream would defeat per-track — the mix + pyannote is robust
+      // to both. Combine every hooked track into ONE AudioContext destination, rescanning for late tracks.
       const setupMix = (): void => {
         const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
         if (!streams.length) return;
@@ -353,7 +520,10 @@ export async function startCaptureBridge(
         }
         if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
           w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm))))
+          // Accumulated-audio-time clock (anchor + samples/rate on the page clock = the hints' clock) —
+          // NOT Node receipt time nor Date.now() at callback (which still carries the ~256ms buffer lag);
+          // without it ~3/4 of hints missed their binder window → misattribution.
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, (pcm: Float32Array, tsMs?: number) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm), tsMs)))
             .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
@@ -398,47 +568,59 @@ export async function startCaptureBridge(
           });
         }
       }
-      if (isZoom) {
-        // Zoom contributes the WHO signal the mixed audio can't carry: the active-speaker
-        // DOM watcher (poll + flicker debounce lives in @vexa/zoom-capture) emits name
-        // transitions → __vexaSpeakerHint → pipeline.recordHint, which labels them
-        // 'dom-active' (Zoom's true kind — the mixed lane's DOM-active lag model).
-        // Timestamps are page Date.now() = epoch ms, the same clock Node stamps with.
-        if (w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
-          let lastActive: string | null = null;
-          w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
-            selfName: botName,
-            log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
-            onSpeakerChange: (name: string | null) => {
-              const tMs = Date.now();
-              if (name) w.__vexaSpeakerHint?.(name, tMs, false);           // start / heartbeat re-assert
-              else if (lastActive) w.__vexaSpeakerHint?.(lastActive, tMs, true); // nobody lit → close the turn
-              lastActive = name;
-            },
-          });
-        }
-      }
+      // (Zoom's watcher lives in the per-track branch above — it feeds the resolver, not the mix.)
       return;
     }
-    // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
+    // gmeet lane: per-channel capture, named through the SAME vote resolver as Zoom. gmeet is the same
+    // shape — anonymous per-participant <audio> streams (each a stable channel index) + a decoupled per-
+    // tile speaking glow (probeDom confirmed the audio elements carry NO participant name). The old code
+    // stamped the RAW instantaneous glow, which flickers at turn onset (Sue's words → Jacob). Voting each
+    // element to its participant over time defends against that flicker. The glow lights one tile at a
+    // time → 'exclusive'.
     if (w.VexaBrowserUtils?.createGmeetCapture && !w.__vexaGmeetCapture) {
+      if (!w.__vexaTrackNamer) w.__vexaTrackNamer = makeTrackNamer('exclusive');
       w.__vexaGmeetSpeakers = w.__vexaGmeetSpeakers
         ?? w.VexaBrowserUtils.createGmeetSpeakers?.({ log: (m: string) => w.logBot?.('[PerSpeaker] ' + m) });
       w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
         log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
         onAudio: (index: number, pcm: Float32Array) => {
           w.__vexaGmeetSpeakers?.reportTrackAudio?.(index);
-          // Bind the glow name at capture time (the v1 producer's inversion): exactly-one-lit ⇒ name.
+          const ts = Date.now();
+          // The single lit tile is the current active speaker → feed it once per change; this element's
+          // peak energy marks it hot. resolve(index) is the VOTED name (stable, flicker-proof) — not the
+          // instantaneous glow. Unbound (early frames) → UNKNOWN, upgraded by the pipeline once it binds.
           const lit: string[] = w.__vexaGmeetSpeakers?.litNames?.() ?? [];
           const glow = lit.length === 1 ? lit[0] : undefined;
-          if (glow) w.__vexaNamedAudioData(index, glow, Array.from(pcm), Date.now());
-          else w.__vexaPerSpeakerAudioData(index, Array.from(pcm), Date.now());
+          if (glow && w.__vexaGmeetGlow !== glow) { w.__vexaTrackNamer.onSpeak(glow, ts, false); w.__vexaGmeetGlow = glow; }
+          let maxVal = 0;
+          for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > maxVal) maxVal = a; }
+          w.__vexaTrackNamer.markHot(index, ts, maxVal);
+          const name = w.__vexaTrackNamer.resolve(index, ts);
+          if (name) w.__vexaNamedAudioData(index, name, Array.from(pcm), ts);
+          else w.__vexaPerSpeakerAudioData(index, Array.from(pcm), ts);
         },
       });
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
+      // STRUCTURAL-NAMING PROBE (temporary): dump probeDom() a handful of times so we can see whether
+      // each participant's <audio> element sits inside a tile carrying data-participant-id + name. If it
+      // does, gmeet naming can be a DIRECT structural read (audio→tile→name) instead of the flicker-prone
+      // instantaneous glow that misattributes at turn onset (Sue's words → Jacob). Logged as [gmeet-probe];
+      // remove once the naming design is settled.
+      if (w.__vexaGmeetSpeakers?.probeDom && w.__vexaGmeetProbeCount === undefined) {
+        w.__vexaGmeetProbeCount = 0;
+        const probe = (): void => {
+          try { w.logBot?.('[gmeet-probe] ' + JSON.stringify(w.__vexaGmeetSpeakers.probeDom())); }
+          catch (e: any) { w.logBot?.('[gmeet-probe] failed: ' + String(e)); }
+          if (++w.__vexaGmeetProbeCount >= 6 && w.__vexaGmeetProbeTimer) {
+            (globalThis as any).clearInterval(w.__vexaGmeetProbeTimer); w.__vexaGmeetProbeTimer = null;
+          }
+        };
+        probe();
+        w.__vexaGmeetProbeTimer = (globalThis as any).setInterval(probe, 20000); // 6× over ~2 min → catch active speakers
+      }
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isPerTrack: perTrack, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
@@ -449,11 +631,21 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { if (w.__vexaGmeetProbeTimer) { (globalThis as any).clearInterval(w.__vexaGmeetProbeTimer); w.__vexaGmeetProbeTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
       try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
+      try {
+        if (w.__vexaTrackCaps) {
+          for (const e of w.__vexaTrackCaps.values()) {
+            try { if (e?.proc) { e.proc.disconnect(); e.proc.onaudioprocess = null; } e?.src?.disconnect(); } catch { /* */ }
+          }
+          w.__vexaTrackCaps = null;
+        }
+      } catch { /* best-effort */ }
+      try { w.__vexaTrackCtx?.close?.(); w.__vexaTrackCtx = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
       try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* best-effort */ }

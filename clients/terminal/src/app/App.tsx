@@ -34,6 +34,15 @@ function InviteGate({ children }: { children: ReactNode }) {
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const invite = params.get("invite");
   const tshare = params.get("tshare");
+  const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
+
+  // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
+  // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
+  useEffect(() => {
+    if (!meeting) return;
+    try { localStorage.setItem("vexa.openMeetingRef", meeting); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [meeting, invite, tshare]);
 
   // Transcript share redeems silently (no consent surface). Clean the URL after — unless an invite is also
   // present, in which case the invite flow owns the reload.

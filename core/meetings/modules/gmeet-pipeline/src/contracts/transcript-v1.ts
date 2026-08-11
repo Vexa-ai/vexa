@@ -60,5 +60,11 @@ export interface TranscriptSink {
   /** Optional LIVE PARTIAL for seg.speaker_key (completed:false); empty text clears it.
    *  Additive — confirmed-only consumers omit it. */
   draft?(seg: TranscriptSegment): void;
+  /** Optional: actively DROP these segment_ids from the (append-only) stream. A live draft is
+   *  published under id `key:round(startMs)`; when it confirms, whisper may start the segment later
+   *  (leading silence trimmed) so the confirmed lands under a DIFFERENT id and upsert-by-id can't
+   *  replace the draft — the stale temp row must be retracted or it lingers. Additive — consumers
+   *  that don't render retractable drafts omit it. */
+  retract?(segmentIds: string[]): void;
   finalize(): void | Promise<void>;
 }
