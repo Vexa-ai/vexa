@@ -49,6 +49,7 @@ import { env as transformersEnv } from '@huggingface/transformers';
 import { ClusterNameBinder, type HintKind } from './cluster-name-binder.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { localAgreement } from '@vexa/transcribe-buffer';
+import { hallucinationRule, type SuppressedSegment } from './hallucination-gate.js';
 
 const SAMPLE_RATE = 16000;
 /** Near-silent spans are dropped before Whisper (desktop's DROP_RMS). */
@@ -167,6 +168,10 @@ export interface ChunkedTranscriberCallbacks {
    *  degrades gracefully, but the host gets the fault to make it observable instead of
    *  a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** A segment the hallucination gate refused to publish. Suppression is a JUDGEMENT the
+   *  lane made about real STT output, so it is reported, never silent — the host logs it as
+   *  an observation and can audit what the gate ate. */
+  onSuppressed?: (s: SuppressedSegment) => void;
   /** Instantaneous per-hint outcome (the hint-hop instrument): 'matched' when the
    *  hint names/claims a turn at the moment it arrives (or re-asserts the open
    *  turn's already-resolved name); 'missed' when no turn overlaps it yet. A
@@ -259,6 +264,7 @@ export class ChunkedTranscriber {
    *  gap that resets the prompt (SILENCE_PROMPT_RESET_MS). */
   private lastAudioEndMs = 0;
   private commitCounter = 0;
+  private suppressedCount = 0;
   private turnCounter = 0;
   private disposed = false;
 
@@ -288,8 +294,8 @@ export class ChunkedTranscriber {
   }
 
   /** Audio-accounting trace (VEXA_TRACE_SPANS=1): every window this lane submits to STT,
-   *  and every window it declines to. Off by default; the only way to tell "STT heard it
-   *  and got it wrong" from "the lane never sent that audio at all". */
+   *  and every window it declines to. Off by default; the only way to separate the case where
+   *  STT heard the audio and got it wrong from the case where the lane never sent it. */
   private trace(msg: string): void {
     if (typeof process !== 'undefined' && process.env?.VEXA_TRACE_SPANS) this.log(`[spans] ${msg}`);
   }
@@ -442,8 +448,8 @@ export class ChunkedTranscriber {
     }
   }
 
-  stats(): { commits: number; turns: number; queued: number; unresolved: number; binder: ReturnType<ClusterNameBinder['stats']> } {
-    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
+  stats(): { commits: number; turns: number; queued: number; unresolved: number; suppressed: number; binder: ReturnType<ClusterNameBinder['stats']> } {
+    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats() };
   }
 
   /** Session end: flush the carried span and close the open turn. Resolves
@@ -696,6 +702,14 @@ export class ChunkedTranscriber {
       // check; the blanket phrase list would also kill legit short answers
       // ("Yes.") inside real-speech windows the RMS gate already vouched for.
       if (prompt && s.text.length > 6 && prompt.includes(s.text)) return false;
+      // Whisper invented this on non-speech. Reported, never dropped in silence.
+      const rule = hallucinationRule(s.text);
+      if (rule) {
+        this.cb.onSuppressed?.({ text: s.text, startMs: s.startMs, endMs: s.endMs, rule });
+        this.log(`[ChunkedTranscriber] suppressed (${rule}) ${Math.round(s.startMs)}..${Math.round(s.endMs)}: ${JSON.stringify(s.text)}`);
+        this.suppressedCount++;
+        return false;
+      }
       return true;
     });
     if (mapped.length === 0) {
