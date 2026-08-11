@@ -508,7 +508,25 @@ export class TrackNamer {
     if (this.named.has(trackId)) return;
     const byName = this.evidence.get(trackId);
     if (!byName) return;
-    const ranked = [...byName.values()].sort((x, y) => y.supportMs - x.supportMs);
+    // EVIDENCE FOR SOMEONE ELSE'S NAME IS NOT DISAGREEMENT. A track accrues time for a name that
+    // another track has ALREADY EARNED purely because the tiles lag the audio by about a second —
+    // the bleed this file's exclusivity rule exists to catch. Once that name is settled on another
+    // track the bleed is a known contaminant, and leaving it in the denominator lets it veto a
+    // name the track genuinely holds.
+    //
+    // Measured on the real m34 tape: track 201 carried 10.4 s for "Dmitry Grankin" and 7.1 s of
+    // bleed for "leo (Unverified)", which track 414 owned outright with 82.8 s. Dmitry's share came
+    // to 0.59, under the bar, and a participant with ten seconds of unambiguous evidence was
+    // published as "Speaker A" for the whole meeting.
+    //
+    // This is not a loosened bar. The discount only removes names another track has already earned
+    // under the full rules, the winner still has to clear corroboration and the same share, and it
+    // still has to hold the clear majority of its OWN name across every track.
+    const mine = [...byName.values()].filter((e) => {
+      const holder = this.owner.get(e.name) ?? this.owner.get(this.canonicalCase(e.name));
+      return holder === undefined || holder === trackId;
+    });
+    const ranked = mine.sort((x, y) => y.supportMs - x.supportMs);
     const lead = ranked[0];
     if (!lead || lead.episodes < this.corroborations) return;
     const total = ranked.reduce((s, e) => s + e.supportMs, 0);
@@ -537,6 +555,8 @@ export class TrackNamer {
     this.letters.delete(trackId);
     this.onNamed?.(trackId, display);
     this.relabelUnnamed();
+    // Settling THIS name can free another track's evidence from a contaminant — re-test the rest.
+    for (const other of this.order) if (other !== trackId && !this.named.has(other)) this.evaluate(other, atMs);
     // A binding can complete the last pairing, so the elimination is re-tested after every one.
     this.eliminate(atMs);
   }
