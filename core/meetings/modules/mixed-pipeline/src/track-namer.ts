@@ -382,6 +382,16 @@ export class TrackNamer {
     return ranked[0][0];
   }
 
+  /** How many times this name's tile has been re-asserted all session. Zero means the UI has never
+   *  once testified about this person — and a signal that has never named someone cannot be read as
+   *  evidence that they are NOT the one speaking. */
+  hintEvidenceFor(name: string): number {
+    const want = this.canonicalCase(name).toLowerCase();
+    let n = 0;
+    for (const ev of this.hintEvents) if (this.canonicalCase(ev.name).toLowerCase() === want) n++;
+    return n;
+  }
+
   /** The ONE name the UI showed lit at this instant, or null when none or several were. Used only
    *  to break a tie the transport itself cannot: when two sources are audible, the tiles are the
    *  second, independent opinion about which of THOSE TWO was speaking. Constrained to names the
