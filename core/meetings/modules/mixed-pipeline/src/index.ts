@@ -24,6 +24,8 @@ export type {
 } from './turn-source.js';
 export { VirtualClock } from './virtual-clock.js';
 export type { VirtualClockOptions } from './virtual-clock.js';
+export { correlateSourcesToNames } from './source-name-correlator.js';
+export type { Interval, Binding, CorrelationResult, CorrelatorOptions } from './source-name-correlator.js';
 export { TrackNamer, speakerLabel } from './track-namer.js';
 export type { TrackNaming, TrackEvidence, TrackNamerOptions } from './track-namer.js';
 export { PyannoteSegmenter } from './pyannote-segmenter.js';
