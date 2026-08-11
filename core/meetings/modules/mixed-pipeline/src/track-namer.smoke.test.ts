@@ -20,7 +20,7 @@ const check = (name: string, cond: boolean, detail?: string): void => {
 
 /** A namer with the lag switched OFF, so a test can state times in audio terms. */
 const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer>[0]>> = {}) =>
-  new TrackNamer({ settleMs: 0, minEpisodeMs: 600, corroborations: 2, ...over });
+  new TrackNamer({ settleMs: 0, minEpisodeMs: 600, corroborations: 2, rosterSettleMs: 5000, ...over });
 
 // ── 1) Stable letters when nothing names anybody ────────────────────────────────────────────────
 {
@@ -118,6 +118,7 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   n.noteHeard('201');
   n.noteHeard('1266');
   for (const nm of ['leo (Unverified)', 'Dmitry Grankin']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  n.tick(6000);   // past the roster settle, before any speaking evidence exists
   check('two unnamed tracks and two unclaimed names ⇒ elimination REFUSES',
     n.nameFor('201') === null && n.nameFor('1266') === null, JSON.stringify(n.stats().how));
   // Now Leo earns 1266 from real evidence.
@@ -140,6 +141,7 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   const n = namer({ rosterSightings: 2 });
   for (const t of ['a', 'b', 'c']) n.noteHeard(t);
   for (const nm of ['Ana', 'Bo', 'Cy']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  n.tick(30_000);
   check('3 unnamed tracks + 3 unclaimed names ⇒ NOTHING fires',
     ['a', 'b', 'c'].every((t) => n.nameFor(t) === null), JSON.stringify(n.stats().how));
   // Two named leaves one track and one name — that IS decidable.
@@ -147,6 +149,7 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   const m = namer({ rosterSightings: 2 });
   m.noteHeard('a'); m.noteHeard('b');
   for (const nm of ['Ana', 'Bo', 'Cy']) { m.recordRosterName(nm, 0); m.recordRosterName(nm, 100); }
+  m.tick(30_000);
   check('one unnamed track but TWO unclaimed names ⇒ still refuses (the other direction)',
     m.nameFor('a') === null && m.nameFor('b') === null, JSON.stringify(m.stats().how));
 }
@@ -158,7 +161,23 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   check('an uncorroborated roster name cannot pair with anything',
     n.nameFor('solo') === null, JSON.stringify(n.stats().roster));
   n.recordRosterName('Flicker', 100);
-  check('a second sighting makes it usable', n.nameFor('solo') === 'Flicker', JSON.stringify(n.stats().how));
+  n.tick(60_000);   // the room settled and nobody new appeared
+  check('a second sighting plus a settled roster makes it usable',
+    n.nameFor('solo') === 'Flicker', JSON.stringify(n.stats().how));
+  // THE RACE. Sightings arrive one name at a time, so a roster mid-fill briefly looks like a
+  // decidable 1-and-1. Eliminating there is a coin toss wearing an argument's clothes — and on the
+  // real m30 tape it produced the RIGHT answer for the WRONG reason, which is how it hid.
+  const r = namer({ rosterSightings: 2 });
+  r.noteHeard('only');
+  r.recordRosterName('First Name', 0);
+  r.recordRosterName('First Name', 10);      // corroborated…
+  check('a half-filled roster cannot decide anything, even at 1 track and 1 qualified name',
+    r.nameFor('only') === null, JSON.stringify(r.stats()));
+  r.recordRosterName('Second Name', 20);     // …and now a second person appears
+  r.recordRosterName('Second Name', 30);
+  r.tick(60_000);
+  check('the second name lands and the pairing is correctly ambiguous',
+    r.nameFor('only') === null, JSON.stringify(r.stats().how));
 }
 {
   // Elimination never overrides evidence: a named track is never revisited.
@@ -171,6 +190,7 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   n.setTrackActive('1', false, 12_000);
   n.tick(20_000);
   for (const nm of ['Ana', 'Someone Else']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  n.tick(60_000);
   check('a track named from evidence is never re-let by elimination',
     n.nameFor('1') === 'Ana' && n.naming('1')?.source === 'evidence', JSON.stringify(n.stats().how));
 }

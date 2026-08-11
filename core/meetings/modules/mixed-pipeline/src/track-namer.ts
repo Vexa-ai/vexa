@@ -71,6 +71,10 @@ const RETENTION_MS = 120_000;
 /** How many separate scans a roster name must appear in before elimination may use it. A name that
  *  flickered once through a rotting selector is not a participant. */
 export const TRACK_NAME_ROSTER_SIGHTINGS = envNumber('VEXA_TRACK_NAME_ROSTER_SIGHTINGS', 2);
+/** How long the roster must have shown NO NEW NAME before an elimination may be drawn from it.
+ *  Elimination is a last resort and must be taken LATE: a roster fills one name at a time, so it
+ *  passes through states that look decidable and are not. */
+export const TRACK_NAME_ROSTER_SETTLE_MS = envNumber('VEXA_TRACK_NAME_ROSTER_SETTLE_MS', 5000);
 
 export type NameEvidenceKind = 'dom' | 'caption';
 
@@ -106,6 +110,8 @@ export interface TrackNamerOptions {
   onNamed?: (trackId: string, name: string) => void;
   /** Roster sightings required before elimination may use a name. */
   rosterSightings?: number;
+  /** Quiet period the roster must show before an elimination is drawn from it. */
+  rosterSettleMs?: number;
   log?: (m: string) => void;
 }
 
@@ -126,6 +132,7 @@ export class TrackNamer {
   private readonly minOwnerShare: number;
   private readonly settleMs: number;
   private readonly rosterSightings: number;
+  private readonly rosterSettleMs: number;
   private readonly log: (m: string) => void;
   onNamed?: (trackId: string, name: string) => void;
 
@@ -142,6 +149,8 @@ export class TrackNamer {
   /** The ROSTER: display name → how many scans it has been sighted in. Who is in the room, which is
    *  a different question from who can be heard — and the only question an elimination can use. */
   private roster = new Map<string, number>();
+  /** When the roster last showed a name it had never shown before. */
+  private rosterChangedAt = -Infinity;
   /** lowercased name → the roster's own casing, so a tile that renders "leo" and a roster that
    *  renders "Leo" do not become two people, and the rendered form is the one Teams considers
    *  canonical. Never rewrites the name itself — a " (Unverified)" suffix is Teams' statement. */
@@ -164,6 +173,7 @@ export class TrackNamer {
     this.minOwnerShare = opts.minOwnerShare ?? TRACK_NAME_MIN_OWNER_SHARE;
     this.settleMs = opts.settleMs ?? TRACK_NAME_SETTLE_MS;
     this.rosterSightings = opts.rosterSightings ?? TRACK_NAME_ROSTER_SIGHTINGS;
+    this.rosterSettleMs = opts.rosterSettleMs ?? TRACK_NAME_ROSTER_SETTLE_MS;
     this.onNamed = opts.onNamed;
     this.log = opts.log ?? (() => { /* silent */ });
   }
@@ -209,6 +219,7 @@ export class TrackNamer {
   recordRosterName(name: string, tMs?: number): void {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
+    if (!this.roster.has(trimmed)) this.rosterChangedAt = Math.max(tMs ?? this.newest, this.newest);
     this.roster.set(trimmed, (this.roster.get(trimmed) ?? 0) + 1);
     this.canonical.set(trimmed.toLowerCase(), trimmed);
     if (tMs !== undefined) this.newest = Math.max(this.newest, tMs);
@@ -236,10 +247,13 @@ export class TrackNamer {
   tick(tMs: number): void {
     this.newest = Math.max(this.newest, tMs);
     this.advance(this.newest - this.settleMs);
+    // Elimination is time-gated on a quiet roster, so it has to be re-tested as time passes — no
+    // further roster sighting is coming once the room has settled.
+    this.eliminate(this.newest);
   }
 
   /** Integrate everything, ignoring the settle delay. Teardown only. */
-  finish(): void { this.advance(this.newest); }
+  finish(): void { this.advance(this.newest); this.eliminate(this.newest); }
 
   // ── outputs ───────────────────────────────────────────────────────────────────────────────────
 
@@ -442,10 +456,20 @@ export class TrackNamer {
   private eliminate(atMs: number): void {
     const unnamed = this.order.filter((t) => !this.named.has(t));
     if (unnamed.length !== 1) return;
-    const unclaimed = [...this.roster.entries()]
-      .filter(([n, sightings]) => sightings >= this.rosterSightings && !this.owner.has(n)
-        && !this.owner.has(this.canonicalCase(n)))
-      .map(([n]) => n);
+    // A ROSTER THAT IS STILL FILLING IS NOT A ROSTER YOU CAN ELIMINATE AGAINST. Sightings arrive one
+    // name at a time, so between the moment the first name crosses the corroboration threshold and
+    // the moment the second does, the set looks exactly like a decidable 1-and-1 — and eliminating
+    // there is a race, not an argument. It produced the right answer on the m30 fixture for entirely
+    // the wrong reason, which is worse than producing the wrong one: it would have gone unnoticed.
+    // So every name the roster has shown must have finished corroborating before any pairing counts.
+    for (const sightings of this.roster.values()) if (sightings < this.rosterSightings) return;
+    // …and it must have been QUIET. A roster fills one name at a time, so between the first name
+    // corroborating and the second appearing it looks exactly like a decidable 1-and-1. Eliminating
+    // there is a race, not an argument — on the real m30 tape it produced the RIGHT answer for
+    // entirely the WRONG reason, which is how it stayed invisible.
+    if (Math.max(atMs, this.newest) - this.rosterChangedAt < this.rosterSettleMs) return;
+    const unclaimed = [...this.roster.keys()]
+      .filter((n) => !this.owner.has(n) && !this.owner.has(this.canonicalCase(n)));
     if (unclaimed.length !== 1) return;
     this.bind(unnamed[0], unclaimed[0], 'elimination', 1, [], atMs,
       `the only unnamed track and the only unclaimed roster name`);
