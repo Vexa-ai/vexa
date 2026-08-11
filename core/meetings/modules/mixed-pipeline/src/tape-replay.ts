@@ -99,6 +99,22 @@ function loadCsrc(path: string): TransportEvent[] {
   return out;
 }
 
+/** Roster display names, from the observations sidecar the capture path writes. A name here says
+ *  who was IN the meeting, never who was speaking. */
+function loadRosterNames(path: string): { name: string; tMs: number }[] {
+  const out: { name: string; tMs: number }[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line) continue;
+    let r: any;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (r.type !== 'observation') continue;
+    const o = r.observation;
+    if (!o || o.type !== 'roster-name' || typeof o.name !== 'string' || !o.name) continue;
+    out.push({ name: o.name, tMs: typeof r.t === 'number' ? r.t : 0 });
+  }
+  return out;
+}
+
 /** The caption sidecar: the platform's own ASR, with its own attribution. Used as name evidence,
  *  and (with --cc-oracle) as the thing we are scored against. */
 function loadCaptions(path: string): { t: number; name: string; text: string; stable: boolean }[] {
@@ -150,9 +166,18 @@ async function main(): Promise<void> {
       + `${csrcPath ? ` in ${csrcPath}` : ' (no csrc sidecar beside the tape)'}`
       + (TURN_SOURCE === 'csrc' ? ' — this run will produce nothing.' : ' — this run will stay on pyannote.'));
   }
+  // The roster sensor postdates the older fixtures, so a tape recorded before it carries no roster
+  // observations at all. `--roster "A,B"` supplies them as a STAND-IN so the elimination rule can be
+  // exercised against a real tape — it is stated in the run's own output, because a name that came
+  // from the operator rather than from the meeting must never be mistaken for one the bot observed.
+  const observationsPath = arg('observations') ?? siblingSidecar(TAPE!, 'observations');
+  const rosterFromTape = observationsPath ? loadRosterNames(observationsPath) : [];
+  const rosterSupplied = (arg('roster') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const captionsPath = arg('captions') ?? siblingSidecar(TAPE!, 'captions');
   const captions = captionsPath ? loadCaptions(captionsPath) : [];
   console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s), ${transport.length} transport transition(s), ${captions.length} caption(s)`);
+  if (rosterFromTape.length) console.log(`roster: ${rosterFromTape.length} observed sighting(s) from the tape`);
+  if (rosterSupplied.length) console.log(`roster: ${JSON.stringify(rosterSupplied)} SUPPLIED BY --roster (stand-in for the roster sensor, which postdates this tape)`);
   console.log(`language: ${language ?? 'auto (whisper decides, as the live bot did)'}`);
   console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
 
@@ -263,6 +288,15 @@ async function main(): Promise<void> {
   // Captions are name evidence for a track. Only settled entries: an entry still being refined can
   // still change its author, and evidence that can change is not evidence.
   for (const c of captions) if (c.stable) evs.push({ t: c.t, run: () => tc.recordCaption(c.name, c.t) });
+  // Roster names ride the timeline where the sensor observed them; a supplied stand-in is delivered
+  // repeatedly from the first frame, which is what a scan every couple of seconds looks like.
+  for (const r of rosterFromTape) evs.push({ t: r.tMs, run: () => tc.recordRosterName(r.name, r.tMs) });
+  if (rosterSupplied.length && frames.length) {
+    for (let i = 0; i < 3; i++) {
+      const at = frames[Math.min(i * 5, frames.length - 1)].ts;
+      for (const n of rosterSupplied) evs.push({ t: at, run: () => tc.recordRosterName(n, at) });
+    }
+  }
   evs.sort((a, b) => a.t - b.t);
   // PACING MATTERS. The transcriber's submit pump is driven by a WALL-CLOCK 1s tick, so a turn
   // is transcribed in several growing passes live but in ONE pass if the tape is fired instantly.
@@ -316,7 +350,9 @@ async function main(): Promise<void> {
   const st = tc.stats();
   console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}`);
   console.log(`  turn sources: ${JSON.stringify(st.sources)}`);
-  console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named; evidence ${JSON.stringify(st.tracks.evidence)}`);
+  console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named — ${JSON.stringify(st.tracks.how)}`);
+  console.log(`  track evidence: ${JSON.stringify(st.tracks.evidence)}; roster: ${JSON.stringify(st.tracks.roster)}`);
+  console.log(`  orphan spans: ${st.orphansContained}/${st.orphans} contained by a single track (the rest were genuinely ambiguous)`);
   if (spineEvents.length) console.log(`  spine changes: ${spineEvents.map((e) => `${e.from}→${e.to}(${e.reason})`).join(', ')}`);
   const namedRows = byTime.filter((r) => !isUnattributed(r.speaker)).length;
   console.log(`  rows carrying a HUMAN name: ${namedRows}/${byTime.length} (${byTime.length ? ((namedRows / byTime.length) * 100).toFixed(1) : '0'}%)`);

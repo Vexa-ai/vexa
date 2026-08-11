@@ -68,6 +68,10 @@ const CAPTION_WINDOW_MS = envNumber('VEXA_TRACK_NAME_CAPTION_WINDOW_MS', 1500);
 /** Intervals older than this behind the integrator are dropped (a long meeting must not grow). */
 const RETENTION_MS = 120_000;
 
+/** How many separate scans a roster name must appear in before elimination may use it. A name that
+ *  flickered once through a rotting selector is not a participant. */
+export const TRACK_NAME_ROSTER_SIGHTINGS = envNumber('VEXA_TRACK_NAME_ROSTER_SIGHTINGS', 2);
+
 export type NameEvidenceKind = 'dom' | 'caption';
 
 export interface TrackEvidence {
@@ -81,8 +85,12 @@ export interface TrackEvidence {
 
 export interface TrackNaming {
   name: string;
-  /** The winner's share of the track's own evidence at acceptance. */
+  /** The winner's share of the track's own evidence at acceptance. 1 for an elimination, which is
+   *  not a measurement — it is the only remaining possibility. */
   confidence: number;
+  /** HOW the name was reached. 'evidence' means this track was seen to be that person;
+   *  'elimination' means nobody else could be, which is a weaker claim and is recorded as one. */
+  source: 'evidence' | 'elimination';
   evidence: TrackEvidence[];
   /** When the name was accepted (integrator time, epoch ms). */
   atMs: number;
@@ -96,6 +104,8 @@ export interface TrackNamerOptions {
   settleMs?: number;
   /** A track earned a name. The host repaints everything that track already published. */
   onNamed?: (trackId: string, name: string) => void;
+  /** Roster sightings required before elimination may use a name. */
+  rosterSightings?: number;
   log?: (m: string) => void;
 }
 
@@ -115,6 +125,7 @@ export class TrackNamer {
   private readonly minShare: number;
   private readonly minOwnerShare: number;
   private readonly settleMs: number;
+  private readonly rosterSightings: number;
   private readonly log: (m: string) => void;
   onNamed?: (trackId: string, name: string) => void;
 
@@ -128,6 +139,13 @@ export class TrackNamer {
   private named = new Map<string, TrackNaming>();
   /** name → the track that earned it. A name is never re-let. */
   private owner = new Map<string, string>();
+  /** The ROSTER: display name → how many scans it has been sighted in. Who is in the room, which is
+   *  a different question from who can be heard — and the only question an elimination can use. */
+  private roster = new Map<string, number>();
+  /** lowercased name → the roster's own casing, so a tile that renders "leo" and a roster that
+   *  renders "Leo" do not become two people, and the rendered form is the one Teams considers
+   *  canonical. Never rewrites the name itself — a " (Unverified)" suffix is Teams' statement. */
+  private canonical = new Map<string, string>();
   /** First-heard order → the stable Speaker A/B/C fallback label. */
   private order: string[] = [];
 
@@ -145,6 +163,7 @@ export class TrackNamer {
     this.minShare = opts.minShare ?? TRACK_NAME_MIN_SHARE;
     this.minOwnerShare = opts.minOwnerShare ?? TRACK_NAME_MIN_OWNER_SHARE;
     this.settleMs = opts.settleMs ?? TRACK_NAME_SETTLE_MS;
+    this.rosterSightings = opts.rosterSightings ?? TRACK_NAME_ROSTER_SIGHTINGS;
     this.onNamed = opts.onNamed;
     this.log = opts.log ?? (() => { /* silent */ });
   }
@@ -179,6 +198,40 @@ export class TrackNamer {
     this.newest = Math.max(this.newest, tMs);
   }
 
+  /**
+   * The roster says this person is in the meeting.
+   *
+   * NOT a hint, and deliberately carries no time: a roster name says nothing about who is speaking,
+   * and treating one as speaking evidence would attribute a turn to somebody for merely being
+   * present. It does exactly two things — it supplies the canonical CASING for a name the tiles may
+   * render differently, and it makes ELIMINATION possible.
+   */
+  recordRosterName(name: string, tMs?: number): void {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    this.roster.set(trimmed, (this.roster.get(trimmed) ?? 0) + 1);
+    this.canonical.set(trimmed.toLowerCase(), trimmed);
+    if (tMs !== undefined) this.newest = Math.max(this.newest, tMs);
+    // A roster sighting can arrive after a track was already named from a tile that rendered the
+    // same person in a different case. Re-render under the roster's form so one participant does
+    // not read as two in the transcript — same person, same rows, one repaint.
+    for (const [trackId, naming] of this.named) {
+      const display = this.canonicalCase(naming.name);
+      if (display === naming.name) continue;
+      naming.name = display;
+      this.owner.set(display, trackId);
+      this.log(`track ${trackId} rendered as "${display}" (roster casing)`);
+      this.onNamed?.(trackId, display);
+    }
+    this.eliminate(tMs ?? this.upTo);
+  }
+
+  /** The roster's casing for a name, when the roster has seen it. Otherwise the name unchanged —
+   *  inventing a capitalisation nobody rendered would be a different kind of guess. */
+  private canonicalCase(name: string): string {
+    return this.canonical.get(name.toLowerCase()) ?? name;
+  }
+
   /** Move the integrator's clock (called on every audio frame — cheap when nothing moved). */
   tick(tMs: number): void {
     this.newest = Math.max(this.newest, tMs);
@@ -193,6 +246,9 @@ export class TrackNamer {
   /** The name this track earned, or null. NEVER a guess. */
   nameFor(trackId: string): string | null { return this.named.get(trackId)?.name ?? null; }
 
+  /** The roster as this namer knows it: name → sightings. */
+  rosterNames(): Record<string, number> { return Object.fromEntries(this.roster); }
+
   /** What a turn on this track publishes under right now: the earned name, else a stable
    *  "Speaker A/B/C" by first-heard order. */
   labelFor(trackId: string): string {
@@ -206,23 +262,31 @@ export class TrackNamer {
     const i = this.order.indexOf(trackId);
     if (i >= 0) return i;
     this.order.push(trackId);
+    // A newly heard track changes how many tracks are unnamed, which is half of the elimination
+    // test — including the case where hearing a SECOND track makes a pending elimination invalid.
+    this.eliminate(this.upTo);
     return this.order.length - 1;
   }
 
   naming(trackId: string): TrackNaming | null { return this.named.get(trackId) ?? null; }
 
-  stats(): { tracks: number; named: number; evidence: Record<string, Record<string, number>> } {
+  stats(): {
+    tracks: number; named: number; evidence: Record<string, Record<string, number>>;
+    roster: Record<string, number>; how: Record<string, string>;
+  } {
     const ev: Record<string, Record<string, number>> = {};
     for (const [track, m] of this.evidence) {
       ev[track] = {};
       for (const [name, e] of m) ev[track][name] = Math.round(e.supportMs);
     }
-    return { tracks: this.order.length, named: this.named.size, evidence: ev };
+    const how: Record<string, string> = {};
+    for (const [t, n] of this.named) how[t] = `${n.name} [${n.source}]`;
+    return { tracks: this.order.length, named: this.named.size, evidence: ev, roster: this.rosterNames(), how };
   }
 
   reset(): void {
     this.trackSpans.clear(); this.nameSpans.clear(); this.evidence.clear();
-    this.named.clear(); this.owner.clear(); this.order = [];
+    this.named.clear(); this.owner.clear(); this.roster.clear(); this.canonical.clear(); this.order = [];
     this.upTo = 0; this.newest = 0; this.origin = null; this.episode = null;
   }
 
@@ -334,11 +398,57 @@ export class TrackNamer {
     let nameTotal = 0;
     for (const [, m] of this.evidence) { const e = m.get(lead.name); if (e) nameTotal += e.supportMs; }
     if (nameTotal > 0 && lead.supportMs / nameTotal < this.minOwnerShare) return;
-    this.named.set(trackId, { name: lead.name, confidence: share, evidence: ranked, atMs });
-    this.owner.set(lead.name, trackId);
+    this.bind(trackId, lead.name, 'evidence', share, ranked, atMs,
+      `${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)}`);
+  }
+
+  /** Accept a name for a track, once. The single place a name is ever attached. */
+  private bind(
+    trackId: string, name: string, source: 'evidence' | 'elimination',
+    confidence: number, evidence: TrackEvidence[], atMs: number, why: string,
+  ): void {
+    const display = this.canonicalCase(name);
+    this.named.set(trackId, { name: display, confidence, source, evidence, atMs });
+    this.owner.set(name, trackId);
+    if (display !== name) this.owner.set(display, trackId);
     this.noteHeard(trackId);
-    this.log(`track ${trackId} → "${lead.name}" (${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)})`);
-    this.onNamed?.(trackId, lead.name);
+    this.log(`track ${trackId} → "${display}" [${source}] (${why})`);
+    this.onNamed?.(trackId, display);
+    // A binding can complete the last pairing, so the elimination is re-tested after every one.
+    this.eliminate(atMs);
+  }
+
+  /**
+   * THE ELIMINATION RULE. When exactly ONE track is still unnamed and exactly ONE roster name is
+   * still unclaimed, they are each other — there is no other pairing left.
+   *
+   * This is what the m30 fixture needs and nothing else can supply: the DOM outline named one of
+   * two participants for the entire meeting, so the other could never be named from speaking
+   * evidence however long anyone listened. He was in the roster the whole time.
+   *
+   * It is deliberately the STRICTEST possible form of the argument, because a loose one fabricates:
+   *
+   *   • two or more unnamed tracks  ⇒ nothing fires. Which of them is the unclaimed name is a
+   *     coin toss, and a coin toss that prints a human's name is the defect this lane exists to end.
+   *   • two or more unclaimed names ⇒ nothing fires, for the same reason in the other direction.
+   *   • a track that already has a name is NEVER touched. Elimination is a last resort, never an
+   *     override — direct evidence always wins, and a name reached this way is recorded as
+   *     'elimination' so a reader can tell the two apart.
+   *   • a roster name is only usable once it has been sighted in `rosterSightings` separate scans,
+   *     so a name that flickered through a rotting selector cannot pair with anything.
+   *
+   * Silence in a 3-and-3 meeting is the correct answer, not a gap to close later.
+   */
+  private eliminate(atMs: number): void {
+    const unnamed = this.order.filter((t) => !this.named.has(t));
+    if (unnamed.length !== 1) return;
+    const unclaimed = [...this.roster.entries()]
+      .filter(([n, sightings]) => sightings >= this.rosterSightings && !this.owner.has(n)
+        && !this.owner.has(this.canonicalCase(n)))
+      .map(([n]) => n);
+    if (unclaimed.length !== 1) return;
+    this.bind(unnamed[0], unclaimed[0], 'elimination', 1, [], atMs,
+      `the only unnamed track and the only unclaimed roster name`);
   }
 
   private prune(before: number): void {

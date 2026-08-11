@@ -64,7 +64,7 @@ export interface HintCounters {
  *  (name, KIND, tMs) without the pyannote model load. */
 export type MixedTranscriber =
   Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>
-  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption'>>;
+  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName'>>;
 export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
@@ -86,6 +86,10 @@ export interface BotPipeline extends Pipeline {
   /** A mixed-lane caption AUTHOR (Teams' own ASR) — name evidence for a transport track, never a
    *  turn edge. Absent on platforms/tenants with no captions. */
   recordCaptionName?(name: string, tMs: number): void;
+  /** A mixed-lane ROSTER display name — who is in the meeting. Never a turn edge and never a hint:
+   *  a roster name says nothing about when anyone spoke. It is the only way to name a participant
+   *  whose tile never lights, which on the m30 fixture was one of the two people in the room. */
+  recordRosterName?(name: string, tMs?: number): void;
   /** Mixed lane only: the cumulative hint-hop counters (undefined on the gmeet lane). */
   readonly hintCounters?: HintCounters;
 }
@@ -282,6 +286,7 @@ function createMixedBotPipeline(
     recordHint: (name, tMs, isEnd) => { hintCounters.received++; transcriber?.recordHint(name, hintKind, tMs, isEnd); },
     recordTransportEvent: (ev) => { transcriber?.recordTransportEvent?.(ev); },
     recordCaptionName: (name, tMs) => { transcriber?.recordCaption?.(name, tMs); },
+    recordRosterName: (name, tMs) => { transcriber?.recordRosterName?.(name, tMs); },
     hintCounters,
   };
 }
