@@ -28,7 +28,7 @@ import {
 import { createCaptureSignalRecorder, resolveMaxTapeBytes, DEFAULT_MAX_TAPE_BYTES } from './telemetry.js';
 import type { Invocation } from './config.js';
 import type { CapturedFrame } from './ports.js';
-import type { TeamsCaptionRecord } from './capture-bridge.js';
+import type { CsrcRecord, ObservationRecord, TeamsCaptionRecord } from './capture-bridge.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -112,10 +112,16 @@ console.log('\n── caption sidecar ──');
   await rec.close();
 
   const lines = readFileSync(rec.captionsPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  check('captions land in the sidecar', lines.length === 2, String(lines.length));
-  check('caption records are stored verbatim',
-    lines[0].name === 'Jacob' && lines[0].text === 'hello there' && lines[0].type === 'caption',
+  // A sidecar travels alone constantly — an S3 listing, a curator's download, a bug report with one
+  // file attached — so it opens with its own mini-header naming the session and the build.
+  check('the sidecar opens with a self-identifying mini-header',
+    lines[0].type === 'sidecar_header' && lines[0].part === 'captions'
+    && lines[0].session_uid === 'conn-tape-1' && typeof lines[0].image_version === 'string',
     JSON.stringify(lines[0]));
+  check('captions land in the sidecar', lines.length === 3, String(lines.length));
+  check('caption records are stored verbatim',
+    lines[1].name === 'Jacob' && lines[1].text === 'hello there' && lines[1].type === 'caption',
+    JSON.stringify(lines[1]));
 
   // The tape itself must stay contract-clean — captured-signal.v1 is sealed at three records, and
   // a caption line inside it would make every stored session fail its own schema.
@@ -150,6 +156,158 @@ console.log('\n── caption sidecar ──');
   check('no captions → no sidecar file', !existsSync(rec.captionsPath));
 }
 
+// ── the transport (CSRC) sidecar ────────────────────────────────────────────────────────────────
+console.log('\n── csrc sidecar ──');
+{
+  const dir = tmp();
+  const rec = createCaptureSignalRecorder(inv(), { dir });
+  const edge = (csrc: number, active: boolean, t: number): CsrcRecord =>
+    ({ type: 'csrc', t, csrc, active, audioLevel: 0.5, rtpTimestamp: csrc * 10, lane: 'mixed' });
+  // Order is the whole content of this stream: an activation filed after its own deactivation
+  // would describe a meeting that never happened.
+  rec.sink.captureCsrc?.(edge(101, true, 1_700_000_000_000));
+  rec.sink.captureCsrc?.(edge(202, true, 1_700_000_000_100));
+  rec.sink.captureCsrc?.(edge(101, false, 1_700_000_000_500));
+  rec.sink.captureFrame(frame(0));
+  // No sleep: close() drains the csrc chain, because the teardown upload reads this file the
+  // instant close() returns. A test that had to sleep here would be hiding that contract.
+  await rec.close();
+
+  const all = readFileSync(rec.csrcPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  check('the sidecar opens with its own mini-header naming part + build',
+    all[0].type === 'sidecar_header' && all[0].part === 'csrc' && typeof all[0].image_version === 'string',
+    JSON.stringify(all[0]));
+  const lines = all.slice(1);
+  check('transitions land in the sidecar, in arrival order',
+    lines.length === 3 && lines.map((l) => `${l.csrc}:${l.active}`).join(',') === '101:true,202:true,101:false',
+    JSON.stringify(lines.map((l) => `${l.csrc}:${l.active}`)));
+  check('the record is stored verbatim (epoch t, level and rtp timestamp carried)',
+    lines[0].type === 'csrc' && lines[0].t === 1_700_000_000_000 && lines[0].lane === 'mixed'
+    && lines[0].audioLevel === 0.5 && lines[0].rtpTimestamp === 1010, JSON.stringify(lines[0]));
+
+  // captured-signal.v1 is sealed at three records — a transition inside the tape would make every
+  // stored session fail its own schema.
+  const tape = readFileSync(rec.path, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  check('no transition ever enters the tape', tape.every((l) => l.type !== 'csrc'),
+    JSON.stringify(tape.map((l) => l.type)));
+  check('the sidecar sits beside the tape',
+    rec.csrcPath === rec.path.replace('.captured-signal.jsonl', '.csrc.jsonl'), rec.csrcPath);
+}
+{
+  // A 100ms sensor over a busy meeting can fill a disk exactly like a chatty caption stream, so it
+  // shares the ONE budget rather than getting its own.
+  const dir = tmp();
+  const written: string[] = [];
+  const rec = createCaptureSignalRecorder(inv(), {
+    dir, maxBytes: 400, csrcWriter: (l) => { written.push(l); },
+  });
+  for (let i = 0; i < 200; i++) {
+    rec.sink.captureCsrc?.({ type: 'csrc', t: 1, csrc: i, active: i % 2 === 0, lane: 'mixed' });
+  }
+  check('the cap covers transitions too', rec.isCapped(), 'csrc wrote past the cap');
+  check('transitions stop being written once capped', written.length < 200, String(written.length));
+  check('csrc bytes count toward the cap', rec.bytesWritten() <= 400, String(rec.bytesWritten()));
+  let threw = false;
+  try { rec.sink.captureCsrc?.({ type: 'csrc', t: 1, csrc: 9, active: true, lane: 'mixed' }); }
+  catch { threw = true; }
+  check('a capped csrc sink never throws into capture', !threw);
+  await rec.close();
+}
+{
+  // A meeting that observed no transport sources (the gmeet lane, or a client that never mixes
+  // server-side) must leave no sidecar at all — an empty file would upload as a fixture that lies.
+  const dir = tmp();
+  const rec = createCaptureSignalRecorder(inv(), { dir });
+  await rec.close();
+  check('no transitions → no sidecar file', !existsSync(rec.csrcPath));
+}
+
+// ── the observations sidecar ────────────────────────────────────────────────────────────────────
+console.log('\n── observations sidecar ──');
+{
+  const dir = tmp();
+  const rec = createCaptureSignalRecorder(inv(), { dir });
+  const obs = (source: string, o: Record<string, unknown>, t: number): ObservationRecord =>
+    ({ type: 'observation', t, source, lane: 'mixed', observation: o });
+  rec.sink.captureObservation?.(obs('teams-speakers', { type: 'signal-absent', tiles: 4 }, 1_700_000_000_000));
+  rec.sink.captureObservation?.(obs('mixed', { type: 'mix-topology', streams: 1 }, 1_700_000_000_050));
+  rec.sink.captureObservation?.(obs('csrc', { kind: 'csrc-poll-error', where: 'receivers' }, 1_700_000_000_100));
+  await rec.close();
+
+  const all = readFileSync(rec.observationsPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  check('the observations sidecar opens with its mini-header',
+    all[0].type === 'sidecar_header' && all[0].part === 'observations'
+    && all[0].platform === 'teams' && typeof all[0].image_version === 'string', JSON.stringify(all[0]));
+  const lines = all.slice(1);
+  check('observations land in arrival order, one per line',
+    lines.length === 3 && lines.map((l) => l.source).join(',') === 'teams-speakers,mixed,csrc',
+    JSON.stringify(lines.map((l) => l.source)));
+  // The producer's payload is the evidence; a bridge that normalized it would be deciding at
+  // capture time what a later analysis is allowed to see.
+  check('the producer payload is carried VERBATIM under `observation`',
+    lines[0].observation.type === 'signal-absent' && lines[0].observation.tiles === 4
+    && lines[1].observation.streams === 1 && lines[2].observation.where === 'receivers',
+    JSON.stringify(lines.map((l) => l.observation)));
+  check('each observation carries the epoch clock the audio shares',
+    lines[0].t === 1_700_000_000_000 && lines[2].t === 1_700_000_000_100, JSON.stringify(lines.map((l) => l.t)));
+
+  const tape = readFileSync(rec.path, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  check('no observation ever enters the tape', tape.every((l) => l.type !== 'observation'),
+    JSON.stringify(tape.map((l) => l.type)));
+}
+{
+  // Observations share the ONE budget like every other sidecar.
+  const dir = tmp();
+  const written: string[] = [];
+  const rec = createCaptureSignalRecorder(inv(), {
+    dir, maxBytes: 400, observationWriter: (l) => { written.push(l); },
+  });
+  for (let i = 0; i < 100; i++) {
+    rec.sink.captureObservation?.({ type: 'observation', t: 1, source: 'csrc', lane: 'mixed',
+                                    observation: { kind: 'csrc-poll-error', n: i, pad: 'x'.repeat(40) } });
+  }
+  check('the cap covers observations too', rec.isCapped(), 'observations wrote past the cap');
+  check('observation bytes count toward the cap', rec.bytesWritten() <= 400, String(rec.bytesWritten()));
+  let threw = false;
+  try { rec.sink.captureObservation?.({ type: 'observation', t: 1, source: 'x', lane: 'mixed', observation: {} }); }
+  catch { threw = true; }
+  check('a capped observation sink never throws into capture', !threw);
+  await rec.close();
+}
+{
+  const dir = tmp();
+  const rec = createCaptureSignalRecorder(inv(), { dir });
+  await rec.close();
+  check('no observations → no sidecar file (an empty file would claim a stream we never saw)',
+    !existsSync(rec.observationsPath));
+}
+
+// ── the build stamp ─────────────────────────────────────────────────────────────────────────────
+console.log('\n── image version ──');
+{
+  const saved = process.env.VEXA_IMAGE_VERSION;
+  process.env.VEXA_IMAGE_VERSION = 'a1b2c3d';
+  const dir = tmp();
+  const rec = createCaptureSignalRecorder(inv(), { dir });
+  rec.sink.captureCsrc?.({ type: 'csrc', t: 1, csrc: 1, active: true, lane: 'mixed' });
+  await rec.close();
+  const header = JSON.parse(readFileSync(rec.path, 'utf8').split('\n')[0]);
+  check('the tape header names the build that produced it', header.image_version === 'a1b2c3d',
+    JSON.stringify(header));
+  const side = JSON.parse(readFileSync(rec.csrcPath, 'utf8').split('\n')[0]);
+  check('each sidecar carries the same build stamp, so it is self-identifying when separated',
+    side.image_version === 'a1b2c3d', JSON.stringify(side));
+
+  // An unstamped image must say so rather than guess.
+  process.env.VEXA_IMAGE_VERSION = '';
+  const rec2 = createCaptureSignalRecorder(inv(), { dir: tmp() });
+  await rec2.close();
+  const header2 = JSON.parse(readFileSync(rec2.path, 'utf8').split('\n')[0]);
+  check("an unstamped build records 'unknown', never a guess", header2.image_version === 'unknown',
+    JSON.stringify(header2));
+  if (saved === undefined) delete process.env.VEXA_IMAGE_VERSION; else process.env.VEXA_IMAGE_VERSION = saved;
+}
+
 // ── teardown upload ─────────────────────────────────────────────────────────────────────────────
 console.log('\n── teardown upload ──');
 {
@@ -167,13 +325,16 @@ console.log('\n── teardown upload ──');
   for (let i = 0; i < 5; i++) rec.sink.captureFrame(frame(i));
   await rec.close();
   writeFileSync(sttTapePath(rec.path), '{"ok":true}\n');
+  writeFileSync(rec.csrcPath, '{"type":"csrc","t":1,"csrc":7,"active":true,"lane":"mixed"}\n');
+  writeFileSync(rec.observationsPath, '{"type":"observation","t":1,"source":"csrc","lane":"mixed","observation":{}}\n');
 
   const seen: Array<[TapePart, number]> = [];
   const out = await uploadSignalTapes(rec, {
     inv: inv({ recordingUploadUrl: 'http://127.0.0.1:1/x' }),
     upload: async (part, _p, size) => { seen.push([part, size]); },
   });
-  check('both tape parts upload', out.uploaded.join(',') === 'captured-signal,stt', out.uploaded.join(','));
+  check('every present tape part uploads, transport sidecar included',
+    out.uploaded.join(',') === 'captured-signal,stt,csrc,observations', out.uploaded.join(','));
   check('sizes are passed through', seen.every(([, s]) => s > 0), JSON.stringify(seen));
 }
 {
@@ -188,7 +349,7 @@ console.log('\n── teardown upload ──');
   });
   check('absent sidecars are skipped, not failed',
     out.uploaded.join(',') === 'captured-signal'
-      && out.skipped.join(',') === 'stt,captions' && out.failed.length === 0,
+      && out.skipped.join(',') === 'stt,captions,csrc,observations' && out.failed.length === 0,
     JSON.stringify(out));
 }
 {
