@@ -16,4 +16,6 @@ export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource } from '
 export { PyannoteSegmenter } from './pyannote-segmenter.js';
 export type { BoundaryEvent, PyannoteSegmenterConfig } from './pyannote-segmenter.js';
 export { ClusterNameBinder } from './cluster-name-binder.js';
+export { hallucinationRule } from './hallucination-gate.js';
+export type { HallucinationRule, SuppressedSegment } from './hallucination-gate.js';
 export type { HintKind, HintEvent } from './cluster-name-binder.js';
