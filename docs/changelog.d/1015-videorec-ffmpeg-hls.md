@@ -5,5 +5,7 @@
   smoothly on mobile and shows its full length on load. Codecs are configurable — `RECORD_VIDEO_CODEC`
   (h264/hevc/vp9/av1) and `RECORD_AUDIO_CODEC` (aac/opus) compose with `VIDEO_HWACCEL` into an encoder
   matrix (impossible combos fail the spawn with a named error); defaults are **h264 + aac** for universal
-  playback. An optional combined download (`ENABLE_COMBINED_RECORDING`) remuxes the HLS into one shareable
-  mp4, on demand or auto-built on completion (`AUTO_COMBINED_RECORDING`).
+  playback. The recording is **crash-resilient** — its HLS playlist is written incrementally as segments
+  land, so even a bot that is hard-killed mid-meeting still leaves a playable recording on the server. An
+  optional combined download (`ENABLE_COMBINED_RECORDING`) remuxes the HLS into one shareable mp4 with
+  **audio and video kept in sync**, on demand or auto-built on completion (`AUTO_COMBINED_RECORDING`).
