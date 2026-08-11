@@ -21,7 +21,6 @@ export {
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
   plausibleNameFromLeaves,
-  TEAMS_NAME_FORBIDDEN,
 } from './msteams-speakers.js';
 export type {
   TeamsSpeakers,
