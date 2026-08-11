@@ -64,7 +64,7 @@ export interface HintCounters {
  *  (name, KIND, tMs) without the pyannote model load. */
 export type MixedTranscriber =
   Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>
-  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName'>>;
+  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName' | 'recordRosterCoverage'>>;
 export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
@@ -90,6 +90,9 @@ export interface BotPipeline extends Pipeline {
    *  a roster name says nothing about when anyone spoke. It is the only way to name a participant
    *  whose tile never lights, which on the m30 fixture was one of the two people in the room. */
   recordRosterName?(name: string, tMs?: number): void;
+  /** How much of the roster the producer could read (seen vs named) — the completeness premise
+   *  the namer's elimination rule depends on. */
+  recordRosterCoverage?(named: number, participants: number, tMs?: number): void;
   /** Mixed lane only: the cumulative hint-hop counters (undefined on the gmeet lane). */
   readonly hintCounters?: HintCounters;
 }
@@ -204,6 +207,7 @@ function createMixedBotPipeline(
   onError?: (e: unknown) => void,
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
+  selfName?: string,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -261,6 +265,7 @@ function createMixedBotPipeline(
         // transport speaks, the transport takes over when it does, and it hands back — mid-meeting,
         // on the same ring — if it goes silent under continuing speech.
         turnSource: 'auto',
+        selfName,
         onObservation: (o: TurnSourceObservation) => {
           // A transcript cannot say which spine produced it, so the switch is DATA beside the
           // tape, not just a log line — otherwise a replay can never attribute what it measures.
@@ -287,6 +292,7 @@ function createMixedBotPipeline(
     recordTransportEvent: (ev) => { transcriber?.recordTransportEvent?.(ev); },
     recordCaptionName: (name, tMs) => { transcriber?.recordCaption?.(name, tMs); },
     recordRosterName: (name, tMs) => { transcriber?.recordRosterName?.(name, tMs); },
+    recordRosterCoverage: (named, participants, tMs) => { transcriber?.recordRosterCoverage?.(named, participants, tMs); },
     hintCounters,
   };
 }
@@ -331,6 +337,7 @@ export function createBotPipeline(
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
+      inv.botName,
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

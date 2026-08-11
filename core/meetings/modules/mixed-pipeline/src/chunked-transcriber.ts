@@ -206,6 +206,10 @@ export interface ChunkedTranscriberCallbacks {
   turnSource?: 'pyannote' | 'csrc' | 'auto';
   /** How long 'auto' waits for a first transport transition before disarming it. */
   turnSourceGraceMs?: number;
+  /** OUR OWN display name. The bot is a participant in every meeting it records, so without this
+   *  the namer cannot tell its own name in a roster from a person's — and on the m34 meeting that
+   *  is exactly how a bot's name ended up on a human's speech. */
+  selfName?: string;
   /** Typed lane observations — `turn-source-armed` / `turn-source-fallback`. The host stores them
    *  beside the tape, so a replay can answer WHICH SPINE produced a transcript, which is otherwise
    *  unrecoverable from the transcript itself. */
@@ -374,6 +378,7 @@ export class ChunkedTranscriber {
     this.mode = cb.turnSource ?? 'pyannote';
     this.graceMs = cb.turnSourceGraceMs ?? TURN_SOURCE_GRACE_MS;
     this.trackNamer = new TrackNamer({
+      selfName: cb.selfName,
       onNamed: (trackId, name) => this.onTrackNamed(trackId, name),
       log: (m) => this.log(`[track-namer] ${m}`),
     });
@@ -487,9 +492,14 @@ export class ChunkedTranscriber {
     if (this.disposed) return;
     this.trackNamer.setTrackActive(String(ev.csrc), ev.active, ev.tMs);
     if (!this.csrcSource) return;
-    const wasArmed = this.csrcSource.armed;
+    // PROMOTE FIRST, THEN DELIVER. The spine's callbacks check who is authoritative at the moment
+    // they fire, and reconcile() fires from inside onTransportEvent — so promoting afterwards
+    // DROPPED the very first turn the transport ever opened. On the adversarial m34 fixture that
+    // lost the meeting's opening turn to the pyannote spine, which then published it merged with
+    // the next speaker's, unattributed and unrepaintable (a turn with no track cannot be renamed
+    // when its track is later named). One statement's ordering, one whole speaker's first words.
+    if (!this.csrcSource.armed) this.promoteTransport(ev.tMs);
     this.csrcSource.onTransportEvent(ev);
-    if (!wasArmed && this.csrcSource.armed) this.promoteTransport(ev.tMs);
   }
 
   /** The platform's own captions — a SECOND naming source for transport tracks, independent of the
@@ -505,6 +515,13 @@ export class ChunkedTranscriber {
   recordRosterName(name: string, tMs?: number): void {
     if (this.disposed || !name) return;
     this.trackNamer.recordRosterName(name, tMs);
+  }
+
+  /** How much of the roster the producer could read: participants seen, and of those, named.
+   *  Elimination is an argument from a complete set and must know when the set is not. */
+  recordRosterCoverage(named: number, participants: number, tMs?: number): void {
+    if (this.disposed) return;
+    this.trackNamer.recordRosterCoverage(named, participants, tMs);
   }
 
   /** 'auto' only: the transport gets `graceMs` of audio to say something, then it is disarmed for

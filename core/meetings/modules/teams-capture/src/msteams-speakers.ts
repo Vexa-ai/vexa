@@ -92,15 +92,74 @@ const TEAMS_CLOCK_PREFIX = /^\d{1,2}:\d{2}/;
 const TEAMS_MACHINE_TOKEN =
   /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
 
+/**
+ * Teams' own PLACEHOLDERS for a participant it cannot identify. These are not names — they are the
+ * platform saying it does not know — and they arrive shaped exactly like names: capitalised, spaced,
+ * two words, through the same attributes a real name uses.
+ *
+ * On the m34 meeting Teams' captions attributed 50 entries to "Unknown user", and that string
+ * became a speaker label on the founder's transcript. A placeholder that becomes a name is worse
+ * than an unnamed row: the row LOOKS attributed, so nothing downstream ever asks again.
+ *
+ * Locale variants are listed because the bot joins meetings in the participant's language, not
+ * ours; a German tenant's "Unbekannter Benutzer" is the same failure wearing different letters.
+ */
+const TEAMS_PLACEHOLDER_NAMES = new Set([
+  'unknown user', 'unknown', 'unknown participant', 'guest', 'guest user',
+  'anonymous', 'anonymous user', 'participant', 'unidentified',
+  'unbekannter benutzer', 'unbekannter teilnehmer', 'gast',
+  'utilisateur inconnu', 'invite', 'invité',
+  'usuario desconocido', 'invitado',
+  'utente sconosciuto', 'ospite',
+  'onbekende gebruiker', 'gebruiker',
+  'okand anvandare', 'okänd användare',
+  'nieznany uzytkownik', 'nieznany użytkownik',
+  'неизвестный пользователь', 'гость', 'участник',
+  'usuario desconhecido', 'convidado',
+  'bilinmeyen kullanıcı', 'misafir',
+]);
+
+/**
+ * Strip the qualifiers Teams appends to a display name, for IDENTITY comparison only.
+ *
+ * Teams renders the same person as "Vexa", "Vexa (Unverified)", "Vexa (Guest)" or "Vexa 2"
+ * depending on how they joined and whether the name collides. Comparing raw strings therefore let
+ * our OWN bot's roster tile past the self-filter on the m34 meeting — and that bot's name was then
+ * handed to a HUMAN by the elimination rule, which is the worst outcome this whole lane has.
+ *
+ * Used ONLY to decide "is this the same identity", never to rewrite what is displayed: the suffix
+ * is Teams' statement about the participant and the transcript keeps it verbatim.
+ */
+export function normalizeDisplayNameForIdentity(value: string): string {
+  return (value || '')
+    .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|gość|гость|外部)\)\s*$/giu, '')
+    .replace(/\s+\(\d+\)\s*$/, '')
+    .replace(/\s+\d+$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/** Is `name` the local participant (our bot), whatever qualifier Teams hung off it? */
+export function isSelfDisplayName(name: string, selfName: string | undefined): boolean {
+  const self = normalizeDisplayNameForIdentity(selfName || '');
+  if (!self) return false;
+  return normalizeDisplayNameForIdentity(name) === self;
+}
+
 /** Is this string plausibly a HUMAN display name (as opposed to a Teams control
- * label, a timer, or a machine token)? Exported so every name path in this
- * package — tile resolution AND the caption reader — applies the SAME guard:
- * one place decides what may become a name, so a rejection here can never be
- * re-litigated by a second implementation next door. */
+ * label, a timer, a machine token, or Teams' own placeholder for someone it cannot
+ * identify)? Exported so every name path in this package — tile resolution, the
+ * roster walk AND the caption reader — applies the SAME guard: one place decides
+ * what may become a name, so a rejection here can never be re-litigated by a
+ * second implementation next door. */
 export function isTeamsDisplayNameCandidate(value: string): boolean {
   const candidate = value.trim();
   if (candidate.length <= 1 || candidate.length >= 50) return false;
   const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
+  // A placeholder is rejected with its qualifier stripped too, so "Unknown user (Guest)" cannot
+  // walk through the door its bare form is refused at.
+  if (TEAMS_PLACEHOLDER_NAMES.has(normalized)) return false;
+  if (TEAMS_PLACEHOLDER_NAMES.has(normalizeDisplayNameForIdentity(candidate))) return false;
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
     && !TEAMS_CLOCK_PREFIX.test(normalized)
@@ -301,12 +360,32 @@ export interface TeamsRosterNameObservation {
   tMs: number;
 }
 
+/**
+ * How much of the roster this scan could actually READ: participants seen, and of those, how many
+ * resolved a display name.
+ *
+ * A scan that sees four tiles and names two is not a roster of two people — it is a roster of four
+ * with two missing, and nothing in the names themselves says so. Any consumer reasoning from "these
+ * are the people in the meeting" needs this or its premise is silently false, which is precisely
+ * how the m34 meeting put a bot's name on a human.
+ */
+export interface TeamsRosterCoverageObservation {
+  type: 'roster-coverage';
+  platform: 'teams';
+  /** Participant-shaped tiles this scan matched, excluding our own. */
+  participants: number;
+  /** …of which a display name resolved. */
+  named: number;
+  tMs: number;
+}
+
 export type TeamsProducerObservation =
   | TeamsNameUnresolvedObservation
   | TeamsSignalAbsentObservation
   | TeamsIndicatorFiredObservation
   | TeamsIndicatorSilentObservation
-  | TeamsRosterNameObservation;
+  | TeamsRosterNameObservation
+  | TeamsRosterCoverageObservation;
 
 /** Coverage + liveness of the WHO signal, for a caller that wants to surface it. */
 export interface TeamsSpeakerHealth {
@@ -371,6 +450,8 @@ type SpeakingState = 'speaking' | 'silent' | 'unknown';
 
 export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
+  // Kept for the substring test below (a tile whose label EMBEDS the bot name); identity
+  // comparisons go through isSelfDisplayName, which strips Teams' qualifiers first.
   const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
   const heartbeatMs = opts.heartbeatMs ?? 2000;
@@ -780,7 +861,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       return;   // unresolved name stays unknown; never emit a nameless/GUID hint
     }
     unresolvedEpisodes.delete(identity.id);
-    if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;
+    if (isSelfDisplayName(identity.name, opts.selfName)) return;                 // our bot, any qualifier
+    if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;   // …or embedding our name
     if (edge === 'end' && !namedEpisodes.delete(identity.id)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     if (edge === 'start') emitNamedStart(identity);
@@ -864,11 +946,12 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   // matched tile rather than only the observable ones.
   const rosterSeen = new Map<string, number>();
   let scanCounter = 0;
+  let lastCoverageKey = '';
   function emitRosterName(name: string): void {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
     if (!isTeamsDisplayNameCandidate(trimmed)) return;          // the one guard every name path uses
-    if (selfLower && trimmed.toLowerCase() === selfLower) return;   // never report ourselves
+    if (isSelfDisplayName(trimmed, opts.selfName)) return;   // never report ourselves, suffix or not
     const seenCount = (rosterSeen.get(trimmed) ?? 0) + 1;
     rosterSeen.set(trimmed, seenCount);
     if (seenCount > rosterEmitScans) return;                    // corroborated enough; stop repeating
@@ -882,6 +965,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     let found = 0; let observable = 0;
     scanCounter++;
     const namesThisScan = new Set<string>();
+    let selfTilesThisScan = 0;
     for (const selector of allSelectors) {
       document.querySelectorAll(selector).forEach(el => {
         if (el instanceof HTMLElement && !seen.has(el)) {
@@ -891,7 +975,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
           // voice outline is invisible to every other path in this file, and they are exactly the
           // person an elimination argument is for.
           const rosterName = extractTeamsSpeakerName(el);
-          if (rosterName) namesThisScan.add(rosterName);
+          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) selfTilesThisScan++;
+          else if (rosterName) namesThisScan.add(rosterName);
           if (hasRequiredSignal(el)) { observable++; observeParticipant(el); }
           else emitSignalAbsent(el);   // counted and reported, never hinted
         }
@@ -899,6 +984,17 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     }
     // Emit once per name per scan (a name matched by two selectors is one participant).
     for (const n of namesThisScan) emitRosterName(n);
+    // …and say how much of the roster this scan could read. Reported on CHANGE rather than every
+    // heartbeat: it is a state, and an unchanged state repeated 1800 times is not information.
+    const usableNames = new Set([...namesThisScan].filter(
+      (n) => isTeamsDisplayNameCandidate(n) && !isSelfDisplayName(n, opts.selfName)));
+    const participants = Math.max(usableNames.size, found - selfTilesThisScan);
+    const coverageKey = `${usableNames.size}/${participants}`;
+    if (coverageKey !== lastCoverageKey) {
+      lastCoverageKey = coverageKey;
+      deliver({ type: 'roster-coverage', platform: 'teams', participants, named: usableNames.size, tMs: now() });
+      log(`[TeamsSpeakers] roster-coverage named=${usableNames.size} participants=${participants}`);
+    }
     coverage.found = found;
     coverage.observable = observable;
     coverage.roster = rosterSeen.size;

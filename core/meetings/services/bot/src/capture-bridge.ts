@@ -197,6 +197,8 @@ export function makeObservationSink(
    *  the same reason the transport edges are — a fixture that lacks what the run acted on cannot
    *  reproduce the run. */
   consumeRosterName?: (name: string, tMs: number) => void,
+  /** …and the producer's account of how much of the roster it could read. */
+  consumeRosterCoverage?: (named: number, participants: number, tMs: number) => void,
 ): { sink: (source: string, obs: unknown, tMs?: number) => void; crossed: () => number; stored: () => number } {
   let crossed = 0;
   let stored = 0;
@@ -223,6 +225,10 @@ export function makeObservationSink(
       // namer conclude, when one track and one name are all that remain, that they are each other.
       if (payload.type === 'roster-name' && typeof payload.name === 'string' && payload.name) {
         try { consumeRosterName?.(payload.name, t); } catch { /* never breaks capture */ }
+      }
+      if (payload.type === 'roster-coverage'
+        && typeof payload.named === 'number' && typeof payload.participants === 'number') {
+        try { consumeRosterCoverage?.(payload.named, payload.participants, t); } catch { /* never breaks capture */ }
       }
     },
   };
@@ -733,6 +739,7 @@ export async function startCaptureBridge(
   const { sink: onObservation, crossed: obsBridgeCrossed } = makeObservationSink(
     lane, telemetry, undefined,
     mixed ? (name, tMs) => pipeline.recordRosterName?.(name, tMs) : undefined,
+    mixed ? (named, participants, tMs) => pipeline.recordRosterCoverage?.(named, participants, tMs) : undefined,
   );
   // C1: the four hint hops on one periodic, cumulative counter line —
   // page-emitted lives in the page console ([TeamsSpeakers]/[JitsiSpeakers] logs);

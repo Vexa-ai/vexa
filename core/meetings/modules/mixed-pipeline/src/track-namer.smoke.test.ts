@@ -220,7 +220,82 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
   check('with no roster sighting, no capitalisation is invented', m.nameFor('9') === 'bob smith', String(m.nameFor('9')));
 }
 
-// ── 6) Captions are a second, independent naming source ─────────────────────────────────────────
+// ── 6) A POLLUTED OR PARTIAL ROSTER DISABLES ELIMINATION (the m34 failure) ──────────────────────
+{
+  // What the live m34 meeting actually contained: two humans, an outline that named one of them,
+  // and a roster holding OUR OWN BOT. Elimination had exactly one track and one name left, and put
+  // the bot's name on the other human's speech. One unusable entry now disables the rule outright —
+  // "the only name left" is an argument about people, and this set is not one.
+  const n = namer({ rosterSightings: 2, selfName: 'Vexa' });
+  n.noteHeard('414'); n.noteHeard('201');
+  for (const nm of ['leo (Unverified)', 'Vexa (Unverified)']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 10); }
+  for (const t0 of [10_000, 30_000]) {
+    n.setTrackActive('414', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('leo (Unverified)', t + 1000);
+    n.setTrackActive('414', false, t0 + 4000);
+  }
+  n.tick(60_000);
+  check('the bot is refused entry to the roster at all',
+    !Object.keys(n.stats().roster).some((x) => /vexa/i.test(x)), JSON.stringify(n.stats().roster));
+  check('and its presence is RECORDED, not silently dropped',
+    n.stats().rosterPolluted.length === 1, JSON.stringify(n.stats().rosterPolluted));
+  check('leo is still named from real evidence', n.naming('414')?.source === 'evidence', JSON.stringify(n.stats().how));
+  check('THE m34 FAILURE: the other human is NOT given the bot\'s name',
+    n.nameFor('201') === null && /^Speaker [A-Z]+$/.test(n.labelFor('201')), String(n.nameFor('201')));
+}
+{
+  // The completeness premise, on its own — a CLEAN roster, one unnamed track, one unclaimed name,
+  // and the producer reporting that it could not name everyone it could see. m34's scans saw four
+  // tiles and resolved two, and the people it could not name included the human the rule then
+  // mislabelled. A roster that is missing people cannot support "the only one left".
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('a'); n.noteHeard('b');
+  for (const nm of ['Ana', 'Bo']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 10); }
+  for (const t0 of [10_000, 30_000]) {
+    n.setTrackActive('a', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('a', false, t0 + 4000);
+  }
+  n.recordRosterCoverage(2, 4, 40_000);   // saw four participants, could name two
+  n.tick(60_000);
+  check('a PARTIAL roster refuses elimination even when it looks decidable',
+    n.naming('a')?.source === 'evidence' && n.nameFor('b') === null, JSON.stringify(n.stats().how));
+  // …and the same set, once the producer says it read everyone, does decide.
+  const m = namer({ rosterSightings: 2 });
+  m.noteHeard('a'); m.noteHeard('b');
+  for (const nm of ['Ana', 'Bo']) { m.recordRosterName(nm, 0); m.recordRosterName(nm, 10); }
+  for (const t0 of [10_000, 30_000]) {
+    m.setTrackActive('a', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) m.recordHint('Ana', t + 1000);
+    m.setTrackActive('a', false, t0 + 4000);
+  }
+  m.recordRosterCoverage(2, 2, 40_000);
+  m.tick(60_000);
+  check('a COMPLETE roster still decides — the gate is completeness, not timidity',
+    m.nameFor('b') === 'Bo' && m.naming('b')?.source === 'elimination', JSON.stringify(m.stats().how));
+}
+{
+  // The placeholder never becomes a name on ANY path — it arrives shaped exactly like one.
+  const n = namer({ rosterSightings: 2, selfName: 'Vexa' });
+  n.setTrackActive('1', true, 0);
+  for (let t = 0; t < 4000; t += 1000) { n.recordHint('Unknown user', t + 1000); n.recordCaption('Unknown user', t + 1000); }
+  n.setTrackActive('1', false, 4000);
+  n.setTrackActive('1', true, 10_000);
+  for (let t = 10_000; t < 14_000; t += 1000) n.recordCaption('Unknown user', t + 1000);
+  n.setTrackActive('1', false, 14_000);
+  n.tick(30_000);
+  check('"Unknown user" contributes no evidence and can never be a speaker',
+    n.nameFor('1') === null && Object.keys(n.stats().evidence).length === 0, JSON.stringify(n.stats().evidence));
+  const b = namer({ rosterSightings: 2, selfName: 'Vexa' });
+  b.setTrackActive('1', true, 0);
+  for (let t = 0; t < 4000; t += 1000) b.recordHint('Vexa (Unverified)', t + 1000);
+  b.setTrackActive('1', false, 4000);
+  b.tick(30_000);
+  check('our own bot, however Teams qualifies its name, is never a speaker either',
+    b.nameFor('1') === null, String(b.nameFor('1')));
+}
+
+// ── 7) Captions are a second, independent naming source ─────────────────────────────────────────
 {
   const n = namer();
   n.setTrackActive('4', true, 0);
