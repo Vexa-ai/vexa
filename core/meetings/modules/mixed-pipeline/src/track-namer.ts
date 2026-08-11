@@ -342,6 +342,24 @@ export class TrackNamer {
   /** The name this track earned, or null. NEVER a guess. */
   nameFor(trackId: string): string | null { return this.named.get(trackId)?.name ?? null; }
 
+  /** The ONE name the UI showed lit at this instant, or null when none or several were. Used only
+   *  to break a tie the transport itself cannot: when two sources are audible, the tiles are the
+   *  second, independent opinion about which of THOSE TWO was speaking. Constrained to names the
+   *  caller already trusts, so this can never introduce a name of its own. */
+  litNameAt(tMs: number): string | null {
+    let found: string | null = null;
+    for (const [name, list] of this.nameSpans) {
+      for (const iv of list) {
+        if (iv.start <= tMs && tMs < iv.end) {
+          if (found && found !== name) return null;    // two tiles lit — the UI cannot decide either
+          found = name;
+          break;
+        }
+      }
+    }
+    return found;
+  }
+
   /** The roster as this namer knows it: name → sightings. */
   rosterNames(): Record<string, number> { return Object.fromEntries(this.roster); }
 

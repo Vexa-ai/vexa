@@ -143,6 +143,9 @@ const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.e
  *  only when EXACTLY ONE track is a candidate: audible somewhere in the span, or the immediately
  *  preceding turn if the orphan begins within this window of it. Two candidates and it stays
  *  honest. Tunable via VEXA_ORPHAN_ADJACENT_MS. */
+/** What an unattributable piece is published as. The host renders a provisional segmentation id the
+ *  same way; naming it here keeps the two spellings of "we do not know" in one place. */
+const PROVISIONAL_SPEAKER = 'Speaker';
 const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
 
 export interface ChunkSegment {
@@ -1017,6 +1020,10 @@ export class ChunkedTranscriber {
         endMs,
         language: lang,
         relEnd: Math.max(0, (endMs - spanStart) / 1000),
+        // Whisper's own word timestamps, already requested by the client. They are what lets a
+        // sentence be attributed at the granularity the TRANSPORT changes at, instead of at the
+        // granularity the decoder happened to choose.
+        words: (ws as any).words as Array<{ word: string; start: number; end: number }> | undefined,
       };
     }).filter(s => {
       if (!s.text) return false;
@@ -1060,19 +1067,43 @@ export class ChunkedTranscriber {
     }));
 
     if (confirmCount > 0) {
-      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
-        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
-      }));
-      // ONE bundle: confirmed + surviving tail. Splitting them deletes the
-      // client's pending block for seconds (the "vanishing transcript" bug).
-      this.cb.publish(name, confirmed, closing ? [] : tail);
-      this.rememberPublishedSpeaker(name, confirmed[confirmed.length - 1]?.endMs);
+      // ATTRIBUTE BELOW THE TURN. Each confirmed segment is split along the transport's timeline at
+      // its own word boundaries, so one turn may publish under more than one name — which is the
+      // honest shape when the transport changed hands inside a sentence.
+      const pieces: Array<{ name: string; seg: ChunkSegment }> = [];
+      for (const s of mapped.slice(0, confirmCount)) {
+        for (const part of this.splitByOwner(s, spanStart, name)) {
+          pieces.push({
+            name: part.name,
+            seg: { text: part.text, startMs: part.startMs, endMs: part.endMs, language: part.language,
+                   segmentId: `turn:${turn.turnId}:${turn.seq++}` },
+          });
+        }
+      }
+      const confirmed = pieces.map((p) => p.seg);
+      // Group consecutive pieces by name so each speaker's run publishes as one bundle. The tail
+      // rides with the LAST bundle: pending is a full-replace block per pass, so attaching it to an
+      // earlier bundle would have the next one retract it.
+      const groups: Array<{ name: string; segs: ChunkSegment[] }> = [];
+      for (const p of pieces) {
+        const g = groups[groups.length - 1];
+        if (g && g.name === p.name) g.segs.push(p.seg);
+        else groups.push({ name: p.name, segs: [p.seg] });
+      }
+      groups.forEach((g, i) => {
+        const isLast = i === groups.length - 1;
+        // ONE bundle: confirmed + surviving tail. Splitting them deletes the
+        // client's pending block for seconds (the "vanishing transcript" bug).
+        this.cb.publish(g.name, g.segs, isLast && !closing ? tail : []);
+      });
+      this.rememberPublishedSpeaker(groups[groups.length - 1]?.name ?? name, confirmed[confirmed.length - 1]?.endMs);
       turn.allConfirmed.push(...confirmed);
-      // Track per-key so a later name change repaints these in place.
+      // Track per-key so a later name change repaints these in place. Only the pieces published
+      // under the TURN's own name may be repainted by a later rename — a piece the transport
+      // assigned to the other speaker is not this turn's to rename.
       let cs = this.clusterSegments.get(turn.clusterId);
       if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
-      cs.push(...confirmed);
+      cs.push(...pieces.filter((p) => p.name === name).map((p) => p.seg));
       this.clusterName.set(turn.clusterId, name);
       turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
@@ -1164,6 +1195,67 @@ export class ChunkedTranscriber {
    *  which reads as two people. Never invents a capitalisation nobody rendered. */
   private render(name: string): string {
     return this.trackNamer.canonicalCase(name);
+  }
+
+  /**
+   * Split ONE transcribed segment into per-speaker pieces along the transport's timeline.
+   *
+   * Attribution used to stop at the turn: a turn got one owner and every word in it inherited that
+   * owner, so a span the transport could not assign published an ENTIRE SENTENCE as "Speaker". On
+   * the m34 tape that was 12 rows — and 11 of them were rows where the tiles knew perfectly well
+   * who was speaking, because the transport's "both audible" is a much blunter statement than the
+   * meeting actually made. Measured on that tape, two sources are genuinely audible together for
+   * 5.0% of the meeting, in stretches whose median length is one second; a whole sentence is never
+   * that.
+   *
+   * So each WORD is asked the question separately, and consecutive words with the same answer stay
+   * together. A word inside one source's run takes that source. A word in a contested stretch is
+   * offered to the tiles — the second, independent signal — and only when they name exactly one
+   * person, and that person already owns one of the two contesting tracks, does it take a name;
+   * that constraint is what stops this from being the flickery per-turn DOM race all over again.
+   * Anything still undecided stays "Speaker", which is now a sliver rather than a sentence.
+   */
+  private splitByOwner(seg: { text: string; startMs: number; endMs: number; language: string; words?: Array<{ word: string; start: number; end: number }> },
+                       spanStart: number, fallbackName: string): Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> {
+    const src = this.csrcSource;
+    if (!src || this.authoritative !== 'csrc') return [{ name: fallbackName, ...seg }];
+    const words = seg.words?.filter((w) => typeof w.start === 'number' && (w.word ?? '').trim());
+    if (!words || words.length === 0) return [{ name: fallbackName, ...seg }];
+
+    const nameAt = (tMs: number): string => {
+      const o = src.ownerAt(tMs);
+      if (o.trackId) return this.trackNamer.labelFor(o.trackId);
+      if (o.contested) {
+        // The transport says two people are audible. The tiles get the casting vote — but only if
+        // they name exactly one person AND that person owns one of the tracks in the mix.
+        const lit = this.trackNamer.litNameAt(tMs);
+        if (lit) {
+          for (const t of src.tracksAudibleAt(tMs)) {
+            if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+          }
+        }
+      }
+      return PROVISIONAL_SPEAKER;
+    };
+
+    const out: Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> = [];
+    for (const w of words) {
+      const t0 = spanStart + w.start * 1000;
+      const t1 = spanStart + (w.end ?? w.start) * 1000;
+      const name = nameAt((t0 + t1) / 2);
+      const last = out[out.length - 1];
+      if (last && last.name === name) {
+        last.text += (last.text.endsWith(' ') ? '' : ' ') + w.word.trim();
+        last.endMs = Math.max(last.endMs, t1);
+      } else {
+        out.push({ name, text: w.word.trim(), startMs: t0, endMs: Math.max(t1, t0 + 1), language: seg.language });
+      }
+    }
+    if (out.length === 0) return [{ name: fallbackName, ...seg }];
+    // Clip to the segment's own bounds so nothing published moves outside the audio it came from.
+    out[0].startMs = Math.min(out[0].startMs, seg.startMs);
+    out[out.length - 1].endMs = Math.max(out[out.length - 1].endMs, seg.endMs);
+    return out;
   }
 
   private resolveName(turn: Turn): string {

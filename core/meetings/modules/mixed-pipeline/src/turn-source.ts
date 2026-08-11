@@ -265,6 +265,9 @@ export class CsrcTurnSource implements TurnSource {
   private quietEnergyMs = 0;
   private deadFired = false;
 
+  /** Closed runs, bounded — the timeline `ownerAt` reads. Trimmed to the recent past because the
+   *  ring the lane can still cut from is bounded too. */
+  private history: Array<{ track: string; t0: number; t1: number }> = [];
   private edges = 0;
   private transitions = 0;
   private contestedTurns = 0;
@@ -337,6 +340,26 @@ export class CsrcTurnSource implements TurnSource {
     if (limit > this.open.t0) this.cb.turnGrown?.({ tMs: limit, trackId: this.open.trackId });
   }
 
+  /** Who the transport says was audible at one instant. The turn is the unit the lane CUTS on, but
+   *  it is not the unit attribution has to stop at: a turn carries Whisper's own word timestamps,
+   *  and each of those can be asked this question independently. That is the difference between a
+   *  whole sentence going out as "Speaker" and only the contested syllables doing so. */
+  ownerAt(tMs: number): { trackId?: string; contested: boolean } {
+    const on: string[] = [];
+    for (const h of this.history) if (h.t0 <= tMs && tMs < h.t1) on.push(h.track);
+    if (this.open && this.open.t0 <= tMs) for (const c of this.active) { const id = String(c); if (!on.includes(id)) on.push(id); }
+    if (on.length === 1) return { trackId: on[0], contested: false };
+    return { contested: on.length > 1 };
+  }
+
+  /** Every track audible at one instant — the candidate set a tie-break may choose from. */
+  tracksAudibleAt(tMs: number): string[] {
+    const on: string[] = [];
+    for (const h of this.history) if (h.t0 <= tMs && tMs < h.t1 && !on.includes(h.track)) on.push(h.track);
+    if (this.open && this.open.t0 <= tMs) for (const c of this.active) { const id = String(c); if (!on.includes(id)) on.push(id); }
+    return on;
+  }
+
   /** Retire deactivations whose hysteresis has elapsed, each at the instant the source actually
    *  stopped — not at the moment we noticed, or a turn's end would drift by the grace. */
   private settle(tNow: number): void {
@@ -377,6 +400,8 @@ export class CsrcTurnSource implements TurnSource {
   private closeOpen(t1: number, reason: TurnCloseReason): void {
     const o = this.open;
     if (!o) return;
+    for (const t of o.tracks) this.history.push({ track: t, t0: o.t0, t1: Math.max(t1, o.t0) });
+    if (this.history.length > 4000) this.history.splice(0, this.history.length - 4000);
     this.open = null;
     this.edges++;
     this.cb.turnClosed({
