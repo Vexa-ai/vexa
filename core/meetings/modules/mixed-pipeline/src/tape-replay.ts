@@ -10,17 +10,30 @@
  *   ATTRIBUTION  — which name each turn ends up under, scored against ground-truth windows
  *                  the humans in the meeting attested to.
  *
- * Segmentation is NOT re-derived here. The turn windows come from the live run itself
- * (--turns, `turn:{N}:{i}` segment ids grouped from the transcriptions table), so the
- * segmenter is replayed exactly as it actually cut, and the only thing under test is the
- * naming/publish path. That is deliberate: it isolates the defect from pyannote's variance.
+ * WHERE THE TURNS COME FROM is now the thing under test, so it is a flag:
+ *
+ *   --turns <psv>            replay the LIVE run's own windows (the original mode). Segmentation
+ *                            is not re-derived, so the only variable is the naming/publish path —
+ *                            which is what makes it the stable regression baseline.
+ *   --turn-source pyannote   run the REAL streaming segmenter over the tape's audio. Slower, and
+ *                            it re-introduces pyannote's variance, but it is the only honest way
+ *                            to score the FALLBACK lane on a tape that has no recorded windows.
+ *   --turn-source csrc       the transport spine, driven from the tape's csrc sidecar.
+ *   --turn-source auto       what production runs: pyannote until the transport speaks.
+ *
+ * The csrc sidecar is found beside the tape by convention (`<tape>.csrc.jsonl`, or the sibling of
+ * a `*.captured-signal.jsonl`) unless --csrc names it. Captions (`--captions`) feed the track
+ * namer as a second naming source AND, with --cc-oracle, score the run against the platform's own
+ * attribution.
  *
  *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turns <turns.psv> [--gt <gt.json>]
+ *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turn-source csrc --stt-url …
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { ChunkedTranscriber, type BoundarySource } from './index.js';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import type { BoundaryEvent } from './pyannote-segmenter.js';
+import type { TransportEvent } from './turn-source.js';
 
 const arg = (name: string): string | undefined => {
   const i = process.argv.indexOf(`--${name}`);
@@ -28,7 +41,25 @@ const arg = (name: string): string | undefined => {
 };
 const TAPE = arg('tape');
 const TURNS = arg('turns');
-if (!TAPE || !TURNS) { console.error('usage: tsx src/tape-replay.ts --tape <jsonl> --turns <psv> [--gt <json>]'); process.exit(2); }
+const TURN_SOURCE = (arg('turn-source') ?? (TURNS ? 'recorded' : 'pyannote')) as 'recorded' | 'pyannote' | 'csrc' | 'auto';
+if (!TAPE || (TURN_SOURCE === 'recorded' && !TURNS)) {
+  console.error('usage: tsx src/tape-replay.ts --tape <jsonl> [--turns <psv> | --turn-source pyannote|csrc|auto] [--csrc <jsonl>] [--captions <jsonl>] [--gt <json>] [--cc-oracle]');
+  process.exit(2);
+}
+
+/** The csrc sidecar lives beside the tape by convention. Naming it explicitly is for the case where
+ *  a fixture was assembled by hand; guessing a path that does not exist is reported, never silent —
+ *  a csrc run against an absent sidecar would otherwise produce an empty transcript and look like a
+ *  pipeline defect. */
+function siblingSidecar(tape: string, part: string): string | null {
+  const candidates = [
+    tape.replace(/\.captured-signal\.jsonl$/, `.${part}.jsonl`),
+    tape.replace(/\.jsonl$/, `.${part}.jsonl`),
+    tape.replace(/[^/]+$/, `${part}.jsonl`),
+  ];
+  for (const c of candidates) if (c !== tape && existsSync(c)) return c;
+  return null;
+}
 
 interface Frame { ts: number; pcm: string }
 interface Hint { t: number; name: string; isEnd: boolean }
@@ -49,12 +80,47 @@ function loadTape(path: string): { frames: Frame[]; hints: Hint[] } {
   return { frames, hints };
 }
 
+/** The transport sidecar: one transition per line, plus its own mini-header (skipped). */
+function loadCsrc(path: string): TransportEvent[] {
+  const out: TransportEvent[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line) continue;
+    let r: any;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (r.type !== 'csrc') continue;
+    if (typeof r.csrc !== 'number' || typeof r.t !== 'number') continue;
+    out.push({ csrc: r.csrc, active: !!r.active, tMs: r.t, ...(typeof r.audioLevel === 'number' ? { audioLevel: r.audioLevel } : {}) });
+  }
+  return out;
+}
+
+/** The caption sidecar: the platform's own ASR, with its own attribution. Used as name evidence,
+ *  and (with --cc-oracle) as the thing we are scored against. */
+function loadCaptions(path: string): { t: number; name: string; text: string; stable: boolean }[] {
+  const out: { t: number; name: string; text: string; stable: boolean }[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line) continue;
+    let r: any;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (r.type !== 'caption' || !r.name || typeof r.t !== 'number') continue;
+    out.push({ t: r.t, name: r.name, text: String(r.text ?? ''), stable: r.stable !== false });
+  }
+  return out;
+}
+
 function loadTurns(path: string): { turn: number; t0: number; t1: number }[] {
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map((l) => {
     const [turn, t0, t1] = l.split('|');
     return { turn: Number(turn), t0: Number(t0), t1: Number(t1) };
   }).filter((t) => Number.isFinite(t.t0) && Number.isFinite(t.t1)).sort((a, b) => a.t0 - b.t0);
 }
+
+/** A label that names NOBODY. Three shapes mean the same thing and all three must score as
+ *  unattributed rather than as a wrong name: the provisional segmentation id, the display label the
+ *  pyannote lane publishes it as, and the transport spine's honest "a distinct person we could not
+ *  name". Counting "Speaker A" as a name would flatter every score in this file. */
+const isUnattributed = (s: string): boolean =>
+  s === 'Speaker' || /^seg_\d+$/.test(s) || /^Speaker [A-Z]+$/.test(s);
 
 const pcmOf = (f: Frame): Float32Array => {
   const b = Buffer.from(f.pcm, 'base64');
@@ -63,8 +129,22 @@ const pcmOf = (f: Frame): Float32Array => {
 
 async function main(): Promise<void> {
   const { frames, hints } = loadTape(TAPE!);
-  const turns = loadTurns(TURNS!);
-  console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s); replaying ${turns.length} live turn window(s)`);
+  const turns = TURNS ? loadTurns(TURNS) : [];
+  const csrcPath = TURN_SOURCE === 'csrc' || TURN_SOURCE === 'auto'
+    ? (arg('csrc') ?? siblingSidecar(TAPE!, 'csrc'))
+    : arg('csrc') ?? null;
+  const transport = csrcPath ? loadCsrc(csrcPath) : [];
+  if ((TURN_SOURCE === 'csrc' || TURN_SOURCE === 'auto') && transport.length === 0) {
+    // Loud, not silent: a csrc run with no sidecar produces an empty transcript, which reads
+    // exactly like a broken pipeline.
+    console.error(`WARNING: --turn-source ${TURN_SOURCE} but no transport transitions were found`
+      + `${csrcPath ? ` in ${csrcPath}` : ' (no csrc sidecar beside the tape)'}`
+      + (TURN_SOURCE === 'csrc' ? ' — this run will produce nothing.' : ' — this run will stay on pyannote.'));
+  }
+  const captionsPath = arg('captions') ?? siblingSidecar(TAPE!, 'captions');
+  const captions = captionsPath ? loadCaptions(captionsPath) : [];
+  console.log(`tape: ${frames.length} audio frame(s), ${hints.length} hint(s), ${transport.length} transport transition(s), ${captions.length} caption(s)`);
+  console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
 
   let emit!: (ev: BoundaryEvent) => void;
   /** Every publish call, in order — the naive "one row per publish" view. */
@@ -73,6 +153,7 @@ async function main(): Promise<void> {
    *  DELETE on a retract. */
   const durable = new Map<string, { speaker: string; text: string; startMs: number; endMs: number }>();
   const renames: { from: string; to: string; n: number }[] = [];
+  const spineEvents: { from: string; to: string; reason: string; tMs: number }[] = [];
   let retracted = 0;
 
   // The bot's pending reconciliation, mirrored from services/bot/src/pipeline.ts. The mixed lane
@@ -133,11 +214,24 @@ async function main(): Promise<void> {
       renames.push({ from: oldS, to: newS, n: segs.length });
       for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs }); }
     },
-    makeSegmenter: async (onBoundary): Promise<BoundarySource> => {
-      emit = onBoundary;
-      return { appendFrame: async () => {}, reset: () => {} };
-    },
-    log: () => {},
+    // The turn spine under test. 'recorded' injects the live run's own boundaries (the stable
+    // baseline); every other mode runs the REAL streaming segmenter over the tape's audio, because
+    // a fallback scored against pre-recorded windows is not the fallback being scored.
+    ...(TURN_SOURCE === 'recorded'
+      ? {
+        makeSegmenter: async (onBoundary: (ev: BoundaryEvent) => void): Promise<BoundarySource> => {
+          emit = onBoundary;
+          return { appendFrame: async () => { /* boundaries are injected from --turns */ }, reset: () => { /* nothing */ } };
+        },
+      }
+      : {}),
+    ...(TURN_SOURCE === 'csrc' || TURN_SOURCE === 'auto' ? { turnSource: TURN_SOURCE as 'csrc' | 'auto' } : {}),
+    // The grace is wall-time in production but AUDIO time here, and a tape's PCM is VAD-gated
+    // (m29 carries 201.6s of audio across a 913s meeting) — so a default 20s of audio can be
+    // minutes of meeting. Overridable for that reason.
+    ...(arg('grace-ms') ? { turnSourceGraceMs: Number(arg('grace-ms')) } : {}),
+    onObservation: (o) => { spineEvents.push(o); console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`); },
+    log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
   });
 
   // ── Drive the tape in TIMESTAMP order across all three streams: audio, hints, and the
@@ -147,10 +241,18 @@ async function main(): Promise<void> {
   const evs: Ev[] = [];
   for (const f of frames) evs.push({ t: f.ts, run: () => tc.feedAudio(pcmOf(f), f.ts) });
   for (const h of hints) evs.push({ t: h.t, run: () => tc.recordHint(h.name, 'dom-outline', h.t, h.isEnd) });
-  for (const tn of turns) {
-    evs.push({ t: tn.t0, run: () => emit({ tMs: tn.t0, kind: 'silence→speaker', confidence: 0.9 }) });
-    evs.push({ t: tn.t1, run: () => emit({ tMs: tn.t1, kind: 'speaker→silence', confidence: 0.9 }) });
+  if (TURN_SOURCE === 'recorded') {
+    for (const tn of turns) {
+      evs.push({ t: tn.t0, run: () => emit({ tMs: tn.t0, kind: 'silence→speaker', confidence: 0.9 }) });
+      evs.push({ t: tn.t1, run: () => emit({ tMs: tn.t1, kind: 'speaker→silence', confidence: 0.9 }) });
+    }
   }
+  // The transport's edges ride the SAME ordered timeline as the audio and the hints — that shared
+  // epoch clock is the only reason a stored transition can be lined up against a stored frame.
+  for (const ev of transport) evs.push({ t: ev.tMs, run: () => tc.recordTransportEvent(ev) });
+  // Captions are name evidence for a track. Only settled entries: an entry still being refined can
+  // still change its author, and evidence that can change is not evidence.
+  for (const c of captions) if (c.stable) evs.push({ t: c.t, run: () => tc.recordCaption(c.name, c.t) });
   evs.sort((a, b) => a.t - b.t);
   // PACING MATTERS. The transcriber's submit pump is driven by a WALL-CLOCK 1s tick, so a turn
   // is transcribed in several growing passes live but in ONE pass if the tape is fired instantly.
@@ -201,6 +303,13 @@ async function main(): Promise<void> {
   console.log(`  label distribution: ${JSON.stringify(Object.fromEntries(tally))}`);
   console.log(`  renames issued: ${renames.length}`);
   if (client) console.log(`  REAL STT: ${sttCalls} call(s), ${sttFailures} failure(s)`);
+  const st = tc.stats();
+  console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}`);
+  console.log(`  turn sources: ${JSON.stringify(st.sources)}`);
+  console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named; evidence ${JSON.stringify(st.tracks.evidence)}`);
+  if (spineEvents.length) console.log(`  spine changes: ${spineEvents.map((e) => `${e.from}→${e.to}(${e.reason})`).join(', ')}`);
+  const namedRows = byTime.filter((r) => !isUnattributed(r.speaker)).length;
+  console.log(`  rows carrying a HUMAN name: ${namedRows}/${byTime.length} (${byTime.length ? ((namedRows / byTime.length) * 100).toFixed(1) : '0'}%)`);
 
   // ── The readable transcript: one line per FINAL (post-retract) segment. ──
   const out = arg('out');
@@ -241,6 +350,70 @@ async function main(): Promise<void> {
     console.log(`wrote ${rows.length} JSON row(s) → ${outJson}`);
   }
 
+  // ── THE CAPTION ORACLE ──
+  // Teams' own ASR names every caption's author, so a Teams tape carries its own attribution
+  // reference — no third party, no hand-labelling. It is NOT a neutral oracle (it over-represents
+  // whoever it hears best) and it is not word-accurate, so it is reported as agreement against a
+  // stated tolerance rather than as accuracy. Its lag against the audio is applied before matching.
+  if (process.argv.includes('--cc-oracle')) {
+    const lag = Number(arg('cc-lag-ms') ?? 1000);
+    const tol = Number(arg('cc-tol-ms') ?? 1000);
+    console.log(`\nCAPTION ORACLE (${captions.length} caption(s), lag ${lag}ms, tolerance ±${tol}ms)`);
+    if (captions.length === 0) console.log('  no captions in this fixture — nothing to score against');
+    else {
+      // 1) WORDS. A bag-of-words recall against the oracle's words: a WER proxy, since true WER
+      //    needs an alignment across two different segmentations that we cannot do reliably.
+      const norm = (s: string): string[] => (s.toLowerCase().match(/[a-z0-9'Ѐ-ӿ]+/g) ?? []);
+      const refCount = new Map<string, number>();
+      // Captions REFINE in place: the same utterance appears repeatedly, growing. Counting every
+      // entry would inflate the reference enormously, so each author's longest final form wins by
+      // dropping any caption text that is a prefix of a later one from the same author.
+      const finals: { name: string; text: string }[] = [];
+      for (let i = 0; i < captions.length; i++) {
+        const c = captions[i];
+        const superseded = captions.slice(i + 1, i + 12)
+          .some((n) => n.name === c.name && n.text.startsWith(c.text.slice(0, Math.max(0, c.text.length - 1))));
+        if (!superseded) finals.push({ name: c.name, text: c.text });
+      }
+      for (const f of finals) for (const w of norm(f.text)) refCount.set(w, (refCount.get(w) ?? 0) + 1);
+      const hypCount = new Map<string, number>();
+      for (const r of byTime) for (const w of norm(r.text)) hypCount.set(w, (hypCount.get(w) ?? 0) + 1);
+      let overlap = 0;
+      for (const [w, n] of refCount) overlap += Math.min(n, hypCount.get(w) ?? 0);
+      const refTotal = [...refCount.values()].reduce((a, b) => a + b, 0);
+      const hypTotal = [...hypCount.values()].reduce((a, b) => a + b, 0);
+      const recall = refTotal ? overlap / refTotal : 0;
+      const precision = hypTotal ? overlap / hypTotal : 0;
+      const f1 = recall + precision > 0 ? (2 * recall * precision) / (recall + precision) : 0;
+      console.log(`  WORDS  oracle=${refTotal} ours=${hypTotal}  recall=${recall.toFixed(3)}  precision=${precision.toFixed(3)}  F1=${f1.toFixed(3)}`);
+
+      // 2) ATTRIBUTION. Each of OUR rows is scored against the majority caption author whose
+      //    lag-shifted timestamp lands inside the row's span. A row nobody captioned is not scored
+      //    (it is not evidence of anything); a row we left unnamed is counted separately, because
+      //    an honest gap and a wrong name are not the same failure and must never be added together.
+      let agree = 0, disagree = 0, unnamed = 0, unscored = 0;
+      const confusion = new Map<string, number>();
+      for (const r of byTime) {
+        const inSpan = captions.filter((c) => c.t - lag >= r.t - tol && c.t - lag <= r.end + tol);
+        if (inSpan.length === 0) { unscored++; continue; }
+        const votes = new Map<string, number>();
+        for (const c of inSpan) votes.set(c.name, (votes.get(c.name) ?? 0) + 1);
+        const truth = [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        if (isUnattributed(r.speaker)) { unnamed++; confusion.set(`unnamed←${truth}`, (confusion.get(`unnamed←${truth}`) ?? 0) + 1); continue; }
+        if (r.speaker === truth) agree++;
+        else { disagree++; confusion.set(`${r.speaker}←${truth}`, (confusion.get(`${r.speaker}←${truth}`) ?? 0) + 1); }
+      }
+      const scored = agree + disagree;
+      console.log(`  ATTRIBUTION  scored=${scored + unnamed} (of ${byTime.length} rows; ${unscored} had no caption in span)`);
+      console.log(`    named+agree      : ${agree}` + (scored ? ` (${((agree / scored) * 100).toFixed(1)}% of named)` : ''));
+      console.log(`    named+WRONG      : ${disagree}`);
+      console.log(`    unnamed          : ${unnamed}`);
+      const delivered = scored + unnamed;
+      console.log(`    correct name DELIVERED: ${agree}/${delivered}` + (delivered ? ` (${((agree / delivered) * 100).toFixed(1)}%)` : ''));
+      if (confusion.size) console.log(`    breakdown (ours←oracle): ${JSON.stringify(Object.fromEntries([...confusion].sort((a, b) => b[1] - a[1])))}`);
+    }
+  }
+
   const gtPath = arg('gt');
   if (gtPath) {
     const gt = JSON.parse(readFileSync(gtPath, 'utf8')) as { label: string; t0: number; t1: number; who: string }[];
@@ -250,7 +423,7 @@ async function main(): Promise<void> {
       const c = { right: 0, wrong: 0, unknown: 0 };
       for (const r of inWin) {
         if (r.speaker === w.who) c.right++;
-        else if (r.speaker === 'Speaker' || /^seg_\d+$/.test(r.speaker)) c.unknown++;
+        else if (isUnattributed(r.speaker)) c.unknown++;
         else c.wrong++;
       }
       right += c.right; wrong += c.wrong; unknown += c.unknown;
