@@ -87,7 +87,12 @@ const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
 const TEAMS_MACHINE_TOKEN =
   /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
 
-function isTeamsDisplayNameCandidate(value: string): boolean {
+/** Is this string plausibly a HUMAN display name (as opposed to a Teams control
+ * label, a timer, or a machine token)? Exported so every name path in this
+ * package — tile resolution AND the caption reader — applies the SAME guard:
+ * one place decides what may become a name, so a rejection here can never be
+ * re-litigated by a second implementation next door. */
+export function isTeamsDisplayNameCandidate(value: string): boolean {
   const candidate = value.trim();
   if (candidate.length <= 1 || candidate.length >= 50) return false;
   const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');

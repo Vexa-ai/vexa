@@ -83,6 +83,7 @@ import {
 } from ${JSON.stringify(JITSI)};
 import {
   createTeamsSpeakers,
+  createTeamsCaptions,
 } from ${JSON.stringify(TEAMS)};
 import {
   createZoomSpeakers,
@@ -108,6 +109,7 @@ const VexaBrowserUtils = {
   sendJitsiChatMessage,
   // ── teams lane (voice-level "blue-square" outline → speaker hints) ──
   createTeamsSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsSpeakers
+  createTeamsCaptions,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsCaptions (live CC → diagnostics)
   // ── zoom lane (active-speaker DOM watcher → 'dom-active' naming hints) ──
   createZoomSpeakers,        // capture-bridge.ts: w.VexaBrowserUtils.createZoomSpeakers
 };
@@ -155,5 +157,5 @@ console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
-console.log('  - createTeamsSpeakers / createZoomSpeakers');
+console.log('  - createTeamsSpeakers / createTeamsCaptions / createZoomSpeakers');
 console.log('  - window.performLeaveAction');
