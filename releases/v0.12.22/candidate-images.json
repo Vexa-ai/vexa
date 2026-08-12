@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "release": "v0.12.22",
+  "stable_tag": "v0.12.22",
+  "candidate_tag": "v0.12.22-rc.4",
+  "build_source": "0653de255957dcf2009781b14b01479bc6b0d107",
+  "validation_source": "0653de255957dcf2009781b14b01479bc6b0d107",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/31538709323",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/31538709323",
+  "images": {
+    "vexaai/v012-admin-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:23932797a64e0cd94d2712fcd319a2199123cf8b0d2044129a2d9c39f74375d0",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:948854354f0f11d2443cd6ec76a89be6c7279d77c66649c84e7e9af1510ff030",
+          "config_digest": "sha256:6cc88933ba45f1c3fdb9eb4842dcadd89c9d675379a61861acceb9467bc0fc85"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:e2b4b4c4da5b6b9f55df61c114bb14fa10d2ebf46b448ec1637518f0889450ea",
+          "config_digest": "sha256:fdfb804988eecba5f5a15bd6eddbddf13e857748b7b0fbf3b51ced7892a6ddfb"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25 plus hosted production rev128 running imageID sha256:948854354f0f11d2443cd6ec76a89be6c7279d77c66649c84e7e9af1510ff030 (linux/amd64 child manifest of this index), founder-witnessed 2026-08-12"
+    },
+    "vexaai/v012-runtime": {
+      "class": "prod_deployed",
+      "digest": "sha256:d2dced7bbb49cdf652738dc185a1f4af4744188366ca68345961cbc44374a5e3",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:b3d466567447d7fa1337a5ed88e7228d18e4ddea664840879e2095667f0aec7e",
+          "config_digest": "sha256:63f7a4b377c5664884cbe5070843293927ed6e0c49d10206a478c4e9ee510cf1"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:340c23c88255e8d11e60a1df841758ded9076a255d738ad124bdafb1b0dd8e3a",
+          "config_digest": "sha256:69b314903e5dd47f7cf6106db3425f28ca76bb274262b7a006416a57a982b6bf"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25 plus hosted production rev128 running imageID sha256:b3d466567447d7fa1337a5ed88e7228d18e4ddea664840879e2095667f0aec7e (linux/amd64 child manifest of this index), read back post-rev-128 on 2026-08-12"
+    },
+    "vexaai/v012-agent-worker": {
+      "class": "oss_only",
+      "digest": "sha256:dab9fb35d8c4c756c0968405ec6788c2a1395a80aa6e812002857232b2c57735",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:b1a6f789f2052e4afcb2be759129a37cbec46342fa0bdb9ffe9b68301b5c0dd4",
+          "config_digest": "sha256:0f25ff0ec121620d3704fdbfbb8a7b9d2a5861d4ae78264a32403387fa666a8c"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:9dbc6f3b9a40fdcdcc7f541dd22387e2827def8e35d9312a9d016e1fdd858207",
+          "config_digest": "sha256:395b82de0a4950c079e17ba328909cc32c0ef114233c9bac8a0cc8551644f166"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25; dev:builds gate suite green at d7c1dedb (parent of the ship SHA) and gate:node green at 0653de25 on bbb"
+    },
+    "vexaai/v012-agent-api": {
+      "class": "oss_only",
+      "digest": "sha256:e2f5b2832783841cc1c7abfcd81a6148ff13a10f34ac098b740a097ba4e1fd24",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:ad4d7493012824fc6e7e7595c46955571d76505a61282fdccb5d2ac58df0f088",
+          "config_digest": "sha256:b4faf42317860a95d4acc15e60e4337f5ee8fe86c52d532b323db8559a2133f2"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:f4f7ee5fff40bf3a5e55df2f987ef21cd4e2cfbdbe9e21facb1084c4b9e0a418",
+          "config_digest": "sha256:07f40af476e9df5348f54cc8c803f8de75154fca1207c3a10128832fe8d4acda"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25; dev:builds gate suite green at d7c1dedb (parent of the ship SHA) and gate:node green at 0653de25 on bbb"
+    },
+    "vexaai/v012-meeting-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:b9b3f4bd9ae6949f55c93db2ad5d60b0a249a9e181758bca2fcd59fb1d376824",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:8b578e65b2ee4f35be7b6e54ca8720201792aaaba6b592cdc4c724b5dcc6e9c3",
+          "config_digest": "sha256:d5a5cb3d31d2c20b8cdf839a9f6bd789d9b5ecc28774c3604e2ce7fa9cf23d9b"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:d49297919ba16e7405d36cd30f1d561c2fae2fc3533df91c26695735da854c47",
+          "config_digest": "sha256:b00a0dcfdd1c079eb708b308b68fe04a675cdebe5a20f9aa3732b47d3490c6b3"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25 plus hosted production rev128 running imageID sha256:8b578e65b2ee4f35be7b6e54ca8720201792aaaba6b592cdc4c724b5dcc6e9c3 on 3 pods (linux/amd64 child manifest of this index), founder-witnessed 2026-08-12"
+    },
+    "vexaai/v012-gateway": {
+      "class": "prod_deployed",
+      "digest": "sha256:8a184f480ad7052fadf268e78bde764d4e087d45af0258fd512fb207dc9871b6",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:bc3ff1fb197df6871ef05d8b65f087e00a768b248e8bc4d6124b24397deef3d1",
+          "config_digest": "sha256:2282c318588af2357a49654fdc32097c09bc9b119ba93c493547b2827e709707"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:6a40f1ed5f6f8ed9287d98b6cfddca8b3f4404e9f9ef329a08b0505cbcdc2c81",
+          "config_digest": "sha256:489a7ff40f7f8d43339215bb3b53628c43642d3d6bf6e3151d0e65fa1d24196c"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25 plus hosted production rev128 running imageID sha256:bc3ff1fb197df6871ef05d8b65f087e00a768b248e8bc4d6124b24397deef3d1 on 2 pods (linux/amd64 child manifest of this index), read back post-rev-128 on 2026-08-12"
+    },
+    "vexaai/v012-mcp": {
+      "class": "oss_only",
+      "digest": "sha256:4793a2047804796f14a70a51a779abfbadb937a5dd1103c4922f308bf694ecdc",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:f7bbe274330b2292e0220659218aedb527c26682ac4d31c9dc0142717891999b",
+          "config_digest": "sha256:6518fa29cf047e906a5ebc50757505d29563c724aee7d794cb5bc86e823929d7"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:09f59c0c70f966601b362fccf2eb420d263c27e41d857d1944cb8a25bc5686ac",
+          "config_digest": "sha256:9c234fa1b558948687d7d9ea60c244dbfaacef35497ce7507171dedb3f6aaa9b"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25; dev:builds gate suite green at d7c1dedb (parent of the ship SHA) and gate:node green at 0653de25 on bbb"
+    },
+    "vexaai/v012-terminal": {
+      "class": "oss_only",
+      "digest": "sha256:61886c75f7a8c587e792893a2fba47c6ff1bb1d0b63b156ab13b13cea1e161cc",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:b11de8e372062bc1a817a8500ac7128f032ee6fb864b36455216d5b73e9e6966",
+          "config_digest": "sha256:e37fcb77bc9cc5108015040f0d34c491f82f2efc4a03fbc051547a89dce4001a"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:3c7191089ed5b405fa55dededc6bf2722b90e9eabfdaf8a4ad16b6894225cddb",
+          "config_digest": "sha256:018aa566f8832d231bf687c7173edcacd458fb3577b5b15a9a664d9ae7cfa400"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25; dev:builds gate suite green at d7c1dedb (parent of the ship SHA), lite front-door probe of the terminal UI green at 0653de25 on bbb"
+    },
+    "vexaai/vexa-bot": {
+      "class": "prod_deployed",
+      "digest": "sha256:5f706d28f866181015d830ffc4afbbcfb34ee3cc2411ae7d022a41fa45486268",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:5f706d28f866181015d830ffc4afbbcfb34ee3cc2411ae7d022a41fa45486268",
+          "config_digest": "sha256:31ac76cd4536079c9bc9f1ee5ab8dd6a8741d59500a429248ba90b69b6484a6c"
+        }
+      },
+      "evidence": "candidate build run 31538709323 at 0653de25 plus hosted production rev128 runtime BROWSER_IMAGE sha256:5f706d28f866181015d830ffc4afbbcfb34ee3cc2411ae7d022a41fa45486268 (single-platform manifest; top digest equals the platform digest), founder-witnessed on Teams meeting 26026 and Google Meet 26025/26024 on 2026-08-12; staging helm rev 141 zero drift"
+    },
+    "vexaai/vexa-lite": {
+      "class": "oss_only",
+      "digest": "sha256:de252fdc232f25803c339371be62ef1ba6b407d8f44913a16d0ae94da94178a4",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:e78e119c48b79cd6ca00a880d483bb2994c0f6dcdbc33de81795df4c88f75925",
+          "config_digest": "sha256:6e8794bad2b957f543491557cd782bec1b635ceaf41f8bb012c1b249962d2988"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:511f492e9c8af54afb79a239e2964c32ea95ce0fbded69be7bdeff35860b1828",
+          "config_digest": "sha256:110c2764ddc091f910279ad621032ee8aa4295b46932cf2e8d2e2d77e0bde94f"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 31538709323 at 0653de25; dev:builds lite leg 4/4 green at 0653de25 on bbb (build, up, front doors, concurrent-bots) and compose leg green (23 passed, 9 skipped)"
+    }
+  }
+}
