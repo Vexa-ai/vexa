@@ -6,15 +6,21 @@
  *   - createTeamsSpeakers: watches Teams' voice-level "blue-square" outline to
  *     detect the active speaker → a mixed-capture.v1 `hint` (kind 'dom-outline').
  *   - createTeamsChat: reads the chat panel (content tier).
+ *   - createTeamsCaptions: reads Teams' live closed captions when they are ON —
+ *     an ALTERNATIVE speaker-attribution SOURCE (Teams attributes each caption to
+ *     a named participant itself). Best-effort and DIAGNOSTIC in this iteration:
+ *     it feeds neither the transcript nor the mixed-pipeline name binder.
  */
 export {
   createTeamsSpeakers,
   extractTeamsSpeakerName,
+  isTeamsDisplayNameCandidate,
   teamsNameFromStream,
   teamsParticipantSelectors,
   teamsNameSelectors,
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
+  plausibleNameFromLeaves,
 } from './msteams-speakers.js';
 export type {
   TeamsSpeakers,
@@ -46,3 +52,15 @@ export type {
 } from './producer-dom-trace.js';
 export { createTeamsChat } from './teams-chat.js';
 export type { TeamsChat, TeamsChatMessage } from './teams-chat.js';
+export { createTeamsCaptions, teamsCaptionSelectors } from './msteams-captions.js';
+export type {
+  TeamsCaptions,
+  TeamsCaptionsOptions,
+  TeamsCaptionEvent,
+  TeamsCaptionsHealth,
+  TeamsCaptionsActiveObservation,
+  TeamsCaptionsLostObservation,
+  TeamsCaptionsAbsentObservation,
+  TeamsCaptionSpeakerUnresolvedObservation,
+  TeamsCaptionObservation,
+} from './msteams-captions.js';

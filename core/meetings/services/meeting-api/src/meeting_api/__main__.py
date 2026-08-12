@@ -207,6 +207,7 @@ def build_production_app():
         service_authority=service_authority,
         system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
+        storage=storage,
     )
     return app
 
@@ -222,7 +223,7 @@ def _minio_endpoint_url() -> str:
 
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
-    service_authority=None, system_webhook_sink=None, session_factory=None,
+    service_authority=None, system_webhook_sink=None, session_factory=None, storage=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -606,6 +607,37 @@ def _attach_background_loops(
                 log.exception("calendar sync tick failed")
             await asyncio.sleep(calendar_interval)
 
+    # Captured-signal tape budget (O-TEL-1). Fixture collection is default ON, so the bound lives on
+    # the KEEP side: this sweep is the only thing standing between "every prod meeting tapes" and an
+    # object store that grows without limit. It deletes ONLY under the `signal/` prefix, and only
+    # tapes carrying no PROMOTED marker — recordings are never within its reach.
+    signal_janitor_interval = float(os.getenv("SIGNAL_TAPE_JANITOR_INTERVAL_S", "900"))
+    signal_min_age_s = float(os.getenv("SIGNAL_TAPE_MIN_AGE_S", "600"))
+
+    async def _signal_tape_janitor_loop() -> None:
+        if storage is None:
+            return  # no object store wired (Lite without MinIO) → nothing to sweep
+        from .recordings import DEFAULT_BUDGET_BYTES, sweep_signal_tapes
+
+        budget_bytes = int(os.getenv("SIGNAL_TAPE_BUDGET_BYTES") or DEFAULT_BUDGET_BYTES)
+
+        async def _tick():
+            await sweep_signal_tapes(
+                storage, budget_bytes=budget_bytes, min_age_s=signal_min_age_s,
+            )
+
+        while True:
+            try:
+                # #637: single-flight. The sweep both LISTS a whole prefix (a real S3 cost) and
+                # DELETES — two replicas racing would pay the listing twice and could try to delete
+                # the same tape's parts concurrently.
+                await _guarded("signal-tape-janitor", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("signal tape janitor tick failed")
+            await asyncio.sleep(signal_janitor_interval)
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -619,6 +651,7 @@ def _attach_background_loops(
             ),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
+            asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:

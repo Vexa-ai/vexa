@@ -586,6 +586,27 @@
    "default": "100",
    "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this — a stuck/orphaned batch is a reportable state (P18)",
    "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_BUDGET_BYTES",
+   "class": "defaulted",
+   "default": "53687091200 (50 GiB)",
+   "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Fixture collection is default ON, so the bound lives here rather than on the capture path — the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
+   "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_JANITOR_INTERVAL_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "O-TEL-1: captured-signal budget sweep cadence (s) — one paginated listing of the `signal/` prefix plus per-object deletes, single-flighted across replicas",
+   "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_MIN_AGE_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it — the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
+   "targets": []
   }
  ],
  "capabilities": {

@@ -16,9 +16,9 @@
  */
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isMixedLanePlatform, type Invocation } from './config.js';
-import { rmsOf } from './capture-bridge.js';
+import { rmsOf, type CaptionCapableSink, type TeamsCaptionRecord } from './capture-bridge.js';
 import type { CapturedFrame, HintEvent, TelemetrySink } from './ports.js';
 
 /** Where a session's JSONL lines land. append() receives whole lines (newline-terminated). */
@@ -36,11 +36,44 @@ export function fileSignalWriter(path: string): SignalWriter {
 }
 
 export interface CaptureSignalRecorder {
-  sink: TelemetrySink;
+  sink: CaptionCapableSink;
   /** The session file path (file writer) or logical key. */
   path: string;
+  /**
+   * The CC sidecar beside the tape — `<session>.captions.jsonl`.
+   *
+   * Captions are a SIDECAR rather than a record type inside the tape because captured-signal.v1 is
+   * SEALED and defines exactly three records (SessionHeader · CapturedFrame · HintEvent). Writing a
+   * fourth into the same file would make every stored session fail its own contract, and the replay
+   * loader validates line by line — so the tape would stop being replayable the moment a Teams
+   * meeting produced a caption. Same precedent as the STT tape (`<session>.stt.jsonl`), which is a
+   * sidecar for the same reason. Adding a CaptionEvent to the contract is a v2 decision, not a
+   * side effect of wiring a lane.
+   */
+  captionsPath: string;
+  /** Bytes admitted to the tape so far (the header plus every recorded line, sidecars included). */
+  bytesWritten(): number;
+  /** True once the size cap stopped the writer. The MEETING is unaffected — see `admit`. */
+  isCapped(): boolean;
   /** Flush any buffered frames and stop the flush timer. Idempotent; never throws. */
   close(): Promise<void>;
+}
+
+/**
+ * One structured observation for the capture-signal path.
+ *
+ * The tape's whole lifecycle is invisible from outside: nothing in the meeting changes when it
+ * starts, caps, or fails to upload — which is the design, and also why these lines are the ONLY way
+ * to tell a deployment that is collecting fixtures from one that has silently stopped.
+ * Events: `tape-started` · `tape-capped` · `tape-uploaded` · `tape-upload-failed`.
+ */
+export function signalEvent(event: string, fields: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({
+    level: event.endsWith('failed') || event.endsWith('invalid') ? 'warn' : 'info',
+    msg: `[capture-signal] ${event}`,
+    event: `capture_signal.${event.replace(/-/g, '_')}`,
+    ...fields,
+  }));
 }
 
 export interface RecorderOptions {
@@ -51,6 +84,10 @@ export interface RecorderOptions {
   /** Flush cadence + buffer cap — tuned so a crash loses at most ~flushMs of signal. */
   flushMs?: number;
   maxBufferBytes?: number;
+  /** Hard ceiling on tape bytes; past it the writer stops and the meeting continues. */
+  maxBytes?: number;
+  /** Override the caption sidecar's line writer (tests assert without touching a disk). */
+  captionWriter?: (line: string) => void;
   log?: (m: string) => void;
   now?: () => number;
 }
@@ -58,6 +95,24 @@ export interface RecorderOptions {
 const DEFAULT_DIR = process.env.VEXA_CAPTURE_SIGNAL_DIR ?? '/tmp/captured-signal';
 const DEFAULT_FLUSH_MS = 2000;
 const DEFAULT_MAX_BUFFER = 1 << 20; // 1 MiB of pending JSONL
+/** 250 MB ≈ an hour of tape at the observed ~4 MB/min. The pod's ephemeral-storage request is the
+ *  real bound; this keeps one pathological meeting from ever reaching it. */
+export const DEFAULT_MAX_TAPE_BYTES = 250 * 1024 * 1024;
+
+export function resolveMaxTapeBytes(
+  raw: string | undefined = process.env.VEXA_CAPTURE_SIGNAL_MAX_BYTES,
+): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_TAPE_BYTES;
+  const n = Number(raw);
+  // A garbled cap is NOT an instruction to record without bound — fall back loudly to the default.
+  // (Same rule as meeting-api's env_flag: an unrecognized value is not an explicit opt-out, and a
+  // set-but-empty env line — which .env files produce constantly — must read as unset.)
+  if (!Number.isFinite(n) || n <= 0) {
+    signalEvent('cap-invalid', { raw, using: DEFAULT_MAX_TAPE_BYTES });
+    return DEFAULT_MAX_TAPE_BYTES;
+  }
+  return n;
+}
 
 /** Build the captured-signal.v1 SessionHeader for this invocation. */
 export function sessionHeader(inv: Invocation, startedAt: number): Record<string, unknown> {
@@ -124,6 +179,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   const dir = opts.dir ?? DEFAULT_DIR;
   const name = `${inv.connectionId ?? inv.nativeMeetingId ?? 'session'}.captured-signal.jsonl`;
   const path = join(dir, name);
+  const captionsPath = path.replace(/\.captured-signal\.jsonl$/, '.captions.jsonl');
 
   const headerLine = JSON.stringify(sessionHeader(inv, startedAt)) + '\n';
   let writer: SignalWriter | null = null;
@@ -151,6 +207,34 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   let faults = 0;
   const maxBuffer = opts.maxBufferBytes ?? DEFAULT_MAX_BUFFER;
 
+  // ── the size cap ──────────────────────────────────────────────────────────────────────────────
+  // Fixture collection is default ON, so EVERY prod meeting writes into the pod's ephemeral
+  // storage. Unbounded, one pathological meeting (a 6-hour room, a wedged leave) fills the disk —
+  // and a bot that dies of a full disk is a lost MEETING, not just a lost fixture. So the tape has
+  // a ceiling, and reaching it stops the TAPE and nothing else: no throw into capture, no leave, no
+  // change to transcription or recording. A capped tape is a shorter fixture; a dead bot is an
+  // incident.
+  const maxBytes = opts.maxBytes ?? resolveMaxTapeBytes();
+  let written = writer ? headerLine.length : 0;
+  let capped = false;
+
+  /** Gate one JSONL line against the cap. Returns whether it may be recorded. */
+  const admit = (line: string): boolean => {
+    if (capped) return false;
+    if (written + line.length > maxBytes) {
+      capped = true;
+      // ONE observation, not one per dropped frame — a capped 6-hour meeting would otherwise emit
+      // hundreds of thousands of identical lines and bury everything else in the pod's logs.
+      signalEvent('tape-capped', {
+        path, max_bytes: maxBytes, bytes: written, frames: seq, hints,
+        note: 'tape stopped; the meeting continues unaffected',
+      });
+      return false;
+    }
+    written += line.length;
+    return true;
+  };
+
   const flush = (): Promise<void> => {
     if (!writer || buf.length === 0) return flushing;
     const chunk = buf.join('');
@@ -167,14 +251,38 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
   const timer = writer ? setInterval(() => { void flush(); }, opts.flushMs ?? DEFAULT_FLUSH_MS) : null;
   timer?.unref?.();
 
+  // The caption sidecar's writer. Per-line append rather than the frame stream's buffered flush:
+  // captions arrive a few per second, not one per 20 ms audio frame, so they need none of that
+  // machinery — and keeping them off the frame writer means a caption can never reorder or delay an
+  // audio line.
+  //
+  // But the appends are SERIALIZED on their own chain, and close() awaits it. Two bare
+  // fire-and-forget appendFile calls can complete out of order, which would silently scramble a
+  // caption stream whose whole value is its sequence — and the teardown upload reads this file
+  // immediately after close(), so an unawaited tail would ship a truncated sidecar.
+  let captionFaults = 0;
+  let captionChain: Promise<void> = Promise.resolve();
+  const writeCaption = opts.captionWriter ?? ((line: string): void => {
+    captionChain = captionChain
+      .then(async () => {
+        // The dir already exists on the file-writer path; a session with an injected frame writer
+        // may have none, so create it lazily rather than losing that session's captions.
+        try { mkdirSync(dirname(captionsPath), { recursive: true }); } catch { /* best-effort */ }
+        await appendFile(captionsPath, line, 'utf8');
+      })
+      .catch((e) => { if (captionFaults++ < 5) log(`caption write failed: ${String(e)}`); });
+  });
+
   let hints = 0;
-  const sink: TelemetrySink = {
+  let captions = 0;
+  const sink: CaptionCapableSink = {
     // The mixed lane's speaker hints arrive out-of-band; without them a replay of this session
     // has audio but no way to attribute it (the gmeet lane binds its name onto the frame instead).
     captureHint(hint: HintEvent): void {
-      if (!writer) return;
+      if (!writer || capped) return;
       try {
         const line = JSON.stringify(hint) + '\n';
+        if (!admit(line)) return;
         buf.push(line);
         bufBytes += line.length;
         hints++;
@@ -182,7 +290,7 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
       } catch { /* must never throw into capture */ }
     },
     captureFrame(frame: CapturedFrame): void {
-      if (!writer) return;
+      if (!writer || capped) return;
       try {
         // The bridge tap supplies seq/rms; derive them here if a caller doesn't (ports.ts).
         const full = {
@@ -190,19 +298,41 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
           seq: frame.seq ?? seq,
           rms: frame.rms ?? rmsOf(new Float32Array(Buffer.from(frame.pcm, 'base64').buffer)),
         };
-        seq = full.seq + 1;
         const line = JSON.stringify(full) + '\n';
+        // Gate BEFORE advancing seq, so the seq counter never skips numbers a replay would read as
+        // dropped frames — a capped tape ends cleanly rather than looking corrupted.
+        if (!admit(line)) return;
+        seq = full.seq + 1;
         buf.push(line);
         bufBytes += line.length;
         if (bufBytes >= maxBuffer) void flush();
       } catch { /* must never throw into capture */ }
     },
+    // Teams' own CC lane — a SECOND, independent attribution source beside the outline hints. It
+    // belongs in the fixture for the same reason the hints do: a replay that has audio and outline
+    // hints but not the captions cannot reproduce, offline, the tie-break a live meeting had
+    // available. Written to the sidecar, counted against the SAME cap (a chatty caption stream is
+    // as capable of filling the disk as a chatty audio stream).
+    captureCaption(caption: TeamsCaptionRecord): void {
+      if (!writer || capped) return;
+      try {
+        const line = JSON.stringify(caption) + '\n';
+        if (!admit(line)) return;
+        captions++;
+        writeCaption(line);
+      } catch { /* must never throw into capture */ }
+    },
   };
+
+  if (writer) signalEvent('tape-started', { path, max_bytes: maxBytes, platform: inv.platform });
 
   let closed = false;
   return {
     sink,
     path,
+    captionsPath,
+    bytesWritten: () => written,
+    isCapped: () => capped,
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
@@ -210,7 +340,10 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
       try {
         await flush();
         await writer?.end();
-        log(`session written: ${path} (${seq} frames, ${hints} hints)`);
+        // Drain the caption sidecar too — the teardown upload reads this file the moment close()
+        // returns, so an un-awaited tail would ship a truncated sidecar.
+        await captionChain;
+        log(`session written: ${path} (${seq} frames, ${hints} hints, ${captions} captions)`);
       } catch (e) {
         log(`close failed: ${String(e)}`);
       }

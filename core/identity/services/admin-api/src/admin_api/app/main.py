@@ -218,8 +218,15 @@ _TRANSCRIPTION_FIELDS = ("url", "token")
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
 _SETUP_FIELDS = ("models", "transcription", "completed")
+# "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
+# capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
+# (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
+# is a KILL switch, not an enable switch: absence means ON everywhere (see _resolve_capture_signal).
+# Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
+# default) because _validate_config_fields' one rulebook is string-only.
+_DIAGNOSTICS_FIELDS = ("capture_signal",)
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS}
+                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS}
 
 
 class ModelPrefsUpdate(BaseModel):
@@ -289,6 +296,45 @@ def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dic
         if value:
             out[field] = value
     return out
+
+
+_FLAG_FALSE = ("false", "0", "no", "off")
+_FLAG_TRUE = ("true", "1", "yes", "on")
+
+
+def _as_flag(value) -> Optional[bool]:
+    """TRI-STATE read of a stored boolean-ish setting: ``True``/``False`` when the field carries a
+    recognized value, ``None`` when it is absent, empty, or unrecognized.
+
+    Tri-state is load-bearing here, unlike ``_resolve_effective``'s truthiness fold: a stored
+    ``"false"`` is exactly what a kill switch is FOR, and ``if value:`` would discard it and fall
+    through to the next tier. An unrecognized value resolves to ``None`` (fall through) rather than
+    to a guess — same discipline as meeting-api's ``env_flag``: a typo is not an explicit opt-out.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _FLAG_TRUE:
+            return True
+        if v in _FLAG_FALSE:
+            return False
+    return None
+
+
+def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool:
+    """Whether this user's bots tee the captured-signal tape: user > platform_settings > DEFAULT ON.
+
+    DEFAULT ON is the product decision, not an accident of config: prod meetings are the fixture
+    source, so absence of any flag means capture. The flag exists to STOP collection fleet-wide with
+    no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and per-user
+    (``users.data["diagnostics"]["capture_signal"]``) for an account that must not be taped.
+    """
+    for source in (user_data.get("diagnostics") or {}, platform_diagnostics or {}):
+        flag = _as_flag(source.get("capture_signal") if isinstance(source, dict) else None)
+        if flag is not None:
+            return flag
+    return True
 
 
 def create_app() -> FastAPI:
@@ -787,6 +833,13 @@ def create_app() -> FastAPI:
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {"max_concurrent": user.max_concurrent_bots}
+        # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
+        # ALWAYS present in the response — a missing key downstream is indistinguishable from an
+        # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
+        # rather than inferred there.
+        resp["capture_signal"] = _resolve_capture_signal(
+            data, await _platform_setting("diagnostics", db)
+        )
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
             if data.get("webhook_secret"):

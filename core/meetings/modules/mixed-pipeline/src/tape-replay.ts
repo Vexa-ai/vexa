@@ -219,6 +219,15 @@ async function main(): Promise<void> {
   // produced the text render above. STT output varies between runs, so the two artefacts have
   // to come from one run or they describe different transcripts. `Speaker` is written out here
   // exactly as the render shows it — a provisional seg_N is not a display name.
+  // Every publish call in order, drafts included — the ONLY way to ask what the retract leg
+  // deleted. `durable` shows what survived; this shows what was ever shown to a viewer, so a
+  // word that appeared as a draft and never came back as confirmed is measurable.
+  const outWrites = arg('out-writes');
+  if (outWrites) {
+    writeFileSync(outWrites, writes.map((w) => JSON.stringify(w)).join('\n') + '\n');
+    console.log(`wrote ${writes.length} publish call(s) → ${outWrites}`);
+  }
+
   const outJson = arg('out-json');
   if (outJson) {
     const rows = byTime.map((r) => ({

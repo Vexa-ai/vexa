@@ -49,6 +49,7 @@ import { env as transformersEnv } from '@huggingface/transformers';
 import { ClusterNameBinder, type HintKind } from './cluster-name-binder.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { localAgreement } from '@vexa/transcribe-buffer';
+import { hallucinationRule, type SuppressedSegment } from './hallucination-gate.js';
 
 const SAMPLE_RATE = 16000;
 /** Near-silent spans are dropped before Whisper (desktop's DROP_RMS). */
@@ -90,6 +91,13 @@ const CONFIRM_TTL_MS = 2500;
 /** Don't bother Whisper with unconfirmed windows shorter than this unless
  *  the turn is closing. */
 const MIN_SUBMIT_MS = 800;
+/** GAP RECLAIM bounds. A gap between two turns shorter than MIN is boundary jitter and
+ *  already covered by the close pad; longer than MAX is a real pause, and dragging it
+ *  into the next Whisper window would cost latency and invite silence hallucination.
+ *  Between them the gap is submitted with the next turn if it carries energy — the
+ *  segmenter's false negatives stop deleting speech. Tunable via VEXA_GAP_RECLAIM_MAX_MS. */
+const GAP_RECLAIM_MIN_MS = 400;
+const GAP_RECLAIM_MAX_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_GAP_RECLAIM_MAX_MS) || 10_000);
 /** Time-based resubmission cadence for the OPEN turn (the bot's
  *  submitInterval): pending refreshes and LocalAgreement stability build at
  *  this pace instead of waiting for the next boundary (which can be 10s away
@@ -160,6 +168,10 @@ export interface ChunkedTranscriberCallbacks {
    *  degrades gracefully, but the host gets the fault to make it observable instead of
    *  a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** A segment the hallucination gate refused to publish. Suppression is a JUDGEMENT the
+   *  lane made about real STT output, so it is reported, never silent — the host logs it as
+   *  an observation and can audit what the gate ate. */
+  onSuppressed?: (s: SuppressedSegment) => void;
   /** Instantaneous per-hint outcome (the hint-hop instrument): 'matched' when the
    *  hint names/claims a turn at the moment it arrives (or re-asserts the open
    *  turn's already-resolved name); 'missed' when no turn overlaps it yet. A
@@ -252,6 +264,7 @@ export class ChunkedTranscriber {
    *  gap that resets the prompt (SILENCE_PROMPT_RESET_MS). */
   private lastAudioEndMs = 0;
   private commitCounter = 0;
+  private suppressedCount = 0;
   private turnCounter = 0;
   private disposed = false;
 
@@ -278,6 +291,13 @@ export class ChunkedTranscriber {
 
   private constructor(private readonly cb: ChunkedTranscriberCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
+  }
+
+  /** Audio-accounting trace (VEXA_TRACE_SPANS=1): every window this lane submits to STT,
+   *  and every window it declines to. Off by default; the only way to separate the case where
+   *  STT heard the audio and got it wrong from the case where the lane never sent it. */
+  private trace(msg: string): void {
+    if (typeof process !== 'undefined' && process.env?.VEXA_TRACE_SPANS) this.log(`[spans] ${msg}`);
   }
 
   static async create(cb: ChunkedTranscriberCallbacks): Promise<ChunkedTranscriber> {
@@ -428,8 +448,8 @@ export class ChunkedTranscriber {
     }
   }
 
-  stats(): { commits: number; turns: number; queued: number; unresolved: number; binder: ReturnType<ClusterNameBinder['stats']> } {
-    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
+  stats(): { commits: number; turns: number; queued: number; unresolved: number; suppressed: number; binder: ReturnType<ClusterNameBinder['stats']> } {
+    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats() };
   }
 
   /** Session end: flush the carried span and close the open turn. Resolves
@@ -561,6 +581,30 @@ export class ChunkedTranscriber {
     this.commitCounter++;
     if (this.turn) { const prev = this.turn; this.turn = null; await this.submitTurn(prev, true); }
     const t0 = Math.max(item.t0, this.confirmedHighWaterMs);
+    this.trace(`open turn=${this.turnCounter} at=${item.t0}${t0 !== item.t0 ? ` clamped→${t0} (highwater, ${t0 - item.t0}ms skipped)` : ''}`);
+    // GAP RECLAIM. Only audio inside a turn is ever submitted, so the segmenter's
+    // silence verdict is not just a cut — it DELETES speech. Measured on clean
+    // single-speaker audio (270s, clean-audio-replay + a Deepgram oracle): the streaming
+    // segmenter declared 131.5s of the 270s as speech, and 79 of the oracle's 251 words
+    // fell outside every declared region. Whisper on the same file straight through
+    // scored 7.5% WER; the lane scored 27.2%, and the difference was almost entirely
+    // words never sent.
+    //
+    // So the span between the previous turn's end and this boundary is submitted with
+    // this turn instead of dropped — bounded, and only when the gap actually carries
+    // energy, so genuine silence is still never fed to Whisper (which hallucinates on
+    // it). The reclaimed audio widens only the STT window: t0 (the attribution window
+    // the namer resolves over) is untouched, so speaker identification sees exactly what
+    // it saw before.
+    let coverFrom = t0;
+    const gapFrom = Math.max(this.confirmedHighWaterMs, t0 - GAP_RECLAIM_MAX_MS);
+    if (t0 - gapFrom >= GAP_RECLAIM_MIN_MS) {
+      const gap = this.cut(gapFrom, t0);
+      if (gap.length > 0 && rms(gap) >= DROP_RMS) {
+        coverFrom = gapFrom;
+        this.trace(`reclaim turn=${this.turnCounter} ${gapFrom}..${t0} (${Math.round(t0 - gapFrom)}ms, rms=${rms(gap).toFixed(4)})`);
+      }
+    }
     // Real silence since the last turn → reset the in-memory prompt so the new
     // utterance starts clean (no inherited context, no silence-hallucination loop).
     if (this.lastAudioEndMs > 0 && t0 - this.lastAudioEndMs >= SILENCE_PROMPT_RESET_MS) {
@@ -568,7 +612,7 @@ export class ChunkedTranscriber {
     }
     this.turn = {
       clusterId: item.segId, turnId: this.turnCounter++,
-      t0, t1: t0, confirmedUpToMs: t0,
+      t0, t1: t0, confirmedUpToMs: coverFrom,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
       lastVoicedWallMs: Date.now(), resolvedName: null,
     };
@@ -604,6 +648,7 @@ export class ChunkedTranscriber {
     const publishEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
     const spanEnd = closing ? Math.max(publishEnd, turn.contextEndMs ?? publishEnd) : publishEnd;
     if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
+      this.trace(`skip-short turn=${turn.turnId} ${spanStart}..${spanEnd} (${spanEnd - spanStart}ms) closing=${closing}`);
       if (closing) await this.closeOut(turn);
       return;
     }
@@ -614,9 +659,11 @@ export class ChunkedTranscriber {
 
     const pcm = this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
+      this.trace(`skip-quiet turn=${turn.turnId} ${spanStart}..${spanEnd} rms=${rms(pcm).toFixed(4)} closing=${closing}`);
       if (closing) await this.closeOut(turn);
       return;
     }
+    this.trace(`submit turn=${turn.turnId} ${spanStart}..${spanEnd} (${spanEnd - spanStart}ms) closing=${closing}`);
 
     const prompt = this.lastConfirmedText ? this.lastConfirmedText.slice(-PROMPT_TAIL_CHARS) : undefined;
     let result: TranscriptionResult | null = null;
@@ -655,6 +702,14 @@ export class ChunkedTranscriber {
       // check; the blanket phrase list would also kill legit short answers
       // ("Yes.") inside real-speech windows the RMS gate already vouched for.
       if (prompt && s.text.length > 6 && prompt.includes(s.text)) return false;
+      // Whisper invented this on non-speech. Reported, never dropped in silence.
+      const rule = hallucinationRule(s.text);
+      if (rule) {
+        this.cb.onSuppressed?.({ text: s.text, startMs: s.startMs, endMs: s.endMs, rule });
+        this.log(`[ChunkedTranscriber] suppressed (${rule}) ${Math.round(s.startMs)}..${Math.round(s.endMs)}: ${JSON.stringify(s.text)}`);
+        this.suppressedCount++;
+        return false;
+      }
       return true;
     });
     if (mapped.length === 0) {

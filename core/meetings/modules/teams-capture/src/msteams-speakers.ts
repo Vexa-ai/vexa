@@ -77,6 +77,11 @@ const TEAMS_CONTROL_LABELS = new Set([
   'mute', 'unmute',
 ].map(value => value.replace(/[_\s-]+/g, ' ')));
 const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+// A clock reading that carries a SUFFIX — "10:42 AM", "05:14 elapsed" — is not matched by
+// the anchored timer label above, so a roster tile's timestamp leaf could still become a
+// confident wrong name. No human display name begins with h:mm.
+// Adopted from Daniel Dormann's guard in Vexa-ai/vexa#1121, which is stricter than ours was.
+const TEAMS_CLOCK_PREFIX = /^\d{1,2}:\d{2}/;
 // Machine identifiers Teams also carries in `data-tid` / label attributes: hyphen- or
 // underscore-joined token chains (`video-stream-2`, `voice-level-stream-outline`), camelCase
 // single tokens (`videoTile`), and pure digit runs. A human display name is none of these.
@@ -87,12 +92,18 @@ const TEAMS_TIMER_LABEL = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
 const TEAMS_MACHINE_TOKEN =
   /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
 
-function isTeamsDisplayNameCandidate(value: string): boolean {
+/** Is this string plausibly a HUMAN display name (as opposed to a Teams control
+ * label, a timer, or a machine token)? Exported so every name path in this
+ * package — tile resolution AND the caption reader — applies the SAME guard:
+ * one place decides what may become a name, so a rejection here can never be
+ * re-litigated by a second implementation next door. */
+export function isTeamsDisplayNameCandidate(value: string): boolean {
   const candidate = value.trim();
   if (candidate.length <= 1 || candidate.length >= 50) return false;
   const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
+    && !TEAMS_CLOCK_PREFIX.test(normalized)
     && !TEAMS_MACHINE_TOKEN.test(candidate);
 }
 
@@ -158,17 +169,40 @@ export function extractTeamsSpeakerName(
     }
   }
   if (opts?.structuralFallback === false) return '';
+  return plausibleNameFromLeaves(element);
+}
+
+/** First leaf-text fragment in `element` that can plausibly be a display name.
+ *
+ *  Teams renders the display name in a div whose only distinguishing attribute is a
+ *  build-specific obfuscated class like `___2u340f0`, with no data-tid, title or
+ *  aria-label to key on — so the durable key is the STRUCTURE (a text-only leaf), never
+ *  the class hash. Leaves only, so a wrapper's concatenated text can never win. Returns
+ *  `''` when nothing resolves: no hint beats a wrong hint.
+ *
+ *  Origin: Daniel Dormann, Vexa-ai/vexa#1121 (delivers #1119). This is the same leaf scan
+ *  `extractTeamsSpeakerName` already ends in, exported under his name so that his
+ *  rot-resistance fixtures (a deliberately invented future class) guard OUR resolver
+ *  rather than a second copy of it — two implementations of "what may become a name"
+ *  would let a rejection here be re-litigated next door.
+ */
+export function plausibleNameFromLeaves(element: HTMLElement): string {
   const leaves = element.querySelectorAll('*');
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i] as HTMLElement;
-    if (leaf.children.length !== 0) continue;
+    // Leaf test tolerates both shapes our fixtures use: the DOM's `childElementCount`
+    // and a plain `children` array.
+    const childCount = typeof (leaf as any).childElementCount === 'number'
+      ? (leaf as any).childElementCount
+      : ((leaf as any).children?.length ?? 0);
+    if (childCount !== 0) continue;
     const text = (leaf.textContent || '').trim();
     if (
       text.toLocaleLowerCase() !== text.toLocaleUpperCase()
       && isTeamsDisplayNameCandidate(text)
     ) return text;
   }
-  return '';
+  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
 }
 
 export interface TeamsSpeakerIdentity {
@@ -352,6 +386,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     return id!;
   }
 
+  // Resolution chain lives in extractTeamsSpeakerName (stream data-tid → name
+  // selectors → aria → structural leaf fallback), which already ends in the
+  // structural leaf path this commit is about.
   const extractName = (element: HTMLElement): string => extractTeamsSpeakerName(element);
 
   function getIdentity(element: HTMLElement): Identity {
