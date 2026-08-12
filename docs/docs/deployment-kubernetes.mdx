@@ -268,6 +268,36 @@ terminal:
   publicUrl: https://vexa.example.com
 ```
 
+### Sign-in providers — Google and Microsoft
+
+The Terminal's Google and Microsoft buttons each self-gate on their own credentials: set **both**
+the client id and the client secret and that button appears; leave either empty and it stays
+hidden. The chart has no dedicated fields for them — pass them through `terminal.extraEnv`, which
+is rendered onto the Deployment verbatim, so `valueFrom` works where a literal would put a secret
+in your values file:
+
+```yaml
+terminal:
+  extraEnv:
+    - name: MICROSOFT_CLIENT_ID
+      value: "<application (client) id>"
+    - name: MICROSOFT_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef: { name: vexa-oauth, key: microsoft-client-secret }
+    # "common" = work/school + personal; or a single org tenant id. Unset ⇒ common.
+    - name: MICROSOFT_TENANT_ID
+      value: "common"
+    # Google is the same shape, minus the tenant:
+    - name: GOOGLE_CLIENT_ID
+      value: "<client id>"
+    - name: GOOGLE_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef: { name: vexa-oauth, key: google-client-secret }
+```
+
+Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
+(or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
+
 <Note>
 Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —
 reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.
