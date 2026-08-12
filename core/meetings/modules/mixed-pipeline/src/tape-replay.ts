@@ -225,7 +225,7 @@ async function main(): Promise<void> {
   };
   /** The collector's durable view: UPSERT on segment id (its unique key with meeting_id), and
    *  DELETE on a retract. */
-  const durable = new Map<string, { speaker: string; text: string; startMs: number; endMs: number }>();
+  const durable = new Map<string, { speaker: string; text: string; startMs: number; endMs: number; completed: boolean }>();
   const renames: { from: string; to: string; n: number }[] = [];
   const spineEvents: { from: string; to: string; reason: string; tMs: number }[] = [];
   let retracted = 0;
@@ -311,18 +311,18 @@ async function main(): Promise<void> {
       };
     },
     publish: (speaker, confirmed, pending) => {
-      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); streamWrite({ id: c.segmentId, speaker, text: c.text, completed: true }, c.startMs, c.endMs); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs }); }
+      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); streamWrite({ id: c.segmentId, speaker, text: c.text, completed: true }, c.startMs, c.endMs); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs, completed: true }); }
       reconcilePending(pending ?? []);
-      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
+      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false }); }
     },
     publishPending: (speaker, segs) => {
       reconcilePending(segs);
-      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
+      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false }); }
     },
     clearPending: () => { reconcilePending([]); },
     rename: (oldS, newS, segs) => {
       renames.push({ from: oldS, to: newS, n: segs.length });
-      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); streamWrite({ id: s.segmentId, speaker: newS, text: s.text, completed: true }, s.startMs, s.endMs); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs }); }
+      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); streamWrite({ id: s.segmentId, speaker: newS, text: s.text, completed: true }, s.startMs, s.endMs); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs, completed: true }); }
     },
     // The turn spine under test. 'recorded' injects the live run's own boundaries (the stable
     // baseline); every other mode runs the REAL streaming segmenter over the tape's audio, because
@@ -442,8 +442,8 @@ async function main(): Promise<void> {
   console.log(`  turns holding BOTH a draft id and a confirmed id: ${shadowed}`);
 
   // ── ATTRIBUTION ──
-  const byTime: { id: string; t: number; end: number; speaker: string; text: string }[] = [];
-  for (const [id, v] of durable) byTime.push({ id, t: v.startMs, end: v.endMs, speaker: v.speaker, text: v.text });
+  const byTime: { id: string; t: number; end: number; speaker: string; text: string; completed: boolean }[] = [];
+  for (const [id, v] of durable) byTime.push({ id, t: v.startMs, end: v.endMs, speaker: v.speaker, text: v.text, completed: v.completed });
   byTime.sort((a, b) => a.t - b.t);
   const tally = new Map<string, number>();
   for (const r of byTime) tally.set(r.speaker, (tally.get(r.speaker) ?? 0) + 1);
@@ -490,11 +490,18 @@ async function main(): Promise<void> {
 
   const outJson = arg('out-json');
   if (outJson) {
+    // `speaker` is the SHIPPED label (what the row is published as); `speaker_internal` is the
+    // lane's own label for the same row. Both are needed downstream and they answer different
+    // questions: a stitcher must merge on IDENTITY, and the display string destroys it —
+    // every distinct provisional turn renders as the same word 'Speaker', so merging on the
+    // shipped label would fuse turns that were never the same speaker.
     const rows = byTime.map((r) => ({
       segment_id: r.id,
       start_epoch_s: r.t / 1000,
       end_epoch_s: r.end / 1000,
       speaker: /^seg_\d+$/.test(r.speaker) ? 'Speaker' : r.speaker,
+      speaker_internal: r.speaker,
+      completed: r.completed,
       text: r.text,
     }));
     writeFileSync(outJson, JSON.stringify(rows, null, 2) + '\n');
