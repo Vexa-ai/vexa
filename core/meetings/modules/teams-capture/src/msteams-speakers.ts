@@ -1121,7 +1121,19 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     // heartbeat: it is a state, and an unchanged state repeated 1800 times is not information.
     const usableNames = new Set([...namesThisScan].filter(
       (n) => isTeamsDisplayNameCandidate(n) && !isSelfDisplayName(n, opts.selfName)));
-    const participants = Math.max(usableNames.size, found - selfTilesThisScan);
+    // PEOPLE, NOT ELEMENTS. `found` counts matched ELEMENTS, and Teams renders each participant on
+    // more than one surface — a video tile AND a roster row both match, so a six-person meeting
+    // reported twelve. The consumer reads this as "named 6 of 12" and concludes the roster is half
+    // missing, which permanently disables the elimination rule in exactly the multi-party rooms it
+    // was built for. Measured on the first prod fixture: 3/6, 4/8, 5/10, 6/12, 6/14 — participants
+    // exactly double the names, every scan.
+    //
+    // There is no honest way to count PEOPLE from an element sweep, so it no longer pretends to.
+    // The count is the distinct names resolved; when the roster PANEL was readable it is the
+    // authority, because a panel row is one participant by construction. A scan that resolved every
+    // name it could see reports complete, and one that could not stays short.
+    const participants = Math.max(usableNames.size, panelNames.filter(
+      (n) => !isSelfDisplayName(n, opts.selfName)).length);
     const coverageKey = `${usableNames.size}/${participants}`;
     if (coverageKey !== lastCoverageKey) {
       lastCoverageKey = coverageKey;

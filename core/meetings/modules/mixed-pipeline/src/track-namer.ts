@@ -43,6 +43,22 @@ const envNumber = (name: string, fallback: number): number => {
 export const TRACK_NAME_CORROBORATIONS = envNumber('VEXA_TRACK_NAME_CORROBORATIONS', 2);
 /** Shorter than this, a coincidence is not an episode — it is the tail of a lag correction. */
 export const TRACK_NAME_MIN_EPISODE_MS = envNumber('VEXA_TRACK_NAME_MIN_EPISODE_MS', 600);
+/**
+ * A SINGLE episode this long satisfies corroboration on its own.
+ *
+ * The count rule exists because one coincidence is a coincidence — but it can only count, and that
+ * makes it blind to strength. On the first prod fixture two participants each accrued one unbroken
+ * stretch of exclusive coincidence (3.1 s and 3.5 s, sole audible source, sole lit tile, share 1.0)
+ * and were refused, because neither ever got a SECOND stretch: in a six-person room a quieter
+ * speaker talks once while the tiles happen to be unambiguous and then never again. They spent the
+ * meeting unnamed on evidence far stronger than the two 600 ms episodes the rule would have
+ * accepted without hesitation.
+ *
+ * So duration is an alternative route to the same bar, not a lowering of it: share and the
+ * cross-track owner share are still enforced exactly as before, and a long stretch that is
+ * ambiguous still fails them.
+ */
+export const TRACK_NAME_SOLO_EPISODE_MS = envNumber('VEXA_TRACK_NAME_SOLO_EPISODE_MS', 2500);
 /** The winner's share of THIS TRACK's evidence. Below it the tiles disagree about who the track is. */
 export const TRACK_NAME_MIN_SHARE = envNumber('VEXA_TRACK_NAME_MIN_SHARE', 0.7);
 /** The winner's share of THIS NAME's evidence across all tracks. Below it two tracks are both
@@ -140,6 +156,8 @@ export interface TrackNamerOptions {
   onNamed?: (trackId: string, name: string) => void;
   /** Roster sightings required before elimination may use a name. */
   rosterSightings?: number;
+  /** A single episode of at least this much exclusive coincidence corroborates on its own. */
+  soloEpisodeMs?: number;
   /** OUR OWN display name. A bot is in every meeting it records and appears in the roster like any
    *  participant; without this the lane cannot tell its own name from a person's. */
   selfName?: string;
@@ -165,6 +183,7 @@ export class TrackNamer {
   private readonly minOwnerShare: number;
   private readonly settleMs: number;
   private readonly rosterSightings: number;
+  private readonly soloEpisodeMs: number;
   private readonly rosterSettleMs: number;
   private readonly selfName: string;
   private readonly log: (m: string) => void;
@@ -217,6 +236,7 @@ export class TrackNamer {
     this.minOwnerShare = opts.minOwnerShare ?? TRACK_NAME_MIN_OWNER_SHARE;
     this.settleMs = opts.settleMs ?? TRACK_NAME_SETTLE_MS;
     this.rosterSightings = opts.rosterSightings ?? TRACK_NAME_ROSTER_SIGHTINGS;
+    this.soloEpisodeMs = opts.soloEpisodeMs ?? TRACK_NAME_SOLO_EPISODE_MS;
     this.rosterSettleMs = opts.rosterSettleMs ?? TRACK_NAME_ROSTER_SETTLE_MS;
     this.selfName = normalizeNameForIdentity(opts.selfName ?? '');
     this.onNamed = opts.onNamed;
@@ -367,19 +387,44 @@ export class TrackNamer {
    * A strict majority is required, so two people genuinely talking at once still resolves to
    * nobody.
    */
-  hintLeaderAt(tMs: number, tolMs: number): string | null {
+  hintLeaderAt(tMs: number, tolMs: number, candidates?: string[]): string | null {
     const from = tMs - tolMs;
     const to = tMs + tolMs;
+    // RANK AMONG THE PEOPLE WHO COULD ACTUALLY BE SPEAKING. In a six-person room the loudest tile
+    // around an instant is often somebody who is not even in the mix at that moment, and returning
+    // them meant the caller discarded the verdict and fell through to a weaker test — which then
+    // picked the wrong one of the two who WERE audible. Measured on the first prod fixture: a span
+    // where the transport had Shannon and Matt, the tiles said Shannon 2 / Matt 1, and the global
+    // leader was Liam with 4 — so the answer went to Matt. Restricting the ballot to the audible
+    // owners is not a weaker test, it is the question actually being asked.
+    const allowed = candidates && candidates.length
+      ? new Set(candidates.map((c) => this.canonicalCase(c).toLowerCase()))
+      : null;
     const votes = new Map<string, number>();
     for (const ev of this.hintEvents) {
       if (ev.tMs < from) continue;
       if (ev.tMs > to) break;                    // the log is append-ordered
-      votes.set(ev.name, (votes.get(ev.name) ?? 0) + 1);
+      const key = this.canonicalCase(ev.name);
+      if (allowed && !allowed.has(key.toLowerCase())) continue;
+      votes.set(key, (votes.get(key) ?? 0) + 1);
     }
     if (votes.size === 0) return null;
     const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1]);
     if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;   // a tie decides nothing
     return ranked[0][0];
+  }
+
+  /** Has the UI ever testified about this TRACK — has it, at any point, been the sole audible
+   *  source while exactly one tile was lit? That is the question the contested tie-break needs, and
+   *  it is answerable for a track the namer has not yet been able to NAME. Requiring a name instead
+   *  starved the rule in exactly the rooms it exists for: on the first prod fixture six sources
+   *  produced six roster names, only three ever bound, and every contested span touching one of the
+   *  other three was refused — 26 of 69 blank rows whose hints could decide them outright. */
+  hasTileTestimony(trackId: string): boolean {
+    const byName = this.evidence.get(trackId);
+    if (!byName) return false;
+    for (const e of byName.values()) if (e.supportMs > 0) return true;
+    return false;
   }
 
   /** How many times this name's tile has been re-asserted all session. Zero means the UI has never
@@ -603,7 +648,11 @@ export class TrackNamer {
     });
     const ranked = mine.sort((x, y) => y.supportMs - x.supportMs);
     const lead = ranked[0];
-    if (!lead || lead.episodes < this.corroborations) return;
+    // Corroborated by COUNT (several separate coincidences) or by WEIGHT (one long unambiguous
+    // one). Either is corroboration; only the count was expressible before.
+    if (!lead) return;
+    const corroborated = lead.episodes >= this.corroborations || lead.supportMs >= this.soloEpisodeMs;
+    if (!corroborated) return;
     const total = ranked.reduce((s, e) => s + e.supportMs, 0);
     const share = total > 0 ? lead.supportMs / total : 0;
     if (share < this.minShare) return;                        // this track's tiles disagree

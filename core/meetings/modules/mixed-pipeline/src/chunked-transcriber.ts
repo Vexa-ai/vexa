@@ -1322,13 +1322,21 @@ export class ChunkedTranscriber {
         // reading the other man's silence as absence put nine wrong names into the transcript the
         // first time this rule ran. A signal that has never once named someone cannot be evidence
         // that they are not the one talking.
+        // The guard asks whether the TILES CAN SPEAK about everyone in the mix — not whether we have
+        // already managed to name them. Requiring a name made the rule useless in multi-party
+        // rooms: the first prod fixture had six sources and six roster names, only three of which
+        // ever bound, so every contested span touching the other three was refused even where the
+        // hints decided it outright. A track the UI has testified about is one the UI may rule on.
         const audible = src.tracksAudibleAt(tMs);
         const everyoneTestified = audible.every((t) => {
           const n = this.trackNamer.nameFor(t);
-          return n !== null && this.trackNamer.hintEvidenceFor(n) >= CONTESTED_MIN_TILE_EVIDENCE;
+          if (n !== null) return this.trackNamer.hintEvidenceFor(n) >= CONTESTED_MIN_TILE_EVIDENCE;
+          return this.trackNamer.hasTileTestimony(t);
         });
         if (everyoneTestified) {
-          const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS)
+          // The ballot is restricted to the people the transport says are actually in the mix here.
+          const owners = audible.map((t) => this.trackNamer.nameFor(t)).filter((n): n is string => !!n);
+          const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS, owners)
             ?? this.trackNamer.litNameAt(tMs);
           if (lit) {
             for (const t of audible) {
