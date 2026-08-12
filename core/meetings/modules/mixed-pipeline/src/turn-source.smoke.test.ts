@@ -99,8 +99,17 @@ const speech = (ms: number): Float32Array => {
   src.onTransportEvent({ csrc: 9, active: true, tMs: 0 });
   for (let i = 0; i < 500; i++) src.onAudio(silence(100), i * 100);   // 50s of SILENCE
   check('a quiet room is not a dead transport (no false fallback in a pause)', dead.length === 0, JSON.stringify(dead));
-  for (let i = 0; i < 500; i++) src.onAudio(speech(100), 50_000 + i * 100);   // 50s of speech, still nothing
-  check('50s of energetic audio with zero transitions fires the fallback, once',
+  // A MONOLOGUE. One speaker holds the floor for fifty seconds: the transport emits no edge because
+  // nothing changed, which is a healthy transport doing its job. Reading that as death cost the
+  // prod meeting m26042 seventeen of its twenty-one minutes on the weaker lane.
+  for (let i = 0; i < 500; i++) src.onAudio(speech(100), 50_000 + i * 100);
+  check('50s of one speaker holding the floor is NOT a dead transport',
+    dead.length === 0, JSON.stringify(dead));
+  // Now the real dead case: the source is released, so the transport is holding NOBODY audible —
+  // and the room is still full of sound. Nothing can explain that but a transport that has stopped.
+  src.onTransportEvent({ csrc: 9, active: false, tMs: 100_000 });
+  for (let i = 0; i < 600; i++) src.onAudio(speech(100), 101_000 + i * 100);
+  check('energetic audio while the transport holds NOBODY fires the fallback, once',
     dead.length === 1 && dead[0] === 'transport-silent', JSON.stringify(dead));
 }
 

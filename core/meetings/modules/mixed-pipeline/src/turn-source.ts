@@ -322,13 +322,27 @@ export class CsrcTurnSource implements TurnSource {
     const edge = tsMs + durMs;
     this.settle(edge);
     if (this.lastTransitionMs === 0) this.lastTransitionMs = tsMs;
-    // Liveness: only ENERGETIC audio counts toward the watchdog. A quiet room produces no
-    // transitions and is not a dead transport.
-    if (!this.deadFired && rms(pcm) >= DEATH_RMS) {
+    // LIVENESS — and the question is whether the transport is SAYING NOTHING, not whether it has
+    // said anything lately.
+    //
+    // This counted energetic audio with no recent EDGE, and a monologue produces exactly that: one
+    // speaker holds the floor, no source changes, and a healthy transport correctly emits nothing
+    // for as long as they talk. On the prod meeting m26042 a 37-second stretch of one person
+    // speaking was read as a dead transport at +246s; the lane demoted to pyannote and spent the
+    // remaining seventeen of twenty-one minutes on the weaker binder, which is where that
+    // meeting's ten wrong names came from. The transport was fine — 179 further transitions
+    // arrived after it was declared dead, at a median gap of 1.3 seconds.
+    //
+    // So the watchdog only accumulates while energetic audio is arriving AND the transport is
+    // holding NOBODY audible. A source held active is the transport doing its job; silence from it
+    // then is the correct and expected reading. That is the real dead case — sound in the room and
+    // the transport claiming the room is empty — and it is still caught.
+    const holdingNobody = this.active.size === 0 && this.pendingClose.size === 0;
+    if (!this.deadFired && holdingNobody && rms(pcm) >= DEATH_RMS) {
       this.quietEnergyMs += durMs;
       if (this.quietEnergyMs >= CSRC_DEATH_MS) {
         this.deadFired = true;
-        this.log(`transport silent for ${Math.round(this.quietEnergyMs)}ms of energetic audio`);
+        this.log(`transport silent for ${Math.round(this.quietEnergyMs)}ms of energetic audio with no source held audible`);
         this.onDead?.({ reason: 'transport-silent', tMs: edge, quietMs: Math.round(this.quietEnergyMs) });
       }
     }
