@@ -31,6 +31,7 @@ import {
   type HintKind,
   type TransportEvent,
   type TurnSourceObservation,
+  type TrackNamerObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
 import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
@@ -288,9 +289,16 @@ function createMixedBotPipeline(
         // on the same ring — if it goes silent under continuing speech.
         turnSource: 'auto',
         selfName,
-        onObservation: (o: TurnSourceObservation) => {
+        onObservation: (o: TurnSourceObservation | TrackNamerObservation) => {
           // A transcript cannot say which spine produced it, so the switch is DATA beside the
           // tape, not just a log line — otherwise a replay can never attribute what it measures.
+          // The namer's refusals ride the same channel for the same reason: when the lane declines
+          // to name, it publishes NOTHING, so the tape would otherwise record only an absence.
+          if (o.type === 'bot-family-in-roster') {
+            console.log(`[bot] pipeline(mixed): roster name "${o.name}" refused — our own bot family (stem "${o.stem}"); elimination off`);
+            try { onObservation?.('mixed-bot-family-in-roster', { ...o }, o.tMs); } catch { /* diagnostics never break the lane */ }
+            return;
+          }
           console.log(`[bot] pipeline(mixed): turn spine ${o.from} → ${o.to} (${o.reason})`);
           try { onObservation?.('mixed-turn-source', { ...o }, o.tMs); } catch { /* diagnostics never break the lane */ }
         },

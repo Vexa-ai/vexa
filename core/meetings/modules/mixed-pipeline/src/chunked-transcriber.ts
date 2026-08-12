@@ -51,7 +51,7 @@ import {
   CsrcTurnSource, PyannoteTurnSource,
   type TransportEvent, type TurnSource, type TurnSourceCallbacks,
 } from './turn-source.js';
-import { TrackNamer } from './track-namer.js';
+import { TrackNamer, type TrackNamerObservation } from './track-namer.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { localAgreement } from '@vexa/transcribe-buffer';
 import { hallucinationRule, type SuppressedSegment } from './hallucination-gate.js';
@@ -238,8 +238,9 @@ export interface ChunkedTranscriberCallbacks {
   selfName?: string;
   /** Typed lane observations — `turn-source-armed` / `turn-source-fallback`. The host stores them
    *  beside the tape, so a replay can answer WHICH SPINE produced a transcript, which is otherwise
-   *  unrecoverable from the transcript itself. */
-  onObservation?: (o: TurnSourceObservation) => void;
+   *  unrecoverable from the transcript itself. Also carries `bot-family-in-roster`, which is
+   *  otherwise invisible: the lane refuses to name, so the tape shows only an absence. */
+  onObservation?: (o: TurnSourceObservation | TrackNamerObservation) => void;
   /**
    * VIRTUAL TIME — a harness seam, not a behaviour switch.
    *
@@ -434,6 +435,7 @@ export class ChunkedTranscriber {
     this.trackNamer = new TrackNamer({
       selfName: cb.selfName,
       onNamed: (trackId, name) => this.onTrackNamed(trackId, name),
+      onObservation: (o) => this.cb.onObservation?.(o),
       log: (m) => this.log(`[track-namer] ${m}`),
     });
   }

@@ -29,7 +29,7 @@
  *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turns <turns.psv> [--gt <gt.json>]
  *   npx tsx src/tape-replay.ts --tape <captured-signal.jsonl> --turn-source csrc --stt-url …
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, openSync, writeSync } from 'node:fs';
 import { ChunkedTranscriber, VirtualClock, type BoundarySource } from './index.js';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import type { BoundaryEvent } from './pyannote-segmenter.js';
@@ -209,6 +209,20 @@ async function main(): Promise<void> {
   let emit!: (ev: BoundaryEvent) => void;
   /** Every publish call, in order — the naive "one row per publish" view. */
   const writes: { id: string; speaker: string; text: string; completed: boolean }[] = [];
+  /** `--stream-writes <path>`: append each publish call AS IT HAPPENS, so a `--realtime` replay can
+   *  be rendered into a collector live instead of only at the end. Carries the segment's own span
+   *  plus the wall-clock instant it was published, which is what makes the cadence observable
+   *  downstream. Writes are fsync-free appends of one JSON object per line. */
+  const streamPath = arg('stream-writes');
+  const streamFd = streamPath ? openSync(streamPath, 'a') : null;
+  const streamWrite = (
+    w: { id: string; speaker: string; text: string; completed: boolean },
+    startMs: number,
+    endMs: number,
+  ): void => {
+    if (streamFd === null) return;
+    writeSync(streamFd, JSON.stringify({ ...w, startMs, endMs, wallMs: Date.now() }) + '\n');
+  };
   /** The collector's durable view: UPSERT on segment id (its unique key with meeting_id), and
    *  DELETE on a retract. */
   const durable = new Map<string, { speaker: string; text: string; startMs: number; endMs: number }>();
@@ -297,18 +311,18 @@ async function main(): Promise<void> {
       };
     },
     publish: (speaker, confirmed, pending) => {
-      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs }); }
+      for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); streamWrite({ id: c.segmentId, speaker, text: c.text, completed: true }, c.startMs, c.endMs); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs }); }
       reconcilePending(pending ?? []);
-      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
+      for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
     },
     publishPending: (speaker, segs) => {
       reconcilePending(segs);
-      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
+      for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs }); }
     },
     clearPending: () => { reconcilePending([]); },
     rename: (oldS, newS, segs) => {
       renames.push({ from: oldS, to: newS, n: segs.length });
-      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs }); }
+      for (const s of segs) { writes.push({ id: s.segmentId, speaker: newS, text: s.text, completed: true }); streamWrite({ id: s.segmentId, speaker: newS, text: s.text, completed: true }, s.startMs, s.endMs); durable.set(s.segmentId, { speaker: newS, text: s.text, startMs: s.startMs, endMs: s.endMs }); }
     },
     // The turn spine under test. 'recorded' injects the live run's own boundaries (the stable
     // baseline); every other mode runs the REAL streaming segmenter over the tape's audio, because
@@ -330,7 +344,14 @@ async function main(): Promise<void> {
     // tell it from a person in the roster. Defaults to the name our bots actually join under.
     selfName: arg('self-name') ?? 'Vexa',
     ...(clock ? { clock: { now: () => clock.now(), setHeartbeat: (fn, ms) => clock.setHeartbeat(fn, ms) } } : {}),
-    onObservation: (o) => { spineEvents.push(o); console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`); },
+    onObservation: (o) => {
+      if (o.type === 'bot-family-in-roster') {
+        console.log(`  [namer] REFUSED roster name "${o.name}" — our own bot family (stem "${o.stem}") @${o.tMs}; elimination off`);
+        return;
+      }
+      spineEvents.push(o);
+      console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`);
+    },
     log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
   });
 

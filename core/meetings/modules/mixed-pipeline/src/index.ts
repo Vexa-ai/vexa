@@ -27,7 +27,7 @@ export type { VirtualClockOptions } from './virtual-clock.js';
 export { correlateSourcesToNames } from './source-name-correlator.js';
 export type { Interval, Binding, CorrelationResult, CorrelatorOptions } from './source-name-correlator.js';
 export { TrackNamer, speakerLabel } from './track-namer.js';
-export type { TrackNaming, TrackEvidence, TrackNamerOptions } from './track-namer.js';
+export type { TrackNaming, TrackEvidence, TrackNamerOptions, TrackNamerObservation } from './track-namer.js';
 export { PyannoteSegmenter } from './pyannote-segmenter.js';
 export type { BoundaryEvent, PyannoteSegmenterConfig } from './pyannote-segmenter.js';
 export { ClusterNameBinder } from './cluster-name-binder.js';

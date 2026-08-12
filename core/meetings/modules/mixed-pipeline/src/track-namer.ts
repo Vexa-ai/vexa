@@ -163,7 +163,19 @@ export interface TrackNamerOptions {
   selfName?: string;
   /** Quiet period the roster must show before an elimination is drawn from it. */
   rosterSettleMs?: number;
+  /** A typed account of a naming decision worth seeing in a tape. Currently only the bot-family
+   *  refusal, which is otherwise invisible: nothing is published, so the tape shows an absence. */
+  onObservation?: (o: TrackNamerObservation) => void;
   log?: (m: string) => void;
+}
+
+/** Emitted when the roster carried a name from our own bot's family — the state that put a bot's
+ *  name on a human's speech in meeting 25930. */
+export interface TrackNamerObservation {
+  type: 'bot-family-in-roster';
+  name: string;
+  stem: string;
+  tMs: number;
 }
 
 interface Interval { start: number; end: number; kind?: NameEvidenceKind }
@@ -186,8 +198,13 @@ export class TrackNamer {
   private readonly soloEpisodeMs: number;
   private readonly rosterSettleMs: number;
   private readonly selfName: string;
+  private readonly selfStem: string;
   private readonly log: (m: string) => void;
   onNamed?: (trackId: string, name: string) => void;
+  onObservation?: (o: TrackNamerObservation) => void;
+  /** Roster entries refused as bot-family. Tracked apart from the other pollution because it is
+   *  the only kind the producer COUNTED AS NAMED — so it is the only kind coverage must discount. */
+  private rosterBotFamily = new Set<string>();
 
   /** Audible spans per track (the transport's own account). */
   private trackSpans = new Map<string, Interval[]>();
@@ -239,7 +256,14 @@ export class TrackNamer {
     this.soloEpisodeMs = opts.soloEpisodeMs ?? TRACK_NAME_SOLO_EPISODE_MS;
     this.rosterSettleMs = opts.rosterSettleMs ?? TRACK_NAME_ROSTER_SETTLE_MS;
     this.selfName = normalizeNameForIdentity(opts.selfName ?? '');
+    // Our bot's FAMILY, not its exact name. Every bot we spawn derives its display name from the
+    // same configured stem ("Vexa test", "Vexa", "Vexa (Unverified)"), so the first token is what
+    // identifies one — and identity-equality against our own full name, which is all we had, sees
+    // a SECOND bot as a person. Self-hosters rebrand freely, so the stem is read from selfName
+    // rather than hard-coded.
+    this.selfStem = this.selfName.split(' ')[0] ?? '';
     this.onNamed = opts.onNamed;
+    this.onObservation = opts.onObservation;
     this.log = opts.log ?? (() => { /* silent */ });
   }
 
@@ -299,6 +323,21 @@ export class TrackNamer {
       }
       return;
     }
+    // A SECOND BOT IS NOT A PERSON. The check above asks "is this name OURS"; this one asks "is it
+    // one of OUR KIND". Meeting 25930 put another Vexa bot ("Vexa (Unverified)") in a room where the
+    // DOM yielded nothing, and a roster of exactly that one name read as complete — so elimination
+    // bound a human's speech to a bot. Scoped deliberately to the roster: a real person named Vexa
+    // can still be named by DIRECT evidence (recordHint/recordCaption do not consult this), so the
+    // worst this can cost is an elimination we decline to draw, never a human who cannot be named.
+    if (this.botFamily(trimmed)) {
+      if (!this.rosterBotFamily.has(trimmed)) {
+        this.rosterBotFamily.add(trimmed);
+        this.rosterPolluted.add(trimmed);
+        this.log(`roster carries "${trimmed}" from our own bot family (stem "${this.selfStem}") — elimination is off for this meeting`);
+        this.onObservation?.({ type: 'bot-family-in-roster', name: trimmed, stem: this.selfStem, tMs: tMs ?? this.newest });
+      }
+      return;
+    }
     if (!this.roster.has(trimmed)) this.rosterChangedAt = Math.max(tMs ?? this.newest, this.newest);
     this.roster.set(trimmed, (this.roster.get(trimmed) ?? 0) + 1);
     this.canonical.set(trimmed.toLowerCase(), trimmed);
@@ -321,6 +360,15 @@ export class TrackNamer {
    *  not know who someone is, or our own bot? Applied to EVERY naming path, not only elimination:
    *  a placeholder that reaches the transcript looks attributed, so nothing downstream ever asks
    *  again, which makes it worse than an honest blank. */
+  /** Is this name one of OUR OWN KIND — a bot spawned from the same configured stem? Distinct from
+   *  `unnameable`, which asks whether the name is ours exactly. Roster-only by design. */
+  private botFamily(name: string): boolean {
+    if (!this.selfStem) return false;
+    const id = normalizeNameForIdentity(name);
+    if (!id) return false;
+    return id.split(' ')[0] === this.selfStem;
+  }
+
   private unnameable(name: string): boolean {
     const id = normalizeNameForIdentity(name);
     if (!id) return true;
@@ -348,7 +396,12 @@ export class TrackNamer {
    * two missing, and the difference is invisible from the names alone.
    */
   recordRosterCoverage(named: number, participants: number, tMs?: number): void {
-    this.rosterCoverage = { named, participants };
+    // A ROSTER OF ONLY BOTS IS NOT A COMPLETE ROSTER. The producer counts a bot as a participant it
+    // could name, so a room holding one other bot reports named=1/participants=1 — the *most*
+    // complete a roster can look, and the state elimination trusts most. Discounting the bot-family
+    // entries turns 25930's roster into named=0/participants=1: incomplete, which is the truth.
+    const effectiveNamed = Math.max(0, named - this.rosterBotFamily.size);
+    this.rosterCoverage = { named: effectiveNamed, participants };
     if (tMs !== undefined) this.newest = Math.max(this.newest, tMs);
   }
 

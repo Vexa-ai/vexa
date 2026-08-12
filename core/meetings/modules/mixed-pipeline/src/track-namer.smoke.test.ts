@@ -309,5 +309,52 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
     n.nameFor('4') === 'Priya Nair', JSON.stringify(n.stats()));
 }
 
+// ── 8) A SECOND BOT IS NOT A PERSON (meeting 25930) ─────────────────────────────────────────────
+// Two of our bots in one room. The DOM yielded nothing, so the roster was the only name source —
+// and it held exactly one name: the OTHER bot. One track, one name, corroborated and settled: every
+// gate elimination has, passed. It bound a human's speech to "Vexa (Unverified)". The self-name
+// check could not catch it because it asks "is this name MINE" (`vexa test`), not "is it MY KIND".
+{
+  const seen: string[] = [];
+  const n = namer({ selfName: 'Vexa test', onObservation: (o) => seen.push(`${o.type}:${o.name}`) });
+  n.setTrackActive('201', true, 0);
+  for (const t of [0, 100, 200]) n.recordRosterName('Vexa (Unverified)', t);
+  n.recordRosterCoverage(1, 1, 200);           // the producer counts the bot as a named participant
+  n.setTrackActive('201', false, 8000);
+  n.tick(60_000);                              // well past the roster settle window
+  check('a second bot in the roster never wins by elimination',
+    n.nameFor('201') !== 'Vexa (Unverified)', `got ${n.nameFor('201')}`);
+  const held = n.nameFor('201');
+  check('the track holds no name at all, so the publish path gives it a letter',
+    !held || /^Speaker /.test(held), `${held}`);
+  check('the refusal is emitted as a typed observation, so a tape shows it',
+    seen.includes('bot-family-in-roster:Vexa (Unverified)'), JSON.stringify(seen));
+}
+
+// ── 9) …and a roster of ONLY bots is INCOMPLETE, not complete ───────────────────────────────────
+// named=1/participants=1 is the most complete a roster can look, and it was the state elimination
+// trusted most. Discounting the bot-family entries tells the truth: nobody has been named yet.
+{
+  const n = namer({ selfName: 'Vexa test' });
+  for (const t of [0, 100, 200]) n.recordRosterName('Vexa (Unverified)', t);
+  n.recordRosterCoverage(1, 1, 200);
+  const cov = n.stats().rosterCoverage;
+  check('a roster holding only bot-family entries reads as coverage-incomplete',
+    !cov || cov.named === 0, JSON.stringify(cov));
+}
+
+// ── 10) SCOPE: the exclusion gates elimination, never direct evidence ────────────────────────────
+// The misfire cost has to stay "fewer eliminations in a weird room", never "a human who cannot be
+// named". Someone actually called Vexa still earns their name from exclusive coincidence.
+{
+  const n = namer({ selfName: 'Vexa test' });
+  n.setTrackActive('77', true, 0);
+  for (let t = 0; t < 8000; t += 1000) n.recordHint('Vexa Petrova', t + 1000);
+  n.setTrackActive('77', false, 9000);
+  n.tick(20_000);
+  check('a real human whose name shares the bot stem is still named by direct evidence',
+    n.nameFor('77') === 'Vexa Petrova', `got ${n.nameFor('77')}`);
+}
+
 if (failed) { console.error(`\n❌ track-namer: ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ track-namer: a track is named only from unambiguous, corroborated, exclusively-held evidence — and otherwise keeps a stable letter.');
