@@ -67,11 +67,11 @@ export async function GET(request: NextRequest) {
   const hostedMode = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
   const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
 
-  // Platform release this dashboard build fronts, read at RUNTIME. The build
-  // stamps its own UI version (release-version.generated.json); a hosted deploy
-  // may pair that UI build with a newer platform release. When unset (OSS
-  // self-host where UI == release), the chip falls back to the UI build alone.
-  const platformVersion = process.env.PLATFORM_VERSION || null;
+  // NOTE: PLATFORM_VERSION used to be read here and rendered by the version
+  // chip as the product release. It was a hand-maintained Helm value, and it
+  // drifted — staging displayed 0.12.18 while the cluster served 0.12.22-rc.3.
+  // The version now comes from the deployment itself via /api/version, which
+  // asks the gateway. Do not reintroduce a configured version string here.
 
   return NextResponse.json({
     wsUrl,
@@ -82,6 +82,5 @@ export async function GET(request: NextRequest) {
     defaultBotName,
     hostedMode,
     webappUrl,
-    platformVersion,
   });
 }

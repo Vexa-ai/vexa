@@ -1,15 +1,24 @@
+"use client";
+
 /**
- * <VersionChip /> — small, discoverable label for the Vexa product version
- * this dashboard fronts. Hosted deployments provide that identity at runtime
- * through PLATFORM_VERSION → /api/config → `platformVersion`.
+ * <VersionChip /> — what this deployment is running, asked of the deployment.
  *
- * When `platformVersion` is absent, the chip falls back to the build-time
- * release identity used by OSS self-hosted deployments.
+ * The backend version comes from `/api/version` at page load (which proxies
+ * the gateway's own `/version`); the UI build version is this image's stamp
+ * and is always labelled "UI". The chip shows both whenever they differ, and
+ * says "version unknown" — never a compiled-in or configured number — when the
+ * backend does not answer.
+ *
+ * It used to take a `platformVersion` prop fed from a Helm value. That value
+ * was expected to be hand-maintained "in lockstep with the platform release
+ * staging actually serves"; it drifted to 0.12.18 against a 0.12.22-rc.3
+ * cluster and nothing failed, because a constant cannot notice it is wrong.
  *
  * Mirror of services/webapp's component, intentionally kept simple so it
  * can stay in sync without sharing a package.
  */
 
+import { useDeploymentVersion } from "@/hooks/use-deployment-version";
 import { RELEASE, releaseUrl } from "@/lib/release-version";
 import { versionChipText } from "@/lib/version-chip-label";
 
@@ -20,19 +29,21 @@ export function VersionChip({
   variant = "minimal",
   look = "pill",
   className = "",
-  platformVersion = null,
 }: {
   variant?: Variant;
   look?: Look;
   className?: string;
-  /** Runtime platform release this build fronts. null → UI-build-only. */
-  platformVersion?: string | null;
 }) {
-  const url = releaseUrl(platformVersion || RELEASE.version);
+  const { backendStatus, backendVersion } = useDeploymentVersion();
+
+  // Release notes for what is RUNNING when we know it; for the UI build only
+  // when we do not, since that is then the only version we can honestly name.
+  const url = releaseUrl(backendVersion || RELEASE.version);
   const { label, title } = versionChipText({
     uiVersion: RELEASE.version,
     releaseDate: RELEASE.releaseDate,
-    platformVersion,
+    backendVersion,
+    backendStatus,
     variant,
   });
 

@@ -11,7 +11,6 @@ interface RuntimeConfig {
   authToken?: string | null;
   hostedMode?: boolean;
   webappUrl?: string;
-  platformVersion?: string | null;
 }
 
 // Global cache to avoid refetching on every component mount
