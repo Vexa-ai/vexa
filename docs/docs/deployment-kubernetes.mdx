@@ -242,7 +242,10 @@ upgrade needs on `/ws`.
 external clients should reach the gateway directly:
 
 ```yaml
-ingress:
+ingress:                    # the same `ingress:` key as above — one block, not two
+  enabled: true
+  className: nginx
+  host: vexa.example.com
   paths:
     - path: /
       pathType: Prefix
@@ -277,7 +280,8 @@ is rendered onto the Deployment verbatim, so `valueFrom` works where a literal w
 in your values file:
 
 ```yaml
-terminal:
+terminal:                                 # the same `terminal:` key as above — one block, not two
+  publicUrl: https://vexa.example.com
   extraEnv:
     - name: MICROSOFT_CLIENT_ID
       value: "<application (client) id>"
