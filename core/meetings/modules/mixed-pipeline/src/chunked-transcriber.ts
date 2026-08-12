@@ -515,6 +515,25 @@ export class ChunkedTranscriber {
         void t.pump();
         return;
       }
+      // THE RESUBMIT TICK IS HOISTED ABOVE THE LIVENESS GUARD, for the same reason the window
+      // bound was — and this one is what LocalAgreement is built on.
+      //
+      // LocalAgreement-N confirms a word only when N consecutive submissions of the SAME left edge
+      // agree. That makes the 2 s resubmit the load-bearing part of the whole confirmation design.
+      // It sat below the guard, which returns as soon as the boundary queue is non-empty; with 252
+      // and 918 transport transitions on m26042/m26043 the queue is almost never empty, so the
+      // pump's once-per-drain-batch submit was very nearly the only submission a turn ever got.
+      // Measured across two iterations: a median of ONE pass per left edge, ≥3 passes on 2.9% and
+      // 1.7% of generations, and therefore agreement delivering 0.0–0.2% of shipped words while the
+      // closing pass — which bypasses the agreement test by design — delivered all the rest.
+      //
+      // Continuing the window (iteration 1/2) gave the tick something to resubmit INTO and did not
+      // help, which is what isolated the tick itself as the cause rather than the window.
+      if (t.turn && t.latestAudioMs - Math.max(t.turn.lastSubmitEndMs, t.turn.confirmedUpToMs) >= SUBMIT_TICK_MS) {
+        t.queue.push('tick');
+        void t.pump();
+        return;
+      }
       // Liveness: an item enqueued during the pump's closing pass misses the
       // drain loop; with no further boundaries nothing would re-pump it.
       if (t.queue.length > 0) { void t.pump(); return; }
