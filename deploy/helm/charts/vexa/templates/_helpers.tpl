@@ -215,3 +215,13 @@ become non-blocking. Industry-standard Redis-as-stream-buffer config.
 {{- required "INVALID redis.durability config: stopWritesOnBgsaveError=yes requires appendonly=yes (paired AOF + BGSAVE durability invariant — see v0.10.5 Pack C.5). Without AOF, blocking writes on BGSAVE failure means writes that arrive while BGSAVE is failing have no durable record anywhere." "" -}}
 {{- end -}}
 {{- end -}}
+
+{{/* The tag of the gateway image this release actually runs — the SAME expression the gateway
+container's `image:` field uses, so the version the gateway discloses at /version cannot drift
+from the image serving the request. It is a helper rather than a repeated literal precisely so
+the two cannot be edited apart; deploy/helm/tests/test_template.sh asserts they render equal.
+Deliberately NOT the chart appVersion: appVersion is what the chart was written for, the image
+tag is what is running. */}}
+{{- define "vexa.gatewayImageTag" -}}
+{{- .Values.global.imageTag | default .Values.gateway.image.tag -}}
+{{- end -}}

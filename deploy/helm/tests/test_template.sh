@@ -198,4 +198,17 @@ else
   echo "  FAIL: migrations Job ignored global.imageTag — schema/code skew risk (#900): $MIG_IMG"; fail=1
 fi
 
+# version truth — the gateway's VEXA_VERSION env (what /version discloses) must render to the
+# SAME string as its own image tag. A UI reports the backend version by asking /version at page
+# load; if this env could drift from the image, the answer would be the old lie in a new place.
+VER_RENDER="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set global.imageTag=vVERSION-TRUTH --show-only templates/deployment-gateway.yaml)"
+gw_img="$(grep -E '^\s+image: "vexaai/v012-gateway:' <<< "$VER_RENDER" | sed 's/.*://; s/"//')"
+gw_ver="$(grep -A1 'name: VEXA_VERSION' <<< "$VER_RENDER" | grep 'value:' | sed 's/.*value: *//; s/"//g')"
+if [ -n "$gw_ver" ] && [ "$gw_img" = "$gw_ver" ]; then
+  echo "  OK: gateway VEXA_VERSION == gateway image tag ($gw_ver)"
+else
+  echo "  FAIL: gateway image tag '$gw_img' != VEXA_VERSION '$gw_ver' — /version would lie"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -66,6 +66,11 @@ _GUARD_EXCLUDE_PATHS = [
     "/favicon.ico",
     "/static",
     "/health",
+    # /version is the same shape as /health: a constant-cost, keyless, public disclosure of what
+    # this deployment is. It is excluded because every dashboard/webapp page load asks for it
+    # through ONE server-side proxy — a single pod IP would otherwise spend the whole per-IP
+    # budget on it and the UI would fall back to "unknown" under normal traffic.
+    "/version",
 ]
 
 
