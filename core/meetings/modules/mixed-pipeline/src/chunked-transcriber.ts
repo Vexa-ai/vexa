@@ -82,6 +82,13 @@ const SILENCE_PROMPT_RESET_MS = 3000;
 /** Cap on the UNCONFIRMED window — if stability stalls this long, the open turn
  *  force-rolls into a fresh turn (everything confirms). Inside Whisper's input. */
 const TURN_MAX_MS = 28_000;
+/** PROVISIONAL CUT. A continuous monologue produces no boundary, so its first FINAL used to wait
+ *  for the speaker to pause — measured at ~9 s on a live meeting, which is the founder's latency
+ *  complaint. Past this much unconfirmed audio the open turn is rolled: everything so far confirms
+ *  and a fresh turn continues on the SAME track, so attribution is untouched and only the
+ *  granularity of the finals changes. Well inside TURN_MAX_MS, which remains the Whisper-window
+ *  bound rather than a latency control. Tunable via VEXA_PROVISIONAL_CUT_MS. */
+const PROVISIONAL_CUT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_PROVISIONAL_CUT_MS) || 4000);
 /** Pyannote's speech-end frame can land a little early. On a clean
  *  speaker→silence close, send a small trailing context pad to STT so final
  *  phones/words survive, while clipping published timestamps to the committed
@@ -146,6 +153,22 @@ const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.e
 /** What an unattributable piece is published as. The host renders a provisional segmentation id the
  *  same way; naming it here keeps the two spellings of "we do not know" in one place. */
 const PROVISIONAL_SPEAKER = 'Speaker';
+/** How much of the just-confirmed text is remembered for the re-emission check. */
+const TAIL_DEDUP_CHARS = 120;
+/** Shortest repeat treated as a re-emission rather than as speech. Two tokens is a real thing a
+ *  person says twice ("да, да"); this is deliberately above that. */
+const TAIL_DEDUP_MIN_TOKENS = 3;
+/** Only windows starting this close behind the confirmed boundary can be re-emitting it. */
+const TAIL_DEDUP_REACH_MS = 4000;
+/** How far either side of a contested instant to count tile re-assertions. A speaker's outline is
+ *  re-asserted about every 2 s, so a second either way catches the current speaker without reaching
+ *  into the neighbouring turn. Tunable via VEXA_CONTESTED_HINT_TOLERANCE_MS. */
+const CONTESTED_HINT_TOLERANCE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_CONTESTED_HINT_TOLERANCE_MS) || 1000);
+/** Tile re-assertions a participant must have somewhere in the meeting before the tiles may be used
+ *  to rule FOR or AGAINST them in a contested span. */
+const CONTESTED_MIN_TILE_EVIDENCE = Number((typeof process !== 'undefined' && process.env?.VEXA_CONTESTED_MIN_TILE_EVIDENCE) || 3);
+/** Comparison tokens: case- and punctuation-insensitive, so "глюнки." matches "глюнки". */
+const tokens = (t: string): string[] => (t.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
 const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
 
 export interface ChunkSegment {
@@ -369,6 +392,8 @@ export class ChunkedTranscriber {
   private latestAudioMs = 0;
   private pumping = false;
   private lastConfirmedText = '';
+  /** The tail of the most recently confirmed text — what a re-emission would repeat. */
+  private lastConfirmedTail = '';
   /** Audio-time end of the last processed commit — used to detect the silence
    *  gap that resets the prompt (SILENCE_PROMPT_RESET_MS). */
   private lastAudioEndMs = 0;
@@ -465,6 +490,18 @@ export class ChunkedTranscriber {
       // drain loop; with no further boundaries nothing would re-pump it.
       if (t.queue.length > 0) { void t.pump(); return; }
       if (!t.turn) return;
+      // A monologue confirms on a cadence instead of waiting for a pause. Only fires while the
+      // turn is genuinely growing (unconfirmed audio beyond the cut length) and has text pending,
+      // so a silent open turn is not chopped into empty pieces.
+      if (t.turn.trackId
+        && t.turn.pendingTail.length > 0
+        && t.latestAudioMs - t.turn.confirmedUpToMs > PROVISIONAL_CUT_MS) {
+        const rolled = t.turn;
+        t.queue.push({ kind: 'close', t1: t.latestAudioMs });
+        t.queue.push(t.rollOpen(rolled, t.latestAudioMs));
+        void t.pump();
+        return;
+      }
       if (t.latestAudioMs - t.turn.confirmedUpToMs > TURN_MAX_MS) {
         // The roll is a Whisper-window bound, not a speaker change: the successor is the SAME
         // speaker, so it inherits the track. Dropping the trackId here would hand every monologue
@@ -1051,6 +1088,33 @@ export class ChunkedTranscriber {
     }
     turn.lastVoicedWallMs = this.now();   // voiced update arrived — resets the TTL idle-finalize
 
+    // TAIL DEDUP — the second half of the overlap fix. Advancing the window is the structural cure,
+    // but a decoder handed a window that STARTS mid-phrase will still sometimes reach backwards for
+    // context it can hear in the ring's pad. So a leading run of tokens that merely repeats the end
+    // of what was just confirmed is dropped, bounded hard: only at the very start of the first
+    // segment, only when the repeat is at least MIN tokens (so a genuine "да, да" survives), and
+    // only while the window begins close behind the confirmed boundary.
+    if (this.lastConfirmedTail && mapped.length > 0 && spanStart <= this.confirmedHighWaterMs + TAIL_DEDUP_REACH_MS) {
+      const first = mapped[0];
+      const tailTokens = tokens(this.lastConfirmedTail);
+      const headTokens = tokens(first.text);
+      let repeat = 0;
+      for (let n = Math.min(tailTokens.length, headTokens.length); n >= TAIL_DEDUP_MIN_TOKENS; n--) {
+        if (tailTokens.slice(-n).join(' ') === headTokens.slice(0, n).join(' ')) { repeat = n; break; }
+      }
+      if (repeat > 0) {
+        const kept = first.text.split(/\s+/).slice(repeat).join(' ').trim();
+        this.log(`[ChunkedTranscriber] dropped ${repeat} leading token(s) duplicating the confirmed tail`);
+        if (kept) {
+          first.text = kept;
+          if (first.words && first.words.length > repeat) first.words = first.words.slice(repeat);
+        } else {
+          mapped.shift();
+          if (mapped.length === 0) { if (closing) await this.closeOut(turn); return; }
+        }
+      }
+    }
+
     // LocalAgreement-N (shared confirm core, @vexa/transcribe-buffer): confirm whole
     // leading segments whose words are stable across N (default 3) consecutive
     // submissions; the still-forming tail stays pending. On close everything confirms.
@@ -1105,8 +1169,25 @@ export class ChunkedTranscriber {
       if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
       cs.push(...pieces.filter((p) => p.name === name).map((p) => p.seg));
       this.clusterName.set(turn.clusterId, name);
-      turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
+      // ADVANCE PAST WHAT WAS CONFIRMED, USING THE MOST PRECISE BOUNDARY AVAILABLE.
+      //
+      // The window used to advance to the whisper SEGMENT's end, which is routinely earlier than
+      // the audio that produced it. The next window therefore re-fed the tail of already-final
+      // speech, Whisper re-emitted it as the new row's prefix, and — because only DRAFTS can be
+      // retracted and a confirmed row is immutable — the duplicate published. On m36 that is the
+      // pair "Есть какие-то реал-тайм глюнки." followed by "Есть какие-то реал-тайм глюнки, но, в
+      // основном, …": one pause, one resume, one sentence said twice.
+      //
+      // Word timestamps make the boundary exact, so use the last CONFIRMED WORD's end where the
+      // decoder gave us one and fall back to the segment's end where it did not. Audio that has
+      // produced a final is never transcribed again.
+      const lastConfirmed = mapped[confirmCount - 1];
+      const lastWord = lastConfirmed.words?.[lastConfirmed.words.length - 1];
+      const boundaryRelSec = Math.max(lastConfirmed.relEnd, lastWord?.end ?? 0);
+      turn.confirmedUpToMs = spanStart + boundaryRelSec * 1000;
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
+      // Remember the tail of what just went out, so a re-emission of it can be recognised as one.
+      this.lastConfirmedTail = confirmed.map((c) => c.text).join(' ').slice(-TAIL_DEDUP_CHARS);
       const txt = confirmed.map(s => s.text).join(' ');
       this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
       turn.pendingName = !closing && tail.length > 0 ? name : null;
@@ -1220,23 +1301,52 @@ export class ChunkedTranscriber {
     const src = this.csrcSource;
     if (!src || this.authoritative !== 'csrc') return [{ name: fallbackName, ...seg }];
     const words = seg.words?.filter((w) => typeof w.start === 'number' && (w.word ?? '').trim());
-    if (!words || words.length === 0) return [{ name: fallbackName, ...seg }];
 
     const nameAt = (tMs: number): string => {
       const o = src.ownerAt(tMs);
       if (o.trackId) return this.trackNamer.labelFor(o.trackId);
       if (o.contested) {
-        // The transport says two people are audible. The tiles get the casting vote — but only if
-        // they name exactly one person AND that person owns one of the tracks in the mix.
-        const lit = this.trackNamer.litNameAt(tMs);
-        if (lit) {
-          for (const t of src.tracksAudibleAt(tMs)) {
-            if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+        // The transport says two sources are audible — but on the staging Jacob call that claim was
+        // mostly the mixer HOLDING a source open, not two people speaking: both tracks read active
+        // across 2% of the meeting yet produced 22% of the rows, all of them refused, all of them
+        // in the middle of one man's continuous speech. Asking whether a tile was LIT could not
+        // separate them, because a lit interval survives silence by construction.
+        //
+        // So ask which tile was being RE-ASSERTED instead. A hint event is emitted when the watcher
+        // sees the outline move; the speaker re-emits one every couple of seconds while the held
+        // source emits nothing. A strict majority within a second either side decides it, and two
+        // people genuinely talking at once still tie and still resolve to nobody.
+        // THE TILES ONLY GET A VOTE IF THEY CAN TESTIFY ABOUT EVERYONE IN THE MIX. On the m30 tape
+        // the outline lights for exactly ONE of the two participants for the whole meeting, so a
+        // tile majority there says "leo" no matter who is speaking — one-sided by construction, and
+        // reading the other man's silence as absence put nine wrong names into the transcript the
+        // first time this rule ran. A signal that has never once named someone cannot be evidence
+        // that they are not the one talking.
+        const audible = src.tracksAudibleAt(tMs);
+        const everyoneTestified = audible.every((t) => {
+          const n = this.trackNamer.nameFor(t);
+          return n !== null && this.trackNamer.hintEvidenceFor(n) >= CONTESTED_MIN_TILE_EVIDENCE;
+        });
+        if (everyoneTestified) {
+          const lit = this.trackNamer.hintLeaderAt(tMs, CONTESTED_HINT_TOLERANCE_MS)
+            ?? this.trackNamer.litNameAt(tMs);
+          if (lit) {
+            for (const t of audible) {
+              if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+            }
           }
         }
       }
       return PROVISIONAL_SPEAKER;
     };
+
+    // WITHOUT word timestamps the segment is still a span, and the span still has an owner. Falling
+    // back to the turn's own name here meant a decoder that returns no words could never resolve a
+    // contested span at all — every one of them would publish as "Speaker" no matter how clearly the
+    // tiles said who was talking. Ask once, for the whole segment, at its midpoint.
+    if (!words || words.length === 0) {
+      return [{ name: nameAt((seg.startMs + seg.endMs) / 2), ...seg }];
+    }
 
     const out: Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> = [];
     for (const w of words) {

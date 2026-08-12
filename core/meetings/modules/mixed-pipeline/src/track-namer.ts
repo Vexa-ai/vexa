@@ -190,6 +190,9 @@ export class TrackNamer {
   private rosterPolluted = new Set<string>();
   /** The producer's own account of whether it could name everyone it could see. */
   private rosterCoverage: { named: number; participants: number } | null = null;
+  /** Raw, lag-corrected hint arrivals — the POSITIVE evidence, as opposed to the merged intervals
+   *  above which are mostly the absence of an end event. Bounded like everything else here. */
+  private hintEvents: Array<{ name: string; tMs: number }> = [];
   /** lowercased name → the roster's own casing, so a tile that renders "leo" and a roster that
    *  renders "Leo" do not become two people, and the rendered form is the one Teams considers
    *  canonical. Never rewrites the name itself — a " (Unverified)" suffix is Teams' statement. */
@@ -239,6 +242,10 @@ export class TrackNamer {
   /** A DOM tile lit (or explicitly went dark). */
   recordHint(name: string, tMs: number, isEnd = false): void {
     if (!name || this.unnameable(name)) return;
+    if (!isEnd) {
+      this.hintEvents.push({ name, tMs: tMs - HINT_LAG_MS });
+      if (this.hintEvents.length > 20_000) this.hintEvents.splice(0, this.hintEvents.length - 20_000);
+    }
     this.paint(name, tMs - HINT_LAG_MS, HINT_GRACE_MS, 'dom', isEnd);
   }
 
@@ -342,6 +349,49 @@ export class TrackNamer {
   /** The name this track earned, or null. NEVER a guess. */
   nameFor(trackId: string): string | null { return this.named.get(trackId)?.name ?? null; }
 
+  /**
+   * The name whose tile was RE-ASSERTED most often around this instant, or null when nothing leads.
+   *
+   * `litNameAt` asks whether a tile was lit, and on the staging Jacob call that question could not
+   * separate anybody: the mixer held both sources active for the whole of each contested span and
+   * both tiles read lit throughout, so every one of eighteen spans in the middle of one man's
+   * continuous speech published as "Speaker" — with correctly named rows on both sides of them.
+   *
+   * A lit INTERVAL is mostly the absence of an end event: it is extended by grace and it survives
+   * silence. A hint EVENT is positive evidence, emitted when the watcher sees the outline move, and
+   * a speaker who is actually talking re-emits one every couple of seconds. Counting the events
+   * rather than measuring the interval separates the person speaking from the person the mixer is
+   * merely still carrying — 1308 events for the man speaking against 97 for the man held open, on
+   * that call.
+   *
+   * A strict majority is required, so two people genuinely talking at once still resolves to
+   * nobody.
+   */
+  hintLeaderAt(tMs: number, tolMs: number): string | null {
+    const from = tMs - tolMs;
+    const to = tMs + tolMs;
+    const votes = new Map<string, number>();
+    for (const ev of this.hintEvents) {
+      if (ev.tMs < from) continue;
+      if (ev.tMs > to) break;                    // the log is append-ordered
+      votes.set(ev.name, (votes.get(ev.name) ?? 0) + 1);
+    }
+    if (votes.size === 0) return null;
+    const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1]);
+    if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;   // a tie decides nothing
+    return ranked[0][0];
+  }
+
+  /** How many times this name's tile has been re-asserted all session. Zero means the UI has never
+   *  once testified about this person — and a signal that has never named someone cannot be read as
+   *  evidence that they are NOT the one speaking. */
+  hintEvidenceFor(name: string): number {
+    const want = this.canonicalCase(name).toLowerCase();
+    let n = 0;
+    for (const ev of this.hintEvents) if (this.canonicalCase(ev.name).toLowerCase() === want) n++;
+    return n;
+  }
+
   /** The ONE name the UI showed lit at this instant, or null when none or several were. Used only
    *  to break a tie the transport itself cannot: when two sources are audible, the tiles are the
    *  second, independent opinion about which of THOSE TWO was speaking. Constrained to names the
@@ -426,6 +476,7 @@ export class TrackNamer {
     this.trackSpans.clear(); this.nameSpans.clear(); this.evidence.clear();
     this.named.clear(); this.owner.clear(); this.roster.clear(); this.canonical.clear();
     this.rosterPolluted.clear(); this.rosterCoverage = null; this.order = []; this.letters.clear();
+    this.hintEvents = [];
     this.upTo = 0; this.newest = 0; this.origin = null; this.episode = null;
   }
 
@@ -523,7 +574,13 @@ export class TrackNamer {
 
   /** Can this track's leading candidate be believed yet? */
   private evaluate(trackId: string, atMs: number): void {
-    if (this.named.has(trackId)) return;
+    const existing = this.named.get(trackId);
+    // A track named by ELIMINATION may still be re-examined, for one purpose only: to upgrade the
+    // record when direct evidence arrives for the same name. Elimination can beat the evidence path
+    // to the punch — on the m36 tape a track was labelled [elimination] while holding 46.9 s of its
+    // own unambiguous DOM evidence, so the audit trail understated its own confidence and read as
+    // the weaker claim. The NAME never changes here; only the account of how it was reached.
+    if (existing && existing.source === 'evidence') return;
     const byName = this.evidence.get(trackId);
     if (!byName) return;
     // EVIDENCE FOR SOMEONE ELSE'S NAME IS NOT DISAGREEMENT. A track accrues time for a name that
@@ -550,11 +607,26 @@ export class TrackNamer {
     const total = ranked.reduce((s, e) => s + e.supportMs, 0);
     const share = total > 0 ? lead.supportMs / total : 0;
     if (share < this.minShare) return;                        // this track's tiles disagree
-    if (this.owner.has(lead.name)) return;                    // that person is already someone else
+    const holder = this.owner.get(lead.name) ?? this.owner.get(this.canonicalCase(lead.name));
+    if (holder !== undefined && holder !== trackId) return;   // that person is already someone else
     // Exclusivity the other way: does this track hold the clear majority of that NAME's evidence?
     let nameTotal = 0;
     for (const [, m] of this.evidence) { const e = m.get(lead.name); if (e) nameTotal += e.supportMs; }
     if (nameTotal > 0 && lead.supportMs / nameTotal < this.minOwnerShare) return;
+    if (existing) {
+      // Same name, better provenance: upgrade in place. A DIFFERENT name is never accepted — an
+      // elimination that has already been published is not overturned by later evidence, it is a
+      // contradiction worth seeing rather than silently resolving.
+      if (existing.name !== this.canonicalCase(lead.name) && existing.name !== lead.name) {
+        this.log(`track ${trackId} evidence names "${lead.name}" but it was already eliminated to "${existing.name}" — keeping the published name`);
+        return;
+      }
+      existing.source = 'evidence';
+      existing.confidence = share;
+      existing.evidence = ranked;
+      this.log(`track ${trackId} upgraded to [evidence] (${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s))`);
+      return;
+    }
     this.bind(trackId, lead.name, 'evidence', share, ranked, atMs,
       `${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)}`);
   }

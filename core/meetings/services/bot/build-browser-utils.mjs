@@ -73,6 +73,7 @@ import {
   createMixedAudioCapture,
   installRemoteAudioHook,
   selectTeamsMixStreams,
+  mainAudioProvedSilent,
   createCsrcPoll,
 } from ${JSON.stringify(MIXED)};
 import {
@@ -103,6 +104,7 @@ const VexaBrowserUtils = {
   createMixedAudioCapture,   // capture-bridge.ts: w.VexaBrowserUtils.createMixedAudioCapture
   installRemoteAudioHook,
   selectTeamsMixStreams,     // capture-bridge.ts setupMix: Teams mix vs fail-open (one impl, unit-tested)
+  mainAudioProvedSilent,     // capture-bridge.ts setupMix: presence is not liveness — abandon a silent mix
   createCsrcPoll,            // capture-bridge.ts: the transport sensor (RTP contributing sources → transitions)
   // ── recording (all platforms): MediaRecorder → recording.v1 chunks ──
   createRecordingTap,        // capture-bridge.ts: w.VexaBrowserUtils.createRecordingTap

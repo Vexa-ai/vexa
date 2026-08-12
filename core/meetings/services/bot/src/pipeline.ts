@@ -111,7 +111,9 @@ const isoFromEpochSeconds = (s: number | undefined): string | undefined =>
 function toBotSegment(seg: LaneSegment): TranscriptSegment {
   return {
     segment_id: seg.segment_id,
-    speaker: seg.speaker,
+    // The gmeet lane publishes the same 'Speaker' placeholder for an unnamed channel, and it
+    // reaches the same dashboard — so it gets the same treatment. One rule, both lanes.
+    speaker: displaySpeaker(seg.speaker ?? ''),
     speaker_key: seg.speaker_key,
     text: seg.text,
     start: seg.start,
@@ -157,14 +159,34 @@ function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => 
  *  `startMs/1000` is epoch seconds. Without it the live `:mutable` bundle carries a null
  *  absolute_start_time and the dashboard renderer SKIPS every pending draft (it keys on absolute
  *  time), so Teams/Zoom transcripts only appeared after a reload (the REST read re-derives it). */
+/**
+ * Labels that name NOBODY, in every spelling the lane produces: the provisional segmentation id,
+ * the word the lane publishes it as, and the stable letter a distinct-but-unnamed transport track
+ * carries. All three are INTERNAL — they are how the lane talks to itself about a refusal.
+ */
+const UNATTRIBUTED_LABEL = /^(?:seg_\d+|Speaker|Speaker [A-Z]+)$/;
+
+/**
+ * What a viewer sees when we could not name the speaker: NOTHING.
+ *
+ * Founder ruling from the rc.3 witness call. A row labelled "Speaker" advertises a failed claim —
+ * it is the product telling the customer, in the customer's own transcript, that it tried and
+ * missed. A blank simply reads as continuation of the passage. The refusal has not been hidden: the
+ * track identity survives in `speaker_key`, and WHY the lane refused lives in the observations
+ * sidecar beside the tape. What changes is that the failure stops being addressed to the customer.
+ *
+ * This is the one place the mapping happens. The lane keeps its internal labels, so the replay
+ * harness and every score built on it keep counting refusals exactly as before rather than going
+ * blind the moment the display string changed.
+ */
+function displaySpeaker(internal: string): string {
+  return UNATTRIBUTED_LABEL.test(internal) ? '' : internal;
+}
+
 function chunkToBotSegment(speaker: string, c: ChunkSegment, completed: boolean): TranscriptSegment {
   return {
     segment_id: c.segmentId,
-    // Provisional cluster ids (seg_N) are an internal key, never a display name; while
-    // unattributed, emit the stable 'Speaker' label the gmeet lane uses (gmeet-pipeline.ts:52)
-    // so per-speaker consumers group as one speaker, not hundreds; late attribution still
-    // repaints by segment_id.
-    speaker: /^seg_\d+$/.test(speaker) ? 'Speaker' : speaker,
+    speaker: displaySpeaker(speaker),
     speaker_key: c.segmentId,
     text: c.text,
     start: c.startMs / 1000,
