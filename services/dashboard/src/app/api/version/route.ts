@@ -74,9 +74,29 @@ export async function GET() {
     backendError = "VEXA_API_URL is unset — no backend to ask";
   }
 
+  // Fallback when the gateway cannot be asked: the RELEASE this deployment was deployed as,
+  // injected per deploy by the release ceremony (dashboard.platformVersion → PLATFORM_VERSION,
+  // or RELEASE_VERSION for symmetry with the webapp). This is the release layer — what helm,
+  // the ownership lock and the GitHub release all name — not a component build.
+  //
+  // This env carried a hand-maintained value once and drifted to 0.12.18 against a
+  // 0.12.22-rc.3 cluster. What changed is ownership: a value the ceremony sets while naming
+  // the release moves with the release. It is still the weakest link, so it is labelled.
+  let versionSource: "gateway" | "release-pin" | "none" =
+    backendStatus === "ok" ? "gateway" : "none";
+  if (backendStatus !== "ok") {
+    const pinned = (process.env.RELEASE_VERSION || process.env.PLATFORM_VERSION || "").trim();
+    if (pinned && pinned !== "unknown") {
+      backend = { version: pinned };
+      backendStatus = "ok";
+      versionSource = "release-pin";
+    }
+  }
+
   return NextResponse.json(
     {
       component: "dashboard",
+      versionSource,
       fetchedAt: new Date().toISOString(),
       backendStatus,
       backend,

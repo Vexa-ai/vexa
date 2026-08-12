@@ -1,28 +1,23 @@
 /**
- * Pure label/title builder for <VersionChip /> — kept free of React and of the
- * build-time release-version.generated.json import so the honesty rules below
- * are unit testable without a DOM or a generated file.
+ * Pure label/title builder for <VersionChip /> — free of React and of the build-time
+ * release-version.generated.json import, so the honesty rules are unit testable.
  *
- * The chip carries TWO identities and never lets one impersonate the other:
+ * The headline is the RELEASE this deployment is: what helm, the ownership lock and the GitHub
+ * release all name. The dashboard's own UI build is a COMPONENT identity and lives in the
+ * tooltip — a 0.10-lineage UI build fronting a 0.12 platform is normal, and putting "0.10.6.3"
+ * next to the release in a headline reports a true fact about the wrong layer.
  *
- *   - the BACKEND version, read live from the deployment's own gateway
- *     (`/api/version` → `GET {VEXA_API_URL}/version`), and
- *   - this UI's own build stamp, always labelled as such ("UI build").
- *
- * They are shown together whenever they differ, which on a hosted deploy is
- * always: a 0.10-lineage dashboard build fronts a 0.12 platform. Collapsing
- * them into one number is what produced the defect this file exists to
- * prevent — a badge reading "v0.12.18" while the cluster ran v0.12.22-rc.3,
- * because the 0.12.18 was a constant the image had been built with.
- *
- * When the backend cannot be reached the chip says "unknown". It never falls
- * back to a configured or compiled-in backend version.
+ * When nothing can name the release the chip says "version unknown". It never falls back to the
+ * UI build for it — that is how this badge advertised 0.12.18 against a 0.12.22-rc.3 cluster.
  */
 
 export type Variant = "full" | "compact" | "minimal";
 
-/** How much we know about the backend right now. "unknown" is a real answer. */
+/** How much we know about the release right now. "unknown" is a real answer. */
 export type BackendStatus = "loading" | "ok" | "unknown";
+
+/** Where the headline came from, weakest last. */
+export type VersionSource = "gateway" | "release-pin" | "none";
 
 export function withVPrefix(v: string): string {
   return v.startsWith("v") ? v : `v${v}`;
@@ -33,65 +28,52 @@ export function versionChipText({
   releaseDate,
   backendVersion = null,
   backendStatus = "unknown",
+  versionSource = "none",
   variant = "minimal",
 }: {
   uiVersion: string;
   releaseDate: string;
   backendVersion?: string | null;
   backendStatus?: BackendStatus;
+  versionSource?: VersionSource;
   variant?: Variant;
 }): { label: string; title: string } {
-  const backend =
+  const release =
     backendStatus === "ok" && backendVersion ? withVPrefix(backendVersion) : null;
   const ui = withVPrefix(uiVersion);
 
-  // The backend half of the label — a version, an admission, or a wait.
-  const backendLabel =
-    backend !== null
-      ? backend
-      : backendStatus === "loading"
-        ? "checking…"
-        : "version unknown";
-
-  // When the two agree there is one product version and no reason to spend a
-  // reader's attention saying it twice.
-  const sameVersion = backend !== null && backend === ui;
-
   let label: string;
-  if (sameVersion) {
-    switch (variant) {
-      case "full":
-        label = `Running ${backend} · updated ${releaseDate}`;
-        break;
-      case "compact":
-        label = `${backend} · ${releaseDate}`;
-        break;
-      default:
-        label = backend;
-    }
+  if (!release) {
+    label = backendStatus === "loading" ? "checking…" : "version unknown";
   } else {
     switch (variant) {
       case "full":
-        label = `Running ${backendLabel} · UI build ${ui} · updated ${releaseDate}`;
+        label = `Running ${release}`;
         break;
       case "compact":
-        label = `${backendLabel} · UI build ${ui} · ${releaseDate}`;
+        label = `${release} · ${releaseDate}`;
         break;
       default:
-        label = `${backendLabel} · UI ${ui}`;
+        label = release;
     }
   }
 
-  let title: string;
-  if (sameVersion) {
-    title = `Vexa ${backend} · released ${releaseDate} · click for release notes`;
-  } else if (backend !== null) {
-    title = `Vexa ${backend} (live from this deployment) · dashboard UI build ${ui}, released ${releaseDate} · click for release notes`;
-  } else if (backendStatus === "loading") {
-    title = `Asking this deployment which version it runs · dashboard UI build ${ui}, released ${releaseDate}`;
-  } else {
-    title = `This deployment did not report its version — showing the dashboard UI build ${ui} only, which does NOT tell you the backend release · released ${releaseDate}`;
-  }
+  const provenance: Record<VersionSource, string> = {
+    gateway: "reported live by this deployment",
+    "release-pin": "the release this deployment was deployed as",
+    none: "",
+  };
 
-  return { label, title };
+  const detail: string[] = [];
+  if (release) detail.push(`Vexa ${release} (${provenance[versionSource]})`);
+  else if (backendStatus === "loading")
+    detail.push("Asking this deployment which release it runs");
+  else
+    detail.push(
+      "This deployment did not report a version and none was configured — the build below describes the UI only, not the release"
+    );
+  detail.push(`dashboard UI build ${ui}, released ${releaseDate}`);
+  if (release) detail.push("click for release notes");
+
+  return { label, title: detail.join(" · ") };
 }

@@ -34,7 +34,7 @@ export function VersionChip({
   look?: Look;
   className?: string;
 }) {
-  const { backendStatus, backendVersion } = useDeploymentVersion();
+  const { backendStatus, backendVersion, versionSource } = useDeploymentVersion();
 
   // Release notes for what is RUNNING when we know it; for the UI build only
   // when we do not, since that is then the only version we can honestly name.
@@ -44,6 +44,7 @@ export function VersionChip({
     releaseDate: RELEASE.releaseDate,
     backendVersion,
     backendStatus,
+    versionSource,
     variant,
   });
 

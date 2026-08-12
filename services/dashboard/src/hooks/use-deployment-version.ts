@@ -21,6 +21,8 @@ import type { BackendStatus } from "@/lib/version-chip-label";
 export type DeploymentVersion = {
   backendStatus: BackendStatus;
   backendVersion: string | null;
+  /** 'release-pin' is the release this deploy was named; weaker than a live gateway answer. */
+  versionSource: "gateway" | "release-pin" | "none";
 };
 
 // One fetch per page load, shared by every chip on the page.
@@ -30,21 +32,25 @@ let inFlight: Promise<DeploymentVersion> | null = null;
 async function fetchDeploymentVersion(): Promise<DeploymentVersion> {
   try {
     const r = await fetch(withBasePath("/api/version"), { cache: "no-store" });
-    if (!r.ok) return { backendStatus: "unknown", backendVersion: null };
+    if (!r.ok) return { backendStatus: "unknown", backendVersion: null, versionSource: "none" };
     const body = await r.json();
     const version: unknown = body?.backend?.version;
     if (body?.backendStatus === "ok" && typeof version === "string" && version.length > 0) {
-      return { backendStatus: "ok", backendVersion: version };
+      return {
+        backendStatus: "ok",
+        backendVersion: version,
+        versionSource: body?.versionSource === "release-pin" ? "release-pin" : "gateway",
+      };
     }
   } catch {
     // fall through — an unreachable backend is reported as unknown, not guessed
   }
-  return { backendStatus: "unknown", backendVersion: null };
+  return { backendStatus: "unknown", backendVersion: null, versionSource: "none" };
 }
 
 export function useDeploymentVersion(): DeploymentVersion {
   const [state, setState] = useState<DeploymentVersion>(
-    () => cached ?? { backendStatus: "loading", backendVersion: null }
+    () => cached ?? { backendStatus: "loading", backendVersion: null, versionSource: "none" }
   );
 
   useEffect(() => {
