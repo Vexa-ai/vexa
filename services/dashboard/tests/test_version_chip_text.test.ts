@@ -1,63 +1,97 @@
 /**
- * Unit tests for the version chip's product release label builder.
+ * The chip's headline is the RELEASE this deployment is. The dashboard's own UI build is a
+ * component identity and belongs in the tooltip: a 0.10-lineage UI build fronting a 0.12
+ * platform is normal, and "0.10.6.3" beside the release in a headline reports a true fact about
+ * the wrong layer.
  *
- * A hosted deployment presents one product version. Without runtime platform
- * configuration, OSS self-hosted deployments use the build-time identity.
+ * And when nothing can name the release, the chip says so rather than borrowing the UI build —
+ * which is how this badge advertised 0.12.18 against a 0.12.22-rc.3 cluster.
  */
 import { describe, it, expect } from "vitest";
 import { versionChipText, withVPrefix } from "@/lib/version-chip-label";
 
 const UI = "0.10.6.3";
-const DATE = "2025-01-01";
+const DATE = "2026-05-28";
 
-describe("versionChipText — platform configured", () => {
-  it("minimal shows only the platform release", () => {
+describe("versionChipText — the release is the headline", () => {
+  it("shows the release alone, with the UI build nowhere near it", () => {
     const { label } = versionChipText({
       uiVersion: UI,
       releaseDate: DATE,
-      platformVersion: "v0.12.16-rc.4",
+      backendVersion: "0.12.22",
+      backendStatus: "ok",
+      versionSource: "gateway",
     });
-    expect(label).toBe("v0.12.16-rc.4");
+    expect(label).toBe("v0.12.22");
     expect(label).not.toContain(UI);
   });
 
-  it("adds a v-prefix when the platform version lacks one", () => {
-    const { label } = versionChipText({
+  it("keeps the UI build in the tooltip, labelled as a build", () => {
+    const { title } = versionChipText({
       uiVersion: UI,
       releaseDate: DATE,
-      platformVersion: "0.12.16",
+      backendVersion: "0.12.22",
+      backendStatus: "ok",
+      versionSource: "gateway",
     });
-    expect(label).toBe("v0.12.16");
+    expect(title).toContain("Vexa v0.12.22");
+    expect(title).toContain("dashboard UI build v0.10.6.3");
   });
 
-  it("full and compact variants keep one product identity", () => {
+  it("names the provenance so a deploy pin is not passed off as a live reading", () => {
     expect(
-      versionChipText({ uiVersion: UI, releaseDate: DATE, platformVersion: "v0.12.16", variant: "full" }).label
-    ).toBe("Running v0.12.16");
+      versionChipText({
+        uiVersion: UI, releaseDate: DATE, backendVersion: "0.12.22",
+        backendStatus: "ok", versionSource: "release-pin",
+      }).title
+    ).toContain("deployed as");
     expect(
-      versionChipText({ uiVersion: UI, releaseDate: DATE, platformVersion: "v0.12.16", variant: "compact" }).label
-    ).toBe("v0.12.16");
+      versionChipText({
+        uiVersion: UI, releaseDate: DATE, backendVersion: "0.12.22",
+        backendStatus: "ok", versionSource: "gateway",
+      }).title
+    ).toContain("reported live by this deployment");
   });
 
-  it("title points to the platform release without exposing the UI build", () => {
-    const { title } = versionChipText({ uiVersion: UI, releaseDate: DATE, platformVersion: "v0.12.16" });
-    expect(title).toBe("Vexa v0.12.16 · click for release notes");
-    expect(title).not.toContain(UI);
+  it("full and compact keep the headline to one version", () => {
+    expect(
+      versionChipText({
+        uiVersion: UI, releaseDate: DATE, backendVersion: "0.12.22",
+        backendStatus: "ok", versionSource: "gateway", variant: "full",
+      }).label
+    ).toBe("Running v0.12.22");
+    expect(
+      versionChipText({
+        uiVersion: UI, releaseDate: DATE, backendVersion: "0.12.22",
+        backendStatus: "ok", versionSource: "gateway", variant: "compact",
+      }).label
+    ).toBe("v0.12.22 · 2026-05-28");
   });
 });
 
-describe("versionChipText — platform absent (unchanged OSS behavior)", () => {
-  it("minimal shows UI version alone", () => {
-    expect(versionChipText({ uiVersion: UI, releaseDate: DATE }).label).toBe("0.10.6.3");
-    expect(versionChipText({ uiVersion: UI, releaseDate: DATE, platformVersion: null }).label).toBe("0.10.6.3");
+describe("versionChipText — nothing can name the release", () => {
+  it("says unknown and refuses to let the UI build stand in", () => {
+    const { label, title } = versionChipText({ uiVersion: UI, releaseDate: DATE });
+    expect(label).toBe("version unknown");
+    expect(title).toContain("describes the UI only, not the release");
+    expect(title).toContain("dashboard UI build v0.10.6.3");
   });
 
-  it("full and compact match prior format", () => {
-    expect(versionChipText({ uiVersion: UI, releaseDate: DATE, variant: "full" }).label).toBe(
-      "Running 0.10.6.3 · updated 2025-01-01"
-    );
-    expect(versionChipText({ uiVersion: UI, releaseDate: DATE, variant: "compact" }).label).toBe(
-      "0.10.6.3 · 2025-01-01"
+  it("an 'ok' status with no version is still unknown", () => {
+    expect(
+      versionChipText({ uiVersion: UI, releaseDate: DATE, backendVersion: null, backendStatus: "ok" }).label
+    ).toBe("version unknown");
+  });
+
+  it("says it is checking rather than showing a version it does not have yet", () => {
+    const { label } = versionChipText({ uiVersion: UI, releaseDate: DATE, backendStatus: "loading" });
+    expect(label).toBe("checking…");
+    expect(label).not.toContain("unknown");
+  });
+
+  it("offers no release-notes link when there is no version to link to", () => {
+    expect(versionChipText({ uiVersion: UI, releaseDate: DATE }).title).not.toContain(
+      "click for release notes"
     );
   });
 });
