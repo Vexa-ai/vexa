@@ -3,15 +3,41 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.22 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.23 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.22`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.23`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
 [github.com/Vexa-ai/vexa/releases](https://github.com/Vexa-ai/vexa/releases). This page summarizes the
 notable line and the migration notes between majors.
+
+## 0.12.23 — Teams speaker attribution
+
+Microsoft Teams sends a meeting as one mixed audio stream, so who is speaking has to be worked out
+rather than read off. This release takes it from the transport instead of guessing, and stops the
+bot guessing when it cannot tell.
+
+- **Speakers from the RTP stream.** Teams' mixer labels the audio it sends with the sources that
+  went into it. Turn boundaries come from those labels rather than from a guess at the waveform,
+  and each speaker keeps a stable identity for the whole meeting.
+- **Attribution inside a sentence.** Speaker changes resolve at word timestamps, so a turn that
+  changes hands mid-sentence is split where it actually changed.
+- **Unknown stays unknown.** Where the evidence does not identify a speaker, the transcript leaves
+  the speaker empty rather than guessing a name or labelling the row "Speaker".
+- **Quieter participants in larger meetings.** Naming no longer needs a speaker to be unambiguous
+  twice; one clear stretch is enough, which is what a person who speaks briefly in a six-person
+  call actually gets.
+- **Captions are no longer switched on for you.** The bot does not change what participants see; it
+  reads captions a meeting already has running. `VEXA_TEAMS_ENABLE_CAPTIONS=1` restores the old
+  behaviour.
+- **A silent capture now reports itself.** A picked audio stream that carries no sound is detected
+  and abandoned for the full track set, and says so, instead of producing an empty transcript.
+- **Fewer duplicated lines, faster finals.** Audio that already produced a final line is never
+  transcribed again, and a long stretch of one person speaking no longer waits for a pause.
+
+With thanks to community contributors **Jacob Schooley** and **Daniel Dormann**.
 
 ## 0.12 — control-plane carve
 
