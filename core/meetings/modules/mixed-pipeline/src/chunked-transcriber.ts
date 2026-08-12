@@ -371,6 +371,8 @@ export class ChunkedTranscriber {
   private trackClusters = new Map<string, Set<string>>();
   /** The track that owned the previously closed turn — gap reclaim may not cross a speaker change. */
   private lastClosedTrackId: string | undefined;
+  /** How many turn boundaries the STT window survived (see continuesWindow). */
+  private windowContinuations = 0;
   /** Where the previous turn ended — the adjacency half of the orphan-containment test. */
   private lastClosedEndMs = 0;
   /** Orphans offered to containment, and those it accepted. Reported, so the rule's own refusal
@@ -495,6 +497,24 @@ export class ChunkedTranscriber {
     //    (continuous speech, stalled stability) force-rolls into a fresh turn.
     const heartbeat = (): void => {
       if (t.pumping) return;
+      // THE WINDOW BOUND IS CHECKED BEFORE THE QUEUE GUARD, not after it.
+      //
+      // It used to sit below, and that made it unreliable in exactly the conditions it exists for:
+      // the guard below returns as soon as the boundary queue is non-empty, and on a busy meeting
+      // (252 and 918 transport transitions on m26042/m26043) the queue is rarely empty — so the
+      // roll rarely ran. A 60.6 s window with 56.9 s of audio in ONE request was measured on
+      // m26042 against a bound of 28 s. An over-long window is unconditionally wrong regardless of
+      // what else is pending, and the roll only reads `turn` and `latestAudioMs`, both of which are
+      // current here; the close+open it enqueues drains through the same pump as everything else.
+      if (t.turn && t.latestAudioMs - t.turn.confirmedUpToMs > TURN_MAX_MS) {
+        // The roll is a Whisper-window bound, not a speaker change: the successor is the SAME
+        // speaker, so it inherits the track. Dropping the trackId here would hand every monologue
+        // longer than TURN_MAX_MS to "Speaker A" halfway through.
+        t.queue.push({ kind: 'close', t1: t.latestAudioMs });
+        t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
+        void t.pump();
+        return;
+      }
       // Liveness: an item enqueued during the pump's closing pass misses the
       // drain loop; with no further boundaries nothing would re-pump it.
       if (t.queue.length > 0) { void t.pump(); return; }
@@ -511,15 +531,7 @@ export class ChunkedTranscriber {
         void t.pump();
         return;
       }
-      if (t.latestAudioMs - t.turn.confirmedUpToMs > TURN_MAX_MS) {
-        // The roll is a Whisper-window bound, not a speaker change: the successor is the SAME
-        // speaker, so it inherits the track. Dropping the trackId here would hand every monologue
-        // longer than TURN_MAX_MS to "Speaker A" halfway through.
-        t.queue.push({ kind: 'close', t1: t.latestAudioMs });
-        t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
-        void t.pump();
-        return;
-      }
+      // (the TURN_MAX_MS roll now runs ABOVE the queue guard — see the note there)
       // TTL idle-finalize: pending exists but no voiced update for CONFIRM_TTL_MS
       // (speaker paused / segmenter didn't close on continuous live audio) → commit
       // what we have by closing the turn, instead of holding it for the 3rd pass.
@@ -894,6 +906,22 @@ export class ChunkedTranscriber {
           if (item !== 'tick' && item.kind === 'open') {
             await this.openTurnApply(item);
           } else if (item !== 'tick' && item.kind === 'close') {
+            // WINDOW CONTINUITY (see continuesWindow). A handover arrives as a close immediately
+            // followed by an open; where the speech is continuous and the speaker unchanged, the
+            // two are COALESCED and the STT window survives instead of being flushed and rebuilt.
+            const nxt = this.queue[0];
+            if (nxt !== undefined && nxt !== 'tick' && nxt.kind === 'open' && this.continuesWindow(item, nxt)) {
+              this.queue.shift();                       // the open is absorbed, not applied
+              const t = this.turn!;
+              t.t1 = Math.max(t.t1, Math.min(item.t1, this.latestAudioMs || item.t1));
+              if (nxt.contested) t.contested = true;
+              // The transport's live edge belongs to the track, and the track has not changed —
+              // carry it forward so the open turn keeps reading to the speaker's own edge.
+              if (t.edgeMs !== undefined) t.edgeMs = Math.max(t.edgeMs, nxt.t0);
+              this.windowContinuations++;
+              this.trace(`continue turn=${t.turnId} ${item.t1}..${nxt.t0} (gap=${Math.round(nxt.t0 - item.t1)}ms unconfirmed=${Math.round(nxt.t0 - t.confirmedUpToMs)}ms)`);
+              continue;
+            }
             await this.closeTurnApply(item);   // submits + closes the open turn
             continue;
           }
@@ -921,6 +949,50 @@ export class ChunkedTranscriber {
     // Items enqueued during the closing pass (after the drain loop exited)
     // would otherwise strand until the next boundary.
     if (this.queue.length > 0) void this.pump(closeAtEnd);
+  }
+
+  /** MAY THE STT WINDOW SURVIVE THIS TURN BOUNDARY?
+   *
+   *  A turn boundary is an ATTRIBUTION event. It is not a statement about where a sentence ends —
+   *  and until now it also ended the STT window, because `openTurnApply` re-anchors
+   *  `confirmedUpToMs` to the new turn's `t0`. Measured on 2026-08-13 against the real model: the
+   *  left edge NEVER advanced past a confirmed word (0 of 594 submissions across m26042+m26043),
+   *  90%/99.8% of windows were submitted exactly ONCE, and LocalAgreement-3 therefore delivered
+   *  0.2%/0.0% of shipped words — everything else confirmed unconditionally on the closing pass,
+   *  where the agreement test is bypassed by design. m26073 shows the same shredding with NO
+   *  transport at all (pyannote, one continuous speaker, 43 turns in 44 s), which is why this is
+   *  keyed on the WINDOW and not on the mixer: the cause is the turn, whatever produces turns.
+   *
+   *  Four conditions, and none of them is a new tuning knob:
+   *
+   *   1. a turn is open;
+   *   2. the audio is CONTINUOUS — the gap is below the lane's own existing definition of real
+   *      silence, `SILENCE_PROMPT_RESET_MS`, the very gap at which it already declares the prompt
+   *      context stale. The same physical fact decides both, so there is one threshold, not two;
+   *   3. the window stays inside `TURN_MAX_MS`, which is what that constant was always for.
+   *      Enforcing it HERE also repairs it: the heartbeat's roll branches sit behind an early
+   *      return that fires whenever the boundary queue is non-empty, and with a transition every
+   *      few hundred ms the queue is rarely empty — a 60.6 s window was measured on m26042. The
+   *      bound now applies where the window actually grows;
+   *   4. THE SPEAKER DOES NOT CHANGE. Continuing across a genuine handover requires attribution to
+   *      happen below the window — `splitByOwner` already does exactly that, per word, from
+   *      `ownerAt` — but only where the transport is authoritative, and the second absolute (no
+   *      misattribution) forbids buying completeness with a wrong name. So this iteration continues
+   *      only SAME-TRACK windows, whose blast radius on attribution is provably zero: the turn's
+   *      identity never changes, so no row can move to a different speaker than it would have had.
+   *      Cross-speaker windows are a later iteration, gated on their own read.
+   *
+   *  Condition 4 is not a small case. It covers every `rollOpen` (the PROVISIONAL_CUT and
+   *  TURN_MAX rolls both re-open on the SAME track and were resetting the left edge anyway), every
+   *  DTX/packet-loss break inside one speaker's run, and the whole of a single-speaker meeting —
+   *  which is the worst fixture in the library.
+   */
+  private continuesWindow(close: { t1: number }, open: { t0: number; trackId?: string }): boolean {
+    const t = this.turn;
+    if (!t) return false;
+    if (open.t0 - close.t1 >= SILENCE_PROMPT_RESET_MS) return false;
+    if (open.t0 - t.confirmedUpToMs > TURN_MAX_MS) return false;
+    return open.trackId === t.trackId;
   }
 
   /** Open a new segmentation turn. Closes any still-open turn first (defensive —
@@ -989,8 +1061,24 @@ export class ChunkedTranscriber {
 
   /** Close the open turn at a boundary: everything confirms (last chance). */
   private async closeTurnApply(item: { t1: number; contextPadMs?: number }): Promise<void> {
-    if (!this.turn) return;
     const t = this.turn;
+    if (!t) return;
+    // A STALE CLOSE CANNOT CLOSE THIS TURN. A boundary whose instant is at or before the turn's own
+    // start describes a moment that predates it, so it belongs to a turn that is already gone.
+    //
+    // This is reachable whenever the window is force-rolled: the TURN_MAX roll enqueues close+open
+    // at the live edge, and a spine boundary already in flight then arrives carrying an OLDER t1.
+    // Applied, it closed the fresh successor at zero length — `t1` clamps up to `confirmedUpToMs`,
+    // the closing submit is skipped as too short, and the turn ends while live audio continues past
+    // it. Caught on m26073 in the first iteration of the window-continuity change: the meeting's
+    // last sentence ("Прежде чем перейдем к вопросу о будущем, что дальше?") never reached STT at
+    // all. The never-lose-tail promotion saved the pending words, which is precisely why this was
+    // invisible in the row count and visible only in the ORACLE comparison — the rows looked fine
+    // and the meeting's final sentence was simply absent.
+    if (item.t1 <= t.t0) {
+      this.trace(`stale-close turn=${t.turnId} at=${item.t1} <= t0=${t.t0} — ignored (turn still open)`);
+      return;
+    }
     // Clamp the boundary to available audio and never below confirmed.
     t.t1 = Math.max(t.confirmedUpToMs, Math.min(item.t1, this.latestAudioMs || item.t1));
     if (item.contextPadMs && item.contextPadMs > 0) {
