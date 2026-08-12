@@ -110,8 +110,8 @@ def test_intent_publishes_user_channel_frame():
     client, _store, redis, mid = _client(status="idle")
     r = client.put(f"/meetings/{PLAT}/{NID}/intent", json={"intent": "scheduled", "at": AT}, headers=H)
     assert r.status_code == 200
-    assert len(redis.published) == 1
-    channel, raw = redis.published[0]
+    assert len(redis.published) == 2
+    channel, raw = next((c, p) for c, p in redis.published if json.loads(p)["type"] == "meeting.status")
     assert channel == f"u:{USER}:meetings"
     frame = json.loads(raw)
     assert frame == {
@@ -121,6 +121,10 @@ def test_intent_publishes_user_channel_frame():
         "status": "scheduled",
         "when": AT,
     }
+    changed = next(json.loads(p) for c, p in redis.published if json.loads(p)["type"] == "meetings.changed")
+    assert changed["meeting_id"] == mid
+    assert changed["change"] == "updated"
+    assert changed["user_id"] == str(USER)
 
 
 def test_intent_idempotent_noop_does_not_publish():

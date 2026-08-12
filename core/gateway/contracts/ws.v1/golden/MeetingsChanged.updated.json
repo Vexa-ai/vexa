@@ -1,0 +1,9 @@
+{
+  "type": "meetings.changed",
+  "event_id": "evt_meeting_001",
+  "user_id": 42,
+  "meeting_id": 123,
+  "change": "updated",
+  "meeting": { "id": 123, "platform": "google_meet", "native_meeting_id": "abc-defg-hij", "status": "scheduled" },
+  "ts": "2026-08-04T12:00:00Z"
+}

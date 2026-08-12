@@ -10,7 +10,7 @@
   "core/agent/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
   "core/gateway/contracts/api.v1": "9b3fbdc65a049460db486c14ad590b8b7f60fe55ec252db4e5ef5ac2d894e1e6",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
-  "core/gateway/contracts/ws.v1": "77ce41cb384600acaf34402f4daf8d04b32063c662831238ba7a2e4195e80287",
+  "core/gateway/contracts/ws.v1": "6ff18db3316045d8b7055f95a261359e0dbbeaca3c7b1e2aa18f40ad7e0a4bfc",
   "core/identity/contracts/identity.v1": "36902fe610115088c855e7af607c1d778dbd3ab75512d8c71c8bf78cf1767dc7",
   "core/meetings/contracts/acts.v1": "1eaa34d27c52b0eb987a278115a1966c058f615ca16e3391b00107a6779dec4f",
   "core/meetings/contracts/captured-signal.v1": "6ab2c63f5164827d9735f51b0add4d30890972069f18b63d52255df33c36907d",

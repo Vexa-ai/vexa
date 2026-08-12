@@ -27,7 +27,10 @@ the conformance harness — the conformance assertions therefore drive THIS ship
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -39,6 +42,26 @@ from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
+
+
+async def _publish_user_meetings_changed(redis, *, user_id, meeting_id, change: str,
+                                         meeting: Optional[dict] = None) -> None:
+    """Best-effort additive ``ws.v1`` collection notification for the authenticated user feed."""
+    if redis is None or user_id is None or meeting_id is None:
+        return
+    frame = {
+        "type": "meetings.changed",
+        "event_id": f"evt_{uuid.uuid4().hex}",
+        "meeting_id": meeting_id,
+        "change": change,
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if meeting is not None:
+        frame["meeting"] = meeting
+    try:
+        await redis.publish(f"u:{user_id}:meetings", json.dumps(frame, default=str))
+    except Exception:  # noqa: BLE001 - WS notification must not fail the lifecycle callback
+        pass
 
 
 def _xpending_total(summary) -> "Optional[int]":
@@ -503,6 +526,13 @@ def _mount_lifecycle(
                         log_event("user_meeting_status_publish_failed", audience="system",
                                   level="warning", span="lifecycle.callback",
                                   fields={"error": str(e)})
+                await _publish_user_meetings_changed(
+                    redis,
+                    user_id=user_id,
+                    meeting_id=meeting_id,
+                    change="status_changed",
+                    meeting=meeting_row,
+                )
         # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
         # the meeting copilot transcript feed — the EXACT stream the meeting copilot worker
         # (agent worker/meeting.py, via VEXA_TRANSCRIPT_STREAM) blocks on. The worker reaps immediately

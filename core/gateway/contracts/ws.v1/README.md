@@ -29,8 +29,23 @@ SDKs, and any client build against.
     — from `bm:meeting:{id}:status` (status under `payload.status`).
   - `ChatMessage` `{type:"chat_message", sender?, text}` — from `va:meeting:{id}:chat`.
 
-  Data messages are **type-tagged and additive** (the gateway forwards the producer's raw
-  payload unchanged), so `type` + the listed required field are the floor; extra fields are allowed.
+  - `MeetingsChanged` `{type:"meetings.changed", event_id, meeting_id, change, ts, meeting?}` — from
+    `u:{user_id}:meetings`.
+  - `WorkspaceCommitted` `{type:"workspace.committed", event_id, workspace_id, commit_sha, ts}` — from
+    `u:{user_id}:workspace`.
+  - `RoutineStatus` `{type:"routine.status", event_id, routine_id, status, ts}` — from
+    `u:{user_id}:routines`.
+
+Data messages are **type-tagged and additive** (the gateway forwards the producer's raw
+payload unchanged), so `type` + the listed required fields are the floor; extra fields are allowed.
+
+### User scope
+
+After successful connect-time API-key resolution, the gateway subscribes to the Redis
+pattern `u:{resolved_user_id}:*`. The client cannot provide or alter this user id. The
+pattern currently covers `meetings`, `workspace`, and `routines` topics. Redis Pub/Sub
+does not replay missed messages; clients should fetch a REST snapshot after connect or
+reconnect and then apply live frames.
 
 ## The seam (what conforms to this)
 | Consumer | How |

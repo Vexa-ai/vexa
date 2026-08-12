@@ -655,6 +655,30 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
             except Exception:
                 pass
 
+    async def pattern_fan_in(pattern: str):
+        """Forward all Redis Pub/Sub events in the authenticated user namespace."""
+        pubsub = redis.pubsub()
+        await pubsub.psubscribe(pattern)
+        try:
+            async for message in pubsub.listen():
+                if message.get("type") != "pmessage":
+                    continue
+                data = message.get("data")
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8", errors="replace")
+                if not isinstance(data, str):
+                    continue
+                try:
+                    await ws.send_text(data)
+                except Exception:
+                    break
+        finally:
+            try:
+                await pubsub.punsubscribe(pattern)
+                await pubsub.close()
+            except Exception:
+                pass
+
     async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id):
         key = (platform, native_id, user_id)
         if key in subscribed_meetings:
@@ -680,8 +704,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
     # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
     # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
-    user_channel = f"u:{user_id}:meetings"
-    user_sub_task = asyncio.create_task(fan_in([user_channel]))
+    user_pattern = f"u:{user_id}:*"
+    user_sub_task = asyncio.create_task(pattern_fan_in(user_pattern))
 
     try:
         while True:
@@ -748,9 +772,9 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
                 subscribed: List[Dict[str, str]] = []
                 for item in authorized:
                     plat = item.get("platform"); nid = item.get("native_id")
-                    user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
-                    if plat and nid and user_id and meeting_id:
-                        await subscribe_meeting(plat, nid, user_id, meeting_id)
+                    item_user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
+                    if plat and nid and item_user_id and meeting_id:
+                        await subscribe_meeting(plat, nid, item_user_id, meeting_id)
                         subscribed.append({"platform": plat, "native_id": nid})
                 await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
 
@@ -795,9 +819,12 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     except WebSocketDisconnect:
         pass
     finally:
-        user_sub_task.cancel()  # Track G — tear down the user-scope fan-in on disconnect.
+        user_sub_task.cancel()  # tear down the user-scope fan-in on disconnect.
+        await asyncio.gather(user_sub_task, return_exceptions=True)
         for task in sub_tasks.values():
             task.cancel()
+        if sub_tasks:
+            await asyncio.gather(*sub_tasks.values(), return_exceptions=True)
 
 
 # Backward-compatible private alias (kept so any existing internal reference still resolves; the

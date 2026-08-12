@@ -1,0 +1,9 @@
+{
+  "type": "workspace.committed",
+  "event_id": "evt_workspace_001",
+  "user_id": 42,
+  "workspace_id": "personal",
+  "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+  "message": "Update decision notes",
+  "ts": "2026-08-04T12:01:00Z"
+}

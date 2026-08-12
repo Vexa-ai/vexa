@@ -172,9 +172,9 @@ async def test_invalid_api_key_closes_4401():
     assert ws.close_code == 4401
 
 
-async def test_connect_auto_subscribes_user_channel_and_forwards():
-    # Track G: a valid connect resolves user_id (7) and auto-subscribes `u:7:meetings`, with no
-    # client `subscribe` frame. A frame published to that channel reaches the socket verbatim.
+async def test_connect_auto_subscribes_user_pattern_and_forwards():
+    # A valid connect resolves user_id (7) and auto-subscribes `u:7:*`, with no
+    # client `subscribe` frame. Frames on user topics reach the socket verbatim.
     ws = _WS(inbound=[], api_key=API_KEY, close_when_drained=False)
     redis, auth = _redis_and_auth()
     task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
@@ -197,6 +197,20 @@ async def test_connect_auto_subscribes_user_channel_and_forwards():
     assert any(
         f.get("type") == "meeting.status" and f.get("status") == "scheduled" for f in ws.sent
     ), ws.sent
+
+    await redis.publish("u:7:workspace", json.dumps({
+        "type": "workspace.committed", "workspace_id": "personal", "commit_sha": "abc123"
+    }))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert any(f.get("type") == "workspace.committed" for f in ws.sent), ws.sent
+
+    await redis.publish("u:8:workspace", json.dumps({
+        "type": "workspace.committed", "workspace_id": "other", "commit_sha": "secret"
+    }))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not any(f.get("commit_sha") == "secret" for f in ws.sent), ws.sent
 
     ws.disconnect()
     await task

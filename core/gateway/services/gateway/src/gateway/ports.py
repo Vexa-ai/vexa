@@ -106,16 +106,24 @@ class DownstreamClient(Protocol):
 
 @runtime_checkable
 class PubSub(Protocol):
-    """A redis-style pub/sub subscription used by the ``/ws`` fan-in (``main.fan_in``)."""
+    """A Redis pub/sub subscription used by the ``/ws`` fan-in.
+
+    Ordinary meeting subscriptions emit ``message`` records. The authenticated user
+    scope uses ``PSUBSCRIBE`` and emits ``pmessage`` records.
+    """
 
     async def subscribe(self, *channels: str) -> None: ...
 
     async def unsubscribe(self, *channels: str) -> None: ...
 
+    async def psubscribe(self, *patterns: str) -> None: ...
+
+    async def punsubscribe(self, *patterns: str) -> None: ...
+
     async def close(self) -> None: ...
 
     def listen(self) -> AsyncIterator[dict]:
-        """Yield ``{"type": "message"|"subscribe", "data": <str>}`` dicts (redis-py shape)."""
+        """Yield Redis-shaped ``message``/``pmessage``/subscription records."""
         ...
 
 

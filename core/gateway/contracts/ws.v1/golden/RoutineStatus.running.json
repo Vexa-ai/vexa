@@ -1,0 +1,10 @@
+{
+  "type": "routine.status",
+  "event_id": "evt_routine_001",
+  "user_id": 42,
+  "routine_id": "rt_abc123",
+  "status": "running",
+  "job_id": "job_123",
+  "error": null,
+  "ts": "2026-08-04T12:02:00Z"
+}

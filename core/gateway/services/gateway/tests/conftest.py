@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from fnmatch import fnmatchcase
 from typing import Optional
 
 # fastapi-guard: keep it installed (so the integration is exercised) but in-memory and with
@@ -96,6 +97,7 @@ class FakePubSub:
         self._hub = hub
         self._queue: asyncio.Queue = asyncio.Queue()
         self._channels: list[str] = []
+        self._patterns: list[str] = []
 
     async def subscribe(self, *channels: str) -> None:
         self._channels = list(channels)
@@ -109,14 +111,26 @@ class FakePubSub:
             except ValueError:
                 pass
 
+    async def psubscribe(self, *patterns: str) -> None:
+        self._patterns = list(patterns)
+        for pattern in patterns:
+            self._hub._pattern_subs.setdefault(pattern, []).append(self._queue)
+
+    async def punsubscribe(self, *patterns: str) -> None:
+        for pattern in patterns or self._patterns:
+            try:
+                self._hub._pattern_subs.get(pattern, []).remove(self._queue)
+            except ValueError:
+                pass
+
     async def close(self) -> None:
         pass
 
     async def listen(self):
         yield {"type": "subscribe"}
         while True:
-            data = await self._queue.get()
-            yield {"type": "message", "data": data}
+            kind, data = await self._queue.get()
+            yield {"type": kind, "data": data}
 
 
 class FakeRedis:
@@ -124,10 +138,19 @@ class FakeRedis:
 
     def __init__(self):
         self._subs: dict[str, list[asyncio.Queue]] = {}
+        self._pattern_subs: dict[str, list[asyncio.Queue]] = {}
 
     def pubsub(self) -> FakePubSub:
         return FakePubSub(self)
 
-    async def publish(self, channel: str, data: str) -> None:
+    async def publish(self, channel: str, data: str) -> int:
+        delivered = 0
         for q in list(self._subs.get(channel, [])):
-            await q.put(data)
+            await q.put(("message", data))
+            delivered += 1
+        for pattern, queues in list(self._pattern_subs.items()):
+            if fnmatchcase(channel, pattern):
+                for q in list(queues):
+                    await q.put(("pmessage", data))
+                    delivered += 1
+        return delivered

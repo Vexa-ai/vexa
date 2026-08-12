@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -69,6 +70,7 @@ from control_plane.workspace_membership import MembershipError, MembershipIndex,
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
+from shared.user_events import RedisUserEventPublisher, routine_status, workspace_committed
 from control_plane.workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
@@ -933,6 +935,10 @@ def create_app(
     app.state.sessions = sess
     app.state.live_meetings = live
     app.state.scheduler = scheduler
+    # User-scoped WS notifications are best-effort. The APIs and workspace git history remain
+    # authoritative when Redis Pub/Sub is unavailable.
+    user_events = RedisUserEventPublisher(redis_url)
+    app.state.user_event_publisher = user_events
     settings = dispatcher.settings if dispatcher is not None else None
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
@@ -1317,13 +1323,20 @@ def create_app(
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         try:
+            subject = subject_of(request)
             routine = routines_mod.make_routine(
-                subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
+                subject=subject, name=body.name, cron=body.cron, prompt=body.prompt,
             )
             job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
         except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
             raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
         job = scheduler.schedule(job_spec)
+        job_id = job.get("job_id")
+        user_events.publish(
+            subject=subject,
+            suffix="routines",
+            frame=routine_status(subject=subject, routine_id=routine["id"], status="scheduled", job_id=job_id),
+        )
         ran_now = False
         if body.run_now:
             # Fire one immediate run via the dispatcher (no HTTP hop) so the author sees a result now.
@@ -1332,7 +1345,7 @@ def create_app(
                 ran_now = True
             except Exception:  # noqa: BLE001 — the routine is still scheduled even if the demo run fails
                 ran_now = False
-        return {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now}
+        return {"routine": routine, "job_id": job_id, "ran_now": ran_now}
 
     @app.get("/api/routines")
     def list_routines(request: Request):
@@ -1367,6 +1380,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown routine")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        user_events.publish(
+            subject=subject,
+            suffix="routines",
+            frame=routine_status(
+                subject=subject,
+                routine_id=workspace_routines_mod.routine_id_for_workspace_file(subject, name),
+                status="scheduled" if body.enabled else "disabled",
+            ),
+        )
         return {
             "ok": True,
             "name": name,
@@ -1383,6 +1405,12 @@ def create_app(
             meta = job.get("metadata") or {}
             if meta.get("routine_id") == routine_id and meta.get("owner") == subject:
                 scheduler.cancel_job(job["job_id"])
+                user_events.publish(
+                    subject=subject,
+                    suffix="routines",
+                    frame=routine_status(subject=subject, routine_id=routine_id, status="cancelled",
+                                         job_id=job.get("job_id")),
+                )
                 return {"ok": True, "routine_id": routine_id}
         raise HTTPException(status_code=404, detail="unknown routine")
 
@@ -1788,7 +1816,27 @@ def create_app(
         shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
         subject = subject_of(request)
         ws = _manage_dir(subject, body.slug)
-        return {"purpose": write_purpose(ws, body.purpose)}
+        purpose = write_purpose(ws, body.purpose)
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(ws), "rev-parse", "HEAD"],
+                check=False, capture_output=True, text=True, timeout=3,
+            )
+            sha = proc.stdout.strip() if proc.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            sha = ""
+        if sha:
+            user_events.publish(
+                subject=subject,
+                suffix="workspace",
+                frame=workspace_committed(
+                    subject=subject,
+                    workspace_id=body.slug or "main",
+                    commit_sha=sha,
+                    message="workspace purpose updated",
+                ),
+            )
+        return {"purpose": purpose}
 
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):

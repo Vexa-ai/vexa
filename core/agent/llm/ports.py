@@ -349,4 +349,7 @@ def run_harness_turn(
         except subprocess.CalledProcessError:
             continue  # one mount's commit failing must not abort the rest of the set
         if sha:
-            yield {"type": "commit", "sha": sha}
+            # The worker uses this additive field to attribute the commit to the correct mounted
+            # workspace when a turn has more than one writable mount. Existing consumers only
+            # depend on ``type`` and ``sha``.
+            yield {"type": "commit", "sha": sha, "workspace_path": str(mount)}

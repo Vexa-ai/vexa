@@ -31,6 +31,9 @@ gateway's contextvars (the cross-hop trace ``test_tracing.py`` asserts).
 """
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
@@ -68,8 +71,6 @@ async def _publish_user_meeting_status(
     (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing."""
     if redis is None or user_id is None or meeting_id is None:
         return
-    import json as _json
-
     frame = {
         "type": "meeting.status",
         "meeting_id": meeting_id,
@@ -78,10 +79,38 @@ async def _publish_user_meeting_status(
         "when": when,
     }
     try:
-        await redis.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+        await redis.publish(f"u:{user_id}:meetings", json.dumps(frame, default=str))
     except Exception as e:  # noqa: BLE001 — publish is best-effort
         log_event("user_meeting_status_publish_failed", audience="system", level="warning",
                   span="meetings.intent.publish", fields={"error": str(e)})
+
+
+async def _publish_user_meetings_changed(
+    redis,
+    *,
+    user_id,
+    meeting_id,
+    change: str,
+    meeting: Optional[dict] = None,
+    log_event: Callable[..., dict],
+) -> None:
+    """Publish the additive ``ws.v1`` collection-change frame beside legacy meeting.status."""
+    if redis is None or user_id is None or meeting_id is None:
+        return
+    frame = {
+        "type": "meetings.changed",
+        "event_id": f"evt_{uuid.uuid4().hex}",
+        "meeting_id": meeting_id,
+        "change": change,
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if meeting is not None:
+        frame["meeting"] = meeting
+    try:
+        await redis.publish(f"u:{user_id}:meetings", json.dumps(frame))
+    except Exception as e:  # noqa: BLE001 - notification fan-out must not fail the write
+        log_event("user_meetings_changed_publish_failed", audience="system", level="warning",
+                  span="meetings.changed.publish", fields={"error": str(e)})
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -361,6 +390,10 @@ def build_router(
             redis, user_id=user_id, meeting_id=row.get("id"), native_id=native_id,
             status=row.get("status"), when=scheduled_at, log_event=log_event,
         )
+        await _publish_user_meetings_changed(
+            redis, user_id=user_id, meeting_id=row.get("id"), change="created",
+            meeting=row, log_event=log_event,
+        )
         return JSONResponse(status_code=201, content=row)
 
     # --- PATCH /meetings/{meeting_id} → EDIT a PLANNED meeting by ROW id (title / time / link /
@@ -443,6 +476,10 @@ def build_router(
             native_id=row.get("native_meeting_id"), status=row.get("status"),
             when=(row.get("data") or {}).get("scheduled_at"), log_event=log_event,
         )
+        await _publish_user_meetings_changed(
+            redis, user_id=user_id, meeting_id=meeting_id, change="updated",
+            meeting=row, log_event=log_event,
+        )
         return row
 
     async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
@@ -460,6 +497,10 @@ def build_router(
         await _publish_user_meeting_status(
             redis, user_id=user_id, meeting_id=meeting_id, native_id=None,
             status="deleted", when=None, log_event=log_event,
+        )
+        await _publish_user_meetings_changed(
+            redis, user_id=user_id, meeting_id=meeting_id, change="deleted",
+            log_event=log_event,
         )
 
     @router.patch("/meetings/{meeting_id}")
@@ -780,6 +821,10 @@ def build_router(
                 status=intent,
                 when=result.get("scheduled_at"),
                 log_event=log_event,
+            )
+            await _publish_user_meetings_changed(
+                redis, user_id=user_id, meeting_id=result.get("id"), change="updated",
+                meeting=result, log_event=log_event,
             )
         return JSONResponse(content={
             "meeting_id": result.get("id"),

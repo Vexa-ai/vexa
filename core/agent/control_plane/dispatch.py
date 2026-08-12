@@ -230,6 +230,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    if str(identity.get("launcher") or "").startswith("schedule:"):
+        env["VEXA_ROUTINE_ID"] = str(identity["launcher"])[len("schedule:"):]
     # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
     # authenticated human whose input drives the turn), committer stays the platform. Until membership/
     # sharing lands (later WPs) the principal IS the subject; a caller that already resolved a distinct

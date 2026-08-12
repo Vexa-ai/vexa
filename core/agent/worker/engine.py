@@ -37,6 +37,7 @@ from llm import (
 )
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from shared.user_events import RedisUserEventPublisher, routine_status, workspace_committed
 
 log = logging.getLogger("agent_api.worker")
 
@@ -336,9 +337,47 @@ def run_turn_over_workspace(
                                commit=commit, author=author, extra_mounts=extras)
         first = next(gen, None)
     captured: str | None = None
+    user_event_publisher = RedisUserEventPublisher(os.environ.get("REDIS_URL"))
+    routine_id = os.environ.get("VEXA_ROUTINE_ID", "").strip()
     for ev in (gen if first is None else itertools.chain([first], gen)):
         if ev.get("type") == "done" and ev.get("sessionId"):
             captured = ev["sessionId"]
+        if ev.get("type") == "done" and routine_id:
+            subject = os.environ.get("VEXA_OWNER", "").strip()
+            if subject:
+                ok = ev.get("ok", True)
+                user_event_publisher.publish(
+                    subject=subject,
+                    suffix="routines",
+                    frame=routine_status(
+                        subject=subject,
+                        routine_id=routine_id,
+                        status="succeeded" if ok else "failed",
+                        error=None if ok else str(ev.get("error") or ev.get("reply") or "routine failed"),
+                    ),
+                )
+        if ev.get("type") == "commit" and ev.get("sha"):
+            subject = os.environ.get("VEXA_OWNER", "").strip()
+            if subject:
+                committed_path = Path(ev.get("workspace_path") or work).resolve()
+                workspace_id = None
+                for mount in mounts:
+                    try:
+                        if Path(mount.get("path", "")).resolve() == committed_path:
+                            workspace_id = mount.get("id") or mount.get("slug")
+                            break
+                    except (TypeError, OSError):
+                        continue
+                workspace_id = workspace_id or ("main" if committed_path == work.resolve() else committed_path.name)
+                user_event_publisher.publish(
+                    subject=subject,
+                    suffix="workspace",
+                    frame=workspace_committed(
+                        subject=subject,
+                        workspace_id=workspace_id,
+                        commit_sha=str(ev["sha"]),
+                    ),
+                )
         yield ev
     if captured and session_continuity:
         sess_file.parent.mkdir(parents=True, exist_ok=True)

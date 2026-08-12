@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/contracts/ws.v1",
   "title": "ws.v1 — the public live WebSocket multiplex (/ws), frozen to vexa main",
-  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages — transcript (the per-speaker confirmed/pending bundle) + transcription_segment from tc:meeting:{id}:mutable, meeting.status from bm:meeting:{id}:status, chat_message from va:meeting:{id}:chat. The gateway forwards the raw redis payload verbatim, so data messages are type-tagged and additive (extra fields allowed). Shapes are the canonical 0.10.6 contract (vexa-0.11 api-gateway + meetings.publish_meeting_status_change).",
+  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages. In addition to per-meeting channels, an authenticated socket is automatically pattern-subscribed to u:{user_id}:*; producers use u:{user_id}:meetings, u:{user_id}:workspace, and u:{user_id}:routines. The gateway forwards producer payloads verbatim, so data messages are type-tagged and additive. Redis Pub/Sub is transient and does not provide replay; clients should rehydrate from REST after reconnect.",
   "$defs": {
     "MeetingRef": {
       "type": "object",
@@ -103,6 +103,50 @@
         "ts": { "type": ["string", "null"] }
       }
     },
+    "MeetingsChanged": {
+      "type": "object",
+      "description": "A user-scoped meeting collection change from u:{user_id}:meetings. The meeting snapshot is optional so a client may use meeting_id + change and refetch details.",
+      "required": ["type", "event_id", "meeting_id", "change", "ts"],
+      "properties": {
+        "type": { "const": "meetings.changed" },
+        "event_id": { "type": "string", "minLength": 1 },
+        "user_id": { "type": ["integer", "string"] },
+        "meeting_id": { "type": ["integer", "string"] },
+        "change": { "type": "string", "enum": ["created", "updated", "deleted", "status_changed"] },
+        "meeting": { "type": ["object", "null"] },
+        "revision": { "type": ["integer", "string", "null"] },
+        "ts": { "type": "string", "minLength": 1 }
+      }
+    },
+    "WorkspaceCommitted": {
+      "type": "object",
+      "description": "A durable workspace git commit from u:{user_id}:workspace. The commit SHA is the idempotent state cursor; clients may refetch workspace/git for details.",
+      "required": ["type", "event_id", "workspace_id", "commit_sha", "ts"],
+      "properties": {
+        "type": { "const": "workspace.committed" },
+        "event_id": { "type": "string", "minLength": 1 },
+        "user_id": { "type": ["integer", "string"] },
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "commit_sha": { "type": "string", "minLength": 1 },
+        "message": { "type": ["string", "null"] },
+        "ts": { "type": "string", "minLength": 1 }
+      }
+    },
+    "RoutineStatus": {
+      "type": "object",
+      "description": "A user-scoped routine lifecycle update from u:{user_id}:routines.",
+      "required": ["type", "event_id", "routine_id", "status", "ts"],
+      "properties": {
+        "type": { "const": "routine.status" },
+        "event_id": { "type": "string", "minLength": 1 },
+        "user_id": { "type": ["integer", "string"] },
+        "routine_id": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["created", "scheduled", "running", "succeeded", "failed", "disabled", "cancelled"] },
+        "job_id": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] },
+        "ts": { "type": "string", "minLength": 1 }
+      }
+    },
     "ChatMessage": {
       "type": "object",
       "description": "server → client: a chat message from the bot (forwarded from va:meeting:{id}:chat)",
@@ -123,6 +167,8 @@
           "type": "string",
           "enum": [
             "missing_api_key",
+            "invalid_api_key",
+            "auth_unavailable",
             "invalid_json",
             "invalid_subscribe_payload",
             "invalid_unsubscribe_payload",
