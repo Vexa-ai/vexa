@@ -55,6 +55,7 @@ import { TrackNamer, type TrackNamerObservation } from './track-namer.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { localAgreement } from '@vexa/transcribe-buffer';
 import { hallucinationRule, type SuppressedSegment } from './hallucination-gate.js';
+import { stitchPublishBoundary } from './publish-stitch.js';
 
 const SAMPLE_RATE = 16000;
 /** Near-silent spans are dropped before Whisper (desktop's DROP_RMS). */
@@ -427,8 +428,14 @@ export class ChunkedTranscriber {
    *  guard compares a fresh window-match against this to spot a brief tile flip. */
   private lastPublishedSpeaker: { name: string; endMs: number } | null = null;
 
-  private constructor(private readonly cb: ChunkedTranscriberCallbacks) {
+  /** The publish boundary, STITCHED (publish-stitch.ts). Everything in this class publishes
+   *  through it, so the lane keeps cutting exactly where it cuts and only the ASSEMBLY of those
+   *  cuts into rows changes. `VEXA_PUBLISH_STITCH=0` restores the raw boundary. */
+  private readonly cb: ChunkedTranscriberCallbacks;
+
+  private constructor(cb: ChunkedTranscriberCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
+    this.cb = stitchPublishBoundary(cb, { log: (m) => this.log(m) });
     this.mode = cb.turnSource ?? 'pyannote';
     this.graceMs = cb.turnSourceGraceMs ?? TURN_SOURCE_GRACE_MS;
     if (cb.clock) this.now = () => cb.clock!.now();

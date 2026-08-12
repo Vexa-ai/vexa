@@ -86,8 +86,28 @@ async function main() {
     'first submission confirms nothing (no prior pass to agree with)');
   ok(confirmedTexts.includes('This is Anna'),
     'the stable word-prefix confirms ("This is Anna")');
-  ok(confirmedIds.every((id) => /^turn:\d+:\d+$/.test(id)) && new Set(confirmedIds).size === confirmedIds.length,
-    'confirmed segment ids are stable turn:N:seq and unique');
+  ok(confirmedIds.every((id) => /^turn:\d+:\d+$/.test(id)), 'confirmed segment ids are stable turn:N:seq');
+  // A confirmed id may now be published MORE THAN ONCE, because publish-stitch merges consecutive
+  // finals of one speaker into a row that GROWS in place. That makes the old uniqueness assertion
+  // wrong and, in its place, pins the invariant that actually protects the customer: a repeat is
+  // always a strict EXTENSION of what that id already said. A row may lengthen; it may never
+  // rewrite or shorten, because the words already on screen are words the customer read.
+  {
+    const seen = new Map<string, string>();
+    let violation = '';
+    for (const p of h.publishes) {
+      const ids = p.confirmed.map((c) => c.id);
+      if (new Set(ids).size !== ids.length) violation = `duplicate id within one publish: ${ids.join(',')}`;
+      for (const c of p.confirmed) {
+        const before = seen.get(c.id);
+        if (before !== undefined && !c.text.startsWith(before)) {
+          violation = `id ${c.id} rewrote ${JSON.stringify(before)} as ${JSON.stringify(c.text)}`;
+        }
+        seen.set(c.id, c.text);
+      }
+    }
+    ok(violation === '', `a republished id only ever EXTENDS its text${violation ? ` — ${violation}` : ''}`);
+  }
   ok(h.prompts.some((p) => (p || '').includes('This is Anna')),
     'prompt chaining: a later transcribe call carries the confirmed tail');
   ok((h.publishes[h.publishes.length - 1].pending.length === 0),

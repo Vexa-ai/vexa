@@ -64,8 +64,20 @@ const texts = confirmed.map((c) => c.text);
 const ids = confirmed.map((c) => c.id);
 check('early segment confirmed (turn reached seq>0)', texts.includes('alpha'), JSON.stringify(texts));
 check('dangling pending tail is PROMOTED on close, not lost', texts.some((t) => t.includes('beta')), JSON.stringify(texts));
-check('promoted id continues the seq (no collision with the confirmed segment)',
-  new Set(ids).size === ids.length && ids.every((id) => /^turn:\d+:\d+$/.test(id)), JSON.stringify(ids));
+// The danger this check exists for is a COLLISION: the promoted tail landing on an id that
+// already holds confirmed text, so the upsert overwrites "alpha" and the customer loses it.
+// publish-stitch legitimately republishes one id as its row grows, so id-uniqueness is no longer
+// the test — settle the store the way the collector does (upsert on id) and assert that BOTH the
+// early confirm and the promoted tail survive in it.
+{
+  const store = new Map<string, string>();
+  for (const c of confirmed) store.set(c.id, c.text);
+  const settled = [...store.values()].join(' | ');
+  check('promoted tail does not overwrite the earlier confirm (upsert-settled store keeps both)',
+    ids.every((id) => /^turn:\d+:\d+$/.test(id))
+    && settled.includes('alpha') && settled.includes('beta'),
+    `ids=${JSON.stringify(ids)} settled=${JSON.stringify(settled)}`);
+}
 
 if (failed) { console.error(`\n❌ never-lose-tail: ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ never-lose-tail: a confirmed-then-dangling turn promotes its tail instead of deleting it.');
