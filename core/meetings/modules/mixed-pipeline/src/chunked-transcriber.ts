@@ -101,6 +101,22 @@ const SUBMIT_TICK_MS = 2000;
  *  sub-{MAX}ms turn by someone new. Tunable via VEXA_SHORT_UI_SWITCH_*. */
 const SHORT_UI_SWITCH_MAX_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SHORT_UI_SWITCH_MAX_MS) || 3200);
 const SHORT_UI_SWITCH_GAP_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SHORT_UI_SWITCH_GAP_MS) || 2500);
+/** Confidence a DIFFERENT name must reach, over the OPEN turn's grown window, to take a turn
+ *  already attributed to someone else (and repaint what it published).
+ *
+ *  It is deliberately an absolute bar rather than a lead over the incumbent's remembered
+ *  confidence: the incumbent's number was measured on a much SMALLER window (often the first
+ *  sub-second tick, where it was the only name lit and so scored 1.0), and comparing across
+ *  windows of different size is not a comparison at all. Confidence here is the winner's share
+ *  of all support in the CURRENT window, so this bar means "a clear majority of the evidence
+ *  seen so far", strictly above the MIN_MATCH_CONFIDENCE gate a first attribution must clear.
+ *  Hysteresis, so two near-tied names cannot thrash segment by segment. Tunable via
+ *  VEXA_REATTRIBUTE_MIN_CONFIDENCE. */
+const REATTRIBUTE_MIN_CONFIDENCE = Number((typeof process !== 'undefined' && process.env?.VEXA_REATTRIBUTE_MIN_CONFIDENCE) || 0.75);
+/** Share of the lit-time over a turn's window that ONE name must hold before the late-box
+ *  claim will hand it that turn. Below this the tiles disagree too much to name the turn from
+ *  the UI alone and it stays provisional ("Speaker"). Tunable via VEXA_CLAIM_MIN_SHARE. */
+const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.VEXA_CLAIM_MIN_SHARE) || 0.6);
 
 export interface ChunkSegment {
   text: string;
@@ -187,6 +203,11 @@ interface Turn {
    *  the name is locked so later hints (incl. brief "hmm" flickers) can't flip the
    *  turn's pending. Priority is for the unattributed, never for already-attributed. */
   resolvedName: string | null;
+  /** Window-match confidence the current `resolvedName` was accepted at. A challenger
+   *  must beat it by REATTRIBUTE_MARGIN over the turn's GROWN window to take the turn. */
+  resolvedConfidence?: number;
+  /** Set at close: the turn is over, its name is final, no further re-resolution. */
+  nameLocked?: boolean;
   /** Optional STT-only trailing context used on speech-end closes. Published
    *  timestamps and confirmed high-water still stop at t1. */
   contextEndMs?: number;
@@ -359,7 +380,35 @@ export class ChunkedTranscriber {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
       if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
-      if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
+      // Late-box gap. The turn could not be window-matched, and the claim used to go to
+      // WHICHEVER NAME'S HINT HAPPENED TO FIRE — regardless of whether that name was lit
+      // during the turn at all. On Teams, where the tile lights on NOISE, a participant who
+      // is TYPING emits hints continuously and therefore won this race almost every time.
+      // That is what produced m24's label distribution (Jacob 65 : Dmitry 1 on a balanced
+      // two-speaker conversation) and it is fabrication: an unnameable turn was given a
+      // confident name chosen by timing rather than by evidence.
+      //
+      // Claim by the accumulated lit-time over the TURN's own window instead, and only when
+      // one name holds a clear plurality of it (CLAIM_MIN_SHARE). When both tiles were lit
+      // through the turn — the genuinely ambiguous case Teams cannot disambiguate from one
+      // mixed stream — the turn stays provisional and publishes as "Speaker". Unknown stays
+      // unknown.
+      //
+      // The genuine late-box gap is the case where NO tile was lit during the turn at all —
+      // the platform reported the speaker only after the fact. That one still claims for the
+      // hint that just fired, exactly as before. The change bites only when the turn window
+      // DOES carry hint evidence, which is precisely when "whoever fired last" was choosing
+      // against the record.
+      let claimName: string | null = null;
+      if (u.t1 >= claimFrom) {
+        const evidence = this.binder.support({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+        if (evidence.length === 0) claimName = name;                       // true late box — unchanged
+        else {
+          const lead = evidence.find((s) => !blocked.has(s.name));
+          if (lead && lead.share >= CLAIM_MIN_SHARE) claimName = lead.name;   // the record, not the race
+        }
+      }
+      if (claimName && !blocked.has(claimName)) { this.claimTurn(u.clusterId, claimName); matchedNow = true; }
       else still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
@@ -672,10 +721,20 @@ export class ChunkedTranscriber {
     // The whole turn span is adjudicated once closed — later commits
     // (overlap duplicates) must not re-transcribe any of it.
     this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.t1, turn.confirmedUpToMs);
-    if (turn.seq === 0 && turn.allConfirmed.length === 0 && turn.pendingTail.length > 0) {
-      // Closing pass produced nothing but drafts existed — never lose a turn.
+    if (turn.pendingTail.length > 0) {
+      // NEVER LOSE A TURN. The closing pass yielded nothing new, but drafts are still pending —
+      // live-edge speech past the last committed boundary. Promote them to CONFIRMED before the
+      // clearPending below retracts them; otherwise that speech is DELETED from the live view AND
+      // the durable store (the pending-retract path). This covers the seq>0 case (a turn that
+      // already confirmed earlier segments and closed with a dangling tail via one of submitTurn's
+      // yielded-nothing early returns) — the previous guard only rescued a never-confirmed turn,
+      // so a confirmed-then-dangling turn silently lost its trailing words. Continue the segment
+      // numbering from turn.seq so the promoted ids never collide with turn:${id}:0..seq-1.
       const name = this.resolveName(turn);
-      const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
+      const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${turn.seq + i}` }));
+      turn.seq += promoted.length;
+      // publish(confirmed, []) republishes these as completed AND reconciles pending→[], so the
+      // matching turn:${id}:p* drafts are retracted in the same breath (text moves p*→confirmed).
       this.cb.publish(name, promoted, []);
       this.rememberPublishedSpeaker(name, promoted[promoted.length - 1]?.endMs);
       turn.allConfirmed.push(...promoted);
@@ -688,8 +747,13 @@ export class ChunkedTranscriber {
       // PUBLISHED, or the next turn re-transcribes the promoted audio and
       // the same sentence appears under two turns.
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, promoted[promoted.length - 1].endMs);
+      turn.pendingTail = [];
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
+    // The turn is over: its window can grow no further, so its name is final. Everything
+    // after this point is the LATE path (unresolved queue / binder cluster vote), which
+    // owns renames of closed turns; the open-turn re-resolution above must not run again.
+    turn.nameLocked = true;
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);
     // Register a name vote for the closed turn. If no hint overlaps yet
     // (provisional), queue it for re-resolve when a later hint arrives.
@@ -704,30 +768,60 @@ export class ChunkedTranscriber {
   }
 
   private resolveName(turn: Turn): string {
-    // STICKY ATTRIBUTION. Once a turn has resolved to a real speaker, lock it: later
-    // hints (a brief "hmm" box-flicker, the other speaker's lag-shifted overlap) must
-    // NOT flip an already-attributed turn's pending. Priority/claim is for the
-    // UNATTRIBUTED, never for the attributed. While unattributed we keep resolving:
-    // window-match (lag-corrected overlap) casts the per-key vote; the first REAL
-    // result locks the name (and onLateResolve → onClusterRename paints it in).
-    if (turn.resolvedName) return turn.resolvedName;
+    // STICKY-UNTIL-CLOSE ATTRIBUTION. A turn's name is locked when the turn CLOSES, not on
+    // the first tick that produced any name at all.
+    //
+    // Why this changed (m24, the first real Teams tape). The old rule was `if
+    // (turn.resolvedName) return turn.resolvedName` — the very first submit tick, whose
+    // commit window is a fraction of a second, decided the whole turn. Whoever's tile
+    // happened to be lit at the turn's onset owned every later segment of it. On Teams the
+    // tile lights on NOISE, so the other participant TYPING at the moment a turn began
+    // stamped his name on the entire utterance. Measured on the tape: over the ground-truth
+    // window 1786397358.0–1786397406.5 (Dmitry describing the teams-capture module) the
+    // hints name Dmitry for 145.4s of lit time against Jacob's 47.2s — better than 3:1 —
+    // and the transcript still said Jacob for all of it. The evidence was there; the lock
+    // was taken before it arrived.
+    //
+    // So while the turn is OPEN we keep re-resolving over the GROWN window and let a
+    // challenger take the turn only if it beats the incumbent's confidence by
+    // REATTRIBUTE_MARGIN. That is strictly MORE evidence, never invented evidence: an
+    // unresolvable turn still returns its cluster id and stays "Speaker". Every flip
+    // repaints the already-published segments through the same rename path a late hint
+    // uses, so nothing is orphaned under the old name.
+    if (turn.resolvedName && turn.nameLocked) return turn.resolvedName;
     const commit = { clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 };
     // recordVote:false — we only commit a vote once the result survives the
     // short-UI-switch guard below, so a held-provisional bad hint never votes.
     const r = this.binder.resolve(commit, { recordVote: false });
-    if (r.source !== 'provisional-cluster-id' && this.shouldDeferShortUiSwitch(turn, r.speakerName, r.source)) {
+    if (r.source === 'provisional-cluster-id') return turn.resolvedName ?? r.speakerName;
+    if (this.shouldDeferShortUiSwitch(turn, r.speakerName, r.source)) {
       // A brief isolated tile flip to a NEW name right after a different speaker:
       // hold provisional and block that name from a later claim/rename.
       if (!turn.blockedNames) turn.blockedNames = new Set();
       turn.blockedNames.add(r.speakerName);
       this.log(`[ChunkedTranscriber] short UI switch held provisional ${turn.clusterId}; speaker=${r.speakerName}`);
-      return turn.clusterId;
+      return turn.resolvedName ?? turn.clusterId;
     }
-    if (r.source !== 'provisional-cluster-id') {
+    if (turn.blockedNames?.has(r.speakerName)) return turn.resolvedName ?? turn.clusterId;
+    if (!turn.resolvedName) {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
       turn.resolvedName = r.speakerName;
+      turn.resolvedConfidence = r.confidence;
+      return r.speakerName;
     }
-    return r.speakerName;
+    if (r.speakerName === turn.resolvedName) {
+      turn.resolvedConfidence = r.confidence;
+      return turn.resolvedName;
+    }
+    if (r.source === 'window-match' && r.confidence >= REATTRIBUTE_MIN_CONFIDENCE) {
+      this.log(`[ChunkedTranscriber] re-attributed ${turn.clusterId}: "${turn.resolvedName}" → "${r.speakerName}" (conf ${r.confidence.toFixed(2)}) over the grown turn window`);
+      this.binder.recordClusterVote(turn.clusterId, r.speakerName);
+      turn.resolvedName = r.speakerName;
+      turn.resolvedConfidence = r.confidence;
+      this.claimTurn(turn.clusterId, r.speakerName);   // repaint what this turn already published
+      return r.speakerName;
+    }
+    return turn.resolvedName;
   }
 
   private isRealSpeakerName(name: string): boolean {

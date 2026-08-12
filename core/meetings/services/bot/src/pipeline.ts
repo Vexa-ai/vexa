@@ -201,15 +201,38 @@ function createMixedBotPipeline(
     }
   };
 
+  // The mixed lane's pending tail is a FULL-REPLACE block: the ChunkedTranscriber republishes the whole
+  // surviving tail each pass, shrinking it as segments confirm (under NEW `turn:N:{seq}` ids) and emptying
+  // it when the turn closes. The bot's egress is an append-only stream the terminal upserts by id, so a
+  // pending id that DROPS OUT of the block is never removed → it lingers as a stale "unattached" draft
+  // (and an over-read past the turn boundary re-appears when the next turn transcribes the same audio).
+  // Diff the pending id set each pass and RETRACT the departed ids so the terminal + durable store drop
+  // them, leaving only the clean confirmed segments. One turn is open at a time (the pump serializes), so
+  // a single set tracks the whole lane.
+  let pendingIds = new Set<string>();
+  const reconcilePending = (pending: ChunkSegment[]): void => {
+    const next = new Set(pending.map((c) => c.segmentId));
+    const retracted: string[] = [];
+    for (const id of pendingIds) if (!next.has(id)) retracted.push(id);
+    pendingIds = next;
+    if (retracted.length > 0 && sink.retract) {
+      void sink.retract(retracted).catch((e) => {
+        (onError ?? ((err) => console.error(`[bot] pipeline(mixed): retract rejected: ${String(err)}`)))(e);
+      });
+    }
+  };
+
   const ensure = (): Promise<MixedTranscriber> => {
     if (transcriber) return Promise.resolve(transcriber);
     if (!creating) {
       creating = createTranscriber({
         transcribe,
-        // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail.
-        publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); publish(speaker, pending, false); },
-        publishPending: (speaker, segments) => publish(speaker, segments, false),
-        clearPending: () => { /* the bot's transcript.v1 egress is append-only; drafts self-replace by id */ },
+        // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail. Reconcile the
+        // pending block FIRST so a draft that just confirmed (or dropped out) is retracted, not orphaned.
+        publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); reconcilePending(pending); publish(speaker, pending, false); },
+        publishPending: (speaker, segments) => { reconcilePending(segments); publish(speaker, segments, false); },
+        // The turn's pending is gone (moved to another name / tail emptied / turn closed) → retract it.
+        clearPending: () => { reconcilePending([]); },
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
         language,
         onError,

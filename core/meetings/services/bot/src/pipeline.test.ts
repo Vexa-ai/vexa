@@ -39,10 +39,12 @@ addFormats(ajv);
 ajv.addSchema(txSchema);
 const validateSeg: ValidateFunction = ajv.compile({ $ref: `${txSchema.$id}#/$defs/TranscriptSegment` });
 
-/** A capturing bot-port TranscriptSink — records every published segment (confirmed + drafts). */
-function captureSink(): TranscriptSink & { readonly published: TranscriptSegment[] } {
+/** A capturing bot-port TranscriptSink — records every published segment (confirmed + drafts) and
+ *  every retracted id (the pending-tail withdrawal path). */
+function captureSink(): TranscriptSink & { readonly published: TranscriptSegment[]; readonly retracted: string[] } {
   const published: TranscriptSegment[] = [];
-  return { published, async publish(seg) { published.push(seg); } };
+  const retracted: string[] = [];
+  return { published, retracted, async publish(seg) { published.push(seg); }, async retract(ids) { retracted.push(...ids); } };
 }
 
 const baseInv = (over: Partial<Invocation> = {}): Invocation => ({
@@ -196,6 +198,41 @@ async function main(): Promise<void> {
         !!s.absolute_start_time &&
         Math.abs(new Date(s.absolute_start_time).getTime() / 1000 - (s.start ?? 0)) < 1),
       JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
+  }
+
+  // ── 6) MIXED LANE pending RETRACTION (transcript de-dup): the mixed lane republishes its pending
+  //     tail as a FULL-REPLACE block. The bot's egress is append-only + the terminal upserts by id, so a
+  //     draft id that DROPS OUT of the block (confirmed under a new seq id, tail shrank, turn closed) must
+  //     be RETRACTED or it lingers as a stale "unattached" duplicate (and an over-read past the turn
+  //     boundary re-appears when the next turn transcribes the same audio). Assert the diff → retract. ──
+  {
+    const sink = captureSink();
+    let cb: ChunkedTranscriberCallbacks | null = null;
+    const factory = async (c: ChunkedTranscriberCallbacks) => {
+      cb = c;
+      return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
+    };
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
+    await pipe.start();
+    const seg = (id: string, s: number, e: number) => ({ text: 't', startMs: s, endMs: e, language: 'en', segmentId: id });
+
+    // Open turn: two pending drafts published (nothing departed yet).
+    cb!.publishPending('Speaker', [seg('turn:1:p0', 1000, 2000), seg('turn:1:p1', 2000, 3000)]);
+    // A confirm lands: the leading draft confirms under a NEW seq id and the tail SHRINKS to one — the
+    // dropped draft (turn:1:p1) must be retracted, the surviving draft (turn:1:p0) must NOT.
+    cb!.publish('Speaker', [seg('turn:1:0', 1000, 2000)], [seg('turn:1:p0', 2000, 2500)]);
+    // Turn closes: pending emptied → the last surviving draft is retracted; only confirmed seq ids remain.
+    cb!.clearPending();
+    await sleep(20);
+
+    check('retraction: a draft that dropped out of the pending block was retracted (turn:1:p1)',
+      sink.retracted.includes('turn:1:p1'), JSON.stringify(sink.retracted));
+    check('retraction: the surviving-then-closed draft was retracted on close (turn:1:p0)',
+      sink.retracted.includes('turn:1:p0'), JSON.stringify(sink.retracted));
+    check('retraction: a CONFIRMED seq segment is NEVER retracted (durable content survives)',
+      !sink.retracted.includes('turn:1:0'), JSON.stringify(sink.retracted));
+    check('retraction: the confirmed segment WAS published (real content kept)',
+      sink.published.some((s) => s.segment_id === 'turn:1:0' && s.completed), JSON.stringify(sink.published.map((s) => s.segment_id)));
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

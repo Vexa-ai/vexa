@@ -327,15 +327,36 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName, mainAudioGraceMs }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
       // track into w.__vexaCapturedRemoteAudioStreams. Combine them into ONE live stream (an
       // AudioContext destination), keep connecting late-arriving tracks via a rescan (a participant
       // who speaks later), and feed that single mix to the mixed lane (pyannote re-separates speakers).
+      // Teams delivers the COMPLETE meeting audio as a single server-side mix whose track id is prefixed
+      // "mainAudio" — witnessed live: the standard web client receives exactly ONE audio receiver. The
+      // bot is ALSO handed a redundant track (e.g. a dominant-speaker copy) whose audio is already inside
+      // that mix; combining both double-feeds every word to the transcriber → repeated words. So on Teams
+      // mix ONLY the mainAudio track. Jitsi keeps combining all tracks (its topology isn't witnessed).
       const setupMix = (): void => {
-        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
+        let streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>;
+        if (isTeams && streams.length) {
+          // selectTeamsMixStreams (bundled via VexaBrowserUtils) prefers the server mix and FAILS OPEN
+          // if it never appears — see its doc for why an unconditional preference is the more
+          // dangerous bug. Kept out of this callback so the page and its unit test run one
+          // implementation; a hand-copied twin here would drift from the test on the first edit.
+          const select = w.VexaBrowserUtils?.selectTeamsMixStreams;
+          if (select) {
+            const sel = select(streams, { firstMissMs: w.__vexaTeamsNoMainSince ?? null, nowMs: Date.now(), graceMs: mainAudioGraceMs });
+            if (sel.outcome === 'main-audio') { w.__vexaTeamsNoMainSince = null; }
+            else { w.__vexaTeamsNoMainSince = w.__vexaTeamsNoMainSince || Date.now(); }
+            // Re-emitted on EVERY falling-back rescan, deliberately: the latched one-shot warning it
+            // replaces meant a bot capturing the wrong thing said so once and looked healthy after.
+            if (sel.observation) w.logBot?.('[mixed] observation ' + JSON.stringify(sel.observation));
+            streams = sel.streams;
+          }
+        }
         if (!streams.length) return;
         if (!w.__vexaMixCtx) {
           w.__vexaMixCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
@@ -376,7 +397,26 @@ export async function startCaptureBridge(
             log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
             onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
               w.__vexaSpeakerHint?.(name, tMs, isEnd),
+            // Typed producer DIAGNOSTICS — signal-absent / indicator-fired /
+            // indicator-silent / name-unresolved. They are logged, never turned
+            // into a hint: a diagnostic that becomes a name is a fabricated name.
+            onObservation: (o: Record<string, unknown>) =>
+              w.logBot?.('[TeamsSpeakers] observation ' + JSON.stringify(o)),
           });
+          // Coverage + liveness of the WHO signal, alongside the hint counters.
+          // The failure this exists for was silent: 3 of 4 tiles unobservable and
+          // zero speaking transitions, with nothing in the logs saying so.
+          w.__vexaTeamsHealthTimer = (globalThis as any).setInterval(() => {
+            try {
+              const h = w.__vexaTeamsSpeakers?.health?.();
+              if (h) {
+                w.logBot?.(
+                  `[TeamsSpeakers] health found=${h.found} observable=${h.observable} `
+                  + `named=${h.named} name-unresolved=${h.nameUnresolved} transitions=${h.transitions}`,
+                );
+              }
+            } catch { /* observability must never break capture */ }
+          }, 30_000);
         }
       }
       if (isJitsi) {
@@ -438,7 +478,9 @@ export async function startCaptureBridge(
       await w.__vexaGmeetCapture.start();
       await w.__vexaRemoteAudioReady?.();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName,
+      // How long the Teams lane waits for the server mix before capturing every track instead.
+      mainAudioGraceMs: Number(process.env.VEXA_TEAMS_MAIN_AUDIO_GRACE_MS || 15000) }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
@@ -449,6 +491,7 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
