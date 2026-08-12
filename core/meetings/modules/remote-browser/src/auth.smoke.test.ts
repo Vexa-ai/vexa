@@ -38,7 +38,10 @@ check(authArgs.includes('--disable-blink-features=AutomationControlled'),
   'authenticated args must disable AutomationControlled');
 check(!authArgs.includes('--incognito'),
   'authenticated args must NOT be incognito (wipes stored cookies)');
-check(authArgs.includes('--no-sandbox'), 'authenticated args must include --no-sandbox (container)');
+// --no-sandbox is NOT in the authenticated set: the bot runs non-root under seccomp=unconfined (namespace
+// sandbox works), and the CHROME_NO_SANDBOX=1 escape hatch lives in the join layer (getSandboxBrowserArgs),
+// with which these args are always merged. So the clean authenticated set must NOT carry the flag.
+check(!authArgs.includes('--no-sandbox'), 'authenticated args must NOT hardcode --no-sandbox (join layer owns the escape hatch)');
 
 const sessionArgs = getBrowserSessionArgs();
 for (const bad of FORBIDDEN) {
