@@ -29,11 +29,11 @@ export const CDP_DEBUG_ARGS = [
  */
 export function getAuthenticatedBrowserArgs(): string[] {
   return [
-    // --no-sandbox is required (Chromium runs as root in the container). --disable-setuid-sandbox is
-    // NOT added: it is redundant with --no-sandbox (which disables all sandboxing) and only adds a
-    // second flag name to Chromium's "unsupported command-line flag" banner that overlays the
-    // server-side recording. (--no-sandbox alone may still raise that banner; kill it recording-side.)
-    '--no-sandbox',
+    // NO --no-sandbox here: the meeting bot runs NON-ROOT under seccomp=unconfined, so Chromium's
+    // namespace sandbox works (and the "unsupported command-line flag" banner is gone from recordings).
+    // These args are always merged with getJoinBrowserArgs() (capture-bridge.ts), which owns the
+    // CHROME_NO_SANDBOX=1 escape hatch for deployments that must re-add the flag — so it is not
+    // duplicated here. (--disable-setuid-sandbox likewise stays out: redundant with --no-sandbox.)
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--disable-gpu',
