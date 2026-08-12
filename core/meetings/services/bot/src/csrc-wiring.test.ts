@@ -1,0 +1,218 @@
+/**
+ * CSRC + observations wiring — the page→Node boundary for the transport sensor and for everything
+ * the capture path NOTICES.
+ *
+ * Drives the REAL page-side capture bundle (dist/browser-utils.global.js — the exact file the bot
+ * injects via addInitScript) and the REAL startCaptureBridge wiring against a fake Playwright Page
+ * whose exposeFunction/evaluate run in-process. Three properties, each of which was invisible
+ * before it was wired:
+ *
+ *   1. the mixed lane STARTS the transport sensor (both platform branches ride the same shared
+ *      init — a poller that only ran on Teams would leave the Zoom topology question unanswerable);
+ *   2. transitions cross to Node with an EPOCH timestamp and reach the telemetry sink;
+ *   3. every typed observation the page produces — the mix topology, a sensor fault, a watcher
+ *      reporting no signal — crosses into the fixture instead of dying with the pod's log.
+ *
+ * The load-bearing NEGATIVE check is the same one the caption lane carries: nothing here may reach
+ * pipeline.recordHint. This iteration buys observation, not a behaviour change.
+ *
+ * RED at any base where the bundle lacks createCsrcPoll or the mixed branch doesn't start it:
+ * zero arrivals.
+ * Run: npx tsx src/csrc-wiring.test.ts
+ */
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import {
+  startCaptureBridge, makeCsrcSink, makeObservationSink,
+  type CsrcRecord, type CsrcCapableSink, type ObservationRecord, type ObservationCapableSink,
+} from './capture-bridge.js';
+import type { Invocation } from './config.js';
+import type { BotPipeline } from './pipeline.js';
+
+let failed = 0;
+const check = (name: string, cond: boolean, detail?: string) => {
+  console.log(`  ${cond ? '✅' : '❌'} ${name}${cond || !detail ? '' : ` — ${detail}`}`);
+  if (!cond) failed++;
+};
+
+// ── 1) The Node-side sinks, driven directly (no page): clock guard + record shape ────────────────
+{
+  const stored: CsrcRecord[] = [];
+  const warnings: string[] = [];
+  const sink = makeCsrcSink(
+    { captureFrame() { /* unused */ }, captureCsrc: (r) => stored.push(r) } as CsrcCapableSink,
+    (m) => warnings.push(m),
+  );
+  const t = Date.now();
+  sink.sink(3735928559, true, t, 0.42, 123456789);
+  check('csrc sink: the record is typed csrc/mixed with the transport fields intact',
+    stored.length === 1 && stored[0].type === 'csrc' && stored[0].csrc === 3735928559
+    && stored[0].active === true && stored[0].lane === 'mixed'
+    && stored[0].audioLevel === 0.42 && stored[0].rtpTimestamp === 123456789, JSON.stringify(stored));
+  // A page emitting a raw performance clock would store turn edges against a clock the audio does
+  // not share — re-stamped, and said out loud.
+  sink.sink(7, false, 42);
+  check('csrc sink: a non-epoch timestamp is re-stamped AND warned, never stored silently',
+    warnings.some((w) => w.includes('csrc-clock-skew')) && stored[1].t >= t, warnings.join(' | '));
+  check('csrc sink: counts what crossed and what was stored', sink.crossed() === 2 && sink.stored() === 2);
+
+  const noStore = makeCsrcSink({ captureFrame() { /* unused */ } });
+  noStore.sink(1, true, Date.now());
+  check('csrc sink: a recorder without captureCsrc degrades to log-only (0 stored, no throw)',
+    noStore.crossed() === 1 && noStore.stored() === 0);
+}
+{
+  const stored: ObservationRecord[] = [];
+  const warnings: string[] = [];
+  const sink = makeObservationSink(
+    'mixed',
+    { captureFrame() { /* unused */ }, captureObservation: (r) => stored.push(r) } as ObservationCapableSink,
+    (m) => warnings.push(m),
+  );
+  const t = Date.now();
+  sink.sink('teams-speakers', { type: 'signal-absent', tiles: 4 }, t);
+  check('observation sink: the producer payload is carried verbatim under `observation`',
+    stored.length === 1 && stored[0].source === 'teams-speakers' && stored[0].lane === 'mixed'
+    && stored[0].observation.type === 'signal-absent' && stored[0].observation.tiles === 4,
+    JSON.stringify(stored));
+  // A malformed observation still says something happened; dropping it would make the sidecar
+  // quietly disagree with the log.
+  sink.sink('bot', 'a bare string', t);
+  check('observation sink: a non-object payload is wrapped, never dropped',
+    stored.length === 2 && stored[1].observation.note === 'a bare string', JSON.stringify(stored[1]));
+  sink.sink('csrc', { kind: 'csrc-poll-error' }, 42);
+  check('observation sink: a non-epoch timestamp is re-stamped AND warned',
+    warnings.some((w) => w.includes('observation-clock-skew')) && stored[2].t >= t, warnings.join(' | '));
+}
+
+// ── The real bundle (built by build-browser-utils.mjs — turbo test depends on build) ─────────────
+const BUNDLE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'browser-utils.global.js');
+if (!existsSync(BUNDLE)) {
+  console.error(`❌ missing ${BUNDLE} — build the capture bundle first (pnpm --filter @vexa/bot build).`);
+  process.exit(1);
+}
+
+// ── Page-context shims on the REAL globalThis (the fake page.evaluate runs in-process) ───────────
+const g = globalThis as unknown as Record<string, unknown>;
+const savedDocument = g.document;
+const realSetInterval = globalThis.setInterval;
+const realClearInterval = globalThis.clearInterval;
+const intervals: Array<() => void> = [];
+(g as any).setInterval = (cb: () => void) => { intervals.push(cb); return intervals.length; };
+(g as any).clearInterval = () => { /* controlled clock */ };
+g.document = { body: {}, querySelector: () => null, querySelectorAll: () => [] };
+g.MutationObserver = class { observe() { /* unused here */ } disconnect() { /* */ } };
+g.window = g;
+
+// A mixed-lane page: ONE server-side mix stream, and an audio receiver whose contributing sources
+// the sensor reads. The AudioContext shim is deliberately minimal — createMixedAudioCapture will
+// fail on it and be swallowed by the bridge's own catch, exactly as it would on a page whose
+// audio stack is unavailable. What is under test here is the OBSERVATION wiring around it.
+class FakeAudioContext {
+  destination = {};
+  createMediaStreamDestination(): unknown { return { stream: { id: 'mix', getAudioTracks: () => [{ id: 'mainAudio-mix' }] } }; }
+  createMediaStreamSource(): unknown { return { connect: () => { /* connected */ } }; }
+  resume(): void { /* no-op */ }
+  close(): void { /* no-op */ }
+}
+(g as any).AudioContext = FakeAudioContext;
+g.__vexaCapturedRemoteAudioStreams = [{ id: 'stream-1', getAudioTracks: () => [{ id: 'mainAudio-abc' }] }];
+
+// The transport, as the sensor sees it: one audio receiver on one peer connection. `timestamp` is
+// the PERFORMANCE clock (what a real UA reports), so this also proves the epoch conversion rather
+// than assuming the page already handed over epoch ms.
+let speakingSince: number | null = null;
+const receiver = {
+  track: { kind: 'audio' },
+  getContributingSources: () => (speakingSince === null ? [] : [
+    { source: 424242, timestamp: speakingSince, audioLevel: 0.3, rtpTimestamp: 987 },
+  ]),
+};
+g.__vexa_peer_connections = [{ getReceivers: () => [receiver] }];
+
+// Load the REAL bundle — defines globalThis.VexaBrowserUtils.
+new Function(readFileSync(BUNDLE, 'utf8'))();
+const utils = g.VexaBrowserUtils as Record<string, unknown> | undefined;
+check('bundle: window.VexaBrowserUtils.createCsrcPoll is exported (RED at base — brick not bundled)',
+  typeof utils?.createCsrcPoll === 'function', `keys: ${Object.keys(utils ?? {}).join(',')}`);
+
+// ── Fake Playwright Page + the Node seams ───────────────────────────────────────────────────────
+const page = {
+  async exposeFunction(name: string, fn: unknown): Promise<void> { g[name] = fn; },
+  async evaluate(fn: (arg: never) => unknown, arg?: unknown): Promise<unknown> { return fn(arg as never); },
+} as never;
+
+const hints: Array<{ name: string; tMs: number; isEnd: boolean }> = [];
+const spine: Array<{ csrc: number; active: boolean; tMs: number }> = [];
+const pipeline: BotPipeline = {
+  async start() { /* not driven */ },
+  async stop() { /* not driven */ },
+  feedAudio() { /* not driven */ },
+  feedMixedAudio() { /* not driven */ },
+  recordHint: (name, tMs, isEnd) => hints.push({ name, tMs, isEnd: !!isEnd }),
+  recordTransportEvent: (ev) => spine.push({ csrc: ev.csrc, active: ev.active, tMs: ev.tMs }),
+};
+const transitions: CsrcRecord[] = [];
+const observations: ObservationRecord[] = [];
+const telemetry: CsrcCapableSink & ObservationCapableSink = {
+  captureFrame() { /* unused */ },
+  captureCsrc: (r) => transitions.push(r),
+  captureObservation: (o) => observations.push(o),
+};
+// zoom, deliberately: the sensor is platform-agnostic and rides the SHARED mixed init, so proving
+// it on the branch that is NOT Teams is what says the Teams branch is not carrying it.
+const inv = { platform: 'zoom', botName: 'Vexa Bot', connectionId: 'test' } as unknown as Invocation;
+
+const t0 = Date.now();
+const stop = await startCaptureBridge(page, inv, pipeline, telemetry);
+const tick = (n = 1) => { for (const cb of [...intervals]) for (let i = 0; i < n; i++) cb(); };
+
+check('the mixed lane started the transport sensor (zoom — the shared init, not a Teams branch)',
+  !!g.__vexaCsrcPoll, `poll=${!!g.__vexaCsrcPoll}`);
+check('the mix topology crossed as DATA, not only as a log line',
+  observations.some((o) => o.observation.type === 'mix-topology' && o.observation.streams === 1),
+  JSON.stringify(observations));
+
+// Nobody speaking: the sensor must be silent rather than reporting a floor.
+tick(3);
+check('silence emits no transitions', transitions.length === 0, JSON.stringify(transitions));
+
+speakingSince = (globalThis as unknown as { performance: { now: () => number } }).performance.now();
+tick(1);
+check('an activation crossed page→Node with the transport fields intact',
+  transitions.length === 1 && transitions[0].active === true && transitions[0].csrc === 424242
+  && transitions[0].audioLevel === 0.3 && transitions[0].rtpTimestamp === 987, JSON.stringify(transitions));
+check('the transition timestamp is epoch ms (the performance clock was converted, not carried)',
+  transitions[0] !== undefined && transitions[0].t >= t0 && transitions[0].t <= Date.now() + 1000,
+  JSON.stringify(transitions.map((x) => x.t)));
+
+tick(3);
+check('steady speech emits nothing further (transitions only, across the boundary too)',
+  transitions.length === 1, JSON.stringify(transitions));
+
+await stop();
+check('teardown flushes the still-open turn as a deactivation',
+  transitions.length === 2 && transitions[1].active === false && transitions[1].csrc === 424242,
+  JSON.stringify(transitions));
+check('teardown released the poller', !g.__vexaCsrcPoll);
+
+// A2: the edge now REACHES THE LANE, as the turn SPINE. What must still never happen is a
+// transition arriving as a naming HINT — it carries a source id, not a person, and the binder
+// would have to invent the person. The lane and the sidecar must also see the SAME stamped time,
+// or a replay scores a run the live bot never had.
+check('the transport edge reached the lane as a spine event (A1 teed it to the tape only)',
+  spine.length === transitions.length && spine.length >= 2
+  && spine[0].csrc === 424242 && spine[0].active === true, JSON.stringify(spine));
+check('the spine and the stored sidecar agree on WHEN each edge happened',
+  spine.every((e, i) => transitions[i] && transitions[i].t === e.tMs && transitions[i].active === e.active),
+  `${JSON.stringify(spine.map((s) => s.tMs))} vs ${JSON.stringify(transitions.map((t) => t.t))}`);
+check('isolation: NO transition reached pipeline.recordHint — a csrc is an id, never a name',
+  hints.length === 0, JSON.stringify(hints));
+
+(g as any).setInterval = realSetInterval;
+(g as any).clearInterval = realClearInterval;
+g.document = savedDocument;
+
+if (failed) { console.error(`\n❌ csrc-wiring: ${failed} checks FAILED.`); process.exit(1); }
+console.log('\n✅ csrc-wiring: the real bundle + real bridge carry transport transitions and typed observations page→Node (epoch ms, teardown flush) and never into the name binder.');

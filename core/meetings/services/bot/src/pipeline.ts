@@ -29,6 +29,8 @@ import {
   type ChunkSegment,
   type ChunkedTranscriberCallbacks,
   type HintKind,
+  type TransportEvent,
+  type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
 import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
@@ -60,7 +62,9 @@ export interface HintCounters {
 /** The mixed-lane transcriber seam — the REAL ChunkedTranscriber in production,
  *  injectable so an offline test observes exactly what reaches the transcriber
  *  (name, KIND, tMs) without the pyannote model load. */
-export type MixedTranscriber = Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>;
+export type MixedTranscriber =
+  Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>
+  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName' | 'recordRosterCoverage'>>;
 export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
@@ -75,6 +79,20 @@ export interface BotPipeline extends Pipeline {
    *  or no hint window can ever overlap a speech turn (the bridge guards this). The
    *  platform's hint KIND is bound at wiring time (hintKindForPlatform), not per call. */
   recordHint(name: string, tMs: number, isEnd?: boolean): void;
+  /** A mixed-lane TRANSPORT edge: the RTP mixer said a contributing source became (in)audible.
+   *  Deliberately NOT recordHint — it carries no name and must never reach the name binder. It is
+   *  the turn SPINE: `csrc` is a stable per-meeting identity, `tMs` is epoch (the bridge guards it). */
+  recordTransportEvent?(ev: TransportEvent): void;
+  /** A mixed-lane caption AUTHOR (Teams' own ASR) — name evidence for a transport track, never a
+   *  turn edge. Absent on platforms/tenants with no captions. */
+  recordCaptionName?(name: string, tMs: number): void;
+  /** A mixed-lane ROSTER display name — who is in the meeting. Never a turn edge and never a hint:
+   *  a roster name says nothing about when anyone spoke. It is the only way to name a participant
+   *  whose tile never lights, which on the m30 fixture was one of the two people in the room. */
+  recordRosterName?(name: string, tMs?: number): void;
+  /** How much of the roster the producer could read (seen vs named) — the completeness premise
+   *  the namer's elimination rule depends on. */
+  recordRosterCoverage?(named: number, participants: number, tMs?: number): void;
   /** Mixed lane only: the cumulative hint-hop counters (undefined on the gmeet lane). */
   readonly hintCounters?: HintCounters;
 }
@@ -188,6 +206,8 @@ function createMixedBotPipeline(
   language?: string,
   onError?: (e: unknown) => void,
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
+  onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
+  selfName?: string,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -239,6 +259,19 @@ function createMixedBotPipeline(
         // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
         // overlapping turn increments `missed` (loudly, on the periodic counter line).
         onHintOutcome: (o) => { if (o.outcome === 'matched') hintCounters.matched++; else hintCounters.missed++; },
+        // ARM THE TRANSPORT SPINE. 'auto', never 'csrc': a client that does not mix server-side
+        // emits no contributing sources at all, and a spine with nothing to say would produce an
+        // empty transcript rather than a degraded one. So pyannote carries the meeting until the
+        // transport speaks, the transport takes over when it does, and it hands back — mid-meeting,
+        // on the same ring — if it goes silent under continuing speech.
+        turnSource: 'auto',
+        selfName,
+        onObservation: (o: TurnSourceObservation) => {
+          // A transcript cannot say which spine produced it, so the switch is DATA beside the
+          // tape, not just a log line — otherwise a replay can never attribute what it measures.
+          console.log(`[bot] pipeline(mixed): turn spine ${o.from} → ${o.to} (${o.reason})`);
+          try { onObservation?.('mixed-turn-source', { ...o }, o.tMs); } catch { /* diagnostics never break the lane */ }
+        },
       }).then((t) => { transcriber = t; return t; })
         // #593: DON'T cache a rejected create promise. The mixed lane's create() loads the pyannote
         // model (from_pretrained) — if that rejects (empty HF cache, no egress), leaving `creating`
@@ -256,6 +289,10 @@ function createMixedBotPipeline(
     feedMixedAudio: (pcm, tsMs) => { transcriber?.feedAudio(pcm, tsMs); },
     // C1 hop 3 + C2: count the arrival, forward under the platform's TRUE kind.
     recordHint: (name, tMs, isEnd) => { hintCounters.received++; transcriber?.recordHint(name, hintKind, tMs, isEnd); },
+    recordTransportEvent: (ev) => { transcriber?.recordTransportEvent?.(ev); },
+    recordCaptionName: (name, tMs) => { transcriber?.recordCaption?.(name, tMs); },
+    recordRosterName: (name, tMs) => { transcriber?.recordRosterName?.(name, tMs); },
+    recordRosterCoverage: (named, participants, tMs) => { transcriber?.recordRosterCoverage?.(named, participants, tMs); },
     hintCounters,
   };
 }
@@ -290,13 +327,17 @@ export function createBotPipeline(
     /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
      *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
     createMixedTranscriber?: MixedTranscriberFactory;
+    /** Where the lane's own typed observations go (the turn-spine switch). Wired at the
+     *  composition root to the capture-signal recorder's observations sidecar. */
+    onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void;
   } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
   if (isMixedLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
-      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber,
+      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
+      inv.botName,
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

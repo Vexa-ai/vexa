@@ -47,6 +47,11 @@
 import { PyannoteSegmenter, type BoundaryEvent } from './pyannote-segmenter.js';
 import { env as transformersEnv } from '@huggingface/transformers';
 import { ClusterNameBinder, type HintKind } from './cluster-name-binder.js';
+import {
+  CsrcTurnSource, PyannoteTurnSource,
+  type TransportEvent, type TurnSource, type TurnSourceCallbacks,
+} from './turn-source.js';
+import { TrackNamer } from './track-namer.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { localAgreement } from '@vexa/transcribe-buffer';
 import { hallucinationRule, type SuppressedSegment } from './hallucination-gate.js';
@@ -125,6 +130,23 @@ const REATTRIBUTE_MIN_CONFIDENCE = Number((typeof process !== 'undefined' && pro
  *  claim will hand it that turn. Below this the tiles disagree too much to name the turn from
  *  the UI alone and it stays provisional ("Speaker"). Tunable via VEXA_CLAIM_MIN_SHARE. */
 const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.VEXA_CLAIM_MIN_SHARE) || 0.6);
+/** TURN-SOURCE ARMING (mode 'auto'). The transport spine cannot be authoritative before it has
+ *  said anything — an unarmed spine emits no turns at all, which is a HOLE in the transcript, not
+ *  a fallback. So pyannote carries the meeting from frame one and the transport takes over on its
+ *  first transition. If none arrives within this much audio, the transport is disarmed for the
+ *  session and one `turn-source-fallback` observation says so. Tunable via VEXA_TURN_SOURCE_GRACE_MS. */
+const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_TURN_SOURCE_GRACE_MS) || 20_000);
+/** ORPHAN CONTAINMENT. A turn that carries no track — a span the transport could not assign — is
+ *  published as "Speaker". Some of those are genuinely unassignable (two people talking at once);
+ *  others sit entirely inside one speaker's run with nobody else audible anywhere in them, and
+ *  calling those "Speaker" is a gap we can close without guessing. An orphan inherits a track's name
+ *  only when EXACTLY ONE track is a candidate: audible somewhere in the span, or the immediately
+ *  preceding turn if the orphan begins within this window of it. Two candidates and it stays
+ *  honest. Tunable via VEXA_ORPHAN_ADJACENT_MS. */
+/** What an unattributable piece is published as. The host renders a provisional segmentation id the
+ *  same way; naming it here keeps the two spellings of "we do not know" in one place. */
+const PROVISIONAL_SPEAKER = 'Speaker';
+const ORPHAN_ADJACENT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_ORPHAN_ADJACENT_MS) || 1500);
 
 export interface ChunkSegment {
   text: string;
@@ -136,12 +158,11 @@ export interface ChunkSegment {
   segmentId: string;
 }
 
-/** The cut source: streams frames, emits boundaries via the sink set at
- *  construction. PyannoteSegmenter in production; injectable for tests. */
-export interface BoundarySource {
-  appendFrame(pcm: Float32Array, tsMs: number): Promise<unknown>;
-  reset(): void;
-}
+/** The cut source: streams frames, emits boundaries via the sink set at construction.
+ *  PyannoteSegmenter in production; injectable for tests. Declared with the spine it belongs to
+ *  (turn-source.ts) and re-exported here so every existing importer is unaffected. */
+export type { BoundarySource } from './turn-source.js';
+import type { BoundarySource } from './turn-source.js';
 
 export interface ChunkedTranscriberCallbacks {
   /** One Whisper round-trip. Called strictly serially. */
@@ -178,13 +199,62 @@ export interface ChunkedTranscriberCallbacks {
    *  'missed' hint is still recorded in the binder and may window-match a later
    *  commit — this reports the hop's immediate fate, not the final binding. */
   onHintOutcome?: (o: { name: string; kind: HintKind; tMs: number; outcome: 'matched' | 'missed' }) => void;
+  /** WHERE turn edges come from (turn-source.ts).
+   *   'pyannote' — today's lane, unchanged. The default, so every existing caller is untouched.
+   *   'csrc'     — the transport spine, authoritative from the first frame (offline A/B only:
+   *                a live meeting whose client does not mix server-side would produce nothing).
+   *   'auto'     — pyannote carries the session until the transport says something, then the
+   *                transport takes over; a dead or absent transport falls back, mid-meeting,
+   *                without touching the ring. This is the production setting. */
+  turnSource?: 'pyannote' | 'csrc' | 'auto';
+  /** How long 'auto' waits for a first transport transition before disarming it. */
+  turnSourceGraceMs?: number;
+  /** OUR OWN display name. The bot is a participant in every meeting it records, so without this
+   *  the namer cannot tell its own name in a roster from a person's — and on the m34 meeting that
+   *  is exactly how a bot's name ended up on a human's speech. */
+  selfName?: string;
+  /** Typed lane observations — `turn-source-armed` / `turn-source-fallback`. The host stores them
+   *  beside the tape, so a replay can answer WHICH SPINE produced a transcript, which is otherwise
+   *  unrecoverable from the transcript itself. */
+  onObservation?: (o: TurnSourceObservation) => void;
+  /**
+   * VIRTUAL TIME — a harness seam, not a behaviour switch.
+   *
+   * Two things in this lane are driven by the wall clock rather than by audio time: the 1 s
+   * heartbeat that ticks/rolls/finalizes the open turn, and the TTL that commits a pending tail
+   * when no voiced update has arrived. They are why a replay had to run at 1x to reproduce a
+   * cadence defect — a turn transcribed in several growing passes live is transcribed in ONE pass
+   * when the tape is fired instantly, and the defects that live in the cadence vanish.
+   *
+   * Injecting the clock lets a replay drive those same code paths from the TAPE'S OWN timestamps
+   * and execute in seconds. The time CONSTANTS are untouched — this changes what "now" means, not
+   * what the lane does with it. Production leaves it undefined and uses Date.now/setInterval.
+   */
+  clock?: LaneClock;
+}
+
+/** The wall-clock dependencies of the lane, in one injectable surface. */
+export interface LaneClock {
+  now(): number;
+  /** Register the lane's periodic heartbeat. Returns its canceller. */
+  setHeartbeat(fn: () => void, everyMs: number): () => void;
+}
+
+/** The lane's account of which spine it is running on, and why it changed. */
+export interface TurnSourceObservation {
+  type: 'turn-source-armed' | 'turn-source-fallback';
+  from: 'pyannote' | 'csrc';
+  to: 'pyannote' | 'csrc';
+  reason: 'transport-armed' | 'no-transport-signal' | 'transport-silent';
+  tMs: number;
+  detail?: Record<string, unknown>;
 }
 
 interface RingFrame { pcm: Float32Array; tMs: number }
 /** Segmentation lifecycle items on the serialized queue: a boundary opens a turn
  *  (speech start / speaker change) or closes the open one (speaker change / end). */
 type SegItem =
-  | { kind: 'open'; t0: number; segId: string }
+  | { kind: 'open'; t0: number; segId: string; trackId?: string; contested?: boolean }
   | { kind: 'close'; t1: number; contextPadMs?: number };
 interface Turn {
   /** The per-turn segmentation id — the namer's key (no clustering). */
@@ -226,6 +296,21 @@ interface Turn {
   /** Names this turn must NOT be (re)claimed to — a short-UI-switch hint that was
    *  held provisional, so a later claim/rename can't resurrect the bad name. */
   blockedNames?: Set<string>;
+  /** The transport's id for this turn's speaker (csrc spine only). When set, naming is the
+   *  TrackNamer's job and the hint claim/re-resolution machinery is bypassed entirely. */
+  trackId?: string;
+  /** Two or more sources were audible across this span. The mix cannot be split, so this turn is
+   *  published unattributed — never merged into either speaker's name. */
+  contested?: boolean;
+  /** Set once this turn has been counted as an orphan (resolveName runs many times per turn). */
+  orphanCounted?: boolean;
+  /** Every track audible at some point inside this turn's span (transport spine). One entry means
+   *  the span is unambiguous even when the transport declined to own it. `undefined` means the
+   *  spine never got to say — which is NOT the same as "nobody else was there". */
+  spanTracks?: string[];
+  /** The transport's live edge for the OPEN turn: audio up to here belongs to it and no further.
+   *  Absent ⇒ read to the newest audio frame, which is what the pyannote spine has always done. */
+  edgeMs?: number;
 }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
@@ -244,6 +329,30 @@ export class ChunkedTranscriber {
   private segCounter = 0;
   private readonly binder = new ClusterNameBinder({});
   private readonly log: (msg: string) => void;
+
+  // ── the turn spine ────────────────────────────────────────────────────────
+  /** Both spines run for the whole session; exactly one is AUTHORITATIVE at a time. Keeping the
+   *  loser warm is what makes a mid-meeting fallback seamless: the segmenter has already locked
+   *  on, the ring is shared and untouched, and the switch is one flag plus a clean cut. */
+  private pyannoteSource: PyannoteTurnSource | null = null;
+  private csrcSource: CsrcTurnSource | null = null;
+  private authoritative: 'pyannote' | 'csrc' = 'pyannote';
+  private mode: 'pyannote' | 'csrc' | 'auto' = 'pyannote';
+  private transportDisarmed = false;
+  private readonly graceMs: number;
+  /** Names for transport tracks — earned from evidence, never guessed. */
+  private readonly trackNamer: TrackNamer;
+  /** trackId → the segmentation keys it has published under, so a late name repaints all of them. */
+  private trackClusters = new Map<string, Set<string>>();
+  /** The track that owned the previously closed turn — gap reclaim may not cross a speaker change. */
+  private lastClosedTrackId: string | undefined;
+  /** Where the previous turn ended — the adjacency half of the orphan-containment test. */
+  private lastClosedEndMs = 0;
+  /** Orphans offered to containment, and those it accepted. Reported, so the rule's own refusal
+   *  rate is visible rather than assumed. */
+  private orphanTurns = 0;
+  private orphanContained = 0;
+  private contestedTurns = 0;
 
   private ring: RingFrame[] = [];
   private ringMs = 0;
@@ -271,6 +380,9 @@ export class ChunkedTranscriber {
   /** The open turn. */
   private turn: Turn | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private cancelHeartbeat: (() => void) | null = null;
+  /** The lane's "now". Wall clock in production; the tape's clock under a virtual-time replay. */
+  private now: () => number = () => Date.now();
 
   /** Turns published under a provisional segmentation id, awaiting hint evidence. */
   private unresolved: UnresolvedTurn[] = [];
@@ -291,6 +403,14 @@ export class ChunkedTranscriber {
 
   private constructor(private readonly cb: ChunkedTranscriberCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
+    this.mode = cb.turnSource ?? 'pyannote';
+    this.graceMs = cb.turnSourceGraceMs ?? TURN_SOURCE_GRACE_MS;
+    if (cb.clock) this.now = () => cb.clock!.now();
+    this.trackNamer = new TrackNamer({
+      selfName: cb.selfName,
+      onNamed: (trackId, name) => this.onTrackNamed(trackId, name),
+      log: (m) => this.log(`[track-namer] ${m}`),
+    });
   }
 
   /** Audio-accounting trace (VEXA_TRACE_SPANS=1): every window this lane submits to STT,
@@ -311,32 +431,58 @@ export class ChunkedTranscriber {
     // (Dockerfile warms /opt/hf-cache at build time) so the segmenter loads
     // pyannote from disk at runtime — no live-meeting HF download stall.
     if (process.env.VEXA_HF_CACHE) transformersEnv.cacheDir = process.env.VEXA_HF_CACHE;
-    // Segmentation OWNS the cut — pyannote boundaries are the only cut signal.
+    // The spine. PyannoteTurnSource wraps the segmenter EXACTLY as handleBoundary used to read it,
+    // so the default path is the same lane through a new seam; CsrcTurnSource is built alongside it
+    // whenever the transport may be consulted, and both are fed every frame.
     const makeSegmenter = cb.makeSegmenter
       ?? ((onBoundary) => PyannoteSegmenter.create({ inferIntervalMs: 500, onBoundary }));
-    t.segmenter = await makeSegmenter((ev) => t.handleBoundary(ev));
+    t.pyannoteSource = await PyannoteTurnSource.create(
+      t.sourceCallbacks('pyannote'),
+      async (onBoundary) => {
+        const src = await makeSegmenter(onBoundary as (ev: BoundaryEvent) => void);
+        t.segmenter = src;             // kept for reset()/dispose(), exactly as before
+        return src;
+      },
+      (m) => t.log(`[ChunkedTranscriber] ${m}`),
+    );
+    if (t.mode !== 'pyannote') {
+      t.csrcSource = new CsrcTurnSource(t.sourceCallbacks('csrc'), {
+        onDead: (info) => t.demoteTransport(info.reason, info.tMs, { quiet_ms: info.quietMs }),
+        log: (m) => t.log(`[ChunkedTranscriber] csrc: ${m}`),
+      });
+      // A forced csrc run is the offline A/B: the transport is authoritative from frame one and
+      // there is no fallback, so the comparison measures the spine and not a blend of two.
+      if (t.mode === 'csrc') t.authoritative = 'csrc';
+    }
     // One 1s heartbeat drives:
     //  - TICK: resubmit the open turn up to the live audio edge on a fixed
     //    cadence (latency decoupled from boundary timing),
     //  - ROLL: bound the unconfirmed Whisper window — an over-long open turn
     //    (continuous speech, stalled stability) force-rolls into a fresh turn.
-    t.idleTimer = setInterval(() => {
+    const heartbeat = (): void => {
       if (t.pumping) return;
       // Liveness: an item enqueued during the pump's closing pass misses the
       // drain loop; with no further boundaries nothing would re-pump it.
       if (t.queue.length > 0) { void t.pump(); return; }
       if (!t.turn) return;
       if (t.latestAudioMs - t.turn.confirmedUpToMs > TURN_MAX_MS) {
+        // The roll is a Whisper-window bound, not a speaker change: the successor is the SAME
+        // speaker, so it inherits the track. Dropping the trackId here would hand every monologue
+        // longer than TURN_MAX_MS to "Speaker A" halfway through.
         t.queue.push({ kind: 'close', t1: t.latestAudioMs });
-        t.queue.push({ kind: 'open', t0: t.latestAudioMs, segId: `seg_${t.segCounter++}` });
+        t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
         void t.pump();
         return;
       }
       // TTL idle-finalize: pending exists but no voiced update for CONFIRM_TTL_MS
       // (speaker paused / segmenter didn't close on continuous live audio) → commit
       // what we have by closing the turn, instead of holding it for the 3rd pass.
-      if (t.turn.pendingTail.length > 0 && Date.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
+      if (t.turn.pendingTail.length > 0 && t.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
         t.queue.push({ kind: 'close', t1: t.latestAudioMs });
+        // On the transport spine the pause that triggered this is a pause, NOT the end of the
+        // speaker's turn — the transport has not said they stopped. Reopen on the same track so
+        // the audio after the pause is neither dropped nor handed to a different label.
+        if (t.turn.trackId) t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
         void t.pump();
         return;
       }
@@ -344,12 +490,16 @@ export class ChunkedTranscriber {
         t.queue.push('tick');
         void t.pump();
       }
-    }, 1000);
+    };
+    // ONE heartbeat, through the clock seam. Identical body either way — a virtual-time replay
+    // must exercise the same branches in the same order, or it is measuring a different lane.
+    if (cb.clock) t.cancelHeartbeat = cb.clock.setHeartbeat(heartbeat, 1000);
+    else t.idleTimer = setInterval(heartbeat, 1000);
     t.log(`[ChunkedTranscriber] ready (segmentation-cut turns, hints-only naming, LocalAgreement-3 confirmation + TTL finalize)`);
     return t;
   }
 
-  /** One mixed-audio frame. Ring + segmentation model — nothing else. */
+  /** One mixed-audio frame. Ring + both spines — nothing else. */
   feedAudio(pcm: Float32Array, tsMs: number): void {
     if (this.disposed) return;
     if (this.firstAudioMs === null) this.firstAudioMs = tsMs;
@@ -360,14 +510,150 @@ export class ChunkedTranscriber {
       const f = this.ring.shift()!;
       this.ringMs -= (f.pcm.length / SAMPLE_RATE) * 1000;
     }
-    this.segmenter?.appendFrame(pcm, tsMs).catch((e: any) =>
-      this.log(`[ChunkedTranscriber] segmenter error: ${e?.message}`));
+    // BOTH spines see every frame. The loser is kept warm precisely so a fallback costs nothing
+    // but a flag: a segmenter that started locking on at the moment of failure would spend its
+    // first seconds blind, which is the interval a fallback exists to protect.
+    this.pyannoteSource?.onAudio(pcm, tsMs);
+    this.csrcSource?.onAudio(pcm, tsMs);
+    this.trackNamer.tick(this.latestAudioMs);
+    this.armingWatchdog();
+  }
+
+  /** One transport transition (the CSRC sensor's edge). Feeds the spine AND the namer: the spine
+   *  needs to know when, the namer needs to know who was audible while a tile was lit. */
+  recordTransportEvent(ev: TransportEvent): void {
+    if (this.disposed) return;
+    this.trackNamer.setTrackActive(String(ev.csrc), ev.active, ev.tMs);
+    if (!this.csrcSource) return;
+    // PROMOTE FIRST, THEN DELIVER. The spine's callbacks check who is authoritative at the moment
+    // they fire, and reconcile() fires from inside onTransportEvent — so promoting afterwards
+    // DROPPED the very first turn the transport ever opened. On the adversarial m34 fixture that
+    // lost the meeting's opening turn to the pyannote spine, which then published it merged with
+    // the next speaker's, unattributed and unrepaintable (a turn with no track cannot be renamed
+    // when its track is later named). One statement's ordering, one whole speaker's first words.
+    if (!this.csrcSource.armed) this.promoteTransport(ev.tMs);
+    this.csrcSource.onTransportEvent(ev);
+  }
+
+  /** The platform's own captions — a SECOND naming source for transport tracks, independent of the
+   *  DOM tiles and (per the m29 fixture) in 99.8% agreement with them where either is decisive. */
+  recordCaption(name: string, tMs: number): void {
+    if (this.disposed || !name) return;
+    this.trackNamer.recordCaption(name, tMs);
+  }
+
+  /** A name the ROSTER shows — who is in the room, which is a different question from who is
+   *  speaking. Never a turn edge and never a hint: it supplies the canonical casing, and it is what
+   *  makes the namer's elimination rule possible for a participant the tiles never light for. */
+  recordRosterName(name: string, tMs?: number): void {
+    if (this.disposed || !name) return;
+    this.trackNamer.recordRosterName(name, tMs);
+  }
+
+  /** How much of the roster the producer could read: participants seen, and of those, named.
+   *  Elimination is an argument from a complete set and must know when the set is not. */
+  recordRosterCoverage(named: number, participants: number, tMs?: number): void {
+    if (this.disposed) return;
+    this.trackNamer.recordRosterCoverage(named, participants, tMs);
+  }
+
+  /** 'auto' only: the transport gets `graceMs` of audio to say something, then it is disarmed for
+   *  the session. One observation, not one per frame. */
+  private armingWatchdog(): void {
+    if (this.mode !== 'auto' || this.transportDisarmed || !this.csrcSource) return;
+    if (this.csrcSource.armed || this.authoritative === 'csrc') return;
+    if (this.firstAudioMs === null || this.latestAudioMs - this.firstAudioMs < this.graceMs) return;
+    this.transportDisarmed = true;
+    this.log(`[ChunkedTranscriber] no transport transition within ${this.graceMs}ms — staying on the pyannote spine`);
+    this.cb.onObservation?.({
+      type: 'turn-source-fallback', from: 'pyannote', to: 'pyannote',
+      reason: 'no-transport-signal', tMs: this.latestAudioMs, detail: { grace_ms: this.graceMs },
+    });
+  }
+
+  /** The transport spoke for the first time inside the grace: it takes the spine. The open pyannote
+   *  turn is cut at that instant so no span is claimed by two spines at once. */
+  private promoteTransport(tMs: number): void {
+    if (this.mode !== 'auto' || this.transportDisarmed || this.authoritative === 'csrc') return;
+    this.authoritative = 'csrc';
+    if (this.turn) this.queue.push({ kind: 'close', t1: Math.max(this.turn.t0, Math.min(tMs, this.latestAudioMs || tMs)) });
+    void this.pump();
+    this.log(`[ChunkedTranscriber] turn spine → csrc (transport armed at ${tMs})`);
+    this.cb.onObservation?.({ type: 'turn-source-armed', from: 'pyannote', to: 'csrc', reason: 'transport-armed', tMs });
+  }
+
+  /** The transport died mid-meeting. Fall back WITHOUT touching the ring: close the open transport
+   *  turn, open a fresh one immediately so the audio in flight is not dropped while pyannote waits
+   *  for its next boundary, and disarm the transport for the rest of the session. */
+  private demoteTransport(reason: 'transport-silent', tMs: number, detail?: Record<string, unknown>): void {
+    if (this.authoritative !== 'csrc') return;
+    this.authoritative = 'pyannote';
+    this.transportDisarmed = true;
+    const at = Math.min(tMs, this.latestAudioMs || tMs);
+    if (this.turn) {
+      this.queue.push({ kind: 'close', t1: Math.max(this.turn.t0, at) });
+      this.queue.push({ kind: 'open', t0: at, segId: `seg_${this.segCounter++}` });
+    }
+    void this.pump();
+    this.log(`[ChunkedTranscriber] turn spine → pyannote (${reason})`);
+    this.cb.onObservation?.({ type: 'turn-source-fallback', from: 'csrc', to: 'pyannote', reason, tMs: at, detail });
+  }
+
+  /** The callback bundle one spine writes into. Events from the spine that is NOT authoritative are
+   *  dropped here — one write surface, one writer, decided in exactly one place. */
+  private sourceCallbacks(kind: 'pyannote' | 'csrc'): TurnSourceCallbacks {
+    const mine = (): boolean => !this.disposed && this.authoritative === kind;
+    return {
+      turnOpened: (ev) => { if (mine()) this.openTurn(ev.t0, ev.trackId, ev.contested); },
+      turnGrown: (ev) => {
+        if (!mine() || !this.turn) return;
+        if (this.turn.trackId !== ev.trackId) return;
+        this.turn.edgeMs = Math.max(this.turn.edgeMs ?? 0, ev.tMs);
+      },
+      turnClosed: (ev) => {
+        if (!mine()) return;
+        if (this.turn && ev.tracks) this.turn.spanTracks = ev.tracks;
+        // A segmenter's speech-end lands a little early and needs a trailing STT pad; a transport
+        // deactivation already carries the sensor's own 400ms inactivity window, so padding it
+        // again would only feed Whisper more silence.
+        this.closeTurn(ev.t1, ev.reason === 'silence' ? SILENCE_CLOSE_CONTEXT_MS : 0);
+      },
+    };
+  }
+
+  /** A close+reopen that is a WINDOW bound rather than a speaker change: the successor inherits
+   *  the track (and its contested flag), so the label cannot change mid-utterance. */
+  private rollOpen(turn: Turn, t0: number): SegItem {
+    return {
+      kind: 'open', t0, segId: `seg_${this.segCounter++}`,
+      ...(turn.trackId ? { trackId: turn.trackId } : {}),
+      ...(turn.contested ? { contested: true } : {}),
+    };
+  }
+
+  /** A track earned its name: repaint everything it has already published, through the SAME rename
+   *  path a late hint uses (stable segment ids, collector UPSERT). */
+  private onTrackNamed(trackId: string, name: string): void {
+    for (const clusterId of this.trackClusters.get(trackId) ?? []) this.claimTurn(clusterId, name);
+    const turn = this.turn;
+    if (turn?.trackId === trackId) {
+      turn.resolvedName = name;
+      if (turn.pendingTail.length > 0) {
+        if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
+        turn.pendingName = name;
+        this.cb.publishPending(name, turn.pendingTail);
+      }
+    }
   }
 
   /** Timestamped platform hint ("who's lit"). Also re-resolves turns that
    *  published provisionally — overlap evidence only, never inheritance. */
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
+    // The SAME hint is also name evidence for a transport track. It is fed unconditionally rather
+    // than only while the transport is authoritative: a track's name is earned over the whole
+    // meeting, and evidence discarded during a spine switch cannot be recovered.
+    this.trackNamer.recordHint(name, tMs, isEnd);
     if (!name) return;
     // Hint-hop instrument: did this hint find a turn RIGHT NOW? Emitted once per
     // start-hint at every exit below (end-hints close windows, they don't bind).
@@ -437,7 +723,8 @@ export class ChunkedTranscriber {
 
   /** Late-box claim: repaint a provisional turn's published segments under `name`
    *  (the speaker whose box just lit). Same path as a binder rename. */
-  private claimTurn(clusterId: string, name: string): void {
+  private claimTurn(clusterId: string, rawName: string): void {
+    const name = this.render(rawName);
     const old = this.clusterName.get(clusterId) ?? clusterId;
     if (old === name) return;
     this.clusterName.set(clusterId, name);
@@ -448,8 +735,32 @@ export class ChunkedTranscriber {
     }
   }
 
-  stats(): { commits: number; turns: number; queued: number; unresolved: number; suppressed: number; binder: ReturnType<ClusterNameBinder['stats']> } {
-    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats() };
+  stats(): {
+    commits: number; turns: number; queued: number; unresolved: number; suppressed: number;
+    binder: ReturnType<ClusterNameBinder['stats']>;
+    spine: 'pyannote' | 'csrc'; contested: number; orphans: number; orphansContained: number;
+    tracks: ReturnType<TrackNamer['stats']>;
+    sources: Record<string, unknown>;
+  } {
+    return {
+      commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length,
+      unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats(),
+      spine: this.authoritative, contested: this.contestedTurns,
+      orphans: this.orphanTurns, orphansContained: this.orphanContained,
+      tracks: this.trackNamer.stats(),
+      sources: {
+        pyannote: this.pyannoteSource?.health(),
+        ...(this.csrcSource ? { csrc: this.csrcSource.health() } : {}),
+      },
+    };
+  }
+
+  /** Resolves once no turn source has work in flight. A REPLAY-DRIVER seam: production never waits
+   *  on the model, and this changes nothing about when frames are fed — only about when a harness
+   *  is allowed to believe the lane has caught up. */
+  async settled(): Promise<void> {
+    await this.pyannoteSource?.settled?.();
+    await this.csrcSource?.settled?.();
   }
 
   /** Session end: flush the carried span and close the open turn. Resolves
@@ -459,6 +770,10 @@ export class ChunkedTranscriber {
     if (this.disposed) return;
     this.disposed = true;
     if (this.idleTimer) { clearInterval(this.idleTimer); this.idleTimer = null; }
+    if (this.cancelHeartbeat) { this.cancelHeartbeat(); this.cancelHeartbeat = null; }
+    // Settle the namer's remaining evidence BEFORE the closing pass: a name earned in the
+    // meeting's last seconds must still repaint what it owns while the rename path is alive.
+    this.trackNamer.finish();
     // An in-flight pump owns the queue — wait it out, then run the closing
     // pass (pump(true) returns immediately while another pump holds the lock).
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
@@ -467,31 +782,15 @@ export class ChunkedTranscriber {
     try { this.segmenter?.reset(); } catch { /* best effort */ }
   }
 
-  // ── Cutting (segmentation boundaries open/close turns) ──────────
+  // ── Cutting (the authoritative TurnSource opens/closes turns) ──────────
+  //
+  // The cut used to be pyannote's alone, read straight off a BoundaryEvent here. It is now whatever
+  // the authoritative spine says (turn-source.ts): the pyannote wrapper reproduces the exact same
+  // mapping it always did, and the transport spine supplies edges it OBSERVED plus, uniquely, an
+  // identity for the speaker behind them. Lifecycle items still go through the serialized queue, so
+  // turn state stays single-threaded under the pump lock regardless of which spine produced them.
 
-  /** Pyannote boundary = the ONLY cut signal. A boundary opens a turn (speech
-   *  start / speaker change) and/or closes the open one (speaker change / end /
-   *  overlap edge). Lifecycle items go through the serialized queue so turn
-   *  state stays single-threaded under the pump lock. */
-  private handleBoundary(ev: BoundaryEvent): void {
-    if (this.disposed) return;
-    switch (ev.kind) {
-      case 'silence→speaker':
-        this.openTurn(ev.tMs);
-        break;
-      case 'speaker→speaker':
-      case 'overlap-onset':
-      case 'overlap-offset':
-        this.closeTurn(ev.tMs);   // hard-split at the change / overlap edge
-        this.openTurn(ev.tMs);
-        break;
-      case 'speaker→silence':
-        this.closeTurn(ev.tMs, SILENCE_CLOSE_CONTEXT_MS);
-        break;
-    }
-  }
-
-  private openTurn(t0: number): void {
+  private openTurn(t0: number, trackId?: string, contested?: boolean): void {
     // Cold start: the model needs seconds of audio to lock on, so its first
     // boundary lands well after capture began — but speech from frame one is in
     // the ring. Back-extend the FIRST turn to the first audio frame (bounded;
@@ -504,7 +803,11 @@ export class ChunkedTranscriber {
         t0 = this.firstAudioMs;
       }
     }
-    this.queue.push({ kind: 'open', t0, segId: `seg_${this.segCounter++}` });
+    if (trackId) this.trackNamer.noteHeard(trackId);   // fixes this track's Speaker-A/B/C order
+    this.queue.push({
+      kind: 'open', t0, segId: `seg_${this.segCounter++}`,
+      ...(trackId ? { trackId } : {}), ...(contested ? { contested: true } : {}),
+    });
     void this.pump();
   }
 
@@ -577,7 +880,7 @@ export class ChunkedTranscriber {
   /** Open a new segmentation turn. Closes any still-open turn first (defensive —
    *  a 'close' normally precedes, but flicker can skip it). Does NOT submit —
    *  the pump submits the open turn once per drain batch (and ticks resubmit). */
-  private async openTurnApply(item: { t0: number; segId: string }): Promise<void> {
+  private async openTurnApply(item: { t0: number; segId: string; trackId?: string; contested?: boolean }): Promise<void> {
     this.commitCounter++;
     if (this.turn) { const prev = this.turn; this.turn = null; await this.submitTurn(prev, true); }
     const t0 = Math.max(item.t0, this.confirmedHighWaterMs);
@@ -596,9 +899,21 @@ export class ChunkedTranscriber {
     // it). The reclaimed audio widens only the STT window: t0 (the attribution window
     // the namer resolves over) is untouched, so speaker identification sees exactly what
     // it saw before.
+    //
+    // ON THE TRANSPORT SPINE the reclaim is bounded by one further rule: it may not cross a
+    // SPEAKER CHANGE. A gap there means the transport reported nobody audible, so any energy in it
+    // is either the previous speaker's clipped tail or an onset the sensor caught late — and
+    // sweeping the former into the NEXT speaker's window would put one person's words under
+    // another person's name, which is the exact failure this whole change set exists to end. So a
+    // gap is reclaimed only within one track's own broken run (DTX, a dropped packet train), or at
+    // the very first turn. Recall is preserved where it is free; it is never bought with a
+    // misattribution.
     let coverFrom = t0;
+    const reclaimAllowed = !item.trackId
+      || this.lastClosedTrackId === undefined
+      || this.lastClosedTrackId === item.trackId;
     const gapFrom = Math.max(this.confirmedHighWaterMs, t0 - GAP_RECLAIM_MAX_MS);
-    if (t0 - gapFrom >= GAP_RECLAIM_MIN_MS) {
+    if (reclaimAllowed && t0 - gapFrom >= GAP_RECLAIM_MIN_MS) {
       const gap = this.cut(gapFrom, t0);
       if (gap.length > 0 && rms(gap) >= DROP_RMS) {
         coverFrom = gapFrom;
@@ -614,8 +929,16 @@ export class ChunkedTranscriber {
       clusterId: item.segId, turnId: this.turnCounter++,
       t0, t1: t0, confirmedUpToMs: coverFrom,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
-      lastVoicedWallMs: Date.now(), resolvedName: null,
+      lastVoicedWallMs: this.now(), resolvedName: null,
+      ...(item.trackId ? { trackId: item.trackId } : {}),
+      ...(item.contested ? { contested: true } : {}),
     };
+    if (item.contested) this.contestedTurns++;
+    if (item.trackId) {
+      let keys = this.trackClusters.get(item.trackId);
+      if (!keys) { keys = new Set(); this.trackClusters.set(item.trackId, keys); }
+      keys.add(item.segId);
+    }
   }
 
   /** Close the open turn at a boundary: everything confirms (last chance). */
@@ -645,7 +968,13 @@ export class ChunkedTranscriber {
     // Closing turns read exactly to the committed boundary, PLUS a small trailing
     // STT-only context pad (contextEndMs) so the final phones survive — published
     // timestamps still clip to publishEnd (the committed speech boundary).
-    const publishEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
+    //
+    // On the TRANSPORT spine the open turn reads to the track's own live edge (turnGrown), not to
+    // the newest frame in the ring: the newest frame may already belong to whoever spoke next, and
+    // this is what "STT windows cut at transport turn edges" means where it actually bites — the
+    // pending window. Without a transport edge the behaviour is the historic one.
+    const liveEdge = turn.edgeMs !== undefined ? Math.max(turn.edgeMs, turn.t1) : (this.latestAudioMs || turn.t1);
+    const publishEnd = closing ? turn.t1 : Math.max(turn.t1, liveEdge);
     const spanEnd = closing ? Math.max(publishEnd, turn.contextEndMs ?? publishEnd) : publishEnd;
     if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
       this.trace(`skip-short turn=${turn.turnId} ${spanStart}..${spanEnd} (${spanEnd - spanStart}ms) closing=${closing}`);
@@ -691,6 +1020,10 @@ export class ChunkedTranscriber {
         endMs,
         language: lang,
         relEnd: Math.max(0, (endMs - spanStart) / 1000),
+        // Whisper's own word timestamps, already requested by the client. They are what lets a
+        // sentence be attributed at the granularity the TRANSPORT changes at, instead of at the
+        // granularity the decoder happened to choose.
+        words: (ws as any).words as Array<{ word: string; start: number; end: number }> | undefined,
       };
     }).filter(s => {
       if (!s.text) return false;
@@ -716,7 +1049,7 @@ export class ChunkedTranscriber {
       if (closing) await this.closeOut(turn);
       return;
     }
-    turn.lastVoicedWallMs = Date.now();   // voiced update arrived — resets the TTL idle-finalize
+    turn.lastVoicedWallMs = this.now();   // voiced update arrived — resets the TTL idle-finalize
 
     // LocalAgreement-N (shared confirm core, @vexa/transcribe-buffer): confirm whole
     // leading segments whose words are stable across N (default 3) consecutive
@@ -734,19 +1067,43 @@ export class ChunkedTranscriber {
     }));
 
     if (confirmCount > 0) {
-      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
-        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
-      }));
-      // ONE bundle: confirmed + surviving tail. Splitting them deletes the
-      // client's pending block for seconds (the "vanishing transcript" bug).
-      this.cb.publish(name, confirmed, closing ? [] : tail);
-      this.rememberPublishedSpeaker(name, confirmed[confirmed.length - 1]?.endMs);
+      // ATTRIBUTE BELOW THE TURN. Each confirmed segment is split along the transport's timeline at
+      // its own word boundaries, so one turn may publish under more than one name — which is the
+      // honest shape when the transport changed hands inside a sentence.
+      const pieces: Array<{ name: string; seg: ChunkSegment }> = [];
+      for (const s of mapped.slice(0, confirmCount)) {
+        for (const part of this.splitByOwner(s, spanStart, name)) {
+          pieces.push({
+            name: part.name,
+            seg: { text: part.text, startMs: part.startMs, endMs: part.endMs, language: part.language,
+                   segmentId: `turn:${turn.turnId}:${turn.seq++}` },
+          });
+        }
+      }
+      const confirmed = pieces.map((p) => p.seg);
+      // Group consecutive pieces by name so each speaker's run publishes as one bundle. The tail
+      // rides with the LAST bundle: pending is a full-replace block per pass, so attaching it to an
+      // earlier bundle would have the next one retract it.
+      const groups: Array<{ name: string; segs: ChunkSegment[] }> = [];
+      for (const p of pieces) {
+        const g = groups[groups.length - 1];
+        if (g && g.name === p.name) g.segs.push(p.seg);
+        else groups.push({ name: p.name, segs: [p.seg] });
+      }
+      groups.forEach((g, i) => {
+        const isLast = i === groups.length - 1;
+        // ONE bundle: confirmed + surviving tail. Splitting them deletes the
+        // client's pending block for seconds (the "vanishing transcript" bug).
+        this.cb.publish(g.name, g.segs, isLast && !closing ? tail : []);
+      });
+      this.rememberPublishedSpeaker(groups[groups.length - 1]?.name ?? name, confirmed[confirmed.length - 1]?.endMs);
       turn.allConfirmed.push(...confirmed);
-      // Track per-key so a later name change repaints these in place.
+      // Track per-key so a later name change repaints these in place. Only the pieces published
+      // under the TURN's own name may be repainted by a later rename — a piece the transport
+      // assigned to the other speaker is not this turn's to rename.
       let cs = this.clusterSegments.get(turn.clusterId);
       if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
-      cs.push(...confirmed);
+      cs.push(...pieces.filter((p) => p.name === name).map((p) => p.seg));
       this.clusterName.set(turn.clusterId, name);
       turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
@@ -810,6 +1167,15 @@ export class ChunkedTranscriber {
     // owns renames of closed turns; the open-turn re-resolution above must not run again.
     turn.nameLocked = true;
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);
+    // The transport spine remembers who just finished — the gap-reclaim rule in openTurnApply
+    // needs it to refuse to carry one speaker's tail into the next speaker's window.
+    if (turn.trackId || turn.contested) this.lastClosedTrackId = turn.trackId;
+    this.lastClosedEndMs = Math.max(this.lastClosedEndMs, turn.t1);
+    // A transport turn is NEVER queued for the late hint claim. Its name is the track's name and
+    // arrives (or does not) through the TrackNamer's retroactive rename; letting it also sit in the
+    // unresolved queue would re-open the per-hint race on the one path built to be free of it. A
+    // contested turn is never claimed either: it has two speakers in it and no name is correct.
+    if (turn.trackId || turn.contested) return;
     // Register a name vote for the closed turn. If no hint overlaps yet
     // (provisional), queue it for re-resolve when a later hint arrives.
     if (turn.allConfirmed.length > 0) {
@@ -822,7 +1188,117 @@ export class ChunkedTranscriber {
     }
   }
 
+  /** The one rendering rule, applied to every name this lane publishes whatever path produced it:
+   *  if the roster showed this person, use the roster's casing. The tiles and the roster disagree
+   *  about capitalisation ("leo" vs "Leo"), and on the full m30 tape that put ONE participant into
+   *  the transcript under TWO labels — 34 rows as "Leo (Unverified)" and 18 as "leo (Unverified)",
+   *  which reads as two people. Never invents a capitalisation nobody rendered. */
+  private render(name: string): string {
+    return this.trackNamer.canonicalCase(name);
+  }
+
+  /**
+   * Split ONE transcribed segment into per-speaker pieces along the transport's timeline.
+   *
+   * Attribution used to stop at the turn: a turn got one owner and every word in it inherited that
+   * owner, so a span the transport could not assign published an ENTIRE SENTENCE as "Speaker". On
+   * the m34 tape that was 12 rows — and 11 of them were rows where the tiles knew perfectly well
+   * who was speaking, because the transport's "both audible" is a much blunter statement than the
+   * meeting actually made. Measured on that tape, two sources are genuinely audible together for
+   * 5.0% of the meeting, in stretches whose median length is one second; a whole sentence is never
+   * that.
+   *
+   * So each WORD is asked the question separately, and consecutive words with the same answer stay
+   * together. A word inside one source's run takes that source. A word in a contested stretch is
+   * offered to the tiles — the second, independent signal — and only when they name exactly one
+   * person, and that person already owns one of the two contesting tracks, does it take a name;
+   * that constraint is what stops this from being the flickery per-turn DOM race all over again.
+   * Anything still undecided stays "Speaker", which is now a sliver rather than a sentence.
+   */
+  private splitByOwner(seg: { text: string; startMs: number; endMs: number; language: string; words?: Array<{ word: string; start: number; end: number }> },
+                       spanStart: number, fallbackName: string): Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> {
+    const src = this.csrcSource;
+    if (!src || this.authoritative !== 'csrc') return [{ name: fallbackName, ...seg }];
+    const words = seg.words?.filter((w) => typeof w.start === 'number' && (w.word ?? '').trim());
+    if (!words || words.length === 0) return [{ name: fallbackName, ...seg }];
+
+    const nameAt = (tMs: number): string => {
+      const o = src.ownerAt(tMs);
+      if (o.trackId) return this.trackNamer.labelFor(o.trackId);
+      if (o.contested) {
+        // The transport says two people are audible. The tiles get the casting vote — but only if
+        // they name exactly one person AND that person owns one of the tracks in the mix.
+        const lit = this.trackNamer.litNameAt(tMs);
+        if (lit) {
+          for (const t of src.tracksAudibleAt(tMs)) {
+            if (this.trackNamer.nameFor(t) === this.trackNamer.canonicalCase(lit)) return this.trackNamer.labelFor(t);
+          }
+        }
+      }
+      return PROVISIONAL_SPEAKER;
+    };
+
+    const out: Array<{ name: string; text: string; startMs: number; endMs: number; language: string }> = [];
+    for (const w of words) {
+      const t0 = spanStart + w.start * 1000;
+      const t1 = spanStart + (w.end ?? w.start) * 1000;
+      const name = nameAt((t0 + t1) / 2);
+      const last = out[out.length - 1];
+      // Concatenate the tokens VERBATIM. Whisper's word tokens carry their own leading space, and a
+      // suffix like "-то" carries none precisely because it must not have one — re-joining trimmed
+      // tokens with a space produced "что -то" in the founder's transcript. The decoder already
+      // knows where the spaces go; the only trimming happens at a piece's outer edges.
+      if (last && last.name === name) {
+        last.text += w.word;
+        last.endMs = Math.max(last.endMs, t1);
+      } else {
+        out.push({ name, text: w.word, startMs: t0, endMs: Math.max(t1, t0 + 1), language: seg.language });
+      }
+    }
+    for (const piece of out) piece.text = piece.text.trim();
+    const kept = out.filter((piece) => piece.text.length > 0);
+    if (kept.length === 0) return [{ name: fallbackName, ...seg }];
+    out.length = 0; out.push(...kept);
+    // Clip to the segment's own bounds so nothing published moves outside the audio it came from.
+    out[0].startMs = Math.min(out[0].startMs, seg.startMs);
+    out[out.length - 1].endMs = Math.max(out[out.length - 1].endMs, seg.endMs);
+    return out;
+  }
+
   private resolveName(turn: Turn): string {
+    // ── THE TRANSPORT PATH ────────────────────────────────────────────────────────────────────
+    // A turn that carries a trackId does not go through ANY of the machinery below. That machinery
+    // exists because a pyannote turn has no identity of its own, so a name had to be raced for
+    // per turn — which is where both of the 2026-08-10 misattribution bugs lived (the per-turn
+    // claim and the open-turn re-resolution). A transport turn already knows WHICH SPEAKER it is;
+    // the only open question is that speaker's name, and that is answered once per meeting by the
+    // TrackNamer against evidence, not once per turn against timing. The old paths are untouched
+    // and still carry the pyannote lane.
+    if (turn.contested || (turn.spanTracks && !turn.trackId)) {
+      // ORPHAN CONTAINMENT. The transport declined to own this span. Before publishing it as
+      // "Speaker", ask whether the span was ambiguous or merely unowned: exactly one candidate
+      // track — audible somewhere inside it, or the turn immediately before it — means there was
+      // never a second person it could have been. Two candidates is real crosstalk and it stays
+      // unattributed, which on the m30 fixture is all three of them.
+      const contained = this.containingTrack(turn);
+      if (contained) {
+        turn.trackId = contained;
+        const label = this.trackNamer.labelFor(contained);
+        turn.resolvedName = label;
+        let keys = this.trackClusters.get(contained);
+        if (!keys) { keys = new Set(); this.trackClusters.set(contained, keys); }
+        keys.add(turn.clusterId);   // so a later name repaints this span too
+        this.orphanContained++;
+        this.log(`[ChunkedTranscriber] orphan ${turn.clusterId} contained by track ${contained} → "${label}"`);
+        return label;
+      }
+      return turn.clusterId;                            // two voices in one mix — nobody's name
+    }
+    if (turn.trackId) {
+      const label = this.trackNamer.labelFor(turn.trackId);
+      turn.resolvedName = label;
+      return label;
+    }
     // STICKY-UNTIL-CLOSE ATTRIBUTION. A turn's name is locked when the turn CLOSES, not on
     // the first tick that produced any name at all.
     //
@@ -860,9 +1336,9 @@ export class ChunkedTranscriber {
     if (turn.blockedNames?.has(r.speakerName)) return turn.resolvedName ?? turn.clusterId;
     if (!turn.resolvedName) {
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
-      turn.resolvedName = r.speakerName;
+      turn.resolvedName = this.render(r.speakerName);
       turn.resolvedConfidence = r.confidence;
-      return r.speakerName;
+      return turn.resolvedName;
     }
     if (r.speakerName === turn.resolvedName) {
       turn.resolvedConfidence = r.confidence;
@@ -871,12 +1347,34 @@ export class ChunkedTranscriber {
     if (r.source === 'window-match' && r.confidence >= REATTRIBUTE_MIN_CONFIDENCE) {
       this.log(`[ChunkedTranscriber] re-attributed ${turn.clusterId}: "${turn.resolvedName}" → "${r.speakerName}" (conf ${r.confidence.toFixed(2)}) over the grown turn window`);
       this.binder.recordClusterVote(turn.clusterId, r.speakerName);
-      turn.resolvedName = r.speakerName;
+      turn.resolvedName = this.render(r.speakerName);
       turn.resolvedConfidence = r.confidence;
-      this.claimTurn(turn.clusterId, r.speakerName);   // repaint what this turn already published
-      return r.speakerName;
+      this.claimTurn(turn.clusterId, turn.resolvedName);   // repaint what this turn already published
+      return turn.resolvedName;
     }
     return turn.resolvedName;
+  }
+
+  /** The ONE track an orphan span can only have belonged to, or null. Candidates are every track
+   *  audible inside the span plus — when the orphan opens right after it — the previous turn's
+   *  track. More than one candidate is a refusal, always. */
+  private containingTrack(turn: Turn): string | null {
+    // resolveName runs on every submission, so count the ORPHAN once rather than once per pass.
+    if (!turn.orphanCounted) { turn.orphanCounted = true; this.orphanTurns++; }
+    // UNKNOWN IS NOT EMPTY. The spine reports a turn's track membership when it closes it — but the
+    // TTL finalize can close a turn first, and then that report never lands. Treating the missing
+    // report as "no other track was audible" let the adjacency rule name a 5.4-second CROSSTALK
+    // span on the m30 tape after both speakers had been talking through the whole of it. If the
+    // spine never told us, we do not know, and we do not guess.
+    if (turn.spanTracks === undefined) return null;
+    const candidates = new Set<string>(turn.spanTracks);
+    if (candidates.size === 0
+      && this.lastClosedTrackId
+      && turn.t0 - this.lastClosedEndMs <= ORPHAN_ADJACENT_MS
+      && turn.t0 >= this.lastClosedEndMs) {
+      candidates.add(this.lastClosedTrackId);
+    }
+    return candidates.size === 1 ? [...candidates][0] : null;
   }
 
   private isRealSpeakerName(name: string): boolean {
