@@ -43,7 +43,7 @@ const TAPE = arg('tape');
 const TURNS = arg('turns');
 const TURN_SOURCE = (arg('turn-source') ?? (TURNS ? 'recorded' : 'pyannote')) as 'recorded' | 'pyannote' | 'csrc' | 'auto';
 if (!TAPE || (TURN_SOURCE === 'recorded' && !TURNS)) {
-  console.error('usage: tsx src/tape-replay.ts --tape <jsonl> [--turns <psv> | --turn-source pyannote|csrc|auto] [--csrc <jsonl>] [--captions <jsonl>] [--gt <json>] [--cc-oracle]');
+  console.error('usage: tsx src/tape-replay.ts --tape <jsonl> [--turns <psv> | --turn-source pyannote|csrc|auto] [--csrc <jsonl>] [--captions <jsonl>] [--gt <json>] [--cc-oracle] [--out-windows <jsonl> (needs VEXA_TRACE_SPANS=1)]');
   process.exit(2);
 }
 
@@ -207,6 +207,62 @@ async function main(): Promise<void> {
   console.log(`turn source: ${TURN_SOURCE}${TURN_SOURCE === 'recorded' ? ` (${turns.length} live window(s))` : ''}`);
 
   let emit!: (ev: BoundaryEvent) => void;
+
+  // ── WINDOW-MECHANICS INSTRUMENT (`--out-windows <path>`) ──────────────────────────────────
+  // What this exists to answer, and why it lives in the harness rather than in the lane: the
+  // question "how does the STT window actually behave in practice" is answered by the ORDER and
+  // SHAPE of the calls the lane makes, not by anything inside it. The lane already narrates every
+  // window it opens, submits, or declines through `trace()` (VEXA_TRACE_SPANS=1 → the `[spans] …`
+  // lines on the log callback); the harness owns `transcribe` and `publish`. Joining those three
+  // streams onto one ordered timeline reconstructs the whole lifecycle without editing the lane —
+  // so the thing under measurement is the shipping code path, byte for byte.
+  //
+  // THE PAIRING IS POSITIONAL AND THAT IS SOUND. `trace('submit turn=…')` is the statement
+  // immediately before `await this.cb.transcribe(…)`, and the pump serialises submissions behind
+  // its `pumping` guard, so the Nth `submit` line is the Nth transcribe call. The record carries
+  // both the traced span and the pcm length actually handed over, so a drift between them would
+  // show up as a mismatch rather than as a silently wrong number.
+  const windowsPath = arg('out-windows');
+  const windowsFd = windowsPath ? openSync(windowsPath, 'w') : null;
+  let winSeq = 0;
+  // Rebound to the virtual clock once it exists (below). Every record is stamped on the LANE's own
+  // clock, not the wall — a virtual-time replay compresses 21 minutes into a few, and rates
+  // measured against the wall would be fiction.
+  let clockNow: () => number = () => Date.now();
+  const wrec = (o: Record<string, unknown>): void => {
+    if (windowsFd === null) return;
+    writeSync(windowsFd, JSON.stringify({ i: winSeq++, at: clockNow(), ...o }) + '\n');
+  };
+  /** The `submit` line the lane just emitted, waiting for its transcribe call to claim it. */
+  let openSubmit: { turn: number; spanStart: number; spanEnd: number; closing: boolean } | null = null;
+  const SPAN_RE = {
+    open: /^open turn=(\d+) at=(-?\d+(?:\.\d+)?)(?: clamped→(-?\d+(?:\.\d+)?) \(highwater, (-?\d+(?:\.\d+)?)ms skipped\))?/,
+    reclaim: /^reclaim turn=(\d+) (-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?) \((-?\d+(?:\.\d+)?)ms, rms=([\d.]+)\)/,
+    submit: /^submit turn=(\d+) (-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?) \((-?\d+(?:\.\d+)?)ms\) closing=(true|false)/,
+    skipShort: /^skip-short turn=(\d+) (-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?) \((-?\d+(?:\.\d+)?)ms\) closing=(true|false)/,
+    skipQuiet: /^skip-quiet turn=(\d+) (-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?) rms=([\d.]+) closing=(true|false)/,
+  };
+  /** Parse one `[spans]` narration line into a record. Unrecognised lines are kept verbatim
+   *  rather than dropped — a trace shape that changed shows up as `kind:"spans-other"` in the
+   *  data instead of as a silently shorter timeline. */
+  const onSpanLine = (s: string): void => {
+    let m: RegExpExecArray | null;
+    if ((m = SPAN_RE.submit.exec(s))) {
+      openSubmit = { turn: +m[1], spanStart: +m[2], spanEnd: +m[3], closing: m[5] === 'true' };
+      wrec({ kind: 'submit', turn: +m[1], spanStart: +m[2], spanEnd: +m[3], windowMs: +m[4], closing: m[5] === 'true' });
+    } else if ((m = SPAN_RE.open.exec(s))) {
+      wrec({ kind: 'open', turn: +m[1], t0: +m[2], ...(m[3] ? { clampedTo: +m[3], skippedMs: +m[4] } : {}) });
+    } else if ((m = SPAN_RE.reclaim.exec(s))) {
+      wrec({ kind: 'reclaim', turn: +m[1], from: +m[2], to: +m[3], ms: +m[4], rms: +m[5] });
+    } else if ((m = SPAN_RE.skipShort.exec(s))) {
+      wrec({ kind: 'skip-short', turn: +m[1], spanStart: +m[2], spanEnd: +m[3], windowMs: +m[4], closing: m[5] === 'true' });
+    } else if ((m = SPAN_RE.skipQuiet.exec(s))) {
+      wrec({ kind: 'skip-quiet', turn: +m[1], spanStart: +m[2], spanEnd: +m[3], rms: +m[4], closing: m[5] === 'true' });
+    } else {
+      wrec({ kind: 'spans-other', line: s });
+    }
+  };
+
   /** Every publish call, in order — the naive "one row per publish" view. */
   const writes: { id: string; speaker: string; text: string; completed: boolean }[] = [];
   /** `--stream-writes <path>`: append each publish call AS IT HAPPENS, so a `--realtime` replay can
@@ -276,14 +332,38 @@ async function main(): Promise<void> {
   const tc = await ChunkedTranscriber.create({
     ...(language ? { language } : {}),
     transcribe: async (pcm: Float32Array, prompt?: string) => {
+      // Claim the `submit` line this call belongs to (see the instrument's note above) and record
+      // what the lane actually handed the model: the window's true length in samples, and whether
+      // it carried rolling left context or started cold. `prompt` is the ONLY context the decoder
+      // gets — `condition_on_previous_text` is off server-side — so its presence per submission is
+      // the whole answer to "how often does Whisper see what came before".
+      const claimed = openSubmit; openSubmit = null;
+      const sttT0 = Date.now();
       if (client) {
         sttCalls++;
         try {
-          return await client.transcribe(pcm, language, prompt);
+          const r = await client.transcribe(pcm, language, prompt);
+          const segs = (r?.segments ?? []) as Array<{ text?: string; words?: unknown[] }>;
+          wrec({
+            kind: 'stt', ...(claimed ?? { turn: null }),
+            pcmMs: Math.round((pcm.length / 16000) * 1000),
+            promptChars: prompt ? prompt.length : 0, cold: !prompt,
+            latencyMs: Date.now() - sttT0, ok: true,
+            nsegs: segs.length,
+            nwords: segs.reduce((a, s) => a + ((s.words as unknown[] | undefined)?.length ?? 0), 0),
+            text: String(r?.text ?? '').trim(),
+          });
+          return r;
         } catch (e) {
           // A failed STT call is a REAL event, not a reason to substitute fake words — count it
           // and return nothing, exactly as an empty transcription would behave in the lane.
           sttFailures++;
+          wrec({
+            kind: 'stt', ...(claimed ?? { turn: null }),
+            pcmMs: Math.round((pcm.length / 16000) * 1000),
+            promptChars: prompt ? prompt.length : 0, cold: !prompt,
+            latencyMs: Date.now() - sttT0, ok: false, nsegs: 0, nwords: 0, text: '',
+          });
           return { text: '', language: language ?? 'en', duration: pcm.length / 16000, segments: [] };
         }
       }
@@ -305,17 +385,30 @@ async function main(): Promise<void> {
       const tag = Math.abs(sig % 9973);
       const secs = Math.max(1, Math.floor(pcm.length / 16000));
       const text = Array.from({ length: secs }, (_, i) => `v${voice}s${tag}w${i}`).join(' ');
+      // The stub path is instrumented too, so the instrument itself can be smoke-tested without a
+      // GPU. An instrument only exercised on the expensive path is an instrument nobody checked.
+      wrec({ kind: 'stt', ...(claimed ?? { turn: null }),
+        pcmMs: Math.round((pcm.length / 16000) * 1000),
+        promptChars: prompt ? prompt.length : 0, cold: !prompt,
+        latencyMs: Date.now() - sttT0, ok: true, stub: true, nsegs: 1, nwords: 0, text });
       return {
         text, language: language ?? 'en', language_probability: 0.99, duration: pcm.length / 16000,
         segments: [{ text, start: 0, end: pcm.length / 16000, no_speech_prob: 0.01, avg_logprob: -0.2, compression_ratio: 1.1 } as any],
       };
     },
     publish: (speaker, confirmed, pending) => {
+      // Confirmed ids are `turn:<turnId>:<seq>`, so a publish is attributable to the window
+      // lifecycle above WITHOUT any new plumbing — this is what lets "which submission of which
+      // turn did this text confirm on" be answered after the fact.
+      wrec({ kind: 'publish', speaker,
+        confirmed: confirmed.map((c) => ({ id: c.segmentId, t0: c.startMs, t1: c.endMs, text: c.text })),
+        pending: (pending ?? []).map((p) => ({ id: p.segmentId, t0: p.startMs, t1: p.endMs, text: p.text })) });
       for (const c of confirmed) { writes.push({ id: c.segmentId, speaker, text: c.text, completed: true }); streamWrite({ id: c.segmentId, speaker, text: c.text, completed: true }, c.startMs, c.endMs); durable.set(c.segmentId, { speaker, text: c.text, startMs: c.startMs, endMs: c.endMs, completed: true }); }
       reconcilePending(pending ?? []);
       for (const p of pending ?? []) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false }); }
     },
     publishPending: (speaker, segs) => {
+      wrec({ kind: 'pending', speaker, pending: segs.map((p) => ({ id: p.segmentId, t0: p.startMs, t1: p.endMs, text: p.text })) });
       reconcilePending(segs);
       for (const p of segs) { writes.push({ id: p.segmentId, speaker, text: p.text, completed: false }); streamWrite({ id: p.segmentId, speaker, text: p.text, completed: false }, p.startMs, p.endMs); durable.set(p.segmentId, { speaker, text: p.text, startMs: p.startMs, endMs: p.endMs, completed: false }); }
     },
@@ -352,10 +445,29 @@ async function main(): Promise<void> {
       spineEvents.push(o);
       console.log(`  [spine] ${o.from} → ${o.to} (${o.reason}) @${o.tMs}`);
     },
-    log: (m: string) => { if (process.argv.includes('--verbose')) console.log(`  ${m}`); },
+    log: (m: string) => {
+      // The lane's audio-accounting narration (VEXA_TRACE_SPANS=1) arrives here verbatim. Tap it
+      // BEFORE the --verbose gate: the instrument must not depend on whether a human wanted to
+      // read the log.
+      if (m.startsWith('[spans] ')) onSpanLine(m.slice(8));
+      if (process.argv.includes('--verbose')) console.log(`  ${m}`);
+    },
   });
 
   settleLane = () => tc.settled();
+  if (clock) clockNow = () => clock.now();
+  if (windowsPath) {
+    // A header, so a windows file is self-describing. An instrument's output that cannot say which
+    // tape and which spine produced it is not evidence of anything.
+    wrec({ kind: 'header', tape: TAPE, turnSource: TURN_SOURCE, language: language ?? null,
+      frames: frames.length, transportEvents: transport.length, captions: captions.length,
+      traceSpans: !!process.env.VEXA_TRACE_SPANS, stt: sttUrl ?? 'stub', model: arg('stt-model') ?? null });
+    if (!process.env.VEXA_TRACE_SPANS) {
+      // Loud, not silent: without the lane's narration the window file has STT calls with no spans
+      // to attach them to, which reads as "the lane never opened a turn" rather than as a missing flag.
+      console.error('WARNING: --out-windows without VEXA_TRACE_SPANS=1 — the span/turn lifecycle will be ABSENT from the window file');
+    }
+  }
   // ── Drive the tape in TIMESTAMP order across all three streams: audio, hints, and the
   // recorded turn boundaries. Each carries its own capture ts, so no wall-clock pacing is
   // needed and the replay stays deterministic. ──
@@ -371,7 +483,7 @@ async function main(): Promise<void> {
   }
   // The transport's edges ride the SAME ordered timeline as the audio and the hints — that shared
   // epoch clock is the only reason a stored transition can be lined up against a stored frame.
-  for (const ev of transport) evs.push({ t: ev.tMs, run: () => tc.recordTransportEvent(ev) });
+  for (const ev of transport) evs.push({ t: ev.tMs, run: () => { wrec({ kind: 'csrc', csrc: ev.csrc, active: ev.active, tMs: ev.tMs }); tc.recordTransportEvent(ev); } });
   // Captions are name evidence for a track. Only settled entries: an entry still being refined can
   // still change its author, and evidence that can change is not evidence.
   if (captionsAsEvidence) for (const c of captions) if (c.stable) evs.push({ t: c.t, run: () => tc.recordCaption(c.name, c.t) });
@@ -571,6 +683,8 @@ async function main(): Promise<void> {
       if (confusion.size) console.log(`    breakdown (ours←oracle): ${JSON.stringify(Object.fromEntries([...confusion].sort((a, b) => b[1] - a[1])))}`);
     }
   }
+
+  if (windowsPath) console.log(`wrote ${winSeq} window-mechanics record(s) → ${windowsPath}`);
 
   const gtPath = arg('gt');
   if (gtPath) {
