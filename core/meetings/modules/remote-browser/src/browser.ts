@@ -28,8 +28,15 @@ export async function launchPersistentBrowser(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const dataDir = opts.dataDir ?? BROWSER_DATA_DIR;
   const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
+  // Playwright DISABLES Chromium's sandbox by default (chromiumSandbox:false) — and it does so by
+  // INJECTING --no-sandbox itself, which paints the "unsupported command-line flag" banner over the
+  // recording no matter what we remove from `args`. The bot runs NON-ROOT under seccomp=unconfined, so
+  // the sandbox works: enable it (Playwright then omits the flag → no banner). The CHROME_NO_SANDBOX=1
+  // escape hatch (root hosts / no userns) flips it back off, and getSandboxBrowserArgs re-adds the flag.
+  const noSandbox = ['1', 'true', 'yes'].includes((process.env.CHROME_NO_SANDBOX || '').trim().toLowerCase());
   const context = await chromium.launchPersistentContext(dataDir, {
     headless: opts.headless ?? false,
+    chromiumSandbox: !noSandbox,
     ignoreDefaultArgs: ['--enable-automation'],
     args: opts.args,
     viewport: null,

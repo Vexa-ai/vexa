@@ -52,14 +52,13 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--window-size=1920,1080",
   "--start-fullscreen",
   "--incognito",
-  "--no-sandbox",
-  // NOTE: deliberately NO --test-type here. It hides Chromium's "unsupported command-line flag:
-  // --no-sandbox" banner (which overlays the server-side recording), but it is an automation signal
-  // that correlated with Google Meet not surfacing the bot for admission — a bot that can't get into
-  // the meeting is worse than a banner in the recording, so the banner is tolerated for now. The banner
-  // must be suppressed some OTHER way (e.g. a recording-side crop/overlay), not via --test-type.
-  // (--disable-setuid-sandbox also stays removed: redundant with --no-sandbox, and it only added a
-  // second flag name to that same banner.)
+  // NO --no-sandbox here: the bot runs as a NON-ROOT user (see the Dockerfiles / vexa-bot-launch) and
+  // the container is launched with `seccomp=unconfined` (or a userns-permitting profile), so Chromium's
+  // namespace sandbox initializes normally — which also removes the "unsupported command-line flag:
+  // --no-sandbox" yellow banner that used to overlay the recording. A deployment that CANNOT relax
+  // seccomp (or must run the bot as root) sets CHROME_NO_SANDBOX=1 to re-add the flag — see
+  // getSandboxBrowserArgs(). --test-type is intentionally NOT used (it correlated with Meet refusing to
+  // admit the bot).
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
@@ -82,9 +81,18 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--disable-site-isolation-trials",
 ];
 
+/** Opt-in `--no-sandbox` escape hatch. Empty by DEFAULT — the bot runs non-root under
+ *  `seccomp=unconfined`, so Chromium's namespace sandbox works and the "unsupported flag" banner is
+ *  gone. A deployment that can't relax seccomp / must run as root sets CHROME_NO_SANDBOX=1 to re-add
+ *  the flag (Chromium as root REQUIRES it; without a usable sandbox it aborts "No usable sandbox"). */
+export function getSandboxBrowserArgs(): string[] {
+  const v = (process.env.CHROME_NO_SANDBOX || "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" ? ["--no-sandbox"] : [];
+}
+
 /** The canonical join launch args, as a fresh mutable array per call. Includes
  *  the pinned-locale flags (#856) so every launch path — production bot and the
  *  debug harness — is byte-identical and speaks the same UI language. */
 export function getJoinBrowserArgs(): string[] {
-  return [...JOIN_BROWSER_ARGS, ...getLocaleBrowserArgs()];
+  return [...JOIN_BROWSER_ARGS, ...getSandboxBrowserArgs(), ...getLocaleBrowserArgs()];
 }

@@ -259,6 +259,17 @@ class DockerBackend:
             if value and key not in spawn_env:
                 spawn_env[key] = value
 
+        # Meeting-bot containers run Chromium's NAMESPACE sandbox as a non-root user (see the bot image
+        # + entrypoint.sh) instead of --no-sandbox — which removes the "unsupported command-line flag"
+        # banner from the recording but needs the container to permit user namespaces. Relax seccomp for
+        # the BOT only (identified by its invocation env VEXA_BOT_CONFIG); agent-worker containers spawned
+        # by this same backend keep the default profile. CHROME_NO_SANDBOX=1 opts back to the legacy
+        # root + --no-sandbox path and needs no seccomp change.
+        _bot = "VEXA_BOT_CONFIG" in spawn_env
+        _no_sbx = (spawn_env.get("CHROME_NO_SANDBOX") or "").strip().lower() in ("1", "true", "yes")
+        if _bot and not _no_sbx:
+            host_config["SecurityOpt"] = ["seccomp=unconfined"]
+
         payload: dict[str, Any] = {
             "Image": runnable.image,
             "Env": [f"{k}={v}" for k, v in spawn_env.items()],
