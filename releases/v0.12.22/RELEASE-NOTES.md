@@ -17,9 +17,9 @@ and tile names, and attributes at word granularity rather than per turn.
 - Only the `mainAudio` mix is transcribed; double-mirrored tracks are deduplicated,
   and a mix that is present but carries no sound is abandoned rather than
   transcribed as silence.
-- Closed captions are no longer switched on automatically.
-- Where nothing can name a speaker, the row publishes with an empty speaker rather
-  than a claim.
+- Unattributed speech is the number we are driving to zero. This release cuts it
+  substantially and publishes what is left with an empty speaker rather than a
+  guess, so the remaining gap stays visible release over release.
 
 ## Transcript quality
 
@@ -28,31 +28,23 @@ and tile names, and attributes at word granularity rather than per turn.
 - Invented media-artifact text is suppressed, and every suppression is reported.
 - Overlap trim, gap reclaim, and a four-second cut on long turns.
 
-## Capture signal
+## Getting it
 
-A bot can tape the transport and DOM signal for a meeting and store it alongside the
-recording — on by default, with a per-deployment kill switch and bounded retention.
+Images are published multi-arch (`linux/amd64` + `linux/arm64`) under `:v0.12.22`.
+Lite and Docker Compose deployments build and run green at this tag.
 
 ## Not claimed
 
-- Zoom is unchanged by this release.
+- Zoom: not updated in this release — next target.
 - Roughly 4–7% of rows still publish unnamed under heavy crosstalk.
-- The closed-caption path is retained behind a flag; it is not the primary
-  attribution source.
 
 ## Credits
 
 Jacob Schooley ([@jbschooley](https://github.com/jbschooley)) — transcript
-retract/promote and `mainAudio` dedup
-([#1024](https://github.com/Vexa-ai/vexa/pull/1024)).
+retract/promote (`6eff8c09`, `ba382219`) and `mainAudio` dedup (`dc740e52`), from
+[#1024](https://github.com/Vexa-ai/vexa/pull/1024); also `2db27364`.
 
 Daniel Dormann ([@danieldormann](https://github.com/danieldormann)) — structural
-Teams name resolver ([#1121](https://github.com/Vexa-ai/vexa/pull/1121)), and the
-report that opened [#1119](https://github.com/Vexa-ai/vexa/issues/1119).
-
-Review stack: [#1123](https://github.com/Vexa-ai/vexa/pull/1123) ·
-[#1124](https://github.com/Vexa-ai/vexa/pull/1124) ·
-[#1125](https://github.com/Vexa-ai/vexa/pull/1125) ·
-[#1126](https://github.com/Vexa-ai/vexa/pull/1126) ·
-[#1127](https://github.com/Vexa-ai/vexa/pull/1127) ·
-[#1128](https://github.com/Vexa-ai/vexa/pull/1128).
+Teams name resolver (`0d0bdbda`), from
+[#1121](https://github.com/Vexa-ai/vexa/pull/1121), and the report that opened
+[#1119](https://github.com/Vexa-ai/vexa/issues/1119).

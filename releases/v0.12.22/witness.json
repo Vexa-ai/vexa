@@ -1,0 +1,220 @@
+{
+ "version": "v0.12.22",
+ "candidate": "v0.12.22",
+ "generated_from": "v0.12.18...v0.12.22",
+ "witnessed_by": "Dmitry Grankin",
+ "witnessed_at": "2026-08-12",
+ "deployment": "helm \u2014 vexa-production revision 128 (2026-08-12), the same bytes as tag v0.12.22 and candidate v0.12.22-rc.4: vexaai/vexa-bot manifest sha256:5f706d28f866181015d830ffc4afbbcfb34ee3cc2411ae7d022a41fa45486268 (single-platform, top manifest is the linux/amd64 manifest), vexaai/v012-runtime index sha256:d2dced7bbb49cdf652738dc185a1f4af4744188366ca68345961cbc44374a5e3 (linux/amd64 image sha256:b3d466567447d7fa1337a5ed88e7228d18e4ddea664840879e2095667f0aec7e)",
+ "witness_deployment": {
+  "url": "https://dashboard.vexa.ai/meetings/26026",
+  "provisioned_by": "vexa-production Helm revision 127 to 128 on 2026-08-12, deployed by the prod-tenure session; stage revisions 138 to 141 preceded it",
+  "prevalidated": [
+   "rc.3 build+run gate suite on bbb: 33 of 34 gates green, Lite leg 4/4, gate:compose green with 23 passed / 9 skipped; sole red was gate:docs-version, closed at 4dfe8b39",
+   "rc.4 addendum at the tagged source 0653de25: Lite 4/4 green, gate:node green across 18 packages, compose green with 23 passed / 9 skipped",
+   "stage Helm revisions 138 to 141, four cycles, all deployed, zero drift at 140 and 141; the rc.4 dry-run showed 0 added / 0 deleted / 2 changed lines",
+   "prod-replica replay ran clean twice with no intervention, roughly 6 minutes each",
+   "stage meetings 25689 and 25690 harvested as fixtures \u2014 the silent-mix failure and its healthy counterpart",
+   "stable alias readback after the tag push: 10 of 10 index digests match the frozen rc.4 map, 19 of 19 platform manifest and config identities match, :v012 and :latest unchanged"
+  ]
+ },
+ "values": [
+  {
+   "pr": "884",
+   "title": "docs(governance): canonicalize the newcomer label to `good first issue` (spaces)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (1 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit db589ef3"
+  },
+  {
+   "pr": "928",
+   "title": "docs: validate FunASR custom STT path",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (1 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 788b67bb"
+  },
+  {
+   "pr": "946",
+   "title": "ci: preload release bot for compose validation",
+   "visibility": "ci-governance",
+   "witnessed": "by-proxy",
+   "evidence": ".github/workflows/release-validate.yml (CI leg)"
+  },
+  {
+   "pr": "949",
+   "title": "ci: authenticate frozen release descriptor validation",
+   "visibility": "ci-governance",
+   "witnessed": "by-proxy",
+   "evidence": ".github/workflows/release-validate.yml (CI leg)"
+  },
+  {
+   "pr": "952",
+   "title": "ci: preserve exact manifest identity when promoting aliases",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": ".github/workflows/release-validate.yml (CI leg)"
+  },
+  {
+   "pr": "955",
+   "title": "docs: hosted runs Vexa 0.12 for meetings/transcription; agents remain self-hosted (#954)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (2 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit fc75df46"
+  },
+  {
+   "pr": "960",
+   "title": "docs: align hosted 0.12 product truth",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "README.md plus docs/docs product-truth alignment; reviewed diff plus the docs-current CI leg green on merge commit ee32e049"
+  },
+  {
+   "pr": "961",
+   "title": "Integrate #923 with complete image-license and Lite SBOM coverage",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "core/identity/services/admin-api/tests/conftest.py, core/identity/services/admin-api/tests/test_stack_redis.py, scripts/gates.mjs (gate)"
+  },
+  {
+   "pr": "987",
+   "title": "feat(meetings): freeze service provenance for trustworthy billing",
+   "visibility": "user-visible",
+   "witnessed": "by-proxy",
+   "evidence": "core/meetings/services/meeting-api/tests/test_service_provenance.py, test_bot_spawn.py, test_lifecycle_durable.py, test_webhook_wiring.py, core/meetings/services/bot/src/orchestrator.test.ts, core/identity/services/admin-api/tests/test_model_settings.py \u2014 31-file change, merge commit 1f6898cf. Shipped in the 0.12.19-0.12.21 era and carried into this batch by the baseline walk; witnessed by its named tests, not walked live for v0.12.22."
+  },
+  {
+   "pr": "997",
+   "title": "feat(identity): add admin user entitlement patch",
+   "visibility": "user-visible",
+   "witnessed": "by-proxy",
+   "evidence": "core/meetings/services/meeting-api/tests/test_service_authority.py, test_lifecycle_seam.py, test_runtime_destroy_terminal_e2e.py, test_system_webhook.py, test_webhook_seam.py, core/identity/services/admin-api/tests/test_stack_admin_api.py, deploy/compose/tests/service-authority.overlay.yml \u2014 59-file change, merge commit 545c92b2. Same provenance as #987: witnessed by its named tests, not walked live for v0.12.22."
+  },
+  {
+   "pr": "1008",
+   "title": "gov: enforce low-friction contributor rights at PR intake",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": ".github/workflows/contribution-rights.yml (CI leg)"
+  },
+  {
+   "pr": "1051",
+   "title": "docs: restore the pre-0.12 URL surface \u2014 49-rule redirects block (#1045)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (1 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 67118b5c"
+  },
+  {
+   "pr": "1052",
+   "title": "docs: Lite deployment page + honest-status notes (#1046, #1048)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (7 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 6ff8b4fd"
+  },
+  {
+   "pr": "1053",
+   "title": "docs: pin the MCP server card url to the canonical endpoint (#1047)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (1 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 161e7223"
+  },
+  {
+   "pr": "1054",
+   "title": "carve: preserve the Vexum-surface de-robot across trains (vexa-platform#239)",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "carve/ transform + manifest + overrides only, no runtime source; the carve output is re-derived and diffed on every train, and the gates/static legs were green on merge commit 3e86e5bc"
+  },
+  {
+   "pr": "1055",
+   "title": "docs: drop the unserved static MCP server card (#1047)",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (1 file(s) under docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 616778fe"
+  },
+  {
+   "pr": "1080",
+   "title": "Automate meeting summaries with n8n without writing a backend \u2014 the /n8n recipe page",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (4 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit c3ba63ed"
+  },
+  {
+   "pr": "1081",
+   "title": "Point Claude Desktop or an IDE at Vexa over MCP \u2014 the /vexa-mcp page, with the hosted-vs-self-host boundary stated",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "docs/docs MCP page plus a core/meetings surface touch; reviewed diff, docs-current CI leg, and the gates leg green on merge commit 045fc51e"
+  },
+  {
+   "pr": "1082",
+   "title": "Arrivals at /chatgpt-transcript-share-links learn the truth \u2014 honest-status page for the unmounted public share flow",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (3 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit fde7dfb7"
+  },
+  {
+   "pr": "1088",
+   "title": "Arrivals at /interactive-bots learn the per-surface truth \u2014 honest-status page while the interactive shape is designed",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (3 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit bc314c57"
+  },
+  {
+   "pr": "1095",
+   "title": "Contribution policy: a corporate contributor can start the process themselves",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "scripts/contribution-rights-gate.mjs with its own unit test scripts/contribution-rights-gate.test.mjs, plus CONTRIBUTOR_RIGHTS.md and docs/adr; the gate itself is the standing proof and runs on every PR (merge commit 9fef84bb)"
+  },
+  {
+   "pr": "1108",
+   "title": "docs: say who validated the FunASR path",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (2 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 965a92c6"
+  },
+  {
+   "pr": "1111",
+   "title": "docs: land five guessed paths on the pages that answer them",
+   "visibility": "docs",
+   "witnessed": "by-proxy",
+   "evidence": "documentation-only change (2 file(s) under docs/changelog.d, docs/docs); reviewed diff plus the docs-current CI leg green on merge commit 4c1612d8"
+  },
+  {
+   "pr": "1123",
+   "title": "fix(teams,transcript): speaker-producer names, transcript retract/promote, mainAudio-only transcription [1/4 v0.12.22]",
+   "visibility": "user-visible",
+   "platform": "ms-teams",
+   "witnessed": true,
+   "pass": "Teams turns carry a speaker name rather than an empty or generic label, and the transcript does not lose speech to dedup: a superseded pending draft is retracted and a confirmed turn's tail is promoted on close.",
+   "observation": "Teams meeting 26026 produced named turns. Across meetings 26026, 26025, 26024 and 26027 the transcript showed no dropped tails at turn boundaries and only the mainAudio mix was transcribed. Walked as one assembled build: the four rungs below are the same bytes \u2014 tag v0.12.22 (4dfe8b39), candidate v0.12.22-rc.4 built at 0653de25 \u2014 running in vexa-production revision 128. The founder walked live Teams meeting 26026 and Google Meet meetings 26025, 26024 and 26027. Each entry records what was observed for that value inside that walk; no rung was walked in isolation."
+  },
+  {
+   "pr": "1125",
+   "title": "feat(capture-signal): bounded signal tapes, and the structural Teams name resolver [2/4 v0.12.22]",
+   "visibility": "user-visible",
+   "platform": "ms-teams",
+   "witnessed": true,
+   "pass": "Names resolve from stable DOM attributes and are guarded so a control label, a clock or a machine token never becomes a name; the bot tapes transport and DOM signal alongside the recording, bounded and kill-switchable.",
+   "observation": "In Teams meeting 26026 the names attached to turns were participant names, with no control-label or clock text appearing as a speaker. Capture-signal tapes were written for the meeting without affecting the live transcript. Walked as one assembled build: the four rungs below are the same bytes \u2014 tag v0.12.22 (4dfe8b39), candidate v0.12.22-rc.4 built at 0653de25 \u2014 running in vexa-production revision 128. The founder walked live Teams meeting 26026 and Google Meet meetings 26025, 26024 and 26027. Each entry records what was observed for that value inside that walk; no rung was walked in isolation."
+  },
+  {
+   "pr": "1128",
+   "title": "feat(mixed): transport-drawn turns, word-level attribution, roster elimination, source\u2192name correlator [3/4 v0.12.22]",
+   "visibility": "user-visible",
+   "platform": "ms-teams",
+   "witnessed": true,
+   "pass": "Attribution follows the WebRTC transport's contributing-source list rather than the UI animation, is applied at word granularity, and a name another track has already earned is treated as contamination rather than disagreement.",
+   "observation": "Teams meeting 26026 attributed speech at word granularity with turns drawn from the transport; no cross-track name bleed was observed on the walked meeting. Walked as one assembled build: the four rungs below are the same bytes \u2014 tag v0.12.22 (4dfe8b39), candidate v0.12.22-rc.4 built at 0653de25 \u2014 running in vexa-production revision 128. The founder walked live Teams meeting 26026 and Google Meet meetings 26025, 26024 and 26027. Each entry records what was observed for that value inside that walk; no rung was walked in isolation."
+  },
+  {
+   "pr": "1126",
+   "title": "fix(mixed): hallucination gate, gap-reclaim, and the v0.12.22 release freeze [4/4 v0.12.22]",
+   "visibility": "user-visible",
+   "witnessed": true,
+   "pass": "Invented media-artifact text is suppressed and every suppression is reported; overlap trim and gap reclaim recover speech; a mainAudio mix that is present but carries no sound is abandoned rather than transcribed as silence.",
+   "observation": "No invented media-artifact lines appeared in the transcripts of meetings 26026, 26025, 26024 or 26027, and no silent-mix transcription occurred. Walked as one assembled build: the four rungs below are the same bytes \u2014 tag v0.12.22 (4dfe8b39), candidate v0.12.22-rc.4 built at 0653de25 \u2014 running in vexa-production revision 128. The founder walked live Teams meeting 26026 and Google Meet meetings 26025, 26024 and 26027. Each entry records what was observed for that value inside that walk; no rung was walked in isolation."
+  }
+ ],
+ "signed_off": true,
+ "signed_off_provenance": "Founder attestation relayed into the publisher session rather than typed by the founder into this file. The underlying witness is his own live walk of vexa-production revision 128 on 2026-08-12 (Teams 26026, Google Meet 26025 / 26024 / 26027), recorded independently in drafts/2026-08-12-v0.12.22-oss-release-packet.md sections 2 and 3 before this receipt existed. His sign-offs this session, verbatim: \"go sign approved\" and \"sign off DCO\". The 23 pre-existing batch entries above are resolved by-proxy against named evidence and were NOT walked live for this release; only the four v0.12.22 rungs carry a live observation."
+}
