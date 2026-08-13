@@ -27,7 +27,11 @@ import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 import { settingProblem } from './transcription-language.js';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'voice_note' | 'vexa_call';
+// 'discord' never actually boots THIS bot — it is a wholly separate first-party Python service
+// (core/meetings/services/discord-bot) that speaks invocation.v1/transcript.v1/lifecycle.v1/acts.v1
+// directly, with no browser/Playwright capture lane at all. It rides this union only so the type
+// mirrors the sealed invocation.v1 Platform enum exactly (config.ts's own contract, above).
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'voice_note' | 'vexa_call' | 'discord';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
