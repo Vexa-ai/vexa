@@ -1356,7 +1356,18 @@ export class ChunkedTranscriber {
       // check; the blanket phrase list would also kill legit short answers
       // ("Yes.") inside real-speech windows the RMS gate already vouched for.
       if (prompt && s.text.length > 6 && prompt.includes(s.text)) {
-        this.trace(`drop-seg why=prompt-echo text=${JSON.stringify(s.text.slice(0, 60))}`);
+        // ITERATION 11 — the last surviving candidate of the filter class died here, and the
+        // trace is what killed it. REACH is the distance from the confirmed boundary to this
+        // window's left edge; NTOK is the repeat's length. Pre-computed on both conversation
+        // baselines before any rule was written: all 14 firings in the corpus sit at reach
+        // 0–1.07 s, and iteration 10's falsifying duplicate arrived at reach ≈0, so bounding this
+        // test by TAIL_DEDUP_REACH_MS (M18′) would have been an unconditional deletion by another
+        // name. Bounding it by TAIL_DEDUP_MIN_TOKENS instead (M18″) DOES separate the sites — it
+        // recovers «Cologne.»/«node-based»/«confirmed» and blocks the 9-token duplicate — and was
+        // still reverted: the read found the admission of «Cologne.» rewrites a sentence THIRTY
+        // SECONDS LATER («Yeah, but generally the good news…» → «Hmm?» · «The next news…»), which
+        // is M23 and is common to every member of the family. Left in place as diagnostics.
+        this.trace(`drop-seg why=prompt-echo reach=${Math.round(spanStart - this.confirmedHighWaterMs)} ntok=${tokens(s.text).length} text=${JSON.stringify(s.text.slice(0, 60))}`);
         return false;
       }
       // Whisper invented this on non-speech. Reported, never dropped in silence.
