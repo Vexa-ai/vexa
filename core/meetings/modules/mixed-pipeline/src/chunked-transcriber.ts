@@ -1183,7 +1183,50 @@ export class ChunkedTranscriber {
 
   /** One submission of the turn's unconfirmed window. While the turn is open,
    *  confirmation is LocalAgreement-2 (the bot's word-prefix stability); on
-   *  close everything confirms. */
+   *  close everything confirms.
+   *
+   *  ────────────────────────────────────────────────────────────────────────────────────────
+   *  A LEADING CONTEXT PAD WAS BUILT AND REJECTED — 2026-08-13, iteration 7.
+   *  ────────────────────────────────────────────────────────────────────────────────────────
+   *  The trailing `contextEndMs` pad below has an obvious symmetric twin: decode ~2 s of
+   *  ALREADY-CONFIRMED audio ahead of `spanStart` so the model hears how the window's first word
+   *  was entered, and discard everything it returns before the boundary. M8 says a cold left edge
+   *  is why word 0 oscillates, and because LocalAgreement is a PREFIX rule, word 0 holds every
+   *  later word hostage — on m26073 that one mechanism IS the 17.2 s median. It was built with
+   *  the boundary held fixed (same `skip-short`, RMS gate on the window's own audio, `spanStart`
+   *  and `spanEnd` untouched), bounded to the turn's own `t0`, energy-gated, and timestamp-rebased
+   *  so nothing downstream saw a different clock. It measured worse and is NOT shipped.
+   *
+   *  1. IT CANNOT REACH THE MECHANISM. The pad only exists where a window has advanced past its
+   *     turn's `t0` — 1 of 3 generations on m26073, 18 of 186 on m26042, 5 of 578 on m26043.
+   *     M8's cold edge is overwhelmingly a property of a turn's FIRST window, and the only audio
+   *     in front of that belongs to the PREVIOUS SPEAKER (iteration 2, reverted for fragmenting
+   *     rows and tripling refusals) or to a stretch the segmenter called silence (which
+   *     `gap-reclaim.test.ts` forbids, and which caught the pad's first form handing Whisper 2 s
+   *     of silence). A same-speaker acoustic pad is structurally unable to warm the edge that is
+   *     cold.
+   *  2. WORD 0 DID NOT SETTLE ANY SOONER — the pre-registered falsifier, and it fired on every
+   *     fixture. Word-0 change counts went 6 → 6, 41 → 41, and 90 → 93. The one window on m26073
+   *     that could be padded already had zero oscillation.
+   *  3. AND IT COST A THIRD OF A TRANSCRIPT THAT WAS 0/0. On m26073 the two runs are IDENTICAL
+   *     up to the padded window's left edge and diverge from that instant: 109 shipped words
+   *     became 73. `когда все машут руками` → `всем штукают`; `Дело НЕ в том, ЧЕГО мы с вами
+   *     ожидали` → `Дело в том, что вы видели` — the negation gone, the sentence asserting its
+   *     own opposite, which is the same failure M9 produced on the same clause; `ну это конечно
+   *     была песня маленькая, но как-то` deleted; and the closing sentence deleted entirely.
+   *     Every counter read IDENTICAL: 1 row, 0 splits, 0 thrash, 0 shrapnel, median unmoved.
+   *
+   *  THE GENERAL LESSON, and it is wider than this change. §11.1 established that the window's
+   *  RIGHT edge is a commitment (a cut publishes an unsettled guess as final) and §12.3 that the
+   *  LEFT edge's advance is one too (a mid-clause advance re-lights M8). This pad commits nothing,
+   *  publishes nothing extra and moves no boundary — and it still rewrote speech the lane had
+   *  already got right. **The decode is not monotone in context: handing the model MORE audio it
+   *  has already adjudicated does not refine its answer, it asks a different question.** Any
+   *  change to the decoder's input window is a change to its output, including one that only
+   *  adds context.
+   *
+   *  Full account: §13 of `~/dev/biz/drafts/2026-08-13-window-mechanics-in-practice.md`.
+   */
   private async submitTurn(turn: Turn, closing: boolean): Promise<void> {
     const spanStart = turn.confirmedUpToMs;
     // Open turns read to the LIVE AUDIO EDGE, not the last commit — pending
