@@ -729,6 +729,39 @@ def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
     assert r.status_code == 201, r.text
 
 
+def test_post_bots_discord_hostname_url_accepted(monkeypatch):
+    """discord (#875) rides the SAME zoom/jitsi passthrough: no URL template (no _URL_TEMPLATES
+    entry), so a caller-supplied meeting_url is required and SSRF-validated identically."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "discord", "native_meeting_id": "222222222222222222",
+                             "meeting_url": "https://discord.com/channels/111111111111111111/222222222222222222"})
+    assert r.status_code == 201, r.text
+    assert r.json()["platform"] == "discord"
+
+
+def test_post_bots_discord_meeting_is_stop_addressable(monkeypatch):
+    """A discord spawn can be stopped via DELETE /bots/discord/{native_id} (stop_router's
+    _SUPPORTED_PLATFORMS now carries 'discord')."""
+    from fastapi import FastAPI
+
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    app = FastAPI()
+    app.include_router(build_router(repo, runtime))
+    app.include_router(build_stop_router(repo, InMemoryCommandPublisher(), runtime))
+    client = TestClient(app)
+    assert client.post("/bots", headers=HEADERS,
+                       json={"platform": "discord", "native_meeting_id": "222222222222222222",
+                             "meeting_url": "https://discord.com/channels/1/222222222222222222"}
+                       ).status_code == 201
+    r = client.delete("/bots/discord/222222222222222222", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "stopping"
+
+
 def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):
     """The zoom passthrough rides the SAME validator (one shared entry-point guard)."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
