@@ -116,6 +116,52 @@ const GAP_RECLAIM_MAX_MS = Number((typeof process !== 'undefined' && process.env
  *  this pace instead of waiting for the next boundary (which can be 10s away
  *  inside a monologue). Pending ≈ tick + RTT; confirm ≈ 2 ticks. */
 const SUBMIT_TICK_MS = 2000;
+/* ──────────────────────────────────────────────────────────────────────────────────────────────
+ * A RELAXED AGREEMENT ON OLD WINDOWS WAS BUILT AND REJECTED — 2026-08-13, iteration 8.
+ * ──────────────────────────────────────────────────────────────────────────────────────────────
+ * The change: pass `agree = 2` to `localAgreement` when the submitted window is ≥17 s old, 3
+ * otherwise. Nothing else moved — no boundary, no tick, no audio, no prompt. It did exactly what
+ * it was built to do and is not shipped.
+ *
+ * 1. THE LATENCY WIN WAS REAL AND EXACTLY AS PREDICTED. m26073's pooled confirm-lag fell
+ *    17220 → 5640 ms, because its binding window confirmed at pass 6 (+17.0 s) instead of pass 9
+ *    (+24.0 s). `fixtures/tools/windows/agreesim.py` predicted 5640 ms from the BASELINE trace
+ *    before the code existed — the confirm core is pure, so a different `agree` is arithmetic on
+ *    the passes a run already made. §12.2's identity (17.2 s = 24.0 − 6.8) is confirmed, and so
+ *    is M13's `agree × tick` floor.
+ *
+ * 2. AND IT COST MEANING ON ALL THREE FIXTURES. m26073 shipped 109 → 92 words: the opening name
+ *    «Мария» became «…», «вот пили» became «вы видели», and the clause «Это была песня маленькая,
+ *    но как-то» was deleted outright. m26042 lost «or Codex» from a sentence about CLI tools.
+ *    m26043 lost two whole rows and shattered «За контриентами.» across three rows and three
+ *    labels. Rows, splits, thrash and word-0 counts were all UNCHANGED on the conversation
+ *    fixtures — the fourth time a meaning-inverting change has read clean on every counter.
+ *
+ * 3. THE MECHANISM IS THAT THE CLOSE IS THE ACCURATE PATH, NOT MERELY THE FAST ONE. A closing
+ *    decode reads the whole turn at once with its extent known; every agreement decode reads a
+ *    prefix and is guessing where it ends. On m26042 the relaxed rule confirmed at +349.0 s and
+ *    froze a decode that had dropped «or Codex»; the CLOSE 1.2 s later had recovered it. So
+ *    cheapening agreement moves confirms off the close path (m26042 close 162→161, agreement
+ *    16→18; m26043 589→587 and 5→7) and M13's disqualifier applies with an extra term: the
+ *    agreement path is six times slower AND has heard less audio.
+ *
+ * 4. THE THIRD PASS IS WHERE THE SEGMENTATION REVISES, WHICH IS WHAT MAKES `agree = 3` LOAD-
+ *    BEARING RATHER THAN CONSERVATIVE. LocalAgreement tests WORD-prefix stability but confirms
+ *    whole SEGMENTS, and the segment boundary is not part of what it tests. On m26073 passes 5
+ *    and 6 both proposed one segment ending at 11.36 s; pass 8 re-cut the same audio into
+ *    0..6.78 + 7.00..11.36. Confirming at pass 6 committed to a boundary the model had not
+ *    finished making, and the next window — opening mid-clause at 11.36 — then sat at nsegs=1
+ *    for TEN consecutive passes and confirmed nothing until close (M12's advance-is-a-commitment,
+ *    reached from the agreement side).
+ *
+ * 5. AND NO GATE SEPARATES THE TWO CASES, WHICH IS WHY NO PARAMETERISATION SURVIVES. "The close
+ *    path is unavailable" is a fact about a turn's FUTURE and the lane must decide now. Every
+ *    observable proxy is shared: at the 17 s threshold above — the largest that still reaches
+ *    m26073 at all — the same rule fires 78 times on m26042 and 53 on m26043, which carry windows
+ *    of 22.0, 27.1 and 24.9 s. Above 17.2 s the change stops reaching its own fixture.
+ *
+ * Full account: §15/§16 of `~/dev/biz/drafts/2026-08-13-window-mechanics-in-practice.md`.
+ * ────────────────────────────────────────────────────────────────────────────────────────────── */
 /** A short isolated active-speaker UI switch (Zoom/Teams) right after a different
  *  published speaker is held provisional rather than stamped — without acoustic
  *  evidence a brief tile flip is more likely a stale/echoed hint than a real,
