@@ -317,6 +317,13 @@
    "targets": []
   },
   {
+   "key": "IMMUTABILITY_THRESHOLD_MIXED_CONFIRMED",
+   "class": "defaulted",
+   "default": "0",
+   "description": "the hold (seconds) for a CONFIRMED segment written by the mixed lane (source=merged — Teams/Zoom), which retracts its drafts instead of refining rows in place, so an early flush is deletable and a rewrite is an upsert-UPDATE. Never raises the hold above IMMUTABILITY_THRESHOLD; pendings and every other lane keep the full hold",
+   "targets": []
+  },
+  {
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
