@@ -838,6 +838,17 @@ export class ChunkedTranscriber {
   async settled(): Promise<void> {
     await this.pyannoteSource?.settled?.();
     await this.csrcSource?.settled?.();
+    // THE PUMP IS PART OF THE LANE, and a clock that waits for the lane must wait for it too.
+    //
+    // Without this the virtual clock advanced past an in-flight STT call. The heartbeat's first
+    // statement is `if (this.pumping) return`, and under virtual time a 350 ms decode spans about
+    // TWELVE virtual heartbeats where it spans 0.35 live ones. Measured on m26042 before this line:
+    // 1194 of 1271 heartbeats — 94% — returned at that guard, and with it 1304 of 1304 run. So the
+    // replay under-ticked the lane by more than an order of magnitude, and every reading of the form
+    // "the resubmit tick does not fire" taken under virtual time was partly measuring the harness
+    // rather than the lane. The clock's own correctness argument already demanded this ("let that
+    // chain settle before it moves again"); the chain was simply taken to end at the segmenter.
+    while (this.pumping) await new Promise((r) => setTimeout(r, 2));
   }
 
   /** Session end: flush the carried span and close the open turn. Resolves
