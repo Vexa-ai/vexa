@@ -901,6 +901,19 @@ export class ChunkedTranscriber {
 
   private closeTurn(t1: number, contextPadMs = 0): void {
     this.queue.push({ kind: 'close', t1, contextPadMs });
+    // MEASURED, AND LOAD-BEARING FOR HOW `continuesWindow` ABOVE ACTUALLY BEHAVES (2026-08-13).
+    //
+    // This pump runs synchronously, so it usually drains the close while the spine's paired
+    // `turnOpened` — emitted one statement later inside the same `reconcile()` — has not been
+    // enqueued yet. The coalescer therefore sees an empty queue and cannot even consider the pair:
+    // on m26042, 171 of 182 boundaries reached it that way, and 610 of 616 on m26043. Window
+    // continuity across a SPINE boundary consequently fires only when some other pump happens to be
+    // awaiting a decode at that instant, which is a race, not a rule.
+    //
+    // Deferring this by one microtask makes the pair atomic and was implemented and measured; it
+    // also made the virtual and real clocks produce different transcripts (virtual-time-equivalence
+    // goes red), so it is NOT shipped. It is written down here because the alternative is that the
+    // next reader believes the rule above describes what the lane does.
     void this.pump();
   }
 
@@ -952,6 +965,11 @@ export class ChunkedTranscriber {
               this.trace(`continue turn=${t.turnId} ${item.t1}..${nxt.t0} (gap=${Math.round(nxt.t0 - item.t1)}ms unconfirmed=${Math.round(nxt.t0 - t.confirmedUpToMs)}ms)`);
               continue;
             }
+            // WHY a boundary did not continue, counted rather than guessed. `queue-empty` is not a
+            // rule refusing: it is the pump having drained the close before the spine's paired open
+            // was enqueued one statement later — see the note in `closeTurn`.
+            this.trace(`no-continue turn=${this.turn?.turnId ?? -1} why=${
+              nxt === undefined ? 'queue-empty' : nxt === 'tick' ? 'tick-next' : nxt.kind !== 'open' ? 'close-next' : 'refused'}`);
             await this.closeTurnApply(item);   // submits + closes the open turn
             continue;
           }
@@ -1016,13 +1034,33 @@ export class ChunkedTranscriber {
    *  TURN_MAX rolls both re-open on the SAME track and were resetting the left edge anyway), every
    *  DTX/packet-loss break inside one speaker's run, and the whole of a single-speaker meeting —
    *  which is the worst fixture in the library.
+   *
+   *  WHAT THIS RULE ACTUALLY DOES, MEASURED (2026-08-13) — read this before reasoning from the
+   *  description above, because the two are not the same thing.
+   *
+   *  Of 478 continuations on m26042 and 51 on m26073, **not one was a spine boundary**. Every single
+   *  one was a `rollOpen` pair: the lane's own PROVISIONAL_CUT, TTL idle-finalize and TURN_MAX rolls
+   *  enqueue close+open ADJACENTLY, so they are the only pairs the pump reliably sees together (see
+   *  `closeTurn` for why the spine's pairs are not). The practical effect of this rule on the
+   *  transport spine is therefore not "the window survives a turn boundary" — it is **the three
+   *  force-rolls are disabled**, and the window ends only at a real speaker change or silence.
+   *
+   *  That is also, measured, the better product, which is why it stands. Making the rolls fire again
+   *  re-creates the amputation class on continuous speech: on m26073 the founder's own example
+   *  returns as "чем……поучают" for "чем получают" and the meeting's final sentence stops mid-clause,
+   *  because a roll cuts at `latestAudioMs` — an arbitrary 256 ms frame edge, inside a word almost
+   *  always. Cutting the rolls at the decoder's own segment boundaries instead was tried and is
+   *  worse still (the model invents text on the truncated windows). The bound on the window IS the
+   *  amputation mechanism, and the honest next move is to end the window on SILENCE rather than on a
+   *  timer — not to re-arm a timer that cuts through speech.
    */
   private continuesWindow(close: { t1: number }, open: { t0: number; trackId?: string }): boolean {
     const t = this.turn;
     if (!t) return false;
-    if (open.t0 - close.t1 >= SILENCE_PROMPT_RESET_MS) return false;
-    if (open.t0 - t.confirmedUpToMs > TURN_MAX_MS) return false;
-    return open.trackId === t.trackId;
+    if (open.t0 - close.t1 >= SILENCE_PROMPT_RESET_MS) { this.trace(`refuse why=silence gap=${Math.round(open.t0 - close.t1)}`); return false; }
+    if (open.t0 - t.confirmedUpToMs > TURN_MAX_MS) { this.trace(`refuse why=turn-max`); return false; }
+    if (open.trackId !== t.trackId) { this.trace(`refuse why=speaker-change`); return false; }
+    return true;
   }
 
   /** Open a new segmentation turn. Closes any still-open turn first (defensive —
