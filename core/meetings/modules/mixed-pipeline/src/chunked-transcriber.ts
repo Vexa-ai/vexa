@@ -1344,12 +1344,21 @@ export class ChunkedTranscriber {
       if (!s.text) return false;
       // The trailing STT context pad is for recognition only — drop anything that
       // begins past the committed speech boundary, and any zero/negative span.
-      if (closing && s.startMs >= publishEnd) return false;
-      if (s.endMs <= s.startMs) return false;
+      if (closing && s.startMs >= publishEnd) {
+        this.trace(`drop-seg why=past-publish-end text=${JSON.stringify(s.text.slice(0, 60))}`);
+        return false;
+      }
+      if (s.endMs <= s.startMs) {
+        this.trace(`drop-seg why=empty-span text=${JSON.stringify(s.text.slice(0, 60))}`);
+        return false;
+      }
       // Prompt echo — whisper parroting the initial_prompt back. Targeted
       // check; the blanket phrase list would also kill legit short answers
       // ("Yes.") inside real-speech windows the RMS gate already vouched for.
-      if (prompt && s.text.length > 6 && prompt.includes(s.text)) return false;
+      if (prompt && s.text.length > 6 && prompt.includes(s.text)) {
+        this.trace(`drop-seg why=prompt-echo text=${JSON.stringify(s.text.slice(0, 60))}`);
+        return false;
+      }
       // Whisper invented this on non-speech. Reported, never dropped in silence.
       const rule = hallucinationRule(s.text);
       if (rule) {
@@ -1821,14 +1830,23 @@ export class ChunkedTranscriber {
   private applyGates(result: TranscriptionResult, windowMs: number): TranscriptionResult['segments'] | null {
     if (!result.text || !result.text.trim()) return null;
     const prob = result.language_probability ?? 0;
-    if (!this.cb.language && prob > 0 && prob < 0.3) return null;
+    if (!this.cb.language && prob > 0 && prob < 0.3) {
+      this.trace(`drop-gate why=language-prob p=${prob.toFixed(3)} win=${windowMs} text=${JSON.stringify(result.text.slice(0, 60))}`);
+      return null;
+    }
     const seg0 = result.segments?.[0];
     if (seg0) {
       const noSpeech = seg0.no_speech_prob ?? 0;
       const logProb = seg0.avg_logprob ?? 0;
       const compression = seg0.compression_ratio ?? 1;
       const duration = (seg0.end || 0) - (seg0.start || 0);
-      if ((noSpeech > 0.5 && logProb < -0.7) || (logProb < -0.8 && duration < 2.0) || compression > 2.4) return null;
+      const why = (noSpeech > 0.5 && logProb < -0.7) ? 'no-speech'
+        : (logProb < -0.8 && duration < 2.0) ? 'short-lowprob'
+        : (compression > 2.4) ? 'compression' : null;
+      if (why) {
+        this.trace(`drop-gate why=${why} noSpeech=${noSpeech.toFixed(2)} logProb=${logProb.toFixed(2)} dur=${duration.toFixed(2)} comp=${compression.toFixed(2)} win=${windowMs} text=${JSON.stringify(result.text.slice(0, 60))}`);
+        return null;
+      }
     }
     // NO phrase-list hallucination filter here — live monitoring showed it
     // killing real interview answers ("Yes.", "Okay.", "Right?", "Thank
