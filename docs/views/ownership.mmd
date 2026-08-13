@@ -33,6 +33,9 @@ flowchart LR
   remote_browser -->|write| userdata_blob
   gateway -.->|read| recording_blob
   bot -.->|read| bot_commands
+  discord_bot -->|write| segments_stream
+  discord_bot -->|write| tc_mutable
+  discord_bot -.->|read| bot_commands
   meeting_api -->|write| bm_status
   meeting_api -->|write| u_meetings
   meeting_api -->|write| bot_commands

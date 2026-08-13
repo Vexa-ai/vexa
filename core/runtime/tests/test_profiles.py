@@ -38,14 +38,17 @@ def _conforms_invocation(obj: dict) -> None:
 
 def test_registry_resolves_meeting_bot_and_agent():
     reg = default_registry()
-    assert set(reg.names()) == {"meeting-bot", "agent"}
-    for name in ("meeting-bot", "agent"):
+    assert set(reg.names()) == {"meeting-bot", "agent", "discord-bot"}
+    for name in ("meeting-bot", "agent", "discord-bot"):
         runnable = reg.resolve(name)
         assert isinstance(runnable, Runnable)
     # The agent carries an explicit launch argv; the meeting-bot deliberately carries NO command so
     # every container backend execs the shipped bot image's own ENTRYPOINT (#675).
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
     assert reg.resolve("meeting-bot").command is None
+    # discord-bot (#875) is a plain Python entrypoint like "agent" — no externally-built image
+    # ENTRYPOINT to lean on — so it carries an explicit launch argv too.
+    assert reg.resolve("discord-bot").command == ["python", "-m", "discord_bot"]
     assert reg.resolve("does-not-exist") is None
 
 
@@ -55,6 +58,51 @@ def test_meeting_bot_uses_browser_image_from_env(monkeypatch):
     assert reg.resolve("meeting-bot").image == "registry.example.com/vexa-bot:0.12"
     # Lifetime is managed externally (idle_timeout 0 ⇒ enforcement skips it).
     assert reg.get("meeting-bot").idle_timeout_sec == 0
+
+
+def test_discord_bot_uses_discord_bot_image_from_env(monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_IMAGE", "registry.example.com/vexa-discord-bot:0.12")
+    reg = default_registry()
+    assert reg.resolve("discord-bot").image == "registry.example.com/vexa-discord-bot:0.12"
+    # Lifetime is managed externally by meeting-api (leave / stop), exactly like meeting-bot.
+    assert reg.get("discord-bot").idle_timeout_sec == 0
+
+
+def test_discord_bot_image_defaults_empty_when_env_unset(monkeypatch):
+    monkeypatch.delenv("DISCORD_BOT_IMAGE", raising=False)
+    reg = default_registry()
+    # No `:latest` fallback — a missing image surfaces as "" the backend rejects (fail-visible).
+    assert reg.resolve("discord-bot").image == ""
+
+
+def test_discord_bot_forwards_token_into_base_env(monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "test-discord-token")
+    reg = default_registry()
+    assert reg.get("discord-bot").base_env == {"DISCORD_TOKEN": "test-discord-token"}
+
+
+def test_discord_bot_base_env_empty_when_token_unset(monkeypatch):
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    reg = default_registry()
+    assert reg.get("discord-bot").base_env == {}
+
+
+def test_discord_bot_env_is_a_valid_invocation():
+    """Same contract-faithful shape as meeting-bot: the whole config is VEXA_BOT_CONFIG, a
+    JSON-encoded Invocation — for discord, platform="discord" + an explicit meetingUrl (no
+    URL template exists for a bare Discord channel id, see invocation.v1 golden Invocation.discord)."""
+    invocation = {
+        "platform": "discord",
+        "meetingUrl": "https://discord.com/channels/111111111111111111/222222222222222222",
+        "botName": "Vexa",
+        "nativeMeetingId": "222222222222222222",
+        "redisUrl": "redis://redis:6379",
+        "connectionId": "sess-uid",
+        "meetingApiCallbackUrl": "http://meeting-api:8080/runtime/callback",
+    }
+    env = {"VEXA_BOT_CONFIG": json.dumps(invocation)}
+    assert "VEXA_BOT_CONFIG" in env
+    _conforms_invocation(json.loads(env["VEXA_BOT_CONFIG"]))
 
 
 def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
@@ -162,12 +210,15 @@ def test_agent_profile_honors_worker_image_override(monkeypatch):
 
 # ── command overrides (process-backend / lite) ────────────────────────────────────────────────────
 def test_command_overrides_noop_without_env(monkeypatch):
-    """No BOT_COMMAND / AGENT_WORKER_COMMAND set ⇒ the image entrypoints are untouched (docker/k8s)."""
+    """No BOT_COMMAND / AGENT_WORKER_COMMAND / DISCORD_BOT_COMMAND set ⇒ the image entrypoints
+    (or explicit launch argv) are untouched (docker/k8s)."""
     monkeypatch.delenv("BOT_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_WORKER_COMMAND", raising=False)
+    monkeypatch.delenv("DISCORD_BOT_COMMAND", raising=False)
     reg = apply_command_overrides(default_registry())
     assert reg.resolve("meeting-bot").command is None  # image ENTRYPOINT is authoritative (#675)
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
+    assert reg.resolve("discord-bot").command == ["python", "-m", "discord_bot"]
 
 
 def test_command_overrides_replace_commands(monkeypatch):
@@ -175,10 +226,13 @@ def test_command_overrides_replace_commands(monkeypatch):
     images + timeouts are preserved (only the command is replaced)."""
     monkeypatch.setenv("BOT_COMMAND", "/usr/local/bin/vexa-bot-launch")
     monkeypatch.setenv("AGENT_WORKER_COMMAND", "/usr/local/bin/vexa-agent-worker --flag")
+    monkeypatch.setenv("DISCORD_BOT_COMMAND", "/usr/local/bin/vexa-discord-bot-launch")
     reg = apply_command_overrides(default_registry())
     assert reg.resolve("meeting-bot").command == ["/usr/local/bin/vexa-bot-launch"]
     assert reg.resolve("agent").command == ["/usr/local/bin/vexa-agent-worker", "--flag"]
+    assert reg.resolve("discord-bot").command == ["/usr/local/bin/vexa-discord-bot-launch"]
     assert reg.get("agent").idle_timeout_sec == 300  # untouched
+    assert reg.get("discord-bot").idle_timeout_sec == 0  # untouched
 
 
 def test_command_overrides_ignore_blank_env(monkeypatch):
@@ -186,6 +240,8 @@ def test_command_overrides_ignore_blank_env(monkeypatch):
     must behave like an unset one: never replace a profile command with an empty argv."""
     monkeypatch.setenv("BOT_COMMAND", "")
     monkeypatch.setenv("AGENT_WORKER_COMMAND", "   ")
+    monkeypatch.setenv("DISCORD_BOT_COMMAND", "")
     reg = apply_command_overrides(default_registry())
     assert reg.resolve("meeting-bot").command is None  # image ENTRYPOINT is authoritative (#675)
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
+    assert reg.resolve("discord-bot").command == ["python", "-m", "discord_bot"]

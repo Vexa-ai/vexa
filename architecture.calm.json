@@ -171,6 +171,23 @@
    ]
   },
   {
+   "unique-id": "discord-bot",
+   "node-type": "service",
+   "name": "discord-bot",
+   "description": "spawned-per-meeting worker (#875): join a Discord voice channel over the DAVE/E2EE voice-gateway receive path -> per-speaker PCM -> STT -> transcript.v1",
+   "metadata": [
+    {
+     "path": "core/meetings/services/discord-bot"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "discord-bot-commands-sub",
+     "type": "consumer"
+    }
+   ]
+  },
+  {
    "unique-id": "transcription",
    "node-type": "service",
    "name": "transcription",
@@ -1694,12 +1711,13 @@
   },
   {
    "unique-id": "workers-deployed",
-   "description": "bot + agent-worker are runtime.v1 workloads",
+   "description": "bot + discord-bot + agent-worker are runtime.v1 workloads",
    "relationship-type": {
     "deployed-in": {
      "container": "runtime",
      "nodes": [
       "bot",
+      "discord-bot",
       "agent-worker"
      ]
     }
@@ -1747,6 +1765,97 @@
     "connects": {
      "source": {
       "node": "bot"
+     },
+     "destination": {
+      "node": "bot-commands"
+     }
+    }
+   },
+   "description": "SUBSCRIBE acts.v1 commands",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "discord-bot-writes-segments-stream",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "discord-bot"
+     },
+     "destination": {
+      "node": "segments-stream"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "discord-bot-publishes-mutable",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "discord-bot"
+     },
+     "destination": {
+      "node": "tc-mutable"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "discord-bot-stt",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "discord-bot"
+     },
+     "destination": {
+      "node": "transcription",
+      "interface": "stt-endpoint"
+     }
+    }
+   },
+   "description": "audio -> first-party STT via transcriptionServiceUrl (invocation.v1)",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "STT is first-party and self-hostable; default destination is tenant-hosted, so audio need not leave the tenant",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "config": {
+        "dataClass": "audio",
+        "destination": "tenant-hosted",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "discord-bot-commands-read",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "discord-bot"
      },
      "destination": {
       "node": "bot-commands"

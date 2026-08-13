@@ -114,6 +114,21 @@
    "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
   },
   {
+   "key": "DISCORD_BOT_IMAGE",
+   "class": "defaulted",
+   "default": "(unset — the `discord-bot` profile cannot spawn; the backend rejects an empty image)",
+   "description": "the Discord platform-lane bot image the `discord-bot` profile spawns (core/meetings/services/discord-bot)",
+   "targets": []
+  },
+  {
+   "key": "DISCORD_TOKEN",
+   "class": "defaulted",
+   "default": "(unset — no discord-bot workload can authenticate to Discord)",
+   "description": "the ONE registered Discord Application bot token, forwarded into every `discord-bot` workload's env (base_env) — the SAME identity for every Discord voice channel this deployment joins, unlike per-invocation platform credentials",
+   "secret": true,
+   "targets": []
+  },
+  {
    "key": "BOT_ALONE_SILENCE_WINDOW_MS",
    "class": "defaulted",
    "default": "600000",
@@ -188,6 +203,13 @@
    "targets": [
     "lite"
    ]
+  },
+  {
+   "key": "DISCORD_BOT_COMMAND",
+   "class": "defaulted",
+   "default": "(unset — python -m discord_bot runs)",
+   "description": "process-backend override: the executable that IS the discord-bot (no lite launcher wired yet)",
+   "targets": []
   },
   {
    "key": "HOST_CLAUDE_CREDENTIALS",
