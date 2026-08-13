@@ -351,13 +351,36 @@ def test_post_bots_meeting_url_only_is_accepted():
 
 # FIXED (A1): create_bot rejects an unsupported platform without a constructible meeting_url → 422
 # (router.py), instead of a deep 500 in the invocation builder. Standing regression guard.
+# ("discord" is now a spawnable platform (invocation.v1 Platform enum) — "webex" stands in as a
+# genuinely unsupported platform for this probe; see test_post_bots_discord_meeting_url_accepted
+# below for the discord positive-path coverage.)
 def test_post_bots_invalid_platform_should_be_422():
     c = _client()
     r = c.post("/bots", headers=HEADERS,
-               json={"platform": "discord", "native_meeting_id": "x"})
+               json={"platform": "webex", "native_meeting_id": "x"})
     assert r.status_code == 422, (
         f"invalid platform accepted with {r.status_code}: {r.text}"
     )
+
+
+# discord (#875): a first-party in-tree platform lane, like zoom/jitsi it has NO constructible
+# meeting_url (a Discord voice channel isn't addressed by a URL template) — the caller passes an
+# explicit meeting_url (the same SSRF-validated passthrough zoom/jitsi already use).
+def test_post_bots_discord_meeting_url_accepted():
+    c = _client()
+    r = c.post("/bots", headers=HEADERS,
+               json={"platform": "discord", "native_meeting_id": "222222222222222222",
+                     "meeting_url": "https://discord.com/channels/111111111111111111/222222222222222222"})
+    assert r.status_code == 201, r.text
+    assert r.json()["platform"] == "discord"
+
+
+def test_post_bots_discord_without_meeting_url_is_422():
+    """Discord has no URL template — without an explicit meeting_url it 422s (A1), matching zoom/jitsi."""
+    c = _client()
+    r = c.post("/bots", headers=HEADERS,
+               json={"platform": "discord", "native_meeting_id": "222222222222222222"})
+    assert r.status_code == 422, r.text
 
 
 # FIXED (A2): _resolve_recording_enabled parses booleans/strings + 422s other types — no silent
@@ -514,15 +537,16 @@ def test_get_meeting_after_post_reflects_it():
 
 def test_delete_bots_invalid_platform_should_be_422():
     """A3 FIXED: DELETE /bots/{platform}/{native_meeting_id} validates `platform` against the
-    sealed api.v1 Platform enum BEFORE find_active. An unsupported platform (e.g. 'discord') is a
-    422 Validation Error — matching the contract — instead of leaking a 404 from a find_active miss."""
+    sealed api.v1 Platform enum BEFORE find_active. An unsupported platform (e.g. 'webex') is a
+    422 Validation Error — matching the contract — instead of leaking a 404 from a find_active miss.
+    ('discord' is now a supported platform — see test_delete_bots_valid_platform_nonexistent_is_404.)"""
     c = _client()
-    r = c.delete("/bots/discord/some-id", headers=HEADERS)
+    r = c.delete("/bots/webex/some-id", headers=HEADERS)
     assert r.status_code == 422, f"invalid platform → {r.status_code} (contract says 422)"
     _assert_error_envelope(r)
 
 
-@pytest.mark.parametrize("platform", ["google_meet", "zoom", "teams", "jitsi", "browser_session"])
+@pytest.mark.parametrize("platform", ["google_meet", "zoom", "teams", "jitsi", "browser_session", "discord"])
 def test_delete_bots_valid_platform_nonexistent_is_404(platform):
     """Idempotent-delete preserved: a VALID platform with no active meeting still → 404
     (the 422 guard only rejects platforms outside the sealed enum, not unknown meetings)."""

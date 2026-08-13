@@ -33,12 +33,14 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
   end
+  discord_bot["discord-bot"]
   slim["slim"]
   extension["extension"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
+  discord_bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
