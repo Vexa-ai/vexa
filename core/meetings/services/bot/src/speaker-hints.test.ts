@@ -184,6 +184,48 @@ async function main(): Promise<void> {
       `desktop=${desktopOut} bot=${botOut}`);
   }
 
+  // ── M24: evidence that arrives while the transcriber is being BUILT ─────────────────────────
+  // `ChunkedTranscriber.create` loads the pyannote model before it resolves, and every recorder
+  // used to be `transcriber?.record…()` — a silent drop for that whole window. A HINT survives a
+  // drop (the tiles re-assert every 2 s); a TRANSPORT EDGE does not. On prod meeting 26088 the
+  // transport's only csrc activation arrived 113 ms after the lane's first observation, was
+  // dropped here, and the next edge came 259 s later — past the 20 s arming grace — so the
+  // meeting ran on the pyannote spine, whose turns carry no track to bind a name to, and 32 of
+  // 62 rows shipped unnamed once the DOM indicator went silent.
+  console.log('M24 — pre-create evidence is buffered, not dropped');
+  {
+    const seen: string[] = [];
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { release = r; });
+    const factory = (async () => {
+      await gate;
+      return {
+        feedAudio() { /* not under test */ },
+        recordHint(name: string, _kind: string, _tMs: number, isEnd = false) { seen.push(`hint:${name}:${isEnd}`); },
+        recordTransportEvent(ev: { csrc: number; active: boolean; tMs: number }) { seen.push(`csrc:${ev.csrc}:${ev.active}`); },
+        recordRosterName(n: string) { seen.push(`roster:${n}`); },
+        async dispose() { /* nothing */ },
+      };
+    }) as unknown as NonNullable<Parameters<typeof createBotPipeline>[2]['createMixedTranscriber']>;
+    const pipe = createBotPipeline(inv('teams'), nullSink, { createMixedTranscriber: factory });
+    const started = pipe.start();
+    pipe.recordTransportEvent?.({ csrc: 201, active: true, tMs: 1 });
+    pipe.recordHint('Alice', 2);
+    pipe.recordRosterName?.('Alice', 3);
+    check('nothing reaches a transcriber that does not exist yet', seen.length === 0, JSON.stringify(seen));
+    check('the arrival is still COUNTED while it waits', pipe.hintCounters?.received === 1, JSON.stringify(pipe.hintCounters));
+    release!();
+    await started;
+    await sleep(0);
+    check('every pre-create event is delivered once the transcriber exists, IN ARRIVAL ORDER',
+      seen.join('|') === 'csrc:201:true|hint:Alice:false|roster:Alice', JSON.stringify(seen));
+    seen.length = 0;
+    pipe.recordTransportEvent?.({ csrc: 201, active: false, tMs: 4 });
+    check('after the drain, events go straight through (the buffer is not a permanent hop)',
+      seen.join('|') === 'csrc:201:false', JSON.stringify(seen));
+    await pipe.stop();
+  }
+
   console.log(failed === 0 ? '\n✅ speaker-hints: all green' : `\n❌ speaker-hints: ${failed} failure(s)`);
   process.exit(failed === 0 ? 0 : 1);
 }

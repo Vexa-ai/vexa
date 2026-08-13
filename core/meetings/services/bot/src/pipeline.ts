@@ -236,6 +236,51 @@ function createMixedBotPipeline(
   let creating: Promise<MixedTranscriber> | null = null;
   const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
 
+  // ── EVIDENCE THAT ARRIVES BEFORE THE TRANSCRIBER EXISTS (M24, 2026-08-13) ────────────────────
+  // `ChunkedTranscriber.create` loads the pyannote model before it returns, and every recorder
+  // below used to be `transcriber?.record…(…)` — a silent drop for the whole of that window. For
+  // AUDIO that is correct and stays so: frames are a continuous signal and the model has to lock
+  // on regardless. For an EDGE it is not, because an edge does not repeat.
+  //
+  // Measured, on prod meeting 26088 (Teams, one continuous speaker): the transport's ONLY csrc
+  // activation crossed the bridge 113 ms after the lane's first observation and was dropped here;
+  // the next transition arrived 259 s later, long past the 20 s arming grace, so the transport was
+  // disarmed for the session and the meeting ran on the pyannote spine. A pyannote turn carries no
+  // track, so the name the DOM tiles had already established could not be bound to anything
+  // durable — and when the Teams outline indicator went silent at 08:12:18 the last 32 of 62 rows
+  // shipped with no speaker at all. The same tape replayed into an ALREADY-CONSTRUCTED transcriber
+  // arms the transport on that first edge and names 25 of 25 rows from the same evidence.
+  //
+  // So: buffer the evidence-bearing calls (transport edges, roster, captions, hints) in arrival
+  // order and deliver them the moment the transcriber exists. Bounded, because a lane that never
+  // finishes creating must not grow a queue without limit; the drop is then counted and loud.
+  const EARLY_EVIDENCE_MAX = 512;
+  let earlyEvidence: Array<(t: MixedTranscriber) => void> | null = [];
+  let earlyEvidenceDropped = 0;
+  /** Run `f` against the transcriber, or hold it in order until there is one. */
+  const withTranscriber = (f: (t: MixedTranscriber) => void): void => {
+    if (transcriber) { f(transcriber); return; }
+    if (!earlyEvidence) return;                       // creation failed — nothing will drain it
+    if (earlyEvidence.length >= EARLY_EVIDENCE_MAX) {
+      earlyEvidenceDropped++;
+      if (earlyEvidenceDropped === 1) {
+        console.warn(`[bot] pipeline(mixed): pre-create evidence buffer full (${EARLY_EVIDENCE_MAX}) — dropping`);
+      }
+      return;
+    }
+    earlyEvidence.push(f);
+  };
+  /** Called once, the instant the transcriber exists: replay what arrived while it was building. */
+  const drainEarlyEvidence = (t: MixedTranscriber): void => {
+    const held = earlyEvidence;
+    earlyEvidence = null;
+    if (!held || held.length === 0) return;
+    console.log(`[bot] pipeline(mixed): replaying ${held.length} evidence event(s) buffered during transcriber construction`);
+    for (const f of held) {
+      try { f(t); } catch (e) { (onError ?? ((err) => console.error(`[bot] pipeline(mixed): buffered evidence rejected: ${String(err)}`)))(e); }
+    }
+  };
+
   const publish = (speaker: string, segs: ChunkSegment[], completed: boolean): void => {
     for (const c of segs) {
       void sink.publish(chunkToBotSegment(speaker, c, completed)).catch((e) => {
@@ -302,7 +347,7 @@ function createMixedBotPipeline(
           console.log(`[bot] pipeline(mixed): turn spine ${o.from} → ${o.to} (${o.reason})`);
           try { onObservation?.('mixed-turn-source', { ...o }, o.tMs); } catch { /* diagnostics never break the lane */ }
         },
-      }).then((t) => { transcriber = t; return t; })
+      }).then((t) => { transcriber = t; drainEarlyEvidence(t); return t; })
         // #593: DON'T cache a rejected create promise. The mixed lane's create() loads the pyannote
         // model (from_pretrained) — if that rejects (empty HF cache, no egress), leaving `creating`
         // as a stuck rejected promise makes every later start() reject too, so the non-fatal retry
@@ -318,11 +363,11 @@ function createMixedBotPipeline(
     feedAudio() { /* not the mixed lane (mixed has no per-channel glow) */ },
     feedMixedAudio: (pcm, tsMs) => { transcriber?.feedAudio(pcm, tsMs); },
     // C1 hop 3 + C2: count the arrival, forward under the platform's TRUE kind.
-    recordHint: (name, tMs, isEnd) => { hintCounters.received++; transcriber?.recordHint(name, hintKind, tMs, isEnd); },
-    recordTransportEvent: (ev) => { transcriber?.recordTransportEvent?.(ev); },
-    recordCaptionName: (name, tMs) => { transcriber?.recordCaption?.(name, tMs); },
-    recordRosterName: (name, tMs) => { transcriber?.recordRosterName?.(name, tMs); },
-    recordRosterCoverage: (named, participants, tMs) => { transcriber?.recordRosterCoverage?.(named, participants, tMs); },
+    recordHint: (name, tMs, isEnd) => { hintCounters.received++; withTranscriber((t) => t.recordHint(name, hintKind, tMs, isEnd)); },
+    recordTransportEvent: (ev) => { withTranscriber((t) => t.recordTransportEvent?.(ev)); },
+    recordCaptionName: (name, tMs) => { withTranscriber((t) => t.recordCaption?.(name, tMs)); },
+    recordRosterName: (name, tMs) => { withTranscriber((t) => t.recordRosterName?.(name, tMs)); },
+    recordRosterCoverage: (named, participants, tMs) => { withTranscriber((t) => t.recordRosterCoverage?.(named, participants, tMs)); },
     hintCounters,
   };
 }
