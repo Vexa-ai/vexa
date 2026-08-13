@@ -1050,9 +1050,33 @@ export class ChunkedTranscriber {
    *  returns as "чем……поучают" for "чем получают" and the meeting's final sentence stops mid-clause,
    *  because a roll cuts at `latestAudioMs` — an arbitrary 256 ms frame edge, inside a word almost
    *  always. Cutting the rolls at the decoder's own segment boundaries instead was tried and is
-   *  worse still (the model invents text on the truncated windows). The bound on the window IS the
-   *  amputation mechanism, and the honest next move is to end the window on SILENCE rather than on a
-   *  timer — not to re-arm a timer that cuts through speech.
+   *  worse still (the model invents text on the truncated windows).
+   *
+   *  AND CUTTING THEM AT A MEASURED SILENCE IS ALSO WORSE — built and rejected 2026-08-13
+   *  (iteration 5). That is the third placement to fail, and it is what finally names the mechanism.
+   *  The ring was probed in 32 ms sub-windows at the lane's own `DROP_RMS` floor; a roll fired only
+   *  where it found a run of ≥200 ms at that floor, and the cut moved into the middle of the run.
+   *  Both cuts it took on m26073 landed in genuine silence. It still destroyed five things the
+   *  un-rolled window gets right: `Мария` shipped as `…` (the subject of the sentence, and a
+   *  person's name), `все машут руками и говорят` as `все машутками говорят`, `ну это конечно`
+   *  deleted, and `А я бы не задавал, но прежде чем` replaced by an invented `Спасибо.`
+   *
+   *  THE FAILURE CHANNEL IS THE CLOSE, NOT THE CUT. `localAgreement` returns
+   *  `confirmCount = segments.length` on `closing` with no agreement test at all, so ANY roll
+   *  freezes whatever the model currently believes. At +7.8 s on m26073 the model was still
+   *  oscillating `Майя` / `…` on the window's cold left edge; four more seconds of audio settled it
+   *  on `Мария`. An early cut does not mainly amputate a word — it publishes an unsettled guess as
+   *  FINAL, which is worse, because nothing downstream can tell it from the truth. A roll is
+   *  therefore legitimate only where MORE AUDIO CANNOT SETTLE THE TEXT (the speaker stopped; the
+   *  request has hit the model's input bound). Cutting in order to publish sooner is not, at any
+   *  placement — and a bound that hunts backwards for a pause is worse again: TURN_MAX cut 27 s
+   *  behind the live edge on the same run and stranded the audio between.
+   *
+   *  So time-to-final on continuous speech is a CONFIRMATION problem, not a windowing one.
+   *  LocalAgreement is a PREFIX rule, so one unsettled word at the cold left edge holds every
+   *  stable word behind it — which is the whole 17 s bill on m26073, and paying it down by cutting
+   *  buys the time back in wrong words. See §10 of
+   *  `~/dev/biz/drafts/2026-08-13-window-mechanics-in-practice.md`.
    */
   private continuesWindow(close: { t1: number }, open: { t0: number; trackId?: string }): boolean {
     const t = this.turn;
