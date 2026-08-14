@@ -38,7 +38,12 @@ from .ports import (
     TranscriptionNotConfigured,
 )
 from .invocation import SPAWNABLE_PLATFORMS
-from .service import DuplicateMeeting, construct_meeting_url, request_bot
+from .service import (
+    NO_MEETING_URL_PLATFORMS,
+    DuplicateMeeting,
+    construct_meeting_url,
+    request_bot,
+)
 
 #: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
 #: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
@@ -360,13 +365,19 @@ def build_router(
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
         # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
-        # only the full URL says WHICH deployment to join).
-        if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
+        # only the full URL says WHICH deployment to join), or the platform has no URL concept at all
+        # (discord — NO_MEETING_URL_PLATFORMS — a voice channel is joined by native_meeting_id alone).
+        if (
+            not meeting_url
+            and platform not in NO_MEETING_URL_PLATFORMS
+            and construct_meeting_url(platform, native_meeting_id) is None
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=(
                     f"unsupported platform '{platform}' without a meeting_url — "
-                    "use google_meet/teams, or provide meeting_url (required for zoom/jitsi)"
+                    "use google_meet/teams, discord (no meeting_url needed), or provide "
+                    "meeting_url (required for zoom/jitsi)"
                 ),
             )
 

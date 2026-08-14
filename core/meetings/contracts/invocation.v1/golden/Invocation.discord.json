@@ -1,6 +1,6 @@
 {
   "platform": "discord",
-  "meetingUrl": "https://discord.com/channels/111111111111111111/222222222222222222",
+  "meetingUrl": null,
   "botName": "Vexa",
   "nativeMeetingId": "222222222222222222",
   "redisUrl": "redis://redis:6379"
