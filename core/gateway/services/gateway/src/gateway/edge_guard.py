@@ -35,15 +35,23 @@ import ipaddress
 import os
 import time
 from collections import defaultdict, deque
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
-from guard import SecurityConfig, SecurityMiddleware
+from guard import SecurityConfig, SecurityMiddleware, ip_ban_manager
+
+# is_ip_allowed / extract_client_ip are not exported at guard's top level yet (ask filed
+# upstream - see the WS guard hook section below); import straight from guard_core. The
+# pinned guard-core (3.4.0, uv.lock) has ``is_ip_allowed`` (plain bool) rather than the
+# newer ``check_ip_access`` (returns a reasoned ``IpAccessResult``) some later guard-core
+# versions add - same whitelist/blacklist/cloud-provider semantics, just a plainer return.
+from guard_core.utils import extract_client_ip, is_ip_allowed
 
 from .config_preflight import ConfigError
 from .ratelimit import env_truthy
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, WebSocket
+    from guard_core.protocols.request_protocol import GuardRequest
 
 _GUARD_REDIS_PREFIX_DEFAULT = "vexa:guard:"
 _GUARD_RATE_LIMIT_RPM_DEFAULT = 600
@@ -193,36 +201,6 @@ def _env_int(env: str, default: int) -> int:
         return default
 
 
-def _ip_matches(client_ip: str, entries: Iterable[str]) -> bool:
-    """True iff ``client_ip`` is contained in any CIDR/IP in ``entries``.
-
-    Tracks the HTTP path's CIDR semantics (fastapi-guard accepts CIDR ranges in
-    whitelist/blacklist/trusted_proxies). Each entry is parsed with
-    ``ip_network(entry, strict=False)`` so a bare IP becomes a ``/32`` (v4) / ``/128`` (v6)
-    and still matches itself. Diverges from the HTTP path on malformed entries: the HTTP
-    ``_ip_in_list`` raises on a malformed CIDR-with-``/``, whereas this helper SKIPS a
-    malformed entry so a bad value does not take the WS path down (fail-open, consistent
-    with ``fail_secure=False`` — a typo'd ``GUARD_IP_BLACKLIST`` entry silently does not
-    block, the safe-direction tradeoff). A malformed ``client_ip`` likewise matches
-    nothing (returns False).
-    """
-    try:
-        addr = ipaddress.ip_address(client_ip)
-    except ValueError:
-        return False
-    for entry in entries:
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            net = ipaddress.ip_network(entry, strict=False)
-        except ValueError:
-            continue  # skip malformed entry (permissive — do not raise)
-        if addr in net:
-            return True
-    return False
-
-
 def build_guard_config() -> SecurityConfig:
     """Build the guard ``SecurityConfig`` from env vars.
 
@@ -297,61 +275,125 @@ def apply_guard(app: FastAPI, config: SecurityConfig | None = None) -> None:
 # HTTP ``SecurityMiddleware`` does NOT intercept the ``/ws`` multiplex (Starlette
 # middleware is HTTP-only). When ``GUARD_WS_ENABLED=true`` (default false — opt-in,
 # since WS guard is beyond the drafted floor), ``run_multiplex`` resolves the
-# client IP and calls :func:`check_ws` to deny over-limit/banned IPs at connect.
+# client IP and calls :func:`ws_guard_check` to deny over-limit/banned IPs at connect.
 #
-# SecurityMiddleware exposes NO reusable programmatic IP-check callable (its
-# ``dispatch`` is bound to an HTTP ``Request`` and the internal ``SecurityCheckPipeline``
-# needs a full ``GuardRequest``). So this is a MINIMAL standalone limiter:
+# Phase 1 (this section) replaced the pieces guard's library already covers: IP-list /
+# cloud-provider matching (``is_ip_allowed``), the ban store (``ip_ban_manager`` -
+# process-wide and Redis-shared with the HTTP middleware when ``GUARD_ENABLE_REDIS`` is
+# on), and client-IP resolution (``extract_client_ip`` via the minimal
+# ``_WsGuardRequest`` adapter below). What is LEFT hand-rolled is the rate limit itself:
+# SecurityMiddleware exposes no reusable programmatic rate-limit primitive (its
+# ``dispatch`` is bound to an HTTP ``Request`` and the internal rate-limit check needs a
+# full ``GuardRequest`` + pipeline). So the rate-limit half is a MINIMAL standalone
+# limiter:
 #
-#   ponytail: standalone WS limiter — shares the vexa:guard: redis namespace (when
-#   Redis is on, the HTTP middleware persists there) but NOT SecurityMiddleware's
-#   in-process counters; the WS path keeps its OWN in-process buckets. Promote to
-#   fastapi-guard's native WS support if/when upstream adds a reusable IP-check.
+#   ponytail: standalone WS rate limiter - in-process buckets, NOT
+#   SecurityMiddleware's own rate-limit counters (the ban store is shared via
+#   ip_ban_manager, but the sliding-window bucket is not). Promote to fastapi-guard's
+#   native WS support if/when upstream adds a reusable rate-limit primitive (ASK 2).
 
 _WS_GUARD: Optional["_WsGuard"] = None
 
 
+class _WsGuardRequest:
+    """Minimal WebSocket -> ``GuardRequest`` adapter, for :func:`resolve_ws_client_ip`.
+
+    Starlette's ``WebSocket`` shares the ``HTTPConnection`` base with ``Request``
+    (``.client`` / ``.headers`` / ``.state`` all present), so this exposes ONLY the
+    three members ``guard_core.utils.extract_client_ip`` actually reads - not the full
+    ``GuardRequest`` protocol (``url_path``, ``method``, ``body``, ...) a general-purpose
+    adapter needs. Mirrors fastapi-guard's own HTTP adapter, ``StarletteGuardRequest``
+    (``guard/adapters.py``), which implements the whole protocol because the HTTP
+    pipeline needs all of it; this one doesn't, so it doesn't. An official WS
+    ``GuardRequest`` adapter is a filed upstream ask - if/when it ships, this class (and
+    the ``cast`` at its one call site) goes away too.
+    """
+
+    __slots__ = ("_ws",)
+
+    def __init__(self, ws: WebSocket) -> None:
+        self._ws = ws
+
+    @property
+    def client_host(self) -> str | None:
+        return self._ws.client.host if self._ws.client else None
+
+    @property
+    def headers(self) -> Any:
+        return self._ws.headers
+
+    @property
+    def state(self) -> Any:
+        return self._ws.state
+
+
 class _WsGuard:
-    """In-memory per-IP rate limiter + auto-ban for the ``/ws`` connect path.
+    """Per-IP guard for the ``/ws`` connect path: library-backed IP-list/ban decisions
+    (SWAP A/B), in-process sliding-window rate limit (still hand-rolled, see the module
+    comment above).
 
     Mirrors the HTTP layer's knobs (rate limit, auto-ban threshold/duration,
     blacklist, whitelist) from the SAME :class:`SecurityConfig` the HTTP middleware
-    uses, so one env surface governs both. In-process only — when Redis is enabled
-    the HTTP middleware shares state across processes via Redis; this WS guard does
-    not (the ceiling named above).
+    uses, so one env surface governs both.
     """
 
-    __slots__ = ("_config", "_rl", "_bans", "_ban_counts")
+    __slots__ = ("_config", "_rl", "_ban_counts")
 
     def __init__(self, config: SecurityConfig) -> None:
         self._config = config
-        # ip -> sliding-window timestamps (monotonic)
+        # ip -> sliding-window timestamps (monotonic) - the still-hand-rolled half.
         self._rl: defaultdict[str, deque[float]] = defaultdict(deque)
-        # ip -> unban monotonic time
-        self._bans: dict[str, float] = {}
-        # ip -> count of rate-limit violations (toward auto-ban)
+        # ip -> count of rate-limit violations toward auto-ban. Stays in-process (it
+        # feeds the threshold, part of the rate-limit half phase 2 replaces); only the
+        # ban STORE itself moved to ip_ban_manager (SWAP B) below.
         self._ban_counts: defaultdict[str, int] = defaultdict(int)
 
-    def check(self, client_ip: str) -> bool:
+    async def check(self, client_ip: str) -> bool:
         """Return True if the IP may connect, False if over-limit or banned."""
-        now = time.monotonic()
         cfg = self._config
 
-        # Whitelist bypass (explicit allow short-circuits everything) — CIDR-aware.
-        if cfg.whitelist and _ip_matches(client_ip, cfg.whitelist):
-            return True
-        # Blacklist deny — CIDR-aware.
-        if _ip_matches(client_ip, cfg.blacklist or []):
+        # Ban check first, unconditional - mirrors guard-core's IpSecurityCheck order
+        # (its ban lookup runs before the whitelist/blacklist decision), so an actively
+        # banned IP stays blocked even if it is also whitelisted. SWAP B: the ban STORE
+        # is now ip_ban_manager (guard_core.handlers.ipban_handler) - process-wide and
+        # Redis-shared with the HTTP middleware when GUARD_ENABLE_REDIS is on, closing
+        # the multi-replica gap the old in-process ``_bans`` dict had (helm defaults the
+        # gateway to replicaCount 2).
+        if await ip_ban_manager.is_ip_banned(client_ip):
             return False
-        # Active ban?
-        unban = self._bans.get(client_ip)
-        if unban is not None:
-            if now < unban:
-                return False
-            del self._bans[client_ip]
 
-        # Per-IP sliding-window rate limit.
+        # IP access (whitelist/blacklist/cloud-provider) via the library (SWAP A),
+        # replacing the hand-copied ``_ip_matches``. is_ip_allowed parses each entry
+        # strictly and only ever fails CLOSED (blocks) on a malformed one, unlike the
+        # old ``_ip_matches``, which deliberately skipped a malformed entry (fail-open).
+        # That fail-open rationale is now obsolete: ``_validate_ip_or_cidr_csv``
+        # (env-validation, merged ahead of this swap) guarantees every whitelist /
+        # blacklist / trusted-proxy entry is a valid IP or CIDR before it ever reaches
+        # ``SecurityConfig``, so a malformed entry can no longer get here at all - the
+        # boot refuses first.
+        #
+        # CAUTION (audit 5.4, deliberate): a non-empty whitelist is EXCLUSIVE here - an
+        # IP not on it is blocked outright, the blacklist is never consulted - matching
+        # guard-core's HTTP semantics exactly. The old hand-rolled check only used the
+        # whitelist as a bypass fast path: a listed IP passed immediately, but an
+        # UNLISTED IP just fell through to the (often empty) blacklist and was allowed.
+        # See ``test_whitelist_exclusive_blocks_unlisted_ip`` for the pinned new
+        # behavior.
+        if not await is_ip_allowed(client_ip, cfg):
+            return False
+        # allowed + a non-empty whitelist means the IP matched it (is_ip_allowed never
+        # falls through to the blacklist once a whitelist is set) - mirrors guard-core's
+        # own is_whitelisted computation (core/checks/implementations/ip_security.py).
+        is_whitelisted = bool(cfg.whitelist)
+        if is_whitelisted:
+            # A whitelisted IP also skips rate limiting, mirroring guard-core's
+            # RateLimitCheck (``if request.state.is_whitelisted: return None``).
+            return True
+
+        # Per-IP sliding-window rate limit - still hand-rolled (ASK 2: no reusable
+        # library primitive yet for this half).
         if cfg.enable_rate_limiting:
+            now = time.monotonic()
             window = float(cfg.rate_limit_window)
             limit = int(cfg.rate_limit)
             bucket = self._rl[client_ip]
@@ -365,11 +407,14 @@ class _WsGuard:
                 if cfg.enable_ip_banning:
                     self._ban_counts[client_ip] += 1
                     if self._ban_counts[client_ip] >= int(cfg.auto_ban_threshold):
-                        # Reset on set: after the ban window expires the offender starts a
-                        # fresh cycle (clean "auto-ban for a window, then fresh budget"
-                        # semantics) — without this, ban_counts sits at the threshold and the
-                        # first over-limit post-expiry immediately re-bans for a full duration.
-                        self._bans[client_ip] = now + float(cfg.auto_ban_duration)
+                        # SWAP B: ban CREATION moves to ip_ban_manager too. Reset-on-set:
+                        # after the ban window expires the offender starts a fresh cycle
+                        # (clean "auto-ban for a window, then fresh budget" semantics) -
+                        # without this, ban_counts sits at the threshold and the first
+                        # over-limit post-expiry immediately re-bans for a full duration.
+                        await ip_ban_manager.ban_ip(
+                            client_ip, int(cfg.auto_ban_duration)
+                        )
                         self._ban_counts[client_ip] = 0
                         bucket.clear()
                 return False
@@ -383,19 +428,7 @@ def reset_ws_guard(config: SecurityConfig | None = None) -> None:
     _WS_GUARD = _WsGuard(config or build_guard_config())
 
 
-def check_ws(client_ip: str) -> bool:
-    """Check whether ``client_ip`` may open a WS connection.
-
-    The singleton is built from env on first call and reused across connects so
-    in-process counters persist. Tests force a fresh singleton via :func:`reset_ws_guard`.
-    """
-    global _WS_GUARD
-    if _WS_GUARD is None:
-        _WS_GUARD = _WsGuard(build_guard_config())
-    return _WS_GUARD.check(client_ip)
-
-
-def ws_guard_check(ws: WebSocket) -> bool:
+async def ws_guard_check(ws: WebSocket) -> bool:
     """Resolve the client IP from ``ws`` (using the singleton's trusted-proxies/XFF config)
     and check it against the WS guard. Returns True if the connect may proceed.
 
@@ -406,36 +439,22 @@ def ws_guard_check(ws: WebSocket) -> bool:
     global _WS_GUARD
     if _WS_GUARD is None:
         _WS_GUARD = _WsGuard(build_guard_config())
-    client_ip = resolve_ws_client_ip(ws, _WS_GUARD._config)
-    return _WS_GUARD.check(client_ip)
+    client_ip = await resolve_ws_client_ip(ws, _WS_GUARD._config)
+    return await _WS_GUARD.check(client_ip)
 
 
-def resolve_ws_client_ip(ws: WebSocket, config: SecurityConfig) -> str:
-    """Resolve the client IP from a WebSocket mirroring guard's HTTP path
-    (``guard_core.utils.extract_client_ip``).
+async def resolve_ws_client_ip(ws: WebSocket, config: SecurityConfig) -> str:
+    """Resolve the client IP from a WebSocket via guard_core's own ``extract_client_ip``
+    (SWAP C) - the SAME function the HTTP path uses, wrapped through the minimal
+    ``_WsGuardRequest`` adapter above, so WS and HTTP can never disagree on trusted-proxy
+    / X-Forwarded-For handling. Replaces the hand-copied peer-trust + XFF-depth walk that
+    used to live here (deleted; see git history for the old logic).
 
-    When the TCP peer is NOT a trusted proxy, the XFF header is ignored and the
-    peer IP is used — so a spoofed XFF from an untrusted source does NOT rotate
-    the rate-limit/ban budget (the A4 spoofed-XFF sub-case).
-
-    When the peer IS a trusted proxy, the client IP is taken from the
-    ``X-Forwarded-For`` chain at depth ``config.trusted_proxy_depth`` counting
-    back from the RIGHTMOST entry (``ips[-trusted_proxy_depth]`` — one hop back
-    from the trusted peer when depth=1, the default). This matches guard_core's
-    ``_extract_from_forwarded_header`` exactly; the LEFTMOST entry is the most
-    attacker-spoofable one and must not be keyed on.
+    When the TCP peer is NOT a trusted proxy, the XFF header is ignored and the peer IP
+    is used - so a spoofed XFF from an untrusted source does NOT rotate the
+    rate-limit/ban budget (the A4 spoofed-XFF sub-case). When the peer IS a trusted
+    proxy, the client IP is taken from the ``X-Forwarded-For`` chain at
+    ``config.trusted_proxy_depth`` entries back from the RIGHTMOST one - both behaviors
+    now live in ``extract_client_ip`` itself.
     """
-    connecting_ip = ws.client.host if ws.client else "unknown"
-    if not config.trusted_proxies:
-        return connecting_ip
-    if not _ip_matches(connecting_ip, config.trusted_proxies):
-        # Untrusted peer: ignore XFF so a spoofed header cannot rotate the budget.
-        return connecting_ip
-    xff = ws.headers.get("x-forwarded-for")
-    if not xff:
-        return connecting_ip
-    ips = [entry.strip() for entry in xff.split(",")]
-    depth = max(1, int(getattr(config, "trusted_proxy_depth", 1) or 1))
-    if len(ips) >= depth:
-        return ips[-depth] or connecting_ip
-    return connecting_ip
+    return await extract_client_ip(cast("GuardRequest", _WsGuardRequest(ws)), config)
