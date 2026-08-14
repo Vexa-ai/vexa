@@ -135,6 +135,7 @@ async function main(): Promise<void> {
   const sttUrl = required('stt-url');
   const token = process.env.VEXA_STT_TOKEN;
   if (!token) throw new Error('VEXA_STT_TOKEN is required');
+  const cacheOnly = process.env.VEXA_FIXTURE_CACHE_ONLY === '1';
   const startSec = Number(arg('start-sec') ?? 60);
   const durationSec = Number(arg('duration-sec') ?? 120);
   const cadenceMs = Number(arg('cadence-sec') ?? 2) * 1000;
@@ -210,6 +211,9 @@ async function main(): Promise<void> {
         .digest('hex');
       const cachePath = join(cacheDir, `${hash}.json`);
       const cached = existsSync(cachePath);
+      if (!cached && cacheOnly) {
+        throw new Error(`fixture cache miss ${hash} for ${context?.sourceKey ?? 'unknown-source'}`);
+      }
       const started = Date.now();
       const result = cached
         ? JSON.parse(readFileSync(cachePath, 'utf8')) as TranscriptionResult
@@ -300,6 +304,9 @@ async function main(): Promise<void> {
   const flatHash = createHash('sha256').update(Buffer.from(flatPcm.buffer)).digest('hex');
   const flatCachePath = join(cacheDir, `single-pass-${flatHash}.json`);
   const flatCached = existsSync(flatCachePath);
+  if (!flatCached && cacheOnly) {
+    throw new Error(`fixture cache miss single-pass-${flatHash}`);
+  }
   const flatStarted = Date.now();
   const singlePass = flatCached
     ? JSON.parse(readFileSync(flatCachePath, 'utf8')) as TranscriptionResult
