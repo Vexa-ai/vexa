@@ -33,7 +33,7 @@ host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 make -C deploy/lite up LOCAL_STT=1
 ```
 
-Runs a bundled **faster-whisper CPU server on the small English model** (`vexa-lite-whisper`) on the same
+Runs a bundled **faster-whisper CPU server on the tiny model** (`vexa-lite-whisper`) on the same
 network and **auto-wires `TRANSCRIPTION_SERVICE_URL`** to it — real transcripts out of the box,
 slower than a GPU but zero setup. This is also how a **witness / human-eval box** always comes up
 with transcription ready. Verify it end-to-end (synthesize speech → transcribe):
@@ -42,8 +42,8 @@ with transcription ready. Verify it end-to-end (synthesize speech → transcribe
 make -C deploy/lite stt-smoke        # ✓ local STT transcribes (model=whisper-1 → words)
 ```
 
-Override the model with `WHISPER_MODEL=...` or use a different CPU/GPU server through
-`WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
+Override the model or image for more accuracy: `WHISPER_MODEL=Systran/faster-whisper-small.en`, or
+a GPU image via `WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
 faster-whisper-server accepts it and serves `WHISPER_MODEL`.)
 
 After it finishes:
@@ -110,8 +110,7 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
-`WHISPER_MODEL` (`Systran/faster-whisper-small.en`), `WHISPER_IMAGE`, `WHISPER_MODEL_CACHE`
-(`vexa-whisper-model-cache`), `HOST_STT_PORT` (`8083`), and `BOT_SPEAKER_IDLE_TIMEOUT_SEC` (`4`). When
+`WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
 `LOCAL_STT=1`, the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
