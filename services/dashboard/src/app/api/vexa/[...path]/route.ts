@@ -42,6 +42,7 @@ async function proxyRequest(
       if (searchParams.get("search")) qs.set("search", searchParams.get("search")!);
       if (searchParams.get("status")) qs.set("status", searchParams.get("status")!);
       if (searchParams.get("platform")) qs.set("platform", searchParams.get("platform")!);
+      if (searchParams.get("exclude_planned")) qs.set("exclude_planned", searchParams.get("exclude_planned")!);
       const botsResp = await fetch(`${VEXA_API_URL}/bots?${qs.toString()}`, {
         headers: { "X-API-Key": VEXA_API_KEY },
         signal: AbortSignal.timeout(5000),

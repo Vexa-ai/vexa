@@ -3,6 +3,8 @@
 export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "browser_session";
 
 export type MeetingStatus =
+  | "idle"
+  | "scheduled"
   | "requested"
   | "joining"
   | "awaiting_admission"
@@ -313,6 +315,8 @@ export const PLATFORM_CONFIG = {
 } as const;
 
 export const MEETING_STATUS_CONFIG: Record<MeetingStatus, { label: string; color: string; bgColor: string }> = {
+  idle: { label: "Planned", color: "text-slate-600 dark:text-slate-400", bgColor: "bg-slate-100 dark:bg-slate-900/50" },
+  scheduled: { label: "Scheduled", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   requested: { label: "Requested", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   joining: { label: "Joining", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   awaiting_admission: { label: "Waiting", color: "text-amber-600 dark:text-amber-400", bgColor: "bg-amber-100 dark:bg-amber-950/50" },

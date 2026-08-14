@@ -94,6 +94,7 @@ export const vexaAPI = {
     search?: string;
     status?: string;
     platform?: string;
+    exclude_planned?: boolean;
   }): Promise<{ meetings: Meeting[]; has_more: boolean }> {
     const query = new URLSearchParams();
     if (params?.limit) query.set("limit", String(params.limit));
@@ -101,6 +102,7 @@ export const vexaAPI = {
     if (params?.search) query.set("search", params.search);
     if (params?.status) query.set("status", params.status);
     if (params?.platform) query.set("platform", params.platform);
+    if (params?.exclude_planned) query.set("exclude_planned", "true");
     const qs = query.toString();
     const response = await fetch(withBasePath(`/api/vexa/meetings${qs ? `?${qs}` : ""}`));
     const data = await handleResponse<{ meetings: RawMeeting[]; has_more?: boolean }>(response);

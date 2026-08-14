@@ -102,6 +102,7 @@ export default function MeetingsPage() {
       search: search || undefined,
       status: status === "all" ? undefined : status,
       platform: platform === "all" ? undefined : platform,
+      exclude_planned: true,
     });
   }, [fetchMeetings]);
 
@@ -138,7 +139,7 @@ export default function MeetingsPage() {
 
   // Initial load
   useEffect(() => {
-    fetchMeetings();
+    fetchMeetings({ exclude_planned: true });
   }, [fetchMeetings]);
 
   // Re-fetch when dropdown filters change

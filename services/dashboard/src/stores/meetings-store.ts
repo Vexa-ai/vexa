@@ -54,6 +54,13 @@ export function recordingsStateSignature(meeting: Meeting | null): string {
     .join("|");
 }
 
+interface MeetingListFilters {
+  search?: string;
+  status?: string;
+  platform?: string;
+  exclude_planned?: boolean;
+}
+
 interface MeetingsState {
   // Data
   meetings: Meeting[];
@@ -80,7 +87,7 @@ interface MeetingsState {
   subscriptionRequired: boolean;
 
   // Filters (server-side)
-  _filters: { search?: string; status?: string; platform?: string };
+  _filters: MeetingListFilters;
 
   // Pagination cursor (#304): explicit offset that advances by the
   // unfiltered API page size — NOT by `meetings.length` which is the
@@ -91,7 +98,7 @@ interface MeetingsState {
   _offset: number;
 
   // Actions
-  fetchMeetings: (filters?: { search?: string; status?: string; platform?: string }) => Promise<void>;
+  fetchMeetings: (filters?: MeetingListFilters) => Promise<void>;
   fetchMoreMeetings: () => Promise<void>;
   fetchMeeting: (id: string, options?: { silent?: boolean }) => Promise<void>;
   refreshMeeting: (id: string) => Promise<void>;
@@ -139,7 +146,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   subscriptionRequired: false,
 
   // Fetch first page of meetings (with optional server-side filters)
-  fetchMeetings: async (filters?: { search?: string; status?: string; platform?: string }) => {
+  fetchMeetings: async (filters?: MeetingListFilters) => {
     const activeFilters = filters ?? get()._filters;
     set({ isLoadingMeetings: true, error: null, _filters: activeFilters, _offset: 0 });
     try {
