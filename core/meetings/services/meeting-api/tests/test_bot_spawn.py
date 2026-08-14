@@ -134,6 +134,44 @@ def test_workload_spec_conforms_to_runtime_v1():
     assert json.loads(spec["env"]["BOT_CONFIG"])["connectionId"] == "conn-1"
 
 
+# ── regression guard: profile resolution must not regress (#875 follow-up) ───────────────────────
+#
+# build_workload_spec used to hardcode profile="meeting-bot" for every platform. A discord spawn
+# then ran the Playwright browser image instead of the discord-bot DAVE service — the browser bot
+# maps any platform it doesn't recognize to google_meet and navigates a blank URL, so the lane could
+# never work end to end. profile_for_platform (invocation.py) is the ONE place platform → profile is
+# decided; these tests fail if that mapping regresses in either direction.
+
+@pytest.mark.parametrize("platform,meeting_url", [
+    ("google_meet", "https://meet.google.com/abc-defg-hij"),
+    ("teams", "https://teams.microsoft.com/l/meetup-join/x"),
+    ("zoom", "https://zoom.us/j/123456789"),
+    ("jitsi", "https://meet.jit.si/Room"),
+])
+def test_workload_spec_non_discord_platforms_resolve_meeting_bot(platform, meeting_url):
+    inv = build_invocation(
+        meeting_id=1, platform=platform, meeting_url=meeting_url,
+        bot_name="VexaBot", token="t", native_meeting_id="x", connection_id="conn-1",
+        redis_url="redis://redis:6379/0",
+    )
+    spec = build_workload_spec(workload_id="mtg-1-conn", invocation=inv)
+    conforms_workload_spec(spec)
+    assert spec["profile"] == "meeting-bot"
+
+
+def test_workload_spec_discord_resolves_discord_bot_profile():
+    """The BLOCKER fix: a discord spawn must resolve the discord-bot runtime profile (the DAVE
+    voice-receive service), never meeting-bot (the Playwright browser image)."""
+    inv = build_invocation(
+        meeting_id=1, platform="discord", meeting_url=None,
+        bot_name="VexaBot", token="t", native_meeting_id="222222222222222222",
+        connection_id="conn-1", redis_url="redis://redis:6379/0",
+    )
+    spec = build_workload_spec(workload_id="mtg-1-conn", invocation=inv)
+    conforms_workload_spec(spec)
+    assert spec["profile"] == "discord-bot"
+
+
 def test_meeting_token_roundtrips_under_secret():
     from meeting_api.recordings.service import _verify_meeting_token
 
@@ -730,14 +768,28 @@ def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
 
 
 def test_post_bots_discord_hostname_url_accepted(monkeypatch):
-    """discord (#875) rides the SAME zoom/jitsi passthrough: no URL template (no _URL_TEMPLATES
-    entry), so a caller-supplied meeting_url is required and SSRF-validated identically."""
+    """discord (#875) has no URL template (no _URL_TEMPLATES entry) and no meeting_url
+    requirement (bot_spawn.NO_MEETING_URL_PLATFORMS) — but an OPTIONAL caller-supplied meeting_url
+    still rides the SAME SSRF validator zoom/jitsi use, identically."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     r = _client().post("/bots", headers=HEADERS,
                        json={"platform": "discord", "native_meeting_id": "222222222222222222",
                              "meeting_url": "https://discord.com/channels/111111111111111111/222222222222222222"})
     assert r.status_code == 201, r.text
     assert r.json()["platform"] == "discord"
+
+
+def test_post_bots_discord_spawns_discord_bot_profile(monkeypatch):
+    """The BLOCKER fix end to end (#875): POST /bots with platform=discord must spawn the
+    discord-bot runtime profile. Before the fix build_workload_spec hardcoded "meeting-bot" for
+    every platform, so a discord request booted the Playwright browser image instead of the DAVE
+    voice-receive service — the bot could never join a Discord voice channel."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post("/bots", headers=HEADERS,
+                       json={"platform": "discord", "native_meeting_id": "222222222222222222"})
+    assert r.status_code == 201, r.text
+    assert runtime.specs[-1]["profile"] == "discord-bot"
 
 
 def test_post_bots_discord_meeting_is_stop_addressable(monkeypatch):
