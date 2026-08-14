@@ -10,10 +10,26 @@ describe("calendarAPI", () => {
       ics_url_masked: "calendar.google.com/….ics", auto_join: true, enabled: true,
     }), { status: 201, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await calendarAPI.create({ name: "Work", ics_url: "https://secret.example/work.ics", auto_join: true });
+    await calendarAPI.create({ name: "Work", ics_url: "https://secret.example/work.ics", auto_join: true, bot_name: "Work bot" });
     expect(fetchMock).toHaveBeenCalledWith("/api/vexa/user/calendars", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ name: "Work", ics_url: "https://secret.example/work.ics", auto_join: true }),
+      body: JSON.stringify({ name: "Work", ics_url: "https://secret.example/work.ics", auto_join: true, bot_name: "Work bot" }),
+    }));
+  });
+
+  it("updates the bot name for one calendar", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "work-1", name: "Work", ics_url_set: true,
+      ics_url_masked: "calendar.google.com/….ics", auto_join: true, enabled: true,
+      bot_name: "Customer Success",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await calendarAPI.update("work-1", { bot_name: "Customer Success" });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/vexa/user/calendars/work-1", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ bot_name: "Customer Success" }),
     }));
   });
 

@@ -7,6 +7,7 @@ export interface CalendarConnection {
   ics_url_masked: string | null;
   auto_join: boolean;
   enabled: boolean;
+  bot_name?: string;
 }
 
 export interface CalendarSyncStamp {
@@ -15,10 +16,6 @@ export interface CalendarSyncStamp {
   last_sync: string;
   last_error: string | null;
   counts?: { created: number; updated: number; cancelled: number };
-}
-
-export interface CalendarPreferences {
-  bot_name: string;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -46,12 +43,12 @@ export const calendarAPI = {
     const result = await request<{ calendars: CalendarConnection[] }>("/user/calendars");
     return result.calendars;
   },
-  create(input: { name: string; ics_url: string; auto_join: boolean }) {
+  create(input: { name: string; ics_url: string; auto_join: boolean; bot_name?: string }) {
     return request<CalendarConnection>("/user/calendars", {
       method: "POST", body: JSON.stringify(input),
     });
   },
-  update(id: string, input: Partial<Pick<CalendarConnection, "name" | "auto_join" | "enabled">>) {
+  update(id: string, input: Partial<Pick<CalendarConnection, "name" | "auto_join" | "enabled" | "bot_name">>) {
     return request<CalendarConnection>(`/user/calendars/${encodeURIComponent(id)}`, {
       method: "PATCH", body: JSON.stringify(input),
     });
@@ -68,13 +65,5 @@ export const calendarAPI = {
     return request<CalendarSyncStamp | Record<string, never>>(
       `/user/calendars/${encodeURIComponent(id)}/sync`,
     );
-  },
-  preferences() {
-    return request<CalendarPreferences>("/user/calendar");
-  },
-  updatePreferences(input: CalendarPreferences) {
-    return request<CalendarPreferences>("/user/calendar", {
-      method: "PUT", body: JSON.stringify(input),
-    });
   },
 };

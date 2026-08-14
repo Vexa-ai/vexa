@@ -60,8 +60,33 @@ export interface MeetingData {
     name: string;
     uid: string;
     auto_join: boolean;
+    bot_name?: string;
+    event?: CalendarEventSnapshot;
+  }>;
+  attendees?: Array<{
+    email?: string;
+    name?: string;
+    partstat?: string;
   }>;
   [key: string]: unknown;
+}
+
+export interface CalendarPropertyValue {
+  value: string;
+  parameters?: Record<string, string | string[]>;
+}
+
+export interface CalendarComponentSnapshot {
+  name: string;
+  properties: Record<string, CalendarPropertyValue[]>;
+  components?: CalendarComponentSnapshot[];
+}
+
+export interface CalendarEventSnapshot {
+  resolved_start: string;
+  calendar: CalendarComponentSnapshot;
+  component: CalendarComponentSnapshot;
+  series_master?: CalendarComponentSnapshot;
 }
 
 export interface TranscriptSegment {
