@@ -2,10 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LiveTranscriptEngine, type EngineSegment } from "../../../canvas/LiveTranscriptEngine";
-import {
-  buildContestPlan,
-  flagContestedText,
-} from "../../../../../../core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-live-model.mjs";
 
 type PipelineRow = {
   csrc: number;
@@ -16,8 +12,6 @@ type PipelineRow = {
   endMs: number;
   completed: boolean;
 };
-type ContestPlan = ReturnType<typeof buildContestPlan>[number];
-
 const API = "/api/debug/teams-pipeline";
 const AUDIO = `${API}/audio`;
 const clock = (seconds: number): string => `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
@@ -48,9 +42,6 @@ export default function TeamsPipelineWitness(): React.ReactElement {
   const audioRef = useRef<HTMLAudioElement>(null);
   const raw = useRef(new Map<string, PipelineRow>());
   const confirmed = useRef(new Set<string>());
-  const plans = useRef<ContestPlan[]>([]);
-  const planBySegment = useRef(new Map<string, ContestPlan[]>());
-  const activeContests = useRef(new Map<string, ContestPlan>());
   const startedAt = useRef<number | null>(null);
   const cutStartAt = useRef<number | null>(null);
   const previousSchedulerAt = useRef<number | null>(null);
@@ -59,22 +50,19 @@ export default function TeamsPipelineWitness(): React.ReactElement {
 
   const publish = (): void => {
     const rows = [...raw.current.values()].sort((left, right) => left.startMs - right.startMs || left.csrc - right.csrc);
-    setSegments(rows.map((row) => {
-      const contest = activeContests.current.get(row.segmentId);
-      const party = contest?.evidence?.runtime?.parties?.find((item: { segmentId: string }) => String(item.segmentId) === row.segmentId);
-      const rival = contest?.evidence?.runtime?.parties?.find((item: { segmentId: string }) => String(item.segmentId) !== row.segmentId);
-      return {
-        speaker: row.speaker,
-        text: contest ? flagContestedText(row.text, contest.contestedText, party?.csrc ?? row.csrc, rival?.csrc) : row.text,
-        tsMs: row.startMs,
-        id: row.segmentId,
-        completed: row.completed,
-      };
-    }));
+    setSegments(rows.map((row) => ({
+      speaker: row.speaker,
+      // Contest ownership is a pipeline/API concern. The ordinary renderer understands the
+      // wire marker, but this page must not infer or rewrite speaker ownership independently.
+      text: row.text,
+      tsMs: row.startMs,
+      id: row.segmentId,
+      completed: row.completed,
+    })));
     setConfirmedCount(rows.filter((row) => row.completed).length);
     setPendingCount(rows.filter((row) => !row.completed).length);
     setTranscriptEdgeMs(rows.length ? Math.max(...rows.map((row) => row.endMs)) : null);
-    setContestedCount(new Set([...activeContests.current.values()].map((plan) => plan.index)).size);
+    setContestedCount(rows.filter((row) => /⟦[^⟧]+⟧\{[^}]+\}/.test(row.text)).length);
     const names = [...new Set(rows.map((row) => row.speaker).filter((name) => name && !/^Speaker [A-Z]+$/.test(name)))];
     setIdentity(names.length ? `Named live: ${names.join(", ")}` : "Awaiting corroboration — Speaker A/B are explicit unknowns");
   };
@@ -88,16 +76,8 @@ export default function TeamsPipelineWitness(): React.ReactElement {
         if (!response.ok) throw new Error(`reference HTTP ${response.status}`);
         return response.json();
       })
-      .then((reference) => {
+      .then(() => {
         if (closed) return;
-        plans.current = buildContestPlan(reference);
-        for (const plan of plans.current) {
-          for (const id of [String(plan.segmentId), String(plan.rivalSegmentId)]) {
-            const list = planBySegment.current.get(id) ?? [];
-            list.push(plan);
-            planBySegment.current.set(id, list);
-          }
-        }
         stream = new EventSource(`${API}/events`);
         stream.onmessage = (message) => {
           const payload = JSON.parse(message.data);
@@ -108,16 +88,10 @@ export default function TeamsPipelineWitness(): React.ReactElement {
           if (payload.type === "snapshot") {
             raw.current.clear();
             confirmed.current.clear();
-            activeContests.current.clear();
             for (const row of (payload.segments ?? []) as PipelineRow[]) {
               if (!row.completed && !row.text.trim()) continue;
               raw.current.set(row.segmentId, row);
               if (row.completed && row.text.trim()) confirmed.current.add(row.segmentId);
-            }
-            for (const plan of plans.current) {
-              if (!confirmed.current.has(String(plan.segmentId)) || !confirmed.current.has(String(plan.rivalSegmentId))) continue;
-              activeContests.current.set(String(plan.segmentId), plan);
-              activeContests.current.set(String(plan.rivalSegmentId), plan);
             }
             startedAt.current = payload.startedAtWallMs == null ? null : Number(payload.startedAtWallMs);
             const cadence = payload.cadence ?? {};
@@ -197,11 +171,6 @@ export default function TeamsPipelineWitness(): React.ReactElement {
             if (!row.completed && !row.text.trim()) raw.current.delete(row.segmentId);
             else raw.current.set(row.segmentId, row);
             if (row.completed && row.text.trim()) confirmed.current.add(row.segmentId);
-            for (const plan of planBySegment.current.get(row.segmentId) ?? []) {
-              if (!confirmed.current.has(String(plan.segmentId)) || !confirmed.current.has(String(plan.rivalSegmentId))) continue;
-              activeContests.current.set(String(plan.segmentId), plan);
-              activeContests.current.set(String(plan.rivalSegmentId), plan);
-            }
             publish();
             return;
           }
