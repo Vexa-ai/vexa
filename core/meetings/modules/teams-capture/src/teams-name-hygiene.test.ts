@@ -40,6 +40,8 @@ for (const placeholder of [
 ]) {
   check(`placeholder: "${placeholder}" can never become a name`, !isTeamsDisplayNameCandidate(placeholder), placeholder);
 }
+check('m26132: a bare lowercase media label cannot become Julian\'s name',
+  !isTeamsDisplayNameCandidate('datenanalyse'));
 
 // ── and the humans still get through ─────────────────────────────────────────────────────────────
 for (const real of ['Dmitry Grankin', 'leo (Unverified)', 'Anne-Marie', 'Jean-Luc Picard', 'Максим', 'Bo']) {

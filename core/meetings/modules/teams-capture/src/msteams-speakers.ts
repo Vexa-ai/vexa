@@ -130,6 +130,12 @@ const TEAMS_CLOCK_PREFIX = /^\d{1,2}:\d{2}/;
 // hyphenated string is refused, which fails toward unknown rather than toward invention.
 const TEAMS_MACHINE_TOKEN =
   /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
+// A bare all-lowercase token is a handle or media label, not a canonical human identity. Meeting
+// m26132 exposed the concrete failure: Teams rendered `datenanalyse` for the participant Julian,
+// and accepting the tile text published the role/topic label as though it were the person's name.
+// Fail toward Speaker A/B until Teams supplies a canonical-looking display name. Qualified names
+// such as `leo (Unverified)` still pass because Teams supplied more than a bare handle.
+const TEAMS_UNCANONICAL_BARE_HANDLE = /^\p{Ll}[\p{Ll}\p{M}\p{Nd}]*$/u;
 
 /**
  * Teams' own PLACEHOLDERS for a participant it cannot identify. These are not names — they are the
@@ -202,7 +208,8 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
     && !TEAMS_CLOCK_PREFIX.test(normalized)
-    && !TEAMS_MACHINE_TOKEN.test(candidate);
+    && !TEAMS_MACHINE_TOKEN.test(candidate)
+    && !TEAMS_UNCANONICAL_BARE_HANDLE.test(candidate);
 }
 
 /**

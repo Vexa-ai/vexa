@@ -163,6 +163,9 @@ export class TeamsCsrcGmeetPipeline {
     this.persistTimeoutMs = Math.max(0, options.persistTimeoutMs ?? 4000);
     this.trackNamer = new TrackNamer({
       selfName: options.selfName,
+      // Teams sometimes exposes a media/topic handle rather than the human's canonical display
+      // name (`datenanalyse` for Julian in m26132). Unknown is safer than that false attribution.
+      requireCanonicalDisplayName: true,
       onNamed: (trackId) => this.repaintTrack(trackId),
     });
     this.manager = new GmeetCompatibleBuffer({

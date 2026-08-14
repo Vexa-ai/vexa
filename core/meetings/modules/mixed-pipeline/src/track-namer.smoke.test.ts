@@ -468,5 +468,18 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
       && n.naming('new')?.successorOf === 'old', JSON.stringify(n.stats().how));
 }
 
+// ── Teams' canonical-identity floor ─────────────────────────────────────────────────────────────
+{
+  const n = namer({ requireCanonicalDisplayName: true });
+  for (const t0 of [0, 10_000]) {
+    n.setTrackActive('414', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('datenanalyse', t + 1000);
+    n.setTrackActive('414', false, t0 + 4000);
+  }
+  n.tick(20_000);
+  check('m26132: a bare lowercase media label stays an honest generic speaker',
+    n.nameFor('414') === null && n.labelFor('414') === 'Speaker A', JSON.stringify(n.stats()));
+}
+
 if (failed) { console.error(`\n❌ track-namer: ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ track-namer: a track is named only from unambiguous, corroborated, exclusively-held evidence — and otherwise keeps a stable letter.');

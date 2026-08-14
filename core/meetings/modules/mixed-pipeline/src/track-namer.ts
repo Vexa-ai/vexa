@@ -177,6 +177,9 @@ export interface TrackNamerOptions {
   /** OUR OWN display name. A bot is in every meeting it records and appears in the roster like any
    *  participant; without this the lane cannot tell its own name from a person's. */
   selfName?: string;
+  /** Teams-only fail-closed policy: refuse a bare all-lowercase handle/media label as a canonical
+   *  human identity. Legacy callers keep their deployed behavior unless they opt in. */
+  requireCanonicalDisplayName?: boolean;
   /** Quiet period the roster must show before an elimination is drawn from it. */
   rosterSettleMs?: number;
   /** A typed account of a naming decision worth seeing in a tape. Currently only the bot-family
@@ -219,6 +222,7 @@ export class TrackNamer {
   private readonly rosterSettleMs: number;
   private readonly selfName: string;
   private readonly selfStem: string;
+  private readonly requireCanonicalDisplayName: boolean;
   private readonly log: (m: string) => void;
   onNamed?: (trackId: string, name: string) => void;
   onObservation?: (o: TrackNamerObservation) => void;
@@ -288,6 +292,7 @@ export class TrackNamer {
     this.soloEpisodeMs = opts.soloEpisodeMs ?? TRACK_NAME_SOLO_EPISODE_MS;
     this.rosterSettleMs = opts.rosterSettleMs ?? TRACK_NAME_ROSTER_SETTLE_MS;
     this.selfName = normalizeNameForIdentity(opts.selfName ?? '');
+    this.requireCanonicalDisplayName = opts.requireCanonicalDisplayName ?? false;
     // Our bot's FAMILY, not its exact name. Every bot we spawn derives its display name from the
     // same configured stem ("Vexa test", "Vexa", "Vexa (Unverified)"), so the first token is what
     // identifies one — and identity-equality against our own full name, which is all we had, sees
@@ -411,6 +416,7 @@ export class TrackNamer {
   private unnameable(name: string): boolean {
     const id = normalizeNameForIdentity(name);
     if (!id) return true;
+    if (this.requireCanonicalDisplayName && /^\p{Ll}[\p{Ll}\p{M}\p{Nd}]*$/u.test(name.trim())) return true;
     if (PLACEHOLDER_NAMES.has(id)) return true;
     if (PLACEHOLDER_NAMES.has(name.trim().toLowerCase())) return true;
     return !!this.selfName && id === this.selfName;
