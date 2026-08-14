@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.22 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.23 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.22`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.23`** — the current release candidate control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -27,6 +27,10 @@ notable line and the migration notes between majors.
 - **Calendar sync.** Paste a secret ICS address (`PUT /user/calendar`) and upcoming meetings with
   Meet/Zoom/Teams links import as planned meetings — no OAuth. See
   [Calendar sync](/how-to/calendar-sync).
+- **Microsoft Teams speaker attribution.** Teams uses CSRC transport activity to route the mixed
+  audio into per-speaker transcription windows with the same LocalAgreement buffering contract as
+  Google Meet. Transport-contested words remain explicitly marked instead of being assigned to the
+  wrong person.
 
 - **One gateway.** All public traffic enters through the gateway (`API_GATEWAY_HOST_PORT`, default
   `18056`); it carries authentication and per-route scopes and routes to the internal services.
