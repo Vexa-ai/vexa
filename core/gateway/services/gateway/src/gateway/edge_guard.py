@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Iterable, Optional
 
 from guard import SecurityConfig, SecurityMiddleware
 
+from .config_preflight import ConfigError
 from .ratelimit import env_truthy
 
 if TYPE_CHECKING:
@@ -72,6 +73,105 @@ _GUARD_EXCLUDE_PATHS = [
 def _guard_csv(env: str) -> list[str]:
     """Parse a comma-separated env var into a stripped, non-empty list."""
     return [value.strip() for value in os.getenv(env, "").split(",") if value.strip()]
+
+
+# guard_core.CloudProvider = Literal["AWS", "GCP", "Azure"] (guard-core >=3.12.0, closed set,
+# case-sensitive). Mirrored here (not imported) so a library-side rename doesn't quietly change
+# what Vexa accepts out from under this error message.
+_VALID_CLOUD_PROVIDERS = ("AWS", "GCP", "Azure")
+_CLOUD_PROVIDER_BY_UPPER = {name.upper(): name for name in _VALID_CLOUD_PROVIDERS}
+
+
+def _validate_block_cloud_providers(env: str) -> set[str]:
+    """Parse + validate ``GUARD_BLOCK_CLOUD_PROVIDERS`` against guard-core's closed set BEFORE
+    it reaches ``SecurityConfig(...)``.
+
+    On the guard-core version this repo's uv.lock actually pins (3.4.0), ``block_cloud_providers``
+    is a SILENT, case-sensitive filter (``models.py::validate_cloud_providers``):
+    ``{sel for sel in v if sel.partition(":!")[0] in VALID_CLOUD_PROVIDERS}``. An unrecognized or
+    wrong-case entry (the natural operator spelling, ``aws``) is just dropped, no error, no log.
+    An unvalidated ``{"aws", "digitalocean"}`` silently becomes ``set()``, cloud blocking quietly
+    off. The case-normalization below repairs that LIVE silent no-op on the pinned version:
+    ``aws`` normalizes to ``AWS`` so it survives guard-core's filter instead of being dropped by
+    it.
+
+    A later guard-core (>=3.12.0) turns the same unrecognized-name mistake into a raise instead
+    of a silent drop
+    (``guard_core/_security_config_validators.py:_validate_block_cloud_providers_value``), a
+    library stack trace deep inside ``SecurityConfig`` construction. Either way, today's silent
+    drop or a future raise, this function is the fix: it validates at Vexa's own boundary with a
+    message naming the var, the bad entry, and the exact accepted spellings, so a typo is caught
+    the same way regardless of which guard-core version is installed.
+
+    The ``:!region`` carve-out suffix (``NAME:!REGION``, see guard-core's ``cloud_handler.py``,
+    which reads it via the same ``selector.partition(":!")`` used below) is preserved; only the
+    provider-name half is case-normalized. The region half is validated too, not normalized:
+    guard-core's real provider region strings are lowercase by convention (``us-east-1``,
+    ``asia-south1``), with one synthetic exception, ``GLOBAL``, and ``is_cloud_ip`` matches the
+    carve-out region with a plain, case-sensitive ``==``. An uppercase region would silently
+    never match, making the carve-out a no-op, so it is rejected here instead of lowercased:
+    rewriting a provider-defined string risks creating a NEW silent mismatch instead of fixing
+    one.
+    """
+    result: set[str] = set()
+    for entry in _guard_csv(env):
+        provider, marker, region = entry.partition(":!")
+        canonical = _CLOUD_PROVIDER_BY_UPPER.get(provider.upper())
+        if canonical is None:
+            raise ConfigError(
+                f"{env} entry {entry!r} is not a recognized cloud provider. Accepted values "
+                f"(case-insensitive): {', '.join(_VALID_CLOUD_PROVIDERS)}. Suffix ':!region' to "
+                "carve out a region exception, e.g. 'AWS:!us-east-1'. Fix or remove the entry "
+                "and restart."
+            )
+        if marker:
+            if not region:
+                raise ConfigError(
+                    f"{env} entry {entry!r} has an empty region after ':!'. Name a region to "
+                    "carve out, e.g. 'AWS:!us-east-1', or drop the ':!' suffix to block the "
+                    "whole provider. Fix the entry and restart."
+                )
+            if region != "GLOBAL" and region != region.lower():
+                raise ConfigError(
+                    f"{env} entry {entry!r} has region {region!r}, which is not lowercase. "
+                    "guard-core matches a carve-out region with a case-sensitive '==' against "
+                    "real provider region strings, which are lowercase by convention (e.g. "
+                    "'us-east-1', 'asia-south1'), with the single synthetic exception 'GLOBAL'. "
+                    "An uppercase region here would silently never match, and the carve-out "
+                    "would be a no-op. Use the lowercase region spelling or 'GLOBAL'. Fix the "
+                    "entry and restart."
+                )
+        result.add(f"{canonical}{marker}{region}" if marker else canonical)
+    return result
+
+
+def _validate_ip_or_cidr_csv(env: str) -> list[str]:
+    """Parse + validate ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES``
+    BEFORE they reach ``SecurityConfig(...)``.
+
+    Unlike ``block_cloud_providers`` (above), these three fields ALREADY raise on the guard-core
+    version this repo's uv.lock actually pins (3.4.0): ``models.py``'s ``validate_ip_lists`` /
+    ``validate_trusted_proxies`` field validators run each entry through the same
+    ``ipaddress.ip_address`` / ``ipaddress.ip_network`` parse and raise ``ValueError`` on
+    failure, deep inside ``SecurityConfig`` construction, a bare library stack trace with no
+    indication of which var or entry was wrong. So this pre-validation is load-bearing TODAY,
+    not future-proofing against a later guard-core: its only job is error-message quality,
+    surfacing the exact same failure as a Vexa :class:`ConfigError` naming the var and the
+    offending entry, before the library ever sees the value.
+    """
+    entries = _guard_csv(env)
+    for entry in entries:
+        try:
+            if "/" in entry:
+                ipaddress.ip_network(entry, strict=False)
+            else:
+                ipaddress.ip_address(entry)
+        except ValueError:
+            raise ConfigError(
+                f"{env} entry {entry!r} is not a valid IP address or CIDR range. Fix or remove "
+                "the entry and restart."
+            ) from None
+    return entries
 
 
 def _env_bool(env: str, default: bool) -> bool:
@@ -131,6 +231,16 @@ def build_guard_config() -> SecurityConfig:
     runs, namespaced under ``vexa:guard:`` to avoid colliding with Vexa's own
     keys (``ratelimit:``, ``gateway:token:``). ``fail_secure=False`` so a guard
     check bug fails open instead of taking the public gateway down.
+
+    ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES`` and
+    ``GUARD_BLOCK_CLOUD_PROVIDERS`` are pre-validated here (:func:`_validate_ip_or_cidr_csv`,
+    :func:`_validate_block_cloud_providers`) and raise :class:`ConfigError` on a bad entry. The
+    IP-list fields already raise on the pinned guard-core (3.4.0) too, so this pre-validation is
+    load-bearing for error-message quality today, not future-proofing. ``block_cloud_providers``
+    on 3.4.0 is a SILENT case-sensitive filter instead (a bad or lowercase entry is dropped, not
+    rejected), so the case-normalization here repairs a live silent no-op on the pinned version;
+    a raise only arrives with a later guard-core. See each function's docstring for the
+    field-by-field evidence.
     """
     rate_limit_rpm = _env_int("GUARD_RATE_LIMIT_RPM", _GUARD_RATE_LIMIT_RPM_DEFAULT)
     return SecurityConfig(
@@ -149,11 +259,11 @@ def build_guard_config() -> SecurityConfig:
         auto_ban_duration=_env_int(
             "GUARD_AUTO_BAN_DURATION", _GUARD_AUTO_BAN_DURATION_DEFAULT
         ),
-        whitelist=_guard_csv("GUARD_IP_WHITELIST") or None,
-        blacklist=_guard_csv("GUARD_IP_BLACKLIST"),
+        whitelist=_validate_ip_or_cidr_csv("GUARD_IP_WHITELIST") or None,
+        blacklist=_validate_ip_or_cidr_csv("GUARD_IP_BLACKLIST"),
         blocked_countries=_guard_csv("GUARD_BLOCKED_COUNTRIES"),
-        block_cloud_providers=set(_guard_csv("GUARD_BLOCK_CLOUD_PROVIDERS")),
-        trusted_proxies=_guard_csv("GUARD_TRUSTED_PROXIES"),
+        block_cloud_providers=_validate_block_cloud_providers("GUARD_BLOCK_CLOUD_PROVIDERS"),
+        trusted_proxies=_validate_ip_or_cidr_csv("GUARD_TRUSTED_PROXIES"),
         trust_x_forwarded_proto=_env_bool("GUARD_TRUST_X_FORWARDED_PROTO", False),
         enable_penetration_detection=False,
         enable_cors=False,

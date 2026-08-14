@@ -124,9 +124,12 @@ gateway:
     rateLimitWindow: 60
     autoBanThreshold: 10
     autoBanDuration: 3600
-    ipWhitelist: ""           # comma-separated IPs that bypass the guard
-    ipBlacklist: ""           # comma-separated IPs to block (403)
-    trustedProxies: ""        # comma-separated trusted proxy IPs (enables X-Forwarded-For)
+    # ipWhitelist / ipBlacklist / trustedProxies: comma-separated IPs or CIDR ranges (e.g.
+    # "10.0.0.0/8,203.0.113.5"). Each entry is validated at boot (stdlib `ipaddress`) - an
+    # invalid entry refuses to boot with an error naming the value and the bad entry.
+    ipWhitelist: ""           # IPs/CIDRs that bypass the guard entirely
+    ipBlacklist: ""           # IPs/CIDRs to block (403)
+    trustedProxies: ""        # IPs/CIDRs whose X-Forwarded-For is trusted for client-IP resolution
     trustXForwardedProto: false
   resources:
     requests: { cpu: 100m, memory: 256Mi }

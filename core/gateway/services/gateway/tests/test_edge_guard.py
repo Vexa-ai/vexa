@@ -28,6 +28,7 @@ from starlette.websockets import WebSocketDisconnect
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 from gateway import edge_guard as _edge_guard
 from gateway.app import run_multiplex
+from gateway.config_preflight import ConfigError
 from gateway.edge_guard import (
     _GUARD_EXCLUDE_PATHS,
     apply_guard,
@@ -142,6 +143,113 @@ class TestGuardWiring:
         monkeypatch.delenv("GUARD_ENABLED_TEST", raising=False)
         assert _env_bool("GUARD_ENABLED_TEST", True) is True
         assert _env_bool("GUARD_ENABLED_TEST", False) is False
+
+
+class TestGuardEnvValidation:
+    """The IP-list fields (``whitelist`` / ``blacklist`` / ``trusted_proxies``) already raise on
+    the guard-core version this repo pins (3.4.0); ``block_cloud_providers`` on that same
+    version is a SILENT case-sensitive filter (a bad or lowercase entry is dropped, not
+    rejected) that a later guard-core (>=3.12.0) turns into a raise. Either way, without a
+    Vexa-side check a bad operator entry either silently vanishes or surfaces as a bare
+    ``ValueError``/pydantic stack trace from deep inside ``SecurityConfig(...)`` construction.
+    ``build_guard_config`` now pre-validates all four and raises :class:`ConfigError` naming the
+    var, the bad entry, and (for cloud providers) the accepted spellings, before the library
+    ever sees the value. See ``edge_guard.py`` for the field-by-field evidence."""
+
+    def test_unrecognized_cloud_provider_raises_clear_error(self, monkeypatch) -> None:
+        """A name that is not case-insensitively AWS/GCP/Azure raises, naming the var, the
+        entry, and the exact accepted spellings - the natural 'aws,digitalocean' typo case."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "digitalocean" in message
+        assert "AWS, GCP, Azure" in message
+
+    def test_cloud_provider_mixed_case_and_region_carveout_construct(self, monkeypatch) -> None:
+        """Lowercase/mixed-case provider names normalize to guard-core's canonical spelling
+        (aws -> AWS); the ':!region' carve-out suffix survives untouched."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,GCP,Azure:!us-east-1")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS", "GCP", "Azure:!us-east-1"}
+
+    def test_uppercase_region_carveout_raises_clear_error(self, monkeypatch) -> None:
+        """guard-core's ``is_cloud_ip`` matches a carve-out region with a case-sensitive '==';
+        real region strings are lowercase, so an uppercase region would silently never match.
+        Vexa rejects it at boot instead, naming the casing rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!US-EAST-1")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "US-EAST-1" in message
+        assert "lowercase" in message
+
+    def test_lowercase_region_carveout_constructs(self, monkeypatch) -> None:
+        """A properly lowercase carve-out region normalizes only the provider half."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws:!us-east-1")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS:!us-east-1"}
+
+    def test_global_region_carveout_constructs(self, monkeypatch) -> None:
+        """'GLOBAL' is the one synthetic, uppercase region guard-core (AWS) actually uses, so
+        it is accepted as-is rather than rejected by the lowercase rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!GLOBAL")
+        cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS:!GLOBAL"}
+
+    def test_empty_region_carveout_raises_clear_error(self, monkeypatch) -> None:
+        """A ':!' suffix with nothing after it is not a valid carve-out."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        assert "empty region" in str(exc_info.value)
+
+    def test_invalid_whitelist_entry_raises_clear_error(self, monkeypatch) -> None:
+        monkeypatch.setenv("GUARD_IP_WHITELIST", "10.0.0.1,not-an-ip")
+        with pytest.raises(ConfigError, match="GUARD_IP_WHITELIST") as exc_info:
+            build_guard_config()
+        assert "not-an-ip" in str(exc_info.value)
+
+    def test_invalid_blacklist_entry_raises_clear_error(self, monkeypatch) -> None:
+        """A CIDR prefix out of range (/99) is invalid and must not reach guard-core."""
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "10.0.0.0/99")
+        with pytest.raises(ConfigError, match="GUARD_IP_BLACKLIST") as exc_info:
+            build_guard_config()
+        assert "10.0.0.0/99" in str(exc_info.value)
+
+    def test_invalid_trusted_proxies_entry_raises_clear_error(self, monkeypatch) -> None:
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "999.999.999.999")
+        with pytest.raises(ConfigError, match="GUARD_TRUSTED_PROXIES"):
+            build_guard_config()
+
+    def test_valid_ip_and_cidr_entries_construct(self, monkeypatch) -> None:
+        """Good IP + CIDR entries across all three IP-list vars still construct a working
+        config. Compared as ``list(...)`` since guard-core's own field type (list vs. tuple)
+        has varied across versions - not this fix's concern, only that construction succeeds
+        with the right values."""
+        monkeypatch.setenv("GUARD_IP_WHITELIST", "10.0.0.1, 10.1.0.0/16")
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "192.168.1.1")
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "127.0.0.1")
+        cfg = build_guard_config()
+        assert list(cfg.whitelist) == ["10.0.0.1", "10.1.0.0/16"]
+        assert list(cfg.blacklist) == ["192.168.1.1"]
+        assert list(cfg.trusted_proxies) == ["127.0.0.1"]
+
+    def test_unset_vars_still_default_to_empty(self, monkeypatch) -> None:
+        """No GUARD_* filter vars set at all → the pre-validation is a no-op and guard-core's
+        own defaults apply, same as before this change."""
+        for var in (
+            "GUARD_IP_WHITELIST",
+            "GUARD_IP_BLACKLIST",
+            "GUARD_TRUSTED_PROXIES",
+            "GUARD_BLOCK_CLOUD_PROVIDERS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        cfg = build_guard_config()
+        assert cfg.whitelist is None
+        assert not cfg.blacklist
+        assert not cfg.trusted_proxies
+        assert not cfg.block_cloud_providers
 
 
 def create_app_with_guard() -> FastAPI:
