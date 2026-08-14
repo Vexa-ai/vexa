@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { Bot, CalendarDays, Clock3, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, CalendarDays, Clock3, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -233,13 +233,13 @@ export default function CalendarPage() {
           <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5" /> Auto-join settings</CardTitle>
           <CardDescription>This name is used by every bot that joins from your connected calendars.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="w-full max-w-md space-y-1.5">
+        <CardContent className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <div className="space-y-1.5">
             <Label htmlFor="calendar-bot-name">Default bot name</Label>
             <Input id="calendar-bot-name" value={botName} onChange={(event) => setBotName(event.target.value)} maxLength={100} placeholder="Vexa" />
           </div>
           <Button type="button" variant="secondary" onClick={() => void saveBotName()} disabled={busy === "bot-name" || !botName.trim() || botName.trim() === savedBotName}>
-            {busy === "bot-name" ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Save</>}
+            {busy === "bot-name" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
           </Button>
         </CardContent>
       </Card>
