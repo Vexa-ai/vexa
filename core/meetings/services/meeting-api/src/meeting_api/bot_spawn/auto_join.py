@@ -72,6 +72,21 @@ def due_rows(rows: list[dict], *, now: datetime,
     return due
 
 
+def _calendar_bot_name(data: dict) -> Optional[str]:
+    """Resolve the bot name from the calendar source that armed this meeting.
+
+    Multi-calendar meetings use the first auto-joining source in stable source order. Legacy rows
+    without per-source names fall back to the user-wide bot context below.
+    """
+    raw = data.get("calendar_sources")
+    sources = [source for source in raw if isinstance(source, dict)] if isinstance(raw, list) else []
+    source = next((item for item in sources if item.get("auto_join", True)), None)
+    if source is None and sources:
+        source = sources[0]
+    value = source.get("bot_name") if source else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _production_transcribe_gate() -> Optional[str]:
     """Mirror POST /bots' CC4 fail-loud STT gate: when transcription resolves ON (env default) but
     the ``stt`` capability is not configured, refuse the auto-spawn with the reason string.
@@ -192,7 +207,7 @@ async def auto_join_tick(
                 platform=row["platform"],
                 native_meeting_id=row["native_meeting_id"],
                 meeting_url=data.get("constructed_meeting_url"),
-                bot_name=ctx.get("bot_name"),
+                bot_name=_calendar_bot_name(data) or ctx.get("bot_name"),
                 max_concurrent=ctx.get("max_concurrent"),
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),

@@ -37,11 +37,12 @@ async def run_user_sync(
             if text is None:
                 stamp["last_error"] = fetch_err or "fetch failed"
                 return stamp
-            parsed = parse_ics(text, now=moment)
+            parsed = parse_ics(text, now=moment, redact_values=(cfg.get("ics_url") or "",))
         result = await sync_user(store, user_id, parsed,
                                  auto_join_default=bool(cfg.get("auto_join", True)),
                                  calendar_id=cfg.get("calendar_id"),
-                                 calendar_name=cfg.get("calendar_name"))
+                                 calendar_name=cfg.get("calendar_name"),
+                                 bot_name=cfg.get("bot_name"))
         stamp["counts"] = result.get("counts")
         if publish is not None:
             for entry in (result.get("created", []) + result.get("updated", [])

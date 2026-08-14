@@ -13,6 +13,15 @@ from fastapi import HTTPException, status
 MAX_CALENDAR_CONNECTIONS = 10
 
 
+def validate_bot_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="bot_name is required")
+    if len(name) > 100:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="bot_name too long")
+    return name
+
+
 def validate_ics_url(value: str) -> str:
     url = value.strip()
     if not url:
@@ -48,12 +57,14 @@ def connections_from_data(data: dict, user_id: int, *, include_deleted: bool = F
             "name": "Calendar",
             "ics_url": legacy_url,
             "auto_join": bool(data.get("calendar_auto_join", True)),
+            "bot_name": data.get("calendar_bot_name") or "Vexa",
             "enabled": True,
         }] if legacy_url else [])
     return connections if include_deleted else [c for c in connections if not c.get("deleted")]
 
 
-def new_connection(*, name: str, ics_url: str, auto_join: bool = True) -> dict:
+def new_connection(*, name: str, ics_url: str, auto_join: bool = True,
+                   bot_name: str = "Vexa") -> dict:
     cleaned_name = name.strip()
     if not cleaned_name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name is required")
@@ -64,6 +75,7 @@ def new_connection(*, name: str, ics_url: str, auto_join: bool = True) -> dict:
         "name": cleaned_name,
         "ics_url": validate_ics_url(ics_url),
         "auto_join": bool(auto_join),
+        "bot_name": validate_bot_name(bot_name),
         "enabled": True,
     }
 
@@ -91,6 +103,7 @@ def masked_connection(connection: dict) -> dict:
         "ics_url_set": bool(url),
         "ics_url_masked": f"{host}/…{url[-4:]}" if url else None,
         "auto_join": bool(connection.get("auto_join", True)),
+        "bot_name": connection.get("bot_name") or "Vexa",
         "enabled": bool(connection.get("enabled", True)),
     }
 
@@ -104,6 +117,7 @@ def internal_connections(data: dict, user_id: int) -> list[dict]:
                 "user_id": user_id,
                 "calendar_id": connection["id"],
                 "calendar_name": connection.get("name") or "Calendar",
+                "bot_name": connection.get("bot_name") or "Vexa",
                 "deleted": True,
             })
         elif connection.get("ics_url") and connection.get("enabled", True):
@@ -113,5 +127,6 @@ def internal_connections(data: dict, user_id: int) -> list[dict]:
                 "calendar_name": connection.get("name") or "Calendar",
                 "ics_url": connection["ics_url"],
                 "auto_join": bool(connection.get("auto_join", True)),
+                "bot_name": connection.get("bot_name") or "Vexa",
             })
     return out

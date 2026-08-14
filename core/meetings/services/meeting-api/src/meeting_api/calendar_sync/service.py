@@ -113,9 +113,52 @@ def _attendees(comp) -> list[dict]:
     return out
 
 
+def _ical_text(value: Any, redact_values: tuple[str, ...] = ()) -> str:
+    """One iCalendar value/parameter as lossless-enough UTF-8 JSON text."""
+    encoded = value.to_ical() if hasattr(value, "to_ical") else value
+    text = encoded.decode("utf-8", errors="replace") if isinstance(encoded, bytes) else str(encoded)
+    for secret in redact_values:
+        if secret:
+            text = text.replace(secret, "[REDACTED_FEED_URL]")
+    return text
+
+
+def _component_metadata(comp, *, include_components: bool = True,
+                        redact_values: tuple[str, ...] = ()) -> dict:
+    """JSON-safe snapshot of every property + parameter on one iCalendar component.
+
+    Values stay in their canonical iCalendar representation so timezone identifiers, recurrence
+    rules, custom X-properties, attendee parameters, and provider extensions survive without a
+    provider-specific schema. Repeated properties remain ordered arrays.
+    """
+    properties: dict[str, list[dict]] = {}
+    for raw_name, value in comp.property_items():
+        name = str(raw_name).upper()
+        if name in ("BEGIN", "END"):
+            continue
+        entry: dict = {"value": _ical_text(value, redact_values)}
+        params = getattr(value, "params", None)
+        if params:
+            entry["parameters"] = {
+                str(key).upper(): [_ical_text(item, redact_values) for item in param]
+                if isinstance(param, (list, tuple)) else _ical_text(param, redact_values)
+                for key, param in params.items()
+            }
+        properties.setdefault(name, []).append(entry)
+    snapshot: dict = {"name": str(getattr(comp, "name", "")).upper(),
+                      "properties": properties}
+    if include_components:
+        children = [_component_metadata(child, redact_values=redact_values)
+                    for child in getattr(comp, "subcomponents", [])]
+        if children:
+            snapshot["components"] = children
+    return snapshot
+
+
 def parse_ics(text: str, *, now: datetime,
               horizon_days: int = DEFAULT_HORIZON_DAYS,
-              lookback_s: float = DEFAULT_LOOKBACK_S) -> dict:
+              lookback_s: float = DEFAULT_LOOKBACK_S,
+              redact_values: tuple[str, ...] = ()) -> dict:
     """Parse an ICS feed → ``{"events": [PlannedEvent], "cancelled_uids": [uid]}``.
 
     PlannedEvent = ``{uid, title, scheduled_at, platform, native_meeting_id, meeting_url}`` —
@@ -136,6 +179,9 @@ def parse_ics(text: str, *, now: datetime,
     # a series whenever a past override happened to precede its master in the walk (observed live:
     # the OeNB bi-weekly vanished while its siblings imported fine).
     cal = Calendar.from_ical(text)
+    calendar_metadata = _component_metadata(
+        cal, include_components=False, redact_values=redact_values,
+    )
     groups: dict[str, list] = {}
     order: list[str] = []
     for comp in cal.walk("VEVENT"):
@@ -192,6 +238,15 @@ def parse_ics(text: str, *, now: datetime,
                 break
         # no recognizable link → import LINK-LESS (fail loud; the terminal shows "no link")
         platform, native_id, url = link if link else (None, None, None)
+        event_metadata = {
+            "resolved_start": occurrence.isoformat(),
+            "calendar": calendar_metadata,
+            "component": _component_metadata(comp, redact_values=redact_values),
+        }
+        if master is not None and comp is not master:
+            event_metadata["series_master"] = _component_metadata(
+                master, redact_values=redact_values,
+            )
         events.append({
             "uid": uid,
             "title": _event_text(comp, "SUMMARY").strip() or None,
@@ -200,6 +255,7 @@ def parse_ics(text: str, *, now: datetime,
             "native_meeting_id": native_id,
             "meeting_url": url,
             "attendees": _attendees(comp),
+            "metadata": event_metadata,
         })
     return {"events": events, "cancelled_uids": cancelled}
 
@@ -211,9 +267,13 @@ def _calendar_sources(data: dict) -> list[dict]:
 
 
 def _source_entry(calendar_id: str, calendar_name: Optional[str], uid: str,
-                  auto_join: bool) -> dict:
-    return {"id": calendar_id, "name": calendar_name or "Calendar", "uid": uid,
-            "auto_join": bool(auto_join)}
+                  auto_join: bool, *, bot_name: Optional[str] = None,
+                  metadata: Optional[dict] = None) -> dict:
+    source = {"id": calendar_id, "name": calendar_name or "Calendar", "uid": uid,
+              "auto_join": bool(auto_join), "bot_name": bot_name or "Vexa"}
+    if metadata:
+        source["event"] = metadata
+    return source
 
 
 def _source_updates(sources: list[dict]) -> dict:
@@ -243,7 +303,8 @@ def _replace_source(sources: list[dict], source: dict) -> list[dict]:
 
 async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: bool = True,
                     calendar_id: Optional[str] = None,
-                    calendar_name: Optional[str] = None) -> dict:
+                    calendar_name: Optional[str] = None,
+                    bot_name: Optional[str] = None) -> dict:
     """Upsert one user's parsed feed against their meeting rows. Returns
     ``{"created": [...], "updated": [...], "cancelled": [...], counts...}`` where each list entry
     is ``{id, native, status, when}`` for the caller to fan out as WS frames.
@@ -297,7 +358,10 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             updates: dict = {}
             if calendar_id:
                 sources = _calendar_sources(data)
-                source = _source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+                source = _source_entry(
+                    calendar_id, calendar_name, ev["uid"], auto_join_default,
+                    bot_name=bot_name, metadata=ev.get("metadata"),
+                )
                 next_sources = _replace_source(sources, source)
                 if next_sources != sources:
                     updates.update(_source_updates(next_sources))
@@ -331,7 +395,10 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 manual_data = manual.get("data") or {}
                 sources = _calendar_sources(manual_data)
                 if calendar_id:
-                    source = _source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+                    source = _source_entry(
+                        calendar_id, calendar_name, ev["uid"], auto_join_default,
+                        bot_name=bot_name, metadata=ev.get("metadata"),
+                    )
                     next_sources = _replace_source(sources, source)
                     source_patch = _source_updates(next_sources)
                     source_patch["calendar_managed"] = bool(
@@ -363,7 +430,10 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             meeting_url=ev["meeting_url"],
             auto_join=auto_join_default,
             calendar_uid=ev["uid"],
-            calendar_source=_source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+            calendar_source=_source_entry(
+                calendar_id, calendar_name, ev["uid"], auto_join_default,
+                bot_name=bot_name, metadata=ev.get("metadata"),
+            )
             if calendar_id else None,
             workspace_id=inherited_ws,
             workspace_source="series" if inherited_ws else None,

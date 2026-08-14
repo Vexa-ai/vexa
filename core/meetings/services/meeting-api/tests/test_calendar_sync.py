@@ -61,13 +61,61 @@ def test_parse_single_event_with_meet_link():
     parsed = parse_ics(_ics(_event()), now=NOW)
     assert parsed["cancelled_uids"] == []
     (ev,) = parsed["events"]
-    assert ev == {
+    assert {key: ev[key] for key in (
+        "uid", "title", "scheduled_at", "platform", "native_meeting_id",
+        "meeting_url", "attendees",
+    )} == {
         "uid": "uid-1", "title": "Weekly sync",
         "scheduled_at": "2026-07-08T15:00:00+00:00",
         "platform": "google_meet", "native_meeting_id": "abc-defg-hij",
-        "meeting_url": "https://meet.google.com/abc-defg-hij",
-        "attendees": [],
+        "meeting_url": "https://meet.google.com/abc-defg-hij", "attendees": [],
     }
+    assert ev["metadata"]["resolved_start"] == "2026-07-08T15:00:00+00:00"
+    assert ev["metadata"]["calendar"]["properties"]["PRODID"][0]["value"] == "-//test//EN"
+    assert ev["metadata"]["component"]["properties"]["UID"][0]["value"] == "uid-1"
+
+
+def test_parse_preserves_all_event_properties_parameters_and_nested_components():
+    event = _event(description="Agenda", status="CONFIRMED").replace(
+        "END:VEVENT",
+        "ORGANIZER;CN=Owner:mailto:owner@example.com\r\n"
+        "DTEND:20260708T160000Z\r\n"
+        "SEQUENCE:4\r\n"
+        "LAST-MODIFIED:20260707T090000Z\r\n"
+        "URL:https://example.com/events/uid-1\r\n"
+        "CLASS:PRIVATE\r\n"
+        "CATEGORIES:Customer,Review\r\n"
+        "X-VEXA-CUSTOM;X-SOURCE=provider:kept exactly\r\n"
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT10M\r\n"
+        "DESCRIPTION:Reminder\r\nEND:VALARM\r\n"
+        "END:VEVENT",
+    )
+    (ev,) = parse_ics(_ics(event), now=NOW)["events"]
+    component = ev["metadata"]["component"]
+    props = component["properties"]
+    assert props["ORGANIZER"] == [{
+        "value": "mailto:owner@example.com", "parameters": {"CN": "Owner"},
+    }]
+    assert props["DTEND"][0]["value"] == "20260708T160000Z"
+    assert props["SEQUENCE"][0]["value"] == "4"
+    assert props["LAST-MODIFIED"][0]["value"] == "20260707T090000Z"
+    assert props["URL"][0]["value"] == "https://example.com/events/uid-1"
+    assert props["CLASS"][0]["value"] == "PRIVATE"
+    assert props["CATEGORIES"][0]["value"] == "Customer,Review"
+    assert props["X-VEXA-CUSTOM"] == [{
+        "value": "kept exactly", "parameters": {"X-SOURCE": "provider"},
+    }]
+    assert component["components"][0]["name"] == "VALARM"
+    assert component["components"][0]["properties"]["TRIGGER"][0]["value"] == "-PT10M"
+
+
+def test_parse_redacts_connected_feed_secret_from_preserved_metadata():
+    secret = "https://calendar.example/private-token/basic.ics"
+    event = _event().replace("END:VEVENT", f"SOURCE:{secret}\r\nEND:VEVENT")
+    (ev,) = parse_ics(_ics(event), now=NOW, redact_values=(secret,))["events"]
+    source = ev["metadata"]["component"]["properties"]["SOURCE"][0]["value"]
+    assert source == "[REDACTED_FEED_URL]"
+    assert secret not in str(ev["metadata"])
 
 
 def test_parse_link_found_in_description():
@@ -217,10 +265,15 @@ async def test_two_calendars_same_native_meeting_share_one_row_and_both_sources(
                              calendar_name="Personal", auto_join_default=True)
     assert result["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
     (row,) = await store.list_meetings(USER)
-    assert row["data"]["calendar_sources"] == [
-        {"id": "work", "name": "Work", "uid": "uid-1", "auto_join": False},
-        {"id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": True},
+    sources = row["data"]["calendar_sources"]
+    assert [{key: source[key] for key in ("id", "name", "uid", "auto_join", "bot_name")}
+            for source in sources] == [
+        {"id": "work", "name": "Work", "uid": "uid-1", "auto_join": False,
+         "bot_name": "Vexa"},
+        {"id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": True,
+         "bot_name": "Vexa"},
     ]
+    assert all(source["event"] == parsed["events"][0]["metadata"] for source in sources)
     assert row["data"]["auto_join"] is True
 
 
@@ -251,9 +304,11 @@ async def test_disconnecting_one_calendar_preserves_other_source_and_recomputes_
                              calendar_id="work", calendar_name="Work")
     assert result["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
     (row,) = await store.list_meetings(USER)
-    assert row["data"]["calendar_sources"] == [
-        {"id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": False},
-    ]
+    (source,) = row["data"]["calendar_sources"]
+    assert {key: source[key] for key in ("id", "name", "uid", "auto_join", "bot_name")} == {
+        "id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": False,
+        "bot_name": "Vexa",
+    }
     assert row["data"]["calendar_name"] == "Personal"
     assert row["data"]["auto_join"] is False
 
@@ -381,6 +436,28 @@ async def test_sync_stores_attendees_on_create_and_follows_feed_changes():
     assert [a["email"] for a in row["data"]["attendees"]] == ["marvin.hanke@oenb.at"]
 
 
+async def test_sync_stores_and_updates_complete_event_metadata_per_calendar_source():
+    store = InMemoryTranscriptStore()
+    first = parse_ics(_ics(_event(description="First").replace(
+        "END:VEVENT", "X-PROVIDER-REV:one\r\nEND:VEVENT")), now=NOW)
+    await sync_user(store, USER, first, calendar_id="work", calendar_name="Work",
+                    bot_name="Work Notes")
+    (row,) = await store.list_meetings(USER)
+    (source,) = row["data"]["calendar_sources"]
+    assert source["bot_name"] == "Work Notes"
+    assert source["event"] == first["events"][0]["metadata"]
+
+    changed = parse_ics(_ics(_event(description="Second").replace(
+        "END:VEVENT", "X-PROVIDER-REV:two\r\nEND:VEVENT")), now=NOW)
+    result = await sync_user(store, USER, changed, calendar_id="work", calendar_name="Work",
+                             bot_name="Work Notes")
+    assert result["counts"]["updated"] == 1
+    (row,) = await store.list_meetings(USER)
+    props = row["data"]["calendar_sources"][0]["event"]["component"]["properties"]
+    assert props["DESCRIPTION"][0]["value"] == "Second"
+    assert props["X-PROVIDER-REV"][0]["value"] == "two"
+
+
 async def test_sync_new_occurrence_inherits_series_workspace():
     store = InMemoryTranscriptStore()
     # last week's occurrence of the series ran and completed, bound to the series room
@@ -467,6 +544,10 @@ def test_parse_moved_override_wins_over_master_expansion():
     ), now=NOW)
     (ev,) = parsed["events"]
     assert ev["scheduled_at"] == "2026-07-10T09:00:00+00:00"
+    assert ev["metadata"]["component"]["properties"]["RECURRENCE-ID"][0]["value"] == \
+        "20260713T150000Z"
+    assert ev["metadata"]["series_master"]["properties"]["RRULE"][0]["value"] == \
+        "FREQ=WEEKLY;BYDAY=MO"
 
 
 def test_parse_cancelled_override_skips_occurrence_not_series():

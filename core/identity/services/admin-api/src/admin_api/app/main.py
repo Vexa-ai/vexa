@@ -206,6 +206,7 @@ class CalendarCreate(BaseModel):
     name: str
     ics_url: str
     auto_join: bool = True
+    bot_name: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 
@@ -214,6 +215,7 @@ class CalendarPatch(BaseModel):
     name: Optional[str] = None
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
+    bot_name: Optional[str] = None
     enabled: Optional[bool] = None
 
     model_config = {"extra": "forbid"}
@@ -528,7 +530,7 @@ def create_app() -> FastAPI:
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,
                             masked_connection, new_connection, store_connections,
-                            validate_ics_url)
+                            validate_bot_name, validate_ics_url)
 
     async def _save_calendar_connections(user: User, db: AsyncSession,
                                          connections: list[dict]) -> None:
@@ -552,8 +554,13 @@ def create_app() -> FastAPI:
         if len([c for c in connections if not c.get("deleted")]) >= MAX_CALENDAR_CONNECTIONS:
             raise HTTPException(status.HTTP_409_CONFLICT,
                                 detail=f"at most {MAX_CALENDAR_CONNECTIONS} calendars can be connected")
-        created = new_connection(name=calendar.name, ics_url=calendar.ics_url,
-                                 auto_join=calendar.auto_join)
+        data = dict(user.data or {})
+        created = new_connection(
+            name=calendar.name,
+            ics_url=calendar.ics_url,
+            auto_join=calendar.auto_join,
+            bot_name=calendar.bot_name or data.get("calendar_bot_name") or "Vexa",
+        )
         connections.append(created)
         await _save_calendar_connections(user, db, connections)
         return masked_connection(created)
@@ -576,6 +583,8 @@ def create_app() -> FastAPI:
             target["ics_url"] = validate_ics_url(patch.ics_url)
         if patch.auto_join is not None:
             target["auto_join"] = bool(patch.auto_join)
+        if patch.bot_name is not None:
+            target["bot_name"] = validate_bot_name(patch.bot_name)
         if patch.enabled is not None:
             target["enabled"] = bool(patch.enabled)
         await _save_calendar_connections(user, db, connections)
@@ -604,6 +613,7 @@ def create_app() -> FastAPI:
         imported meetings). ``ics_url: null`` disconnects the calendar. The URL is a SECRET
         (Google/Outlook secret-address feeds) — it is stored, never echoed in the clear."""
         data = dict(user.data or {})
+        updated_bot_name = None
         if "bot_name" in calendar_update.model_fields_set:
             bot_name = (calendar_update.bot_name or "").strip()
             if not bot_name:
@@ -613,18 +623,22 @@ def create_app() -> FastAPI:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                     detail="bot_name too long")
             data["calendar_bot_name"] = bot_name
+            updated_bot_name = bot_name
             from sqlalchemy.orm import attributes
             user.data = data
             attributes.flag_modified(user, "data")
         connections = connections_from_data(data, user.id, include_deleted=True)
         current = next((c for c in connections if not c.get("deleted")), None)
+        if updated_bot_name is not None and current is not None:
+            current["bot_name"] = updated_bot_name
         if "ics_url" in calendar_update.model_fields_set:
             url = (calendar_update.ics_url or "").strip()
             if url:
                 if current is None:
                     current = new_connection(name="Calendar", ics_url=url,
                                              auto_join=calendar_update.auto_join
-                                             if calendar_update.auto_join is not None else True)
+                                             if calendar_update.auto_join is not None else True,
+                                             bot_name=data.get("calendar_bot_name") or "Vexa")
                     connections.append(current)
                 else:
                     current["ics_url"] = validate_ics_url(url)

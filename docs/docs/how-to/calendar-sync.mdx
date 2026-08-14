@@ -65,8 +65,9 @@ name such as **Work** or **Personal**, paste the secret address, choose whether 
 calendar should auto-join, and click **Connect**. Repeat this for each feed you want Vexa to follow
 (up to 10 active connections).
 
-The same page shows **Upcoming auto-joins** with each meeting's source calendar, and lets you set
-the **Default bot name** used when those unattended joins start.
+The same page groups **Upcoming auto-joins** by source calendar. Each calendar has its own
+**Default bot name**, used when that calendar arms an unattended join. For a meeting present in
+several calendars, the first source with auto-join enabled supplies the bot name.
 
 **Connecting runs a sync on the spot** — within seconds the panel answers with the result, not
 silence:
@@ -99,7 +100,7 @@ Over the API:
 ```bash Connect a named feed
 curl -X POST "$API_BASE/user/calendars" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"name":"Work","ics_url":"https://calendar.google.com/calendar/ical/…/private-…/basic.ics","auto_join":true}'
+  -d '{"name":"Work","ics_url":"https://calendar.google.com/calendar/ical/…/private-…/basic.ics","auto_join":true,"bot_name":"Work Notes"}'
 ```
 
 ```bash Sync right now → the fresh result
@@ -115,7 +116,8 @@ curl "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KEY"
 `/user/calendar/sync` endpoints remain available for single-calendar clients and refer to the
 first active connection.
 
-Set or read the user-wide auto-join bot name through the compatible singular preferences edge:
+Legacy single-calendar clients can still set or read the user-wide fallback bot name through the
+compatible singular preferences edge:
 
 ```bash Set the default auto-join bot name
 curl -X PUT "$API_BASE/user/calendar" \
@@ -128,16 +130,16 @@ curl -X PUT "$API_BASE/user/calendar" \
 | Operation | Endpoint | Result |
 |---|---|---|
 | List connections | `GET /user/calendars` | Named connections with masked URLs; secret feed URLs are never returned. |
-| Connect | `POST /user/calendars` | Creates one connection from `name`, `ics_url`, and `auto_join`. |
-| Rename or configure | `PATCH /user/calendars/{calendar_id}` | Updates `name`, `ics_url`, `auto_join`, or `enabled` for only that connection. |
+| Connect | `POST /user/calendars` | Creates one connection from `name`, `ics_url`, `auto_join`, and optional `bot_name`. |
+| Rename or configure | `PATCH /user/calendars/{calendar_id}` | Updates `name`, `ics_url`, `auto_join`, `bot_name`, or `enabled` for only that connection. |
 | Disconnect | `DELETE /user/calendars/{calendar_id}` | Removes that source without changing other connections. |
 | Read sync state | `GET /user/calendars/{calendar_id}/sync` | Returns that connection's latest sync stamp. |
 | Sync now | `POST /user/calendars/{calendar_id}/sync` | Fetches and reconciles only that connection immediately. |
 
 Imported meeting metadata includes `data.calendar_sources`, an array of source objects with the
-stable connection `id`, display `name`, provider event `uid`, and source `auto_join` preference.
-Consumers should use the array rather than the single-source convenience fields when they need
-complete provenance.
+stable connection `id`, display `name`, provider event `uid`, source `auto_join` preference,
+per-calendar `bot_name`, and the complete event snapshot. Consumers should use the array rather
+than the single-source convenience fields when they need complete provenance.
 
 ## What Vexa stores
 
@@ -146,7 +148,7 @@ have separate storage responsibilities:
 
 | Data | Durable home | Notes |
 |---|---|---|
-| Named calendar connections, secret ICS URLs, per-feed auto-join, default bot name | The user's `data` JSON document in Postgres | User-facing reads mask the feed URL. The full URL crosses only the authenticated internal sync edge. |
+| Named calendar connections, secret ICS URLs, per-feed auto-join, per-feed bot name | The user's `data` JSON document in Postgres | User-facing reads mask the feed URL. The full URL crosses only the authenticated internal sync edge. |
 | Imported events | Ordinary rows in the Postgres `meetings` table | A future event is a planned meeting with `status: "scheduled"`. |
 | Event and calendar provenance | The meeting's `data` JSON document | Includes scheduling, attendees, calendar source IDs/names, and provider event UIDs. |
 | Latest sync time, error, and created/updated/cancelled counts | Redis | Operational status under the user/connection sync key; this is not the durable event authority. |
@@ -171,7 +173,29 @@ fields):
         "id": "calendar-uuid",
         "name": "Work",
         "uid": "provider-event-uid",
-        "auto_join": true
+        "auto_join": true,
+        "bot_name": "Work Notes",
+        "event": {
+          "resolved_start": "2026-08-14T15:00:00+00:00",
+          "calendar": {
+            "name": "VCALENDAR",
+            "properties": {
+              "VERSION": [{"value": "2.0"}],
+              "PRODID": [{"value": "-//Provider//Calendar//EN"}]
+            }
+          },
+          "component": {
+            "name": "VEVENT",
+            "properties": {
+              "UID": [{"value": "provider-event-uid"}],
+              "ORGANIZER": [{
+                "value": "mailto:owner@example.com",
+                "parameters": {"CN": "Owner"}
+              }],
+              "X-PROVIDER-FIELD": [{"value": "provider-value"}]
+            }
+          }
+        }
       }
     ],
     "attendees": [
@@ -192,14 +216,23 @@ for the first source.
 ### Participants and current metadata boundary
 
 ICS `ATTENDEE` entries are synchronized into `data.attendees`. Vexa preserves the normalized email,
-optional display name, and participation status (`partstat`, such as `accepted` or `tentative`).
-Calendar rooms and resources are excluded. Attendee additions, removals, and response changes follow
+optional display name, and participation status (`partstat`, such as `accepted` or `tentative`) for
+ordinary people. Calendar rooms and resources are excluded from this convenience list, but remain
+present in the complete event snapshot. Attendee additions, removals, and response changes follow
 the feed while the meeting is still planned.
 
-The current importer does **not** persist the event organizer, raw description, raw location, end
-time, ICS sequence/revision, recurrence ID, or provider `LAST-MODIFIED` value as calendar metadata.
-Description and location are inspected only to discover a joinable meeting link. Do not build an
-integration that expects those unimplemented fields in `meeting.data`.
+The per-source `event` snapshot preserves every event property in its canonical iCalendar text
+representation, including every property parameter, repeated property, provider `X-` extension,
+and nested component such as `VALARM`. It also preserves the top-level `VCALENDAR` properties. For
+a moved or otherwise overridden recurring occurrence, `event.component` is the selected occurrence
+and `event.series_master` retains the RRULE master. `event.resolved_start` is the UTC occurrence Vexa
+actually scheduled.
+
+This is a JSON-safe event snapshot, not the original feed: it deliberately does not contain the
+secret ICS URL or unrelated events. Vexa normalizes the commonly queried title, start, meeting link,
+and people into ordinary meeting fields while retaining the complete source component for consumers
+that need organizer, description, location, end time, recurrence, sequence, revision, categories,
+custom provider properties, or other calendar metadata.
 
 ## Reading the sync status
 
@@ -235,11 +268,11 @@ can show:
 
 ## Auto-join for imported meetings
 
-Every calendar connection has its own **Auto-join** switch (default on). A meeting shared by
-multiple connected feeds auto-joins when at least one of its sources has auto-join enabled. You
-can still override auto-join per meeting in its prep view. `bot_name` is user-wide rather than
-per-feed: the scheduler reads the latest value when it starts any calendar bot, and defaults to
-`Vexa`.
+Every calendar connection has its own **Auto-join** switch and **Default bot name**. A meeting
+shared by multiple connected feeds auto-joins when at least one source has auto-join enabled; the
+first auto-joining source in stable source order supplies its bot name. You can still override
+auto-join per meeting in its prep view. Connections created without an explicit bot name default
+to the legacy user-wide setting, then `Vexa`.
 
 ## Disconnect
 

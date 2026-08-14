@@ -110,17 +110,34 @@ def test_calendar_bot_name_is_user_visible_and_reaches_auto_join_context(client)
     assert rejected.status_code == 422
 
 
+def test_legacy_bot_name_updates_first_calendar_connection(client):
+    uid, tok = _user_token(client, email="cal-legacy-name@vexa.ai")
+    h = {"X-API-Key": tok}
+    client.put("/user/calendar", headers=h, json={"ics_url": ICS})
+    updated = client.put("/user/calendar", headers=h, json={"bot_name": "Legacy Notes"})
+    assert updated.status_code == 200
+    (calendar,) = client.get("/user/calendars", headers=h).json()["calendars"]
+    assert calendar["bot_name"] == "Legacy Notes"
+    internal = client.get("/internal/calendar-configs",
+                          headers={"X-Internal-Secret": INTERNAL_SECRET}).json()["configs"]
+    cfg = next(item for item in internal if item["user_id"] == uid)
+    assert cfg["bot_name"] == "Legacy Notes"
+
+
 def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
     uid, tok = _user_token(client, email="cal-many@vexa.ai")
     h = {"X-API-Key": tok}
 
     work = client.post("/user/calendars", headers=h,
-                       json={"name": "Work", "ics_url": ICS, "auto_join": True})
+                       json={"name": "Work", "ics_url": ICS, "auto_join": True,
+                             "bot_name": "Work Notes"})
     personal = client.post("/user/calendars", headers=h,
                            json={"name": "Personal", "ics_url": ICS_2, "auto_join": False})
     assert work.status_code == 201, work.text
     assert personal.status_code == 201, personal.text
     assert work.json()["id"] != personal.json()["id"]
+    assert work.json()["bot_name"] == "Work Notes"
+    assert personal.json()["bot_name"] == "Vexa"
 
     listed = client.get("/user/calendars", headers=h).json()["calendars"]
     assert [item["name"] for item in listed] == ["Work", "Personal"]
@@ -129,10 +146,12 @@ def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
     assert "private-fedcba654321" not in rendered
 
     changed = client.patch(f"/user/calendars/{personal.json()['id']}", headers=h,
-                           json={"name": "Family", "auto_join": True})
+                           json={"name": "Family", "auto_join": True,
+                                 "bot_name": "Family Notes"})
     assert changed.status_code == 200
     assert changed.json()["name"] == "Family"
     assert changed.json()["auto_join"] is True
+    assert changed.json()["bot_name"] == "Family Notes"
 
     removed = client.delete(f"/user/calendars/{work.json()['id']}", headers=h)
     assert removed.status_code == 204
@@ -146,13 +165,17 @@ def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
     active = next(c for c in internal if c.get("calendar_id") == personal.json()["id"])
     assert active == {
         "user_id": uid, "calendar_id": personal.json()["id"], "calendar_name": "Family",
-        "ics_url": ICS_2, "auto_join": True,
+        "ics_url": ICS_2, "auto_join": True, "bot_name": "Family Notes",
     }
     retired = next(c for c in internal if c.get("calendar_id") == work.json()["id"])
     assert retired == {
         "user_id": uid, "calendar_id": work.json()["id"], "calendar_name": "Work",
-        "deleted": True,
+        "bot_name": "Work Notes", "deleted": True,
     }
+
+    rejected = client.patch(f"/user/calendars/{personal.json()['id']}", headers=h,
+                            json={"bot_name": " "})
+    assert rejected.status_code == 422
 
 
 def test_legacy_calendar_endpoint_materializes_first_plural_connection(client):
