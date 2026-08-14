@@ -975,7 +975,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     if env_truthy(os.getenv("GUARD_WS_ENABLED")):
         from .edge_guard import ws_guard_check
 
-        if not ws_guard_check(ws):
+        if not await ws_guard_check(ws):
             await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
             return
 

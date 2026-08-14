@@ -16,13 +16,16 @@ Two layers:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from guard import SecurityConfig
+from guard import SecurityConfig, ip_ban_manager
 from httpx import ASGITransport
+from starlette.datastructures import Headers
 from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
@@ -36,6 +39,24 @@ from gateway.edge_guard import (
     reset_ws_guard,
 )
 from gateway.ratelimit import PerUserRateLimiter
+
+
+@pytest.fixture(autouse=True)
+async def _reset_ip_ban_manager() -> AsyncIterator[None]:
+    """SWAP B (``edge_guard._WsGuard.check``) routes bans through guard's process-wide
+    ``ip_ban_manager`` singleton (``IPBanManager.__new__`` caches the instance - see
+    ``guard_core.handlers.ipban_handler``), shared with the HTTP ``SecurityMiddleware``
+    pipeline too. Its own ``reset()`` clears state in place, which works no matter which
+    import path a caller holds a reference through (unlike swapping in a brand-new
+    instance, which only the reference that gets reassigned would ever observe - see
+    ``guard_core``'s own ``IPBanManager._instance = None`` test idiom, which doesn't fit
+    here for exactly that reason). Forcing ``redis_handler = None`` keeps every test
+    in-memory / hermetic (conftest.py already sets ``GUARD_ENABLE_REDIS=false`` for the
+    whole suite, so this is belt-and-braces)."""
+    ip_ban_manager.redis_handler = None
+    await ip_ban_manager.reset()
+    yield
+    await ip_ban_manager.reset()
 
 
 def _guard_middleware(app: FastAPI) -> Any:
@@ -364,10 +385,15 @@ class _FakeClient:
 
 
 class FakeWS:
-    """Minimal WebSocket for the WS-guard tests: has ``.client`` (for IP resolution)
-    and ``.headers`` (for X-Forwarded-For). No inbound frames — a denied connect never
-    reaches the frame loop, and a clean IP test asserts it passes the guard (then hits
-    the auth layer, which closes 4401 on a missing key)."""
+    """Minimal WebSocket for the WS-guard tests: has ``.client`` (for IP resolution),
+    ``.headers`` (for X-Forwarded-For) and ``.state`` (SWAP C: ``resolve_ws_client_ip``
+    now routes through ``guard_core.utils.extract_client_ip``, which reads both - a real
+    Starlette ``WebSocket`` always has them, sharing ``HTTPConnection`` with ``Request``).
+    ``.headers`` is a real Starlette ``Headers`` (case-insensitive), matching production
+    and what ``extract_client_ip`` expects (it looks up ``X-Forwarded-For`` by that exact
+    casing). No inbound frames - a denied connect never reaches the frame loop, and a
+    clean IP test asserts it passes the guard (then hits the auth layer, which closes
+    4401 on a missing key)."""
 
     def __init__(
         self,
@@ -377,12 +403,13 @@ class FakeWS:
         api_key: Optional[str] = None,
     ) -> None:
         self.client = _FakeClient(client_host)
-        headers: dict[str, str] = {}
+        raw_headers: dict[str, str] = {}
         if xff:
-            headers["x-forwarded-for"] = xff
+            raw_headers["x-forwarded-for"] = xff
         if api_key:
-            headers["x-api-key"] = api_key
-        self.headers = headers
+            raw_headers["x-api-key"] = api_key
+        self.headers = Headers(headers=raw_headers)
+        self.state = SimpleNamespace()
         self.query_params: dict[str, str] = {}
         self.sent: list[dict] = []
         self.close_code: Optional[int] = None
@@ -427,7 +454,7 @@ class TestWsGuard:
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
-        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
         assert not ws.sent  # no data frame before accept
 
     @pytest.mark.asyncio
@@ -456,7 +483,7 @@ class TestWsGuard:
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=VALID_KEY)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
-        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
         assert not ws.sent
 
     @pytest.mark.asyncio
@@ -467,9 +494,15 @@ class TestWsGuard:
         rule means a fresh threshold (not a single over-limit) is required to re-ban
         after the ban window expires.
 
-        Uses a fake clock so the in-memory limiter's monotonic time is controllable.
-        ``enable_ip_banning=True`` + ``auto_ban_threshold=2`` so two over-limit events
-        set the ban (the path the hard-coded ``_enforcing_config`` left untested).
+        Uses a fake clock so both the in-memory rate-limit bucket's monotonic time AND
+        ip_ban_manager's (SWAP B) wall-clock expiry are controllable. ``_edge_guard.time``
+        IS the stdlib ``time`` module (``import time`` caches the same object in
+        ``sys.modules`` everywhere), so patching ``.monotonic``/``.time`` on it here also
+        redirects ``guard_core.handlers.ipban_handler``'s own ``import time`` - it reads
+        ``time.time()`` by attribute lookup on every call, not a frozen reference, so the
+        patched module attribute is what it sees too. ``enable_ip_banning=True`` +
+        ``auto_ban_threshold=2`` so two over-limit events set the ban (the path the
+        hard-coded ``_enforcing_config`` left untested).
         """
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         cfg = _enforcing_config(
@@ -483,6 +516,7 @@ class TestWsGuard:
         reset_ws_guard(cfg)
         clock = {"t": 0.0}
         monkeypatch.setattr(_edge_guard.time, "monotonic", lambda: clock["t"])
+        monkeypatch.setattr(_edge_guard.time, "time", lambda: clock["t"])
 
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
@@ -609,6 +643,41 @@ class TestWsGuard:
             assert ws.accepted is True
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
+    @pytest.mark.asyncio
+    async def test_whitelist_exclusive_blocks_unlisted_ip(self, monkeypatch) -> None:
+        """SWAP A / audit 5.4 (deliberate behavior change): guard-core's
+        ``check_ip_access`` treats a non-empty whitelist as EXCLUSIVE - an IP that is
+        NOT on it is blocked outright, the blacklist is never consulted. The OLD
+        hand-rolled ``_ip_matches``-based check only used the whitelist as a bypass
+        fast path: a listed IP passed immediately, but an UNLISTED IP simply fell
+        through to the (here, empty) blacklist and rate limit and was ALLOWED. This
+        pins the NEW, stricter, HTTP-matching behavior: with only ``10.0.0.0/24``
+        whitelisted, an IP outside that range is denied even though it is not
+        blacklisted and the rate limit has room."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        reset_ws_guard(
+            _enforcing_config(
+                rate_limit=1000,
+                trusted_proxies=["127.0.0.1"],
+                whitelist=["10.0.0.0/24"],
+            )
+        )
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        # 10.0.1.5 is outside the whitelisted /24 and not blacklisted -> denied
+        # pre-accept under the new EXCLUSIVE semantics (the old code would have
+        # allowed it through to the auth layer).
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.1.5", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 4401
+        assert ws.accepted is False  # pre-accept rejection - no WebSocket upgrade
+        assert not ws.sent
+        # A listed IP still passes, as before.
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=None)
+        await run_multiplex(ws, auth, redis)
+        assert ws.accepted is True
+        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
 
 # ── A5: both layers in one app ─────────────────────────────────────────────────
 
@@ -675,3 +744,32 @@ class TestBothLayers:
             assert (
                 resp.headers.get("retry-after") is None
             )  # guard's 429, not the limiter's
+
+
+class TestBannedButWhitelisted:
+    async def test_ban_check_precedes_whitelist_bypass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A banned IP that is ALSO whitelisted stays blocked on the WS path.
+
+        Pins the deliberate ordering change of the library consolidation: the ban check runs
+        unconditionally BEFORE the whitelist decision, mirroring guard-core's IpSecurityCheck
+        pipeline. The pre-consolidation hand-rolled guard did the opposite (whitelist bypassed
+        everything, including bans); reordering the two checks back would let a banned IP
+        re-enter through the whitelist, and this test fails if that regresses.
+        """
+        from guard import ip_ban_manager
+
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            enable_ip_banning=True,
+            whitelist=["10.0.0.7"],
+            trusted_proxies=["127.0.0.1"],
+        )
+        reset_ws_guard(cfg)
+        await ip_ban_manager.ban_ip("10.0.0.7", 3600)
+
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.accepted is False
+        assert ws.close_code == 4401
