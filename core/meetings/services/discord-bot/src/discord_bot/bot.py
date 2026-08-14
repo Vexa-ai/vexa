@@ -77,8 +77,24 @@ async def _name_for(guild: discord.Guild, cache: dict[int, str], user_id: int) -
     return name
 
 
-def _non_bot_member_count(channel: discord.VoiceChannel) -> int:
-    return sum(1 for m in channel.members if not m.bot)
+def _non_bot_member_count(channel: discord.VoiceChannel, own_id: int) -> int:
+    # NOT channel.members: that property reads the guild member cache, which is only populated
+    # under the privileged members intent this bot deliberately does not request. Without it the
+    # cache reads empty, the count is 0 from the moment we join, and left_alone fires with humans
+    # mid-conversation (live witness, 2026-08-14). channel.voice_states is the py-cord-documented
+    # replacement "when the member cache is unavailable": Discord pushes a voice state for every
+    # occupant regardless of intents. Count everyone but ourselves; when a Member object IS cached
+    # we still use it to exclude other bots (an uncached occupant counts as human, the safe
+    # default: overcounting keeps the bot in the call, undercounting is the bug this replaces).
+    count = 0
+    for uid in channel.voice_states:
+        if uid == own_id:
+            continue
+        member = channel.guild.get_member(uid)
+        if member is not None and member.bot:
+            continue
+        count += 1
+    return count
 
 
 def _on_connect_task_done(task: asyncio.Task[None], *, stop_event: asyncio.Event, log: Callable[[str], None] = _log) -> None:
@@ -141,6 +157,7 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
     session: Optional[MeetingSession] = None
     voice_protocol: Optional[DAVEVoiceProtocol] = None
     dave_client: Optional[DAVEVoiceClient] = None
+    background_tasks: list[asyncio.Task[None]] = []
     stop_event = asyncio.Event()
 
     @client.event
@@ -201,8 +218,10 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
         await acts.subscribe(session.handle_act)
 
         await session.emit_active()
-        asyncio.create_task(_flush_loop(session, stop_event))
-        asyncio.create_task(_alone_loop(session, channel, stop_event))
+        background_tasks.append(asyncio.create_task(_flush_loop(session, stop_event)))
+        background_tasks.append(
+            asyncio.create_task(_alone_loop(session, channel, client.user.id if client.user else 0, stop_event))
+        )
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -227,18 +246,52 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
     connect_task.add_done_callback(lambda t: _on_connect_task_done(t, stop_event=stop_event, log=_log))
     await stop_event.wait()
 
-    if session is not None:
-        await session.flush_all()
-        completion_reason = session.stop_reason or "stopped"
-        await session.emit_completed(completion_reason)
+    await _teardown(
+        session=session,
+        dave_client=dave_client,
+        voice_protocol=voice_protocol,
+        client=client,
+        connect_task=connect_task,
+        background_tasks=background_tasks,
+        redis_client=redis_client,
+    )
+    return 0
+
+
+async def _teardown(
+    *,
+    session: Optional[MeetingSession],
+    dave_client: Optional[DAVEVoiceClient],
+    voice_protocol: Optional[DAVEVoiceProtocol],
+    client: Any,
+    connect_task: Optional["asyncio.Task[Any]"],
+    background_tasks: list["asyncio.Task[None]"],
+    redis_client: Any,
+) -> None:
+    """Ordered shutdown. The order is load-bearing, in three ways:
+
+    1. Stop the DAVE receive pipeline BEFORE the final drain: PCM keeps arriving via on_pcm until
+       dave_client.stop() returns, so draining first leaves a window whose audio is never flushed.
+    2. flush_all() then emit_completed(): the final lifecycle event must postdate the last segment.
+    3. Cancel the poll loops BEFORE closing redis: they run on their own tasks, and a flush that
+       races the aclose() below dies with a redis ConnectionError at teardown (live witness,
+       2026-08-14).
+    """
     if dave_client is not None:
         await dave_client.stop()
+    if session is not None:
+        await session.flush_all()
+        await session.emit_completed(session.stop_reason or "stopped")
     if voice_protocol is not None:
         await voice_protocol.disconnect(force=True)
     await client.close()
-    connect_task.cancel()
+    if connect_task is not None:
+        connect_task.cancel()
+    for task in background_tasks:
+        task.cancel()
+    if background_tasks:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
     await redis_client.aclose()
-    return 0
 
 
 async def _flush_loop(session: MeetingSession, stop_event: asyncio.Event) -> None:
@@ -250,7 +303,9 @@ async def _flush_loop(session: MeetingSession, stop_event: asyncio.Event) -> Non
         await session.flush_ready()
 
 
-async def _alone_loop(session: MeetingSession, channel: discord.VoiceChannel, stop_event: asyncio.Event) -> None:
+async def _alone_loop(
+    session: MeetingSession, channel: discord.VoiceChannel, own_id: int, stop_event: asyncio.Event
+) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=ALONE_POLL_S)
@@ -258,5 +313,5 @@ async def _alone_loop(session: MeetingSession, channel: discord.VoiceChannel, st
             pass
         if stop_event.is_set():
             return
-        if session.observe_channel_members(_non_bot_member_count(channel)):
+        if session.observe_channel_members(_non_bot_member_count(channel, own_id)):
             session.request_stop("left_alone")
