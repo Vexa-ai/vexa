@@ -11,8 +11,9 @@ ports the CORE of that:
   * ``build_invocation(...)`` — the parent's ``BOT_CONFIG`` as an ``invocation.v1`` ``Invocation``
     (camelCase fields, ``None`` stripped). Validated against the sealed schema before it ships.
   * ``build_workload_spec(...)`` — wrap the invocation as the ONE env var the bot reads
-    (``BOT_CONFIG``) inside a ``runtime.v1`` ``WorkloadSpec`` (``profile="meeting-bot"``), validated
-    against the sealed schema.
+    (``BOT_CONFIG``) inside a ``runtime.v1`` ``WorkloadSpec``. ``profile`` is derived from the
+    invocation's ``platform`` (``PLATFORM_PROFILES`` below) — ``"meeting-bot"`` for every browser
+    platform, ``"discord-bot"`` for discord. Validated against the sealed schema.
 
 continue_meeting / max-bots / join-retry are P3 — NOT here; ``request_bot`` leaves the seam.
 """
@@ -61,6 +62,31 @@ SPAWNABLE_PLATFORMS = frozenset(_INVOCATION_SCHEMA["$defs"]["Platform"]["enum"])
 _RT_REGISTRY = Registry().with_resource(
     _RUNTIME_SCHEMA["$id"], Resource.from_contents(_RUNTIME_SCHEMA)
 )
+
+# Platforms with NO meeting URL at all — a Discord voice channel has no join-by-URL concept: the
+# bot is OAuth2-invited to the guild once, then joins a channel by its snowflake id over the
+# gateway (``native_meeting_id`` alone is sufficient and authoritative);
+# ``https://discord.com/channels/{guild}/{channel}`` is a human deep link the bot never parses
+# (#875 A1). Lives here (not service.py, which imports FROM this module) so both the router's
+# URL-required gate and ``build_invocation``'s meetingUrl null-survival (below) read the SAME set —
+# re-exported from ``service`` for callers that already do ``from .service import
+# NO_MEETING_URL_PLATFORMS`` (router.py).
+NO_MEETING_URL_PLATFORMS = frozenset({"discord"})
+
+# Platform → runtime profile (core/runtime/src/runtime_kernel/profiles.py's ProfileRegistry keys).
+# Every platform not listed here resolves to the shared "meeting-bot" Playwright browser profile —
+# only a platform that ships its OWN runtime image (discord's DAVE receive service, not a browser)
+# needs an entry. THE single place this mapping lives: runtime.v1 keeps ``profile`` opaque to the
+# kernel (it just resolves whatever name arrives in the spec), so platform-awareness belongs here,
+# on the meeting-api side, not in the kernel.
+PLATFORM_PROFILES = {"discord": "discord-bot"}
+_DEFAULT_PROFILE = "meeting-bot"
+
+
+def profile_for_platform(platform: str) -> str:
+    """The ``runtime.v1`` profile a ``platform``'s bot spawns under (``PLATFORM_PROFILES``, default
+    ``"meeting-bot"``)."""
+    return PLATFORM_PROFILES.get(platform, _DEFAULT_PROFILE)
 
 
 def _conforms(obj: dict, schema: dict, registry: Registry, shape: str) -> None:
@@ -203,7 +229,20 @@ def build_invocation(
         "s3AccessKey": s3_access_key,
         "s3SecretKey": s3_secret_key,
     }
-    invocation = {k: v for k, v in invocation.items() if v is not None}
+    # meetingUrl is REQUIRED by the sealed schema but its type is ["string", "null"]. For a platform
+    # in NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all) None is a legitimate,
+    # PERMANENT null, so the key must survive as JSON null rather than being stripped like every
+    # other unset field below (a missing "meetingUrl" fails the schema's required check). Scoped to
+    # exactly that set, not every platform: an unscoped strip would also swallow a None meetingUrl
+    # for a platform that DOES need one, reaching this function only if router.py's URL-required
+    # gate was bypassed (e.g. bot_spawn/auto_join.py calls request_bot directly with
+    # ``meeting_url=data.get("constructed_meeting_url")``, which can be None) — scoping it means
+    # that bypass still fails LOUD here (the required-field check below), instead of silently
+    # spawning a bot with no way to find its meeting.
+    invocation = {
+        k: v for k, v in invocation.items()
+        if v is not None or (k == "meetingUrl" and platform in NO_MEETING_URL_PLATFORMS)
+    }
     conforms_invocation(invocation)
     return invocation
 
@@ -216,8 +255,12 @@ def build_workload_spec(
     extra_env: Optional[dict[str, str]] = None,
 ) -> dict:
     """Wrap ``invocation`` as the bot's ONE config env var (``VEXA_BOT_CONFIG``) inside a ``runtime.v1``
-    ``WorkloadSpec`` (``profile="meeting-bot"``). The bot image resolves from the kernel's profile
-    registry — NOT carried in the spec. Validated against the sealed schema.
+    ``WorkloadSpec``. ``profile`` is resolved from ``invocation["platform"]`` via
+    ``profile_for_platform`` — ``"meeting-bot"`` for every browser platform, ``"discord-bot"`` for
+    discord (PLATFORM_PROFILES, the one place this mapping lives). The bot IMAGE resolves from the
+    kernel's profile registry from THAT name — NOT carried in the spec; runtime.v1 keeps ``profile``
+    opaque to the kernel (P11), so platform-awareness stays here, on the meeting-api side. Validated
+    against the sealed schema.
 
     The sealed ``invocation.v1`` contract (ADR-0002) names this env var ``VEXA_BOT_CONFIG`` — what the
     carved v0.12 bot (``config.ts``) and the runtime profile read. We ALSO emit the legacy ``BOT_CONFIG``
@@ -229,7 +272,7 @@ def build_workload_spec(
         env.update({k: str(v) for k, v in extra_env.items()})
     spec: dict[str, Any] = {
         "workloadId": workload_id,
-        "profile": "meeting-bot",
+        "profile": profile_for_platform(invocation["platform"]),
         "env": env,
     }
     if callback_url:

@@ -16,7 +16,8 @@ The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot b
   2c. continue_meeting — reuse a TERMINAL prior meeting row + add a session (P3c),
   3. insert the ``Meeting`` row (status ``requested``) → meeting_id (unless reusing one),
   4. mint the MeetingToken + build the ``invocation.v1`` invocation (BOT_CONFIG),
-  5. spawn the meeting-bot workload over ``runtime.v1`` (``RuntimeClient.create_workload``),
+  5. spawn the platform's bot workload over ``runtime.v1`` (``RuntimeClient.create_workload`` —
+     profile ``meeting-bot`` or ``discord-bot``, resolved from ``platform``),
   6. eager-create the ``MeetingSession`` keyed by the bot's ``connectionId`` (== session_uid),
   7. write the kernel workload id back as ``bot_container_id``,
   8. return the ``api.v1`` ``MeetingResponse`` (now listing its ``sessions``).
@@ -36,7 +37,12 @@ from ..service_authority import (
     ServiceAuthorityUnavailable,
 )
 from .env_flags import env_flag
-from .invocation import build_invocation, build_workload_spec, mint_meeting_token
+from .invocation import (
+    NO_MEETING_URL_PLATFORMS,
+    build_invocation,
+    build_workload_spec,
+    mint_meeting_token,
+)
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
@@ -51,7 +57,10 @@ from .ports import (
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
-__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting", "LOBBY_BUDGET_MS"]
+__all__ = [
+    "request_bot", "construct_meeting_url", "DuplicateMeeting", "LOBBY_BUDGET_MS",
+    "NO_MEETING_URL_PLATFORMS",
+]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
 # .waitingRoomTimeout``): how long the bot may sit in a lobby, silently polling, before it gives up
@@ -79,6 +88,10 @@ _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
     "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
 }
+
+# NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all, a different case from the
+# templates above) now lives in invocation.py, imported above, so build_invocation's meetingUrl
+# null-survival check reads the SAME set as the router's URL-required gate below.
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
