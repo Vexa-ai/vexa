@@ -59,7 +59,7 @@
       ],
       "properties": {
         "platform": { "$ref": "#/$defs/Platform" },
-        "meetingUrl": { "type": ["string", "null"], "description": "null for native-SDK zoom, for voice_note (nothing to join) and for vexa_call (the room is in `call`)" },
+        "meetingUrl": { "type": ["string", "null"], "description": "null for native-SDK zoom, for voice_note (nothing to join) for vexa_call (the room is in `call`) and for discord (a voice channel is joined by nativeMeetingId, not a URL)" },
         "botName": { "type": "string" },
         "passcode": { "type": "string", "description": "meeting passcode (zoom passcode screen / jitsi room password); placeholder in goldens" },
         "nativeMeetingId": { "type": "string" },
