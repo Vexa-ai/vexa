@@ -299,6 +299,26 @@ def build_router(
             raise HTTPException(status_code=404, detail="no calendar feed connected")
         return stamp
 
+    @router.get("/user/calendars/{calendar_id}/sync")
+    async def calendar_connection_sync_state(calendar_id: str,
+                                             x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if calendar_sync_status is None:
+            raise HTTPException(status_code=503, detail="calendar sync is not available")
+        stamp = await calendar_sync_status(user_id, calendar_id)
+        return stamp or {}
+
+    @router.post("/user/calendars/{calendar_id}/sync")
+    async def calendar_connection_sync_run(calendar_id: str,
+                                           x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if calendar_sync_now is None:
+            raise HTTPException(status_code=503, detail="calendar sync is not available")
+        stamp = await calendar_sync_now(user_id, calendar_id)
+        if stamp is None:
+            raise HTTPException(status_code=404, detail="calendar not found")
+        return stamp
+
     @router.post("/meetings", status_code=201)
     async def create_planned_meeting(
         request: Request,

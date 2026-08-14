@@ -512,6 +512,30 @@ def create_app(
     async def get_user_calendar(request: Request):
         return await _forward("GET", _admin("/user/calendar"), request)
 
+    @app.get("/user/calendars")
+    async def list_user_calendars(request: Request):
+        return await _forward("GET", _admin("/user/calendars"), request)
+
+    @app.post("/user/calendars")
+    async def create_user_calendar(request: Request):
+        return await _forward("POST", _admin("/user/calendars"), request)
+
+    @app.patch("/user/calendars/{calendar_id}")
+    async def update_user_calendar(calendar_id: str, request: Request):
+        return await _forward("PATCH", _admin(f"/user/calendars/{calendar_id}"), request)
+
+    @app.delete("/user/calendars/{calendar_id}")
+    async def delete_user_calendar(calendar_id: str, request: Request):
+        return await _forward("DELETE", _admin(f"/user/calendars/{calendar_id}"), request)
+
+    @app.get("/user/calendars/{calendar_id}/sync")
+    async def get_calendar_connection_sync(calendar_id: str, request: Request):
+        return await _forward("GET", _meeting(f"/user/calendars/{calendar_id}/sync"), request)
+
+    @app.post("/user/calendars/{calendar_id}/sync")
+    async def run_calendar_connection_sync(calendar_id: str, request: Request):
+        return await _forward("POST", _meeting(f"/user/calendars/{calendar_id}/sync"), request)
+
     # ---- user self-serve model + transcription prefs (identity owns them, same shape as
     # /user/webhook: secrets masked by admin-api on every read-back, no ROUTE_SCOPES entry). ----
     @app.put("/user/models")

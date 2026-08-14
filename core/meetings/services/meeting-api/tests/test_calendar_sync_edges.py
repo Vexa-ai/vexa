@@ -23,12 +23,14 @@ class _CaptureRedis:
 def _client(now_result=None, status_result=None, wired=True):
     calls = {"now": 0, "status": 0}
 
-    async def sync_now(user_id: int):
+    async def sync_now(user_id: int, calendar_id=None):
         calls["now"] += 1
+        calls["calendar_id"] = calendar_id
         return now_result
 
-    async def sync_status(user_id: int):
+    async def sync_status(user_id: int, calendar_id=None):
         calls["status"] += 1
+        calls["calendar_id"] = calendar_id
         return status_result
 
     app = create_app(
@@ -69,6 +71,17 @@ def test_post_sync_now_404_when_no_feed():
     client, _ = _client(now_result=None)
     r = client.post("/user/calendar/sync", headers={"X-User-Id": "28"})
     assert r.status_code == 404
+
+
+def test_connection_scoped_sync_routes_forward_calendar_id():
+    stamp = {"last_sync": "2026-08-14T10:30:00+00:00", "last_error": None}
+    client, calls = _client(now_result=stamp, status_result=stamp)
+    r = client.get("/user/calendars/work-1/sync", headers={"X-User-Id": "28"})
+    assert r.status_code == 200
+    assert calls["calendar_id"] == "work-1"
+    r = client.post("/user/calendars/work-1/sync", headers={"X-User-Id": "28"})
+    assert r.status_code == 200
+    assert calls["calendar_id"] == "work-1"
 
 
 def test_unwired_hooks_503():

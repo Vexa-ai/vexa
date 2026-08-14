@@ -157,6 +157,7 @@ class TranscriptStore(Protocol):
         workspace_id: Optional[str] = None,
         auto_join: bool = True,
         calendar_uid: Optional[str] = None,
+        calendar_source: Optional[dict] = None,
         workspace_source: Optional[str] = None,
         attendees: Optional[list] = None,
     ) -> dict:

@@ -21,6 +21,28 @@ describe("LiveTranscriptEngine — processed v2 inline rendering", () => {
     unmount();
   });
 
+  it("renders exact contested words like an ordinary unresolved tail without leaking wire metadata", () => {
+    const contested = [{
+      id: "s-contested",
+      speaker: "Tom Dean",
+      text: "before ⟦shared words⟧{CSRC 201↔CSRC 840} after",
+      completed: true,
+    }];
+    const { container, unmount } = render(<LiveTranscriptEngine segments={contested} />);
+    const mark = container.querySelector('[data-contested="true"]') as HTMLElement;
+    expect(mark).not.toBeNull();
+    expect(mark.textContent).toBe("shared words");
+    expect(mark.style.fontStyle).toBe("italic");
+    expect(mark.getAttribute("aria-label")).toBe("Unresolved live transcript");
+    expect(container.textContent).toContain("before");
+    expect(container.textContent).toContain("after");
+    expect(container.textContent).not.toContain("⟦");
+    expect(container.textContent).not.toContain("⟧");
+    expect(container.textContent).not.toContain("{CSRC");
+    expect(container.textContent).not.toContain("CONTESTED");
+    unmount();
+  });
+
   it("PROCESSED mode highlights the entity inline and fires Research on click", () => {
     const research = vi.fn();
     const entities: EngineEntity[] = [{ id: "c1", label: "Acme", kind: "company", docPath: "kg/acme.md" }];

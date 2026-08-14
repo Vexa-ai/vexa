@@ -1,7 +1,7 @@
 # calendar_sync — ICS feed → planned meetings
 
 One concern: turn a user's secret ICS calendar feed into PLANNED meeting rows (intent status
-`scheduled`, `data.calendar_uid` provenance) so the Meetings surface shows what's coming and the
+`scheduled`, complete `data.calendar_sources[].event` provenance) so the Meetings surface shows what's coming and the
 auto-join sweep sends the bot when each meeting starts. No OAuth — the user pastes the
 secret-address ICS URL Google Calendar / Outlook already provide (`PUT /user/calendar`, identity
 domain).
@@ -10,7 +10,9 @@ domain).
 - `parse_ics(text, now, horizon_days=14)` → `{"events": [PlannedEvent], "cancelled_uids": […]}`
   (pure). **One event per UID — the next upcoming occurrence only** (a recurring meeting reuses one
   link; two active rows on one native id would violate `uq_meeting_active_user_platform_native`).
-  Only events with a recognizable Meet/Zoom/Teams link import (`collector/meeting_link.py`).
+  Every event carries a JSON-safe snapshot of all VEVENT properties, parameters, nested components,
+  top-level VCALENDAR properties, and the series master for an override. Link-less events still
+  import honestly; only recognized Meet/Zoom/Teams links arm auto-join.
 - `sync_user(store, user_id, parsed, auto_join_default)` → upserts through the SAME planned-meeting
   store primitives `POST /meetings` uses (advisory-locked). Intent rows follow the feed; FSM rows
   are never touched; a manual plan on the same link is ADOPTED (uid stamped), not duplicated;

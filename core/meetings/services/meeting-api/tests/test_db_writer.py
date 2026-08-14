@@ -221,6 +221,67 @@ async def test_mutable_tail_stays_in_redis_until_it_settles(store, bus, redis_c)
     assert [s["text"] for s in doc["segments"]] == ["fresh"]  # live read merge
 
 
+# ── M21: the hold is per-LANE, because only a lane that refines in place needs it ───────────────
+
+async def test_teams_csrc_confirmed_segment_flushes_without_waiting_out_the_hold(store, bus, redis_c):
+    """The Teams CSRC lane retracts drafts instead of refining rows in place, so a CONFIRMED
+    segment of its is durable-safe the moment it exists. Measured cost of
+    the old behaviour on prod meeting 26088: 36.2 s of a 39.4 s wait, against 2.0 s of model."""
+    seg = {**_seg("csrc-201:3:0", 1.0, "shipped now"), "source": "merged", "speaker_key": "csrc:201"}
+    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await consume_segments(store, bus)
+
+    stored = await db_writer_tick(redis_c, store)  # real `now` — the segment is milliseconds old
+    assert stored == 1
+    assert _durable_texts(store) == ["shipped now"]
+
+
+async def test_teams_csrc_PENDING_still_waits_out_the_hold(store, bus, redis_c):
+    """A draft must never become a durable row: the durable read reports every stored row as
+    completed, so a flushed pending would read back as final until its retract caught up."""
+    seg = {**_seg("csrc-201:3:p0", 1.0, "still forming", completed=False), "source": "merged", "speaker_key": "csrc:201"}
+    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await consume_segments(store, bus)
+
+    assert await db_writer_tick(redis_c, store) == 0
+    assert await redis_c.hlen(segments_hash_key(1)) == 1
+
+
+async def test_gmeet_lane_confirmed_segment_still_waits_out_the_hold(store, bus, redis_c):
+    """THE FALSIFIER. The gmeet lane republishes confirmed text under a rotated id and withdraws
+    the old row with EMPTY TEXT, which never deletes an already-flushed row — so its hold is the
+    only thing preventing an orphaned stale row, and this change must not touch it."""
+    seg = {**_seg("ch-1:5:1200", 1.0, "refined in place"), "source": "glow-bound"}
+    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await consume_segments(store, bus)
+
+    assert await db_writer_tick(redis_c, store) == 0
+    assert await redis_c.hlen(segments_hash_key(1)) == 1
+    assert await flush_meeting_segments(redis_c, store, 1, now=LATER) == 1  # settles normally
+
+
+async def test_legacy_mixed_lane_confirmed_segment_keeps_the_hold(store, bus, redis_c):
+    """A source=merged row without a CSRC speaker key is Zoom/Jitsi legacy traffic and remains
+    outside the Teams-only release blast radius."""
+    seg = {**_seg("turn:3:0", 1.0, "legacy mixed"), "source": "merged"}
+    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await consume_segments(store, bus)
+
+    assert await db_writer_tick(redis_c, store) == 0
+    assert await redis_c.hlen(segments_hash_key(1)) == 1
+
+
+async def test_finalize_still_flushes_everything_including_other_lanes(store, bus, redis_c):
+    """threshold_for never RAISES a caller's threshold — finalize (threshold 0) still takes the
+    whole tail, mixed pendings and gmeet rows included."""
+    await bus.xadd("transcription_segments", json.loads(_message(1, [
+        {**_seg("turn:9:p0", 1.0, "draft tail", completed=False), "source": "merged"},
+        {**_seg("ch-1:9:900", 2.0, "gmeet tail"), "source": "glow-bound"},
+    ])["payload"]))
+    await consume_segments(store, bus)
+    assert await flush_meeting_segments(redis_c, store, 1, immutability_threshold=0) == 2
+
+
 async def test_empty_text_segments_are_dropped_not_stored(store, redis_c):
     seg = {**_seg("s1", 1.0, "   "), "updated_at": "2026-06-20T09:00:00Z"}
     await redis_c.hset(segments_hash_key(1), "s1", json.dumps(seg))

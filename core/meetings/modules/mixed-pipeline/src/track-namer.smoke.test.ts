@@ -309,5 +309,164 @@ const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer
     n.nameFor('4') === 'Priya Nair', JSON.stringify(n.stats()));
 }
 
+// ── 8) A SECOND BOT IS NOT A PERSON (meeting 25930) ─────────────────────────────────────────────
+// Two of our bots in one room. The DOM yielded nothing, so the roster was the only name source —
+// and it held exactly one name: the OTHER bot. One track, one name, corroborated and settled: every
+// gate elimination has, passed. It bound a human's speech to "Vexa (Unverified)". The self-name
+// check could not catch it because it asks "is this name MINE" (`vexa test`), not "is it MY KIND".
+{
+  const seen: string[] = [];
+  const n = namer({ selfName: 'Vexa test', onObservation: (o) => seen.push(`${o.type}:${o.name}`) });
+  n.setTrackActive('201', true, 0);
+  for (const t of [0, 100, 200]) n.recordRosterName('Vexa (Unverified)', t);
+  n.recordRosterCoverage(1, 1, 200);           // the producer counts the bot as a named participant
+  n.setTrackActive('201', false, 8000);
+  n.tick(60_000);                              // well past the roster settle window
+  check('a second bot in the roster never wins by elimination',
+    n.nameFor('201') !== 'Vexa (Unverified)', `got ${n.nameFor('201')}`);
+  const held = n.nameFor('201');
+  check('the track holds no name at all, so the publish path gives it a letter',
+    !held || /^Speaker /.test(held), `${held}`);
+  check('the refusal is emitted as a typed observation, so a tape shows it',
+    seen.includes('bot-family-in-roster:Vexa (Unverified)'), JSON.stringify(seen));
+}
+
+// ── 9) …and a roster of ONLY bots is INCOMPLETE, not complete ───────────────────────────────────
+// named=1/participants=1 is the most complete a roster can look, and it was the state elimination
+// trusted most. Discounting the bot-family entries tells the truth: nobody has been named yet.
+{
+  const n = namer({ selfName: 'Vexa test' });
+  for (const t of [0, 100, 200]) n.recordRosterName('Vexa (Unverified)', t);
+  n.recordRosterCoverage(1, 1, 200);
+  const cov = n.stats().rosterCoverage;
+  check('a roster holding only bot-family entries reads as coverage-incomplete',
+    !cov || cov.named === 0, JSON.stringify(cov));
+}
+
+// ── 10) SCOPE: the exclusion gates elimination, never direct evidence ────────────────────────────
+// The misfire cost has to stay "fewer eliminations in a weird room", never "a human who cannot be
+// named". Someone actually called Vexa still earns their name from exclusive coincidence.
+{
+  const n = namer({ selfName: 'Vexa test' });
+  n.setTrackActive('77', true, 0);
+  for (let t = 0; t < 8000; t += 1000) n.recordHint('Vexa Petrova', t + 1000);
+  n.setTrackActive('77', false, 9000);
+  n.tick(20_000);
+  check('a real human whose name shares the bot stem is still named by direct evidence',
+    n.nameFor('77') === 'Vexa Petrova', `got ${n.nameFor('77')}`);
+}
+
+// ── 11) A HUMAN MAY SURVIVE A STRICTLY LATER TRANSPORT EPOCH (meeting 26112) ───────────────────
+{
+  const n = namer();
+  // The first CSRC earns Ana normally, then retires.
+  for (const t0 of [0, 10_000]) {
+    n.setTrackActive('414', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('414', false, t0 + 4000);
+  }
+  n.tick(20_000);
+  check('the first transport epoch owns Ana', n.nameFor('414') === 'Ana', JSON.stringify(n.stats().how));
+
+  // A newly allocated CSRC appears only after 414 is gone and independently carries three long,
+  // exclusive episodes. This is the m26112 shape: identity continues, transport id does not.
+  for (const t0 of [40_000, 50_000, 60_000]) {
+    n.setTrackActive('1266', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('1266', false, t0 + 4000);
+  }
+  n.tick(80_000);
+  check('succession is not published live while an old CSRC could still return',
+    n.nameFor('1266') === null, JSON.stringify(n.stats().how));
+  n.finish();
+  check('a sustained, strictly later CSRC joins the same human identity',
+    n.nameFor('1266') === 'Ana' && n.naming('1266')?.successorOf === '414', JSON.stringify(n.stats().how));
+}
+{
+  // m30's adversarial shape: the other human's source exists before and between the true owner's
+  // turns, and accrues repeated one-second tail evidence from the lagging Ana tile. Total support
+  // alone is deliberately enough to look tempting; temporal succession and episode weight refuse it.
+  const n = namer();
+  for (let i = 0; i < 14; i++) {
+    const t0 = i * 10_000;
+    n.setTrackActive('201', true, t0);                         // false track predates the owner
+    n.recordHint('Ana', t0 + 1000);
+    n.setTrackActive('201', false, t0 + 1000);
+    n.setTrackActive('1266', true, t0 + 2000);
+    for (let t = t0 + 2000; t < t0 + 6000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('1266', false, t0 + 6000);
+  }
+  n.tick(160_000);
+  check('m30-shaped lag evidence never re-lets Ana to the alternating human',
+    n.nameFor('1266') === 'Ana' && n.nameFor('201') === null, JSON.stringify(n.stats()));
+}
+{
+  // Even strong evidence cannot join a lineage if the old id returned after the candidate first
+  // appeared. That is conversational alternation, not a one-way transport rotation.
+  const n = namer();
+  for (const t0 of [0, 10_000]) {
+    n.setTrackActive('old', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('old', false, t0 + 4000);
+  }
+  n.tick(20_000);
+  n.setTrackActive('new', true, 30_000); n.setTrackActive('new', false, 34_000);
+  n.setTrackActive('old', true, 36_000); n.setTrackActive('old', false, 38_000); // old id returned
+  for (const t0 of [40_000, 50_000, 60_000]) {
+    n.setTrackActive('new', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('new', false, t0 + 4000);
+  }
+  n.tick(80_000);
+  check('an old id that reappears makes the alleged successor fail closed',
+    n.nameFor('new') === null, JSON.stringify(n.stats().how));
+}
+{
+  // Simultaneous sources are never a lineage. Ambiguous overlap contributes no evidence in the
+  // first place, and the epoch order independently refuses the relationship.
+  const n = namer();
+  for (const t0 of [0, 10_000]) {
+    n.setTrackActive('old', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('old', false, t0 + 4000);
+  }
+  n.tick(20_000);
+  for (const t0 of [30_000, 40_000, 50_000]) {
+    n.setTrackActive('old', true, t0);
+    n.setTrackActive('new', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('new', false, t0 + 4000);
+    n.setTrackActive('old', false, t0 + 4000);
+  }
+  n.tick(70_000);
+  check('overlapping tracks never share a human name', n.nameFor('new') === null, JSON.stringify(n.stats().how));
+}
+{
+  // A strict roster elimination may name the first transport epoch before direct evidence arrives.
+  // The later epoch still has to prove itself by the full sustained successor gate; its evidence
+  // corroborates the human name rather than becoming weaker because the predecessor used a weaker
+  // (but valid) source. This is speaker B's path on meeting 26112.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('old');
+  n.recordRosterName('Ana', 0); n.recordRosterName('Ana', 10);
+  n.recordRosterCoverage(1, 1, 10);
+  n.tick(6000);
+  n.setTrackActive('old', true, 7000); n.setTrackActive('old', false, 9000);
+  check('the first epoch may have been named by strict elimination',
+    n.naming('old')?.source === 'elimination', JSON.stringify(n.stats().how));
+  for (const t0 of [20_000, 30_000, 40_000]) {
+    n.setTrackActive('new', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('new', false, t0 + 4000);
+  }
+  n.tick(60_000);
+  check('an elimination-named predecessor also waits for whole-meeting proof',
+    n.nameFor('new') === null, JSON.stringify(n.stats().how));
+  n.finish();
+  check('sustained direct evidence may succeed an elimination-named epoch',
+    n.nameFor('new') === 'Ana' && n.naming('new')?.source === 'evidence'
+      && n.naming('new')?.successorOf === 'old', JSON.stringify(n.stats().how));
+}
+
 if (failed) { console.error(`\n❌ track-namer: ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ track-namer: a track is named only from unambiguous, corroborated, exclusively-held evidence — and otherwise keeps a stable letter.');

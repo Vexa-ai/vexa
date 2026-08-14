@@ -87,6 +87,7 @@
         "group": "API reference",
         "pages": [
           "api/meetings",
+          "api/calendar",
           "api/agent",
           "api/errors"
         ]

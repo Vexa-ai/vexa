@@ -151,18 +151,19 @@ def build_production_app():
     # background sweep runs, on demand — paste-a-feed gets an immediate result instead of a
     # silent wait for the next tick (fail loud to the user). None-returns mean "no feed / sync
     # unavailable" and the route answers 404/503 accordingly.
-    async def _calendar_sync_now(user_id: int):
+    async def _calendar_sync_now(user_id: int, calendar_id: str | None = None):
         admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
         internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
         if not (admin_api_url and internal_secret):
             return None
         import json as _json
 
-        from .calendar_sync import fetch_configs, run_user_sync, store_stamp
+        from .calendar_sync import aggregate_stamps, fetch_configs, run_user_sync, store_stamp
 
         configs = await fetch_configs(admin_api_url, internal_secret)
-        cfg = next((c for c in configs or [] if c.get("user_id") == user_id), None)
-        if cfg is None:
+        selected = [c for c in configs or [] if c.get("user_id") == user_id and
+                    (calendar_id is None or c.get("calendar_id") == calendar_id)]
+        if not selected:
             return None
 
         async def _pub(uid, entry):
@@ -174,13 +175,22 @@ def build_production_app():
             except Exception:
                 pass
 
-        stamp = await run_user_sync(transcript_store, cfg, publish=_pub)
-        await store_stamp(redis_client, user_id, stamp)
-        return stamp
+        stamps = []
+        for cfg in selected:
+            stamp = await run_user_sync(transcript_store, cfg, publish=_pub)
+            stamp["calendar_id"] = cfg.get("calendar_id")
+            stamp["calendar_name"] = cfg.get("calendar_name")
+            await store_stamp(redis_client, user_id, stamp, cfg.get("calendar_id"))
+            stamps.append(stamp)
+        if calendar_id is not None:
+            return stamps[0]
+        aggregate = aggregate_stamps(stamps)
+        await store_stamp(redis_client, user_id, aggregate)
+        return aggregate
 
-    async def _calendar_sync_status(user_id: int):
+    async def _calendar_sync_status(user_id: int, calendar_id: str | None = None):
         from .calendar_sync import read_stamp
-        return await read_stamp(redis_client, user_id)
+        return await read_stamp(redis_client, user_id, calendar_id)
 
     app = create_app(
         transcript_store=transcript_store,
@@ -585,17 +595,23 @@ def _attach_background_loops(
             return
         if not hasattr(transcript_store, "create_planned_meeting"):
             return
-        from .calendar_sync import fetch_configs, run_user_sync, store_stamp
+        from .calendar_sync import aggregate_stamps, fetch_configs, run_user_sync, store_stamp
 
         async def _tick():
             configs = await fetch_configs(admin_api_url, internal_secret)
+            user_stamps: dict[int, list[dict]] = {}
             for cfg in configs or []:
                 try:  # one bad feed never stalls the sweep
                     stamp = await run_user_sync(transcript_store, cfg, publish=_cal_publish)
                 except Exception:
                     log.exception("calendar sync failed for user %s", cfg.get("user_id"))
                     continue
-                await store_stamp(redis_client, cfg["user_id"], stamp)
+                stamp["calendar_id"] = cfg.get("calendar_id")
+                stamp["calendar_name"] = cfg.get("calendar_name")
+                await store_stamp(redis_client, cfg["user_id"], stamp, cfg.get("calendar_id"))
+                user_stamps.setdefault(cfg["user_id"], []).append(stamp)
+            for user_id, stamps in user_stamps.items():
+                await store_stamp(redis_client, user_id, aggregate_stamps(stamps))
 
         while True:
             try:

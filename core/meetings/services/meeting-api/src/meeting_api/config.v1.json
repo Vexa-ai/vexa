@@ -317,6 +317,13 @@
    "targets": []
   },
   {
+   "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
+   "class": "defaulted",
+   "default": "0",
+   "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
+   "targets": []
+  },
+  {
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
