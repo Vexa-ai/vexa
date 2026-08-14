@@ -375,6 +375,7 @@ class InMemoryTranscriptStore:
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
+                                     calendar_source=None,
                                      workspace_source=None, attendees=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
@@ -391,6 +392,11 @@ class InMemoryTranscriptStore:
                 data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if calendar_source:
+            data["calendar_sources"] = [dict(calendar_source)]
+            data["calendar_connection_id"] = calendar_source["id"]
+            data["calendar_name"] = calendar_source.get("name") or "Calendar"
+            data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
         mid = self.seed_meeting(
@@ -457,6 +463,19 @@ class InMemoryTranscriptStore:
                 data["calendar_uid"] = updates["calendar_uid"]
             else:
                 data.pop("calendar_uid", None)
+        if "calendar_sources" in updates:
+            if updates["calendar_sources"]:
+                data["calendar_sources"] = updates["calendar_sources"]
+            else:
+                data.pop("calendar_sources", None)
+        for key in ("calendar_connection_id", "calendar_name"):
+            if key in updates:
+                if updates[key]:
+                    data[key] = updates[key]
+                else:
+                    data.pop(key, None)
+        if "calendar_managed" in updates:
+            data["calendar_managed"] = bool(updates["calendar_managed"])
         return self._planned_row(meeting_id)
 
     async def delete_planned_meeting(self, user_id, meeting_id):

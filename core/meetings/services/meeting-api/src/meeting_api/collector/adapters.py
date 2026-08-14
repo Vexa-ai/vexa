@@ -915,6 +915,7 @@ class SqlAlchemyTranscriptStore:
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
+                                     calendar_source=None,
                                      workspace_source=None, attendees=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
@@ -937,6 +938,11 @@ class SqlAlchemyTranscriptStore:
                 data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if calendar_source:
+            data["calendar_sources"] = [dict(calendar_source)]
+            data["calendar_connection_id"] = calendar_source["id"]
+            data["calendar_name"] = calendar_source.get("name") or "Calendar"
+            data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
         status = "scheduled" if scheduled_at else "idle"
@@ -1050,6 +1056,19 @@ class SqlAlchemyTranscriptStore:
                     data["calendar_uid"] = updates["calendar_uid"]
                 else:
                     data.pop("calendar_uid", None)
+            if "calendar_sources" in updates:
+                if updates["calendar_sources"]:
+                    data["calendar_sources"] = updates["calendar_sources"]
+                else:
+                    data.pop("calendar_sources", None)
+            for key in ("calendar_connection_id", "calendar_name"):
+                if key in updates:
+                    if updates[key]:
+                        data[key] = updates[key]
+                    else:
+                        data.pop(key, None)
+            if "calendar_managed" in updates:
+                data["calendar_managed"] = bool(updates["calendar_managed"])
 
             meeting.data = data
             flag_modified(meeting, "data")

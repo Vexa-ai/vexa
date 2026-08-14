@@ -204,12 +204,52 @@ def parse_ics(text: str, *, now: datetime,
     return {"events": events, "cancelled_uids": cancelled}
 
 
-async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: bool = True) -> dict:
+def _calendar_sources(data: dict) -> list[dict]:
+    raw = data.get("calendar_sources")
+    return [dict(source) for source in raw if isinstance(source, dict) and source.get("id")] \
+        if isinstance(raw, list) else []
+
+
+def _source_entry(calendar_id: str, calendar_name: Optional[str], uid: str,
+                  auto_join: bool) -> dict:
+    return {"id": calendar_id, "name": calendar_name or "Calendar", "uid": uid,
+            "auto_join": bool(auto_join)}
+
+
+def _source_updates(sources: list[dict]) -> dict:
+    primary = sources[0] if sources else None
+    return {
+        "calendar_sources": sources or None,
+        "calendar_uid": primary.get("uid") if primary else None,
+        "calendar_connection_id": primary.get("id") if primary else None,
+        "calendar_name": primary.get("name") if primary else None,
+        "auto_join": any(bool(source.get("auto_join", True)) for source in sources),
+    }
+
+
+def _replace_source(sources: list[dict], source: dict) -> list[dict]:
+    replaced = False
+    out = []
+    for item in sources:
+        if item.get("id") == source["id"]:
+            out.append(source)
+            replaced = True
+        else:
+            out.append(item)
+    if not replaced:
+        out.append(source)
+    return out
+
+
+async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: bool = True,
+                    calendar_id: Optional[str] = None,
+                    calendar_name: Optional[str] = None) -> dict:
     """Upsert one user's parsed feed against their meeting rows. Returns
     ``{"created": [...], "updated": [...], "cancelled": [...], counts...}`` where each list entry
     is ``{id, native, status, when}`` for the caller to fan out as WS frames.
 
-    Rules: a row is matched by ``data.calendar_uid``; an INTENT-status row follows the feed
+    Rules: a legacy row is matched by ``data.calendar_uid``; plural feeds match the tuple
+    ``(calendar connection id, UID)`` carried in ``data.calendar_sources``. An INTENT-status row follows the feed
     (time/title/link moves, cancellation); a row the bot FSM owns is NEVER touched; a feed event
     colliding with a MANUALLY planned row for the same (platform, native) ADOPTS that row (stamps
     the uid) instead of duplicating it."""
@@ -226,7 +266,14 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
         if row.get("shared"):
             continue  # another user's meeting mounted in — never a series/identity source here
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
-        uid = data.get("calendar_uid")
+        sources = _calendar_sources(data)
+        source = next((item for item in sources if item.get("id") == calendar_id), None) \
+            if calendar_id else None
+        # Existing single-feed rows predate calendar_sources. The first plural sweep adopts them
+        # by UID; once stamped, every later match is scoped by connection id.
+        uid = source.get("uid") if source else (
+            data.get("calendar_uid") if not sources and (not calendar_id or data.get("calendar_uid")) else None
+        )
         if uid and (data.get("workspace_id") or data.get("workspace_unbound")):
             stamp = str(row.get("start_time") or data.get("scheduled_at") or "")
             if uid not in series_stamp or stamp >= series_stamp[uid]:
@@ -248,6 +295,12 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 continue  # the FSM owns it now — sync never fights a live/finished meeting
             data = row.get("data") if isinstance(row.get("data"), dict) else {}
             updates: dict = {}
+            if calendar_id:
+                sources = _calendar_sources(data)
+                source = _source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+                next_sources = _replace_source(sources, source)
+                if next_sources != sources:
+                    updates.update(_source_updates(next_sources))
             if (data.get("title") or None) != ev["title"] and ev["title"]:
                 updates["title"] = ev["title"]
             if data.get("scheduled_at") != ev["scheduled_at"]:
@@ -274,9 +327,22 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
         # (a link-less event has no native identity to adopt by — always creates)
         manual = by_native.get((ev["platform"], ev["native_meeting_id"])) if ev["native_meeting_id"] else None
         if manual is not None:
-            if manual.get("status") in _INTENT and not (manual.get("data") or {}).get("calendar_uid"):
+            if manual.get("status") in _INTENT:
+                manual_data = manual.get("data") or {}
+                sources = _calendar_sources(manual_data)
+                if calendar_id:
+                    source = _source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+                    next_sources = _replace_source(sources, source)
+                    source_patch = _source_updates(next_sources)
+                    source_patch["calendar_managed"] = bool(
+                        manual_data.get("calendar_managed", False)
+                    )
+                elif manual_data.get("calendar_uid"):
+                    continue
+                else:
+                    source_patch = {"calendar_uid": ev["uid"]}
                 adopted = await store.update_planned_meeting(user_id, manual["id"], {
-                    "calendar_uid": ev["uid"],
+                    **source_patch,
                     "scheduled_at": ev["scheduled_at"],
                 })
                 if isinstance(adopted, dict) and not adopted.get("error"):
@@ -297,6 +363,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             meeting_url=ev["meeting_url"],
             auto_join=auto_join_default,
             calendar_uid=ev["uid"],
+            calendar_source=_source_entry(calendar_id, calendar_name, ev["uid"], auto_join_default)
+            if calendar_id else None,
             workspace_id=inherited_ws,
             workspace_source="series" if inherited_ws else None,
             attendees=ev.get("attendees") or None,
@@ -316,6 +384,24 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue
         if row.get("status") not in _INTENT:
             continue
+        if calendar_id:
+            data = row.get("data") if isinstance(row.get("data"), dict) else {}
+            sources = _calendar_sources(data)
+            remaining = [source for source in sources if source.get("id") != calendar_id]
+            managed = bool(data.get("calendar_managed", bool(sources)))
+            if remaining or not managed:
+                patch = _source_updates(remaining)
+                if not remaining and not managed:
+                    patch.pop("auto_join", None)
+                updated = await store.update_planned_meeting(
+                    user_id, row["id"], patch,
+                )
+                if isinstance(updated, dict) and not updated.get("error"):
+                    out["updated"].append({"id": updated["id"],
+                                           "native": updated.get("native_meeting_id"),
+                                           "status": updated.get("status"),
+                                           "when": (updated.get("data") or {}).get("scheduled_at")})
+                continue
         deleted = await store.delete_planned_meeting(user_id, row["id"])
         if deleted:
             out["cancelled"].append({"id": row["id"], "native": row.get("native_meeting_id"),

@@ -11,11 +11,27 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from meeting_api.calendar_sync import parse_ics, sync_user
+from meeting_api.calendar_sync import aggregate_stamps, parse_ics, sync_user
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 USER = 7
 NOW = datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_plural_stamps_preserve_legacy_user_status():
+    stamps = [
+        {"calendar_id": "work", "last_sync": "2026-07-08T12:00:00+00:00",
+         "last_error": None, "counts": {"created": 1, "updated": 2, "cancelled": 0}},
+        {"calendar_id": "personal", "last_sync": "2026-07-08T12:00:01+00:00",
+         "last_error": "feed unavailable", "counts": {"created": 0, "updated": 1}},
+    ]
+
+    assert aggregate_stamps(stamps) == {
+        "last_sync": "2026-07-08T12:00:01+00:00",
+        "last_error": "feed unavailable",
+        "counts": {"created": 1, "updated": 3, "cancelled": 0},
+        "calendars": stamps,
+    }
 
 
 def _ics(*events: str) -> str:
@@ -190,6 +206,82 @@ async def test_sync_other_users_rows_untouched():
     await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
     await sync_user(store, 99, parse_ics(_ics(), now=NOW))  # user 99's empty feed
     assert len(await store.list_meetings(USER)) == 1
+
+
+async def test_two_calendars_same_native_meeting_share_one_row_and_both_sources():
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work",
+                    auto_join_default=False)
+    result = await sync_user(store, USER, parsed, calendar_id="personal",
+                             calendar_name="Personal", auto_join_default=True)
+    assert result["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert row["data"]["calendar_sources"] == [
+        {"id": "work", "name": "Work", "uid": "uid-1", "auto_join": False},
+        {"id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": True},
+    ]
+    assert row["data"]["auto_join"] is True
+
+
+async def test_same_uid_in_two_calendars_is_scoped_by_connection_id():
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                    calendar_id="work", calendar_name="Work")
+    other = parse_ics(_ics(_event(
+        location="https://meet.google.com/xyz-abcd-efg",
+        start="20260709T150000Z",
+    )), now=NOW)
+    result = await sync_user(store, USER, other,
+                             calendar_id="personal", calendar_name="Personal")
+    assert result["counts"]["created"] == 1
+    rows = await store.list_meetings(USER)
+    assert len(rows) == 2
+    assert {row["data"]["calendar_connection_id"] for row in rows} == {"work", "personal"}
+
+
+async def test_disconnecting_one_calendar_preserves_other_source_and_recomputes_auto_join():
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work",
+                    auto_join_default=True)
+    await sync_user(store, USER, parsed, calendar_id="personal", calendar_name="Personal",
+                    auto_join_default=False)
+    result = await sync_user(store, USER, {"events": [], "cancelled_uids": []},
+                             calendar_id="work", calendar_name="Work")
+    assert result["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert row["data"]["calendar_sources"] == [
+        {"id": "personal", "name": "Personal", "uid": "uid-1", "auto_join": False},
+    ]
+    assert row["data"]["calendar_name"] == "Personal"
+    assert row["data"]["auto_join"] is False
+
+
+async def test_disconnecting_last_calendar_removes_calendar_managed_plan():
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                    calendar_id="work", calendar_name="Work")
+    result = await sync_user(store, USER, {"events": [], "cancelled_uids": []},
+                             calendar_id="work", calendar_name="Work")
+    assert result["counts"]["cancelled"] == 1
+    assert await store.list_meetings(USER) == []
+
+
+async def test_disconnecting_calendar_does_not_delete_adopted_manual_plan():
+    store = InMemoryTranscriptStore()
+    manual = await store.create_planned_meeting(
+        USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        title="Manual", auto_join=True,
+    )
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                    calendar_id="work", calendar_name="Work")
+    await sync_user(store, USER, {"events": [], "cancelled_uids": []},
+                    calendar_id="work", calendar_name="Work")
+    (row,) = await store.list_meetings(USER)
+    assert row["id"] == manual["id"]
+    assert row["data"]["title"] == "Manual"
+    assert "calendar_sources" not in row["data"]
 
 # ---- link-less imports (fail loud, v4 BUG-2) -----------------------------------------
 

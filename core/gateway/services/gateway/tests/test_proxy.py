@@ -288,6 +288,30 @@ def test_user_calendar_sync_routes_forward_to_meeting_api():
     assert r.status_code == 200
     assert downstream.last["method"] == "GET"
     assert downstream.last["url"] == "http://meeting-api/user/calendar/sync"
+
+
+def test_plural_calendar_routes_forward_to_owning_services():
+    client, downstream = _client()
+    client.get("/user/calendars", headers=AUTH)
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.post("/user/calendars", headers=AUTH,
+                json={"name": "Work", "ics_url": "https://cal.example/work.ics"})
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.patch("/user/calendars/work-1", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
+
+    client.post("/user/calendars/work-1/sync", headers=AUTH)
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/work-1/sync"
+
+    client.delete("/user/calendars/work-1", headers=AUTH)
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
     assert downstream.last["headers"]["x-user-id"] == "7"
 
     r = client.post("/user/calendar/sync", headers=AUTH)
