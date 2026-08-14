@@ -232,6 +232,13 @@ async function proxyRequest(
       });
     }
 
+    if (response.status === 204) {
+      return new NextResponse(null, {
+        status: 204,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+
     const data = await response.text();
     const upstreamAuthRejected =
       (response.status === 401 || response.status === 403) &&

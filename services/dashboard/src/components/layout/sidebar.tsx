@@ -21,6 +21,7 @@ import {
   Webhook,
   User,
   Bug,
+  CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -52,6 +53,7 @@ const adminNavigation = [
 // IS_HOSTED is determined at runtime via /api/config, not build time
 
 function BillingStatus() {
+  const [mountedAt] = useState(() => Date.now());
   const [status, setStatus] = useState<{
     subscription_status: string | null;
     subscription_tier: string | null;
@@ -74,7 +76,7 @@ function BillingStatus() {
     const daysLeft = Math.max(
       0,
       Math.ceil(
-        (new Date(subscription_trial_end).getTime() - Date.now()) /
+        (new Date(subscription_trial_end).getTime() - mountedAt) /
           (1000 * 60 * 60 * 24)
       )
     );
@@ -134,15 +136,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const handleJoinClick = () => {
     openJoinModal();
     onClose?.();
-  };
-
-  const handleAdminClick = (href: string) => {
-    if (isAdminAuthenticated) {
-      router.push(href);
-      onClose?.();
-    } else {
-      setShowAdminAuthModal(true);
-    }
   };
 
   const handleAdminAuthSuccess = () => {
@@ -262,6 +255,20 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                     />
                   </span>
                   MCP Setup
+                </Link>
+                {/* Profile */}
+                <Link
+                  href="/calendar"
+                  onClick={onClose}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    pathname.startsWith("/calendar")
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  <CalendarDays className="h-5 w-5" />
+                  Calendar
                 </Link>
                 {/* Profile */}
                 <Link

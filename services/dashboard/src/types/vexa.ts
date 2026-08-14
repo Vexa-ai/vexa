@@ -52,6 +52,15 @@ export interface MeetingData {
   completion_reason?: string;
   // Status history
   status_transition?: StatusTransition[];
+  calendar_uid?: string;
+  calendar_connection_id?: string;
+  calendar_name?: string;
+  calendar_sources?: Array<{
+    id: string;
+    name: string;
+    uid: string;
+    auto_join: boolean;
+  }>;
   [key: string]: unknown;
 }
 

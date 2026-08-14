@@ -2036,6 +2036,18 @@ export default function MeetingDetailPage() {
                 </div>
               )}
 
+              {currentMeeting.data?.calendar_sources && currentMeeting.data.calendar_sources.length > 0 && (
+                <div className="flex items-start gap-3">
+                  <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium">Imported from</p>
+                    <p className="text-sm text-muted-foreground">
+                      {currentMeeting.data.calendar_sources.map((source) => source.name).join(", ")}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Bot Settings - hidden for now, available via API */}
 
               {/* Languages (read-only when not active) */}
