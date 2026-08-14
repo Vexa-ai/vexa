@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { CalendarDays, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Bot, CalendarDays, Clock3, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { calendarAPI, type CalendarConnection, type CalendarSyncStamp } from "@/lib/calendar-api";
+import { vexaAPI } from "@/lib/api";
+import type { Meeting } from "@/types/vexa";
 
 function SyncStatus({ stamp }: { stamp?: CalendarSyncStamp }) {
   if (!stamp?.last_sync) return <span className="text-xs text-muted-foreground">Not synced yet</span>;
@@ -28,13 +30,35 @@ export default function CalendarPage() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [autoJoin, setAutoJoin] = useState(true);
+  const [botName, setBotName] = useState("Vexa");
+  const [savedBotName, setSavedBotName] = useState("Vexa");
+  const [upcoming, setUpcoming] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const items = await calendarAPI.list();
+      const [items, preferences, scheduled] = await Promise.all([
+        calendarAPI.list(),
+        calendarAPI.preferences(),
+        vexaAPI.getMeetings({ status: "scheduled", limit: 100 }),
+      ]);
       setCalendars(items);
+      setBotName(preferences.bot_name || "Vexa");
+      setSavedBotName(preferences.bot_name || "Vexa");
+      const now = Date.now();
+      setUpcoming(scheduled.meetings
+        .filter((meeting) => {
+          const at = typeof meeting.data.scheduled_at === "string"
+            ? Date.parse(meeting.data.scheduled_at)
+            : Number.NaN;
+          return Number.isFinite(at)
+            && at >= now
+            && meeting.data.auto_join !== false
+            && Array.isArray(meeting.data.calendar_sources)
+            && meeting.data.calendar_sources.length > 0;
+        })
+        .sort((a, b) => Date.parse(String(a.data.scheduled_at)) - Date.parse(String(b.data.scheduled_at))));
       const entries = await Promise.all(items.map(async (calendar) => {
         try {
           const status = await calendarAPI.status(calendar.id);
@@ -52,6 +76,22 @@ export default function CalendarPage() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const saveBotName = async () => {
+    const value = botName.trim();
+    if (!value) return;
+    setBusy("bot-name");
+    try {
+      const preferences = await calendarAPI.updatePreferences({ bot_name: value });
+      setBotName(preferences.bot_name);
+      setSavedBotName(preferences.bot_name);
+      toast.success("Default bot name saved");
+    } catch (error) {
+      toast.error("Could not save bot name", { description: (error as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const addCalendar = async (event: FormEvent) => {
     event.preventDefault();
@@ -187,6 +227,52 @@ export default function CalendarPage() {
           </form>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5" /> Auto-join settings</CardTitle>
+          <CardDescription>This name is used by every bot that joins from your connected calendars.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="w-full max-w-md space-y-1.5">
+            <Label htmlFor="calendar-bot-name">Default bot name</Label>
+            <Input id="calendar-bot-name" value={botName} onChange={(event) => setBotName(event.target.value)} maxLength={100} placeholder="Vexa" />
+          </div>
+          <Button type="button" variant="secondary" onClick={() => void saveBotName()} disabled={busy === "bot-name" || !botName.trim() || botName.trim() === savedBotName}>
+            {busy === "bot-name" ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Save</>}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-medium">Upcoming auto-joins</h2>
+          <p className="text-sm text-muted-foreground">Meetings imported from your calendars that Vexa is scheduled to join.</p>
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading meetings…</div>
+        ) : upcoming.length === 0 ? (
+          <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No upcoming auto-joins found.</CardContent></Card>
+        ) : upcoming.map((meeting) => {
+          const sources = meeting.data.calendar_sources ?? [];
+          return (
+            <Card key={meeting.id}>
+              <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center">
+                <Clock3 className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{meeting.data.title || meeting.data.name || "Untitled meeting"}</p>
+                  <p className="text-sm text-muted-foreground">{new Date(String(meeting.data.scheduled_at)).toLocaleString()}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sources.map((source) => (
+                    <span key={`${meeting.id}:${source.id}:${source.uid}`} className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">{source.name}</span>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-medium">Connected calendars</h2>

@@ -230,33 +230,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                   <Webhook className="h-5 w-5" />
                   Webhooks
                 </Link>
-                {/* MCP Setup */}
-                <Link
-                  href="/mcp"
-                  onClick={onClose}
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                    pathname.startsWith("/mcp")
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  )}
-                >
-                  <span className="h-5 w-5 flex items-center justify-center">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src="/icons/icons8-mcp-96 (1).png"
-                      alt="MCP"
-                      width={20}
-                      height={20}
-                      className={cn(
-                        "dark:invert opacity-70",
-                        pathname.startsWith("/mcp") && "invert dark:invert-0 opacity-100"
-                      )}
-                    />
-                  </span>
-                  MCP Setup
-                </Link>
-                {/* Profile */}
+                {/* Calendar */}
                 <Link
                   href="/calendar"
                   onClick={onClose}

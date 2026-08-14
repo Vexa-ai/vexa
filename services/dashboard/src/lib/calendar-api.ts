@@ -17,6 +17,10 @@ export interface CalendarSyncStamp {
   counts?: { created: number; updated: number; cancelled: number };
 }
 
+export interface CalendarPreferences {
+  bot_name: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(withBasePath(`/api/vexa${path}`), {
     cache: "no-store",
@@ -64,5 +68,13 @@ export const calendarAPI = {
     return request<CalendarSyncStamp | Record<string, never>>(
       `/user/calendars/${encodeURIComponent(id)}/sync`,
     );
+  },
+  preferences() {
+    return request<CalendarPreferences>("/user/calendar");
+  },
+  updatePreferences(input: CalendarPreferences) {
+    return request<CalendarPreferences>("/user/calendar", {
+      method: "PUT", body: JSON.stringify(input),
+    });
   },
 };
