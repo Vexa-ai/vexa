@@ -181,17 +181,22 @@ async def test_teardown_order_is_stop_capture_then_drain_then_close():
     tasks = [asyncio.create_task(_sleeper())]
     await asyncio.sleep(0)  # let the sleeper start
 
+    class _Acts:
+        close = rec.make("acts.close")
+
     await _teardown(
         session=_Session(), dave_client=_Dave(), voice_protocol=_Voice(), client=_Client(),
-        connect_task=None, background_tasks=tasks, redis_client=_Redis(),
+        connect_task=None, background_tasks=tasks, acts_client=_Acts(), redis_client=_Redis(),
     )
 
     # capture stops BEFORE the final drain (audio arriving mid-teardown is flushed, not lost)
     assert rec.calls.index("dave.stop") < rec.calls.index("flush_all")
     # last lifecycle event postdates the last segment flush
     assert rec.calls.index("flush_all") < rec.calls.index("emit_completed:left_alone")
-    # poll loops are dead BEFORE redis closes (the live-witness ConnectionError race)
+    # every redis user is dead BEFORE redis closes (the live-witness ConnectionError race):
+    # the poll loops AND the acts.v1 pubsub listener
     assert rec.calls.index("task.cancelled") < rec.calls.index("redis.aclose")
+    assert rec.calls.index("acts.close") < rec.calls.index("redis.aclose")
     assert rec.calls[-1] == "redis.aclose"
 
 
@@ -208,6 +213,33 @@ async def test_teardown_tolerates_absent_components():
 
     await _teardown(
         session=None, dave_client=None, voice_protocol=None, client=_Client(),
-        connect_task=None, background_tasks=[], redis_client=_Redis(),
+        connect_task=None, background_tasks=[], acts_client=None, redis_client=_Redis(),
     )
     assert rec.calls == ["client.close", "redis.aclose"]
+
+
+async def test_teardown_reaches_redis_close_even_when_a_step_raises():
+    from discord_bot.bot import _teardown
+
+    rec = _Recorder()
+
+    class _DeadVoice:
+        # the dead-gateway case: teardown's most likely trigger is also the one where
+        # disconnect raises; cleanup after it must still run
+        async def disconnect(self, force=False):
+            raise ConnectionResetError("gateway already dead")
+
+    class _Client:
+        close = rec.make("client.close")
+
+    class _Acts:
+        close = rec.make("acts.close")
+
+    class _Redis:
+        aclose = rec.make("redis.aclose")
+
+    await _teardown(
+        session=None, dave_client=None, voice_protocol=_DeadVoice(), client=_Client(),
+        connect_task=None, background_tasks=[], acts_client=_Acts(), redis_client=_Redis(),
+    )
+    assert rec.calls == ["client.close", "acts.close", "redis.aclose"]
