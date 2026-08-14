@@ -1,5 +1,6 @@
 import { createTranscriptManager, groupSegments } from '/_shared/transcript-rendering.js';
 import { buildContestPlan, toTranscriptSegment } from './teams-csrc-live-model.mjs';
+import { safeResourceUrl } from './safe-resource-url.mjs';
 
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -67,7 +68,7 @@ export function mountTeamsLiveTranscript(root, result, { audioUrl, dataUrl } = {
   const stateCount = root.querySelector('#state-count');
   const speed = root.querySelector('#speed');
   const start = root.querySelector('#start');
-  audio.src = audioUrl ?? '';
+  audio.src = safeResourceUrl(audioUrl ?? '/audio.wav', { allowBlob: true });
 
   let manager = createTranscriptManager();
   let actionIndex = 0;
@@ -204,8 +205,8 @@ export function mountTeamsLiveTranscript(root, result, { audioUrl, dataUrl } = {
 
 export async function bootTeamsLiveTranscript(root = document.getElementById('app')) {
   const params = new URLSearchParams(location.search);
-  const dataUrl = params.get('data') || '/result.json';
-  const audioUrl = params.get('audio') || '/audio.wav';
+  const dataUrl = safeResourceUrl(params.get('data') || '/result.json');
+  const audioUrl = safeResourceUrl(params.get('audio') || '/audio.wav', { allowBlob: true });
   const result = await fetch(dataUrl).then((response) => {
     if (!response.ok) throw new Error(`${dataUrl}: HTTP ${response.status}`);
     return response.json();

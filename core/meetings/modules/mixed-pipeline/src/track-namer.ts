@@ -122,14 +122,52 @@ const PLACEHOLDER_NAMES = new Set([
   'nieznany użytkownik', 'неизвестный пользователь', 'гость', 'участник',
 ]);
 
+const IDENTITY_QUALIFIERS = new Set([
+  'unverified', 'guest', 'bot', 'external', 'extern', 'invite', 'invité', 'gast', 'гость',
+]);
+
+const stripParenthesizedIdentitySuffix = (
+  value: string,
+  accepts: (suffix: string) => boolean,
+): string => {
+  const trimmed = value.trimEnd();
+  if (!trimmed.endsWith(')')) return trimmed;
+  const open = trimmed.lastIndexOf('(');
+  if (open <= 0 || !/\s/u.test(trimmed[open - 1])) return trimmed;
+  const suffix = trimmed.slice(open + 1, -1);
+  return accepts(suffix) ? trimmed.slice(0, open).trimEnd() : trimmed;
+};
+
+const isAsciiDigits = (value: string): boolean => {
+  if (!value) return false;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
+};
+
+const stripNumericIdentitySuffix = (value: string): string => {
+  let start = value.length;
+  while (start > 0) {
+    const code = value.charCodeAt(start - 1);
+    if (code < 48 || code > 57) break;
+    start -= 1;
+  }
+  if (start === value.length || start === 0 || !/\s/u.test(value[start - 1])) return value;
+  return value.slice(0, start).trimEnd();
+};
+
 /** Teams' qualifiers, stripped for identity comparison only — never for display. */
 export function normalizeNameForIdentity(value: string): string {
-  return (value || '')
-    .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|гость)\)\s*$/giu, '')
-    .replace(/\s+\(\d+\)\s*$/, '')
-    .replace(/\s+\d+$/, '')
-    .trim()
-    .toLowerCase();
+  let normalized = String(value || '').trimEnd();
+  normalized = stripParenthesizedIdentitySuffix(
+    normalized,
+    (suffix) => IDENTITY_QUALIFIERS.has(suffix.toLowerCase()),
+  );
+  normalized = stripParenthesizedIdentitySuffix(normalized, isAsciiDigits);
+  normalized = stripNumericIdentitySuffix(normalized);
+  return normalized.trim().toLowerCase();
 }
 
 export type NameEvidenceKind = 'dom' | 'caption';

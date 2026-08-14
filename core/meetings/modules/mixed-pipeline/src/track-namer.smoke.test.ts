@@ -10,7 +10,7 @@
  *
  * Run: npx tsx src/track-namer.smoke.test.ts
  */
-import { TrackNamer, speakerLabel } from './track-namer.js';
+import { normalizeNameForIdentity, TrackNamer, speakerLabel } from './track-namer.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail?: string): void => {
@@ -21,6 +21,12 @@ const check = (name: string, cond: boolean, detail?: string): void => {
 /** A namer with the lag switched OFF, so a test can state times in audio terms. */
 const namer = (over: Partial<NonNullable<ConstructorParameters<typeof TrackNamer>[0]>> = {}) =>
   new TrackNamer({ settleMs: 0, minEpisodeMs: 600, corroborations: 2, rosterSettleMs: 5000, ...over });
+
+check('identity suffix normalization keeps its existing semantics without a backtracking regex',
+  normalizeNameForIdentity('Leo (Unverified)') === 'leo'
+  && normalizeNameForIdentity('Ana (2)') === 'ana'
+  && normalizeNameForIdentity('Ana 2') === 'ana'
+  && normalizeNameForIdentity('Project (notes)') === 'project (notes)');
 
 // ── 1) Stable letters when nothing names anybody ────────────────────────────────────────────────
 {

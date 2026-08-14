@@ -1,5 +1,6 @@
 import { createTranscriptManager, groupSegments } from '/_shared/transcript-rendering.js';
 import { buildContestPlan, toTranscriptSegment } from './teams-csrc-live-model.mjs';
+import { safeResourceUrl } from './safe-resource-url.mjs';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -57,7 +58,7 @@ export function mountTeamsPipelineLive(root, reference, { audioUrl, streamUrl, s
   const updateLatency = root.querySelector('#update-latency');
   const stateCount = root.querySelector('#state-count');
   const start = root.querySelector('#start');
-  audio.src = audioUrl;
+  audio.src = safeResourceUrl(audioUrl, { allowBlob: true });
 
   let manager = createTranscriptManager();
   let received = [];
@@ -128,7 +129,7 @@ export function mountTeamsPipelineLive(root, reference, { audioUrl, streamUrl, s
     raf = requestAnimationFrame(followClock);
   };
 
-  const stream = new EventSource(streamUrl);
+  const stream = new EventSource(safeResourceUrl(streamUrl));
   stream.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     if (payload.type === 'started') {
@@ -168,7 +169,7 @@ export function mountTeamsPipelineLive(root, reference, { audioUrl, streamUrl, s
     start.disabled = true;
     start.textContent = 'Pipeline starting…';
     audio.currentTime = 0;
-    const response = await fetch(startUrl);
+    const response = await fetch(safeResourceUrl(startUrl));
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.message || `${startUrl}: HTTP ${response.status}`);
@@ -181,12 +182,16 @@ export function mountTeamsPipelineLive(root, reference, { audioUrl, streamUrl, s
 
 export async function bootTeamsPipelineLive(root = document.getElementById('app')) {
   const params = new URLSearchParams(location.search);
-  const dataUrl = params.get('data') || '/result-live.json';
-  const audioUrl = params.get('audio') || '/audio.wav';
-  const backend = params.get('backend') || 'http://127.0.0.1:8771';
+  const dataUrl = safeResourceUrl(params.get('data') || '/result-live.json');
+  const audioUrl = safeResourceUrl(params.get('audio') || '/audio.wav', { allowBlob: true });
+  const backend = safeResourceUrl(params.get('backend') || 'http://127.0.0.1:8771');
   const reference = await fetch(dataUrl).then((response) => {
     if (!response.ok) throw new Error(`${dataUrl}: HTTP ${response.status}`);
     return response.json();
   });
-  mountTeamsPipelineLive(root, reference, { audioUrl, streamUrl: `${backend}/events`, startUrl: `${backend}/start` });
+  mountTeamsPipelineLive(root, reference, {
+    audioUrl,
+    streamUrl: new URL('/events', backend).href,
+    startUrl: new URL('/start', backend).href,
+  });
 }

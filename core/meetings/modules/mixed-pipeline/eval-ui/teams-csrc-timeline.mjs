@@ -140,7 +140,7 @@ export function mountTeamsCsrcTimeline(root, model, { audioUrl, dataUrl, annotat
   const tip = root.querySelector('#tooltip');
   const legend = root.querySelector('#legend');
   const receipt = root.querySelector('#receipt');
-  audio.src = audioUrl ?? '';
+  audio.src = safeResourceUrl(audioUrl ?? '/audio.wav', { allowBlob: true });
 
   const palette = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
   const left = 86, right = 14, top = 34, laneHeight = 50, singleHeight = 42, bottom = 34;
@@ -313,9 +313,10 @@ export function mountTeamsCsrcTimeline(root, model, { audioUrl, dataUrl, annotat
 
 export async function bootTeamsCsrcTimeline(root = document.getElementById('app')) {
   const params = new URLSearchParams(location.search);
-  const dataUrl = params.get('data') || '/result.json';
-  const audioUrl = params.get('audio') || '/audio.wav';
-  const annotationsUrl = params.get('annotations');
+  const dataUrl = safeResourceUrl(params.get('data') || '/result.json');
+  const audioUrl = safeResourceUrl(params.get('audio') || '/audio.wav', { allowBlob: true });
+  const annotationsParam = params.get('annotations');
+  const annotationsUrl = annotationsParam ? safeResourceUrl(annotationsParam) : null;
   const [result, annotations] = await Promise.all([
     fetch(dataUrl).then((response) => {
       if (!response.ok) throw new Error(`${dataUrl}: HTTP ${response.status}`);
@@ -332,3 +333,4 @@ export async function bootTeamsCsrcTimeline(root = document.getElementById('app'
     audioUrl, dataUrl, annotationsUrl,
   });
 }
+import { safeResourceUrl } from './safe-resource-url.mjs';
