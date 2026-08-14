@@ -157,12 +157,13 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
     session: Optional[MeetingSession] = None
     voice_protocol: Optional[DAVEVoiceProtocol] = None
     dave_client: Optional[DAVEVoiceClient] = None
+    acts_client: Optional[RedisPubSubClient] = None
     background_tasks: list[asyncio.Task[None]] = []
     stop_event = asyncio.Event()
 
     @client.event
     async def on_ready() -> None:
-        nonlocal session, voice_protocol, dave_client
+        nonlocal session, voice_protocol, dave_client, acts_client
         session = MeetingSession(
             invocation=inv, lifecycle=lifecycle, transcript=transcript,
             transcribe=transcribe_fn, name_for=lambda uid: _name_for(channel.guild, name_cache, uid),
@@ -213,7 +214,7 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
             stop_event.set()
             return
 
-        acts_client = RedisPubSubClient(redis_client)
+        acts_client = RedisPubSubClient(redis_client)  # hoisted: _teardown must close its listener
         acts = ActsSource(acts_client, meeting_id, log=_log)
         await acts.subscribe(session.handle_act)
 
@@ -253,9 +254,22 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
         client=client,
         connect_task=connect_task,
         background_tasks=background_tasks,
+        acts_client=acts_client,
         redis_client=redis_client,
     )
     return 0
+
+
+async def _best_effort(step: str, coro: "Any", log: Callable[[str], None] = _log) -> None:
+    """Await one teardown step, logging instead of raising. Teardown must ALWAYS reach the redis
+    close at the end: the most likely trigger for teardown is a dead gateway (routed here by
+    _on_connect_task_done), which is exactly when voice_protocol.disconnect() or client.close()
+    can raise. A raise mid-teardown skipping the remaining cleanup is the same bug class this
+    function chain exists to fix."""
+    try:
+        await coro
+    except Exception as e:  # noqa: BLE001 (teardown: report and continue, never abort cleanup)
+        log(f"teardown: {step} failed: {e!r}")
 
 
 async def _teardown(
@@ -266,32 +280,36 @@ async def _teardown(
     client: Any,
     connect_task: Optional["asyncio.Task[Any]"],
     background_tasks: list["asyncio.Task[None]"],
+    acts_client: Optional[Any],
     redis_client: Any,
 ) -> None:
-    """Ordered shutdown. The order is load-bearing, in three ways:
+    """Ordered, raise-proof shutdown. The order is load-bearing, in three ways:
 
     1. Stop the DAVE receive pipeline BEFORE the final drain: PCM keeps arriving via on_pcm until
        dave_client.stop() returns, so draining first leaves a window whose audio is never flushed.
     2. flush_all() then emit_completed(): the final lifecycle event must postdate the last segment.
-    3. Cancel the poll loops BEFORE closing redis: they run on their own tasks, and a flush that
-       races the aclose() below dies with a redis ConnectionError at teardown (live witness,
-       2026-08-14).
+    3. Every redis USER dies before redis closes: the flush/alone poll loops AND the acts.v1
+       pubsub listener (RedisPubSubClient's _listen task; missing it left the identical
+       ConnectionError in the post-fix live-witness log). Each step is best-effort so a raising
+       step cannot skip the ones after it; the redis close itself is the last word.
     """
     if dave_client is not None:
-        await dave_client.stop()
+        await _best_effort("dave_client.stop", dave_client.stop())
     if session is not None:
-        await session.flush_all()
-        await session.emit_completed(session.stop_reason or "stopped")
+        await _best_effort("flush_all", session.flush_all())
+        await _best_effort("emit_completed", session.emit_completed(session.stop_reason or "stopped"))
     if voice_protocol is not None:
-        await voice_protocol.disconnect(force=True)
-    await client.close()
+        await _best_effort("voice disconnect", voice_protocol.disconnect(force=True))
+    await _best_effort("client.close", client.close())
     if connect_task is not None:
         connect_task.cancel()
     for task in background_tasks:
         task.cancel()
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
-    await redis_client.aclose()
+    if acts_client is not None:
+        await _best_effort("acts listener close", acts_client.close())
+    await _best_effort("redis close", redis_client.aclose())
 
 
 async def _flush_loop(session: MeetingSession, stop_event: asyncio.Event) -> None:
