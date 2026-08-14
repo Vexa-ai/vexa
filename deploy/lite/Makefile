@@ -41,15 +41,22 @@ MINIO_BUCKET     ?= vexa
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
 # For a self-host (or a witness box) with NO hosted token and NO GPU, `make up LOCAL_STT=1` runs a
-# bundled faster-whisper CPU server on the tiny model and auto-wires TRANSCRIPTION_SERVICE_URL to
-# it — transcripts work out of the box, slower but real. The client sends model=whisper-1 (the
-# OpenAI id); faster-whisper-server accepts it and serves WHISPER_MODEL. Override for a bigger
-# model (WHISPER_MODEL=Systran/faster-whisper-small.en) or a GPU image.
+# bundled faster-whisper CPU server on the small English model and auto-wires
+# TRANSCRIPTION_SERVICE_URL to it — transcripts work out of the box with enough accuracy for
+# interactive meetings. The client sends model=whisper-1 (the OpenAI id);
+# faster-whisper-server accepts it and serves WHISPER_MODEL. Override the model or image when a
+# deployment has different accuracy, language, or accelerator requirements.
 LOCAL_STT        ?=
 WHISPER_CONTAINER ?= vexa-lite-whisper
 WHISPER_IMAGE    ?= fedirz/faster-whisper-server:latest-cpu
-WHISPER_MODEL    ?= Systran/faster-whisper-tiny.en
+WHISPER_MODEL    ?= Systran/faster-whisper-small.en
+WHISPER_MODEL_CACHE ?= vexa-whisper-model-cache
 HOST_STT_PORT    ?= 8083
+
+# Four seconds preserves the two-pass LocalAgreement confirmation while avoiding the default
+# 15-second tail on short, finished utterances. The runtime profile forwards this deployment-level
+# floor to every spawned meeting bot; callers can still override it explicitly in a workload spec.
+BOT_SPEAKER_IDLE_TIMEOUT_SEC ?= 4
 
 define set_tag
 	@echo "Setting '$(1)' → $(2)..."
@@ -153,6 +160,7 @@ up: preflight
 			docker rm -f $(WHISPER_CONTAINER) 2>/dev/null || true; \
 			docker run -d --name $(WHISPER_CONTAINER) --network $(NETWORK) --restart unless-stopped \
 				-e WHISPER__MODEL=$(WHISPER_MODEL) -e WHISPER__INFERENCE_DEVICE=cpu -e WHISPER__TTL=-1 \
+				-v $(WHISPER_MODEL_CACHE):/root/.cache/huggingface \
 				-p $(HOST_STT_PORT):8000 \
 				$(WHISPER_IMAGE) > /dev/null; \
 		fi; \
@@ -169,6 +177,7 @@ up: preflight
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
+		-e BOT_SPEAKER_IDLE_TIMEOUT_SEC="$(BOT_SPEAKER_IDLE_TIMEOUT_SEC)" \
 		-e MINIO_ENDPOINT=$(MINIO_CONTAINER):9000 -e MINIO_ACCESS_KEY=$(MINIO_ACCESS_KEY) \
 		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
