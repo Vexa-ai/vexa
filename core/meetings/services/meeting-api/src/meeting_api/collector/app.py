@@ -176,6 +176,14 @@ def build_router(
         )
         return JSONResponse(content=doc)
 
+    # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.
+    # Keep the set explicit so list pagination can exclude plans in SQL rather than making
+    # clients discard rows after a page has already been cut.
+    _NON_PLANNED_STATUSES = (
+        "requested", "joining", "awaiting_admission", "active", "needs_human_help",
+        "stopping", "completed", "failed",
+    )
+
     # --- GET /meetings → api.v1 MeetingListResponse ---
     @router.get("/meetings")
     async def get_meetings(
@@ -186,11 +194,13 @@ def build_router(
         offset: Optional[int] = Query(default=None, ge=0),
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
+        exclude_planned: bool = Query(default=False),
     ):
         user_id = _resolve_user_id(x_user_id)
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        status_filter = status if status is not None else (_NON_PLANNED_STATUSES if exclude_planned else None)
         meetings, _has_more = await store.list_meetings(
-            user_id, status=status, platform=platform, limit=limit, offset=offset,
+            user_id, status=status_filter, platform=platform, limit=limit, offset=offset,
             member_workspaces=member_workspaces, list_view=True,
         )
         log_event(
@@ -212,10 +222,12 @@ def build_router(
         offset: Optional[int] = Query(default=None, ge=0),
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
+        exclude_planned: bool = Query(default=False),
     ):
         user_id = _resolve_user_id(x_user_id)
+        status_filter = status if status is not None else (_NON_PLANNED_STATUSES if exclude_planned else None)
         meetings, has_more = await store.list_meetings(
-            user_id, status=status, platform=platform, limit=limit, offset=offset,
+            user_id, status=status_filter, platform=platform, limit=limit, offset=offset,
             list_view=True,
         )
         log_event(

@@ -126,6 +126,23 @@ def test_bots_has_more_reflects_more_not_hardcoded_false():
     assert r2.json()["has_more"] is False
 
 
+def test_bots_excludes_planned_rows_before_page_and_has_more_are_computed():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="past",
+                       status="completed", created_at="2026-08-14T20:00:00Z")
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future-a",
+                       status="scheduled", created_at="2026-08-14T22:00:00Z")
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future-b",
+                       status="scheduled", created_at="2026-08-14T21:00:00Z")
+    c = _client(store)
+
+    response = c.get("/bots", headers=HEADERS, params={"exclude_planned": "true", "limit": 1})
+
+    assert response.status_code == 200
+    assert [meeting["status"] for meeting in response.json()["meetings"]] == ["completed"]
+    assert response.json()["has_more"] is False
+
+
 async def test_list_view_applies_default_limit_and_has_more():
     """The store's list-view path caps an unbounded request at DEFAULT_LIST_LIMIT and reports more."""
     store = InMemoryTranscriptStore()
