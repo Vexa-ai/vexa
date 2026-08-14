@@ -298,10 +298,26 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 ```
 
 <Note>
-**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
-call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
-return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+Create the bot with `"voice_agent_enabled": true` to enable speech. `POST …/speak` accepts exactly
+one of `text` or `audio_base64`. Base64 audio may be a WAV (`"format":"wav"`) or mono s16le PCM
+(`"format":"pcm","sample_rate":24000`); PCM is normalized to WAV before it reaches the bot.
+MP3, Opus, and `audio_url` are not accepted in this initial bounded implementation. Interrupt
+playback with `DELETE …/speak`.
+
+**Config** (`PUT …/config`, change language/task mid-call) is still not wired in the v0.12
+open-core stack. Send-a-bot, stop, speak, **running bots** (`GET /bots/status`), list, and transcripts
+are service-wired; speak still requires the live meeting proof described on the roadmap.
 </Note>
+
+```bash Play generated PCM into the meeting
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"audio_base64":"<base64 s16le PCM>","format":"pcm","sample_rate":24000}'
+
+# Barge in / stop playback
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+  -H "X-API-Key: $API_KEY"
+```
 
 ```bash List meetings — GET /meetings
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"

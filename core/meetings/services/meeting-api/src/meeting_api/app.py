@@ -271,6 +271,11 @@ def create_app(
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
 
+    # --- voice bridge: POST/DELETE /bots/{platform}/{native}/speak → acts.v1 over redis ---
+    from .lifecycle.speak_router import build_speak_router
+
+    app.include_router(build_speak_router(meeting_repo, command_publisher))
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()

@@ -31,6 +31,7 @@ const CORE = [
   ["/bots/{platform}/{native_meeting_id}", "delete"],
   ["/bots/{platform}/{native_meeting_id}/config", "put"],
   ["/bots/{platform}/{native_meeting_id}/speak", "post"],
+  ["/bots/{platform}/{native_meeting_id}/speak", "delete"],
   ["/transcripts/{platform}/{native_meeting_id}", "get"],
   ["/recordings", "get"], ["/recordings/{recording_id}", "get"],
   ["/meetings", "get"],

@@ -55,12 +55,6 @@
       "issue": "https://github.com/Vexa-ai/vexa/issues/591"
     },
     {
-      "method": "DELETE",
-      "path": "/bots/{platform}/{native_meeting_id}/speak",
-      "reason": "Bot-command channel (stop TTS) — live acts.v1 PUBLISH, no downstream handler in the 0.12 carve. The POST /speak counterpart IS forwarded by the gateway but likewise has no backend; the DELETE (stop) half is not even registered.",
-      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
-    },
-    {
       "method": "GET",
       "path": "/bots/id/{meeting_id}",
       "reason": "api.v1 declares it (desc: 'Forward to meeting-api GET /bots/{meeting_id}') but the gateway maps the meeting-detail read to GET /meetings/{meeting_id} instead; the dashboard reads /meetings/{id}. Deferred reconcile (drop from api.v1 or implement) is a lane:contract change (A1/A2, MATURITY-FINDINGS.md).",

@@ -183,6 +183,7 @@ async def request_bot(
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
     transcribe_enabled: bool = True,
+    voice_agent_enabled: Optional[bool] = None,
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
@@ -487,6 +488,7 @@ async def request_bot(
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
         # record still yields a fixture. Both ride the same upload endpoint below.
         capture_signal_enabled=capture_signal_enabled,
+        voice_agent_enabled=voice_agent_enabled,
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
         userdata_s3_path=auth_userdata_path,
