@@ -8,6 +8,19 @@ export interface CalendarMeetingGroup {
   meetings: Meeting[];
 }
 
+export function isUpcomingAutoJoin(meeting: Meeting, nowMs: number): boolean {
+  const at = typeof meeting.data.scheduled_at === "string"
+    ? Date.parse(meeting.data.scheduled_at)
+    : Number.NaN;
+  return Number.isFinite(at)
+    && at >= nowMs
+    && meeting.data.auto_join !== false
+    && meeting.platform !== "unknown"
+    && Boolean(meeting.platform_specific_id)
+    && Array.isArray(meeting.data.calendar_sources)
+    && meeting.data.calendar_sources.some((source) => source.auto_join !== false);
+}
+
 export function groupMeetingsByCalendar(
   calendars: CalendarConnection[],
   meetings: Meeting[],

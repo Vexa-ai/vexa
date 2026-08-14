@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { calendarAPI, type CalendarConnection, type CalendarSyncStamp } from "@/lib/calendar-api";
-import { groupMeetingsByCalendar, meetingParticipantCount } from "@/lib/calendar-view";
+import { groupMeetingsByCalendar, isUpcomingAutoJoin, meetingParticipantCount } from "@/lib/calendar-view";
 import { vexaAPI } from "@/lib/api";
 import type { Meeting } from "@/types/vexa";
 
@@ -62,16 +62,7 @@ export default function CalendarPage() {
       setCalendarBotNames(Object.fromEntries(items.map((calendar) => [calendar.id, calendar.bot_name || "Vexa"])));
       const now = Date.now();
       setUpcoming(scheduled.meetings
-        .filter((meeting) => {
-          const at = typeof meeting.data.scheduled_at === "string"
-            ? Date.parse(meeting.data.scheduled_at)
-            : Number.NaN;
-          return Number.isFinite(at)
-            && at >= now
-            && meeting.data.auto_join !== false
-            && Array.isArray(meeting.data.calendar_sources)
-            && meeting.data.calendar_sources.length > 0;
-        })
+        .filter((meeting) => isUpcomingAutoJoin(meeting, now))
         .sort((a, b) => Date.parse(String(a.data.scheduled_at)) - Date.parse(String(b.data.scheduled_at))));
       const entries = await Promise.all(items.map(async (calendar) => {
         try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMeetingsByCalendar, meetingParticipantCount } from "../src/lib/calendar-view";
+import { groupMeetingsByCalendar, isUpcomingAutoJoin, meetingParticipantCount } from "../src/lib/calendar-view";
 import type { CalendarConnection } from "../src/lib/calendar-api";
 import type { Meeting } from "../src/types/vexa";
 
@@ -49,5 +49,19 @@ describe("calendar schedule view", () => {
     const repeated = meeting("same", "2026-08-14T15:00:00Z", ["work", "work"]);
     expect(groupMeetingsByCalendar(calendars, [repeated])[0].meetings).toHaveLength(1);
     expect(meetingParticipantCount(repeated)).toBe(2);
+  });
+
+  it("includes only future, joinable meetings armed by a calendar source", () => {
+    const future = meeting("future", "2026-08-14T15:00:00Z", ["work"]);
+    expect(isUpcomingAutoJoin(future, Date.parse("2026-08-14T14:00:00Z"))).toBe(true);
+
+    const linkless = meeting("linkless", "2026-08-14T15:00:00Z", ["work"]);
+    linkless.platform = "unknown";
+    linkless.platform_specific_id = "";
+    expect(isUpcomingAutoJoin(linkless, Date.parse("2026-08-14T14:00:00Z"))).toBe(false);
+
+    const disabled = meeting("disabled", "2026-08-14T15:00:00Z", ["work"]);
+    disabled.data.calendar_sources![0].auto_join = false;
+    expect(isUpcomingAutoJoin(disabled, Date.parse("2026-08-14T14:00:00Z"))).toBe(false);
   });
 });
