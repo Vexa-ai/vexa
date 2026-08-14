@@ -15,7 +15,7 @@ export function isUpcomingAutoJoin(meeting: Meeting, nowMs: number): boolean {
   return Number.isFinite(at)
     && at >= nowMs
     && meeting.data.auto_join !== false
-    && meeting.platform !== "unknown"
+    && String(meeting.platform) !== "unknown"
     && Boolean(meeting.platform_specific_id)
     && Array.isArray(meeting.data.calendar_sources)
     && meeting.data.calendar_sources.some((source) => source.auto_join !== false);

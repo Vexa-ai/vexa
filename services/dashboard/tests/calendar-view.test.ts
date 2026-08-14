@@ -56,7 +56,7 @@ describe("calendar schedule view", () => {
     expect(isUpcomingAutoJoin(future, Date.parse("2026-08-14T14:00:00Z"))).toBe(true);
 
     const linkless = meeting("linkless", "2026-08-14T15:00:00Z", ["work"]);
-    linkless.platform = "unknown";
+    Object.defineProperty(linkless, "platform", { value: "unknown" });
     linkless.platform_specific_id = "";
     expect(isUpcomingAutoJoin(linkless, Date.parse("2026-08-14T14:00:00Z"))).toBe(false);
 
