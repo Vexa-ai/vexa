@@ -137,12 +137,7 @@ export default function MeetingsPage() {
     }
   }
 
-  // Initial load
-  useEffect(() => {
-    fetchMeetings({ exclude_planned: true });
-  }, [fetchMeetings]);
-
-  // Re-fetch when dropdown filters change
+  // Initial load and subsequent dropdown-filter changes share one request path.
   useEffect(() => {
     applyFilters(searchQuery, statusFilter, platformFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
