@@ -73,8 +73,8 @@ several calendars, the first source with auto-join enabled supplies the bot name
 silence:
 
 - `✓ Synced just now — imported 3` — done; the meetings are under **Upcoming**.
-- `✓ Synced just now — no meetings with joinable links found` — the feed is fine, but no upcoming
-  event carries a Meet/Zoom/Teams link (see [what imports](#what-imports-and-what-doesnt)).
+- `✓ Synced just now — 0 imported, 0 updated` — the feed is fine and already reconciled, or it has
+  no event inside the current import window.
 - `⚠ Last sync failed: …` — the actual reason, named (see the
   [error reference](#reading-the-sync-status) below).
 
@@ -112,9 +112,10 @@ curl -X POST "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KE
 curl "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KEY"
 ```
 
-`GET /user/calendars` lists the masked connections. The original `/user/calendar` and
-`/user/calendar/sync` endpoints remain available for single-calendar clients and refer to the
-first active connection.
+`GET /user/calendars` lists the masked connections. The original `/user/calendar` endpoint remains
+available for single-calendar clients and refers to the first active connection. The singular
+`/user/calendar/sync` compatibility endpoint synchronizes all active connections and returns an
+aggregate stamp. See the [Calendar API](/api/calendar) for exact schemas and statuses.
 
 Legacy single-calendar clients can still set or read the user-wide fallback bot name through the
 compatible singular preferences edge:
