@@ -49,6 +49,14 @@ export type {
   TeamsCsrcVirtualFrame,
 } from './teams-csrc-channelizer.js';
 export { spanFitsCsrcOwnership, TeamsCsrcGmeetPipeline } from './teams-csrc-gmeet-pipeline.js';
+export { detectTeamsWordContest, markTeamsWordContests } from './teams-contested-word-marker.js';
+export type {
+  TeamsContestConfig,
+  TeamsContestRow,
+  TeamsContestSubmission,
+  TeamsRoutedSpan,
+  TeamsWordContest,
+} from './teams-contested-word-marker.js';
 export type {
   CsrcOwnershipInterval,
   TeamsCsrcGmeetPipelineHealth,

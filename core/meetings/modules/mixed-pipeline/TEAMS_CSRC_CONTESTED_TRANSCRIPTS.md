@@ -25,13 +25,20 @@ There is no winner, loser, score, confidence, deletion, or reassignment. Differe
 wording remains ordinary independent speech. If word-time evidence is missing or too distant, the
 detector emits no contested marker rather than widening the marked interval.
 
-The detector and rendering notation live at:
+The production detector is post-confirm and pre-publish inside the Teams pipeline. The browser
+evaluation copy stays independent so a fixture can audit the production output rather than create
+it:
 
 ```text
-/Users/dmitriygrankin/dev/vexa-csrc-virtual-channels/core/meetings/modules/mixed-pipeline/eval-ui/teams-contested-word-detector.mjs
-/Users/dmitriygrankin/dev/vexa-csrc-virtual-channels/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-timeline.mjs
-/Users/dmitriygrankin/dev/vexa-csrc-virtual-channels/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-live-model.mjs
+/Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/src/teams-contested-word-marker.ts
+/Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/src/teams-csrc-gmeet-pipeline.ts
+/Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/eval-ui/teams-contested-word-detector.mjs
+/Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-timeline.mjs
+/Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-live-model.mjs
 ```
+
+The API text is the source of the marker. Terminal rendering may hide the wire suffix visually,
+but it must not infer, widen, resolve, or delete a contest.
 
 ## Why the heuristic resolver is rejected
 

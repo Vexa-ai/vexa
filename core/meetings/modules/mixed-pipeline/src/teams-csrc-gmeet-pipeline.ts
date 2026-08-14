@@ -6,6 +6,13 @@ import {
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { teamsWindowHallucinationRule } from './hallucination-gate.js';
 import {
+  detectTeamsWordContest,
+  markTeamsWordContests,
+  type TeamsContestSubmission,
+  type TeamsRoutedSpan,
+  type TeamsWordContest,
+} from './teams-contested-word-marker.js';
+import {
   TeamsCsrcChannelizer,
   type TeamsCsrcChannelizerHealth,
   type TeamsCsrcVirtualFrame,
@@ -66,6 +73,7 @@ export interface TeamsCsrcGmeetPipelineHealth extends TeamsCsrcChannelizerHealth
   inFlight: number;
   rejectedOwnership: number;
   timeoutPromotions: number;
+  contestedPairs: number;
 }
 
 export interface CsrcOwnershipInterval { startMs: number; endMs?: number }
@@ -127,10 +135,9 @@ interface PendingDraft {
  * whether each window's prompt/continuity makes Whisper follow its established speaker is an
  * empirical property, never claimed as acoustic source separation.
  *
- * Deferred isolation boundary: time-and-word duplicates across simultaneously active CSRC lanes
- * are documented in ../TEAMS_CSRC_CONTESTED_TRANSCRIPTS.md. This candidate intentionally performs
- * no cross-lane arbitration; keep any future resolver post-confirm and pre-publish, outside the
- * shared GMeet-compatible buffer.
+ * Time-and-word duplicates across simultaneously active CSRC lanes are marked post-confirm and
+ * pre-publish. Both rows remain and no winner is inferred. The shared GMeet-compatible buffer is
+ * unchanged; the deferred embedding resolver is documented in ../TEAMS_CSRC_CONTESTED_TRANSCRIPTS.md.
  */
 export class TeamsCsrcGmeetPipeline {
   private readonly manager: GmeetCompatibleBuffer;
@@ -151,6 +158,12 @@ export class TeamsCsrcGmeetPipeline {
   private readonly sourceLastAudioMs = new Map<string, number>();
   /** Latest public row by stable id, retained only so a late proven name can repaint it. */
   private readonly published = new Map<string, TeamsCsrcTranscriptSegment>();
+  /** Unmarked rows are the evidence source; public rows may contain unresolved contest notation. */
+  private readonly rawPublished = new Map<string, TeamsCsrcTranscriptSegment>();
+  private readonly contestSubmissions: TeamsContestSubmission[] = [];
+  private readonly routedSpans: TeamsRoutedSpan[] = [];
+  private readonly latestRoutedSpan = new Map<number, TeamsRoutedSpan>();
+  private readonly contests = new Map<string, TeamsWordContest>();
   private turnCount = 0;
   private rejectedOwnership = 0;
   private timeoutPromotions = 0;
@@ -188,6 +201,7 @@ export class TeamsCsrcGmeetPipeline {
       flickerHoldMs: options.flickerHoldMs,
       onFrame: (frame) => {
         options.onRoutedFrame?.(frame);
+        this.recordRoutedSpan(frame.csrc, frame.tsMs, frame.tsMs + frame.pcm.length / 16_000 * 1000);
         this.routeFrame(frame.csrc, frame.pcm, frame.tsMs);
       },
     });
@@ -211,6 +225,11 @@ export class TeamsCsrcGmeetPipeline {
             trigger,
             bufferTrigger,
           });
+          this.contestSubmissions.push({
+            sourceKey,
+            segments: result.segments ?? [],
+            observedAtMs: this.sourceLastAudioMs.get(sourceKey),
+          });
           const lastEnd = result.segments?.length
             ? result.segments[result.segments.length - 1].end
             : undefined;
@@ -221,6 +240,7 @@ export class TeamsCsrcGmeetPipeline {
             result.segments,
             result.language,
           );
+          this.refreshContestsForSource(sourceKey);
         } catch (error) {
           this.options.onError?.(error);
           this.manager.handleTranscriptionResult(sourceKey, '');
@@ -334,6 +354,7 @@ export class TeamsCsrcGmeetPipeline {
       inFlight: this.inflight.size,
       rejectedOwnership: this.rejectedOwnership,
       timeoutPromotions: this.timeoutPromotions,
+      contestedPairs: this.contests.size,
     };
   }
 
@@ -420,9 +441,17 @@ export class TeamsCsrcGmeetPipeline {
   }
 
   private emit(segment: TeamsCsrcTranscriptSegment): void {
-    if (!segment.completed && !segment.text.trim()) this.published.delete(segment.segmentId);
-    else this.published.set(segment.segmentId, segment);
-    this.options.onSegment(segment);
+    if (!segment.completed && !segment.text.trim()) {
+      this.rawPublished.delete(segment.segmentId);
+      this.removeContestsFor(segment.segmentId);
+      const previous = this.published.get(segment.segmentId);
+      this.published.delete(segment.segmentId);
+      this.options.onSegment(previous ? { ...previous, text: '', completed: false } : segment);
+      return;
+    }
+    this.rawPublished.set(segment.segmentId, segment);
+    this.refreshContestsFor(segment.segmentId);
+    this.reconcilePublished();
   }
 
   private isWordPrefix(prefixText: string, candidateText: string): boolean {
@@ -443,9 +472,73 @@ export class TeamsCsrcGmeetPipeline {
     const csrc = Number(trackId);
     if (!Number.isFinite(csrc)) return;
     const speaker = this.trackNamer.labelFor(trackId);
-    for (const segment of this.published.values()) {
+    for (const segment of this.rawPublished.values()) {
       if (segment.csrc !== csrc || segment.speaker === speaker) continue;
-      this.emit({ ...segment, speaker });
+      this.rawPublished.set(segment.segmentId, { ...segment, speaker });
+    }
+    this.reconcilePublished();
+  }
+
+  private recordRoutedSpan(csrc: number, startMs: number, endMs: number): void {
+    const previous = this.latestRoutedSpan.get(csrc);
+    if (previous && startMs <= previous.endMs + 20) {
+      previous.endMs = Math.max(previous.endMs, endMs);
+    } else {
+      const span = { csrc, startMs, endMs };
+      this.routedSpans.push(span);
+      this.latestRoutedSpan.set(csrc, span);
+    }
+    // Word-contest evidence is needed only while a rival timestamp-overlapping row can still
+    // arrive. Keep the markers themselves for the meeting, but bound raw word traces and spans.
+    const evidenceFloorMs = endMs - 120_000;
+    for (let index = this.routedSpans.length - 1; index >= 0; index--) {
+      if (this.routedSpans[index].endMs < evidenceFloorMs) this.routedSpans.splice(index, 1);
+    }
+    for (let index = this.contestSubmissions.length - 1; index >= 0; index--) {
+      if ((this.contestSubmissions[index].observedAtMs ?? endMs) < evidenceFloorMs) {
+        this.contestSubmissions.splice(index, 1);
+      }
+    }
+  }
+
+  private contestKey(left: string, right: string): string {
+    return [left, right].sort().join('~');
+  }
+
+  private removeContestsFor(segmentId: string): void {
+    for (const [key, contest] of this.contests) {
+      if (contest.leftSegmentId === segmentId || contest.rightSegmentId === segmentId) this.contests.delete(key);
+    }
+  }
+
+  private refreshContestsFor(segmentId: string): void {
+    const row = this.rawPublished.get(segmentId);
+    this.removeContestsFor(segmentId);
+    if (!row?.completed || !row.text.trim()) return;
+    for (const rival of this.rawPublished.values()) {
+      if (rival.segmentId === segmentId || !rival.completed || !rival.text.trim()) continue;
+      const contest = detectTeamsWordContest(row, rival, this.contestSubmissions, this.routedSpans);
+      if (contest) this.contests.set(this.contestKey(row.segmentId, rival.segmentId), contest);
+    }
+  }
+
+  private refreshContestsForSource(sourceKey: string): void {
+    for (const row of this.rawPublished.values()) {
+      if (row.sourceKey === sourceKey) this.refreshContestsFor(row.segmentId);
+    }
+    this.reconcilePublished();
+  }
+
+  private reconcilePublished(): void {
+    const contests = [...this.contests.values()];
+    for (const raw of this.rawPublished.values()) {
+      const desired = { ...raw, text: markTeamsWordContests(raw, contests) };
+      const previous = this.published.get(raw.segmentId);
+      if (previous && previous.text === desired.text && previous.speaker === desired.speaker
+          && previous.completed === desired.completed && previous.startMs === desired.startMs
+          && previous.endMs === desired.endMs && previous.language === desired.language) continue;
+      this.published.set(raw.segmentId, desired);
+      this.options.onSegment(desired);
     }
   }
 

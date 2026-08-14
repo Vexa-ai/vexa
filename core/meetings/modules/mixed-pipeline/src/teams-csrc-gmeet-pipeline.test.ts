@@ -184,5 +184,66 @@ check('published Whisper timestamps never extend past the source\'s last routed 
   JSON.stringify(boundedSegments));
 await boundedPipeline.dispose();
 
+let contestNow = 0;
+const contestedDurable = new Map<string, TeamsCsrcTranscriptSegment>();
+const contestedPipeline = new TeamsCsrcGmeetPipeline({
+  lookbackMs: 0,
+  flickerHoldMs: 0,
+  onsetGapMs: 1000,
+  buffer: { scheduleSubmissions: false, now: () => contestNow, silenceRmsThreshold: 0 },
+  onSegment: (segment) => {
+    if (!segment.completed && !segment.text.trim()) contestedDurable.delete(segment.segmentId);
+    else contestedDurable.set(segment.segmentId, segment);
+  },
+  transcribe: async (_audio, _prompt, context) => {
+    const text = context?.csrc === 201
+      ? 'ask amazing amazing like really good'
+      : 'amazing amazing like really good answer';
+    const parts = text.split(/\s+/);
+    return {
+      text,
+      language: 'en',
+      duration: 4,
+      segments: [{
+        text,
+        start: 0,
+        end: parts.length * 0.4,
+        words: parts.map((word, index) => ({
+          word,
+          start: index * 0.4,
+          end: (index + 0.8) * 0.4,
+          probability: 0.99,
+        })),
+      }],
+    };
+  },
+});
+contestedPipeline.recordTransportEvent({ csrc: 201, active: true, tMs: 0 });
+contestedPipeline.recordTransportEvent({ csrc: 840, active: true, tMs: 0 });
+for (let index = 0; index < 8; index++) {
+  contestNow = index * 500;
+  contestedPipeline.feedMixedAudio(new Float32Array(8000).fill(0.1), contestNow);
+}
+contestNow = 4000;
+await contestedPipeline.requestTranscription(201);
+await contestedPipeline.requestTranscription(840);
+for (let index = 8; index < 12; index++) {
+  contestNow = index * 500;
+  contestedPipeline.feedMixedAudio(new Float32Array(8000).fill(0.1), contestNow);
+}
+contestNow = 6000;
+await contestedPipeline.requestTranscription(201);
+await contestedPipeline.requestTranscription(840);
+const contestedRows = [...contestedDurable.values()].filter((segment) => segment.completed);
+check('actual Teams pipeline marks exact duplicated words symmetrically before API publication',
+  contestedRows.some((segment) => segment.csrc === 201
+    && segment.text.includes('⟦amazing amazing like really good⟧{CSRC 201↔CSRC 840}'))
+    && contestedRows.some((segment) => segment.csrc === 840
+      && segment.text.includes('⟦amazing amazing like really good⟧{CSRC 840↔CSRC 201}')),
+  JSON.stringify(contestedRows));
+check('the pipeline health exposes the unresolved pair', contestedPipeline.health().contestedPairs === 1,
+  JSON.stringify(contestedPipeline.health()));
+await contestedPipeline.dispose();
+
 if (failed > 0) process.exit(1);
 console.log('\n✅ Teams CSRC lanes drive the shared GMeet window without Pyannote.');
