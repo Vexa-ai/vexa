@@ -196,9 +196,10 @@ class WebhookUpdate(BaseModel):
 
 class CalendarUpdate(BaseModel):
     """The user's calendar-sync self-serve config: a secret ICS feed URL (``null`` disconnects)
-    + the GLOBAL auto-join default stamped onto every imported meeting."""
+    + the GLOBAL auto-join defaults used by imported meetings."""
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
+    bot_name: Optional[str] = None
 
 
 class CalendarCreate(BaseModel):
@@ -603,6 +604,18 @@ def create_app() -> FastAPI:
         imported meetings). ``ics_url: null`` disconnects the calendar. The URL is a SECRET
         (Google/Outlook secret-address feeds) — it is stored, never echoed in the clear."""
         data = dict(user.data or {})
+        if "bot_name" in calendar_update.model_fields_set:
+            bot_name = (calendar_update.bot_name or "").strip()
+            if not bot_name:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="bot_name is required")
+            if len(bot_name) > 100:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="bot_name too long")
+            data["calendar_bot_name"] = bot_name
+            from sqlalchemy.orm import attributes
+            user.data = data
+            attributes.flag_modified(user, "data")
         connections = connections_from_data(data, user.id, include_deleted=True)
         current = next((c for c in connections if not c.get("deleted")), None)
         if "ics_url" in calendar_update.model_fields_set:
@@ -636,6 +649,7 @@ def create_app() -> FastAPI:
             "ics_url_set": bool(masked and masked["ics_url_set"]),
             "ics_url_masked": masked["ics_url_masked"] if masked else None,
             "auto_join": masked["auto_join"] if masked else True,
+            "bot_name": data.get("calendar_bot_name") or "Vexa",
         }
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
@@ -900,7 +914,10 @@ def create_app() -> FastAPI:
         _check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
-        resp: dict = {"max_concurrent": user.max_concurrent_bots}
+        resp: dict = {
+            "max_concurrent": user.max_concurrent_bots,
+            "bot_name": data.get("calendar_bot_name") or "Vexa",
+        }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here

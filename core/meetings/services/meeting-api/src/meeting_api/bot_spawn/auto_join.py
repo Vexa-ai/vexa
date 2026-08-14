@@ -112,7 +112,7 @@ async def auto_join_tick(
     ``{"due": n, "spawned": n, "already": n, "errors": n, "skipped_uncapped": n}``.
 
     ``fetch_bot_context(user_id)`` supplies the per-user spawn context the gateway would have
-    injected as headers (``{"max_concurrent", "webhook_url", "webhook_secret", "webhook_events"}``).
+    injected as headers (including the Calendar default ``bot_name``).
     Three states: the callable is ``None`` (no admin edge configured — the per-user cap is
     UNRESOLVABLE); it returns a dict (use it); it returns ``None`` (identity is configured but
     UNAVAILABLE right now — SKIP the row this tick).
@@ -192,6 +192,7 @@ async def auto_join_tick(
                 platform=row["platform"],
                 native_meeting_id=row["native_meeting_id"],
                 meeting_url=data.get("constructed_meeting_url"),
+                bot_name=ctx.get("bot_name"),
                 max_concurrent=ctx.get("max_concurrent"),
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),

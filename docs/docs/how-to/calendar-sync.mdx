@@ -65,6 +65,9 @@ name such as **Work** or **Personal**, paste the secret address, choose whether 
 calendar should auto-join, and click **Connect**. Repeat this for each feed you want Vexa to follow
 (up to 10 active connections).
 
+The same page shows **Upcoming auto-joins** with each meeting's source calendar, and lets you set
+the **Default bot name** used when those unattended joins start.
+
 **Connecting runs a sync on the spot** — within seconds the panel answers with the result, not
 silence:
 
@@ -98,6 +101,14 @@ curl "$API_BASE/user/calendars/$CALENDAR_ID/sync" -H "X-API-Key: $API_KEY"
 `GET /user/calendars` lists the masked connections. The original `/user/calendar` and
 `/user/calendar/sync` endpoints remain available for single-calendar clients and refer to the
 first active connection.
+
+Set or read the user-wide auto-join bot name through the compatible singular preferences edge:
+
+```bash Set the default auto-join bot name
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"bot_name":"My Meeting Notes"}'
+```
 
 ### Multi-calendar API reference
 
@@ -149,7 +160,9 @@ can show:
 
 Every calendar connection has its own **Auto-join** switch (default on). A meeting shared by
 multiple connected feeds auto-joins when at least one of its sources has auto-join enabled. You
-can still override auto-join per meeting in its prep view.
+can still override auto-join per meeting in its prep view. `bot_name` is user-wide rather than
+per-feed: the scheduler reads the latest value when it starts any calendar bot, and defaults to
+`Vexa`.
 
 ## Disconnect
 

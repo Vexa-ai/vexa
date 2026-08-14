@@ -60,6 +60,18 @@ async def test_due_row_spawns_and_claims_in_place():
     assert len(runtime.specs) == 1
 
 
+async def test_due_row_uses_user_calendar_bot_name():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo)
+
+    async def ctx(_uid):
+        return {"max_concurrent": 4, "bot_name": "Dmitry's Notes"}
+
+    counters = await _tick(repo, runtime, fetch_bot_context=ctx)
+    assert counters["spawned"] == 1
+    assert '"botName":"Dmitry\'s Notes"' in runtime.specs[0]["env"]["VEXA_BOT_CONFIG"]
+
+
 async def test_not_yet_due_row_waits():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo, at=NOW + timedelta(seconds=300))  # 5 min out, lead is 60s

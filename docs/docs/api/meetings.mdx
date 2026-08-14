@@ -145,12 +145,13 @@ tunable on a self-host — see [Configuration](/configuration).
 Connect a calendar's **secret ICS address** and upcoming meetings import as planned records
 automatically (only events carrying a recognizable Meet/Zoom/Teams link; one record per event —
 the next occurrence of a recurring series). The URL is a secret: read-backs return it **masked**.
-`auto_join` here is the **global default** stamped onto imported meetings.
+`auto_join` here is the **global default** stamped onto imported meetings. `bot_name` is the
+user-wide participant name read by the calendar auto-join scheduler (default `Vexa`).
 
 ```bash PUT /user/calendar
 curl -X PUT "$API_BASE/user/calendar" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true}'
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true,"bot_name":"My Meeting Notes"}'
 ```
 
 ```bash GET /user/calendar
@@ -158,7 +159,7 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar"
 ```
 
 ```json Response
-{ "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true }
+{ "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true, "bot_name": "My Meeting Notes" }
 ```
 
 Pasting the wrong kind of URL fails at save: a calendar *page* (e.g. Google's `/calendar/embed`)

@@ -92,6 +92,24 @@ def test_calendar_auto_join_defaults_true(client):
     assert r.json()["auto_join"] is True
 
 
+def test_calendar_bot_name_is_user_visible_and_reaches_auto_join_context(client):
+    uid, tok = _user_token(client, email="cal-name@vexa.ai")
+    h = {"X-API-Key": tok}
+
+    assert client.get("/user/calendar", headers=h).json()["bot_name"] == "Vexa"
+    updated = client.put("/user/calendar", headers=h, json={"bot_name": "  Note Taker  "})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["bot_name"] == "Note Taker"
+
+    ctx = client.get(f"/internal/users/{uid}/bot-context",
+                     headers={"X-Internal-Secret": INTERNAL_SECRET})
+    assert ctx.status_code == 200, ctx.text
+    assert ctx.json()["bot_name"] == "Note Taker"
+
+    rejected = client.put("/user/calendar", headers=h, json={"bot_name": " "})
+    assert rejected.status_code == 422
+
+
 def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
     uid, tok = _user_token(client, email="cal-many@vexa.ai")
     h = {"X-API-Key": tok}
