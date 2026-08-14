@@ -352,7 +352,7 @@ def test_post_bots_meeting_url_only_is_accepted():
 # FIXED (A1): create_bot rejects an unsupported platform without a constructible meeting_url → 422
 # (router.py), instead of a deep 500 in the invocation builder. Standing regression guard.
 # ("discord" is now a spawnable platform (invocation.v1 Platform enum) — "webex" stands in as a
-# genuinely unsupported platform for this probe; see test_post_bots_discord_meeting_url_accepted
+# genuinely unsupported platform for this probe; see test_post_bots_discord_native_meeting_id_only_accepted
 # below for the discord positive-path coverage.)
 def test_post_bots_invalid_platform_should_be_422():
     c = _client()
@@ -363,24 +363,32 @@ def test_post_bots_invalid_platform_should_be_422():
     )
 
 
-# discord (#875): a first-party in-tree platform lane, like zoom/jitsi it has NO constructible
-# meeting_url (a Discord voice channel isn't addressed by a URL template) — the caller passes an
-# explicit meeting_url (the same SSRF-validated passthrough zoom/jitsi already use).
-def test_post_bots_discord_meeting_url_accepted():
+# discord (#875): a first-party in-tree platform lane. Unlike zoom/jitsi (real URL, just not
+# templatable), discord has NO meeting-URL concept at all — a voice channel is joined by its
+# snowflake id over the gateway, never by URL — so native_meeting_id ALONE is sufficient
+# (bot_spawn.NO_MEETING_URL_PLATFORMS), matching A1's acceptance criterion (channel ref, not URL).
+def test_post_bots_discord_native_meeting_id_only_accepted():
+    c = _client()
+    r = c.post("/bots", headers=HEADERS,
+               json={"platform": "discord", "native_meeting_id": "222222222222222222"})
+    assert r.status_code == 201, r.text
+    assert r.json()["platform"] == "discord"
+
+
+def test_post_bots_discord_with_meeting_url_still_accepted():
+    """Compatibility check, NOT a fix guard: a caller-supplied meeting_url for discord already
+    worked before NO_MEETING_URL_PLATFORMS existed (it rode the same zoom/jitsi passthrough
+    every platform without a URL template gets), so this test passes even with the discord
+    meeting_url-optional fix fully reverted — it only proves the fix didn't break that older,
+    pre-existing path. The fix itself (meeting_url becoming OPTIONAL for discord) is guarded by
+    test_post_bots_discord_native_meeting_id_only_accepted above; SSRF-on-discord is covered by
+    test_post_bots_discord_hostname_url_accepted in test_bot_spawn.py."""
     c = _client()
     r = c.post("/bots", headers=HEADERS,
                json={"platform": "discord", "native_meeting_id": "222222222222222222",
                      "meeting_url": "https://discord.com/channels/111111111111111111/222222222222222222"})
     assert r.status_code == 201, r.text
     assert r.json()["platform"] == "discord"
-
-
-def test_post_bots_discord_without_meeting_url_is_422():
-    """Discord has no URL template — without an explicit meeting_url it 422s (A1), matching zoom/jitsi."""
-    c = _client()
-    r = c.post("/bots", headers=HEADERS,
-               json={"platform": "discord", "native_meeting_id": "222222222222222222"})
-    assert r.status_code == 422, r.text
 
 
 # FIXED (A2): _resolve_recording_enabled parses booleans/strings + 422s other types — no silent
