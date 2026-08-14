@@ -1,6 +1,6 @@
 // Vexa API Types
 
-export type Platform = "google_meet" | "teams" | "zoom" | "browser_session";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "browser_session";
 
 export type MeetingStatus =
   | "requested"
@@ -266,6 +266,15 @@ export const PLATFORM_CONFIG = {
     icon: "video",
     pattern: /^\d{9,11}$/,
     placeholder: "85173157171",
+  },
+  jitsi: {
+    name: "Jitsi Meet",
+    color: "bg-blue-500",
+    textColor: "text-blue-600",
+    bgColor: "bg-blue-50",
+    icon: "video",
+    pattern: /^.+$/,
+    placeholder: "meeting-room",
   },
   browser_session: {
     name: "Browser",

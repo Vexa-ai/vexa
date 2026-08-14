@@ -1986,17 +1986,21 @@ export default function MeetingDetailPage() {
               {/* Platform & Meeting ID */}
               <div className="flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg flex items-center justify-center overflow-hidden bg-background">
-                  <Image
-                    src={currentMeeting.platform === "google_meet"
-                      ? "/icons/icons8-google-meet-96.png"
-                      : currentMeeting.platform === "teams"
-                      ? "/icons/icons8-teams-96.png"
-                      : "/icons/icons8-zoom-96.png"}
-                    alt={platformConfig.name}
-                    width={32}
-                    height={32}
-                    className="object-contain"
-                  />
+                  {currentMeeting.platform === "jitsi" || currentMeeting.platform === "browser_session" ? (
+                    <Video className="h-5 w-5 text-muted-foreground" aria-label={platformConfig.name} />
+                  ) : (
+                    <Image
+                      src={currentMeeting.platform === "google_meet"
+                        ? "/icons/icons8-google-meet-96.png"
+                        : currentMeeting.platform === "teams"
+                        ? "/icons/icons8-teams-96.png"
+                        : "/icons/icons8-zoom-96.png"}
+                      alt={platformConfig.name}
+                      width={32}
+                      height={32}
+                      className="object-contain"
+                    />
+                  )}
                 </div>
                 <div>
                   <p className="text-sm font-medium">{platformConfig.name}</p>
