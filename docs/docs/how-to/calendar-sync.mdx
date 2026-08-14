@@ -78,8 +78,21 @@ silence:
   [error reference](#reading-the-sync-status) below).
 
 Each connection keeps its own **last sync status**, **Auto-join** switch, **Sync now**, and
-**Disconnect** action — no waiting on the background cycle (default 5 minutes) after you add an
-event or change a preference.
+**Disconnect** action — no waiting on the background cycle after you add an event or change a
+preference.
+
+### How often Vexa checks the feed
+
+- **Connect and Sync now:** run the same reconciliation immediately.
+- **Hosted calendar rollout:** polls each connected feed every **60 seconds**.
+- **Self-hosted default:** polls every **5 minutes**. Operators can change this with
+  `CALENDAR_SYNC_INTERVAL_S`.
+- **Bot scheduling:** checks due planned meetings every **30 seconds** by default. A bot becomes
+  eligible **60 seconds before** `scheduled_at` and remains eligible until **10 minutes after** it.
+
+The calendar provider controls when an edit appears in its published ICS feed, so the practical
+delay is provider publication time plus up to one Vexa polling interval. Sync now cannot make an
+edit visible before Google or Outlook has published it to the feed.
 
 Over the API:
 
@@ -126,6 +139,68 @@ stable connection `id`, display `name`, provider event `uid`, and source `auto_j
 Consumers should use the array rather than the single-source convenience fields when they need
 complete provenance.
 
+## What Vexa stores
+
+Vexa does not keep a second calendar-event database. A connected feed and an imported meeting
+have separate storage responsibilities:
+
+| Data | Durable home | Notes |
+|---|---|---|
+| Named calendar connections, secret ICS URLs, per-feed auto-join, default bot name | The user's `data` JSON document in Postgres | User-facing reads mask the feed URL. The full URL crosses only the authenticated internal sync edge. |
+| Imported events | Ordinary rows in the Postgres `meetings` table | A future event is a planned meeting with `status: "scheduled"`. |
+| Event and calendar provenance | The meeting's `data` JSON document | Includes scheduling, attendees, calendar source IDs/names, and provider event UIDs. |
+| Latest sync time, error, and created/updated/cancelled counts | Redis | Operational status under the user/connection sync key; this is not the durable event authority. |
+| Bot attempts | The same meeting row plus `meeting_sessions` rows | Auto-join claims the planned meeting in place through the normal bot lifecycle. |
+| Transcript segments | Postgres `transcriptions` rows linked to the meeting | Finalized meeting output remains addressable by the meeting ID. |
+| Recording and processed post-meeting metadata | The meeting's `data` JSON document | Media objects themselves use the configured object store. |
+
+An imported meeting currently carries this calendar-specific shape (alongside its ordinary meeting
+fields):
+
+```json
+{
+  "status": "scheduled",
+  "data": {
+    "scheduled_at": "2026-08-14T15:00:00+00:00",
+    "calendar_uid": "provider-event-uid",
+    "calendar_connection_id": "calendar-uuid",
+    "calendar_name": "Work",
+    "calendar_managed": true,
+    "calendar_sources": [
+      {
+        "id": "calendar-uuid",
+        "name": "Work",
+        "uid": "provider-event-uid",
+        "auto_join": true
+      }
+    ],
+    "attendees": [
+      {
+        "email": "person@example.com",
+        "name": "Person",
+        "partstat": "accepted"
+      }
+    ]
+  }
+}
+```
+
+`calendar_sources` is the authoritative multi-calendar provenance. The singular
+`calendar_connection_id`, `calendar_name`, and `calendar_uid` fields are compatibility conveniences
+for the first source.
+
+### Participants and current metadata boundary
+
+ICS `ATTENDEE` entries are synchronized into `data.attendees`. Vexa preserves the normalized email,
+optional display name, and participation status (`partstat`, such as `accepted` or `tentative`).
+Calendar rooms and resources are excluded. Attendee additions, removals, and response changes follow
+the feed while the meeting is still planned.
+
+The current importer does **not** persist the event organizer, raw description, raw location, end
+time, ICS sequence/revision, recurrence ID, or provider `LAST-MODIFIED` value as calendar metadata.
+Description and location are inspected only to discover a joinable meeting link. Do not build an
+integration that expects those unimplemented fields in `meeting.data`.
+
 ## Reading the sync status
 
 Every failure names its fix — these are the messages the panel (and the API stamp's `last_error`)
@@ -148,7 +223,9 @@ can show:
 - **One meeting per event — the next occurrence only.** A recurring series tracks its next
   upcoming occurrence; the one after imports once the current completes.
 - **Moves and cancellations follow the feed.** A rescheduled event moves its meeting; a cancelled
-  or deleted event removes it — unless the bot already joined, in which case sync never touches it.
+  or deleted event removes it. Title, start time, meeting link, and attendee changes are also
+  reconciled while the row remains planned. Once the bot lifecycle claims the meeting (requested,
+  active, completed, or failed), calendar sync never rewrites that live or historical record.
 - **Your manual plans are respected.** If you already planned a meeting on the same link, the
   calendar event links up with it instead of creating a duplicate — your title and workspace
   binding win.
