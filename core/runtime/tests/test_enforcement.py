@@ -5,6 +5,8 @@
     SIGTERM'd; the status is the sealed runtime.v1 enum value, no schema change).
   • quota — with owner_quota=2, the 3rd active workload for the same owner is rejected (QuotaExceeded).
 """
+import time
+
 import pytest
 
 from runtime_kernel import (
@@ -108,6 +110,44 @@ def test_profile_idle_timeout_zero_disables_idle_limit():
     assert enforcer.sweep() == []
     assert rt.get("bot").state is RuntimeState.running
     rt.stop("bot")  # cleanup the real child
+
+
+def test_sweep_stopped_destroys_self_exited_workload_after_retention():
+    """A workload whose process exited on its own (reflected `stopped` with its exit code) is
+    DESTROYED once it stays stopped past the retention window — the substrate object is reclaimed
+    so no `exited` containers accumulate. Retention 0 simulates a window already elapsed."""
+    rt = Runtime(backend=ProcessBackend(), profiles={"quick-exit": ["true"]}, grace_sec=2.0)
+    enforcer = Enforcer(rt)
+
+    rt.create(WorkloadSpec(workloadId="w1", profile="quick-exit", env={}))
+    # The child exits immediately; get() reflects the exit (code 0) and stamps stoppedAt.
+    status = None
+    for _ in range(100):  # bounded poll — the child needs a moment to be reaped
+        status = rt.get("w1")
+        if status.state is RuntimeState.stopped:
+            break
+        time.sleep(0.05)
+    assert status is not None and status.state is RuntimeState.stopped
+    assert status.exitCode == 0
+
+    # Inside the retention window → the exit-code evidence is preserved, nothing destroyed.
+    assert enforcer.sweep_stopped(retention_sec=3600) == []
+    assert rt.get("w1").state is RuntimeState.stopped
+
+    # Past the retention window → destroyed (container removed).
+    assert enforcer.sweep_stopped(retention_sec=0) == ["w1"]
+    assert rt.get("w1").state is RuntimeState.destroyed
+
+
+def test_sweep_stopped_keeps_running_workloads():
+    """Running workloads are never touched by the stopped-reaper."""
+    clock = FakeClock(start=0.0)
+    rt = Runtime(backend=ProcessBackend(), profiles={"long-sleep": ["sleep", "300"]}, clock=clock, grace_sec=2.0)
+    enforcer = Enforcer(rt, clock=clock)
+    rt.create(WorkloadSpec(workloadId="w1", profile="long-sleep", env={}))
+    assert enforcer.sweep_stopped(retention_sec=0) == []
+    assert rt.get("w1").state is RuntimeState.running
+    rt.stop("w1")  # cleanup the real child
 
 
 def test_quota_rejects_n_plus_first():

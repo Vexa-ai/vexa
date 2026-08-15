@@ -1617,3 +1617,51 @@ def test_default_pre_active_grace_is_derived_from_the_issued_lobby_budget():
     assert LOBBY_BUDGET_MS == 600_000
     assert default_preactive_grace() == 660.0
     assert default_preactive_grace() > LOBBY_BUDGET_MS / 1000.0
+
+
+def test_terminal_callback_reclaims_workload(monkeypatch):
+    """The bot's OWN terminal callback (completed) triggers runtime.delete_workload so the
+    container is removed instead of lingering as an `exited` container (the runtime-side
+    stopped-reaper is only the backstop for paths that never reach this callback)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    client = TestClient(create_app(meeting_repo=repo, runtime=runtime))
+    r = client.post("/bots", headers={"x-user-id": "1"},
+                    json={"platform": "google_meet", "native_meeting_id": "reap-me"})
+    assert r.status_code == 201, r.text
+    meeting_id = r.json()["id"]
+    session_uid = repo.sessions[-1]["session_uid"]
+    bot_container_id = repo._meetings[meeting_id]["bot_container_id"]
+    assert bot_container_id is not None
+
+    # Drive the legal path to terminal; on `completed` the callback must delete the workload.
+    for st, extra in [
+        ("joining", {}),
+        ("active", {}),
+        ("completed", {"exit_code": 0, "completion_reason": "stopped"}),
+    ]:
+        rr = _post(client, connection_id=session_uid, status=st, **extra)
+        assert rr.status_code == 200, rr.text
+    assert runtime.deleted == [bot_container_id]
+
+
+def test_terminal_failed_callback_reclaims_workload(monkeypatch):
+    """A terminal `failed` callback also deletes the workload (same reclaim path)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    client = TestClient(create_app(meeting_repo=repo, runtime=runtime))
+    r = client.post("/bots", headers={"x-user-id": "1"},
+                    json={"platform": "google_meet", "native_meeting_id": "reap-me-fail"})
+    assert r.status_code == 201, r.text
+    meeting_id = r.json()["id"]
+    session_uid = repo.sessions[-1]["session_uid"]
+    bot_container_id = repo._meetings[meeting_id]["bot_container_id"]
+
+    for st, extra in [("joining", {}), ("failed", {"exit_code": 1})]:
+        rr = _post(client, connection_id=session_uid, status=st, **extra)
+        assert rr.status_code == 200, rr.text
+    assert runtime.deleted == [bot_container_id]

@@ -11,13 +11,29 @@ is tracked in Clock epochs (independent of the ISO `startedAt` the contract show
 drive the sweep frame-by-frame.
 
 A profile may pin idleTimeoutSec=0 (meeting-bot — lifetime managed externally); 0 disables the idle
-limit, matching 0.11's `idle_timeout: 0` semantics."""
+limit, matching 0.11's `idle_timeout: 0` semantics.
+
+**Stopped-container reclamation (`sweep_stopped`)** — a workload whose process EXITED is reflected to
+`stopped` (exit code captured) by `Runtime.get()`, but the substrate object is NOT removed: Docker
+`stop`/self-exit leaves the container in the `exited` state, and only `destroy()` (→ `cleanup`, the
+force-delete) reclaims it. `sweep_stopped` destroys every workload that has stayed `stopped` past a
+retention window, so finished bots cannot accumulate as exited containers. The retention window keeps
+the exit-code evidence readable long enough for the control plane's liveness probe / reconcile to
+observe it before the reclaim."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
+
+import time
 
 from .clock import Clock, SystemClock
 from .models import RuntimeState, StopReason
+
+# How long a stopped (exited) workload keeps its container before the reaper destroys it. The
+# retention preserves the exit-code evidence the control plane's liveness probe reads; past it the
+# container is force-deleted so finished bots cannot accumulate as `exited` containers.
+DEFAULT_STOPPED_RETENTION_SEC = 300
 
 
 class Enforcer:
@@ -78,3 +94,43 @@ class Enforcer:
                 self.forget(wid)
                 stopped.append(wid)
         return stopped
+
+    def sweep_stopped(self, retention_sec: Optional[float] = None) -> list[str]:
+        """Destroy workloads that have stayed `stopped` past the retention window; return their ids.
+
+        Self-sufficient: each record goes through ``Runtime.get()`` first, which reflects a
+        workload whose process exited on its own (exit code observed, ``stoppedAt`` stamped) — so
+        an exited bot is reaped even when no control-plane probe ever touched it. Past the
+        retention the workload is ``destroy()``ed, which reclaims the substrate object (Docker
+        force-delete) — the container is REMOVED, not left in the `exited` state. Best-effort per
+        workload: a failed destroy is retried on the next sweep.
+        """
+        retention = retention_sec if retention_sec is not None else DEFAULT_STOPPED_RETENTION_SEC
+        # `stoppedAt` is wall-clock ISO (the contract's timestamp), so age is measured against real
+        # time — the Enforcer's epoch clock drives the idle/lifetime sweep, not this one.
+        now = time.time()
+        destroyed: list[str] = []
+        for record in self.runtime.store.list():
+            wid = record.status.workloadId
+            try:
+                status = self.runtime.get(wid)  # reflects a self-exited workload (exit code captured)
+            except KeyError:
+                continue
+            if status.state is not RuntimeState.stopped:
+                continue
+            if not status.stoppedAt:
+                continue
+            try:
+                stopped_epoch = datetime.fromisoformat(
+                    status.stoppedAt.replace("Z", "+00:00")
+                ).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if now - stopped_epoch < retention:
+                continue
+            try:
+                self.runtime.destroy(wid)
+                destroyed.append(wid)
+            except Exception:  # noqa: BLE001 — reclaim is best-effort; retried next sweep
+                continue
+        return destroyed
