@@ -2,21 +2,30 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const pageSource = readFileSync(
+const serverPageSource = readFileSync(
   fileURLToPath(new URL("../src/app/meetings/page.tsx", import.meta.url)),
+  "utf8",
+);
+const clientPageSource = readFileSync(
+  fileURLToPath(new URL("../src/app/meetings/meetings-client.tsx", import.meta.url)),
+  "utf8",
+);
+const serverLoaderSource = readFileSync(
+  fileURLToPath(new URL("../src/lib/meetings-page.server.ts", import.meta.url)),
   "utf8",
 );
 
 describe("meetings page initial load", () => {
-  it("uses one effect for the initial and filter-driven history request", () => {
-    const effects = [...pageSource.matchAll(/useEffect\(\(\) => \{([\s\S]*?)\n\s*\}, \[([^\]]*)\]\);/g)];
-    const meetingLoadEffects = effects.filter(([, body]) =>
-      body.includes("fetchMeetings(") || body.includes("applyFilters("),
-    );
+  it("server-loads the first historical page", () => {
+    expect(serverPageSource).toContain("await loadInitialMeetingsPage()");
+    expect(serverLoaderSource).toContain('exclude_planned: "true"');
+    expect(serverLoaderSource).toContain('cache: "no-store"');
+  });
 
-    expect(meetingLoadEffects).toHaveLength(1);
-    expect(meetingLoadEffects[0][1]).toContain(
-      "applyFilters(searchQuery, statusFilter, platformFilter)",
-    );
+  it("hydrates successful server data without a duplicate client request", () => {
+    expect(clientPageSource).toContain('if (initialPage.state === "fallback")');
+    expect(clientPageSource).toContain('applyFilters("", "all", "all")');
+    expect(clientPageSource).toContain("hydrateMeetings(initialPage)");
+    expect(clientPageSource).toContain("initialFilterPass.current = false");
   });
 });

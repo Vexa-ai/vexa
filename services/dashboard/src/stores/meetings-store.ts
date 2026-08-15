@@ -5,19 +5,17 @@ import {
   type TranscriptManager,
   createTranscriptManager,
 } from "@vexaai/transcript-rendering";
+import {
+  type InitialMeetingsPage,
+  isHiddenDeletedMeeting,
+  MEETINGS_PAGE_SIZE,
+} from "@/lib/meeting-list";
 
 interface MeetingDataUpdate {
   name?: string;
   notes?: string;
   participants?: string[];
   languages?: string[];
-}
-
-function isHiddenDeletedMeeting(meeting: Meeting): boolean {
-  const redacted = meeting.data?.redacted === true;
-  // Backend delete/anonymize flow clears native meeting id.
-  const missingNativeId = !meeting.platform_specific_id;
-  return redacted || missingNativeId;
 }
 
 function recordingsFromMeeting(meeting: Meeting | null): RecordingData[] {
@@ -99,6 +97,7 @@ interface MeetingsState {
 
   // Actions
   fetchMeetings: (filters?: MeetingListFilters) => Promise<void>;
+  hydrateMeetings: (initialPage: InitialMeetingsPage) => void;
   fetchMoreMeetings: () => Promise<void>;
   fetchMeeting: (id: string, options?: { silent?: boolean }) => Promise<void>;
   refreshMeeting: (id: string) => Promise<void>;
@@ -145,12 +144,24 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   error: null,
   subscriptionRequired: false,
 
+  hydrateMeetings: (initialPage) => {
+    set({
+      meetings: initialPage.meetings,
+      hasMore: initialPage.hasMore,
+      isLoadingMeetings: false,
+      subscriptionRequired: initialPage.state === "subscription_required",
+      error: null,
+      _filters: { exclude_planned: true },
+      _offset: MEETINGS_PAGE_SIZE,
+    });
+  },
+
   // Fetch first page of meetings (with optional server-side filters)
   fetchMeetings: async (filters?: MeetingListFilters) => {
     const activeFilters = filters ?? get()._filters;
     set({ isLoadingMeetings: true, error: null, _filters: activeFilters, _offset: 0 });
     try {
-      const PAGE = 50;
+      const PAGE = MEETINGS_PAGE_SIZE;
       const result = await vexaAPI.getMeetings({ limit: PAGE, offset: 0, ...activeFilters });
       const meetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
       meetings.sort((a, b) =>
@@ -189,7 +200,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     if (!hasMore || isLoadingMore) return;
     set({ isLoadingMore: true });
     try {
-      const PAGE = 50;
+      const PAGE = MEETINGS_PAGE_SIZE;
       // #304: use the explicit _offset cursor, NOT meetings.length.
       const result = await vexaAPI.getMeetings({ limit: PAGE, offset: _offset, ..._filters });
       const newMeetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
