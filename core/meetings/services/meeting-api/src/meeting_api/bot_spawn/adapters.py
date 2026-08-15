@@ -138,12 +138,20 @@ class SqlAlchemyMeetingRepo:
 
         async with self._session_factory() as db:
             m = (
-                await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+                await db.execute(
+                    select(Meeting).where(Meeting.id == meeting_id).with_for_update()
+                )
             ).scalars().first()
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            deletion_pending = data.get("artifact_deletion") or any(
+                r.get("deletion_pending") for r in (data.get("recordings") or [])
+                if isinstance(r, dict)
+            )
+            if m.status not in ("completed", "failed") or deletion_pending:
+                raise DuplicateMeeting("Terminal meeting is no longer reusable")
             m.status = "requested"
             m.end_time = None
             m.bot_container_id = None
-            data = dict(m.data) if isinstance(m.data, dict) else {}
             for k in ("completion_reason", "failure_stage"):
                 data.pop(k, None)
             for key, value in (data_patch or {}).items():

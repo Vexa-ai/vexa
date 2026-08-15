@@ -39,9 +39,10 @@ failures (`422`).
 - `404` reading a transcript for a meeting that was never started.
 - `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
   on an unrecognizable `meeting_url`.
-- `PATCH`/`DELETE /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting
-  is only editable while it's still planned); `409` on `PATCH` when the new link collides with
-  another active meeting.
+- `PATCH /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting is only
+  editable while it's still planned); `409` when the new link collides with another active meeting.
+- `DELETE /meetings/{id}` deletes a plan before spawn or deletes transcript/recording artifacts after
+  the lifecycle is terminal; it returns `409` while the meeting is in flight.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
   fine — the spawn claims it); `429` past your concurrency limit.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`

@@ -75,8 +75,12 @@ class InMemoryRecordingRepo:
         self._meetings: dict[int, dict] = {}
         self._sessions: dict[str, int] = {}
 
-    def seed(self, *, meeting_id: int, user_id: int, session_uid: str) -> None:
-        self._meetings.setdefault(meeting_id, {"user_id": user_id, "recordings": []})
+    def seed(
+        self, *, meeting_id: int, user_id: int, session_uid: str, status: str = "active"
+    ) -> None:
+        self._meetings.setdefault(
+            meeting_id, {"user_id": user_id, "status": status, "recordings": []}
+        )
         self._sessions[session_uid] = meeting_id
 
     async def find_session(self, session_uid: str) -> Optional[dict]:
@@ -101,6 +105,25 @@ class InMemoryRecordingRepo:
 
     async def owner_of(self, meeting_id: int) -> Optional[int]:
         return self._meetings.get(meeting_id, {}).get("user_id")
+
+    async def prepare_recording_deletion(self, user_id: int, recording_id: int) -> Optional[dict]:
+        for meeting_id, meeting in self._meetings.items():
+            if meeting.get("user_id") != user_id:
+                continue
+            recording = next(
+                (r for r in meeting.get("recordings", []) if r.get("id") == recording_id), None
+            )
+            if recording is None:
+                continue
+            if meeting.get("status") not in ("completed", "failed"):
+                return {"error": "conflict"}
+            prepared = {**recording, "deletion_pending": True, "meeting_id": meeting_id}
+            meeting["recordings"] = [
+                prepared if r.get("id") == recording_id else r
+                for r in meeting.get("recordings", [])
+            ]
+            return prepared
+        return None
 
     async def list_meeting_recordings(self, user_id: int) -> list[dict]:
         out: list[dict] = []

@@ -8,6 +8,7 @@ session-resolution seams behave.
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import mint_meeting_token
@@ -62,6 +63,77 @@ def _client_for(repo, storage):
     app = FastAPI()
     app.include_router(build_router(repo, storage, token_secret=SECRET))
     return TestClient(app)
+
+
+def test_delete_recording_is_owner_scoped_storage_first_and_removes_metadata():
+    repo, storage = _seeded()
+    repo._meetings[MEETING_ID]["status"] = "completed"
+    import asyncio
+
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=True,
+    ))
+    rid = receipt["recording_id"]
+    client = _client_for(repo, storage)
+
+    assert client.delete(f"/recordings/{rid}", headers={"x-user-id": "999"}).status_code == 404
+    assert storage.blobs, "another tenant cannot touch storage"
+    deleted = client.delete(f"/recordings/{rid}", headers={"x-user-id": str(USER)})
+    assert deleted.status_code == 200
+    assert deleted.json()["scope"] == "primary_object_storage"
+    assert storage.blobs == {}
+    assert asyncio.run(repo.get_recordings(MEETING_ID)) == []
+
+
+def test_delete_recording_storage_failure_keeps_metadata_retryable():
+    class FailsOnceStorage(InMemoryStorage):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        async def delete(self, key: str) -> None:
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("injected delete failure")
+            await super().delete(key)
+
+    import asyncio
+
+    repo = InMemoryRecordingRepo()
+    repo.seed(
+        meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID, status="completed"
+    )
+    storage = FailsOnceStorage()
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=True,
+    ))
+    rid = receipt["recording_id"]
+    client = TestClient(FastAPI(), raise_server_exceptions=False)
+    client.app.include_router(build_router(repo, storage, token_secret=SECRET))
+
+    headers = {"x-user-id": str(USER)}
+    assert client.delete(f"/recordings/{rid}", headers=headers).status_code == 500
+    assert asyncio.run(repo.get_recordings(MEETING_ID))[0]["id"] == rid
+    assert client.delete(f"/recordings/{rid}", headers=headers).status_code == 200
+    assert asyncio.run(repo.get_recordings(MEETING_ID)) == []
+
+
+def test_delete_recording_does_not_become_an_active_bot_stop_operation():
+    import asyncio
+
+    repo, storage = _seeded()
+    receipt = asyncio.run(upload_chunk(
+        repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+        data=_wav(), media_format="wav", chunk_seq=0, is_final=False,
+    ))
+    response = _client_for(repo, storage).delete(
+        f"/recordings/{receipt['recording_id']}", headers={"x-user-id": str(USER)}
+    )
+    assert response.status_code == 409
+    assert storage.blobs
+    assert asyncio.run(repo.get_recordings(MEETING_ID))
 
 
 # ── flow: upload folds chunks into JSONB; finalize builds the master ─────────────────────────────

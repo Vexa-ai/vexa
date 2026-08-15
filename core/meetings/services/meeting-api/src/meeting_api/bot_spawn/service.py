@@ -310,7 +310,16 @@ async def request_bot(
     reused_row: Optional[dict] = None
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
-        if latest and latest.get("status") in _TERMINAL_STATUSES:
+        latest_data = (latest or {}).get("data", {})
+        deletion = latest_data.get("artifact_deletion") or {}
+        recording_delete = any(
+            r.get("deletion_pending") for r in (latest_data.get("recordings") or [])
+            if isinstance(r, dict)
+        )
+        if (
+            latest and latest.get("status") in _TERMINAL_STATUSES
+            and not deletion and not recording_delete
+        ):
             reused_row = latest
 
     # 2+2b+3. Dedup + max-bots cap + INSERT, made ATOMIC (ROB1/ROB2). Replaces the old read-check-
