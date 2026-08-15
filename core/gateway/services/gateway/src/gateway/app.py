@@ -570,6 +570,10 @@ def create_app(
     async def get_recording(recording_id: int, request: Request):
         return await _forward("GET", _meeting(f"/recordings/{recording_id}"), request)
 
+    @app.delete("/recordings/{recording_id}")
+    async def delete_recording(recording_id: int, request: Request):
+        return await _forward("DELETE", _meeting(f"/recordings/{recording_id}"), request)
+
     # finalize-on-read master metadata (audio|video); the recording player fetches this, then the
     # raw_url it returns. ?type= is preserved by _forward.
     @app.get("/recordings/{recording_id}/master")

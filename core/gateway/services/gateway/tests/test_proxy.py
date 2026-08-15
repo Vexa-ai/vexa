@@ -90,6 +90,18 @@ def test_authed_request_passes_body_and_status_verbatim():
     assert r.json() == {"id": 99, "platform": "google_meet"}
 
 
+def test_recording_delete_is_forwarded_to_meeting_api():
+    downstream = FakeDownstream(
+        status_code=200, body={"status": "deleted", "recording_id": 42}
+    )
+    client, _ = _client(downstream=downstream)
+    response = client.delete("/recordings/42", headers=AUTH)
+    assert response.status_code == 200
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://meeting-api/recordings/42"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
 def test_range_response_preserves_content_range_headers():
     """A 206 from a recording /raw byte stream must keep its Content-Range/Accept-Ranges on the way
     out. Without them the response is a malformed 206 and browsers abort <audio>/<video> playback

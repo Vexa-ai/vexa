@@ -156,6 +156,9 @@ class InMemoryTranscriptStore:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:
             return None
+        deletion = (self._meetings[mid].get("data") or {}).get("artifact_deletion") or {}
+        if deletion and deletion.get("state", "completed") == "completed":
+            return None
         # ``_find`` matches on ``m["user_id"] == user_id`` (mirroring the real store's SQL), so a row
         # reached by the native-keyed path is always the caller's own.
         return await self._transcript_doc(mid, viewer_is_owner=True)
@@ -171,6 +174,9 @@ class InMemoryTranscriptStore:
         if m is None:
             return None
         data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        deletion = data.get("artifact_deletion") or {}
+        if deletion and deletion.get("state", "completed") == "completed":
+            return None
         is_owner = m.get("user_id") == user_id
         authorized = (
             is_owner
@@ -525,6 +531,58 @@ class InMemoryTranscriptStore:
         if m["status"] not in ("idle", "scheduled"):
             return False
         del self._meetings[meeting_id]
+        return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("completed", "failed"):
+            return {"error": "conflict"}
+        data = dict(m.get("data") or {})
+        prior = data.get("artifact_deletion") or {}
+        already_deleted = bool(prior and prior.get("state", "completed") == "completed")
+        if not already_deleted:
+            data["artifact_deletion"] = {
+                "state": "pending",
+                "requested_at": prior.get("requested_at")
+                or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            m["data"] = data
+        return {
+            "meeting_id": meeting_id,
+            "recordings": list(data.get("recordings") or []),
+            "already_deleted": already_deleted,
+        }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("completed", "failed"):
+            return False
+        m["segments"] = {}
+        data = dict(m.get("data") or {})
+        for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+            data.pop(key, None)
+        data["artifact_deletion"] = {
+            "state": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "scope": "primary_transcript_and_recording_storage",
+            "backup_residuals": "expire_under_deployment_retention_policy",
+        }
+        m["data"] = data
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
     def _row_or_placeholder(self, meeting_id) -> dict:

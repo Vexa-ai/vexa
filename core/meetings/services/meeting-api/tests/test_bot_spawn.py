@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import (
+    DuplicateMeeting,
     QuotaExceeded,
     SpawnFailed,
     build_invocation,
@@ -631,6 +632,33 @@ async def test_continue_meeting_refreezes_provider_for_the_new_session(monkeypat
     )
 
     assert repo._meetings[first["id"]]["data"]["transcription_provider"] == "vexa"
+
+
+async def test_continue_meeting_never_reopens_an_artifact_deletion_tombstone(monkeypatch):
+    """A deletion-pending/completed terminal row is immutable lifecycle evidence, not a row the
+    continue path may reopen while storage erasure is in progress or after it completes."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    first = await request_bot(
+        repo, runtime, user_id=USER, platform="google_meet",
+        native_meeting_id="deleted-artifact-row", redis_url="redis://redis:6379/0",
+        token_secret=SECRET,
+    )
+    repo.set_status(first["id"], "completed")
+    repo._meetings[first["id"]]["data"]["artifact_deletion"] = {"state": "pending"}
+    with pytest.raises(DuplicateMeeting):
+        await repo.reopen_meeting(meeting_id=first["id"])
+
+    continued = await request_bot(
+        repo, runtime, user_id=USER, platform="google_meet",
+        native_meeting_id="deleted-artifact-row", continue_meeting=True,
+        redis_url="redis://redis:6379/0", token_secret=SECRET,
+    )
+
+    assert continued["id"] != first["id"]
+    assert repo._meetings[first["id"]]["status"] == "completed"
+    assert first["id"] not in repo.reopened
 
 
 async def test_request_bot_env_transcription_model_rides_invocation(monkeypatch):

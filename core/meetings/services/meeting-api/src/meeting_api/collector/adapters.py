@@ -401,6 +401,10 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
@@ -425,6 +429,9 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             is_owner = meeting.user_id == user_id                                   # (a) owner
             authorized = (
                 is_owner
@@ -1182,6 +1189,85 @@ class SqlAlchemyTranscriptStore:
             await db.delete(meeting)
             await db.commit()
             return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return {"error": "conflict"}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("artifact_deletion") or {}
+            already_deleted = bool(
+                prior and prior.get("state", "completed") == "completed"
+            )
+            if not already_deleted:
+                data["artifact_deletion"] = {
+                    "state": "pending",
+                    "requested_at": prior.get("requested_at")
+                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scope": "primary_transcript_and_recording_storage",
+                    "backup_residuals": "expire_under_deployment_retention_policy",
+                }
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {
+                "meeting_id": meeting.id,
+                "recordings": list(data.get("recordings") or []),
+                "already_deleted": already_deleted,
+            }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import delete, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return False
+            await db.execute(delete(Transcription).where(Transcription.meeting_id == meeting_id))
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+                data.pop(key, None)
+            data["artifact_deletion"] = {
+                "state": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+
+        # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
+        # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
+        return True
 
 
 class RedisStreamBus:
