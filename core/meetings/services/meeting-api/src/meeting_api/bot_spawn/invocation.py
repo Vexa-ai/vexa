@@ -141,6 +141,7 @@ def build_invocation(
     transcription_tier: str = "realtime",
     redis_url: str,
     automatic_leave: Optional[dict] = None,
+    alone_silence_window_ms: Optional[str] = None,
     meeting_api_callback_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
@@ -163,6 +164,19 @@ def build_invocation(
     ``None`` values are stripped (the parent strips them before serializing). The result is
     validated against the sealed schema — a malformed invocation never ships.
     """
+    # Deployment-scoped everyone-left window: explicit caller windows win; otherwise a
+    # meeting-api `BOT_ALONE_SILENCE_WINDOW_MS` sets automaticLeave.everyoneLeftTimeout so the
+    # bot's aloneness window is control-plane-controlled end-to-end (the bot prefers the
+    # invocation value over its own env default). Invalid values are ignored, not fatal.
+    if automatic_leave is None:
+        automatic_leave = {}
+    else:
+        automatic_leave = dict(automatic_leave)  # never mutate a caller-owned dict
+    if automatic_leave.get("everyoneLeftTimeout") is None and alone_silence_window_ms:
+        try:
+            automatic_leave["everyoneLeftTimeout"] = int(alone_silence_window_ms)
+        except (TypeError, ValueError):
+            pass
     invocation: dict[str, Any] = {
         "platform": platform,
         "meetingUrl": meeting_url,

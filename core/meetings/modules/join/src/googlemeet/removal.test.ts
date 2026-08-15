@@ -47,6 +47,14 @@ const HOST_REMOVAL_TEXTS = [
 const KEPT_END_TEXTS = [
   'text="Meeting ended"',
   'text=Meeting ended',
+  'text="This meeting has ended"',
+  'text=This meeting has ended',
+  'text="The meeting has ended"',
+  'text=The meeting has ended',
+  'text="Meeting is over"',
+  'text=Meeting is over',
+  'text="The host has ended the meeting"',
+  'text=host has ended the meeting',
   'text="Call ended"',
   'text=Call ended',
   'text="You left the meeting"',
@@ -59,15 +67,25 @@ const KEPT_END_TEXTS = [
  * and calls page.locator(sel).first().isVisible() on each. The monitor also
  * calls page.evaluate() to dismiss modals — a missing/throwy evaluate must not
  * break detection (the dismiss click is best-effort).
+ *
+ * `url` is a mutable holder (Playwright's page.url() is synchronous): the
+ * monitor anchors the meeting origin at start, so a test can mutate it between
+ * ticks to simulate a navigation.
  */
-function mockPage(visible: string[], evaluateThrows = false): any {
+function mockPage(visible: string[], opts: { url?: string; urlThrows?: boolean; evaluateThrows?: boolean } = {}): any {
+  const state = { currentUrl: opts.url ?? 'https://meet.google.com/abc-defg-hij' };
   return {
+    _state: state,
     locator: (sel: string) => ({
       first: () => ({
         isVisible: async () => visible.includes(sel),
       }),
     }),
-    evaluate: evaluateThrows
+    url: () => {
+      if (opts.urlThrows) throw new Error('url unavailable');
+      return state.currentUrl;
+    },
+    evaluate: opts.evaluateThrows
       ? async () => { throw new Error('evaluate failed'); }
       : async () => undefined,
   };
@@ -130,7 +148,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   {
     let fired = 0;
     const stop = startGoogleRemovalMonitor(
-      mockPage(['text="Removed from meeting"'], true),
+      mockPage(['text="Removed from meeting"'], { evaluateThrows: true }),
       () => { fired++; },
     );
     await sleep(2000);
@@ -144,6 +162,41 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const stop = startGoogleRemovalMonitor(mockPage([]), () => { fired++; });
     await sleep(2000);
     check('monitor does not fire on a benign page', fired === 0, true);
+    stop();
+  }
+
+  // 8. Navigation away from the meeting origin (torn-down tab / redirect) is
+  //    treated as removal/end — the alive-but-navigated-away bot must not idle.
+  {
+    let fired = 0;
+    const page = mockPage([]);
+    const stop = startGoogleRemovalMonitor(page, () => { fired++; });
+    page._state.currentUrl = 'about:blank'; // e.g. the tab was closed by the platform
+    await sleep(2000);
+    check('navigation off the meeting origin fires removal', fired === 1, true);
+    stop();
+  }
+
+  // 9. Same-origin navigation (Meet moving between /xyz routes) is NOT a removal.
+  {
+    let fired = 0;
+    const page = mockPage([]);
+    const stop = startGoogleRemovalMonitor(page, () => { fired++; });
+    page._state.currentUrl = 'https://meet.google.com/other-code-here'; // same origin
+    await sleep(2000);
+    check('same-origin navigation does not fire removal', fired === 0, true);
+    stop();
+  }
+
+  // 10. A throwy url() must not break the selector lane (removal text still fires).
+  {
+    let fired = 0;
+    const stop = startGoogleRemovalMonitor(
+      mockPage(['text=You were removed from the meeting'], { urlThrows: true }),
+      () => { fired++; },
+    );
+    await sleep(2000);
+    check('throwy url() does not block selector detection', fired === 1, true);
     stop();
   }
 

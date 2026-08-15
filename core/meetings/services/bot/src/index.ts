@@ -36,7 +36,7 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
-import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs, resolveAloneUnavailableGraceMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
@@ -213,8 +213,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
-  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs });
-  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs})`);
+  const aloneUnavailableGraceMs = resolveAloneUnavailableGraceMs(env);
+  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs, unavailableGraceMs: aloneUnavailableGraceMs });
+  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs}, unavailable_grace_ms=${aloneUnavailableGraceMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {

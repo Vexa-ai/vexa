@@ -314,6 +314,42 @@ def test_post_bots_omits_everyone_left_when_not_explicit(monkeypatch):
     assert inv["automaticLeave"] == {"waitingRoomTimeout": 600_000}
 
 
+def test_post_bots_everyone_left_from_env_knob_when_not_explicit(monkeypatch):
+    """A deployment-scoped BOT_ALONE_SILENCE_WINDOW_MS on meeting-api sets the
+    everyone-left window end-to-end (rides the invocation, which the bot prefers
+    over its own env default)."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("BOT_ALONE_SILENCE_WINDOW_MS", "180000")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "env-window"},
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["everyoneLeftTimeout"] == 180_000
+    assert inv["automaticLeave"]["waitingRoomTimeout"] == 600_000
+
+
+def test_post_bots_explicit_everyone_left_wins_over_env_knob(monkeypatch):
+    """An explicit caller window must beat the deployment knob."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("BOT_ALONE_SILENCE_WINDOW_MS", "180000")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "env-vs-explicit",
+            "automatic_leave": {"everyone_left_timeout": 12_345},
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["everyoneLeftTimeout"] == 12_345
+
+
 def test_post_bots_rejects_invalid_automatic_leave_timeout(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     r = _client().post(
