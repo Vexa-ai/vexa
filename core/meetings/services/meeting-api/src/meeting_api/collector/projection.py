@@ -22,7 +22,9 @@ from typing import Any, Dict, Optional
 # Heavy per-meeting ``data`` keys the list NEVER renders — dropped from list rows. Everything else
 # (title, docs, scheduled_at, calendar_connection_id, calendar_uid, workspace_id,
 # constructed_meeting_url, recording/transcribe flags, …) rides along, because the list DOES render
-# some of it. Full ``data`` stays on ``GET /meetings/{id}``.
+# some of it. ``calendar_sources`` is the one mixed-weight key: Calendar needs its source identity
+# and auto-join policy, but not the embedded raw ICS event snapshot. It is projected separately
+# below. Full ``data`` stays on ``GET /meetings/{id}``.
 LIST_OMIT_KEYS = frozenset({
     "speaker_events",
     "bot_logs",
@@ -31,7 +33,13 @@ LIST_OMIT_KEYS = frozenset({
     "chat_messages",
     "error_details",
     "last_error",
-    "calendar_sources",
+})
+
+CALENDAR_SOURCE_LIST_KEYS = frozenset({
+    "id",
+    "name",
+    "auto_join",
+    "bot_name",
 })
 
 # Default page size applied on the list-view path when a caller passes no ``limit`` — turns an
@@ -50,4 +58,13 @@ def project_list_data(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     if not isinstance(data, dict):
         return {}
-    return {k: v for k, v in data.items() if k not in LIST_OMIT_KEYS}
+    projected = {k: v for k, v in data.items()
+                 if k not in LIST_OMIT_KEYS and k != "calendar_sources"}
+    sources = data.get("calendar_sources")
+    if isinstance(sources, list):
+        projected["calendar_sources"] = [
+            {k: v for k, v in source.items() if k in CALENDAR_SOURCE_LIST_KEYS}
+            for source in sources
+            if isinstance(source, dict) and source.get("id")
+        ]
+    return projected

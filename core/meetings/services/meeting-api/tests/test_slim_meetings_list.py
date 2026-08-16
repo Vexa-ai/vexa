@@ -48,9 +48,11 @@ HEAVY_DATA = {
     "chat_messages": [{"m": "hi"}],
     "last_error": {"trace": "x" * 5000},
     "calendar_sources": [{
-        "calendar_connection_id": "calendar-primary",
-        "calendar_uid": "weekly-sync@example.com",
-        "display_name": "Primary calendar",
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "uid": "weekly-sync@example.com",
+        "auto_join": True,
+        "bot_name": "Work Notes",
         "event": {
             "component": {
                 "properties": [
@@ -63,7 +65,7 @@ HEAVY_DATA = {
 }
 
 HEAVY_KEYS = ("speaker_events", "bot_logs", "recordings", "status_transition",
-              "chat_messages", "error_details", "last_error", "calendar_sources")
+              "chat_messages", "error_details", "last_error")
 
 
 def _client(store):
@@ -108,6 +110,12 @@ def test_list_row_drops_heavy_data_keeps_light(path):
     assert row["data"].get("calendar_connection_id") == "calendar-primary"
     assert row["data"].get("calendar_uid") == "weekly-sync@example.com"
     assert row["data"].get("scheduled_at") == "2026-08-20T10:00:00Z"
+    assert row["data"].get("calendar_sources") == [{
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }]
     assert row["constructed_meeting_url"] == "https://meet.google.com/abc-defg-hij"
     assert row["status"] == "active" and row["native_meeting_id"] == "abc-defg-hij"
     # the whole list response is a few KB, not the multi-MB the stored data would make.
@@ -128,7 +136,9 @@ def test_get_meeting_by_id_still_returns_full_data():
     assert detail.status_code == 200
     body = detail.json()
     assert "data" in body and "speaker_events" in body["data"] and "recordings" in body["data"]
-    assert body["data"]["calendar_sources"][0]["calendar_connection_id"] == "calendar-primary"
+    assert body["data"]["calendar_sources"][0]["id"] == "calendar-primary"
+    assert body["data"]["calendar_sources"][0]["uid"] == "weekly-sync@example.com"
+    assert "event" in body["data"]["calendar_sources"][0]
 
 
 # ── C2 · default page size + honest has_more ───────────────────────────────────────────────────────
@@ -194,7 +204,11 @@ def test_populated_calendar_account_history_is_compact_and_excludes_plans():
     body = response.json()
     assert len(body["meetings"]) == 39
     assert {meeting["status"] for meeting in body["meetings"]} == {"completed", "failed"}
-    assert all("calendar_sources" not in meeting["data"] for meeting in body["meetings"])
+    assert all(
+        "event" not in source
+        for meeting in body["meetings"]
+        for source in meeting["data"].get("calendar_sources", [])
+    )
     assert all(meeting["data"]["calendar_uid"] for meeting in body["meetings"])
     assert body["has_more"] is False
     assert len(response.content) < 50_000, f"history page too large: {len(response.content)} bytes"
