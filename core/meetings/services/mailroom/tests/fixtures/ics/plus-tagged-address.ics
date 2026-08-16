@@ -1,0 +1,17 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260823T100000Z
+DTEND:20260823T104500Z
+DTSTAMP:20260816T080000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-plus-tag-008@google.com
+ATTENDEE;CN=Vexa Mailroom:mailto:mk-dev+notes@dev.vexa.ai
+X-GOOGLE-CONFERENCE:https://meet.google.com/plu-stag-ged
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Plus-tagged invite
+END:VEVENT
+END:VCALENDAR

@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260826T100000Z
+DTEND:20260826T104500Z
+DTSTAMP:20260816T080000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:negative-not-invited-010@google.com
+ATTENDEE;CN=Someone Else:mailto:someone@example.com
+ATTENDEE;CN=Another Workspace:mailto:other-workspace@dev.vexa.ai
+X-GOOGLE-CONFERENCE:https://meet.google.com/nti-nvtd-xyz
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Not our mailbox
+END:VEVENT
+END:VCALENDAR

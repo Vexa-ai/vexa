@@ -1,0 +1,35 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260821T170000
+DTEND:20260821T173000
+DTSTAMP:20260817T103000Z
+ORGANIZER;CN=Dmitriy Grankin:mailto:dmitry@vexa.ai
+UID:2w6e0r4t8y1u5i9o3p7a1s5dfg@google.com
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
+ TRUE;CN=mk-dev@dev.vexa.ai;X-NUM-GUESTS=0:mailto:mk-dev@dev.vexa.ai
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
+ TRUE;CN=Priya Raman;X-NUM-GUESTS=0:mailto:priya.raman@example.com
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
+ TRUE;CN=Tomás Oliveira;X-NUM-GUESTS=0:mailto:tomas.oliveira@example.com
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
+ TRUE;CN=Anna Weber;X-NUM-GUESTS=0:mailto:anna.weber@example.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/tvb-ynhu-jmi
+X-MICROSOFT-CDO-OWNERAPPTID:-1867241944
+CREATED:20260817T103000Z
+DESCRIPTION:Sent by a client that emits floating times.\n\n-::~:~::~:~:~:~:
+ ~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:
+ -\n\nJoin with Google Meet: https://meet.google.com/tvb-ynhu-jmi\n\nOr dia
+ l: (US) +1 402-935-2311 PIN: 742 158 907#\n\n-::~:~::~:~:~:~:~:~:~:~:~:~:~
+ :~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:-
+LAST-MODIFIED:20260817T103000Z
+LOCATION:
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Floating-time invite
+TRANSP:OPAQUE
+END:VEVENT
+END:VCALENDAR

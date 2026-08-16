@@ -267,6 +267,23 @@
    ]
   },
   {
+   "unique-id": "mailroom",
+   "node-type": "service",
+   "name": "mailroom",
+   "description": "meetings enter by email invitation: polls an inbound mailbox, parses the .ics (the invited address IS the workspace), and plans/reschedules/cancels meetings over the public API",
+   "metadata": [
+    {
+     "path": "core/meetings/services/mailroom"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "mailroom-http",
+     "type": "api"
+    }
+   ]
+  },
+  {
    "unique-id": "buffer",
    "node-type": "module",
    "name": "buffer",
@@ -1317,6 +1334,7 @@
       "desktop",
       "meeting-api",
       "mcp",
+      "mailroom",
       "buffer",
       "capture-codec",
       "gmeet-capture",
@@ -2067,6 +2085,22 @@
     }
    },
    "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "mailroom-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mailroom"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "POST/PATCH/DELETE /meetings with the workspace's X-API-Key — the mailroom consumes the public API like any client",
    "protocol": "HTTPS"
   },
   {

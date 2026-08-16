@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260805T113000Z
+DTEND:20260805T121500Z
+RRULE:FREQ=WEEKLY;BYDAY=WE
+DTSTAMP:20260816T083000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-recurring-006@google.com
+ATTENDEE;CN=Vexa Mailroom:mailto:mk-dev@dev.vexa.ai
+X-GOOGLE-CONFERENCE:https://meet.google.com/rec-urrr-ing
+SEQUENCE:2
+STATUS:CONFIRMED
+SUMMARY:Weekly team sync (moved to 11:30)
+END:VEVENT
+END:VCALENDAR

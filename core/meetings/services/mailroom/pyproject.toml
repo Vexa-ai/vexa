@@ -1,0 +1,25 @@
+[project]
+name = "vexa-mailroom"
+version = "0.12.0"
+description = "The mailroom (Stage-0 dev): meetings enter by EMAIL INVITATION. A workspace has an email address; users invite it like any attendee; the .ics lands in OUR mailbox and the invited address IS the workspace resolution — no calendar integration, no read access to anyone's calendar. Polls an inbound mailbox (Mailpit in dev, behind a MailSource port), parses the invitation (Google + Outlook flavours, RRULE series, SEQUENCE updates, CANCEL), and CONSUMES the public meeting API (POST/PATCH/DELETE /meetings) to plan, re-schedule and stop attendance. Fail-safe: anything unresolvable produces no group effect and a recorded notice."
+requires-python = ">=3.11"
+dependencies = [
+    # The liveness/operator app (MIT) + the transport to Mailpit and the public API (BSD-3).
+    "fastapi>=0.110,<1",
+    "httpx>=0.27,<1",
+    # iCalendar parsing + RRULE expansion — the SAME two libraries meeting-api's calendar_sync
+    # uses, so an invite and a feed resolve an event identically (both FINOS Category A).
+    "icalendar>=6,<7",
+    "python-dateutil>=2.9,<3",
+    # Test harness (in-process, no network, no docker).
+    "pytest>=8",
+    "pytest-asyncio>=0.23,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"

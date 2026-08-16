@@ -1,0 +1,16 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REPLY
+BEGIN:VEVENT
+DTSTART:20260818T140000Z
+DTEND:20260818T150000Z
+DTSTAMP:20260816T081500Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-one-off-001@google.com
+ATTENDEE;PARTSTAT=ACCEPTED;CN=Someone Else:mailto:someone@example.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SEQUENCE:0
+SUMMARY:Accepted: Quarterly sync
+END:VEVENT
+END:VCALENDAR

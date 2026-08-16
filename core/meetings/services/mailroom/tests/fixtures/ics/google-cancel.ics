@@ -1,0 +1,17 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:CANCEL
+BEGIN:VEVENT
+DTSTART:20260818T140000Z
+DTEND:20260818T150000Z
+DTSTAMP:20260816T090000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-one-off-001@google.com
+ATTENDEE;CN=Vexa Mailroom:mailto:mk-dev@dev.vexa.ai
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SEQUENCE:1
+STATUS:CANCELLED
+SUMMARY:Quarterly sync
+END:VEVENT
+END:VCALENDAR
