@@ -57,7 +57,10 @@ for p in sorted(D.glob("*.ics")):
             loc = str(e.get("LOCATION", ""))
             desc = str(e.get("DESCRIPTION", ""))
             xg = str(e.get("X-GOOGLE-CONFERENCE", "")) or str(e.get("X-MICROSOFT-SKYPETEAMSMEETINGURL", ""))
-            url_found = ("meet.google.com" in (loc + desc + xg)) or ("teams.microsoft.com" in (loc + desc + xg))
+            # Presence only — is a conferencing URL anywhere in the event? (Parsing one is the
+            # service's job, not this linter's; matching host substrings here would be both wrong
+            # and a needless URL-sanitization pattern in a fixture tool.)
+            url_found = "https://" in (loc + desc + xg)
             print(f"{p.name:44s} METHOD={method:8s} SEQ={seq} bot={'Y' if has_bot else 'N'} "
                   f"tz={tzid or '-':26s} rrule={'Y' if rr else 'N'} url={'Y' if url_found else 'N'} "
                   f"att={len(emails)} uid={uid[:22]}…")

@@ -37,6 +37,19 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
 
 
+def _host_matches(host: str, *domains: str) -> bool:
+    """Exact host, or a subdomain of one of ``domains`` — never a substring match.
+
+    **This is where the vendored copy is deliberately STRICTER than meeting-api's.** The original
+    tests ``"meet.google.com" in host``, which also matches ``meet.google.com.attacker.example``.
+    In meeting-api the link came from the user's own paste or their own calendar feed; here it
+    comes out of an email anyone on the internet can send to a public mailbox, so a lookalike host
+    must not resolve to a platform. Strictness only ever narrows what the mailroom accepts, so
+    every link it does accept is still accepted by the control plane it hands the URL to.
+    """
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
 def _configured_jitsi_hosts() -> set[str]:
     """Deployment-declared Jitsi hostnames (``VEXA_JITSI_HOSTS``, comma-separated) — for
     self-hosted deployments whose hostname carries neither "jitsi" nor a "meet" label. A
@@ -46,15 +59,20 @@ def _configured_jitsi_hosts() -> set[str]:
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
-def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple[str, str]]:
+def parse_meeting_url(raw: str, *, generic_hosts: bool = False) -> Optional[tuple[str, str]]:
     """Parse a pasted meeting URL (or bare id) → ``(platform, native_meeting_id)``, or ``None``
     when nothing valid can be extracted. Accepts the same inputs the terminal's
     ``parseMeetingInput`` accepts, so a link that validates client-side also validates here.
 
     ``generic_hosts`` widens jitsi inference to the self-hosted conventions (a host containing
-    "jitsi", or a bare ``meet.*`` host) — right for a DELIBERATELY pasted link, too loose for the
-    ICS free-text scan (``find_meeting_link`` passes False so a calendar full of arbitrary links
-    never imports a non-meeting as a jitsi room)."""
+    "jitsi", or a bare ``meet.*`` host). **It defaults to False in this copy** — meeting-api
+    defaults it True because a link there was deliberately pasted by the user, whereas every link
+    the mailroom sees arrived inside an email from anyone at all, and the heuristic would read
+    ``meet.google.com.attacker.example/abc-defg-hij`` as a joinable jitsi room. Deployments with a
+    self-hosted jitsi declare it in ``VEXA_JITSI_HOSTS``, which is honoured either way.
+
+    The narrower default only ever narrows what the mailroom accepts, so a link it does accept is
+    still accepted by the control plane it hands the URL to."""
     value = (raw or "").strip()
     if not value:
         return None
@@ -66,13 +84,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     parsed = urlparse(value)
     host = (parsed.hostname or "").lower()
     if host:
-        if "meet.google.com" in host:
+        if _host_matches(host, "meet.google.com"):
             code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
             return ("google_meet", code) if _GMEET_ID.match(code) else None
-        if "zoom" in host:
+        if _host_matches(host, "zoom.us", "zoomgov.com"):
             m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
             return ("zoom", m.group(0)) if m else None
-        if "teams.microsoft.com" in host or "teams.live.com" in host:
+        if _host_matches(host, "teams.microsoft.com", "teams.live.com"):
             # Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
             thread = _TEAMS_THREAD.search(unquote(value))
             if thread:
