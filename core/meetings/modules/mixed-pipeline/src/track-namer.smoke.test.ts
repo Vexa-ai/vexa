@@ -124,6 +124,7 @@ check('identity suffix normalization keeps its existing semantics without a back
   n.noteHeard('201');
   n.noteHeard('1266');
   for (const nm of ['leo (Unverified)', 'Dmitry Grankin']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 100); }
+  n.recordRosterCoverage(2, 2, 100);
   n.tick(6000);   // past the roster settle, before any speaking evidence exists
   check('two unnamed tracks and two unclaimed names ⇒ elimination REFUSES',
     n.nameFor('201') === null && n.nameFor('1266') === null, JSON.stringify(n.stats().how));
@@ -167,6 +168,7 @@ check('identity suffix normalization keeps its existing semantics without a back
   check('an uncorroborated roster name cannot pair with anything',
     n.nameFor('solo') === null, JSON.stringify(n.stats().roster));
   n.recordRosterName('Flicker', 100);
+  n.recordRosterCoverage(1, 1, 100);
   n.tick(60_000);   // the room settled and nobody new appeared
   check('a second sighting plus a settled roster makes it usable',
     n.nameFor('solo') === 'Flicker', JSON.stringify(n.stats().how));
@@ -281,6 +283,62 @@ check('identity suffix normalization keeps its existing semantics without a back
     m.nameFor('b') === 'Bo' && m.naming('b')?.source === 'elimination', JSON.stringify(m.stats().how));
 }
 {
+  // Silence from the producer is not evidence that the roster was complete. The legacy behavior
+  // treated a missing coverage statement as permission and could therefore draw elimination from a
+  // partial selector result. A modern Teams producer always states coverage; absence fails closed.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('a'); n.noteHeard('b');
+  for (const nm of ['Ana', 'Bo']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 10); }
+  for (const t0 of [10_000, 30_000]) {
+    n.setTrackActive('a', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('a', false, t0 + 4000);
+  }
+  n.tick(60_000);
+  check('NO coverage statement means NO roster elimination',
+    n.naming('a')?.source === 'evidence' && n.nameFor('b') === null, JSON.stringify(n.stats()));
+}
+{
+  // A transient empty DOM scan is not a proof that the previously retained roster became complete.
+  // The producer can report 0/0 while Teams re-mounts its participant surface; old names persist so
+  // the empty coverage statement must never revive an elimination from stale presence.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('solo');
+  n.recordRosterName('Ana', 0); n.recordRosterName('Ana', 10);
+  n.recordRosterCoverage(1, 2, 20);
+  n.recordRosterCoverage(0, 0, 30);
+  n.tick(60_000);
+  check('0/0 coverage cannot turn a retained roster name into a speaker',
+    n.nameFor('solo') === null, JSON.stringify(n.stats()));
+}
+{
+  // Nor may a later complete-looking subset (1/1) authorize an old second name retained from an
+  // earlier scan. Coverage must account for every usable identity elimination would draw from.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('a'); n.noteHeard('b');
+  for (const nm of ['Ana', 'Bo']) { n.recordRosterName(nm, 0); n.recordRosterName(nm, 10); }
+  for (const t0 of [10_000, 30_000]) {
+    n.setTrackActive('a', true, t0);
+    for (let t = t0; t < t0 + 4000; t += 1000) n.recordHint('Ana', t + 1000);
+    n.setTrackActive('a', false, t0 + 4000);
+  }
+  n.recordRosterCoverage(1, 1, 40_000);
+  n.tick(60_000);
+  check('coverage for a subset cannot eliminate from the larger retained roster',
+    n.naming('a')?.source === 'evidence' && n.nameFor('b') === null, JSON.stringify(n.stats()));
+}
+{
+  // The inverse skew is unsafe too: coverage may say it named two participants before the second
+  // roster-name observation crosses the bridge. The one retained name is not the complete set.
+  const n = namer({ rosterSightings: 2 });
+  n.noteHeard('solo');
+  n.recordRosterName('Ana', 0); n.recordRosterName('Ana', 10);
+  n.recordRosterCoverage(2, 2, 20);
+  n.tick(60_000);
+  check('coverage larger than the retained roster cannot eliminate from a partial identity set',
+    n.nameFor('solo') === null, JSON.stringify(n.stats()));
+}
+{
   // The placeholder never becomes a name on ANY path — it arrives shaped exactly like one.
   const n = namer({ rosterSightings: 2, selfName: 'Vexa' });
   n.setTrackActive('1', true, 0);
@@ -335,6 +393,25 @@ check('identity suffix normalization keeps its existing semantics without a back
     !held || /^Speaker /.test(held), `${held}`);
   check('the refusal is emitted as a typed observation, so a tape shows it',
     seen.includes('bot-family-in-roster:Vexa (Unverified)'), JSON.stringify(seen));
+}
+{
+  // Meeting 26218: the local bot joined as "Vexa", while a second bot used meeting-api's generated
+  // fallback identity. Teams qualified it, so the generic machine-token filter did not see the raw
+  // `VexaBot-<hex>` token. With one audio track and false 1/1 coverage, roster elimination painted
+  // every human word with that bot's name. The generated namespace is exact and reserved.
+  for (const selfName of ['Vexa', 'VexaBot-fd5f86', 'Meeting Assistant']) {
+    const seen: string[] = [];
+    const n = namer({ selfName, onObservation: (o) => seen.push(`${o.type}:${o.name}`) });
+    n.setTrackActive('201', true, 0);
+    for (const t of [0, 100, 200]) n.recordRosterName('VexaBot-8f264c (Gość) 2', t);
+    n.recordRosterCoverage(1, 1, 200);
+    n.setTrackActive('201', false, 8000);
+    n.tick(60_000);
+    check(`m26218: generated bot never names speech when self is "${selfName}"`,
+      n.nameFor('201') === null && n.labelFor('201') === 'Speaker A', JSON.stringify(n.stats()));
+    check(`m26218: generated bot refusal is observable when self is "${selfName}"`,
+      seen.includes('bot-family-in-roster:VexaBot-8f264c (Gość) 2'), JSON.stringify(seen));
+  }
 }
 
 // ── 9) …and a roster of ONLY bots is INCOMPLETE, not complete ───────────────────────────────────

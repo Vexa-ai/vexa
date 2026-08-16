@@ -111,12 +111,17 @@ function makeTile(id: string, name: string, opts: { outline: boolean }): { tile:
   return { tile, outline };
 }
 
-function installDocument(tiles: FakeEl[]): FakeEl {
-  const body = new FakeEl('body', {}, tiles);
+function installDocument(tiles: FakeEl[], panelRows: FakeEl[] = []): FakeEl {
+  const panel = panelRows.length ? new FakeEl('div', { 'data-tid': 'roster' }, panelRows) : null;
+  const body = new FakeEl('body', {}, panel ? [...tiles, panel] : tiles);
   g.document = {
     body,
     querySelector: (s: string) => (s === '[role="main"]' ? body : null),
-    querySelectorAll: (s: string) => (s === '[data-tid*="participant"]' ? tiles : []),
+    querySelectorAll: (s: string) => {
+      if (s === '[data-tid*="participant"]') return tiles;
+      if (panel && compile(s)(panel)) return [panel];
+      return [];
+    },
   };
   return body;
 }
@@ -129,7 +134,8 @@ interface Harness {
   advance: (ms: number) => void;
 }
 function start(tiles: FakeEl[], overrides: Record<string, unknown> = {}): Harness {
-  installDocument(tiles);
+  const { panelRows = [], ...watcherOverrides } = overrides as { panelRows?: FakeEl[] };
+  installDocument(tiles, panelRows);
   rafQueue = [];
   let clock = 1_700_000_000_000;
   const hints: Array<{ name: string; id: string; isEnd: boolean }> = [];
@@ -143,7 +149,7 @@ function start(tiles: FakeEl[], overrides: Record<string, unknown> = {}): Harnes
     log: (m) => logs.push(m),
     onSpeaking: (name, id, isEnd) => hints.push({ name, id, isEnd }),
     onObservation: (o) => observations.push(o),
-    ...overrides,
+    ...watcherOverrides,
   } as any);
   return { watcher, hints, observations, logs, advance: (ms) => { clock += ms; } };
 }
@@ -206,6 +212,25 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   check('animation: END carries the same name', h.hints[1]?.name === 'Alpha Example');
   check('animation: health reports one speaking transition', h.watcher.health().transitions === 1,
     JSON.stringify(h.watcher.health()));
+  h.watcher.destroy();
+}
+
+// ── 1a. A human whose name contains the configured bot name is still a human ─
+{
+  const { tile, outline } = makeTile('vexa-human', 'Vexa Petrova', { outline: true });
+  const h = start([tile], { selfName: 'Vexa' });
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('exact self filtering preserves a real human whose name contains the bot name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Vexa Petrova' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
   h.watcher.destroy();
 }
 
@@ -391,6 +416,71 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     ofType(h.observations, 'indicator-silent').length === 1,
     JSON.stringify(ofType(h.observations, 'indicator-silent')));
   check('regression: diagnostics never crossed into the hint stream', h.hints.length === 0);
+  h.watcher.destroy();
+}
+
+// ── 5b. ROSTER COMPLETENESS — meeting 26218's false 1/1 is forbidden ─────────
+{
+  // Teams can render one participant on more than one DOM surface. Every surface resolves a name,
+  // so four elements representing two people are complete 2/2 rather than the old broken 2/4.
+  const tiles = [
+    makeTile('alpha-tile', 'Alpha Example', { outline: true }).tile,
+    makeTile('alpha-row', 'Alpha Example', { outline: false }).tile,
+    makeTile('beta-tile', 'Beta Example', { outline: true }).tile,
+    makeTile('beta-row', 'Beta Example', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('coverage dedupes named duplicate surfaces into two complete participants',
+    last?.named === 2 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const panelRows = [
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'Dmitry Grankin')]),
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'mic_off')]),
+  ];
+  const h = start([], { selfName: 'Vexa', panelRows });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('an unresolved roster-panel row keeps one readable name at incomplete 1/2',
+    last?.named === 1 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const tiles = [
+    makeTile('p1', 'Dmitry Grankin', { outline: true }).tile,
+    makeTile('p2', 'video-stream-2', { outline: false }).tile,
+    makeTile('p3', 'participant-tile-3', { outline: false }).tile,
+    makeTile('p4', 'voice-level-stream-outline', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('m26218 coverage: one resolved name across four matched participants is 1/4, never 1/1',
+    last?.named === 1 && last?.participants === 4, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  const tiles = [
+    makeTile('p1', 'VexaBot-8f264c (Unverified)', { outline: true }).tile,
+    makeTile('p2', 'video-stream-2', { outline: false }).tile,
+    makeTile('p3', 'participant-tile-3', { outline: false }).tile,
+    makeTile('p4', 'voice-level-stream-outline', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'Vexa' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('m26218 generated bot: it never enters the roster-name stream',
+    rosterNames.every((o) => o.name !== 'VexaBot-8f264c (Unverified)'), JSON.stringify(rosterNames));
+  check('m26218 generated bot: unresolved four-surface scan reports 0/4 and cannot eliminate',
+    last?.named === 0 && last?.participants === 4, JSON.stringify(rosterCoverage));
   h.watcher.destroy();
 }
 

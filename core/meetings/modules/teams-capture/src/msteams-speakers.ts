@@ -176,12 +176,30 @@ const TEAMS_PLACEHOLDER_NAMES = new Set([
  * is Teams' statement about the participant and the transcript keeps it verbatim.
  */
 export function normalizeDisplayNameForIdentity(value: string): string {
-  return (value || '')
-    .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|gość|гость|外部)\)\s*$/giu, '')
-    .replace(/\s+\(\d+\)\s*$/, '')
-    .replace(/\s+\d+$/, '')
-    .trim()
-    .toLowerCase();
+  let normalized = String(value || '').trimEnd();
+  // Teams can stack a collision suffix after a qualifier ("Name (Guest) 2"). Peel until stable so
+  // the order in which Teams appended the decorations cannot change identity equality.
+  for (;;) {
+    const previous = normalized;
+    normalized = normalized
+      .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|gość|гость|外部)\)\s*$/giu, '')
+      .replace(/\s+\(\d+\)\s*$/, '')
+      .replace(/\s+\d+$/, '')
+      .trimEnd();
+    if (normalized === previous) break;
+  }
+  return normalized.trim().toLowerCase();
+}
+
+/** The exact machine namespace meeting-api owns for an omitted bot name.
+ *
+ * `VexaBot-${uuid.hex[:6]}` is generated in meeting-api. Teams may append an identity qualifier
+ * or collision suffix, so compare only after the same identity normalization used everywhere
+ * else. This is deliberately exact: words such as "bot", "assistant" and "notetaker" also occur
+ * in legitimate human display names and are not identity evidence.
+ */
+export function isGeneratedDefaultBotDisplayName(value: string): boolean {
+  return /^vexabot-[0-9a-f]{6}$/iu.test(normalizeDisplayNameForIdentity(value));
 }
 
 /** Is `name` the local participant (our bot), whatever qualifier Teams hung off it? */
@@ -205,6 +223,7 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
   // walk through the door its bare form is refused at.
   if (TEAMS_PLACEHOLDER_NAMES.has(normalized)) return false;
   if (TEAMS_PLACEHOLDER_NAMES.has(normalizeDisplayNameForIdentity(candidate))) return false;
+  if (isGeneratedDefaultBotDisplayName(candidate)) return false;
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
     && !TEAMS_CLOCK_PREFIX.test(normalized)
@@ -246,29 +265,45 @@ export function teamsNameFromStream(element: HTMLElement): string {
  * Names go through `isTeamsDisplayNameCandidate` like every other path in this file, so the panel
  * cannot introduce a name the tiles would have been refused.
  */
-export function readTeamsRosterPanel(root: ParentNode = document): string[] {
+export interface TeamsRosterPanelState {
+  /** Distinct display names resolved from panel rows. */
+  names: string[];
+  /** One entry per distinct panel row; null means the row existed but no safe identity resolved. */
+  entries: Array<string | null>;
+}
+
+export function readTeamsRosterPanelState(root: ParentNode = document): TeamsRosterPanelState {
   const names: string[] = [];
-  const seen = new Set<string>();
+  const entries: Array<string | null> = [];
+  const seenNames = new Set<string>();
+  const seenEntries = new Set<Element>();
   for (const panelSel of teamsRosterPanelSelectors) {
     let panels: Element[] = [];
     try { panels = Array.from(root.querySelectorAll(panelSel)); } catch { continue; }
     for (const panel of panels) {
       for (const entrySel of teamsRosterEntrySelectors) {
-        let entries: Element[] = [];
-        try { entries = Array.from(panel.querySelectorAll(entrySel)); } catch { continue; }
-        for (const entry of entries) {
+        let matchedEntries: Element[] = [];
+        try { matchedEntries = Array.from(panel.querySelectorAll(entrySel)); } catch { continue; }
+        for (const entry of matchedEntries) {
           if (!(entry instanceof HTMLElement)) continue;
+          if (seenEntries.has(entry)) continue;
+          seenEntries.add(entry);
           // Same resolution order as a tile, minus the stream wrapper a roster row does not have:
           // stable attributes first, then the structural leaf scan (#1121) as the rot-proof floor.
           const name = extractTeamsSpeakerName(entry);
-          if (!name || seen.has(name)) continue;
-          seen.add(name);
+          entries.push(name || null);
+          if (!name || seenNames.has(name)) continue;
+          seenNames.add(name);
           names.push(name);
         }
       }
     }
   }
-  return names;
+  return { names, entries };
+}
+
+export function readTeamsRosterPanel(root: ParentNode = document): string[] {
+  return readTeamsRosterPanelState(root).names;
 }
 
 /** Resolve the display name carried by one participant tile.
@@ -557,9 +592,6 @@ type SpeakingState = 'speaking' | 'silent' | 'unknown';
 
 export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
-  // Kept for the substring test below (a tile whose label EMBEDS the bot name); identity
-  // comparisons go through isSelfDisplayName, which strips Teams' qualifiers first.
-  const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
   const heartbeatMs = opts.heartbeatMs ?? 2000;
   const indicatorSilentMs = opts.indicatorSilentMs ?? 60_000;
@@ -991,7 +1023,6 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     }
     unresolvedEpisodes.delete(identity.id);
     if (isSelfDisplayName(identity.name, opts.selfName)) return;                 // our bot, any qualifier
-    if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;   // …or embedding our name
     if (edge === 'end' && !namedEpisodes.delete(identity.id)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     if (edge === 'start') emitNamedStart(identity);
@@ -1096,7 +1127,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     let found = 0; let observable = 0;
     scanCounter++;
     const namesThisScan = new Set<string>();
-    let selfTilesThisScan = 0;
+    let unresolvedParticipantSurfaces = 0;
     for (const selector of allSelectors) {
       document.querySelectorAll(selector).forEach(el => {
         if (el instanceof HTMLElement && !seen.has(el)) {
@@ -1106,8 +1137,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
           // voice outline is invisible to every other path in this file, and they are exactly the
           // person an elimination argument is for.
           const rosterName = extractTeamsSpeakerName(el);
-          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) selfTilesThisScan++;
+          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) { /* local bot */ }
           else if (rosterName) namesThisScan.add(rosterName);
+          else unresolvedParticipantSurfaces++;
           if (hasRequiredSignal(el)) { observable++; observeParticipant(el); }
           else emitSignalAbsent(el);   // counted and reported, never hinted
         }
@@ -1117,8 +1149,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     // into the same stream — a name is a name whichever surface showed it — but counted separately,
     // because "the tiles are gone and the panel saved us" is exactly the state worth being able to
     // see in a fixture afterwards.
-    let panelNames: string[] = [];
-    try { panelNames = readTeamsRosterPanel(document); } catch { panelNames = []; }
+    let panelState: TeamsRosterPanelState = { names: [], entries: [] };
+    try { panelState = readTeamsRosterPanelState(document); } catch { panelState = { names: [], entries: [] }; }
+    const panelNames = panelState.names;
     for (const n of panelNames) if (!isSelfDisplayName(n, opts.selfName)) namesThisScan.add(n);
     lastPanelCount = panelNames.length;
 
@@ -1128,19 +1161,18 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     // heartbeat: it is a state, and an unchanged state repeated 1800 times is not information.
     const usableNames = new Set([...namesThisScan].filter(
       (n) => isTeamsDisplayNameCandidate(n) && !isSelfDisplayName(n, opts.selfName)));
-    // PEOPLE, NOT ELEMENTS. `found` counts matched ELEMENTS, and Teams renders each participant on
-    // more than one surface — a video tile AND a roster row both match, so a six-person meeting
-    // reported twelve. The consumer reads this as "named 6 of 12" and concludes the roster is half
-    // missing, which permanently disables the elimination rule in exactly the multi-party rooms it
-    // was built for. Measured on the first prod fixture: 3/6, 4/8, 5/10, 6/12, 6/14 — participants
-    // exactly double the names, every scan.
-    //
-    // There is no honest way to count PEOPLE from an element sweep, so it no longer pretends to.
-    // The count is the distinct names resolved; when the roster PANEL was readable it is the
-    // authority, because a panel row is one participant by construction. A scan that resolved every
-    // name it could see reports complete, and one that could not stays short.
-    const participants = Math.max(usableNames.size, panelNames.filter(
-      (n) => !isSelfDisplayName(n, opts.selfName)).length);
+    // COMPLETENESS MUST FAIL CLOSED WITHOUT PRETENDING DOM ELEMENTS ARE PEOPLE. Teams may render the
+    // same named participant on several selector surfaces, so resolved display names are deduped.
+    // An unresolved surface cannot be deduped safely: each is therefore one additional lower-bound
+    // participant. Meeting 26218 had zero usable names and four unresolved surfaces, so it is 0/4;
+    // an ordinary two-person room rendered twice per person but named on every surface is 2/2.
+    const nonSelfPanelEntries = panelState.entries.filter(
+      (name) => !name || !isSelfDisplayName(name, opts.selfName));
+    const distinctUsablePanelNames = new Set(nonSelfPanelEntries.filter(
+      (name): name is string => !!name && isTeamsDisplayNameCandidate(name)));
+    const unresolvedPanelParticipants = Math.max(
+      0, nonSelfPanelEntries.length - distinctUsablePanelNames.size);
+    const participants = usableNames.size + unresolvedParticipantSurfaces + unresolvedPanelParticipants;
     const coverageKey = `${usableNames.size}/${participants}`;
     if (coverageKey !== lastCoverageKey) {
       lastCoverageKey = coverageKey;

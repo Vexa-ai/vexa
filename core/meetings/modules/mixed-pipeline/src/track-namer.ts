@@ -123,7 +123,7 @@ const PLACEHOLDER_NAMES = new Set([
 ]);
 
 const IDENTITY_QUALIFIERS = new Set([
-  'unverified', 'guest', 'bot', 'external', 'extern', 'invite', 'invité', 'gast', 'гость',
+  'unverified', 'guest', 'bot', 'external', 'extern', 'invite', 'invité', 'gast', 'gość', 'гость', '外部',
 ]);
 
 const stripParenthesizedIdentitySuffix = (
@@ -161,14 +161,22 @@ const stripNumericIdentitySuffix = (value: string): string => {
 /** Teams' qualifiers, stripped for identity comparison only — never for display. */
 export function normalizeNameForIdentity(value: string): string {
   let normalized = String(value || '').trimEnd();
-  normalized = stripParenthesizedIdentitySuffix(
-    normalized,
-    (suffix) => IDENTITY_QUALIFIERS.has(suffix.toLowerCase()),
-  );
-  normalized = stripParenthesizedIdentitySuffix(normalized, isAsciiDigits);
-  normalized = stripNumericIdentitySuffix(normalized);
+  for (;;) {
+    const previous = normalized;
+    normalized = stripParenthesizedIdentitySuffix(
+      normalized,
+      (suffix) => IDENTITY_QUALIFIERS.has(suffix.toLowerCase()),
+    );
+    normalized = stripParenthesizedIdentitySuffix(normalized, isAsciiDigits);
+    normalized = stripNumericIdentitySuffix(normalized);
+    if (normalized === previous) break;
+  }
   return normalized.trim().toLowerCase();
 }
+
+// meeting-api's exact fallback when a caller supplies no bot name. This reserved machine namespace
+// is safe to recognize; fuzzy role words ("bot", "assistant", "notetaker") are not.
+const GENERATED_DEFAULT_BOT_ID = /^vexabot-[0-9a-f]{6}$/iu;
 
 export type NameEvidenceKind = 'dom' | 'caption';
 
@@ -445,9 +453,10 @@ export class TrackNamer {
   /** Is this name one of OUR OWN KIND — a bot spawned from the same configured stem? Distinct from
    *  `unnameable`, which asks whether the name is ours exactly. Roster-only by design. */
   private botFamily(name: string): boolean {
-    if (!this.selfStem) return false;
     const id = normalizeNameForIdentity(name);
     if (!id) return false;
+    if (GENERATED_DEFAULT_BOT_ID.test(id)) return true;
+    if (!this.selfStem) return false;
     return id.split(' ')[0] === this.selfStem;
   }
 
@@ -936,7 +945,10 @@ export class TrackNamer {
     // participants it could not name, the unclaimed set is missing people and the "only one left"
     // is an artefact of what we failed to read. m34 again: four tiles, two names — and the two it
     // could not name included the human the rule then mislabelled.
-    if (this.rosterCoverage && this.rosterCoverage.named < this.rosterCoverage.participants) return;
+    if (!this.rosterCoverage
+      || this.rosterCoverage.participants <= 0
+      || this.rosterCoverage.named !== this.rosterCoverage.participants
+      || this.rosterCoverage.named !== this.roster.size) return;
     const unnamed = this.order.filter((t) => !this.named.has(t));
     if (unnamed.length !== 1) return;
     // A ROSTER THAT IS STILL FILLING IS NOT A ROSTER YOU CAN ELIMINATE AGAINST. Sightings arrive one
