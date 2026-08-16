@@ -12,7 +12,8 @@
  * Run: npx tsx src/teams-name-hygiene.test.ts
  */
 import {
-  isTeamsDisplayNameCandidate, isSelfDisplayName, normalizeDisplayNameForIdentity,
+  isGeneratedDefaultBotDisplayName, isTeamsDisplayNameCandidate, isSelfDisplayName,
+  normalizeDisplayNameForIdentity,
 } from './msteams-speakers.js';
 
 let failed = 0;
@@ -32,6 +33,20 @@ check('identity normalisation strips the qualifier but the DISPLAY name is untou
   normalizeDisplayNameForIdentity('Leo (Unverified)') === 'leo'
   && isTeamsDisplayNameCandidate('Leo (Unverified)'));
 
+// ── meeting-api's generated fallback bot identity ────────────────────────────────────────────────
+for (const generated of [
+  'VexaBot-8f264c', 'VexaBot-8f264c (Unverified)', 'VexaBot-8f264c (Guest)',
+  'VexaBot-8f264c 2', 'VexaBot-8f264c (2)', 'VexaBot-8f264c (Gość) 2',
+  'VexaBot-8f264c (外部) (2)',
+]) {
+  check(`generated bot: "${generated}" is recognized exactly`,
+    isGeneratedDefaultBotDisplayName(generated), generated);
+  check(`generated bot: "${generated}" can never become a human name`,
+    !isTeamsDisplayNameCandidate(generated), generated);
+}
+check('stacked Teams suffixes still compare as the local bot',
+  isSelfDisplayName('Vexa (Guest) 2', 'Vexa'));
+
 // ── the platform's placeholders ──────────────────────────────────────────────────────────────────
 for (const placeholder of [
   'Unknown user', 'unknown user', 'Unknown User', 'Unknown', 'Guest', 'Anonymous',
@@ -44,7 +59,11 @@ check('m26132: a bare lowercase media label cannot become Julian\'s name',
   !isTeamsDisplayNameCandidate('datenanalyse'));
 
 // ── and the humans still get through ─────────────────────────────────────────────────────────────
-for (const real of ['Dmitry Grankin', 'leo (Unverified)', 'Anne-Marie', 'Jean-Luc Picard', 'Максим', 'Bo']) {
+for (const real of [
+  'Dmitry Grankin', 'leo (Unverified)', 'Anne-Marie', 'Jean-Luc Picard', 'Максим', 'Bo',
+  'Vexa Petrova', 'Vexana Petrova', 'Robin Botman', 'Assistant Smith', 'VexaBot Smith',
+  'VexaBot-8f264', 'VexaBot-8f264cc', 'VexaBot-8f26zz',
+]) {
   check(`human: "${real}" is still a name`, isTeamsDisplayNameCandidate(real), real);
 }
 

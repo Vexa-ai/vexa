@@ -73,4 +73,4 @@ check('same text far apart in Whisper word time is not a contest',
   detectTeamsWordContest(left, distantRight, distantSubmissions, spans) === null);
 
 if (failed > 0) process.exit(1);
-console.log('\n✅ Teams contested-word marking stays post-confirm, exact, symmetric, and unresolved.');
+console.log('\n✅ Teams contested-word evaluation diagnostics stay exact, symmetric, and unresolved.');

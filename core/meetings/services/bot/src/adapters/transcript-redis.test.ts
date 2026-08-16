@@ -94,6 +94,38 @@ async function main(): Promise<void> {
     check('string-id: channel = tc:meeting:abc-defg-hij:mutable', pubs[0]?.channel === 'tc:meeting:abc-defg-hij:mutable', pubs[0]?.channel);
   }
 
+  // ── Teams/GMeet-compatible live envelope: same-id mutates, distinct pending ids coexist ──
+  {
+    const { client, pubs } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42, liveEnvelope: 'speaker-snapshot' });
+    const draftA = { ...seg, segment_id: 'csrc-201:1000', speaker: '', speaker_key: 'csrc:201', text: 'hello', completed: false };
+    const draftAGrown = { ...draftA, text: 'hello world' };
+    const draftB = { ...seg, segment_id: 'csrc-201:2000', speaker: '', speaker_key: 'csrc:201', text: 'next thought', completed: false };
+    await sink.publish(draftA);
+    await sink.publish(draftAGrown);
+    await sink.publish(draftB);
+
+    const first = JSON.parse(pubs[0]!.message);
+    const grown = JSON.parse(pubs[1]!.message);
+    const coexist = JSON.parse(pubs[2]!.message);
+    check('snapshot: stable CSRC key is the replacement scope', first.speaker === 'csrc:201', String(first.speaker));
+    check('snapshot: same id replaces its draft text', grown.pending.length === 1 && grown.pending[0].text === 'hello world', JSON.stringify(grown.pending));
+    check('snapshot: distinct pending ids coexist', coexist.pending.length === 2, JSON.stringify(coexist.pending));
+
+    await sink.publish({ ...draftAGrown, completed: true });
+    const confirmed = JSON.parse(pubs[3]!.message);
+    check('snapshot: confirmation replaces only its own draft',
+      confirmed.confirmed.length === 1 && confirmed.confirmed[0].segment_id === draftA.segment_id
+        && confirmed.pending.length === 1 && confirmed.pending[0].segment_id === draftB.segment_id,
+      JSON.stringify(confirmed));
+
+    await sink.retract?.([draftB.segment_id]);
+    const cleared = JSON.parse(pubs[4]!.message);
+    check('snapshot: retract publishes the surviving complete pending set',
+      cleared.speaker === 'csrc:201' && cleared.confirmed.length === 0 && cleared.pending.length === 0,
+      JSON.stringify(cleared));
+  }
+
   if (failed) { console.error(`\n❌ transcript-redis (L3): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ transcript-redis (L3): XADDs the transcription_segments stream + PUBLISHes tc:meeting:{id}:mutable, payload round-trips a schema-valid transcript.v1 segment.');
 }

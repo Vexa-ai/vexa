@@ -6,7 +6,7 @@ transport, transcript context, Whisper confidence, row length, or timing coverag
 
 ## Current contract
 
-A phrase is marked contested only when rows from different CSRCs satisfy all three observations:
+A phrase is detected as contested only when rows from different CSRCs satisfy all three observations:
 
 1. their routed mixed-audio intervals overlap;
 2. their normalized transcript contains the same contiguous phrase above the configured text
@@ -14,7 +14,8 @@ A phrase is marked contested only when rows from different CSRCs satisfy all thr
 3. consensus Whisper word times for that phrase are close enough across the two lane windows.
 
 This is duplicate detection, not speaker identification. Every detected pair stays in the
-transcript under both CSRCs and only the exact shared phrase is wrapped:
+transcript under both CSRCs with verbatim confirmed text. The exact shared phrase may be wrapped in
+evaluation-only diagnostics:
 
 ```text
 CSRC 201: it. ⟦It's not like plug and⟧{CSRC 201↔CSRC 840} plug.
@@ -23,11 +24,12 @@ CSRC 840: ⟦It's not like plug and⟧{CSRC 840↔CSRC 201} play kind of PowerPo
 
 There is no winner, loser, score, confidence, deletion, or reassignment. Different simultaneous
 wording remains ordinary independent speech. If word-time evidence is missing or too distant, the
-detector emits no contested marker rather than widening the marked interval.
+detector records no contested pair rather than widening the detected interval.
 
-The production detector is post-confirm and pre-publish inside the Teams pipeline. The browser
-evaluation copy stays independent so a fixture can audit the production output rather than create
-it:
+The production detector is post-confirm inside the Teams pipeline and exposes only the unresolved
+pair count through pipeline health. Public transcript text is never rewritten. The browser
+evaluation copy stays independent and may render the explicit notation so a fixture can audit the
+detector rather than create production output:
 
 ```text
 /Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/src/teams-contested-word-marker.ts
@@ -37,8 +39,9 @@ it:
 /Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-live-model.mjs
 ```
 
-The API text is the source of the marker. Terminal rendering may hide the wire suffix visually,
-but it must not infer, widen, resolve, or delete a contest.
+The marker is an evaluation diagnostic, not a transcript wire format. The API, Dashboard and
+exports receive the original confirmed text. A consumer must not infer, widen, resolve, or delete a
+contest from text.
 
 ## Why the heuristic resolver is rejected
 
@@ -54,8 +57,8 @@ mixed PCM + CSRC activity
         -> per-CSRC continuous GMeet-compatible windows
         -> confirmed rows
         -> overlap + same phrase + word-time proximity
-        -> wrap exact words on both rows as contested
-        -> publish without guessing ownership
+        -> count the unresolved pair in telemetry
+        -> publish both verbatim rows without guessing ownership
 ```
 
 ## Future fix: session-local diarization centroids
@@ -86,8 +89,8 @@ padding. Run speaker-change/overlap segmentation inside that raw mixed-audio cut
 physical waveform shared by the rival lanes—not one independent audio sample per CSRC.
 
 If the envelope contains one stable voice region, embed that region and compare it with the eligible
-session centroids. If it contains simultaneous voices that cannot be separated, keep the existing
-contested notation. Whisper word times locate the experiment window; they never identify the voice.
+session centroids. If it contains simultaneous voices that cannot be separated, keep both verbatim
+rows unresolved. Whisper word times locate the experiment window; they never identify the voice.
 
 ### 3. Resolve or abstain
 
@@ -136,5 +139,5 @@ interface TeamsContestedAcousticResolution {
   by aggregate accuracy alone; and
 - meeting teardown proves no centroid remains addressable.
 
-Until those gates pass, contested words remain duplicated and explicitly wrapped. That is the only
-safe current behavior.
+Until those gates pass, contested words remain duplicated with verbatim text and an internal
+unresolved-pair signal. That is the only safe current behavior.

@@ -157,7 +157,16 @@ jobs:
           set -euo pipefail
           case "$VERSION" in
             v0.12.18)
+              CANDIDATE_MAP=releases/v0.12.18/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.18
               EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
+              EXPECTED_TOP_DESCRIPTORS=10
+              EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            v0.12.23-rc.10)
+              CANDIDATE_MAP=releases/v0.12.23/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.23
+              EXPECTED_MAP_SHA256=5ad5bd86f5eb8e8a9fe48ef921189998b81fd09af621375b2bf7539d00c37562
               EXPECTED_TOP_DESCRIPTORS=10
               EXPECTED_PLATFORM_IDENTITIES=19
               ;;
@@ -167,8 +176,9 @@ jobs:
               ;;
           esac
           node scripts/registry-candidate-validate.mjs \
-            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --candidate-map "$CANDIDATE_MAP" \
             --tag "$VERSION" \
+            --expected-map-stable-tag "$EXPECTED_MAP_STABLE_TAG" \
             --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
             --expected-top-descriptors "$EXPECTED_TOP_DESCRIPTORS" \
             --expected-platform-identities "$EXPECTED_PLATFORM_IDENTITIES"

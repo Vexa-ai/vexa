@@ -29,6 +29,13 @@
  */
 
 export const teamsParticipantSelectors: string[] = [
+  // Start from the exact speaking atom. Its enclosing stream wrapper joins the
+  // active signal to the display name without depending on a gallery layout.
+  '[data-tid="voice-level-stream-outline"]',
+  // The stream wrapper is the canonical participant surface: Teams carries the
+  // display name in data-tid and nests the voice-level outline below it.  Broad
+  // tile/roster selectors remain fallbacks for layouts without this wrapper.
+  '[data-stream-type][data-tid]',
   '[data-tid*="participant"]',
   '[aria-label*="participant"]',
   '[data-tid*="roster"]',
@@ -109,6 +116,20 @@ export const teamsMeetingContainerSelectors: string[] = [
 ];
 
 const VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
+const STREAM_WRAPPER_SELECTOR = '[data-stream-type][data-tid]';
+const STABLE_PARTICIPANT_ROOT_SELECTOR = [
+  '[data-participant-id]',
+  '[data-user-id]',
+  '[data-object-id]',
+  '[data-acc-element-id]',
+  '[data-tid*="participant-tile"]',
+  '[data-tid*="participantTile"]',
+  '[data-tid*="video-tile"]',
+  '[data-tid*="videoTile"]',
+].join(', ');
+function matchesSelector(element: HTMLElement, selector: string): boolean {
+  try { return (element as any).matches?.(selector) === true; } catch { return false; }
+}
 const TEAMS_CONTROL_LABELS = new Set([
   'more_vert', 'mic_off', 'mic', 'videocam', 'videocam_off',
   'present_to_all', 'devices', 'speaker', 'speakers', 'microphone',
@@ -176,12 +197,30 @@ const TEAMS_PLACEHOLDER_NAMES = new Set([
  * is Teams' statement about the participant and the transcript keeps it verbatim.
  */
 export function normalizeDisplayNameForIdentity(value: string): string {
-  return (value || '')
-    .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|gość|гость|外部)\)\s*$/giu, '')
-    .replace(/\s+\(\d+\)\s*$/, '')
-    .replace(/\s+\d+$/, '')
-    .trim()
-    .toLowerCase();
+  let normalized = String(value || '').trimEnd();
+  // Teams can stack a collision suffix after a qualifier ("Name (Guest) 2"). Peel until stable so
+  // the order in which Teams appended the decorations cannot change identity equality.
+  for (;;) {
+    const previous = normalized;
+    normalized = normalized
+      .replace(/\s*\((?:unverified|guest|bot|external|extern|invit[ée]|gast|gość|гость|外部)\)\s*$/giu, '')
+      .replace(/\s+\(\d+\)\s*$/, '')
+      .replace(/\s+\d+$/, '')
+      .trimEnd();
+    if (normalized === previous) break;
+  }
+  return normalized.trim().toLowerCase();
+}
+
+/** The exact machine namespace meeting-api owns for an omitted bot name.
+ *
+ * `VexaBot-${uuid.hex[:6]}` is generated in meeting-api. Teams may append an identity qualifier
+ * or collision suffix, so compare only after the same identity normalization used everywhere
+ * else. This is deliberately exact: words such as "bot", "assistant" and "notetaker" also occur
+ * in legitimate human display names and are not identity evidence.
+ */
+export function isGeneratedDefaultBotDisplayName(value: string): boolean {
+  return /^vexabot-[0-9a-f]{6}$/iu.test(normalizeDisplayNameForIdentity(value));
 }
 
 /** Is `name` the local participant (our bot), whatever qualifier Teams hung off it? */
@@ -205,6 +244,7 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
   // walk through the door its bare form is refused at.
   if (TEAMS_PLACEHOLDER_NAMES.has(normalized)) return false;
   if (TEAMS_PLACEHOLDER_NAMES.has(normalizeDisplayNameForIdentity(candidate))) return false;
+  if (isGeneratedDefaultBotDisplayName(candidate)) return false;
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
     && !TEAMS_CLOCK_PREFIX.test(normalized)
@@ -227,7 +267,9 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
  * Origin: Jacob Schooley, Vexa-ai/vexa#1024 (commit 6fab915e); the guard is added here.
  */
 export function teamsNameFromStream(element: HTMLElement): string {
-  const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+  const voiceOutline = matchesSelector(element, VOICE_LEVEL_SELECTOR)
+    ? element
+    : element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
   const streamEl = (voiceOutline && (voiceOutline as any).closest?.('[data-stream-type][data-tid]'))
     || (element as any).closest?.('[data-stream-type][data-tid]')
     || element.querySelector('[data-stream-type][data-tid]');
@@ -246,29 +288,45 @@ export function teamsNameFromStream(element: HTMLElement): string {
  * Names go through `isTeamsDisplayNameCandidate` like every other path in this file, so the panel
  * cannot introduce a name the tiles would have been refused.
  */
-export function readTeamsRosterPanel(root: ParentNode = document): string[] {
+export interface TeamsRosterPanelState {
+  /** Distinct display names resolved from panel rows. */
+  names: string[];
+  /** One entry per distinct panel row; null means the row existed but no safe identity resolved. */
+  entries: Array<string | null>;
+}
+
+export function readTeamsRosterPanelState(root: ParentNode = document): TeamsRosterPanelState {
   const names: string[] = [];
-  const seen = new Set<string>();
+  const entries: Array<string | null> = [];
+  const seenNames = new Set<string>();
+  const seenEntries = new Set<Element>();
   for (const panelSel of teamsRosterPanelSelectors) {
     let panels: Element[] = [];
     try { panels = Array.from(root.querySelectorAll(panelSel)); } catch { continue; }
     for (const panel of panels) {
       for (const entrySel of teamsRosterEntrySelectors) {
-        let entries: Element[] = [];
-        try { entries = Array.from(panel.querySelectorAll(entrySel)); } catch { continue; }
-        for (const entry of entries) {
+        let matchedEntries: Element[] = [];
+        try { matchedEntries = Array.from(panel.querySelectorAll(entrySel)); } catch { continue; }
+        for (const entry of matchedEntries) {
           if (!(entry instanceof HTMLElement)) continue;
+          if (seenEntries.has(entry)) continue;
+          seenEntries.add(entry);
           // Same resolution order as a tile, minus the stream wrapper a roster row does not have:
           // stable attributes first, then the structural leaf scan (#1121) as the rot-proof floor.
           const name = extractTeamsSpeakerName(entry);
-          if (!name || seen.has(name)) continue;
-          seen.add(name);
+          entries.push(name || null);
+          if (!name || seenNames.has(name)) continue;
+          seenNames.add(name);
           names.push(name);
         }
       }
     }
   }
-  return names;
+  return { names, entries };
+}
+
+export function readTeamsRosterPanel(root: ParentNode = document): string[] {
+  return readTeamsRosterPanelState(root).names;
 }
 
 /** Resolve the display name carried by one participant tile.
@@ -496,7 +554,7 @@ export type TeamsProducerObservation =
 
 /** Coverage + liveness of the WHO signal, for a caller that wants to surface it. */
 export interface TeamsSpeakerHealth {
-  /** Participant-shaped elements the selectors matched on the last scan. */
+  /** Canonical participant surfaces discovered on the last scan. */
   found: number;
   /** …of which carry the voice-level outline (only these can ever be named). */
   observable: number;
@@ -557,9 +615,6 @@ type SpeakingState = 'speaking' | 'silent' | 'unknown';
 
 export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const log = opts.log || (() => { /* silent */ });
-  // Kept for the substring test below (a tile whose label EMBEDS the bot name); identity
-  // comparisons go through isSelfDisplayName, which strips Teams' qualifiers first.
-  const selfLower = (opts.selfName || '').toLowerCase();
   const debounceMs = opts.debounceMs ?? 300;
   const heartbeatMs = opts.heartbeatMs ?? 2000;
   const indicatorSilentMs = opts.indicatorSilentMs ?? 60_000;
@@ -568,7 +623,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const now = opts.now ?? (() => Date.now());
 
   // ── Coverage accounting (Gate A) ──
-  // Every tile the selectors match is COUNTED, whether or not it is observable.
+  // Every canonical participant surface is COUNTED, whether or not it is observable.
   // The old code returned silently on a missing outline, so 3 of 4 participants
   // were invisible: not observed, not named, and not reported as missing.
   const coverage = { found: 0, observable: 0, roster: 0 };
@@ -590,18 +645,23 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   const cache = new Map<HTMLElement, Identity>();
 
   function extractId(element: HTMLElement): string {
+    const isStreamWrapper = matchesSelector(element, STREAM_WRAPPER_SELECTOR);
     let id = element.getAttribute('data-acc-element-id') ||
-      element.getAttribute('data-tid') ||
       element.getAttribute('data-participant-id') ||
       element.getAttribute('data-user-id') ||
       element.getAttribute('data-object-id') ||
+      // On a stream wrapper data-tid is the display NAME, not an identity key.
+      // Two people can share a display name, so keep them element-distinct.
+      (!isStreamWrapper ? element.getAttribute('data-tid') : null) ||
       element.getAttribute('id');
     if (!id) {
-      const stableChild = element.querySelector(teamsParticipantIdSelectors.join(', '));
+      const stableChild = element.querySelector(
+        '[data-participant-id], [data-user-id], [data-object-id], [data-acc-element-id]');
       if (stableChild) {
-        id = stableChild.getAttribute('data-tid') ||
-          stableChild.getAttribute('data-participant-id') ||
-          stableChild.getAttribute('data-user-id');
+        id = stableChild.getAttribute('data-participant-id') ||
+          stableChild.getAttribute('data-user-id') ||
+          stableChild.getAttribute('data-object-id') ||
+          stableChild.getAttribute('data-acc-element-id');
       }
     }
     if (!id) {
@@ -627,6 +687,40 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       identity.name = extractName(element);   // the name div often renders after the tile
     }
     return identity;
+  }
+
+  /**
+   * Collapse nested selector surfaces onto the element that actually joins
+   * identity to the speaking signal.
+   *
+   * Teams may expose an outer participant tile, a list item and the nested
+   * stream wrapper at the same time. Observing/counting each match independently
+   * creates duplicate participants and can strand the name on one subtree while
+   * the voice outline lives on another. The stream wrapper is therefore the
+   * canonical floor. When it sits inside a root carrying a stable participant
+   * identifier, retain that root so state survives name/layout changes.
+   */
+  function canonicalParticipantSurface(element: HTMLElement): HTMLElement {
+    const outline = matchesSelector(element, VOICE_LEVEL_SELECTOR)
+      ? element
+      : element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+    const stream = (matchesSelector(element, STREAM_WRAPPER_SELECTOR) ? element : null)
+      || (outline && (outline as any).closest?.(STREAM_WRAPPER_SELECTOR))
+      || element.querySelector(STREAM_WRAPPER_SELECTOR);
+    if (!(stream instanceof HTMLElement)) {
+      const signalRoot = outline && (outline as any).closest?.(STABLE_PARTICIPANT_ROOT_SELECTOR);
+      return signalRoot instanceof HTMLElement ? signalRoot : element;
+    }
+    const stableRoot = (stream as any).closest?.(STABLE_PARTICIPANT_ROOT_SELECTOR);
+    return stableRoot instanceof HTMLElement ? stableRoot : stream;
+  }
+
+  function participantSurfaceShape(element: HTMLElement): string {
+    const stream = matchesSelector(element, STREAM_WRAPPER_SELECTOR)
+      ? 'self'
+      : element.querySelector(STREAM_WRAPPER_SELECTOR) ? 'descendant' : 'absent';
+    const stableRoot = matchesSelector(element, STABLE_PARTICIPANT_ROOT_SELECTOR) ? 'yes' : 'no';
+    return `stream=${stream} stable-root=${stableRoot}`;
   }
 
   // ── State machine (200ms hysteresis, signal-required) ──
@@ -808,7 +902,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   function detectSpeakingState(element: HTMLElement): Detection {
-    const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+    const voiceOutline = matchesSelector(element, VOICE_LEVEL_SELECTOR)
+      ? element
+      : element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
     if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
     let memory = signalMemory.get(element);
     if (!memory) {
@@ -847,7 +943,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   }
 
   function hasRequiredSignal(element: HTMLElement): boolean {
-    return element.querySelector(VOICE_LEVEL_SELECTOR) !== null;
+    return matchesSelector(element, VOICE_LEVEL_SELECTOR)
+      || element.querySelector(VOICE_LEVEL_SELECTOR) !== null;
   }
 
   // ── Gate A: a tile without the outline is ACCOUNTED FOR, never hinted ──
@@ -862,7 +959,8 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
       reason: 'outline-missing',
       tMs: now(),
     });
-    log('[TeamsSpeakers] signal-absent reason=outline-missing signal=dom-outline');
+    log('[TeamsSpeakers] signal-absent reason=outline-missing signal=dom-outline '
+      + participantSurfaceShape(element));
   }
 
   /**
@@ -991,7 +1089,6 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     }
     unresolvedEpisodes.delete(identity.id);
     if (isSelfDisplayName(identity.name, opts.selfName)) return;                 // our bot, any qualifier
-    if (selfLower && identity.name.toLowerCase().includes(selfLower)) return;   // …or embedding our name
     if (edge === 'end' && !namedEpisodes.delete(identity.id)) return;
     log(`${state === 'speaking' ? '🎤' : '🔇'} [TeamsSpeakers] ${state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END'}: ${identity.name} (${identity.id})`);
     if (edge === 'start') emitNamedStart(identity);
@@ -1055,7 +1152,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     const identity = getIdentity(element);
     (element as any).dataset.vexaObserverAttached = 'true';
     log(`👁️ [TeamsSpeakers] Observing: ${identity.name} (${identity.id})`);
-    const voiceOutline = element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+    const voiceOutline = matchesSelector(element, VOICE_LEVEL_SELECTOR)
+      ? element
+      : element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
     if (!voiceOutline) return;
     const voiceObserver = new MutationObserver(() => checkAndEmit(identity));
     voiceObserver.observe(voiceOutline, { attributes: true, attributeFilter: ['style', 'class', 'aria-hidden'] });
@@ -1096,20 +1195,23 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     let found = 0; let observable = 0;
     scanCounter++;
     const namesThisScan = new Set<string>();
-    let selfTilesThisScan = 0;
+    let unresolvedParticipantSurfaces = 0;
     for (const selector of allSelectors) {
       document.querySelectorAll(selector).forEach(el => {
-        if (el instanceof HTMLElement && !seen.has(el)) {
-          seen.add(el);
+        if (el instanceof HTMLElement) {
+          const surface = canonicalParticipantSurface(el);
+          if (seen.has(surface)) return;
+          seen.add(surface);
           found++;
           // The roster walk is deliberately BEFORE the signal gate: a participant whose tile has no
           // voice outline is invisible to every other path in this file, and they are exactly the
           // person an elimination argument is for.
-          const rosterName = extractTeamsSpeakerName(el);
-          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) selfTilesThisScan++;
+          const rosterName = extractTeamsSpeakerName(surface);
+          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) { /* local bot */ }
           else if (rosterName) namesThisScan.add(rosterName);
-          if (hasRequiredSignal(el)) { observable++; observeParticipant(el); }
-          else emitSignalAbsent(el);   // counted and reported, never hinted
+          else unresolvedParticipantSurfaces++;
+          if (hasRequiredSignal(surface)) { observable++; observeParticipant(surface); }
+          else emitSignalAbsent(surface);   // counted and reported, never hinted
         }
       });
     }
@@ -1117,8 +1219,9 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     // into the same stream — a name is a name whichever surface showed it — but counted separately,
     // because "the tiles are gone and the panel saved us" is exactly the state worth being able to
     // see in a fixture afterwards.
-    let panelNames: string[] = [];
-    try { panelNames = readTeamsRosterPanel(document); } catch { panelNames = []; }
+    let panelState: TeamsRosterPanelState = { names: [], entries: [] };
+    try { panelState = readTeamsRosterPanelState(document); } catch { panelState = { names: [], entries: [] }; }
+    const panelNames = panelState.names;
     for (const n of panelNames) if (!isSelfDisplayName(n, opts.selfName)) namesThisScan.add(n);
     lastPanelCount = panelNames.length;
 
@@ -1128,19 +1231,18 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     // heartbeat: it is a state, and an unchanged state repeated 1800 times is not information.
     const usableNames = new Set([...namesThisScan].filter(
       (n) => isTeamsDisplayNameCandidate(n) && !isSelfDisplayName(n, opts.selfName)));
-    // PEOPLE, NOT ELEMENTS. `found` counts matched ELEMENTS, and Teams renders each participant on
-    // more than one surface — a video tile AND a roster row both match, so a six-person meeting
-    // reported twelve. The consumer reads this as "named 6 of 12" and concludes the roster is half
-    // missing, which permanently disables the elimination rule in exactly the multi-party rooms it
-    // was built for. Measured on the first prod fixture: 3/6, 4/8, 5/10, 6/12, 6/14 — participants
-    // exactly double the names, every scan.
-    //
-    // There is no honest way to count PEOPLE from an element sweep, so it no longer pretends to.
-    // The count is the distinct names resolved; when the roster PANEL was readable it is the
-    // authority, because a panel row is one participant by construction. A scan that resolved every
-    // name it could see reports complete, and one that could not stays short.
-    const participants = Math.max(usableNames.size, panelNames.filter(
-      (n) => !isSelfDisplayName(n, opts.selfName)).length);
+    // COMPLETENESS MUST FAIL CLOSED WITHOUT PRETENDING DOM ELEMENTS ARE PEOPLE. Teams may render the
+    // same named participant on several selector surfaces, so resolved display names are deduped.
+    // An unresolved surface cannot be deduped safely: each is therefore one additional lower-bound
+    // participant. Meeting 26218 had zero usable names and four unresolved surfaces, so it is 0/4;
+    // an ordinary two-person room rendered twice per person but named on every surface is 2/2.
+    const nonSelfPanelEntries = panelState.entries.filter(
+      (name) => !name || !isSelfDisplayName(name, opts.selfName));
+    const distinctUsablePanelNames = new Set(nonSelfPanelEntries.filter(
+      (name): name is string => !!name && isTeamsDisplayNameCandidate(name)));
+    const unresolvedPanelParticipants = Math.max(
+      0, nonSelfPanelEntries.length - distinctUsablePanelNames.size);
+    const participants = usableNames.size + unresolvedParticipantSurfaces + unresolvedPanelParticipants;
     const coverageKey = `${usableNames.size}/${participants}`;
     if (coverageKey !== lastCoverageKey) {
       lastCoverageKey = coverageKey;
@@ -1174,18 +1276,24 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
         if (node.nodeType !== Node.ELEMENT_NODE) return;
         const el = node as HTMLElement;
         for (const selector of allSelectors) {
-          if (el.matches(selector)) observeParticipant(el);
+          if (el.matches(selector)) observeParticipant(canonicalParticipantSurface(el));
           el.querySelectorAll(selector).forEach(child => {
-            if (child instanceof HTMLElement) observeParticipant(child);
+            if (child instanceof HTMLElement) observeParticipant(canonicalParticipantSurface(child));
           });
         }
       });
       mutation.removedNodes.forEach(node => {
         if (node.nodeType !== Node.ELEMENT_NODE) return;
         const el = node as HTMLElement;
-        for (const selector of teamsParticipantSelectors) {
-          if (!el.matches(selector)) continue;
-          const identity = cache.get(el);
+        const removed = new Set<HTMLElement>();
+        for (const selector of allSelectors) {
+          if (el.matches(selector)) removed.add(canonicalParticipantSurface(el));
+          el.querySelectorAll(selector).forEach(child => {
+            if (child instanceof HTMLElement) removed.add(canonicalParticipantSurface(child));
+          });
+        }
+        for (const surface of removed) {
+          const identity = cache.get(surface);
           if (identity) removeParticipant(identity);
         }
       });

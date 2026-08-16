@@ -7,7 +7,6 @@ import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import { teamsWindowHallucinationRule } from './hallucination-gate.js';
 import {
   detectTeamsWordContest,
-  markTeamsWordContests,
   type TeamsContestSubmission,
   type TeamsRoutedSpan,
   type TeamsWordContest,
@@ -135,9 +134,10 @@ interface PendingDraft {
  * whether each window's prompt/continuity makes Whisper follow its established speaker is an
  * empirical property, never claimed as acoustic source separation.
  *
- * Time-and-word duplicates across simultaneously active CSRC lanes are marked post-confirm and
- * pre-publish. Both rows remain and no winner is inferred. The shared GMeet-compatible buffer is
- * unchanged; the deferred embedding resolver is documented in ../TEAMS_CSRC_CONTESTED_TRANSCRIPTS.md.
+ * Time-and-word duplicates across simultaneously active CSRC lanes are detected post-confirm for
+ * telemetry. Both rows remain, their public text stays verbatim, and no winner is inferred. The
+ * shared GMeet-compatible buffer is unchanged; the deferred embedding resolver is documented in
+ * ../TEAMS_CSRC_CONTESTED_TRANSCRIPTS.md.
  */
 export class TeamsCsrcGmeetPipeline {
   private readonly manager: GmeetCompatibleBuffer;
@@ -158,7 +158,7 @@ export class TeamsCsrcGmeetPipeline {
   private readonly sourceLastAudioMs = new Map<string, number>();
   /** Latest public row by stable id, retained only so a late proven name can repaint it. */
   private readonly published = new Map<string, TeamsCsrcTranscriptSegment>();
-  /** Unmarked rows are the evidence source; public rows may contain unresolved contest notation. */
+  /** Verbatim rows are the evidence source; diagnostic contest notation never enters public text. */
   private readonly rawPublished = new Map<string, TeamsCsrcTranscriptSegment>();
   private readonly contestSubmissions: TeamsContestSubmission[] = [];
   private readonly routedSpans: TeamsRoutedSpan[] = [];
@@ -489,7 +489,8 @@ export class TeamsCsrcGmeetPipeline {
       this.latestRoutedSpan.set(csrc, span);
     }
     // Word-contest evidence is needed only while a rival timestamp-overlapping row can still
-    // arrive. Keep the markers themselves for the meeting, but bound raw word traces and spans.
+    // arrive. Retain the detected pair count for meeting telemetry, but bound raw word traces and
+    // routed spans. Diagnostic notation must never be written into the customer transcript.
     const evidenceFloorMs = endMs - 120_000;
     for (let index = this.routedSpans.length - 1; index >= 0; index--) {
       if (this.routedSpans[index].endMs < evidenceFloorMs) this.routedSpans.splice(index, 1);
@@ -530,9 +531,10 @@ export class TeamsCsrcGmeetPipeline {
   }
 
   private reconcilePublished(): void {
-    const contests = [...this.contests.values()];
     for (const raw of this.rawPublished.values()) {
-      const desired = { ...raw, text: markTeamsWordContests(raw, contests) };
+      // Contest detection is internal abstention/telemetry. Customer transcript text is always
+      // Whisper's confirmed text verbatim; implementation diagnostics never enter public rows.
+      const desired = raw;
       const previous = this.published.get(raw.segmentId);
       if (previous && previous.text === desired.text && previous.speaker === desired.speaker
           && previous.completed === desired.completed && previous.startMs === desired.startMs

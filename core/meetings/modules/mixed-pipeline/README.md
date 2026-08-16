@@ -14,9 +14,11 @@ mixed PCM is routed only to the CSRC owners active at that moment; genuine overl
 feed more than one virtual channel. Each channel uses the shared faithful Google Meet window
 ([`buffer`](../buffer/) LocalAgreement, prompt feedback, full-text fallback and timeout flush), and
 [`TrackNamer`](src/track-namer.ts) earns the CSRC-to-display-name binding from Teams evidence.
-After confirmation, [`teams-contested-word-marker.ts`](src/teams-contested-word-marker.ts) marks
-only phrases proven duplicated by routed-audio overlap, matching text, and nearby Whisper word
-times. Both rows stay in the API as `⟦words⟧{CSRC A↔CSRC B}`; the pipeline does not choose a winner.
+After confirmation, [`teams-contested-word-marker.ts`](src/teams-contested-word-marker.ts) detects
+phrases proven duplicated by routed-audio overlap, matching text, and nearby Whisper word times.
+The unresolved-pair count stays in pipeline telemetry, both rows keep their verbatim confirmed text,
+and the pipeline does not choose a winner. CSRC diagnostic notation is evaluation-only and never
+enters the API, Dashboard, or exports.
 
 There is **no Pyannote, diarization, clustering, embedding, or voiceprint in the Teams path**.
 Pyannote remains packaged only because Zoom/Jitsi still use the legacy lane; deleting it from those
@@ -61,10 +63,11 @@ segmenter (`makeSegmenter`) and a scripted/stub Whisper, so the ONNX model is ne
 loaded and there is no network:
 - `confirm-loop.golden.test.ts` — pins the LocalAgreement-3 confirm/pending/prompt/id
   loop (the shared `@vexa/transcribe-buffer` behavior) with a scripted stub Whisper.
-- `teams-contested-word-marker.test.ts` — pins exact, symmetric, no-winner marking and its routed
-  overlap/word-time negative controls.
-- `teams-csrc-gmeet-pipeline.test.ts` — proves the actual Teams publish callback receives the marked
-  API rows while the shared GMeet-compatible buffer remains unchanged.
+- `teams-contested-word-marker.test.ts` — pins the evaluation-only exact, symmetric diagnostic and
+  its routed-overlap/word-time negative controls.
+- `teams-csrc-gmeet-pipeline.test.ts` — proves the production Teams publish callback keeps confirmed
+  text verbatim while telemetry counts the unresolved pair and the shared GMeet-compatible buffer
+  remains unchanged.
 - `naming.smoke.test.ts` — a hint name binds to a segmentation turn (hints-only namer).
 - `claim.smoke.test.ts` — late-box claim: a turn that finalized provisionally is
   repainted to the speaker whose box lit within `CLAIM_WINDOW_MS`.
