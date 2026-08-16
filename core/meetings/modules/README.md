@@ -16,3 +16,9 @@ The transcript spine, in dependency order:
 | [gmeet-pipeline](gmeet-pipeline/) | channel-routed transcription → transcript.v1 | `gmeet-capture.v1` → `transcript.v1` |
 
 _Filled in brick-by-brick as each lands gate-green (Stage 3)._
+
+Downstream of the spine:
+
+| Brick | Concern | In → out |
+|---|---|---|
+| [presend-gate](presend-gate/) (Py) | is this record a meeting, and who may its artifact reach | `transcript.v1` + roster → `send` · `hold_for_creator` · `suppress` |
