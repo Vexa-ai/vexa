@@ -5,6 +5,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   service desktop
   service meeting-api
   service mcp
+  service chat-door
   module buffer
   module capture-codec
   module gmeet-capture
@@ -122,6 +123,7 @@ edges:
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
+  chat-door -req-> gateway  # the door reads the meeting record as an ordinary API consumer (GET /meetings/{id} + the transcript route); it imports no meetings internals
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
