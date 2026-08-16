@@ -37,6 +37,9 @@ HEAVY_DATA = {
     "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
     "title": "Weekly sync",
     "docs": [{"workspace": "u", "path": "notes.md"}],
+    "calendar_connection_id": "calendar-primary",
+    "calendar_uid": "weekly-sync@example.com",
+    "scheduled_at": "2026-08-20T10:00:00Z",
     # heavy detail keys the LIST must never ship (the outage cause)
     "speaker_events": [{"i": i, "t": "x" * 64} for i in range(2000)],   # the ~3 MB-class key
     "bot_logs": ["log-line " * 8] * 2000,
@@ -44,10 +47,23 @@ HEAVY_DATA = {
     "status_transition": [{"to": "active"}],
     "chat_messages": [{"m": "hi"}],
     "last_error": {"trace": "x" * 5000},
+    "calendar_sources": [{
+        "calendar_connection_id": "calendar-primary",
+        "calendar_uid": "weekly-sync@example.com",
+        "display_name": "Primary calendar",
+        "event": {
+            "component": {
+                "properties": [
+                    {"name": f"X-PROVIDER-{i:04d}", "value": "x" * 128}
+                    for i in range(2000)
+                ],
+            },
+        },
+    }],
 }
 
 HEAVY_KEYS = ("speaker_events", "bot_logs", "recordings", "status_transition",
-              "chat_messages", "error_details", "last_error")
+              "chat_messages", "error_details", "last_error", "calendar_sources")
 
 
 def _client(store):
@@ -89,6 +105,9 @@ def test_list_row_drops_heavy_data_keeps_light(path):
     # …but the light metadata the list actually renders survives.
     assert row["data"].get("title") == "Weekly sync"
     assert row["data"].get("docs") == [{"workspace": "u", "path": "notes.md"}]
+    assert row["data"].get("calendar_connection_id") == "calendar-primary"
+    assert row["data"].get("calendar_uid") == "weekly-sync@example.com"
+    assert row["data"].get("scheduled_at") == "2026-08-20T10:00:00Z"
     assert row["constructed_meeting_url"] == "https://meet.google.com/abc-defg-hij"
     assert row["status"] == "active" and row["native_meeting_id"] == "abc-defg-hij"
     # the whole list response is a few KB, not the multi-MB the stored data would make.
@@ -109,6 +128,7 @@ def test_get_meeting_by_id_still_returns_full_data():
     assert detail.status_code == 200
     body = detail.json()
     assert "data" in body and "speaker_events" in body["data"] and "recordings" in body["data"]
+    assert body["data"]["calendar_sources"][0]["calendar_connection_id"] == "calendar-primary"
 
 
 # ── C2 · default page size + honest has_more ───────────────────────────────────────────────────────
@@ -141,6 +161,43 @@ def test_bots_excludes_planned_rows_before_page_and_has_more_are_computed():
     assert response.status_code == 200
     assert [meeting["status"] for meeting in response.json()["meetings"]] == ["completed"]
     assert response.json()["has_more"] is False
+
+
+def test_populated_calendar_account_history_is_compact_and_excludes_plans():
+    """A populated first page keeps run history small even when Calendar stores full event snapshots."""
+    store = InMemoryTranscriptStore()
+    calendar_sources = HEAVY_DATA["calendar_sources"]
+    for i in range(50):
+        status = "scheduled" if i < 11 else "failed" if i < 14 else "completed"
+        data = {
+            "title": f"Meeting {i}",
+            "calendar_connection_id": "calendar-primary",
+            "calendar_uid": f"meeting-{i}@example.com",
+            "scheduled_at": f"2026-08-{(i % 20) + 1:02d}T10:00:00Z",
+        }
+        if i < 16:
+            data["calendar_sources"] = calendar_sources
+        store.seed_meeting(
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id=f"calendar-{i:02d}",
+            status=status,
+            created_at=f"2026-08-14T{(i // 60):02d}:{i % 60:02d}:00Z",
+            data=data,
+        )
+
+    response = _client(store).get(
+        "/bots", headers=HEADERS, params={"exclude_planned": "true", "limit": 50},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["meetings"]) == 39
+    assert {meeting["status"] for meeting in body["meetings"]} == {"completed", "failed"}
+    assert all("calendar_sources" not in meeting["data"] for meeting in body["meetings"])
+    assert all(meeting["data"]["calendar_uid"] for meeting in body["meetings"])
+    assert body["has_more"] is False
+    assert len(response.content) < 50_000, f"history page too large: {len(response.content)} bytes"
 
 
 async def test_list_view_applies_default_limit_and_has_more():

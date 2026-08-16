@@ -1,9 +1,9 @@
 """List-view shaping for the meetings list (#584).
 
 The meetings-list endpoints (``GET /bots``, ``GET /meetings``) return a row PER meeting. Each row used
-to embed that meeting's full ``data`` JSONB — transcripts, speaker events, logs, recordings. On a real
-583-meeting account the list response was 4.6 MB, and serializing it on the meeting-api event loop
-under morning load wedged the loop and caused a ~1.5 h hosted read outage (2026-07-15).
+to embed that meeting's full ``data`` JSONB — transcripts, speaker events, logs, recordings, and
+calendar event snapshots. Those details can make a single page multi-megabyte even though no list
+consumer renders them.
 
 We cannot drop ``data`` from the list wholesale — the list genuinely renders a few LIGHT keys from it
 (a meeting's ``title``, connected ``docs``, ``scheduled_at``, the recording/transcribe flags). So the
@@ -20,11 +20,9 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 # Heavy per-meeting ``data`` keys the list NEVER renders — dropped from list rows. Everything else
-# (title, docs, scheduled_at, workspace_id, constructed_meeting_url, recording/transcribe flags, …)
-# rides along, because the list DOES render some of it. Full ``data`` stays on ``GET /meetings/{id}``.
-# Measured weight on the outage account (sum across meetings / max in one): speaker_events 155 MB /
-# 3.2 MB, bot_logs 78 MB, recordings 13 MB, status_transition 6 MB, last_error 2 MB / 2 MB,
-# chat_messages 796 KB. Dropping these removes ~99% of the list's bytes.
+# (title, docs, scheduled_at, calendar_connection_id, calendar_uid, workspace_id,
+# constructed_meeting_url, recording/transcribe flags, …) rides along, because the list DOES render
+# some of it. Full ``data`` stays on ``GET /meetings/{id}``.
 LIST_OMIT_KEYS = frozenset({
     "speaker_events",
     "bot_logs",
@@ -33,6 +31,7 @@ LIST_OMIT_KEYS = frozenset({
     "chat_messages",
     "error_details",
     "last_error",
+    "calendar_sources",
 })
 
 # Default page size applied on the list-view path when a caller passes no ``limit`` — turns an

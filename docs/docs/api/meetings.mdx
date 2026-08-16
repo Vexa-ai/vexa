@@ -282,8 +282,10 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 The two list endpoints — `GET /bots` and `GET /meetings` — return **lightweight rows**. Each row keeps
 its light metadata (id, status, times, `title`, connected docs) but **omits the heavy `data` detail
 keys**: `speaker_events`, `bot_logs`, `recordings`, `status_transition`, `chat_messages`,
-`error_details`, and `last_error`. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the
-detail endpoint is unaffected and still returns every key.
+`error_details`, `last_error`, and the complete `calendar_sources` event snapshots. Compact calendar
+identity such as `calendar_connection_id`, `calendar_uid`, and `scheduled_at` remains available in a
+list row. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the detail endpoint is
+unaffected and still returns every key.
 
 The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
 to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
