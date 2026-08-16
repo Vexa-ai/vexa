@@ -417,6 +417,15 @@ def create_app(
     async def meeting(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
 
+    # RECORD-keyed transcript: the meeting is the resource, its transcript the sub-resource. Same
+    # downstream read as GET /transcripts/by-id/{id}, under the spelling a connector reaches for first.
+    # It addresses records the native path cannot express at all — a NULL native id, a native id that
+    # is a full URL, and every shadowed run behind a recurring link. Declared BEFORE the 2-segment
+    # native routes so the literal `transcript` segment is not matched as a native_meeting_id.
+    @app.get("/meetings/{meeting_id}/transcript")
+    async def meeting_transcript(meeting_id: int, request: Request):
+        return await _forward("GET", _meeting(f"/meetings/{meeting_id}/transcript"), request)
+
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
