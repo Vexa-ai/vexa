@@ -70,6 +70,14 @@ A mailroom with no key or no workspace map **still boots** and reports
 
 ## Running it against Mailpit
 
+Whole stack, mailbox included (from `deploy/compose`):
+
+```bash
+docker compose --profile mailroom up -d      # adds mailpit (11025/18025) + mailroom (18030)
+```
+
+Or standalone, against any Mailpit:
+
 ```bash
 # 1. a mailbox (dev only — Mailpit is an SMTP sink with an HTTP API)
 docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit
