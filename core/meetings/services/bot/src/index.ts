@@ -177,7 +177,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const transcriptClient = redisClientFrom(inv.redisUrl);
   const actsClient = redisActsClientFrom(inv.redisUrl);
   const liveTranscript: TranscriptSink = createRedisTranscriptSink({
-    client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
+    client: transcriptClient,
+    meetingId,
+    nativeMeetingId: inv.nativeMeetingId,
+    // Teams is the current blast radius. Its CSRC lanes need the same complete per-speaker pending
+    // snapshot the Dashboard already consumes for GMeet-style live rendering. Leave every sibling
+    // platform on the existing wire until this is proven on STAGE and deliberately imported back.
+    liveEnvelope: inv.platform === 'teams' ? 'speaker-snapshot' : 'segment',
   });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
 
