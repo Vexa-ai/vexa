@@ -173,6 +173,11 @@ adminApi:
 meetingApi:
   enabled: true
   replicaCount: 2
+  # Keep the process alive briefly after Kubernetes marks the Pod terminating. This gives
+  # EndpointSlice/kube-proxy enough time to stop routing fresh connections to the old IP before
+  # Uvicorn exits; it is especially important when multiple co-located replicas disappear.
+  preStopDelaySeconds: 5
+  terminationGracePeriodSeconds: 30
   image:
     repository: vexaai/v012-meeting-api
     tag: v012
