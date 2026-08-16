@@ -35,8 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from .invite import (METHOD_CANCEL, METHOD_REQUEST, REASON_UNKNOWN_WORKSPACE, ParsedMail,
-                     Rejection, parse_invite)
+from .invite import (METHOD_CANCEL, REASON_UNKNOWN_WORKSPACE, ParsedMail, Rejection,
+                     parse_invite)
 from .ports import Binding, MailMessage, MailSource, MeetingApi, Notice
 
 log = logging.getLogger("vexa_mailroom")

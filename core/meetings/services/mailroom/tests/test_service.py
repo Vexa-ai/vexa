@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import NOW, WORKSPACE_ADDRESS, WORKSPACE_ID, FakeMailSource, FakeMeetingApi, envelope, read_ics
+from conftest import NOW, WORKSPACE_ADDRESS, WORKSPACE_ID, FakeMailSource, envelope, read_ics
 
-from vexa_mailroom import FileStore, Mailroom, MemoryStore, normalize_address
+from vexa_mailroom import FileStore, Mailroom, normalize_address
 from vexa_mailroom.service import Outcome
 
 
