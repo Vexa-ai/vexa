@@ -355,6 +355,17 @@
    ]
   },
   {
+   "unique-id": "presend-gate",
+   "node-type": "module",
+   "name": "presend-gate",
+   "description": "presend-gate — atomic module in meetings",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/presend-gate"
+    }
+   ]
+  },
+  {
    "unique-id": "record-chunker",
    "node-type": "module",
    "name": "record-chunker",
@@ -1325,6 +1336,7 @@
       "join",
       "mixed-capture-core",
       "mixed-pipeline",
+      "presend-gate",
       "record-chunker",
       "recording",
       "remote-browser",
