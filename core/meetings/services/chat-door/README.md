@@ -51,6 +51,9 @@ The key is held in a wrapper whose `repr`/`str` yield `sha256(key)[:8]`, so a tr
 config dump or a validation error cannot leak it. `/health` reports that fingerprint, which is
 how two processes confirm they agree on a key without either emitting it.
 
+Every response carries `Referrer-Policy: no-referrer` and `Cache-Control: no-store`: the
+verify URL *is* the token, and every page behind it is one person's record.
+
 ## Demo (the whole loop, no Docker on the laptop)
 ```bash
 cd core/meetings/services/chat-door
@@ -77,7 +80,7 @@ unless you pass `--print-link` — it is a bearer capability for one person's re
 
 ## Isolated evaluation
 ```bash
-uv run pytest -q      # 53 tests, no docker, no network
+uv run pytest -q      # 54 tests, no docker, no network
 ```
 Covers: token issue/verify/expiry/single-use/tamper/wrong-key · lazy creation on the first
 successful click only (and nothing on a failed one) · scope refusal across meetings ·

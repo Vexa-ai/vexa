@@ -59,6 +59,20 @@ def create_app(
             config.meetings_url, api_key=config.meetings_api_key
         )
 
+    @app.middleware("http")
+    async def _door_headers(request: Request, call_next):
+        """Two headers the whole surface needs, for one reason each.
+
+        ``Referrer-Policy: no-referrer`` — the verify URL *is* the token, so no request the
+        browser makes afterwards may carry it in a ``Referer``.
+        ``Cache-Control: no-store`` — every page here is one person's record behind a bearer
+        link; a shared cache holding it is the same leak by another route.
+        """
+        response = await call_next(request)
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
     @app.get("/health")
     def health() -> JSONResponse:
         return JSONResponse(

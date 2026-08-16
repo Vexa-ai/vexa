@@ -29,6 +29,16 @@ def test_health_reports_fingerprint_not_key(door):
 
 # -- lazy identity --------------------------------------------------------------
 
+def test_every_response_suppresses_referrer_and_caching(door):
+    """The verify URL *is* the token, and every page is one person's record."""
+    client, signer, _ = door
+    verify = client.get("/door/verify", params={"t": link_for(signer)}, follow_redirects=False)
+    page = client.get("/door/meeting/126")
+    for resp in (verify, page, client.get("/health")):
+        assert resp.headers["referrer-policy"] == "no-referrer"
+        assert resp.headers["cache-control"] == "no-store"
+
+
 def test_nothing_is_stored_before_the_first_click(door):
     _, _, store = door
     assert store.get_user(EMAIL) is None
