@@ -11,6 +11,10 @@
 
 global:
   imageTag: ""              # When set, overrides every service image tag (build-once promotion).
+  # Optional git revision of the build being deployed. Rendered into the gateway as VEXA_REVISION
+  # and disclosed at GET /version alongside the tag. Empty → /version reports "unknown", which is
+  # the honest answer; it is never filled in with a guess or a chart constant.
+  imageRevision: ""
   imagePullPolicy: Always
   imagePullSecrets: []
   clusterDomain: cluster.local

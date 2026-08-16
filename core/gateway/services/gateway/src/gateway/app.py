@@ -13,7 +13,9 @@ behavior is the v0.12 carve of the deployed ``services/api-gateway/main.py``:
     unknown_action / invalid_subscribe_payload / invalid_unsubscribe_payload / missing_api_key
     error vocabulary; raw redis payloads forwarded over ``tc:…:mutable`` / ``bm:…:status`` /
     ``va:…:chat`` (main.py:2165-2340),
-  * ``/health`` — liveness ``{status:"ok", service:"gateway"}`` (gate:health discovers it).
+  * ``/health`` — liveness ``{status:"ok", service:"gateway"}`` (gate:health discovers it),
+  * ``/version`` — the running release identity read from the environment at request time, so a
+    UI can report what the deployment IS rather than what its own build was baked against.
 
 The collaborators (admin-api, downstream services, redis) are injected as PORTS (``ports.py``)
 so the same app runs with real adapters in prod (``adapters.py``) and in-process fakes in the
@@ -124,6 +126,23 @@ def create_app(
     @app.get("/health")
     async def health():
         return {"status": "ok", "service": "gateway"}
+
+    # --- /version — what release is ACTUALLY running here. Public and unauthenticated for the
+    # same reason /health is: a UI, a probe or an operator must be able to ask the deployment
+    # what it is without holding a key. The values come from the process environment
+    # (VEXA_VERSION / VEXA_REVISION), which the chart renders from the SAME value that pins the
+    # gateway image tag — so the string cannot drift from the image serving the request.
+    #
+    # There is deliberately NO fallback constant. A frontend that bakes a backend version at
+    # build time keeps reporting it long after the backend moved on; that is exactly the lie
+    # this route exists to end. Unset env → "unknown", which is true.
+    @app.get("/version")
+    async def version():
+        return {
+            "service": "gateway",
+            "version": os.getenv("VEXA_VERSION") or "unknown",
+            "revision": os.getenv("VEXA_REVISION") or "unknown",
+        }
 
     # --- /auth/me — caller identity from the API key (GET /auth/me with x-api-key →
     # user_id/email/scopes); the dashboard's login + session-validation resolve the user via this.

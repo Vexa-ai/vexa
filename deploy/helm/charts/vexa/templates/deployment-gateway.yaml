@@ -30,7 +30,7 @@ spec:
         - name: gateway
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag | default .Values.gateway.image.tag }}"
+          image: "{{ .Values.gateway.image.repository }}:{{ include "vexa.gatewayImageTag" . }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -53,6 +53,17 @@ spec:
                   key: INTERNAL_API_SECRET
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
+            # What /version discloses. Rendered from the same helper as the container's image
+            # tag above, so "the version this deployment reports" and "the image this deployment
+            # runs" are one value with one editable source. A UI asks the gateway at page load
+            # instead of baking a backend version into its own build — the bake is how
+            # dashboard.staging.vexa.ai advertised 0.12.18 while the cluster served 0.12.22-rc.3.
+            - name: VEXA_VERSION
+              value: {{ include "vexa.gatewayImageTag" . | quote }}
+            {{- with .Values.global.imageRevision }}
+            - name: VEXA_REVISION
+              value: {{ . | quote }}
+            {{- end }}
             # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
             # ON by default with generous limits (owner ruling); opt out with
             # --set gateway.guard.enabled=false. guard.wsEnabled is the optional /ws hook (off,

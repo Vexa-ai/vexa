@@ -382,6 +382,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # What GET /version discloses. Interpolated from the SAME IMAGE_TAG that selects the image
+      # above, so the version this stack reports is the image it is running — a UI asks the
+      # gateway at page load instead of baking a backend version into its own build.
+      - VEXA_VERSION=${IMAGE_TAG:-dev}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
       # nobody). Opt out with GUARD_ENABLED=false in .env; all keys interpolate from .env.
