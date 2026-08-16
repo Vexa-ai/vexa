@@ -60,10 +60,18 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
 
 # Route-prefix → required scope set. Mirrors main.py ROUTE_SCOPES (main.py:59-65) for the CORE
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
+#
+# #1062 — the headline flow "send a bot → read its transcript" must work with ONE key. A `bot`
+# scope therefore reads /meetings + /transcripts too (not only /recordings): these routes are
+# already USER-scoped downstream (the key resolves to a user_id and meeting-api returns ONLY that
+# user's rows), so accepting `bot` here lets a user read the data their OWN bot captured — it does
+# NOT let a bot key reach another user's meetings. The scope gate was redundantly strict on top of
+# the user-scoping. `tx` stays a valid transcription-only reader; /bots still requires `bot`/`browser`
+# (a `tx`-only key correctly 403s on /bots).
 ROUTE_SCOPES: Dict[str, Set[str]] = {
     "/bots": {"bot", "browser"},
-    "/transcripts": {"tx"},
-    "/meetings": {"tx"},
+    "/transcripts": {"tx", "bot"},
+    "/meetings": {"tx", "bot"},
     "/recordings": {"tx", "bot"},
 }
 

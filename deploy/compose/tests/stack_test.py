@@ -171,11 +171,19 @@ def test_02_auth_surface(stack):
     code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": "vxa_tx_not-a-real-token"})
     assert code == 401, f"invalid key → {code} {body}"
 
-    # REJECT out-of-scope → 403: a bot-only token on /meetings (which requires the tx scope).
+    # ACCEPT own-resource → 200: a bot-only token reads its own /meetings (#1062 — the key that
+    # captures a meeting owns its record; meetings are user-scoped upstream, so this exposes
+    # only the caller's own data).
     bot_only = _mint_token(stack, user_id, "bot")
     code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": bot_only})
-    assert code == 403, f"out-of-scope bot token on /meetings → {code} {body}"
-    print(f"\n[2/auth] mint→accept(200)·missing(401)·invalid(401)·out-of-scope(403); proxy reached meeting-api")
+    assert code == 200 and isinstance(body, dict) and "meetings" in body, f"bot token on own /meetings → {code} {body}"
+
+    # REJECT out-of-scope → 403: a browser-only token on /meetings (requires tx or bot) — keeps
+    # the scope gate's negative case alive now that bot legitimately reads meetings.
+    browser_only = _mint_token(stack, user_id, "browser")
+    code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": browser_only})
+    assert code == 403, f"out-of-scope browser token on /meetings → {code} {body}"
+    print(f"\n[2/auth] mint→accept(200)·missing(401)·invalid(401)·bot-own(200)·out-of-scope(403); proxy reached meeting-api")
 
 
 # ── 4. transcript dataflow (no meeting) ──────────────────────────────────────────────────────────

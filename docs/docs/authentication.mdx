@@ -66,9 +66,13 @@ is refused with `422` — never silently dropped.
 
 | Scope | Grants |
 |---|---|
-| `bot` | send and manage meeting bots, read transcripts |
-| `tx` | transcription / transcript access |
-| `browser` | browser-tool capabilities |
+| `bot` | send and manage meeting bots, **and read your own meetings, transcripts, and recordings** |
+| `tx` | read meetings, transcripts, and recordings (transcription-only reader — cannot send bots) |
+| `browser` | browser-tool capabilities (send and manage bots) |
+
+A single `bot` key completes the headline flow end to end — `POST /bots` → `GET /transcripts/by-id/{meeting_id}` —
+with no second key. Reads are always scoped to the caller's own meetings: a key never sees another
+user's data, whatever its scope.
 
 Keys are prefixed by their primary scope — `vxa_bot_…`, `vxa_tx_…`, `vxa_browser_…`. A key without a
 recognized scope is rejected.
