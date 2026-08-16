@@ -1,0 +1,18 @@
+[project]
+name = "vexa-chat-door"
+version = "0.12.0"
+description = "The chat door (dev v0): magic-link entry from an artifact email into the meeting record, plus the postman that mails a rendered artifact carrying that link."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
