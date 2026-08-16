@@ -267,6 +267,23 @@
    ]
   },
   {
+   "unique-id": "chat-door",
+   "node-type": "service",
+   "name": "chat-door",
+   "description": "magic-link entry from an artifact email into the meeting record (dev v0): signed single-use links, lazy user creation, the personal-instructions write path, and the postman that mails a rendered artifact carrying that link",
+   "metadata": [
+    {
+     "path": "core/meetings/services/chat-door"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "chat-door-http",
+     "type": "api"
+    }
+   ]
+  },
+  {
    "unique-id": "buffer",
    "node-type": "module",
    "name": "buffer",
@@ -1317,6 +1334,7 @@
       "desktop",
       "meeting-api",
       "mcp",
+      "chat-door",
       "buffer",
       "capture-codec",
       "gmeet-capture",
@@ -2068,6 +2086,21 @@
    },
    "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
    "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "chat-door-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "chat-door"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "the door reads the meeting record as an ordinary API consumer (GET /meetings/{id} + the transcript route); it imports no meetings internals"
   },
   {
    "unique-id": "gw-ma",
