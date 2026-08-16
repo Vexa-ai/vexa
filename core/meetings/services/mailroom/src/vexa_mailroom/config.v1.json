@@ -1,0 +1,127 @@
+{
+ "contract": "config.v1",
+ "service": "mailroom",
+ "keys": [
+  {
+   "key": "MAILPIT_URL",
+   "class": "defaulted",
+   "default": "http://mailpit:8025",
+   "targets": ["compose"],
+   "description": "The dev INBOUND mailbox's HTTP API (Mailpit). Dev-only by design — a hosted deployment replaces it with an IMAP / inbound-SMTP MailSource; nothing above the port knows which is in use"
+  },
+  {
+   "key": "MEETING_API_URL",
+   "class": "defaulted",
+   "default": "http://gateway:8000",
+   "targets": ["compose"],
+   "description": "The PUBLIC API base the mailroom plans meetings on (the gateway). The mailroom is a consumer of the published REST surface, never of meeting-api internals"
+  },
+  {
+   "key": "MAILROOM_API_KEY",
+   "class": "defaulted",
+   "default": "(unset — ingest degrades and /health reports configured:false)",
+   "secret": true,
+   "targets": ["compose"],
+   "description": "The Vexa API key presented as X-API-Key on every control-plane call. Unset (and not MAILROOM_DRY_RUN) ⇒ the poller does not run and /health says so, rather than crash-looping"
+  },
+  {
+   "key": "MAILROOM_WORKSPACE_MAP",
+   "class": "defaulted",
+   "default": "(unset — ingest degrades)",
+   "targets": ["compose"],
+   "description": "address=workspace_id pairs, comma-separated. THIS MAP IS THE WORKSPACE RESOLUTION: an invitation naming a listed address belongs to that workspace, anything else belongs to nobody. Multi-workspace is this value getting longer"
+  },
+  {
+   "key": "MAILROOM_WORKSPACE_ADDRESS",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": [],
+   "description": "Single-pair shorthand for MAILROOM_WORKSPACE_MAP (with MAILROOM_WORKSPACE_ID) — the dev deployment configures exactly one address"
+  },
+  {
+   "key": "MAILROOM_WORKSPACE_ID",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": [],
+   "description": "The workspace id paired with MAILROOM_WORKSPACE_ADDRESS"
+  },
+  {
+   "key": "MAILROOM_STATE_PATH",
+   "class": "defaulted",
+   "default": "/data/mailroom-state.json",
+   "targets": ["compose"],
+   "description": "Where the series↔meeting bindings, the resume cursor and the notice log are written (one atomically-replaced JSON file; mount a volume to survive a container replacement)"
+  },
+  {
+   "key": "MAILROOM_POLL_INTERVAL_S",
+   "class": "defaulted",
+   "default": "30",
+   "targets": ["compose"],
+   "description": "Seconds between mailbox polls. The series sweep (recurring bindings → next occurrence) runs on the same tick"
+  },
+  {
+   "key": "MAILROOM_BATCH_LIMIT",
+   "class": "defaulted",
+   "default": "50",
+   "targets": [],
+   "description": "Maximum messages read per poll"
+  },
+  {
+   "key": "MAILROOM_AUTO_JOIN",
+   "class": "defaulted",
+   "default": "true",
+   "targets": [],
+   "description": "Whether planned meetings are created armed (the bot joins at start time)"
+  },
+  {
+   "key": "MAILROOM_DRY_RUN",
+   "class": "defaulted",
+   "default": "false",
+   "targets": ["compose"],
+   "description": "Decide everything, mutate nothing: parse, resolve and log what WOULD be planned without calling the control plane. The safe first run against a live gateway"
+  },
+  {
+   "key": "MAILROOM_INTERNAL_SECRET",
+   "class": "defaulted",
+   "default": "(unset — /internal is open on the loopback-bound dev port)",
+   "secret": true,
+   "targets": ["compose"],
+   "description": "When set, every /internal route requires it in X-Internal-Secret. The mailroom has no public surface and is not fronted by the gateway"
+  },
+  {
+   "key": "MAILROOM_ICS_CORPUS",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": [],
+   "description": "Test-only: point the corpus eval at an out-of-repo .ics corpus (e.g. a date-shifted regeneration) instead of the vendored one"
+  },
+  {
+   "key": "HOST",
+   "class": "defaulted",
+   "default": "0.0.0.0",
+   "targets": [],
+   "description": "Bind address of the liveness/operator app"
+  },
+  {
+   "key": "PORT",
+   "class": "defaulted",
+   "default": "8030",
+   "targets": ["compose"],
+   "description": "Port of the liveness/operator app"
+  },
+  {
+   "key": "LOG_LEVEL",
+   "class": "defaulted",
+   "default": "info",
+   "targets": ["compose"],
+   "description": "uvicorn + service log level"
+  },
+  {
+   "key": "VEXA_JITSI_HOSTS",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": [],
+   "description": "Deployment-declared Jitsi hostnames, read by the vendored meeting-link parser — the same key meeting-api declares, so an invitation's link resolves identically on both sides"
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260819T090000Z
+DTEND:20260819T093000Z
+DTSTAMP:20260816T080000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-desc-link-002@google.com
+ATTENDEE;CUTYPE=INDIVIDUAL;CN=Vexa Mailroom:mailto:mk-dev@dev.vexa.ai
+DESCRIPTION:Join with Google Meet: https://meet.google.com/xyz-mnop-qrs\n\nOr dial in.
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Standup
+END:VEVENT
+END:VCALENDAR

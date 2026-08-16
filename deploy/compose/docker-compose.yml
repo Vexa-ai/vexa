@@ -571,11 +571,75 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # ─── mailroom (Stage-0 dev) — meetings enter by EMAIL INVITATION ──────────────────────────────
+  # A workspace has an email address; users invite it like any attendee; the .ics lands in OUR
+  # mailbox and the invited address IS the workspace resolution. No calendar integration.
+  #
+  # Behind a PROFILE, because it needs two things the default stack does not provide: an inbound
+  # mailbox, and a real API key + workspace id to plan meetings against. Start it explicitly:
+  #     docker compose --profile mailroom up -d
+  # See core/meetings/services/mailroom/README.md for the end-to-end dev loop.
+  mailpit:
+    profiles: ["mailroom"]
+    # The dev INBOUND mailbox: an SMTP sink with an HTTP API. Dev only — a hosted deployment
+    # replaces it with IMAP or an inbound-SMTP hook behind the same MailSource port.
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-11025}:1025"
+      - "127.0.0.1:${MAILPIT_HTTP_PORT:-18025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [vexa]
+    restart: unless-stopped
+
+  mailroom:
+    profiles: ["mailroom"]
+    build:
+      context: ../../core/meetings/services/mailroom
+      dockerfile: Dockerfile
+    image: vexaai/v012-mailroom:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${MAILROOM_HOST_PORT:-18030}:8030"
+    environment:
+      - MAILPIT_URL=http://mailpit:8025
+      # The mailroom is a CONSUMER of the public API — same front door as any customer client.
+      - MEETING_API_URL=http://gateway:8000
+      - MAILROOM_API_KEY=${MAILROOM_API_KEY:-}
+      # address=workspace_id. THIS MAP IS THE WORKSPACE RESOLUTION.
+      - MAILROOM_WORKSPACE_MAP=${MAILROOM_WORKSPACE_MAP:-}
+      - MAILROOM_STATE_PATH=/data/mailroom-state.json
+      - MAILROOM_POLL_INTERVAL_S=${MAILROOM_POLL_INTERVAL_S:-30}
+      # Decide everything, mutate nothing — the safe first run against a live gateway.
+      - MAILROOM_DRY_RUN=${MAILROOM_DRY_RUN:-false}
+      - MAILROOM_INTERNAL_SECRET=${MAILROOM_INTERNAL_SECRET:-}
+      - PORT=8030
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - mailroom-state:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8030/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      mailpit:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
 volumes:
   redis-data:
   postgres-data:
   minio-data:
   agent-workspaces:
+  mailroom-state:
 
 networks:
   vexa:

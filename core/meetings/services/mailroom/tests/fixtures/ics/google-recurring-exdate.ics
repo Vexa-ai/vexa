@@ -1,0 +1,19 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260805T100000Z
+DTEND:20260805T104500Z
+RRULE:FREQ=WEEKLY;BYDAY=WE
+EXDATE:20260819T100000Z
+DTSTAMP:20260816T080000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:google-recurring-exdate-007@google.com
+ATTENDEE;CN=Vexa Mailroom:mailto:mk-dev@dev.vexa.ai
+X-GOOGLE-CONFERENCE:https://meet.google.com/exd-atee-skp
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Weekly team sync with a skip
+END:VEVENT
+END:VCALENDAR

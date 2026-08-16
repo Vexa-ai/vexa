@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20260824T100000Z
+DTEND:20260824T104500Z
+DTSTAMP:20260816T080000Z
+ORGANIZER;CN=Dev Organizer:mailto:organizer@example.com
+UID:negative-no-link-009@google.com
+ATTENDEE;CN=Vexa Mailroom:mailto:mk-dev@dev.vexa.ai
+LOCATION:Room 3B, second floor
+DESCRIPTION:Bring the printout. Docs at https://example.com/handbook
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:In-person only
+END:VEVENT
+END:VCALENDAR
