@@ -186,12 +186,14 @@ await boundedPipeline.dispose();
 
 let contestNow = 0;
 const contestedDurable = new Map<string, TeamsCsrcTranscriptSegment>();
+const contestedCallbacks: TeamsCsrcTranscriptSegment[] = [];
 const contestedPipeline = new TeamsCsrcGmeetPipeline({
   lookbackMs: 0,
   flickerHoldMs: 0,
   onsetGapMs: 1000,
   buffer: { scheduleSubmissions: false, now: () => contestNow, silenceRmsThreshold: 0 },
   onSegment: (segment) => {
+    contestedCallbacks.push({ ...segment });
     if (!segment.completed && !segment.text.trim()) contestedDurable.delete(segment.segmentId);
     else contestedDurable.set(segment.segmentId, segment);
   },
@@ -235,13 +237,23 @@ contestNow = 6000;
 await contestedPipeline.requestTranscription(201);
 await contestedPipeline.requestTranscription(840);
 const contestedRows = [...contestedDurable.values()].filter((segment) => segment.completed);
-check('actual Teams pipeline marks exact duplicated words symmetrically before API publication',
+const contestedTextCallbacks = contestedCallbacks.filter((segment) => segment.text.trim());
+check('every live publication callback keeps contest diagnostics out of transcript text',
+  contestedTextCallbacks.length > 0
+    && contestedTextCallbacks.every((segment) => !segment.text.includes('{CSRC ')
+      && !segment.text.includes('⟦') && !segment.text.includes('↔'))
+    && contestedTextCallbacks.every((segment) => segment.csrc === 201
+      ? segment.text === 'ask amazing amazing like really good'
+      : segment.csrc === 840 && segment.text === 'amazing amazing like really good answer'),
+  JSON.stringify(contestedCallbacks));
+check('actual Teams pipeline keeps confirmed public text verbatim when it detects a contest',
   contestedRows.some((segment) => segment.csrc === 201
-    && segment.text.includes('⟦amazing amazing like really good⟧{CSRC 201↔CSRC 840}'))
+    && segment.text === 'ask amazing amazing like really good')
     && contestedRows.some((segment) => segment.csrc === 840
-      && segment.text.includes('⟦amazing amazing like really good⟧{CSRC 840↔CSRC 201}')),
+      && segment.text === 'amazing amazing like really good answer')
+    && contestedRows.every((segment) => !segment.text.includes('{CSRC ') && !segment.text.includes('⟦')),
   JSON.stringify(contestedRows));
-check('the pipeline health exposes the unresolved pair', contestedPipeline.health().contestedPairs === 1,
+check('the pipeline health still exposes the unresolved pair without mutating transcript text', contestedPipeline.health().contestedPairs === 1,
   JSON.stringify(contestedPipeline.health()));
 await contestedPipeline.dispose();
 

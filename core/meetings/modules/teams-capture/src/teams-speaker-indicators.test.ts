@@ -10,7 +10,8 @@
  *   2. a tile found WITHOUT an outline is reported `signal-absent` and never hinted
  *   3. `indicator-silent` fires once per window when observable > 0 and nothing speaks
  *   4. coverage accounting (found / observable / named / transitions) is correct
- *   5. REGRESSION — today's live production failure, pinned: 4 tiles, 1 outline,
+ *   5. direct outline/stream anchors remain discoverable without a matching outer tile
+ *   6. REGRESSION — today's live production failure, pinned: 4 tiles, 1 outline,
  *      no indicator ever fires ⇒ 0 hints, 3 signal-absent, indicator-silent fires
  *
  * Run: npx tsx src/teams-speaker-indicators.test.ts
@@ -102,23 +103,43 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
 
 /** One participant tile: `[data-stream-type][data-tid="<name>"]` wrapper (Teams'
  *  stable name attribute) around an optional voice-level outline. */
-function makeTile(id: string, name: string, opts: { outline: boolean }): { tile: FakeEl; outline: FakeEl | null } {
+function makeTile(
+  id: string,
+  name: string,
+  opts: { outline: boolean },
+): { tile: FakeEl; stream: FakeEl; outline: FakeEl | null } {
   const outline = opts.outline
     ? new FakeEl('div', { 'data-tid': 'voice-level-stream-outline', style: 'height: 0px;' })
     : null;
-  const inner = new FakeEl('div', { 'data-tid': name, 'data-stream-type': 'Video' }, outline ? [outline] : []);
-  const tile = new FakeEl('div', { 'data-tid': `participant-tile-${id}`, 'data-participant-id': id }, [inner]);
-  return { tile, outline };
+  const stream = new FakeEl('div', { 'data-tid': name, 'data-stream-type': 'Video' }, outline ? [outline] : []);
+  const tile = new FakeEl('div', { 'data-tid': `participant-tile-${id}`, 'data-participant-id': id }, [stream]);
+  return { tile, stream, outline };
 }
 
-function installDocument(tiles: FakeEl[], panelRows: FakeEl[] = []): FakeEl {
+function installDocument(
+  tiles: FakeEl[],
+  panelRows: FakeEl[] = [],
+  opts: { streamWrappersOnly?: boolean; outlineAtomsOnly?: boolean } = {},
+): FakeEl {
   const panel = panelRows.length ? new FakeEl('div', { 'data-tid': 'roster' }, panelRows) : null;
   const body = new FakeEl('body', {}, panel ? [...tiles, panel] : tiles);
   g.document = {
     body,
     querySelector: (s: string) => (s === '[role="main"]' ? body : null),
     querySelectorAll: (s: string) => {
-      if (s === '[data-tid*="participant"]') return tiles;
+      if (s === '[data-tid="voice-level-stream-outline"]') {
+        if (opts.streamWrappersOnly) return [];
+        return tiles.map((tile) => tile.matches(s) ? tile : tile.querySelector(s))
+          .filter((el): el is FakeEl => !!el);
+      }
+      if (s === '[data-stream-type][data-tid]') {
+        if (opts.outlineAtomsOnly) return [];
+        return tiles.map((tile) => tile.matches(s) ? tile : tile.querySelector(s))
+          .filter((el): el is FakeEl => !!el);
+      }
+      if (s === '[data-tid*="participant"]') {
+        return opts.streamWrappersOnly || opts.outlineAtomsOnly ? [] : tiles;
+      }
       if (panel && compile(s)(panel)) return [panel];
       return [];
     },
@@ -134,8 +155,14 @@ interface Harness {
   advance: (ms: number) => void;
 }
 function start(tiles: FakeEl[], overrides: Record<string, unknown> = {}): Harness {
-  const { panelRows = [], ...watcherOverrides } = overrides as { panelRows?: FakeEl[] };
-  installDocument(tiles, panelRows);
+  const {
+    panelRows = [], streamWrappersOnly = false, outlineAtomsOnly = false, ...watcherOverrides
+  } = overrides as {
+    panelRows?: FakeEl[];
+    streamWrappersOnly?: boolean;
+    outlineAtomsOnly?: boolean;
+  };
+  installDocument(tiles, panelRows, { streamWrappersOnly, outlineAtomsOnly });
   rafQueue = [];
   let clock = 1_700_000_000_000;
   const hints: Array<{ name: string; id: string; isEnd: boolean }> = [];
@@ -310,6 +337,10 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
   check('signal-absent: carries no display name and no DOM text',
     !!absent[0] && !JSON.stringify(absent[0]).includes('Beta') && Object.keys(absent[0]).length === 5,
     JSON.stringify(absent[0]));
+  check('signal-absent: logs a value-free structural fingerprint',
+    h.logs.some((line) => line.includes('stream=descendant stable-root=yes'))
+      && h.logs.every((line) => !line.includes('Beta Example')),
+    JSON.stringify(h.logs));
   check('signal-absent: produces no hint', h.hints.length === 0, JSON.stringify(h.hints));
 
   // Even when the blind tile's markup churns, it stays unobservable and unhinted.
@@ -374,6 +405,139 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     h.logs.some((l) => l.includes('Scanned 3 participants, observing 2 with signal (signal-absent 1)')),
     JSON.stringify(h.logs));
   check('coverage: no coverage-low WARN at 2/3', !h.logs.some((l) => l.includes('WARN coverage-low')));
+  h.watcher.destroy();
+}
+
+// ── 4a. The exact speaking atom is independently discoverable ────────────────
+// The outline itself is the strongest layout-independent anchor. Its ancestor
+// stream wrapper supplies the name even when no outer tile selector matches.
+{
+  const { tile, outline } = makeTile('outline-dmitry', 'Dmitry Grankin', { outline: true });
+  const h = start([tile], { outlineAtomsOnly: true });
+  await settle();
+
+  const health = h.watcher.health();
+  check('outline-only layout: canonical participant is found once',
+    health.found === 1 && health.observable === 1 && health.named === 1,
+    JSON.stringify(health));
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('outline-only layout: speaking atom joins to the stream-wrapper name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// The outline can also survive a layout that omits the stream wrapper. In that
+// shape, climb to a stable participant root and use the guarded visible-name
+// leaf fallback; the speaking atom still must never become a nameless hint.
+{
+  const nameLeaf = new FakeEl('div', {}, [], 'Dmitry Grankin');
+  const outline = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const stableRoot = new FakeEl('div', { 'data-participant-id': 'dmitry-no-stream' }, [
+    nameLeaf, outline,
+  ]);
+  const h = start([stableRoot], { outlineAtomsOnly: true });
+  await settle();
+
+  check('outline-only fallback: stable root supplies the guarded visible name',
+    h.watcher.health().found === 1 && h.watcher.health().named === 1,
+    JSON.stringify(h.watcher.health()));
+  h.advance(250);
+  outline.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('outline-only fallback: speaking evidence emits the visible human name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin', JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// ── 4b. The stable stream wrapper is independently discoverable ──────────────
+// Teams can render the visible name and active-speaker outline inside a stream
+// wrapper while the surrounding participant tile no longer matches any of the
+// broad layout selectors. The wrapper is sufficient evidence by itself.
+{
+  const { tile, outline } = makeTile('dmitry', 'Dmitry Grankin', { outline: true });
+  const h = start([tile], { streamWrappersOnly: true });
+  await settle();
+
+  const health = h.watcher.health();
+  check('stream-only layout: canonical wrapper is found once',
+    health.found === 1 && health.observable === 1 && health.named === 1,
+    JSON.stringify(health));
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  check('stream-only layout: stable data-tid yields the human name',
+    rosterNames.some((o) => o.name === 'Dmitry Grankin'), JSON.stringify(rosterNames));
+
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outline!.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  check('stream-only layout: speaking evidence emits the resolved name',
+    h.hints.length === 1 && h.hints[0]?.name === 'Dmitry Grankin' && !h.hints[0]?.isEnd,
+    JSON.stringify(h.hints));
+  h.watcher.destroy();
+}
+
+// Two stream wrappers may legitimately expose the same display name. Without a
+// participant ID, their element identity remains distinct; the human-readable
+// data-tid must never collapse their speaking state into one participant.
+{
+  const outlineA = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const outlineB = new FakeEl('div', {
+    'data-tid': 'voice-level-stream-outline', style: 'height: 0px;',
+  });
+  const streamA = new FakeEl('div', {
+    'data-tid': 'Alex Smith', 'data-stream-type': 'Video',
+  }, [outlineA]);
+  const streamB = new FakeEl('div', {
+    'data-tid': 'Alex Smith', 'data-stream-type': 'Video',
+  }, [outlineB]);
+  const h = start([streamA, streamB], { streamWrappersOnly: true });
+  await settle();
+
+  check('same-name streams: both canonical participants are retained',
+    h.watcher.health().found === 2 && h.watcher.health().observable === 2,
+    JSON.stringify(h.watcher.health()));
+  h.advance(250);
+  outlineA.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineA.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineB.setAttribute('style', 'height: 2px;');
+  frame();
+  await settle();
+  h.advance(250);
+  outlineB.setAttribute('style', 'height: 14px; transform: scaleY(0.7);');
+  frame();
+  await settle();
+  const starts = h.hints.filter((hint) => !hint.isEnd);
+  check('same-name streams: speaking state uses two distinct IDs',
+    starts.length === 2 && starts[0]?.name === 'Alex Smith' && starts[1]?.name === 'Alex Smith'
+    && starts[0]?.id !== starts[1]?.id,
+    JSON.stringify(starts));
   h.watcher.destroy();
 }
 
