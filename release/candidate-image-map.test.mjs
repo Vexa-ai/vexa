@@ -85,6 +85,32 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
 });
 
+test("v0.12.23 canonical packet freezes the successful rc.10 validation", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "5ad5bd86f5eb8e8a9fe48ef921189998b81fd09af621375b2bf7539d00c37562",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.10");
+  assert.equal(map.build_source, "a7d49881eb8ff53b438537c59a8d480ec8f97593");
+  assert.equal(map.validation_source, "644ca4ce62de61b55abadb029ef7fbd7f7fd7757");
+  assert.equal(
+    map.validation_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/31950949704",
+  );
+  assert.equal(Object.keys(map.images).length, 10);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    19,
+  );
+});
+
 test("refuses a missing image", () => {
   const doc = validMap();
   delete doc.images["vexaai/v012-runtime"];
