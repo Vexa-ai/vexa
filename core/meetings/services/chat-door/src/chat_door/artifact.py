@@ -53,10 +53,35 @@ class Artifact:
 
 
 def _field(body: str, keys: tuple[str, ...]) -> str:
+    """The header key's value, whether or not the renderer emitted the key in bold.
+
+    Two renderers producing the same artifact contract emitted ``**To:** Name`` and plain
+    ``To: Name``. Reading only the bold form silently dropped the record line for half the
+    corpus and fell back to the directory name — pointing the door at the wrong meeting —
+    so both spellings are accepted here rather than fixed in one renderer.
+    """
     for key in keys:
-        m = re.search(rf"^\*\*{re.escape(key)}:?\*\*\s*(.+)$", body, re.MULTILINE)
-        if m:
-            return m.group(1).strip()
+        k = re.escape(key)
+        for pattern in (rf"^\*\*{k}:?\*\*:?\s*(.+)$", rf"^{k}:\s*(.+)$"):
+            m = re.search(pattern, body, re.MULTILINE)
+            if m:
+                return m.group(1).strip()
+    return ""
+
+
+def _unlabelled_meeting_label(body: str) -> str:
+    """The meeting line when the renderer emitted it with no key at all.
+
+    One renderer writes the date/platform/duration on its own line between the recipient and
+    the record. It is recognisable by the ``·`` separators the label always carries, and by
+    sitting inside the header block, so the search stops at the first blank line.
+    """
+    for raw in body.splitlines()[:8]:
+        line = raw.strip()
+        if not line:
+            break
+        if line.count("·") >= 2 and not re.match(r"^\*?\*?[A-Za-zА-Яа-яÀ-ÿ]+:?\*?\*?:", line):
+            return line
     return ""
 
 
@@ -79,7 +104,7 @@ def load_artifact(path: Path | str) -> Artifact:
         body=body,
         meeting_id=meeting_id,
         recipient_name=_field(body, _TO_KEYS),
-        meeting_label=_field(body, _MEETING_KEYS),
+        meeting_label=_field(body, _MEETING_KEYS) or _unlabelled_meeting_label(body),
         language="ru" if _looks_cyrillic(body[:400]) else "en",
         participant_slug=p.stem,
     )

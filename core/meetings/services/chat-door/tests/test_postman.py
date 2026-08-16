@@ -70,6 +70,37 @@ def test_record_line_beats_the_directory_name(en: Path):
     assert a.participant_slug == "dmitry-grankin"
 
 
+PLAIN_HEADER_ARTIFACT = """To: Tobias Hutterer
+2025-12-05 · Google Meet · 48m40s
+record: 5175 · [open the full record](#)
+
+---
+
+**Decided — affects you**
+
+- The ≤€10k route avoids the tender.
+"""
+
+
+def test_plain_header_parses_like_the_bold_one(tmp_path: Path):
+    """A second renderer emitted the same header without bold and with no ``Meeting:`` key.
+
+    Reading only the bold form dropped the record line and fell back to the folder name, so
+    the magic link pointed at meeting 5174 while the artifact was about 5175 — a live wrong
+    link, not a cosmetic subject. Both spellings must parse identically.
+    """
+    d = tmp_path / "5174"
+    d.mkdir()
+    p = d / "tobias-hutterer.md"
+    p.write_text(PLAIN_HEADER_ARTIFACT, "utf-8")
+
+    a = load_artifact(p)
+    assert a.meeting_id == "5175"
+    assert a.recipient_name == "Tobias Hutterer"
+    assert a.meeting_label == "2025-12-05 · Google Meet · 48m40s"
+    assert a.subject.startswith("2025-12-05 · Google Meet · 48m40s — ")
+
+
 def test_subject_is_the_meeting_plus_what_changed(en: Path):
     assert load_artifact(en).subject == "2025-08-28 · Google Meet · 59m — what changed for you"
 
