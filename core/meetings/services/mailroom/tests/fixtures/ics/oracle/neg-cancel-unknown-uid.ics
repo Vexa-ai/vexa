@@ -25,7 +25,7 @@ BEGIN:VEVENT
 DTSTART;TZID=Europe/Lisbon:20260824T140000
 DTEND;TZID=Europe/Lisbon:20260824T143000
 DTSTAMP:20260817T105000Z
-ORGANIZER;CN=Dmitriy Grankin:mailto:dmitry@vexa.ai
+ORGANIZER;CN=Ana Silva:mailto:ana.silva@example.com
 UID:0p9o8i7u6y5t4r3e2w1q0a9s8d@google.com
 ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
  TRUE;CN=mk-dev@dev.vexa.ai;X-NUM-GUESTS=0:mailto:mk-dev@dev.vexa.ai
