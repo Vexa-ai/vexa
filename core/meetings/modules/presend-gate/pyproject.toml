@@ -1,0 +1,15 @@
+[project]
+name = "vexa-presend-gate"
+version = "0.12.0"
+description = "Pre-send eligibility gate: given a meeting record, decide whether its artifact may be emailed to every participant (send), to the meeting's creator only (hold_for_creator), or to nobody (suppress). Stdlib-only, pure, no I/O — the artifact pipeline's last check before a broadcast."
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
