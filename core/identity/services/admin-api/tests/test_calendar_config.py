@@ -168,9 +168,11 @@ def test_plural_calendars_are_independent_and_never_echo_secret_urls(client):
         "ics_url": ICS_2, "auto_join": True, "bot_name": "Family Notes",
     }
     retired = next(c for c in internal if c.get("calendar_id") == work.json()["id"])
+    # The first connection is the legacy claimant even as a tombstone: its sweep
+    # must still match bare-calendar_uid rows so deleting it retires them.
     assert retired == {
         "user_id": uid, "calendar_id": work.json()["id"], "calendar_name": "Work",
-        "bot_name": "Work Notes", "deleted": True,
+        "bot_name": "Work Notes", "deleted": True, "legacy": True,
     }
 
     rejected = client.patch(f"/user/calendars/{personal.json()['id']}", headers=h,
