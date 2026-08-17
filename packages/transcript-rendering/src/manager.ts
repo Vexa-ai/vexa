@@ -1,5 +1,5 @@
 import type { TranscriptSegment, TranscriptState } from './types';
-import { createTranscriptState, bootstrapConfirmed, applyTranscriptTick, recomputeTranscripts } from './state';
+import { createTranscriptState, bootstrapConfirmed, applyTranscriptTick, recomputeTranscripts, retractSegments } from './state';
 import { deduplicateByIdentity, deduplicateSegments, sortSegments, sortByStartTime } from './dedup';
 
 /**
@@ -15,6 +15,23 @@ export interface TranscriptMessage {
   pending?: TranscriptSegment[];
   ts?: string;
 }
+
+/**
+ * Withdrawal of previously-delivered segments, by id.
+ *
+ * Format: `{ type: "transcript_retract", segment_ids: [...] }`. The producer sends it
+ * alongside any pending snapshot, because a snapshot replaces only one speaker's drafts
+ * and cannot reach a confirmed row.
+ */
+export interface TranscriptRetractMessage {
+  type: 'transcript_retract';
+  meeting?: { id?: number };
+  segment_ids?: string[];
+  ts?: string;
+}
+
+/** Anything the gateway's mutable channel delivers to the rendering pipeline. */
+export type TranscriptWireMessage = TranscriptMessage | TranscriptRetractMessage;
 
 /**
  * High-level transcript manager that encapsulates the full pipeline.
@@ -40,7 +57,7 @@ export interface TranscriptManager<T extends TranscriptSegment = TranscriptSegme
   /** Load initial segments from REST. Clears previous state. Returns ready-to-render segments. */
   bootstrap(segments: T[]): T[];
   /** Process a raw WS message. Returns updated segments if state changed, null otherwise. */
-  handleMessage(message: TranscriptMessage): T[] | null;
+  handleMessage(message: TranscriptWireMessage): T[] | null;
   /** Get current deduplicated, sorted segments without processing a new message. */
   getSegments(): T[];
   /** Access the underlying state (for advanced use cases). */
@@ -71,7 +88,11 @@ export function createTranscriptManager<
       return finalize(bootstrapConfirmed(state, segments));
     },
 
-    handleMessage(message: TranscriptMessage): T[] | null {
+    handleMessage(message: TranscriptWireMessage): T[] | null {
+      if (message.type === 'transcript_retract') {
+        const result = retractSegments(state, message.segment_ids || []);
+        return result ? finalize(result) : null;
+      }
       if (message.type !== 'transcript') return null;
 
       const confirmed = (message.confirmed || []) as T[];

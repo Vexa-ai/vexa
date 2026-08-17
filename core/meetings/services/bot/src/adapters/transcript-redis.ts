@@ -98,36 +98,58 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     await client.publish(channel, liveMessage);
   }
 
-  /** Withdraw previously-published segments by id (a superseded/over-extended pending draft). Rides the
-   *  SAME durable stream as `publish` so it's ordered with the segments it retracts — the collector
-   *  deletes those rows and forwards a `retract` marker; the mutable channel carries it live too. */
-  async function retract(segmentIds: string[]): Promise<void> {
-    if (segmentIds.length === 0) return;
-    const payload = JSON.stringify({
-      type: 'transcript_retract', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segment_ids: segmentIds,
-    });
-    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
-    if (liveEnvelope === 'segment') {
-      const msg = JSON.stringify({ type: 'transcript_retract', meeting: { id: meetingId }, segment_ids: segmentIds });
-      await client.publish(channel, msg);
-      return;
-    }
-
-    // The Dashboard consumes full-replace pending snapshots. Re-publish only keys whose snapshot
-    // changed; confirmed rows are not retracted by this Teams-only draft path.
+  /** Drop the withdrawn ids from every speaker's pending snapshot and report the keys that changed.
+   * Synchronous by contract: `retract` calls this before its first await so a `publish` interleaving
+   * with the durable XADD snapshots the map WITHOUT the retracted ids. Both callbacks are fired
+   * fire-and-forget by the pipeline and the transcriber retracts then re-publishes one speaker key
+   * in a single synchronous stack, so a map mutated after the await would let the stale snapshot
+   * win the single-connection FIFO. */
+  function withdrawFromPending(segmentIds: string[]): string[] {
     const ids = new Set(segmentIds);
-    const changed: Array<{ speakerKey: string; pending: TranscriptSegment[] }> = [];
+    const changed: string[] = [];
     for (const [speakerKey, pending] of pendingBySpeakerKey) {
       let removed = false;
       for (const id of ids) removed = pending.delete(id) || removed;
       if (!removed) continue;
       if (pending.size === 0) pendingBySpeakerKey.delete(speakerKey);
-      changed.push({ speakerKey, pending: [...pending.values()] });
+      changed.push(speakerKey);
     }
-    for (const snapshot of changed) {
+    return changed;
+  }
+
+  /** Withdraw previously-published segments by id (a superseded/over-extended pending draft). Rides the
+   *  SAME durable stream as `publish` so it's ordered with the segments it retracts — the collector
+   *  deletes those rows and forwards a `retract` marker; the mutable channel carries it live too. */
+  async function retract(segmentIds: string[]): Promise<void> {
+    if (segmentIds.length === 0) return;
+    // Snapshot bookkeeping happens HERE — before any await — so an interleaved publish() cannot
+    // capture a pending set that still holds a retracted id.
+    const changed = liveEnvelope === 'segment' ? [] : withdrawFromPending(segmentIds);
+
+    const payload = JSON.stringify({
+      type: 'transcript_retract', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segment_ids: segmentIds,
+    });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+
+    // The withdrawal itself is announced on the mutable channel in BOTH envelopes. A retracted id
+    // may live in no pending map at all — a timeout-promoted draft that a later ownership check
+    // rejects is a confirmed row — and a snapshot republish can only ever withdraw pending ones.
+    // The `transcript_retract` message is the id-addressed withdrawal that reaches both lanes.
+    const retractMessage = JSON.stringify({
+      type: 'transcript_retract', meeting: { id: meetingId }, segment_ids: segmentIds,
+    });
+    await client.publish(channel, retractMessage);
+    if (liveEnvelope === 'segment') return;
+
+    // The Dashboard consumes full-replace pending snapshots, so every key the withdrawal touched
+    // republishes its set. The set is read HERE, at publish time, not captured at withdrawal time:
+    // a draft published for the same key while this call sat on the durable XADD belongs in the
+    // snapshot, and either ordering of the two messages then leaves the same correct pending set.
+    for (const speakerKey of changed) {
+      const pending = pendingBySpeakerKey.get(speakerKey);
       await client.publish(channel, JSON.stringify({
-        type: 'transcript', meeting: { id: meetingId }, speaker: snapshot.speakerKey,
-        confirmed: [], pending: snapshot.pending,
+        type: 'transcript', meeting: { id: meetingId }, speaker: speakerKey,
+        confirmed: [], pending: pending ? [...pending.values()] : [],
       }));
     }
   }

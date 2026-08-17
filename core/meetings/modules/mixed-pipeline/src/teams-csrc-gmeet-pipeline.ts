@@ -69,6 +69,9 @@ export interface TeamsCsrcGmeetPipelineOptions {
 
 export interface TeamsCsrcGmeetPipelineHealth extends TeamsCsrcChannelizerHealth {
   turns: number;
+  /** Turn keys the shared GMeet window still holds a buffer and a submission timer for. Bounded by
+   *  the number of concurrently active CSRC lanes, never by the meeting's turn count. */
+  openSources: number;
   inFlight: number;
   rejectedOwnership: number;
   timeoutPromotions: number;
@@ -176,8 +179,8 @@ export class TeamsCsrcGmeetPipeline {
     this.persistTimeoutMs = Math.max(0, options.persistTimeoutMs ?? 4000);
     this.trackNamer = new TrackNamer({
       selfName: options.selfName,
-      // Teams sometimes exposes a media/topic handle rather than the human's canonical display
-      // name (`datenanalyse` for Julian in m26132). Unknown is safer than that false attribution.
+      // Teams sometimes exposes a media/topic handle — a session subject rather than the human's
+      // canonical display name. Unknown is safer than that false attribution.
       requireCanonicalDisplayName: true,
       onNamed: (trackId) => this.repaintTrack(trackId),
     });
@@ -351,6 +354,7 @@ export class TeamsCsrcGmeetPipeline {
     return {
       ...this.channelizer.health(),
       turns: this.turnCount,
+      openSources: this.manager.getActiveSpeakers().length,
       inFlight: this.inflight.size,
       rejectedOwnership: this.rejectedOwnership,
       timeoutPromotions: this.timeoutPromotions,
@@ -388,9 +392,41 @@ export class TeamsCsrcGmeetPipeline {
   }
 
   private closeTurn(sourceKey: string): void {
-    const job = this.flushSource(sourceKey).catch((error) => this.options.onError?.(error));
+    const job = (async () => {
+      try {
+        await this.flushSource(sourceKey);
+      } catch (error) {
+        this.options.onError?.(error);
+      } finally {
+        this.releaseTurn(sourceKey);
+      }
+    })();
     this.closing.add(job);
     void job.finally(() => this.closing.delete(job));
+  }
+
+  /**
+   * Retire a turn key that will never be fed again. `routeFrame` mints one key per turn and each
+   * key opens its own two-second submission timer inside the shared GMeet window, so the manager
+   * releases the key here — otherwise a meeting's timers and per-key bookkeeping grow with its
+   * turn count for the whole session.
+   *
+   * Ordered strictly AFTER the flush: `flushSource` submits the turn's remaining audio and settles
+   * the transcription it triggers, so the removal below finds an already-drained buffer and the
+   * final rows have been published under a live `sourceToCsrc` entry.
+   */
+  private releaseTurn(sourceKey: string): void {
+    this.manager.removeSpeaker(sourceKey);
+    this.sourceToCsrc.delete(sourceKey);
+    this.sourceLastAudioMs.delete(sourceKey);
+    this.pendingDrafts.delete(sourceKey);
+    // Both id shapes a turn publishes under (`<sourceKey>:<startMs>` and the manager's
+    // `<sourceKey>:<seq>`) carry the key plus a separator, so the prefix cannot reach a sibling
+    // turn such as `csrc-201:30` from `csrc-201:3`.
+    const prefix = `${sourceKey}:`;
+    for (const id of this.promotedDraftIds) {
+      if (id.startsWith(prefix)) this.promotedDraftIds.delete(id);
+    }
   }
 
   private async flushSource(sourceKey: string): Promise<void> {

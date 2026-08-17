@@ -257,5 +257,52 @@ check('the pipeline health still exposes the unresolved pair without mutating tr
   JSON.stringify(contestedPipeline.health()));
 await contestedPipeline.dispose();
 
+// ── a long meeting's closed turns leave nothing behind in the shared GMeet window ──
+// Every turn boundary mints a new `csrc-<n>:<turn>` key, and each key carries its own buffer and
+// two-second submission timer. What the window holds must track the number of ACTIVE lanes, not
+// the number of turns the meeting has had.
+{
+  const TURNS = 6;
+  let leakNow = 0;
+  let leakCalls = 0;
+  const leakRows: TeamsCsrcTranscriptSegment[] = [];
+  const leakPipeline = new TeamsCsrcGmeetPipeline({
+    lookbackMs: 0,
+    flickerHoldMs: 0,
+    onsetGapMs: 1000,
+    buffer: { scheduleSubmissions: false, now: () => leakNow, silenceRmsThreshold: 0 },
+    onSegment: (segment) => { if (segment.completed && segment.text.trim()) leakRows.push(segment); },
+    transcribe: async () => {
+      leakCalls++;
+      const text = `turn ${leakCalls}`;
+      return { text, language: 'en', duration: 2, segments: [{ text, start: 0, end: 2 } as any] };
+    },
+  });
+  leakPipeline.recordTransportEvent({ csrc: 201, active: true, tMs: 0 });
+
+  for (let turn = 0; turn < TURNS; turn++) {
+    // Five seconds between turn starts; two seconds of speech each — the 3s of silence between
+    // them is well past onsetGapMs, so every turn opens a fresh key.
+    const base = turn * 5000;
+    for (let frame = 0; frame < 4; frame++) {
+      leakNow = base + frame * 500;
+      leakPipeline.feedMixedAudio(new Float32Array(8000).fill(0.1), leakNow);
+    }
+  }
+  // Turn 1..N-1 were closed by the next turn's onset; only the last one is still open.
+  await leakPipeline.flush();
+
+  check('every closed turn still produced its transcript row', leakRows.length === TURNS,
+    `${leakRows.length} rows from ${TURNS} turns: ${JSON.stringify(leakRows.map((row) => row.text))}`);
+  check('the window holds one key for the single active lane, not one per turn',
+    leakPipeline.health().openSources === 1, JSON.stringify(leakPipeline.health()));
+  check('the meeting really did run the turns being accounted for',
+    leakPipeline.health().turns === TURNS, JSON.stringify(leakPipeline.health()));
+
+  await leakPipeline.dispose();
+  check('dispose leaves the window empty', leakPipeline.health().openSources === 0,
+    JSON.stringify(leakPipeline.health()));
+}
+
 if (failed > 0) process.exit(1);
 console.log('\n✅ Teams CSRC lanes drive the shared GMeet window without Pyannote.');
