@@ -460,8 +460,8 @@ class InMemoryMeetingRepo:
             if (now - u).total_seconds() < grace:
                 continue
             stop_req = bool(row.get("data", {}).get("stop_requested"))
-            out[mid] = (row["status"], s["session_uid"], row.get("bot_container_id"), stop_req)
-        return [(mid, st, sid, bcid, sr) for mid, (st, sid, bcid, sr) in out.items()]
+            out[mid] = (row["status"], s["session_uid"], row.get("bot_container_id"), stop_req, u)
+        return [(mid, st, sid, bcid, sr, u) for mid, (st, sid, bcid, sr, u) in out.items()]
 
     # ── test affordances (not part of the port) ──────────────────────────────────────────────────
     def set_status(self, meeting_id: int, status: str) -> None:

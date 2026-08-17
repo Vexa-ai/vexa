@@ -274,6 +274,11 @@ def _attach_background_loops(
     # this window. With that gate in place, 300s is a SANE default again (the 86400 env stopgap, which
     # only worked because it disabled the time-based reap entirely, is no longer needed).
     active_grace = float(os.getenv("RECONCILE_ACTIVE_GRACE_S", "300"))
+    # Output-liveness grace for the #858 class: an `active` meeting whose workload is ALIVE but
+    # whose row has produced NO output (no recording chunk / segment — updated_at frozen) for this
+    # long is a detached/wedged bot → reaped as completed(left_alone) with evidence. A quiet-but-
+    # live bot keeps uploading silence chunks (~15s), bumping updated_at, so it is never reaped.
+    output_stale_grace = float(os.getenv("RECONCILE_OUTPUT_STALE_GRACE_S", "900"))
     # A bot that has NOT yet reached the meeting gets its OWN, longer window (#862). The control plane
     # hands every spawn a lobby budget (`waitingRoomTimeout`) and the bot reports `awaiting_admission`
     # exactly ONCE before polling silently for the rest of it — so a HEALTHY bot waiting to be let in
@@ -439,6 +444,7 @@ def _attach_background_loops(
                     meeting_repo, runtime, _post_lifecycle,
                     stop_grace=stop_grace, active_grace=active_grace, log=log,
                     preactive_grace=preactive_grace, untracked_grace=untracked_grace,
+                    output_stale_grace=output_stale_grace,
                 )
             await reconcile_stale_stopping_sweep(
                 meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
