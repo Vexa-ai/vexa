@@ -197,8 +197,8 @@ Every imported event becomes an ordinary planned meeting. Link-less events are a
 Teams link appears.
 
 The normalized fields include `data.title`, `data.scheduled_at`, `data.attendees`, the parsed
-platform/native ID, and the constructed meeting URL. Complete multi-calendar provenance is under
-`data.calendar_sources`:
+platform/native ID, and the constructed meeting URL. Multi-calendar provenance is under
+`data.calendar_sources`; API responses return the projected shape:
 
 ```json
 {
@@ -207,24 +207,19 @@ platform/native ID, and the constructed meeting URL. Complete multi-calendar pro
       {
         "id": "f52a1067-6f0d-43c5-9641-54da51d3610f",
         "name": "Work",
-        "uid": "provider-event-uid",
         "auto_join": true,
-        "bot_name": "Work Notes",
-        "event": {
-          "resolved_start": "2026-08-14T15:00:00+00:00",
-          "calendar": {"name": "VCALENDAR", "properties": {}},
-          "component": {"name": "VEVENT", "properties": {}},
-          "series_master": {"name": "VEVENT", "properties": {}}
-        }
+        "bot_name": "Work Notes"
       }
     ]
   }
 }
 ```
 
-`event` preserves every ICS property and parameter, repeated property, provider extension, and
-nested component in JSON-safe canonical text. `series_master` appears only for a selected recurring
-override. The configured secret feed URL is explicitly redacted and is never added as provenance.
+Every response edge projects `calendar_sources` to exactly these four keys. The full ICS event
+snapshot (properties, parameters, recurrence context) is internal reconciliation state the sync
+keeps per source; it never rides an API response, so calendar payloads such as event descriptions
+and attendee addresses are not exposed to transcript viewers or workspace members. The configured
+secret feed URL is likewise redacted everywhere and never appears as provenance.
 See [What Vexa stores](/how-to/calendar-sync#what-vexa-stores) for the complete persistence model.
 
 ## Error summary
