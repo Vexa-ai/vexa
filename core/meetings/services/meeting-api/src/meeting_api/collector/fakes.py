@@ -118,7 +118,10 @@ class InMemoryTranscriptStore:
     async def _transcript_doc(self, mid) -> dict:
         """Build the api.v1 ``TranscriptionResponse`` for row ``mid`` — shared by ``get_transcript``
         (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
-        by-id read returns exactly that row's segments/notes."""
+        by-id read returns exactly that row's segments/notes. Mirrors the real store's response
+        projection of the calendar sources."""
+        from .projection import project_calendar_sources
+
         m = self._meetings[mid]
         by_id = dict(m["segments"])
         # Redis-wired (prod-topology) mode: merge the LIVE in-flight hash over the durable rows,
@@ -144,7 +147,7 @@ class InMemoryTranscriptStore:
             "end_time": m["end_time"],
             "recordings": m["data"].get("recordings", []),
             "notes": m["data"].get("notes"),
-            "data": m["data"],
+            "data": project_calendar_sources(m["data"]),
             "segments": [_segment_to_api(s) for s in segments],
         }
 
@@ -458,6 +461,11 @@ class InMemoryTranscriptStore:
                 data.pop("attendees", None)
         if "auto_join" in updates:
             data["auto_join"] = bool(updates["auto_join"])
+        if "auto_join_user_set" in updates:
+            if updates["auto_join_user_set"]:
+                data["auto_join_user_set"] = True
+            else:
+                data.pop("auto_join_user_set", None)
         if "calendar_uid" in updates:
             if updates["calendar_uid"]:
                 data["calendar_uid"] = updates["calendar_uid"]

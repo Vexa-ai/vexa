@@ -124,7 +124,8 @@ def test_list_row_drops_heavy_data_keeps_light(path):
 
 def test_get_meeting_by_id_still_returns_full_data():
     """A3 — the detail path (GET /meetings/{id}) reuses list_meetings on the INTERNAL path, so it
-    still returns the full `data`; only the LIST drops it."""
+    still returns the full `data`; only the LIST drops it. The one exception is the calendar
+    sources' raw ICS snapshot, projected away at the response edge for every viewer."""
     store = InMemoryTranscriptStore()
     mid = _seed_heavy(store)
     c = _client(store)
@@ -136,9 +137,37 @@ def test_get_meeting_by_id_still_returns_full_data():
     assert detail.status_code == 200
     body = detail.json()
     assert "data" in body and "speaker_events" in body["data"] and "recordings" in body["data"]
-    assert body["data"]["calendar_sources"][0]["id"] == "calendar-primary"
-    assert body["data"]["calendar_sources"][0]["uid"] == "weekly-sync@example.com"
-    assert "event" in body["data"]["calendar_sources"][0]
+    assert body["data"]["calendar_sources"] == [{
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }]
+    # the identity the detail page renders is still reachable — from the row's own singular keys.
+    assert body["data"]["calendar_uid"] == "weekly-sync@example.com"
+
+
+def test_transcript_by_id_projects_calendar_sources_and_keeps_the_stored_snapshot():
+    """The raw ICS event snapshot is sweep state: it stays in the row and never rides a response.
+
+    The transcript reaches workspace members and share recipients as well as the owner, and the
+    snapshot carries the whole calendar component — attendees, organizer, description. So the
+    projection is unconditional, and the STORED row still has everything the sweep reconciles on.
+    """
+    store = InMemoryTranscriptStore()
+    mid = _seed_heavy(store)
+    r = _client(store).get(f"/transcripts/by-id/{mid}", headers=HEADERS)
+    assert r.status_code == 200
+    (source,) = r.json()["data"]["calendar_sources"]
+    assert source == {
+        "id": "calendar-primary",
+        "name": "Primary calendar",
+        "auto_join": True,
+        "bot_name": "Work Notes",
+    }
+    (stored,) = store._meetings[mid]["data"]["calendar_sources"]
+    assert stored["event"]["component"]["properties"]
+    assert stored["uid"] == "weekly-sync@example.com"
 
 
 # ── C2 · default page size + honest has_more ───────────────────────────────────────────────────────

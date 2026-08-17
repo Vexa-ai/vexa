@@ -328,7 +328,13 @@ class SqlAlchemyTranscriptStore:
         """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
         assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
         is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
-        hold a snapshot/transaction open (the #508 fix). Response is byte-identical to the old build."""
+        hold a snapshot/transaction open (the #508 fix).
+
+        This is a RESPONSE edge, so the calendar sources it ships are projected to their identity +
+        policy keys (``project_calendar_sources``) — the raw ICS event snapshot is sweep state, not
+        anyone's transcript."""
+        from .projection import project_calendar_sources
+
         snap, seg_by_id, order = pg
         data = snap["data"]
         # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
@@ -364,7 +370,7 @@ class SqlAlchemyTranscriptStore:
             "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
-            "data": data,
+            "data": project_calendar_sources(data),
             "segments": segments,
         }
 
@@ -1051,6 +1057,13 @@ class SqlAlchemyTranscriptStore:
                     data.pop("attendees", None)
             if "auto_join" in updates:
                 data["auto_join"] = bool(updates["auto_join"])
+            # The USER's own auto-join choice, marked so calendar sync stops deriving the flag
+            # from the connected calendars' policy for this row.
+            if "auto_join_user_set" in updates:
+                if updates["auto_join_user_set"]:
+                    data["auto_join_user_set"] = True
+                else:
+                    data.pop("auto_join_user_set", None)
             if "calendar_uid" in updates:
                 if updates["calendar_uid"]:
                     data["calendar_uid"] = updates["calendar_uid"]

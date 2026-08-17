@@ -60,6 +60,33 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
     preflight(env)
 
 
+# How many users a calendar sweep syncs at once. Users are independent, so the tick's wall time
+# tracks concurrency rather than the number of connected feeds; the bound keeps the DB pool and
+# the outbound feed fetches inside the budget a handful of users would already use.
+CALENDAR_SYNC_CONCURRENCY = 4
+
+
+async def _sync_user_calendars(store, redis_client, user_id: int, configs: list,
+                               *, publish=None, client=None) -> list:
+    """Sync ONE user's calendar connections and return their per-connection stamps.
+
+    The user's meeting rows are read ONCE here and threaded through every connection —
+    ``sync_user`` keeps the list current as it writes, so a second calendar sees the first one's
+    inserts without a second full read. Each connection's stamp is persisted under its own key,
+    exactly as the per-connection panel reads it."""
+    from .calendar_sync import run_user_sync, store_stamp
+
+    rows = await store.list_meetings(user_id)
+    stamps = []
+    for cfg in configs:
+        stamp = await run_user_sync(store, cfg, publish=publish, rows=rows, client=client)
+        stamp["calendar_id"] = cfg.get("calendar_id")
+        stamp["calendar_name"] = cfg.get("calendar_name")
+        await store_stamp(redis_client, user_id, stamp, cfg.get("calendar_id"))
+        stamps.append(stamp)
+    return stamps
+
+
 def build_production_app():
     """Wire the unified meeting-api with the real adapters + the lifespan-driven loops."""
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
@@ -158,7 +185,7 @@ def build_production_app():
             return None
         import json as _json
 
-        from .calendar_sync import aggregate_stamps, fetch_configs, run_user_sync, store_stamp
+        from .calendar_sync import aggregate_stamps, fetch_configs, store_stamp
 
         configs = await fetch_configs(admin_api_url, internal_secret)
         selected = [c for c in configs or [] if c.get("user_id") == user_id and
@@ -175,13 +202,9 @@ def build_production_app():
             except Exception:
                 pass
 
-        stamps = []
-        for cfg in selected:
-            stamp = await run_user_sync(transcript_store, cfg, publish=_pub)
-            stamp["calendar_id"] = cfg.get("calendar_id")
-            stamp["calendar_name"] = cfg.get("calendar_name")
-            await store_stamp(redis_client, user_id, stamp, cfg.get("calendar_id"))
-            stamps.append(stamp)
+        stamps = await _sync_user_calendars(
+            transcript_store, redis_client, user_id, selected, publish=_pub,
+        )
         if calendar_id is not None:
             return stamps[0]
         aggregate = aggregate_stamps(stamps)
@@ -595,23 +618,38 @@ def _attach_background_loops(
             return
         if not hasattr(transcript_store, "create_planned_meeting"):
             return
-        from .calendar_sync import aggregate_stamps, fetch_configs, run_user_sync, store_stamp
+        from .calendar_sync import (aggregate_stamps, build_ics_client, fetch_configs,
+                                    store_stamp)
 
         async def _tick():
             configs = await fetch_configs(admin_api_url, internal_secret)
-            user_stamps: dict[int, list[dict]] = {}
+            by_user: dict[int, list[dict]] = {}
             for cfg in configs or []:
-                try:  # one bad feed never stalls the sweep
-                    stamp = await run_user_sync(transcript_store, cfg, publish=_cal_publish)
-                except Exception:
-                    log.exception("calendar sync failed for user %s", cfg.get("user_id"))
-                    continue
-                stamp["calendar_id"] = cfg.get("calendar_id")
-                stamp["calendar_name"] = cfg.get("calendar_name")
-                await store_stamp(redis_client, cfg["user_id"], stamp, cfg.get("calendar_id"))
-                user_stamps.setdefault(cfg["user_id"], []).append(stamp)
-            for user_id, stamps in user_stamps.items():
-                await store_stamp(redis_client, user_id, aggregate_stamps(stamps))
+                by_user.setdefault(cfg["user_id"], []).append(cfg)
+            if not by_user:
+                return
+            limit = asyncio.Semaphore(CALENDAR_SYNC_CONCURRENCY)
+
+            async def _one_user(user_id: int, user_configs: list, client) -> None:
+                async with limit:
+                    try:  # one bad user never stalls the sweep
+                        stamps = await _sync_user_calendars(
+                            transcript_store, redis_client, user_id, user_configs,
+                            publish=_cal_publish, client=client,
+                        )
+                    except Exception:
+                        log.exception("calendar sync failed for user %s", user_id)
+                        return
+                    if stamps:
+                        await store_stamp(redis_client, user_id, aggregate_stamps(stamps))
+
+            # ONE pinned client for the whole tick: every feed fetch shares its connection pool
+            # instead of paying a fresh TLS handshake per calendar.
+            async with build_ics_client() as client:
+                await asyncio.gather(*(
+                    _one_user(user_id, user_configs, client)
+                    for user_id, user_configs in by_user.items()
+                ))
 
         while True:
             try:

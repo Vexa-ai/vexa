@@ -4,7 +4,7 @@ Public surface: ``parse_ics`` / ``sync_user`` (pure logic), the production I/O a
 ``fetch_ics`` / ``fetch_configs``, and the shared one-user pass ``run_user_sync`` (+ stamp
 helpers) used by BOTH the entrypoint's background poll loop and the user-facing sync-now edge.
 """
-from .adapters import fetch_configs, fetch_ics
+from .adapters import build_ics_client, fetch_configs, fetch_ics
 from .service import parse_ics, sync_user
 
 
@@ -15,5 +15,5 @@ def __getattr__(name):  # lazy: runner imports back from this package
     raise AttributeError(name)
 
 
-__all__ = ["parse_ics", "sync_user", "fetch_ics", "fetch_configs",
+__all__ = ["parse_ics", "sync_user", "fetch_ics", "fetch_configs", "build_ics_client",
            "run_user_sync", "aggregate_stamps", "store_stamp", "read_stamp"]

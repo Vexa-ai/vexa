@@ -50,6 +50,32 @@ CALENDAR_SOURCE_LIST_KEYS = frozenset({
 DEFAULT_LIST_LIMIT = 50
 
 
+def project_calendar_sources(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return ``data`` with each calendar source reduced to :data:`CALENDAR_SOURCE_LIST_KEYS`.
+
+    The stored source carries ``event`` — the whole raw ICS component: every attendee address,
+    the organizer, the description, the conference data. That snapshot is internal reconciliation
+    state for the sweep; no API consumer renders it. So it stays in the row and never rides a
+    response, on ANY read path and for EVERY viewer — a meeting reaches workspace members and
+    transcript-share recipients too, and the owner has no use for it either.
+
+    Pure and non-mutating (builds a new dict), so the caller's stored ``data`` is untouched. A
+    non-dict ``data`` projects to ``{}``.
+    """
+    if not isinstance(data, dict):
+        return {}
+    sources = data.get("calendar_sources")
+    if not isinstance(sources, list):
+        return dict(data)
+    projected = dict(data)
+    projected["calendar_sources"] = [
+        {k: v for k, v in source.items() if k in CALENDAR_SOURCE_LIST_KEYS}
+        for source in sources
+        if isinstance(source, dict) and source.get("id")
+    ]
+    return projected
+
+
 def project_list_data(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Return ``data`` with the heavy :data:`LIST_OMIT_KEYS` dropped; every light key kept.
 
@@ -58,13 +84,9 @@ def project_list_data(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     if not isinstance(data, dict):
         return {}
+    sources = project_calendar_sources(data).get("calendar_sources")
     projected = {k: v for k, v in data.items()
                  if k not in LIST_OMIT_KEYS and k != "calendar_sources"}
-    sources = data.get("calendar_sources")
     if isinstance(sources, list):
-        projected["calendar_sources"] = [
-            {k: v for k, v in source.items() if k in CALENDAR_SOURCE_LIST_KEYS}
-            for source in sources
-            if isinstance(source, dict) and source.get("id")
-        ]
+        projected["calendar_sources"] = sources
     return projected

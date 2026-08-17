@@ -276,15 +276,28 @@ def _source_entry(calendar_id: str, calendar_name: Optional[str], uid: str,
     return source
 
 
-def _source_updates(sources: list[dict]) -> dict:
+def _auto_join_user_set(data: dict) -> bool:
+    """Has the USER pinned this row's auto-join with a PATCH? Their choice outranks the feed."""
+    return bool(data.get("auto_join_user_set"))
+
+
+def _source_updates(sources: list[dict], *, user_set: bool = False) -> dict:
+    """The row patch that mirrors ``sources`` — the plural authority plus the singular fields
+    old clients still read. ``auto_join`` is DERIVED from the connected calendars' policy, so it
+    is omitted once the user has set it per-meeting (``user_set``): a sweep must never re-arm a
+    meeting the user disarmed."""
     primary = sources[0] if sources else None
-    return {
+    updates = {
         "calendar_sources": sources or None,
         "calendar_uid": primary.get("uid") if primary else None,
         "calendar_connection_id": primary.get("id") if primary else None,
         "calendar_name": primary.get("name") if primary else None,
-        "auto_join": any(bool(source.get("auto_join", True)) for source in sources),
     }
+    if not user_set:
+        updates["auto_join"] = any(
+            bool(source.get("auto_join", True)) for source in sources
+        )
+    return updates
 
 
 def _replace_source(sources: list[dict], source: dict) -> list[dict]:
@@ -301,10 +314,26 @@ def _replace_source(sources: list[dict], source: dict) -> list[dict]:
     return out
 
 
+def _remember(rows: list, row: dict) -> None:
+    """Fold a created/updated row back into the caller's row list — the sweep reads a user's rows
+    ONCE per tick and drives every one of their connections off that one list."""
+    for index, existing in enumerate(rows):
+        if existing.get("id") == row.get("id"):
+            rows[index] = row
+            return
+    rows.append(row)
+
+
+def _forget(rows: list, meeting_id) -> None:
+    rows[:] = [row for row in rows if row.get("id") != meeting_id]
+
+
 async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: bool = True,
                     calendar_id: Optional[str] = None,
                     calendar_name: Optional[str] = None,
-                    bot_name: Optional[str] = None) -> dict:
+                    bot_name: Optional[str] = None,
+                    legacy: bool = False,
+                    rows: Optional[list] = None) -> dict:
     """Upsert one user's parsed feed against their meeting rows. Returns
     ``{"created": [...], "updated": [...], "cancelled": [...], counts...}`` where each list entry
     is ``{id, native, status, when}`` for the caller to fan out as WS frames.
@@ -313,8 +342,14 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
     ``(calendar connection id, UID)`` carried in ``data.calendar_sources``. An INTENT-status row follows the feed
     (time/title/link moves, cancellation); a row the bot FSM owns is NEVER touched; a feed event
     colliding with a MANUALLY planned row for the same (platform, native) ADOPTS that row (stamps
-    the uid) instead of duplicating it."""
-    rows = await store.list_meetings(user_id)
+    the uid) instead of duplicating it.
+
+    ``legacy`` marks the ONE connection that inherited the singular pre-plural feed: only its
+    sweep claims rows carrying a bare ``calendar_uid``, so a second calendar never cancels them.
+    ``rows`` (optional) lets the caller supply the user's rows — read once per tick and shared
+    across that user's connections; this pass keeps the list current as it writes."""
+    if rows is None:
+        rows = await store.list_meetings(user_id)
     by_uid: dict[str, dict] = {}
     by_native: dict[tuple, dict] = {}
     # Series workspace map (prep-v3 slice a): a NEW occurrence of a known calendar UID inherits
@@ -330,10 +365,12 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
         sources = _calendar_sources(data)
         source = next((item for item in sources if item.get("id") == calendar_id), None) \
             if calendar_id else None
-        # Existing single-feed rows predate calendar_sources. The first plural sweep adopts them
-        # by UID; once stamped, every later match is scoped by connection id.
+        # Existing single-feed rows predate calendar_sources; the LEGACY connection's sweep (the
+        # one that inherited the singular feed) adopts them by UID and stamps them. Every other
+        # connection ignores them — an unstamped row is not evidence that THIS calendar dropped
+        # the event. Once stamped, every later match is scoped by connection id.
         uid = source.get("uid") if source else (
-            data.get("calendar_uid") if not sources and (not calendar_id or data.get("calendar_uid")) else None
+            data.get("calendar_uid") if not sources and (not calendar_id or legacy) else None
         )
         if uid and (data.get("workspace_id") or data.get("workspace_unbound")):
             stamp = str(row.get("start_time") or data.get("scheduled_at") or "")
@@ -364,7 +401,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 )
                 next_sources = _replace_source(sources, source)
                 if next_sources != sources:
-                    updates.update(_source_updates(next_sources))
+                    updates.update(_source_updates(
+                        next_sources, user_set=_auto_join_user_set(data),
+                    ))
             if (data.get("title") or None) != ev["title"] and ev["title"]:
                 updates["title"] = ev["title"]
             if data.get("scheduled_at") != ev["scheduled_at"]:
@@ -382,6 +421,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 continue
             updated = await store.update_planned_meeting(user_id, row["id"], updates)
             if isinstance(updated, dict) and not updated.get("error"):
+                _remember(rows, updated)
                 out["updated"].append({"id": updated["id"], "native": updated.get("native_meeting_id"),
                                        "status": updated.get("status"),
                                        "when": (updated.get("data") or {}).get("scheduled_at")})
@@ -400,7 +440,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                         bot_name=bot_name, metadata=ev.get("metadata"),
                     )
                     next_sources = _replace_source(sources, source)
-                    source_patch = _source_updates(next_sources)
+                    source_patch = _source_updates(
+                        next_sources, user_set=_auto_join_user_set(manual_data),
+                    )
                     source_patch["calendar_managed"] = bool(
                         manual_data.get("calendar_managed", False)
                     )
@@ -415,6 +457,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 if isinstance(adopted, dict) and not adopted.get("error"):
                     by_uid_row = dict(adopted)
                     by_native[(ev["platform"], ev["native_meeting_id"])] = by_uid_row
+                    _remember(rows, adopted)
                     out["updated"].append({"id": adopted["id"], "native": adopted.get("native_meeting_id"),
                                            "status": adopted.get("status"),
                                            "when": (adopted.get("data") or {}).get("scheduled_at")})
@@ -441,6 +484,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
         )
         if isinstance(created, dict) and not created.get("error"):
             by_native[(ev["platform"], ev["native_meeting_id"])] = created
+            _remember(rows, created)
             out["created"].append({"id": created["id"], "native": created.get("native_meeting_id"),
                                    "status": created.get("status"),
                                    "when": (created.get("data") or {}).get("scheduled_at")})
@@ -458,15 +502,24 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             data = row.get("data") if isinstance(row.get("data"), dict) else {}
             sources = _calendar_sources(data)
             remaining = [source for source in sources if source.get("id") != calendar_id]
-            managed = bool(data.get("calendar_managed", bool(sources)))
+            # A row the calendar CREATED is the calendar's to retire. Rows imported by the
+            # singular pre-plural feed carry only `calendar_uid` — no sources, no marker — and
+            # are managed all the same; defaulting them to manual would strip the stamp and
+            # orphan the row instead of deleting it.
+            managed = bool(data.get(
+                "calendar_managed", bool(sources) or bool(data.get("calendar_uid")),
+            ))
             if remaining or not managed:
-                patch = _source_updates(remaining)
+                patch = _source_updates(
+                    remaining, user_set=_auto_join_user_set(data),
+                )
                 if not remaining and not managed:
                     patch.pop("auto_join", None)
                 updated = await store.update_planned_meeting(
                     user_id, row["id"], patch,
                 )
                 if isinstance(updated, dict) and not updated.get("error"):
+                    _remember(rows, updated)
                     out["updated"].append({"id": updated["id"],
                                            "native": updated.get("native_meeting_id"),
                                            "status": updated.get("status"),
@@ -474,6 +527,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 continue
         deleted = await store.delete_planned_meeting(user_id, row["id"])
         if deleted:
+            _forget(rows, row["id"])
             out["cancelled"].append({"id": row["id"], "native": row.get("native_meeting_id"),
                                      "status": "deleted", "when": None})
 

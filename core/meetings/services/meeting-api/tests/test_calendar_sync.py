@@ -568,3 +568,110 @@ def test_parse_cancelled_master_retires_series():
     ), now=NOW)
     assert parsed["cancelled_uids"] == ["uid-1"]
     assert parsed["events"] == []
+
+
+# ---- the user's own choices outrank the feed --------------------------------------------
+
+async def test_user_disarmed_meeting_stays_disarmed_across_sweeps():
+    """A PATCH of `auto_join` is the user's decision about ONE meeting. The sweep derives the
+    flag from the connected calendars' policy on every pass, so it must stand down on that row —
+    otherwise the next tick silently re-arms a bot the user turned off."""
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work",
+                    auto_join_default=True)
+    (row,) = await store.list_meetings(USER)
+    await store.update_planned_meeting(USER, row["id"],
+                                       {"auto_join": False, "auto_join_user_set": True})
+
+    # a sweep that genuinely changes the sources (renamed calendar, moved event) still runs
+    moved = parse_ics(_ics(_event(start="20260708T160000Z")), now=NOW)
+    result = await sync_user(store, USER, moved, calendar_id="work",
+                             calendar_name="Work calendar", auto_join_default=True)
+
+    assert result["counts"]["updated"] == 1
+    (row,) = await store.list_meetings(USER)
+    assert row["data"]["auto_join"] is False
+    assert row["data"]["calendar_name"] == "Work calendar"
+
+
+# ---- rows imported before calendar_sources existed ---------------------------------------
+
+def _legacy_row(store, uid="uid-1", native="abc-defg-hij"):
+    """A row the singular pre-plural feed imported: `calendar_uid`, no sources, no marker."""
+    return store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id=native, status="scheduled",
+        data={"auto_join": True, "title": "Weekly sync",
+              "scheduled_at": "2026-07-08T15:00:00+00:00", "calendar_uid": uid},
+    )
+
+
+async def test_legacy_row_gone_from_the_feed_is_deleted_not_stripped():
+    """A row with only `calendar_uid` is calendar-managed all the same. Cancelled upstream, it
+    must be deleted — stripping the stamp instead leaves an armed orphan no calendar can reach."""
+    store = InMemoryTranscriptStore()
+    mid = _legacy_row(store)
+
+    result = await sync_user(store, USER, {"events": [], "cancelled_uids": []},
+                             calendar_id="work", calendar_name="Work", legacy=True)
+
+    assert result["counts"]["cancelled"] == 1
+    assert [row["id"] for row in await store.list_meetings(USER)] == []
+    assert mid not in store._meetings
+
+
+async def test_second_calendar_never_claims_a_legacy_row():
+    """Only the connection that inherited the singular feed may match a bare `calendar_uid`.
+    Another calendar's sweep sees a row it never imported — and leaves it alone."""
+    store = InMemoryTranscriptStore()
+    mid = _legacy_row(store)
+
+    result = await sync_user(store, USER, {"events": [], "cancelled_uids": []},
+                             calendar_id="personal", calendar_name="Personal")
+
+    assert result["counts"] == {"created": 0, "updated": 0, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert row["id"] == mid
+    assert row["data"]["calendar_uid"] == "uid-1"
+    assert row["data"]["auto_join"] is True
+
+
+async def test_paused_calendar_disarms_the_rows_it_manages():
+    """`enabled: false` reaches the sweep as a tombstone-shaped config, so the pass parses an
+    empty feed and retires this connection's managed rows. Re-enabling re-imports next sweep."""
+    from meeting_api.calendar_sync import run_user_sync
+
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                    calendar_id="work", calendar_name="Work")
+    assert len(await store.list_meetings(USER)) == 1
+
+    stamp = await run_user_sync(store, {
+        "user_id": USER, "calendar_id": "work", "calendar_name": "Work",
+        "bot_name": "Vexa", "deleted": False, "paused": True,
+    })
+
+    assert stamp["last_error"] is None
+    assert stamp["counts"]["cancelled"] == 1
+    assert await store.list_meetings(USER) == []
+
+
+# ---- one row read per user per tick, shared across their calendars ------------------------
+
+async def test_shared_rows_stay_current_across_a_users_calendars():
+    """The sweep reads a user's rows ONCE and threads the list through every connection, so the
+    second calendar must see the first one's insert — and share the row instead of duplicating."""
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    rows: list = await store.list_meetings(USER)
+
+    first = await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work",
+                            rows=rows)
+    second = await sync_user(store, USER, parsed, calendar_id="personal",
+                             calendar_name="Personal", rows=rows)
+
+    assert first["counts"]["created"] == 1
+    assert second["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert [source["id"] for source in row["data"]["calendar_sources"]] == ["work", "personal"]
+    assert [entry["id"] for entry in rows] == [row["id"]]

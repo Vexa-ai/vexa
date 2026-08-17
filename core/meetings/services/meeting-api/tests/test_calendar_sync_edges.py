@@ -124,3 +124,40 @@ def test_fetch_ics_error_taxonomy(monkeypatch, body, status, expect):
         assert err is None and text is not None
     else:
         assert text is None and expect in (err or "")
+
+
+# ── the per-meeting auto-join opt-out survives the next sweep (route → store → sync) ──────────
+def test_patching_auto_join_off_survives_the_next_calendar_sweep():
+    """PATCH /meetings/{id} {"auto_join": false} is the user's decision about ONE meeting; the
+    sweep recomputes the flag from the connected calendars' policy on every pass. The route marks
+    the row as user-set so the sweep stands down on it — end to end, over the shipped handlers."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from meeting_api.calendar_sync import parse_ics, sync_user
+
+    store = InMemoryTranscriptStore()
+    now = datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc)
+    feed = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n"
+            "BEGIN:VEVENT\r\nUID:uid-1\r\nDTSTAMP:20260701T000000Z\r\nDTSTART:20260708T150000Z\r\n"
+            "SUMMARY:Weekly sync\r\nLOCATION:https://meet.google.com/abc-defg-hij\r\n"
+            "END:VEVENT\r\nEND:VCALENDAR\r\n")
+    asyncio.run(sync_user(store, 28, parse_ics(feed, now=now),
+                          calendar_id="work", calendar_name="Work", auto_join_default=True))
+    (row,) = asyncio.run(store.list_meetings(28))
+
+    app = create_app(store, redis=_CaptureRedis())
+    client = TestClient(app)
+    r = client.patch(f"/meetings/{row['id']}", headers={"X-User-Id": "28"},
+                     json={"auto_join": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["auto_join"] is False
+
+    # the calendar was renamed upstream — a real source change, so the sweep does write the row
+    asyncio.run(sync_user(store, 28, parse_ics(feed, now=now),
+                          calendar_id="work", calendar_name="Work calendar",
+                          auto_join_default=True))
+
+    (row,) = asyncio.run(store.list_meetings(28))
+    assert row["data"]["auto_join"] is False
+    assert row["data"]["calendar_name"] == "Work calendar"

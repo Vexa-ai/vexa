@@ -275,12 +275,19 @@ def build_router(
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
     ):
+        from .projection import project_calendar_sources
+
         user_id = _resolve_user_id(x_user_id)
         meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
-        return JSONResponse(content=meeting)
+        # Full `data` minus the raw ICS event snapshot: the projection happens HERE, at the
+        # response edge, because the same store call feeds calendar sync — which reads the
+        # snapshot and writes it back, so a strip inside the store would erase it.
+        return JSONResponse(content={
+            **meeting, "data": project_calendar_sources(meeting.get("data")),
+        })
 
     # --- POST /meetings → CREATE a PLANNED meeting (intent status, NO bot spawned). The user plans a
     # meeting ahead of time — with or without a meeting link, with or without a time. Status starts at
@@ -453,6 +460,9 @@ def build_router(
             if not isinstance(payload["auto_join"], bool):
                 raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
             updates["auto_join"] = payload["auto_join"]
+            # A per-meeting choice, marked as the user's: calendar sync derives `auto_join` from
+            # the connected calendars' policy on every pass, and stands down on a marked row.
+            updates["auto_join_user_set"] = True
         if not updates:
             raise HTTPException(status_code=422, detail="no editable fields in body")
 

@@ -5,6 +5,7 @@ user-facing representation goes through ``masked_connection``.
 """
 from __future__ import annotations
 
+from typing import Optional
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -108,25 +109,48 @@ def masked_connection(connection: dict) -> dict:
     }
 
 
+def legacy_connection_id(connections: list[dict], user_id: int) -> Optional[str]:
+    """Which connection owns the meeting rows stamped by the singular (pre-plural) feed.
+
+    Those rows carry ``data.calendar_uid`` and no ``calendar_sources``, so they name no
+    connection.  Exactly ONE connection may claim them, or every other calendar's sweep would
+    read them as its own and cancel them: the connection synthesized from the legacy keys when
+    one exists, otherwise the first connection in the list (the one the singular feed migrated
+    into).  ``None`` when the user has no connections at all."""
+    synthesized = _legacy_id(user_id)
+    if any(connection.get("id") == synthesized for connection in connections):
+        return synthesized
+    return connections[0]["id"] if connections else None
+
+
 def internal_connections(data: dict, user_id: int) -> list[dict]:
-    """Flatten one user's connections for the secret-gated meeting-api edge."""
+    """Flatten one user's connections for the secret-gated meeting-api edge.
+
+    Three shapes cross the hop.  A LIVE connection carries its feed URL and syncs normally.  A
+    DELETED one is a tombstone: no URL, and the sweep parses it as an empty feed so its managed
+    rows retire.  A DISABLED one (``enabled: false``) is a tombstone too — a paused calendar must
+    leave no meeting armed — and re-enabling re-imports on the next sweep.
+    """
+    connections = connections_from_data(data, user_id, include_deleted=True)
+    legacy_id = legacy_connection_id(connections, user_id)
     out = []
-    for connection in connections_from_data(data, user_id, include_deleted=True):
+    for connection in connections:
+        entry = {
+            "user_id": user_id,
+            "calendar_id": connection["id"],
+            "calendar_name": connection.get("name") or "Calendar",
+            "bot_name": connection.get("bot_name") or "Vexa",
+        }
+        if connection["id"] == legacy_id:
+            entry["legacy"] = True
         if connection.get("deleted"):
+            out.append({**entry, "deleted": True})
+        elif not connection.get("enabled", True):
+            out.append({**entry, "deleted": False, "paused": True})
+        elif connection.get("ics_url"):
             out.append({
-                "user_id": user_id,
-                "calendar_id": connection["id"],
-                "calendar_name": connection.get("name") or "Calendar",
-                "bot_name": connection.get("bot_name") or "Vexa",
-                "deleted": True,
-            })
-        elif connection.get("ics_url") and connection.get("enabled", True):
-            out.append({
-                "user_id": user_id,
-                "calendar_id": connection["id"],
-                "calendar_name": connection.get("name") or "Calendar",
+                **entry,
                 "ics_url": connection["ics_url"],
                 "auto_join": bool(connection.get("auto_join", True)),
-                "bot_name": connection.get("bot_name") or "Vexa",
             })
     return out
