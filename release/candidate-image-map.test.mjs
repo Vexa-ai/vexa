@@ -91,7 +91,7 @@ test("v0.12.23 canonical packet freezes the rc.12 train candidate", () => {
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "15f214a9944320266167a44c738ab7ff8212dc22e318705237f77a7badf2ee4e",
+    "802b65d0eb929603e3cf0c17702d40fd1c781e07a4f0f135f7b874498b9b272f",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
   assert.equal(map.candidate_tag, "v0.12.23-rc.12");
@@ -102,7 +102,7 @@ test("v0.12.23 canonical packet freezes the rc.12 train candidate", () => {
   );
   assert.equal(
     map.validation_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/32042491383",
+    "https://github.com/Vexa-ai/vexa/actions/runs/32043858377",
   );
   assert.equal(
     map.images["vexaai/vexa-bot"].digest,
