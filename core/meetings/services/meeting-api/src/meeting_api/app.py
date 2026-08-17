@@ -17,8 +17,9 @@ sub-package of ``meeting_api`` mounted here (the v0.12 analog of the parent ``ma
 
 webhooks + scheduling are library bricks (no HTTP surface of their own in the core path — they are
 driven by the lifecycle/bot_spawn flows); they are re-exported from the package front door and wired
-by the production composition root in P3. continue_meeting / max-bots / join-retry / the segment
-consumer loop are P3 seams.
+by the production composition root in P3. continue_meeting / max-bots / the segment consumer loop
+are P3 seams; join-retry is one too, and #1190 filled it — the ``join_retry`` port below is called
+on every terminal ``failed`` advance.
 
 ``create_app`` takes every collaborator as an injected port (or builds a default in-memory stack for
 the app factory / tests), so the SAME app runs with real adapters in prod and in-process fakes in
@@ -182,6 +183,11 @@ def create_app(
     # calendar-sync user edges (async callables from the composition root; None → routes 503)
     calendar_sync_now: Optional["object"] = None,
     calendar_sync_status: Optional["object"] = None,
+    # join-retry (#1190) — awaited with the persisted meeting ROW the moment the FSM lands a
+    # `failed` terminal. Production wires lifecycle.JoinRetryCoordinator.on_terminal_failed: a
+    # pre-active TRANSIENT failure schedules a bounded, backed-off re-spawn (a fresh meeting_session
+    # on the same row). None → no retry at all, which is exactly the pre-#1190 behaviour.
+    join_retry: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -241,6 +247,7 @@ def create_app(
     app.state.delivery_ledger = delivery_ledger
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
+    app.state.join_retry = join_retry
     _mount_lifecycle(
         app,
         sink,
@@ -250,6 +257,7 @@ def create_app(
         redis,
         transcript_finalizer,
         delivery_ledger,
+        join_retry,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -342,6 +350,7 @@ def _mount_lifecycle(
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
+    join_retry: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -836,6 +845,27 @@ def _mount_lifecycle(
                     log_event("meeting_copilot_reap_failed", audience="system", level="warning",
                               span="lifecycle.callback",
                               fields={"meeting_row_id": meeting_row_id, "error": str(e)})
+        # JOIN-RETRY (#1190) — the LAST thing a terminal `failed` advance does. The controller has
+        # existed since P3d with nothing calling it; this is the call. It reads its decision inputs
+        # off the persisted row (sealed `completion_reason`, #1075's `join_evidence`, the attempt
+        # counter) so the same inputs a human queries are the ones the machine used, and it fires
+        # only on a REAL advance (never an idempotent terminal replay — the bot retries its callback
+        # 3x, and each replay must NOT buy another re-spawn). Best-effort by contract: a retry is an
+        # optimization on a run that has already ended and must never fail the bot's callback.
+        if (
+            join_retry is not None
+            and terminal_advanced
+            and rec.status is not None
+            and rec.status.value == "failed"
+        ):
+            try:
+                await join_retry(meeting_row)
+            except Exception as e:  # noqa: BLE001 — the meeting is already terminal either way
+                log_event("join_retry_failed", audience="system", level="warning",
+                          span="lifecycle.callback",
+                          fields={"meeting_id": meeting_row.get("id")
+                                  if isinstance(meeting_row, dict) else None,
+                                  "error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,

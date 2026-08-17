@@ -525,6 +525,41 @@
    "targets": []
   },
   {
+   "key": "JOIN_RETRY_ENABLED",
+   "class": "defaulted",
+   "default": "true",
+   "description": "#1190 master switch for bounded join-retry: on a pre-active TRANSIENT join failure the control plane schedules a fresh re-spawn (new meeting_session, same meeting row) instead of leaving the meeting dead on attempt 1. false disables the trigger entirely and the tick loop never starts — the pre-#1190 behaviour, one boolean away.",
+   "targets": []
+  },
+  {
+   "key": "JOIN_RETRY_MAX_ATTEMPTS",
+   "class": "defaulted",
+   "default": "3",
+   "description": "#1190 total attempts per meeting INCLUDING the original spawn (3 ⇒ the original plus at most two re-spawns). Unparseable values keep the default.",
+   "targets": []
+  },
+  {
+   "key": "JOIN_RETRY_BACKOFF_S",
+   "class": "defaulted",
+   "default": "30,120,300",
+   "description": "#1190 comma-separated backoff seconds per retry attempt; the last entry is reused past its length. A malformed list keeps the default rather than retrying with no delay.",
+   "targets": []
+  },
+  {
+   "key": "JOIN_RETRY_ADMISSION_TIMEOUT",
+   "class": "defaulted",
+   "default": "false",
+   "description": "#1190 whether a lobby expiry (awaiting_admission_timeout, or a join_failure whose #1075 evidence reads admission_timeout) is retried. OFF by founder ruling 2026-08-17: the bot already stood at the door for the whole lobby budget, so re-knocking doubles the quota burn against a host who did not answer. Opt in deliberately, never defaulted.",
+   "targets": []
+  },
+  {
+   "key": "JOIN_RETRY_TICK_INTERVAL_S",
+   "class": "defaulted",
+   "default": "5",
+   "description": "#1190 how often the join-retry scheduler is drained for due re-spawn jobs. Bounds the lateness of a retry, not its backoff.",
+   "targets": []
+  },
+  {
    "key": "CALENDAR_SYNC_INTERVAL_S",
    "class": "defaulted",
    "default": "300",
