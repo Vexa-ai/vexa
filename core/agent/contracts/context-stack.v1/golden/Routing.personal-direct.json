@@ -1,0 +1,6 @@
+{
+  "destination": "direct",
+  "layer": "personal",
+  "workspace_id": "personal-member@example.com",
+  "reason": "personal-policy-writes-direct"
+}

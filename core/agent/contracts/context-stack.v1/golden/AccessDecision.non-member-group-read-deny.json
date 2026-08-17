@@ -1,0 +1,8 @@
+{
+  "allow": false,
+  "subject": "outsider@example.com",
+  "workspace_id": "acme",
+  "policy": "group",
+  "action": "read",
+  "reason": "not-member"
+}

@@ -1,0 +1,35 @@
+[project]
+name = "vexa-context-stack"
+version = "0.12.0"
+description = "The context stack — the four layers a product-mode agent turn composes (global · group · personal · user-system), their membership and policy-routed writes, owner triage of group proposals, and a write-only workspace-secret surface."
+requires-python = ">=3.11"
+# The module owns no connection: a mounting service injects an AsyncSession, so nothing here
+# constructs an engine or holds a pool. FastAPI is the HTTP surface (an APIRouter, not an app).
+dependencies = [
+    "sqlalchemy[asyncio]>=2,<3",
+    "fastapi>=0.110,<1",
+    "pydantic>=2,<3",
+]
+
+[dependency-groups]
+# Tests run the real DDL on in-memory SQLite — real constraints, no docker, no network.
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1,<2",
+    "aiosqlite>=0.20,<1",
+    "httpx>=0.27,<1",
+    # Validates this module's live output against the published context-stack.v1 schema, so the
+    # contract cannot drift from the code while its goldens still pass.
+    "jsonschema>=4.21,<5",
+    "referencing>=0.31",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# Every test here drives an async store; `auto` keeps the marker off ~50 tests without changing
+# what any of them prove.
+asyncio_mode = "auto"

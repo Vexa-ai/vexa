@@ -1,0 +1,8 @@
+{
+  "allow": true,
+  "subject": "owner@example.com",
+  "workspace_id": "acme",
+  "policy": "group",
+  "action": "triage",
+  "reason": "owner"
+}

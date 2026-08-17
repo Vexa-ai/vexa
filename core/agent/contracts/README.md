@@ -17,6 +17,7 @@ proactive cards, and tool calls.
 | **`tool.v1`** | a tool/integration grant — `{ scope, grant, cred_ref, transport, barriers }`; injected as `claude --allowedTools` + MCP. | no |
 | **`event.v1`** | an external event (e.g. email, meeting) mapped into a `unit.v1` Invocation — generic event ingress. | no |
 | **`proactive-card.v1`** | a proactive output card with actions (agent-initiated surface). | no |
+| **`context-stack.v1`** | the four layers a product-mode turn composes — global · group · personal · user-system — with the policy field that routes every write, the proposal queue an owner triages, and `SecretMetadata`, the whole read surface of a workspace secret. | no |
 | **`invoke.v1`** | the legacy meetings→agent invocation seam. **Sealed**; retiring as callers move to `unit.v1`. | **yes** |
 
 Note: `schedule.v1` (the Scheduler job spec routines compile to) is owned by `runtime`, not `agent` —

@@ -61,7 +61,8 @@
           "core/agents",
           "core/runtime",
           "core/identity",
-          "core/workspaces"
+          "core/workspaces",
+          "core/context-stack"
         ]
       },
       {

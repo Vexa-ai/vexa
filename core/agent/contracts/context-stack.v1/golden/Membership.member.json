@@ -1,0 +1,8 @@
+{
+  "workspace_id": "acme",
+  "subject": "member@example.com",
+  "role": "member",
+  "email": "member@example.com",
+  "added_by": "owner@example.com",
+  "added_at": "2026-08-17T09:00:00Z"
+}
