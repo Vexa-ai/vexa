@@ -30,6 +30,7 @@ import json
 import os
 from contextlib import AsyncExitStack
 from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import quote
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
@@ -88,6 +89,32 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 # ``mcp-session-id`` is minted by the server on initialize and echoed by the client on every later
 # request; drop it at the edge and the session can never be bound. Passed through on BOTH legs.
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
+
+
+# Path params reach a handler URL-DECODED (Starlette resolves %3F/%23/%2E before the route sees
+# them), so interpolating one raw into a downstream URL lets a caller graft a query string, a
+# fragment or a dot-segment onto the hop — ``%2E%2E`` walks /user/calendars/{id} back up to
+# admin-api's /user. Every param is re-encoded as ONE opaque segment before it is interpolated.
+# Control characters (NUL, CR, LF) are refused here instead: httpx raises ``InvalidURL`` for them,
+# which is NOT a ``RequestError`` and would escape the 502/504 mapping as a gateway 500.
+def _path_segment(value: str) -> Tuple[Optional[str], Optional[Response]]:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return None, _invalid_path_param_response()
+    segment = quote(value, safe="")
+    # ``quote`` leaves "." alone (it is unreserved), but httpx RESOLVES a dot-only segment against
+    # the base path — "/user/calendars/.." becomes admin-api's "/user". Percent-encode it so the
+    # id stays data; "%2E%2E" survives httpx untouched and decodes back to ".." downstream.
+    if segment and set(segment) == {"."}:
+        segment = segment.replace(".", "%2E")
+    return segment, None
+
+
+def _invalid_path_param_response() -> Response:
+    return Response(
+        content=json.dumps({"detail": "invalid path parameter"}),
+        status_code=400,
+        media_type="application/json",
+    )
 
 
 def _required_scopes(path: str) -> Optional[Set[str]]:
@@ -276,6 +303,10 @@ def create_app(
                 params=dict(request.query_params) or None,
                 content=content,
             )
+        except httpx.InvalidURL:
+            # Not a RequestError: without this arm an unparseable hop URL surfaces as a gateway 500
+            # even though the fault is in what the CALLER put in the path.
+            return _invalid_path_param_response()
         except httpx.TimeoutException:
             return Response(content=json.dumps({"detail": "upstream timeout"}),
                             status_code=504, media_type="application/json")
@@ -522,19 +553,31 @@ def create_app(
 
     @app.patch("/user/calendars/{calendar_id}")
     async def update_user_calendar(calendar_id: str, request: Request):
-        return await _forward("PATCH", _admin(f"/user/calendars/{calendar_id}"), request)
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("PATCH", _admin(f"/user/calendars/{segment}"), request)
 
     @app.delete("/user/calendars/{calendar_id}")
     async def delete_user_calendar(calendar_id: str, request: Request):
-        return await _forward("DELETE", _admin(f"/user/calendars/{calendar_id}"), request)
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("DELETE", _admin(f"/user/calendars/{segment}"), request)
 
     @app.get("/user/calendars/{calendar_id}/sync")
     async def get_calendar_connection_sync(calendar_id: str, request: Request):
-        return await _forward("GET", _meeting(f"/user/calendars/{calendar_id}/sync"), request)
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("GET", _meeting(f"/user/calendars/{segment}/sync"), request)
 
     @app.post("/user/calendars/{calendar_id}/sync")
     async def run_calendar_connection_sync(calendar_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/user/calendars/{calendar_id}/sync"), request)
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("POST", _meeting(f"/user/calendars/{segment}/sync"), request)
 
     # ---- user self-serve model + transcription prefs (identity owns them, same shape as
     # /user/webhook: secrets masked by admin-api on every read-back, no ROUTE_SCOPES entry). ----
