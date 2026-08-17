@@ -3,7 +3,10 @@
  *    google_meet → abc-defg-hij   ·   zoom → 9–11 digits   ·   teams → non-empty (passcode handled elsewhere)
  *    jitsi → the meet.jit.si room name, or room@host for a self-hosted deployment (a single
  *    URL-safe path segment; declared VEXA_JITSI_HOSTS arrive via the `jitsiHosts` parameter).
- *  Accepts either a raw id or a full meeting URL the user pasted. */
+ *  Accepts either a raw id or a full meeting URL the user pasted.
+ *  Hosts are matched EXACTLY or as a dotted subdomain (`hostMatches`) — never by substring,
+ *  which would read `meet.google.com.attacker.example` as Google Meet. The server parsers
+ *  (`meeting_api.collector.meeting_link`, `vexa_mcp.link_parser`) carry the same helper. */
 
 export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
 
@@ -17,6 +20,29 @@ const ZOOM_ID = /\d{9,11}/;
 // A Jitsi room: one URL-safe path segment (no separators/whitespace) — the id is embedded
 // back into the construct-URL template, so the encoded form is the id.
 const JITSI_ROOM = /^[^/?#\s]+$/;
+
+// Zoom's meeting domains: canonical zoom.us (+ every regional subdomain — us02web, a
+// customer's company.zoom.us) and the US-government tenant. Matches the server parsers.
+const ZOOM_DOMAINS = ["zoom.us", "zoomgov.com"] as const;
+// Every domain a hosted platform claims. Used both to match and to recognize a lookalike.
+const PLATFORM_DOMAINS = ["meet.google.com", ...ZOOM_DOMAINS, "teams.microsoft.com", "teams.live.com"] as const;
+
+/** Exact host, or a subdomain of one of `domains` — never a substring match.
+ *  A substring test (`host.includes("meet.google.com")`) also accepts
+ *  `meet.google.com.attacker.example`: the platform name is a *prefix* of a domain whoever
+ *  pasted the link controls. The registrable domain is the rightmost part of a hostname, so
+ *  the only sound test is equality or a dotted suffix. */
+function hostMatches(host: string, ...domains: readonly string[]): boolean {
+  return domains.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+/** True when `host` merely CONTAINS a platform's domain without being it or a subdomain of it.
+ *  Such a host must not reach the jitsi naming heuristics either: `meet.google.com.attacker.example`
+ *  carries a "meet" LABEL, so the self-hosted fallback would otherwise adopt it as a jitsi room.
+ *  Declared hosts (`jitsiHosts`) are unaffected — an operator naming their deployment is not a guess. */
+function isPlatformLookalike(host: string): boolean {
+  return PLATFORM_DOMAINS.some((d) => host.includes(d) && !hostMatches(host, d));
+}
 
 /** True if `id` is a valid native id for `platform`. */
 export function isValidMeetingId(platform: Platform, id: string): boolean {
@@ -50,15 +76,15 @@ export function parseMeetingInput(raw: string, jitsiHosts: readonly string[] = [
 
   if (url) {
     const host = url.hostname.toLowerCase();
-    if (host.includes("meet.google.com")) {
+    if (hostMatches(host, "meet.google.com")) {
       const code = url.pathname.split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
       return isValidMeetingId("google_meet", code) ? { platform: "google_meet", native_meeting_id: code } : null;
     }
-    if (host.includes("zoom")) {
+    if (hostMatches(host, ...ZOOM_DOMAINS)) {
       const m = url.pathname.match(ZOOM_ID) || url.search.match(ZOOM_ID);
       return m ? { platform: "zoom", native_meeting_id: m[0] } : null;
     }
-    if (host.includes("teams.microsoft.com") || host.includes("teams.live.com")) {
+    if (hostMatches(host, "teams.microsoft.com", "teams.live.com")) {
       // Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
       const decoded = decodeURIComponent(input);
       const thread = decoded.match(/19:meeting_[^@%\s/]+@thread\.v2/i);
@@ -77,9 +103,13 @@ export function parseMeetingInput(raw: string, jitsiHosts: readonly string[] = [
     // recommended naming, regionalized). The room is the path's single segment, kept exactly
     // as pasted (case + percent-encoding preserved — the raw URL rides along as meeting_url,
     // so the bot lands on the right deployment).
+    // A host that merely LOOKS like a hosted platform is excluded from the naming heuristics
+    // outright: the branches above already refused it by name, and
+    // meet.google.com.attacker.example carries a "meet" label that would otherwise let it back
+    // in through this door. Declared hosts are an explicit opt-in and stay unaffected.
     const jitsiHost =
       host === "meet.jit.si" || jitsiHosts.includes(host) ||
-      host.includes("jitsi") || host.split(".").includes("meet");
+      (!isPlatformLookalike(host) && (host.includes("jitsi") || host.split(".").includes("meet")));
     if (jitsiHost) {
       const room = url.pathname.replace(/^\/+|\/+$/g, "");
       if (!room || !JITSI_ROOM.test(room)) return null;
