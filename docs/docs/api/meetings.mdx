@@ -333,6 +333,66 @@ The same segments arrive **live** (`completed: false`, a pending draft) and then
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
 runs.
 
+## Participants — who was in the meeting
+
+A **speaker** is an attributed voice in the transcript above. A **participant** is an identity — an
+email on the invitation, or a name the platform showed. They are different things, and the record
+carries both, separately.
+
+`GET /meetings/{meeting_id}` returns `participants[]` plus `participants_source`:
+
+```json Participants on the meeting detail
+{
+  "id": 12345,
+  "participants_source": "invite",
+  "participants": [
+    {"email": "ada@example.com", "name": "Ada Lovelace", "role": "organizer",
+     "source": "invite", "partstat": "ACCEPTED", "joined_at": null, "left_at": null},
+    {"email": null, "name": "Grace Hopper", "role": null,
+     "source": "platform", "joined_at": "2026-08-16T09:00:05Z", "left_at": "2026-08-16T09:47:12Z"}
+  ]
+}
+```
+
+`source` is `invite` (from an invitation's attendee list), `platform` (observed in the meeting), or
+`inferred`. `email` is `null` when the source had none — a participant panel gives a display name,
+not an address.
+
+**Nothing joins a speaker to a participant.** There is no mapping field, and none is computed:
+attribution and identity are separate observations, and correlating them is the consumer's call,
+made with both layers visible. Unattributed speech stays unattributed.
+
+### No roster is not an empty roster
+
+`participants_source: "none"` means no roster was ever captured for this meeting. A roster that
+*was* captured and had nobody on it reports its source with an empty list. Do not read
+`participants: []` on its own as "nobody was there".
+
+### Filter an account by identity
+
+```bash Every meeting with a person — GET /meetings?participant=
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings?participant=ada@example.com"
+```
+
+Case-insensitive, and it reaches rosters imported from a connected calendar as well as attached
+ones. A `participant` value that is not an email address is refused with `400` rather than answered
+with an empty list.
+
+### Attach a roster
+
+```bash Attach the invitation roster — PUT /meetings/{meeting_id}/participants
+curl -X PUT -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"source":"invite","participants":[
+        {"email":"ada@example.com","name":"Ada Lovelace","role":"CHAIR","partstat":"ACCEPTED"}]}' \
+  "$API_BASE/meetings/12345/participants"
+```
+
+Owner-scoped. Each call **replaces** that `source`'s roster and leaves the other sources alone, so
+re-sending an updated invitation converges instead of accumulating. iCalendar `ROLE` values map to
+`organizer` / `required` / `optional` / `non_participant`; anything unrecognized is preserved
+verbatim as `role_raw` rather than guessed. `participants: []` is a valid body — it records a
+roster that was captured and was empty. Omitting the key is an error.
+
 ## Recordings
 
 The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,

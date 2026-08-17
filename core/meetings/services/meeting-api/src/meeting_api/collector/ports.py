@@ -60,9 +60,16 @@ class TranscriptStore(Protocol):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         member_workspaces: "Optional[set[str]]" = None,
+        participant: Optional[str] = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
-        (the body of ``MeetingListResponse``)."""
+        (the body of ``MeetingListResponse``).
+
+        ``participant`` filters to meetings whose ROSTER carries that email — case-insensitively,
+        across the ``meeting_participants`` relation AND the pre-existing ``data['attendees']``
+        store a calendar feed already wrote, so "every meeting with anyone at this address" is
+        answerable without first re-attaching rosters that were captured before the relation
+        existed."""
         ...
 
     async def authorize_subscribe(
@@ -191,6 +198,39 @@ class TranscriptStore(Protocol):
         """OWNER-scoped delete of a PLANNED (``idle``/``scheduled``) row. Returns ``True`` on
         delete, ``None`` when the user owns no such row (→ 404), ``False`` when the row is
         FSM-owned (→ 409). An FSM row is never deletable from here."""
+        ...
+
+    # ── the ROSTER layer (participants) ────────────────────────────────────────────────────────
+    # Who was IN a meeting, as identities — kept beside the SPEAKER layer (``transcriptions.speaker``)
+    # and never joined to it. See ``collector/participants.py``: resolving a speaker to a participant
+    # is an agentic job, not a system one, so no store method here maps between them.
+
+    async def attach_participants(
+        self, user_id: int, meeting_id: int, *, source: str, participants: list
+    ) -> Optional[dict]:
+        """OWNER-scoped: REPLACE the meeting's roster for ``source`` with ``participants``.
+
+        Replace-not-append is what makes it idempotent for the caller that owns a source: an
+        invitation re-delivered, or a series whose attendee list changed, re-attaches the whole
+        roster and the record matches the invitation exactly. Other sources are untouched, so a
+        platform-observed roster is never clobbered by an invite roster or vice versa.
+
+        An EMPTY ``participants`` list is a legitimate attach — it records that a roster WAS
+        captured and had nobody in it, which is a different fact from never having captured one.
+
+        Returns the composed read-back ``{meeting_id, participants[], participants_source}``, or
+        ``None`` when the user owns no such meeting (the route maps ``None`` → 404)."""
+        ...
+
+    async def get_participants(
+        self, user_id: int, meeting_id: int, member_workspaces: "Optional[set[str]]" = None
+    ) -> Optional[dict]:
+        """The meeting's roster under the same access union the transcript read uses (owner OR
+        transcript-share viewer OR bound-workspace member).
+
+        Returns ``{meeting_id, participants[], participants_source}``, or ``None`` when the caller
+        may not see the meeting. ``participants_source == "none"`` means no roster was ever
+        captured — ABSENCE, not an empty roster."""
         ...
 
 

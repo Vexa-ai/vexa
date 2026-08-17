@@ -203,6 +203,20 @@ def test_planned_meeting_routes_forward_to_meeting_api():
     assert downstream.last["url"].endswith("/meetings/42")
 
 
+def test_participants_attach_forwards_to_meeting_api():
+    """The ROSTER attach the invitation lane calls: PUT /meetings/{id}/participants forwards
+    verbatim. Negative control: the literal `participants` segment must not be matched as a
+    native_meeting_id by the 2-segment routes — those declare no PUT, and this route is declared
+    first regardless."""
+    client, downstream = _client()
+    r = client.put("/meetings/42/participants", headers=AUTH,
+                   json={"source": "invite", "participants": [{"email": "ada@example.com"}]})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PUT"
+    assert downstream.last["url"].endswith("/meetings/42/participants")
+    assert "meeting-api" in downstream.last["url"]
+
+
 def test_native_meeting_mutate_forwards_to_meeting_api():
     """#579 C1: native-keyed PATCH/DELETE /meetings/{platform}/{native} forward verbatim to
     meeting-api (which resolves native → owned row). Negative control: on v0.12.2 there was no

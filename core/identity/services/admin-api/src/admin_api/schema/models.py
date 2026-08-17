@@ -94,6 +94,10 @@ class Meeting(Base):
 
     transcriptions = relationship("Transcription", back_populates="meeting")
     sessions = relationship("MeetingSession", back_populates="meeting", cascade="all, delete-orphan")
+    participants = relationship(
+        "MeetingParticipant", back_populates="meeting",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("ix_meeting_user_platform_native_id_created_at",
@@ -166,4 +170,54 @@ class MeetingSession(Base):
 
     __table_args__ = (
         UniqueConstraint("meeting_id", "session_uid", name="_meeting_session_uc"),
+    )
+
+
+class MeetingParticipant(Base):
+    """WHO WAS IN a meeting — the ROSTER layer of identity, stored beside the speaker layer.
+
+    Identity in this product is three things and they are NOT the same thing: a **participant** is
+    an email on an invitation, a **speaker** is an attributed voice in the record
+    (``transcriptions.speaker``), a **user** is someone with sessions. This table carries only the
+    first. Resolving a speaker to a participant is deliberately NOT modelled here — no
+    ``speaker_label`` column, no join table, no confidence score — because that resolution is an
+    agentic job done with the roster and the record in context, not a system one (founder ruling,
+    schema/MIGRATION-0005-meeting-participants.md). Unattributed speech stays unattributed.
+
+    ``email`` is nullable because not every source has one: an invitation always does, a platform's
+    participant panel often gives only a display name. ``source`` records WHERE the row came from —
+    ``invite`` (an invitation's ATTENDEE roster), ``platform`` (observed in the meeting UI), or
+    ``inferred`` — so a consumer can weigh a row instead of treating all identities as equal.
+    ``data`` keeps whatever the source carried that has no column (``partstat``, the raw iCalendar
+    ``ROLE``), so nothing a caller sent is silently dropped.
+    """
+    __tablename__ = "meeting_participants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(
+        Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    email = Column(String(320), nullable=True)
+    name = Column(String(255), nullable=True)
+    role = Column(String(32), nullable=True)
+    source = Column(String(16), nullable=False)
+    joined_at = Column(DateTime, nullable=True)
+    left_at = Column(DateTime, nullable=True)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    meeting = relationship("Meeting", back_populates="participants")
+
+    __table_args__ = (
+        # "every meeting with anyone @example.com" is the query this table exists to answer, and
+        # email identity is case-insensitive — so the index is on lower(email), matching the
+        # predicate the participant filter emits.
+        Index("ix_meeting_participant_email_lower", text("lower(email)")),
+        # One row per (meeting, source, email). The attach route replaces a source's roster
+        # wholesale, so duplicates cannot arise from it; this is the backstop for two concurrent
+        # attaches interleaving. PARTIAL — rows with no email (platform-observed display names)
+        # are not covered, because NULLs are distinct and there is no identity to key on.
+        Index("uq_meeting_participant_identity", "meeting_id", "source", text("lower(email)"),
+              unique=True, postgresql_where=text("email IS NOT NULL")),
     )
