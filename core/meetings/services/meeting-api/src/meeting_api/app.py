@@ -250,6 +250,7 @@ def create_app(
         redis,
         transcript_finalizer,
         delivery_ledger,
+        runtime,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -342,6 +343,7 @@ def _mount_lifecycle(
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
+    runtime: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -366,6 +368,7 @@ def _mount_lifecycle(
     from .lifecycle.webhook import build_status_change_envelope, build_typed_envelope
     from .obs import log_event
     from .webhooks import clean_meeting_data
+    from .bot_spawn.ports import WorkloadUnknown
 
     def _iso(v):
         return v.isoformat() if hasattr(v, "isoformat") else v
@@ -581,6 +584,34 @@ def _mount_lifecycle(
                 log_event("transcript_finalize_failed", audience="system", level="warning",
                           span="lifecycle.callback",
                           fields={"meeting_id": terminal_meeting_id, "error": str(e)})
+        # TERMINAL WORKLOAD RECLAIM: the meeting is terminal and the bot's OWN callback landed —
+        # delete the workload so its container is REMOVED promptly instead of lingering as an
+        # `exited` container (the runtime-side stopped-reaper is the backstop for paths that never
+        # reach this callback, e.g. a crashed bot). Best-effort: a failed or untracked delete must
+        # never fail the bot's callback.
+        if terminal_advanced:
+            workload_id = (
+                meeting_row.get("bot_container_id")
+                if isinstance(meeting_row, dict)
+                else None
+            )
+            if runtime is not None and workload_id:
+                try:
+                    await runtime.delete_workload(workload_id)
+                    log_event("workload_reclaimed_on_terminal", audience="system",
+                              span="lifecycle.callback",
+                              fields={"workload_id": workload_id,
+                                      "meeting_id": meeting_row.get("id")})
+                except WorkloadUnknown as e:
+                    log_event("workload_reclaim_untracked", audience="system", level="warning",
+                              span="lifecycle.callback",
+                              fields={"workload_id": workload_id,
+                                      "meeting_id": meeting_row.get("id"), "error": str(e)})
+                except Exception as e:  # noqa: BLE001 — best-effort; the runtime reaper backstops
+                    log_event("workload_reclaim_failed", audience="system", level="warning",
+                              span="lifecycle.callback",
+                              fields={"workload_id": workload_id,
+                                      "meeting_id": meeting_row.get("id"), "error": str(e)})
         if terminal_advanced and isinstance(meeting_row, dict):
             data = dict(meeting_row.get("data") or {})
             provenance = build_service_provenance({**meeting_row, "data": data})

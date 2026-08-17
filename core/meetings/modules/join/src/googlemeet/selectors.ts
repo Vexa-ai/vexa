@@ -244,9 +244,35 @@ export const googleSpeakingIndicators: string[] = [
 
 // Google Meet removal/error state indicators
 export const googleRemovalIndicators: string[] = [
+  // Host removal (the bot was kicked). Live Meet copy when a host removes the
+  // bot: a dialog titled "You were removed from the meeting" (or "You've been
+  // removed from the meeting") with a "Return to home screen" button; a banned
+  // join renders "You can't rejoin this meeting". These must come FIRST so a
+  // removed screen wins over the generic role/class catch-alls below.
+  'text="You were removed from the meeting"',
+  'text=You were removed from the meeting',
+  'text="You\'ve been removed from the meeting"',
+  'text=You\'ve been removed from the meeting',
+  'text=You’ve been removed from the meeting', // typographic apostrophe (live Meet copy)
+  'text="You have been removed from the meeting"',
+  'text=You have been removed from the meeting',
+  'text="Removed from meeting"',
+  'text=Removed from meeting',
+  'text="You can\'t rejoin this meeting"',
+  'text=You can\'t rejoin this meeting',
+  'text=You can’t rejoin this meeting', // typographic apostrophe (live Meet copy)
+
   // Meeting ended messages
   'text="Meeting ended"',
   'text=Meeting ended',
+  'text="This meeting has ended"',
+  'text=This meeting has ended',
+  'text="The meeting has ended"',
+  'text=The meeting has ended',
+  'text="Meeting is over"',
+  'text=Meeting is over',
+  'text="The host has ended the meeting"',
+  'text=host has ended the meeting',
   'text="Call ended"',
   'text=Call ended',
   'text="You left the meeting"',

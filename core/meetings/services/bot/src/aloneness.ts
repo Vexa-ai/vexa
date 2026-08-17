@@ -3,6 +3,10 @@ import type { AlonenessSource } from './ports.js';
 
 export const DEFAULT_ALONE_SILENCE_WINDOW_MS = 10 * 60 * 1000;
 export const DEFAULT_ALONENESS_POLL_MS = 1_500;
+/** Bounded fail-safe grace: once capture WAS ready, a prolonged unavailable (detached/stopped) tap
+ *  while the bot is still active converges to `left_alone` after this window instead of idling
+ *  forever (a live, attached capture is never unavailable; an ended/kicked call detaches it). */
+export const DEFAULT_ALONE_UNAVAILABLE_GRACE_MS = 60_000;
 /** Presence floor for a DELIVERED remote frame — deliberately 0 (arrival is the signal).
  *
  *  Capture is the single silence oracle: the page emits a frame only when its PEAK sample exceeds
@@ -34,7 +38,8 @@ export interface RemoteAudioActivityTap extends RemoteAudioActivitySource {
   ready(): void;
   /** Record one REMOTE frame's RMS energy. Local bot speech never enters this seam. */
   observeRemoteEnergy(energy: number): void;
-  /** Capture stopped or failed; aloneness must fail closed until it is ready again. */
+  /** Capture stopped or failed; aloneness fails closed until it is ready again — and, if it has
+   *  EVER been ready, converges to `left_alone` after the bounded unavailable grace (fail-safe). */
   unavailable(): void;
 }
 
@@ -104,9 +109,24 @@ export function resolveAloneSilenceWindowMs(
   return DEFAULT_ALONE_SILENCE_WINDOW_MS;
 }
 
+export function resolveAloneUnavailableGraceMs(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (message) => console.warn(`[bot] ${message}`),
+): number {
+  const raw = env.BOT_ALONE_UNAVAILABLE_GRACE_MS;
+  if (raw !== undefined && raw.trim() !== '') {
+    const value = Number(raw);
+    if (Number.isFinite(value) && value > 0) return value;
+    warn(`BOT_ALONE_UNAVAILABLE_GRACE_MS=${JSON.stringify(raw)} is invalid; using the 60s default`);
+  }
+  return DEFAULT_ALONE_UNAVAILABLE_GRACE_MS;
+}
+
 export function createSilenceAlonenessSource(options: {
   activity: RemoteAudioActivitySource;
   windowMs: number;
+  /** Bounded fail-safe grace once capture HAS been ready (default 60s). */
+  unavailableGraceMs?: number;
   adapters?: readonly AlonenessAdapter[];
   now?: () => number;
   pollMs?: number;
@@ -116,6 +136,7 @@ export function createSilenceAlonenessSource(options: {
 }): AlonenessSource {
   const now = options.now ?? Date.now;
   const pollMs = options.pollMs ?? DEFAULT_ALONENESS_POLL_MS;
+  const unavailableGraceMs = options.unavailableGraceMs ?? DEFAULT_ALONE_UNAVAILABLE_GRACE_MS;
   const adapters = options.adapters ?? [silenceAlonenessAdapter];
   const setIntervalFn = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
   const clearIntervalFn = options.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
@@ -126,6 +147,10 @@ export function createSilenceAlonenessSource(options: {
       let handle: unknown;
       let stopped = false;
       let fired = false;
+      /** Capture ever reached the ready state on this subscription (boot-race guard: a tap that
+       *  has NEVER been ready is "no signal", not "detached" — it keeps failing closed). */
+      let wasEverReady = false;
+      let unavailableSince: number | null = null;
 
       const stop = (): void => {
         if (stopped) return;
@@ -136,6 +161,21 @@ export function createSilenceAlonenessSource(options: {
         if (stopped || fired || adapters.length === 0) return;
         const at = now();
         const snapshot = options.activity.snapshot();
+        if (!snapshot.available) {
+          if (!wasEverReady) return; // never-ready tap: fail closed, keep polling
+          // Capture WAS attached and is now unavailable (ended/kicked call detaches it, or the
+          // page navigated away) — converge after the bounded grace instead of idling forever.
+          if (unavailableSince === null) unavailableSince = at;
+          if (at - unavailableSince >= unavailableGraceMs) {
+            fired = true;
+            stop();
+            log(`aloneness: capture unavailable for ${unavailableGraceMs}ms while active — left_alone (fail-safe)`);
+            callback();
+          }
+          return;
+        }
+        wasEverReady = true;
+        unavailableSince = null;
         for (const adapter of adapters) {
           if (adapter.evaluate(snapshot, at, options.windowMs) !== 'alone') return;
         }

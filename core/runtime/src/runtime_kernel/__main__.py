@@ -92,6 +92,27 @@ def _start_ticker(scheduler) -> None:
     threading.Thread(target=_loop, name="scheduler-tick", daemon=True).start()
 
 
+def _start_reaper(enforcer) -> None:
+    """Reclaim stopped (exited) workloads in a daemon thread: every ``RUNTIME_REAP_SEC`` (default
+    60s) the Enforcer destroys workloads that have stayed `stopped` past ``RUNTIME_STOPPED_RETENTION_SEC``
+    (default 300s), so finished bot containers are REMOVED instead of accumulating as `exited`.
+    Best-effort per sweep; a failed destroy is retried on the next sweep."""
+    interval = float(os.getenv("RUNTIME_REAP_SEC", "60"))
+    retention = float(os.getenv("RUNTIME_STOPPED_RETENTION_SEC", "300"))
+
+    def _loop() -> None:
+        while True:
+            try:
+                reaped = enforcer.sweep_stopped(retention_sec=retention)
+                if reaped:
+                    logger.info("reaper destroyed %d stopped workload(s): %s", len(reaped), reaped)
+            except Exception as e:  # noqa: BLE001 — a bad sweep must not kill the loop
+                logger.warning("reaper sweep error: %s", e)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="runtime-reaper", daemon=True).start()
+
+
 def _build_backend():
     """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
     ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
@@ -166,6 +187,14 @@ def build_production_app():
     # process-backend / `lite` case) — docker/k8s keep the image entrypoints unchanged.
     profiles = apply_command_overrides(default_registry())
     runtime = Runtime(backend=backend, profiles=profiles, grace_sec=_kernel_grace_sec())
+    # Stopped-container reclamation: destroy workloads that have stayed `stopped` past the retention
+    # window so finished bot containers are removed, not left as `exited` (see enforcement.py).
+    try:
+        from .enforcement import Enforcer
+
+        _start_reaper(Enforcer(runtime))
+    except Exception as e:  # noqa: BLE001 — the reaper is a boot aid; it must never block the boot
+        logger.warning("stopped-workload reaper failed to start: %s", e)
     # Re-adopt the workloads this runtime spawned that are STILL on the substrate (containers/pods
     # survive a runtime recreate untouched): without this, the fresh in-memory registry 404s over a
     # live bot, and the control plane misreads that 404 as "bot gone" — the orphaned-live-bot

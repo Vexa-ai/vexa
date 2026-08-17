@@ -347,20 +347,23 @@ class SqlAlchemyMeetingRepo:
 
     async def list_stale_nonterminal(
         self, *, stop_grace: float, active_grace: float, preactive_grace: Optional[float] = None
-    ) -> list[tuple[int, str, str, Optional[str], bool]]:
+    ) -> list[tuple[int, str, str, Optional[str], bool, object]]:
         """Meetings stuck in ANY non-terminal status whose row has gone quiet past its grace window —
         a bot that exited (or vanished) without ever sending its terminal lifecycle callback leaves the
         row hung here forever. ``updated_at`` is bumped on every status change AND on segment/heartbeat
-        persistence. NOTE: for a LIVE status (`active`/`needs_help`) ``updated_at`` staleness is a
-        CANDIDATE signal only — the sweep additionally gates the active-reap on runtime workload
-        liveness (see ``reconcile.py``), because a silent-but-live bot stops bumping ``updated_at``.
+        persistence AND on every recording-chunk upload (the recordings live in ``meeting.data``, and
+        ``mutate_recordings`` commits an UPDATE that trips the column's ``onupdate``). NOTE: for a LIVE
+        status (`active`/`needs_help`) ``updated_at`` staleness is a CANDIDATE signal only — the sweep
+        additionally gates the active-reap on runtime workload liveness (see ``reconcile.py``), then on
+        OUTPUT liveness (a row frozen past ``output_stale_grace`` with an alive workload is a detached/
+        wedged bot).
 
         Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast), a
         PRE-ACTIVE row (`requested`/`joining`/`awaiting_admission` — the bot has not reached the
         meeting yet, and holds the lobby budget the control plane handed it) uses ``preactive_grace``,
         everything else ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
-        reaped). Returns ``[(meeting_id, status, session_uid, bot_container_id, stop_requested), …]`` with
-        the LATEST session_uid per meeting (mirrors ``list_stale_stopping``)."""
+        reaped). Returns ``[(meeting_id, status, session_uid, bot_container_id, stop_requested,
+        updated_at), …]`` with the LATEST session_uid per meeting (mirrors ``list_stale_stopping``)."""
         from datetime import datetime, timezone
 
         from sqlalchemy import select
@@ -381,7 +384,7 @@ class SqlAlchemyMeetingRepo:
                 )
             ).all()
         now = datetime.now(timezone.utc)
-        out: dict[int, tuple[str, str, Optional[str], bool]] = {}
+        out: dict[int, tuple[str, str, Optional[str], bool, object]] = {}
         for mid, status, upd, sid, bcid, data in rows:
             if mid in out or upd is None or not sid:
                 continue
@@ -389,8 +392,8 @@ class SqlAlchemyMeetingRepo:
             grace = reconcile_grace_for_status(status, stop_grace, active_grace, preactive_grace)
             if (now - u).total_seconds() >= grace:
                 stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))
-                out[mid] = (status, sid, bcid, stop_req)
-        return [(mid, st, sid, bcid, sr) for mid, (st, sid, bcid, sr) in out.items()]
+                out[mid] = (status, sid, bcid, stop_req, u)
+        return [(mid, st, sid, bcid, sr, u) for mid, (st, sid, bcid, sr, u) in out.items()]
 
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
         from ..sessions.models import Meeting

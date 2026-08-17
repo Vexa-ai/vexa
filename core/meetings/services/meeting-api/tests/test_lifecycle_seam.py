@@ -726,7 +726,7 @@ from meeting_api.bot_spawn.fakes import FakeRuntimeClient  # noqa: E402
 
 
 def _run_general_sweep_rt(client, repo, runtime, *, stop_grace=45.0, active_grace=300.0,
-                          preactive_grace=None):
+                          preactive_grace=None, output_stale_grace=900.0):
     """Run ONE general sweep with a real RuntimeClient injected (so the liveness gate is exercised)."""
     import logging
 
@@ -736,25 +736,60 @@ def _run_general_sweep_rt(client, repo, runtime, *, stop_grace=45.0, active_grac
     extra = {} if preactive_grace is None else {"preactive_grace": preactive_grace}
     return asyncio.run(reconcile_stale_nonterminal_sweep(
         repo, runtime, _post, stop_grace=stop_grace, active_grace=active_grace,
-        log=logging.getLogger("test.reconcile"), **extra,
+        log=logging.getLogger("test.reconcile"), output_stale_grace=output_stale_grace, **extra,
     ))
 
 
-def test_quiet_but_live_active_not_reaped_even_past_grace():
-    """THE BUG FIX: an `active` meeting gone quiet PAST the active grace (no segments) but whose bot
-    WORKLOAD IS STILL ALIVE (runtime reports `running`) is NOT reaped. Silence alone must never kill a
-    bot-present meeting."""
+def _set_updated_age(repo: InMemoryMeetingRepo, meeting_id: int, seconds_ago: float) -> None:
+    """Pin a row's updated_at to now-seconds_ago (a quiet duration, e.g. 400s or 1000s)."""
+    from datetime import datetime, timedelta, timezone
+
+    repo._meetings[meeting_id]["updated_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    ).isoformat()
+
+
+def test_alive_but_output_stale_active_is_reaped_with_evidence():
+    """The #858 class: an `active` meeting whose workload is ALIVE but whose row has produced NO
+    output (no recording chunk / segment — `updated_at` frozen past output_stale_grace) is a
+    DETACHED/wedged bot → reaped as completed(left_alone) with the evidence note, workload
+    destroyed. A live bot keeps uploading silence chunks (~15s), bumping updated_at, so it can
+    never sit here this long (negative control below)."""
     repo = InMemoryMeetingRepo()
-    m = _seed(repo, status="active")  # default updated_at far in the past — well past any grace
-    repo._meetings[m["id"]]["bot_container_id"] = "wl-live"
-    # The workload is alive and running in the runtime — the bot is still in the meeting.
-    runtime = FakeRuntimeClient(workloads={"wl-live": {"workloadId": "wl-live", "state": "running"}})
+    m = _seed(repo, status="active")
+    _set_updated_age(repo, m["id"], 1000)  # quiet for 1000s ≥ 900s output grace
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-live-stale"
+    runtime = FakeRuntimeClient(
+        workloads={"wl-live-stale": {"workloadId": "wl-live-stale", "state": "running"}}
+    )
     client = TestClient(create_app(meeting_repo=repo))
 
-    n = _run_general_sweep_rt(client, repo, runtime)
+    n = _run_general_sweep_rt(client, repo, runtime, output_stale_grace=900.0)
+    assert n == 1
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
+    assert "wl-live-stale" in runtime.deleted  # the detached bot's container is reclaimed
+    trail = repo._meetings[m["id"]]["data"].get("status_transition") or []
+    assert any("no output" in (t.get("reason") or "") for t in trail)
+
+
+def test_quiet_but_live_active_not_reaped_while_output_flows():
+    """NEGATIVE CONTROL: an `active` meeting whose bot is alive AND still producing output (chunks
+    flow every ~15s → updated_at is recent, here 400s < output grace 900s) is NOT reaped — the
+    gate is output-liveness, not silence."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    _set_updated_age(repo, m["id"], 400)  # past active_grace (300s) but well under output grace
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-live-fresh"
+    runtime = FakeRuntimeClient(
+        workloads={"wl-live-fresh": {"workloadId": "wl-live-fresh", "state": "running"}}
+    )
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime, output_stale_grace=900.0)
     assert n == 0
-    assert repo._meetings[m["id"]]["status"] == "active"  # untouched — bot is present
-    assert "wl-live" not in runtime.deleted  # the live bot's workload was NOT torn down
+    assert repo._meetings[m["id"]]["status"] == "active"  # untouched — output still flowing
+    assert "wl-live-fresh" not in runtime.deleted
 
 
 def test_untracked_active_workload_404_is_never_reaped():
@@ -911,6 +946,7 @@ def test_untracked_blip_does_not_escalate():
 
     # The runtime finishes booting and RE-ADOPTS the live bot — the probe answers alive again.
     runtime._workloads["wl-blip"] = {"workloadId": "wl-blip", "state": "running"}
+    _set_updated_now(repo, m["id"])  # a re-adopted live bot is producing output again (chunks flow)
     assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
     assert repo._meetings[m["id"]]["status"] == "active"
     assert tracker == {}, "recovery must reset the untracked window"
@@ -1496,12 +1532,15 @@ def test_user_stopped_pre_active_reap_is_never_retried():
 # ── negative controls: the behaviours this change must NOT disturb ───────────────────────────────
 
 def test_active_liveness_gate_behaviour_is_unchanged():
-    """NEGATIVE CONTROL. The `active` gate keeps both of its halves: a live workload is skipped, a
-    runtime-confirmed terminal workload still completes with `left_alone` (the bot WAS in the
-    meeting — there, `left_alone` is the honest reason, not a manufactured one)."""
+    """NEGATIVE CONTROL. The `active` gate keeps both of its halves: a live workload whose row is
+    still producing output (updated_at fresh) is skipped; a runtime-confirmed terminal workload
+    still completes with `left_alone` (the bot WAS in the meeting — there, `left_alone` is the
+    honest reason, not a manufactured one). An ALIVE-but-output-stale workload is reaped only via
+    the explicit output-liveness gate (see test_alive_but_output_stale_active_is_reaped_with_evidence)."""
     repo = InMemoryMeetingRepo()
     live = _seed(repo, status="active", session_uid="sess-live")
     repo._meetings[live["id"]]["bot_container_id"] = "wl-a-live"
+    _set_updated_now(repo, live["id"])  # output flowing → not output-stale
     client = TestClient(create_app(meeting_repo=repo))
     runtime = FakeRuntimeClient(
         workloads={"wl-a-live": {"workloadId": "wl-a-live", "state": "running"}}
@@ -1617,3 +1656,51 @@ def test_default_pre_active_grace_is_derived_from_the_issued_lobby_budget():
     assert LOBBY_BUDGET_MS == 600_000
     assert default_preactive_grace() == 660.0
     assert default_preactive_grace() > LOBBY_BUDGET_MS / 1000.0
+
+
+def test_terminal_callback_reclaims_workload(monkeypatch):
+    """The bot's OWN terminal callback (completed) triggers runtime.delete_workload so the
+    container is removed instead of lingering as an `exited` container (the runtime-side
+    stopped-reaper is only the backstop for paths that never reach this callback)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    client = TestClient(create_app(meeting_repo=repo, runtime=runtime))
+    r = client.post("/bots", headers={"x-user-id": "1"},
+                    json={"platform": "google_meet", "native_meeting_id": "reap-me"})
+    assert r.status_code == 201, r.text
+    meeting_id = r.json()["id"]
+    session_uid = repo.sessions[-1]["session_uid"]
+    bot_container_id = repo._meetings[meeting_id]["bot_container_id"]
+    assert bot_container_id is not None
+
+    # Drive the legal path to terminal; on `completed` the callback must delete the workload.
+    for st, extra in [
+        ("joining", {}),
+        ("active", {}),
+        ("completed", {"exit_code": 0, "completion_reason": "stopped"}),
+    ]:
+        rr = _post(client, connection_id=session_uid, status=st, **extra)
+        assert rr.status_code == 200, rr.text
+    assert runtime.deleted == [bot_container_id]
+
+
+def test_terminal_failed_callback_reclaims_workload(monkeypatch):
+    """A terminal `failed` callback also deletes the workload (same reclaim path)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    client = TestClient(create_app(meeting_repo=repo, runtime=runtime))
+    r = client.post("/bots", headers={"x-user-id": "1"},
+                    json={"platform": "google_meet", "native_meeting_id": "reap-me-fail"})
+    assert r.status_code == 201, r.text
+    meeting_id = r.json()["id"]
+    session_uid = repo.sessions[-1]["session_uid"]
+    bot_container_id = repo._meetings[meeting_id]["bot_container_id"]
+
+    for st, extra in [("joining", {}), ("failed", {"exit_code": 1})]:
+        rr = _post(client, connection_id=session_uid, status=st, **extra)
+        assert rr.status_code == 200, rr.text
+    assert runtime.deleted == [bot_container_id]

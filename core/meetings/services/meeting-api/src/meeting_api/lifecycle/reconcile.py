@@ -25,7 +25,7 @@ port (prod = HttpRuntimeClient; tests = FakeRuntimeClient). Best-effort per meet
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
@@ -263,6 +263,7 @@ async def reconcile_stale_nonterminal_sweep(
     preactive_grace: Optional[float] = None,
     untracked_grace: float = 600.0,
     untracked_since: Optional[dict] = None,
+    output_stale_grace: float = 900.0,
 ) -> int:
     """The GENERAL backstop: any meeting hung in a non-terminal status whose bot is GONE (its row has
     been quiet — no status change, no segment/heartbeat — past the grace window) converges to a
@@ -296,7 +297,9 @@ async def reconcile_stale_nonterminal_sweep(
     tracker = _UNTRACKED_SINCE if untracked_since is None else untracked_since
     seen_untracked: set = set()
     now = time.monotonic()
-    for meeting_id, status, session_uid, bot_container_id, stop_requested in stale:
+    wall_now = datetime.now(timezone.utc)
+    for meeting_id, status, session_uid, bot_container_id, stop_requested, updated_at in stale:
+        output_stale_reap = False
         probe, probe_info = "unknown", None
         # LIVENESS GATE (the correctness fix): for a status where a bot may be alive and legitimately
         # QUIET — in the meeting (`active`/`needs_help`) or on its way in (`requested`/`joining`/
@@ -334,10 +337,25 @@ async def reconcile_stale_nonterminal_sweep(
                 # ALIVE or UNKNOWN → do not reap a possibly-live, bot-present meeting.
                 # (No bot_container_id at all falls through to the time-based reap — there is no
                 #  live workload that could be holding the meeting open.)
-                log.info("nonterminal-reconcile: skip live/unknown bot for meeting %s "
-                         "(status %s, workload %s, probe=%s)",
-                         meeting_id, status, bot_container_id, probe)
-                continue
+                #
+                # OUTPUT-LIVENESS GATE (the #858 class): a bot whose workload is ALIVE but whose
+                # row has produced NO output for output_stale_grace is DETACHED/wedged — a live
+                # bot uploads recording chunks (silence chunks every ~15s) and flushes segments,
+                # both bumping `updated_at` (mutate_recordings onupdate), so a frozen row with an
+                # alive workload is positive evidence the capture is gone. Reap it below with the
+                # evidence note instead of idling forever. A quiet-but-live bot keeps bumping
+                # `updated_at` and is NEVER reaped here (negative control).
+                output_stale_reap = False
+                if probe == "alive" and status in ("active", "needs_help") and updated_at is not None:
+                    try:
+                        output_stale_reap = (wall_now - updated_at).total_seconds() >= output_stale_grace
+                    except (TypeError, AttributeError):
+                        output_stale_reap = False
+                if not output_stale_reap:
+                    log.info("nonterminal-reconcile: skip live/unknown bot for meeting %s "
+                             "(status %s, workload %s, probe=%s)",
+                             meeting_id, status, bot_container_id, probe)
+                    continue
         # GUARANTEE teardown BEFORE the FSM advances (CC6 + the incident fix): a terminal meeting
         # must never leave a live container behind. Unconfirmed (runtime 404 / delete failure) →
         # the meeting keeps its current status, loud in the logs, retried next sweep — except a
@@ -359,6 +377,13 @@ async def reconcile_stale_nonterminal_sweep(
         body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
         if terminal == "completed":
             body["completion_reason"] = "stopped" if stop_requested else "left_alone"
+            if output_stale_reap:
+                # The workload is (was) ALIVE — attribute the reap to the output-liveness evidence,
+                # never to a bare time default (#862: left_alone must not look manufactured).
+                body["reason"] = (
+                    f"{_workload_evidence(bot_container_id, probe_info)}; "
+                    f"no output for >= {int(output_stale_grace)}s while active (capture detached)"
+                )
             if stop_requested:
                 body["data"] = {"stop_requested": True}
         else:

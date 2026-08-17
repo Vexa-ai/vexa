@@ -496,8 +496,12 @@ async def request_bot(
         s3_secret_key=auth_s3.get("s3_secret_key"),
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
-        # human-in-the-loop dashboard joins).
+        # human-in-the-loop dashboard joins). A deployment-scoped BOT_ALONE_SILENCE_WINDOW_MS
+        # on meeting-api sets the everyone-left window END-TO-END: it travels inside the
+        # invocation as automaticLeave.everyoneLeftTimeout, which the bot's
+        # resolveAloneSilenceWindowMs prefers over its own env default.
         automatic_leave=automatic_leave or {"waitingRoomTimeout": LOBBY_BUDGET_MS},
+        alone_silence_window_ms=os.getenv("BOT_ALONE_SILENCE_WINDOW_MS"),
     )
 
     # 5. Spawn over runtime.v1.

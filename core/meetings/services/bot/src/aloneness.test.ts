@@ -1,9 +1,11 @@
 /** Deterministic proof for silence-based active-phase aloneness. */
 import {
   DEFAULT_ALONE_SILENCE_WINDOW_MS,
+  DEFAULT_ALONE_UNAVAILABLE_GRACE_MS,
   createRemoteAudioActivityTap,
   createSilenceAlonenessSource,
   resolveAloneSilenceWindowMs,
+  resolveAloneUnavailableGraceMs,
 } from './aloneness.js';
 
 let failed = 0;
@@ -34,13 +36,14 @@ class FakeScheduler {
 const loudEnergy = 0.02;
 const quietEnergy = 0.001;
 
-function fixture(windowMs = 1_000) {
+function fixture(windowMs = 1_000, unavailableGraceMs = 500) {
   const clock = new FakeClock();
   const scheduler = new FakeScheduler();
   const activity = createRemoteAudioActivityTap({ now: clock.now });
   const source = createSilenceAlonenessSource({
     activity,
     windowMs,
+    unavailableGraceMs,
     now: clock.now,
     pollMs: 10,
     setInterval: scheduler.setInterval,
@@ -134,17 +137,46 @@ function fixture(windowMs = 1_000) {
   check('a zero-energy frame is silence, not presence', fired === 1);
 }
 
-// No capture readiness means no signal, not silence: fail closed forever.
+// No capture readiness means no signal, not silence: fail closed forever (a tap that has NEVER
+// been ready is "no signal", not "detached" — only an ever-ready capture can detach).
 {
   const f = fixture();
   let fired = 0;
   f.source.onAlone(() => fired++);
   f.clock.advance(10_000); f.scheduler.tick();
   check('absent audio tap fails closed', fired === 0);
+}
+
+// A capture that WAS ready and then becomes unavailable (ended/kicked call detaches the capture,
+// or the page navigated away) converges to left_alone after the bounded unavailable grace — the
+// fail-safe that stops an active bot from idling forever on a detached tap.
+{
+  const f = fixture(1_000, 500);
+  let fired = 0;
   f.activity.ready();
+  f.source.onAlone(() => fired++);
   f.activity.unavailable();
-  f.clock.advance(10_000); f.scheduler.tick();
-  check('failed or torn-down audio tap fails closed', fired === 0);
+  f.clock.advance(499); f.scheduler.tick();
+  check('unavailable within grace does not fire', fired === 0);
+  f.clock.advance(501); f.scheduler.tick(); f.scheduler.tick();
+  check('unavailable past grace fires exactly once', fired === 1);
+  check('fail-safe verdict stops polling', f.scheduler.activeCount === 0);
+}
+
+// A brief unavailable blip that recovers must NOT fire: recovery resets the grace AND restarts
+// the silence window (a transient capture hiccup is not a leave).
+{
+  const f = fixture(1_000, 500);
+  let fired = 0;
+  f.activity.ready();
+  f.source.onAlone(() => fired++);
+  f.clock.advance(100); f.activity.unavailable();
+  f.clock.advance(300); f.scheduler.tick(); // within grace
+  f.activity.ready(); // recovers
+  f.clock.advance(999); f.scheduler.tick();
+  check('brief unavailable + recovery does not fire', fired === 0);
+  f.clock.advance(1); f.scheduler.tick();
+  check('recovered capture still subject to silence window', fired === 1);
 }
 
 // Stopping the subscription prevents a later terminal verdict.
@@ -195,6 +227,17 @@ function fixture(windowMs = 1_000) {
     DEFAULT_ALONE_SILENCE_WINDOW_MS === 600_000);
   check('invalid env falls back to module default',
     resolveAloneSilenceWindowMs(undefined, { BOT_ALONE_SILENCE_WINDOW_MS: 'nope' }, () => {}) === 600_000);
+}
+
+// Unavailable-grace precedence: valid env > 60-second module default.
+{
+  check('unavailable grace env override applies',
+    resolveAloneUnavailableGraceMs({ BOT_ALONE_UNAVAILABLE_GRACE_MS: '12345' }) === 12_345);
+  check('unavailable grace module default is 60s',
+    resolveAloneUnavailableGraceMs({}) === DEFAULT_ALONE_UNAVAILABLE_GRACE_MS &&
+    DEFAULT_ALONE_UNAVAILABLE_GRACE_MS === 60_000);
+  check('invalid unavailable grace env falls back to module default',
+    resolveAloneUnavailableGraceMs({ BOT_ALONE_UNAVAILABLE_GRACE_MS: 'nope' }, () => {}) === 60_000);
 }
 
 console.log(failed
