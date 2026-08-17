@@ -1,0 +1,43 @@
+{
+  "subject": "member@example.com",
+  "mode": "pinned",
+  "slots": [
+    {
+      "layer": "global",
+      "workspace_id": "global",
+      "name": "Vexa",
+      "address": "global@vexa.ai",
+      "write": "none",
+      "hidden": true,
+      "sharable": false
+    },
+    {
+      "layer": "group",
+      "workspace_id": "acme",
+      "name": "Acme",
+      "address": "acme@vexa.ai",
+      "write": "via-triage",
+      "hidden": false,
+      "sharable": true
+    },
+    {
+      "layer": "personal",
+      "workspace_id": "personal-member@example.com",
+      "name": "member@example.com (personal)",
+      "address": "member-personal@vexa.ai",
+      "write": "direct",
+      "hidden": false,
+      "sharable": false
+    },
+    {
+      "layer": "user-system",
+      "workspace_id": "user-system-member@example.com",
+      "name": "member@example.com (system)",
+      "address": "member-system@vexa.ai",
+      "write": "platform-only",
+      "hidden": true,
+      "sharable": false
+    }
+  ],
+  "denied": []
+}

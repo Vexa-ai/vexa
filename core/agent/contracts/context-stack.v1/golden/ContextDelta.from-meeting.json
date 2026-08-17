@@ -1,0 +1,8 @@
+{
+  "workspace_id": "acme",
+  "path": "kg/pricing.md",
+  "body": "Renewal moved to Q3.",
+  "author_subject": "member@example.com",
+  "source_kind": "meeting",
+  "source_ref": "meeting-42"
+}

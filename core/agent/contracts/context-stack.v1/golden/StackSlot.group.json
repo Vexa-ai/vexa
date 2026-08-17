@@ -1,0 +1,9 @@
+{
+  "layer": "group",
+  "workspace_id": "acme",
+  "name": "Acme",
+  "address": "acme@vexa.ai",
+  "write": "via-triage",
+  "hidden": false,
+  "sharable": true
+}

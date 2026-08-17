@@ -1,0 +1,7 @@
+{
+  "id": "acme",
+  "name": "Acme",
+  "address": "acme@vexa.ai",
+  "policy": "group",
+  "owner_subject": "owner@example.com"
+}

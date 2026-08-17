@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/context-stack.v1",
+  "title": "context-stack.v1",
+  "description": "The context stack: the four layers a product-mode agent turn composes, and the shapes around them. Global is read-only and hidden (product-level knowledge, ours); group is read/write VIA TRIAGE (writes land as proposals the owner decides, never direct); personal is read/write and exists for every user (the user is not a group); user-system is read, hidden, never sharable, and holds no external credentials ever. A workspace carries ONE explicit `policy` field which is both its layer in the stack and the rule by which a write to it lands — deliberately not two fields, because the only way two could disagree is a group workspace taking direct writes, which is the bypass of triage the product forbids. Stack slots are POINTERS: a ResolvedStack names workspaces and their access rules, never their content, and a user can be re-pointed at a different personal workspace without a schema change. SecretMetadata is the WHOLE read surface of a workspace secret — there is no shape here in which secret material can be returned.",
+  "$defs": {
+    "Policy": {
+      "description": "A workspace's policy field, which is also its layer in the stack. The order of the stack is the order of this list.",
+      "enum": ["global", "group", "personal", "user-system"]
+    },
+    "Write": {
+      "description": "How a context delta addressed to a layer lands. `via-triage` is the group layer's whole point: the delta becomes a Proposal and enters context only when a human owner accepts it.",
+      "enum": ["none", "direct", "via-triage", "platform-only"]
+    },
+    "Role": {
+      "description": "Owner: workspace config, membership, triage, secrets. Member: chat and knowledge.",
+      "enum": ["owner", "member"]
+    },
+    "ProposalState": {
+      "description": "A proposal is pending until a human owner answers it. There is no machine-written state.",
+      "enum": ["pending", "accepted", "rejected"]
+    },
+    "Workspace": {
+      "description": "A workspace: an address (meetings arrive by inviting it, so the invited address IS the group resolution), a name (which names the bot), a policy, an owner. A personal workspace is the one-member case of this, not a second kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "address", "policy", "owner_subject"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "description": "Names the bot." },
+        "address": { "type": "string", "format": "email", "description": "The workspace's own mailbox address." },
+        "policy": { "$ref": "#/$defs/Policy" },
+        "owner_subject": { "type": "string" }
+      }
+    },
+    "Membership": {
+      "description": "One seat. Group setup is a set of member emails and nothing more, so the email rides on the row rather than being resolved from a directory.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "subject", "role"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "subject": { "type": "string" },
+        "role": { "$ref": "#/$defs/Role" },
+        "email": { "type": ["string", "null"] },
+        "added_by": { "type": "string" },
+        "added_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ContextRevision": {
+      "description": "One append-only revision of one context document; the current state of a document is its highest revision. Append-only because triage needs a before and an after, a rejected proposal must leave no trace in context while leaving a full trace in the record, and compaction can only ever be a readable artifact over a history that was kept. Deletion is a tombstone (`deleted: true`), never a removed row.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "path", "revision", "body", "author_subject", "source_kind"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "path": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "body": { "type": "string" },
+        "deleted": { "type": "boolean" },
+        "author_subject": { "type": "string", "description": "Who wrote the knowledge — the proposer, on an accepted delta, not the owner who accepted it." },
+        "source_kind": { "type": "string", "description": "meeting | chat | triage | seed" },
+        "source_ref": { "type": ["string", "null"], "description": "The source meeting or chat." },
+        "from_proposal_id": { "type": ["integer", "null"], "description": "Set when this revision exists because an owner accepted a proposal." }
+      }
+    },
+    "Proposal": {
+      "description": "A proposed context delta awaiting a human owner's answer. A decided proposal always names who decided and when — enforced by a CHECK constraint, not only by the code that writes it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "workspace_id", "path", "body", "proposer_subject", "state"],
+      "properties": {
+        "id": { "type": "integer" },
+        "workspace_id": { "type": "string" },
+        "path": { "type": "string" },
+        "body": { "type": "string" },
+        "proposer_subject": { "type": "string" },
+        "source_kind": { "type": "string" },
+        "source_ref": { "type": ["string", "null"] },
+        "state": { "$ref": "#/$defs/ProposalState" },
+        "decided_by": { "type": ["string", "null"], "description": "The human owner. Null only while pending." },
+        "decided_at": { "type": ["string", "null"], "format": "date-time" },
+        "decision_note": { "type": ["string", "null"] }
+      }
+    },
+    "StackSlot": {
+      "description": "One mounted layer: a pointer to a workspace plus that layer's access rules. Never content — reading a document is a separate, separately-authorised act.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "workspace_id", "name", "address", "write", "hidden", "sharable"],
+      "properties": {
+        "layer": { "$ref": "#/$defs/Policy" },
+        "workspace_id": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "write": { "$ref": "#/$defs/Write" },
+        "hidden": { "type": "boolean" },
+        "sharable": { "type": "boolean" }
+      }
+    },
+    "Denial": {
+      "description": "A slot that was asked for and not mounted. Recorded rather than swallowed: a stack quietly shorter than the user expects is a bug nobody can see.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "reason"],
+      "properties": {
+        "layer": { "$ref": "#/$defs/Policy" },
+        "workspace_id": { "type": ["string", "null"] },
+        "reason": {
+          "description": "Stable code.",
+          "enum": [
+            "not-member",
+            "not-owner",
+            "policy-mismatch",
+            "dangling-pointer",
+            "global-not-provisioned",
+            "personal-not-provisioned",
+            "user-system-not-provisioned"
+          ]
+        }
+      }
+    },
+    "ResolvedStack": {
+      "description": "The ordered composition for one user: global → group(s) → personal → user-system. `pinned` is the product path, where the group slot is derived from membership and there is nothing to compose; `free` is the terminal's, where pointer rows choose. A user in no group resolves to three slots and that is the participant case, not a degraded one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "mode", "slots", "denied"],
+      "properties": {
+        "subject": { "type": "string" },
+        "mode": { "enum": ["pinned", "free"] },
+        "slots": { "type": "array", "items": { "$ref": "#/$defs/StackSlot" } },
+        "denied": { "type": "array", "items": { "$ref": "#/$defs/Denial" } }
+      }
+    },
+    "ContextDelta": {
+      "description": "What changed in a context because a meeting happened. Addressed to a workspace; the workspace's policy decides where it lands.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "path", "body", "author_subject"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "path": { "type": "string" },
+        "body": { "type": "string" },
+        "author_subject": { "type": "string" },
+        "source_kind": { "type": "string" },
+        "source_ref": { "type": ["string", "null"] }
+      }
+    },
+    "Routing": {
+      "description": "Where a delta lands, decided before anything is written. `proposal` on the group layer is the ceiling of the machine path: no volume of machine writes reaches `accepted`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination", "layer", "workspace_id", "reason"],
+      "properties": {
+        "destination": { "enum": ["direct", "proposal", "refused"] },
+        "layer": { "$ref": "#/$defs/Policy" },
+        "workspace_id": { "type": "string" },
+        "reason": {
+          "enum": [
+            "personal-policy-writes-direct",
+            "group-policy-routes-to-triage",
+            "global-is-read-only",
+            "user-system-is-platform-only",
+            "not-member",
+            "accepted-by-owner"
+          ]
+        }
+      }
+    },
+    "AccessDecision": {
+      "description": "The verdict on one attempt. Default-deny: every allow is an explicit rule and everything unnamed is refused. `reason` is a stable code — a refusal that cannot say why is not auditable, and this is the field a regulated buyer's access-rights question is answered from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "subject", "workspace_id", "policy", "action", "reason"],
+      "properties": {
+        "allow": { "type": "boolean" },
+        "subject": { "type": "string" },
+        "workspace_id": { "type": "string" },
+        "policy": { "$ref": "#/$defs/Policy" },
+        "action": { "enum": ["read", "write", "triage", "secrets", "share"] },
+        "reason": {
+          "enum": [
+            "owner",
+            "member",
+            "global-readable",
+            "not-member",
+            "not-owner",
+            "global-is-read-only",
+            "user-system-is-platform-only",
+            "user-system-holds-no-credentials",
+            "global-secrets-are-deployment-config",
+            "personal-is-not-a-group",
+            "layer-not-sharable",
+            "layer-has-no-proposal-queue",
+            "default-deny"
+          ]
+        }
+      }
+    },
+    "SecretMetadata": {
+      "description": "The WHOLE read surface of a workspace secret. There is no material field and no other shape in this contract carries one: a read returns last-4, the version, and who set it when. Setting is the only place a value appears, and it appears going in. The material itself is readable by exactly one function at LLM-call time, which is not reachable from any route.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "name", "last4", "version", "set_by", "set_at"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "name": { "type": "string" },
+        "last4": { "type": "string", "maxLength": 4 },
+        "version": { "type": "integer", "minimum": 1 },
+        "set_by": { "type": "string" },
+        "set_at": { "type": "string", "format": "date-time" },
+        "rotated_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

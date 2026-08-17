@@ -1,0 +1,121 @@
+---
+title: "The context stack"
+description: "The four layers a product-mode agent turn composes, the policy field that routes every write, and the owner triage that keeps a group's knowledge answerable."
+---
+
+Every product-mode agent turn runs one composition. This page is the model; the code is
+`core/agent/modules/context-stack/`, the published shapes are
+`core/agent/contracts/context-stack.v1/`. Status is marked ✅ built / 🟡 partial / ⬜ planned.
+
+<Note>
+This is the **product** model. The terminal's workspace model — flat, freely composed, git-backed
+— is documented at [Workspaces & live collaboration](/core/workspaces) and is what runs today.
+The two meet where the pinned composition below is derived from membership.
+</Note>
+
+## The four layers
+
+| Layer | Access | Content |
+|---|---|---|
+| **Global** | read-only, hidden | product-level knowledge and behaviour, ours |
+| **Group** | read/write **via triage** | shared knowledge; writes land as **proposals the owner triages** — PR-style, never direct |
+| **Personal** | read/write | always exists for every user — *the user is not a group* |
+| **User-system** | read, hidden, never sharable | sessions, chat history; holds no external credentials ever |
+
+A turn composes them in that order: **global → group(s) → personal → user-system**. ✅
+
+## A workspace is an address, a name, a policy and an owner
+
+The bot has a mailbox and **each workspace has its own address**. Users invite the address to a
+meeting like any attendee, so the invited address *is* the group resolution — there is nothing to
+infer and no calendar to read. The workspace's **name** names the bot.
+
+**Group setup is a set of member emails**, and nothing more. A **personal** workspace is the
+one-member case of the same object, not a second kind of thing — it cannot take a second member,
+because a workspace that needs two members is a group workspace. ✅
+
+**Roles** are owner and member. The owner does four things: workspace config, membership, triage,
+and secrets. A member chats and contributes knowledge. ✅
+
+## The policy field routes every write
+
+Each workspace carries one explicit **policy** field, and it answers both questions the stack asks:
+where the workspace sits in the composition, and how a write to it lands.
+
+| Policy | A context delta addressed to it |
+|---|---|
+| personal | goes into context directly, as a new revision |
+| group | goes into the **proposal queue**. Never direct |
+| global | refused — global is ours and read-only |
+| user-system | refused — sessions and chat history are the platform's to write |
+
+Policy and layer are deliberately **one field, not two**. Two fields can disagree, and the only
+disagreement that matters is a workspace sitting at the group layer while taking direct writes —
+exactly the bypass of owner triage the model forbids. ✅
+
+## No machine ever writes acknowledgement
+
+A meeting produces deltas, and on the group layer the most that path can produce is a **pending**
+proposal. Accepting is a human act by the workspace owner: there is no auto-accept function, no
+bulk form, no endpoint that decides a proposal as a side effect, and no default actor anywhere.
+
+Accepting appends the proposed body as the group context's next revision, crediting the
+**proposer** as its author and the **owner** as its decider — two people, both named. Rejecting
+writes nothing to context and keeps the full record of what was proposed and why it was declined.
+✅
+
+Context is **append-only**: current state is the highest revision of a document, deletion is a
+tombstone, and no write overwrites the body that preceded it. That is what lets triage show a
+before and an after, and what a future compaction pass would read. ✅
+
+## Loosely coupled by schema, pinned by product
+
+The stack slots are **pointers**, not foreign-key constraints. A user can be re-pointed at a
+different personal workspace, or compose several groups, without any schema change — and the
+terminal keeps its free composition.
+
+The **product** ships a pinned default composition, so ordinary users never see composition at
+all. The two modes differ in exactly one place: **pinned derives the group slot from membership**,
+so what you get is exactly the groups you belong to. The three singleton slots honour an explicit
+pointer in both modes, because re-pointing changes *which* workspace fills a slot rather than the
+shape of the stack — that is migration, not composition. ✅
+
+A user in **no group** resolves to global → personal → user-system, and that is the participant
+case, not a degraded one: someone on a meeting invitation who has never joined a group still
+receives an artifact built from the meeting record and their own personal context. ✅
+
+**A non-member never reaches group context.** The composed stack omits it, a pointer at it is
+dropped with a recorded reason, reading it is refused, and proposing into it is refused too — a
+queue anyone may fill is a queue the owner stops reading. ✅
+
+## Workspace secrets are write-only
+
+An owner can **set, rotate, delete** a workspace secret and read its **metadata** — last four
+characters, version, who set it and when. **No endpoint returns a secret.** The management surface
+returns a metadata type with no field material could be put in, and the one function that reads
+material at LLM-call time is not reachable from any route. ✅
+
+In the pilot exactly one secret is user-supplied: the **LLM key or endpoint** the workspace owner
+brings (BYOT). Self-hosted it is a k8s Secret and never becomes a row at all.
+
+The stored value is **plaintext at rest** — the same level as the saved GitHub token
+(access-controlled, not encrypted), so a full server compromise reads it: use a revocable,
+minimally-scoped key. Envelope encryption is deliberately deferred until group-scoped integration
+tokens arrive with grant rows and expiries. ⬜
+
+The **user-system layer holds no external credentials ever**, and that is enforced rather than
+intended: not even its owner can put a key there. Global's credentials are deployment config — a
+k8s Secret or a chart value — not workspace rows. ✅
+
+## Not built yet
+
+⬜ Admin UI · ⬜ address allocation and mailbox provisioning · ⬜ LLM chat over the composed stack ·
+⬜ migration of existing terminal workspaces onto this model · ⬜ deployment wiring (no service
+mounts the module yet, so its tables are not in `schema.seal.json`) · ⬜ a batching or
+auto-accept-factual-deltas policy for triage load · ⬜ context compaction.
+
+## Related
+
+- [Workspaces & live collaboration](/core/workspaces) — the terminal-side model that runs today.
+- `core/agent/contracts/context-stack.v1/` — the published shapes.
+- `core/agent/modules/context-stack/README.md` — the file-by-file map and the decisions behind it.

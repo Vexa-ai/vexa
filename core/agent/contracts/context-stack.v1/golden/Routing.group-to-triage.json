@@ -1,0 +1,6 @@
+{
+  "destination": "proposal",
+  "layer": "group",
+  "workspace_id": "acme",
+  "reason": "group-policy-routes-to-triage"
+}

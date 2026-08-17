@@ -517,6 +517,18 @@
    ]
   },
   {
+   "unique-id": "context-stack.v1",
+   "node-type": "contract",
+   "name": "context-stack.v1",
+   "description": "context-stack.v1 — sealed/published contract (agent)",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/context-stack.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
    "unique-id": "workspace.v1",
    "node-type": "contract",
    "name": "workspace.v1",
@@ -1115,6 +1127,17 @@
    ]
   },
   {
+   "unique-id": "context-stack",
+   "node-type": "module",
+   "name": "context-stack",
+   "description": "context-stack — atomic module in agent",
+   "metadata": [
+    {
+     "path": "core/agent/modules/context-stack"
+    }
+   ]
+  },
+  {
    "unique-id": "platform",
    "node-type": "system",
    "name": "platform",
@@ -1269,8 +1292,10 @@
       "tool.v1",
       "unit.v1",
       "processed-notes.v1",
+      "context-stack.v1",
       "workspace.v1",
       "agent-worker",
+      "context-stack",
       "out-stream",
       "unit-in",
       "proc-stream",
