@@ -3,7 +3,7 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
@@ -18,7 +18,7 @@ import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
-import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
+import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
@@ -523,50 +523,87 @@ function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) 
   );
 }
 
-// ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
-//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming.
+// ── Calendar sync — the QUICK view over the user's calendar CONNECTIONS (#1150 plural API).
+//    Per-calendar auto-join + Sync now live here because they are the two things you reach for
+//    mid-day; adding, renaming, replacing a feed and disconnecting live in Settings → Calendar
+//    (one manager, not two — the design-spec's "same list twice" anti-pattern). The feed address
+//    is write-only: it is typed once here for the FIRST calendar and never rendered back.
 //    Two skins over ONE popover: `icon` (the quiet header icon, always there) and `row` (a
-//    discoverable "Connect your calendar" row that hides itself once a feed is connected). ──
+//    discoverable "Connect your calendar" row that hides itself once a calendar exists). ──
 function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) {
+  const layout = useService(LayoutServiceId);
   const [open, setOpen] = useState(false);
-  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
+  const [cals, setCals] = useState<CalendarConnection[] | null>(null);
+  const [stamps, setStamps] = useState<Record<string, CalendarSyncStamp>>({});
   const [url, setUrl] = useState("");
+  const [name, setName] = useState("My calendar");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [stamp, setStamp] = useState<CalendarSyncStamp | null>(null);
-  const [syncing, setSyncing] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const syncNow = async () => {
-    setSyncing(true); setErr(null);
-    try { setStamp(await syncCalendarNow()); refreshMeetings(); }
+
+  const load = useCallback(async (withStamps: boolean) => {
+    try {
+      const list = await listCalendars();
+      setCals(list);
+      if (!withStamps) return;
+      const pairs = await Promise.all(list.map(async (c) => {
+        try { return [c.id, await getCalendarSyncStatus(c.id)] as const; }
+        catch { return [c.id, {} as CalendarSyncStamp] as const; }
+      }));
+      setStamps(Object.fromEntries(pairs));
+    } catch { setCals(null); }
+  }, []);
+
+  const syncOne = async (id: string) => {
+    setSyncing(id); setErr(null);
+    try { const st = await syncCalendar(id); setStamps((s) => ({ ...s, [id]: st })); refreshMeetings(); }
     catch (e) { setErr(presentError(e).headline); }
-    finally { setSyncing(false); }
+    finally { setSyncing(null); }
   };
-  // the row skin needs the connected-state up front (it hides once connected)
+
+  // the row skin needs the connected-state up front (it hides once a calendar exists)
   useEffect(() => {
     if (variant !== "row") return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-  }, [variant]);
+    void load(false);
+  }, [variant, load]);
   useEffect(() => {
     if (!open) return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-    void getCalendarSyncStatus().then(setStamp).catch(() => {});
+    void load(true);
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
+  }, [open, load]);
+
+  const setAutoJoin = async (cal: CalendarConnection, autoJoin: boolean) => {
     setBusy(true); setErr(null);
     try {
-      setCfg(await setCalendarConfig(body));
-      setUrl(""); refreshMeetings();
-      if (body.ics_url) await syncNow();              // paste → an ANSWER, not a silent wait
-      if (body.ics_url === null) setStamp(null);
+      await updateCalendar(cal.id, { auto_join: autoJoin });
+      await load(false);
+      await syncOne(cal.id);   // PATCH does not reconcile already-imported meetings; the sync does
     }
     catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
-  if (variant === "row" && cfg?.ics_url_set) return null;   // connected → manage via the header icon
+
+  const connectFirst = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await createCalendar({ name: name.trim() || "My calendar", ics_url: u, auto_join: true });
+      setUrl(""); refreshMeetings();
+      await load(false);
+      await syncOne(created.id);            // paste → an ANSWER, not a silent wait
+    }
+    catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
+  const connected = (cals?.length ?? 0) > 0;
+  const openSettings = () => { setOpen(false); layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} }); };
+
+  if (variant === "row" && connected) return null;   // has one → manage via the header icon / Settings
   return (
     <div ref={ref} style={{ position: "relative", flex: variant === "row" ? "initial" : "none" }}>
       {variant === "row" ? (
@@ -576,35 +613,40 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
           <Icon name="cal" size={12} /> Connect your calendar
         </button>
       ) : (
-        <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
-          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+        <button onClick={() => setOpen((v) => !v)} title="Calendars — import upcoming meetings from your calendars"
+          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: connected ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
           <Icon name="cal" size={13} />
         </button>
       )}
       {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Calendar sync</div>
-          {cfg?.ics_url_set ? (
+        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 300, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+            {connected ? `calendars · ${cals?.length ?? 0} of ${MAX_CALENDARS}` : "calendar sync"}
+          </div>
+          {connected ? (
             <>
-              <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
-                Connected: <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{cfg.ics_url_masked}</span>
-              </div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
-                <input type="checkbox" checked={cfg.auto_join} disabled={busy}
-                  onChange={(e) => void save({ auto_join: e.target.checked })} />
-                Auto-join imported meetings
-              </label>
-              <CalendarSyncStatusLine stamp={stamp} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <button disabled={busy || syncing} onClick={() => void syncNow()}
-                  style={{ flex: 1, fontSize: 12, padding: "4px 10px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
-                  {syncing ? "Syncing…" : "Sync now"}
-                </button>
-                <button disabled={busy || syncing} onClick={() => void save({ ics_url: null })}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 6, cursor: "pointer" }}>
-                  Disconnect
-                </button>
-              </div>
+              {cals?.map((c) => (
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 5, borderBottom: "1px dashed var(--line)", paddingBottom: 7 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ flex: 1, fontSize: 12, color: c.enabled ? "var(--t1)" : "var(--t3)", fontWeight: 600 }}>{c.name}</span>
+                    {!c.enabled && <span style={{ fontSize: 10.5, color: "var(--t3)" }}>paused</span>}
+                    <button disabled={busy || syncing !== null} onClick={() => void syncOne(c.id)}
+                      style={{ fontSize: 11.5, padding: "3px 8px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
+                      {syncing === c.id ? "Syncing…" : "Sync"}
+                    </button>
+                  </div>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+                    <input type="checkbox" checked={c.auto_join} disabled={busy || syncing !== null}
+                      onChange={(e) => void setAutoJoin(c, e.target.checked)} />
+                    Auto-join meetings from this calendar
+                  </label>
+                  <CalendarSyncStatusLine stamp={stamps[c.id] ?? null} />
+                </div>
+              ))}
+              <button onClick={openSettings}
+                style={{ fontSize: 11.5, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, cursor: "pointer" }}>
+                Add, rename or disconnect in Settings → Calendar
+              </button>
             </>
           ) : (
             <>
@@ -612,12 +654,16 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                 Paste your calendar&apos;s <b>secret ICS address</b> (Google Calendar → Settings → &quot;Secret address in iCal format&quot;).
                 Upcoming meetings with a Meet/Zoom/Teams link appear under Upcoming and auto-join at start.
               </div>
-              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
-                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void save({ ics_url: url.trim() }); }}
+              <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
+                aria-label="Calendar name" placeholder="Calendar name"
                 style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
-              <button disabled={busy || !url.trim()} onClick={() => void save({ ics_url: url.trim() })}
+              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
+                type="password" autoComplete="off" aria-label="Secret ICS address"
+                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void connectFirst(); }}
+                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+              <button disabled={busy || !url.trim()} onClick={() => void connectFirst()}
                 style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
-                {busy || syncing ? "Connecting…" : "Connect"}
+                {busy || syncing !== null ? "Connecting…" : "Connect"}
               </button>
               <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
                 Tip: the <i>public</i> address only carries events you made public — use the <b>secret</b> one for your full calendar.
