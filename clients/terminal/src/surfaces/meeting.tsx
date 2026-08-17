@@ -12,7 +12,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
 import { ApiError, presentError } from "./apiClient";
-import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
+import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
@@ -801,8 +801,45 @@ export function meetingHeaderState(m: MeetingMock | undefined, connected: boolea
   return connected ? "live" : "reconnecting";
 }
 
+/** Whether a requested meeting id has RESOLVED, is still resolving, or does not exist for this user.
+ *  `listLoaded` is the meetings list having answered at least once — without it an id that simply hasn't
+ *  been fetched yet is indistinguishable from one that doesn't exist, and an addressable URL
+ *  (`/meetings/<id>`) would show a permanent "Connecting…" for a deleted or foreign meeting.
+ *  Exported for the routing test. */
+export type MeetingResolution = "resolving" | "resolved" | "not-found";
+export function meetingResolution(m: MeetingMock | undefined, listLoaded: boolean): MeetingResolution {
+  if (m) return "resolved";
+  return listLoaded ? "not-found" : "resolving";
+}
+
+/** The clean terminal state for an id that isn't ours (deleted, mistyped, someone else's un-shared
+ *  meeting). A dead reference is a normal outcome of a shareable URL, so it reads as an answer — not an
+ *  error, not a spinner that never ends. Pure (no services) so it renders in a test as-is. */
+export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string; onOpenToday?: () => void }) {
+  return (
+    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Meeting not found</div>
+        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          {meetingId
+            ? <>Nothing here matches <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. It may have been deleted, or it belongs to someone who hasn&apos;t shared it with you.</>
+            : <>This link doesn&apos;t carry a meeting. Open one from your day.</>}
+        </div>
+        {onOpenToday && (
+          <button onClick={onOpenToday}
+            style={{ marginTop: 16, fontSize: 12.5, padding: "5px 12px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 7, cursor: "pointer" }}>
+            Open today
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
+  const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
+  const listLoaded = useLiveMeetingsLoaded();
   const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
@@ -811,6 +848,18 @@ function MeetingTab({ params }: TabProps) {
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
   const header = meetingHeaderState(m, connected);
+
+  // An unknown id — a stale/foreign/mistyped meeting URL — is a clean dead end, never a crash and never
+  // an endless "Connecting…". Only once the list has actually answered (P0: an offline list keeps
+  // resolving, so a network blip can't make a live meeting look deleted).
+  if (meetingResolution(m, listLoaded) === "not-found") {
+    return (
+      <MeetingNotFound
+        meetingId={requestedMeetingId}
+        onOpenToday={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
+      />
+    );
+  }
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>

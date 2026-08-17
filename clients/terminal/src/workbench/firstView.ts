@@ -8,6 +8,10 @@
 export interface FirstViewInputs {
   /** an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload) */
   sharedMeetingId: string | null;
+  /** the meeting id carried by the URL (`/meetings/<id>`) — the durable reference. Like a share link
+   *  this is an EXPLICIT act (the user opened that address), so it applies to a returning user too:
+   *  a reloaded/pasted meeting URL must restore that meeting, not the last saved layout. */
+  routeMeetingId?: string | null;
   /** a workspace whose invite the user JUST accepted (?invite= link — InviteRedeemer stashed its id
    *  before the reload). Like an accepted shared meeting, this is an EXPLICIT act: pin its README even
    *  for a returning user with a saved layout (they clicked the invite; the shared ws must show). */
@@ -35,8 +39,13 @@ export function firstViewPlan(i: FirstViewInputs): FirstViewPlan {
   // A just-accepted invite is an explicit shared workspace — it outranks the passive active-set `sharedSlug`
   // and, like an accepted shared meeting, applies even to a returning (non-fresh) user.
   const slug = i.acceptedSlug ?? i.sharedSlug;
+  // A just-redeemed share outranks the address bar (it was stashed by THIS navigation).
   if (i.sharedMeetingId && slug) return { kind: "meeting-and-workspace", meetingId: i.sharedMeetingId, slug };
   if (i.sharedMeetingId) return { kind: "meeting", meetingId: i.sharedMeetingId };
+  // Then the URL. A plain meeting address shows THE MEETING and nothing else — a passively-mounted
+  // shared workspace must not hijack it; only a just-accepted invite (explicit) rides alongside.
+  if (i.routeMeetingId && i.acceptedSlug) return { kind: "meeting-and-workspace", meetingId: i.routeMeetingId, slug: i.acceptedSlug };
+  if (i.routeMeetingId) return { kind: "meeting", meetingId: i.routeMeetingId };
   if (i.acceptedSlug) return { kind: "workspace-readme", slug: i.acceptedSlug };  // explicit accept → pin regardless of a saved dock
   if (!i.fresh) return { kind: "noop" };
   if (i.liveMeetingId) return { kind: "live-meeting", meetingId: i.liveMeetingId };

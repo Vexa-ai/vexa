@@ -92,3 +92,28 @@ A pass to make the first-run + workspace experience real (no mocks, no dead UI):
   folds the meeting's live transcript (redis `tc:meeting:{native}`) into the prompt server-side, fresh each
   turn. The client adds no prompt preamble and points at no notes file. (Replaced the earlier notes-file
   workaround, itself a stand-in for the unwired `meeting.read_transcript` MCP tool that hung the worker.)
+
+## D7 — the open meeting is addressable: `/meetings/<id>`
+Until now the terminal was a **single route** (`/`). Which meeting was open lived only in the dockview
+layout in `localStorage` (`vexa.terminal.dock.v3`), so a hard reload restored it *in that browser* while
+the URL referenced nothing: a meeting could not be pasted to a colleague, bookmarked, or reopened in a
+fresh session. The only URL that ever reached a meeting was a `?tshare=` token, and that flow deliberately
+strips itself back to `/` after redeeming.
+
+- **The reference is the meetings-domain ROW id** — the same `id` the client already keys the tab, the
+  live streams (`tc:meeting:{id}`) and `GET /api/transcripts/by-id/{id}` by. **No API change is implied.**
+  The public transcript API still keys by `platform/native_meeting_id`; the route carries only the id the
+  existing client data paths already resolve, so nothing about fetching moved.
+- **One shell, two routes.** `src/app/meetings/[meetingId]/page.tsx` renders the same `<App/>` as `/`.
+  A second app would drift; a route that only *deep-links* would fork the layout logic.
+- **The URL follows the active tab, it does not drive it.** In-app navigation (row click, preview slot,
+  restored dock) is unchanged and remains the interactive path; a `history.replaceState` effect mirrors
+  the active meeting tab into the address bar (`replaceState`, not push — the workbench keeps its own
+  history under Escape / Alt+Left). Only `/` and `/meetings/<id>` are ever rewritten.
+- **Landing is the existing first-view resolver**, extended with `routeMeetingId` — ranked below a
+  just-redeemed share (that stash belongs to *this* navigation) and above everything else, and applying
+  to a returning user, because opening that address IS the explicit act. A passively-mounted shared
+  workspace does not ride along; a just-accepted invite does.
+- **An unknown id is an answer, not a spinner.** A dead reference is a normal outcome of a shareable URL,
+  so the tab renders a not-found state — gated on the meetings list having *answered at least once*
+  (`useLiveMeetingsLoaded`), so an offline list can never make a live meeting look deleted.
