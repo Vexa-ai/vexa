@@ -188,6 +188,22 @@ class TranscriptStore(Protocol):
         ``{"error": "duplicate"}`` when a new native id collides with another non-terminal row."""
         ...
 
+    async def attach_calendar_source(
+        self, user_id: int, meeting_id: int, *, calendar_uid: str,
+        calendar_sources: Optional[list] = None,
+    ) -> Optional[dict]:
+        """Stamp calendar IDENTITY onto a row in ANY status — including one the bot FSM owns.
+
+        The narrow complement of ``update_planned_meeting``: calendar sync uses it when an imported
+        event's meeting is ALREADY LIVE, so the live row carries the calendar's uid/sources instead
+        of a duplicate planned row being created beside it (which the auto-join sweep would then
+        dispatch a SECOND bot for). Writes ONLY ``calendar_uid`` / ``calendar_sources`` and the
+        singular ``calendar_connection_id`` / ``calendar_name`` mirrors — never ``auto_join``,
+        ``auto_join_user_set``, ``calendar_managed``, ``scheduled_at`` or ``status``.
+
+        Returns the row (``list_meetings`` shape), or ``None`` when the user owns no such row."""
+        ...
+
     async def delete_planned_meeting(self, user_id: int, meeting_id: int) -> Optional[bool]:
         """OWNER-scoped delete of a PLANNED (``idle``/``scheduled``) row. Returns ``True`` on
         delete, ``None`` when the user owns no such row (→ 404), ``False`` when the row is

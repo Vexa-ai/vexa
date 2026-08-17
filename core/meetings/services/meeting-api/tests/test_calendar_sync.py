@@ -249,6 +249,51 @@ async def test_sync_adopts_manual_plan_on_same_link():
     assert row["status"] == "scheduled"               # feed time attached
 
 
+async def test_sync_adopts_a_LIVE_row_on_the_same_link_and_never_duplicates_it():
+    """The live 2026-08-17 defect: a manual bot is already in the room when the calendar imports
+    the same Meet. The import must attach to the live row — a sibling row is what the auto-join
+    sweep then sends a SECOND bot for (rows 26237 live + 26251 imported, native mjm-dycn-qdp)."""
+    store = InMemoryTranscriptStore()
+    live = store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="active", data={"title": "sent by hand"},
+        constructed_meeting_url="https://meet.google.com/abc-defg-hij",
+    )
+    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                             calendar_id="work", calendar_name="Work")
+    rows = await store.list_meetings(USER)
+    assert len(rows) == 1                              # ONE row — no sibling to dispatch for
+    (row,) = rows
+    assert row["id"] == live
+    assert row["status"] == "active"                   # the FSM still owns it
+    assert result["counts"] == {"created": 0, "updated": 1, "cancelled": 0}
+    data = row["data"]
+    assert data["calendar_uid"] == "uid-1"             # calendar identity attached
+    assert [s["id"] for s in data["calendar_sources"]] == ["work"]
+    assert data["calendar_connection_id"] == "work"
+    # adopting a LIVE row must never re-arm it: no auto_join, no calendar_managed, no re-schedule
+    assert "auto_join" not in data
+    assert "calendar_managed" not in data
+    assert "scheduled_at" not in data
+
+
+async def test_live_row_adoption_is_idempotent_and_survives_the_feed_vanishing():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="active", data={},
+    )
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work")
+    again = await sync_user(store, USER, parsed, calendar_id="work", calendar_name="Work")
+    assert again["counts"] == {"created": 0, "updated": 0, "cancelled": 0}   # nothing to re-write
+    gone = await sync_user(store, USER, parse_ics(_ics(), now=NOW),
+                           calendar_id="work", calendar_name="Work")
+    assert gone["counts"]["cancelled"] == 0                                  # never retires a live row
+    (row,) = await store.list_meetings(USER)
+    assert row["status"] == "active"
+
+
 async def test_sync_other_users_rows_untouched():
     store = InMemoryTranscriptStore()
     await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))

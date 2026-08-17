@@ -170,6 +170,16 @@ class InMemoryMeetingRepo:
             and m["platform"] not in (None, "", "unknown")
         ]
 
+    async def list_live_meetings(self) -> list:
+        from .auto_join import LIVE_STATUSES
+
+        return [
+            dict(m) for m in self._meetings.values()
+            if m["status"] in LIVE_STATUSES
+            and m["native_meeting_id"] is not None
+            and m["platform"] not in (None, "", "unknown")
+        ]
+
     async def merge_meeting_data(self, meeting_id, patch) -> None:
         m = self._meetings.get(meeting_id)
         if m is None:

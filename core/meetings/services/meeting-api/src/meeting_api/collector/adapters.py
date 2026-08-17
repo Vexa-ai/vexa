@@ -981,6 +981,44 @@ class SqlAlchemyTranscriptStore:
             await db.refresh(m)
             return self._planned_row(m)
 
+    async def attach_calendar_source(self, user_id, meeting_id, *, calendar_uid,
+                                     calendar_sources=None) -> "Optional[dict]":
+        """Stamp calendar IDENTITY onto a row in ANY status (the live-row adoption path).
+
+        Deliberately narrower than ``update_planned_meeting``, which refuses an FSM-owned row: an
+        imported event whose meeting is already live must attach to THAT row rather than create a
+        sibling the auto-join sweep would send a second bot for. Identity keys only — status,
+        ``auto_join``, ``auto_join_user_set``, ``calendar_managed`` and ``scheduled_at`` are never
+        written here, so adopting a live row can never re-arm or re-dispatch it."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if calendar_uid:
+                data["calendar_uid"] = calendar_uid
+            if calendar_sources:
+                data["calendar_sources"] = [dict(s) for s in calendar_sources]
+                primary = calendar_sources[0]
+                data["calendar_connection_id"] = primary.get("id")
+                data["calendar_name"] = primary.get("name") or "Calendar"
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
+
     async def update_planned_meeting(self, user_id, meeting_id, updates) -> "Optional[dict]":
         """ROW-id-addressed PATCH of a planned row (intent status only). ``updates`` carries only
         the keys the caller sent — presence means apply (None clears where documented)."""

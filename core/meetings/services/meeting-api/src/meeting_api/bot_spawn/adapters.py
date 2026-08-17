@@ -532,6 +532,25 @@ class SqlAlchemyMeetingRepo:
             )).scalars().all()
             return [_row_to_dict(m) for m in rows]
 
+    async def list_live_meetings(self) -> list[dict]:
+        """Every row a bot currently OWNS (``auto_join.LIVE_STATUSES``) with a joinable link — the
+        auto-join sweep's duplicate-dispatch guard reads it to answer "is someone already in this
+        room?" for a due row that a sibling row (manual send, un-adopted calendar import) covers."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+        from .auto_join import LIVE_STATUSES
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting).where(
+                    Meeting.status.in_(LIVE_STATUSES),
+                    Meeting.platform_specific_id.isnot(None),
+                    Meeting.platform != "unknown",
+                )
+            )).scalars().all()
+            return [_row_to_dict(m) for m in rows]
+
     async def merge_meeting_data(self, meeting_id, patch: dict) -> None:
         """Merge ``patch`` into ``meeting.data`` (a ``None`` value REMOVES the key) — the sweep's
         error/backoff stamping primitive. Row-locked; a missing row is a no-op."""

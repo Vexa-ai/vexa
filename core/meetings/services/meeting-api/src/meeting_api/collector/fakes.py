@@ -409,6 +409,22 @@ class InMemoryTranscriptStore:
         )
         return self._planned_row(mid)
 
+    async def attach_calendar_source(self, user_id, meeting_id, *, calendar_uid,
+                                     calendar_sources=None):
+        """Identity-only stamp on a row in ANY status — mirrors the adapter (live-row adoption)."""
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        data = m["data"]
+        if calendar_uid:
+            data["calendar_uid"] = calendar_uid
+        if calendar_sources:
+            data["calendar_sources"] = [dict(s) for s in calendar_sources]
+            primary = calendar_sources[0]
+            data["calendar_connection_id"] = primary.get("id")
+            data["calendar_name"] = primary.get("name") or "Calendar"
+        return self._planned_row(meeting_id)
+
     async def update_planned_meeting(self, user_id, meeting_id, updates):
         m = self._meetings.get(meeting_id)
         if m is None or m["user_id"] != user_id:

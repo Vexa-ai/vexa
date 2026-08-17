@@ -16,6 +16,11 @@ no native id) so the terminal can render the honest "bot not armed — no link" 
 the event silently vanishing. A link appearing in a later feed sweep arms the existing row.
 ``STATUS:CANCELLED`` events and UIDs that vanish from the feed cancel their still-planned row;
 a row the bot FSM owns (live/completed) is NEVER touched by sync.
+
+Adoption by link is by (platform, native) over EVERY non-terminal row, intent AND live. An
+imported event whose meeting is already running attaches its calendar identity to that live row
+(``_attach_live_source`` — uid/sources only, never ``auto_join``/``scheduled_at``/status) rather
+than importing a sibling: a sibling is what the auto-join sweep sends a SECOND bot for.
 """
 from __future__ import annotations
 
@@ -314,6 +319,43 @@ def _replace_source(sources: list[dict], source: dict) -> list[dict]:
     return out
 
 
+async def _attach_live_source(store, user_id: int, row: dict, ev: dict, *,
+                              calendar_id: Optional[str], calendar_name: Optional[str],
+                              bot_name: Optional[str], auto_join_default: bool):
+    """Attach this calendar's source to a row the bot FSM already owns — IDENTITY ONLY.
+
+    An event whose meeting is ALREADY LIVE (the user sent a bot by hand, or an earlier occurrence
+    is still running) must not import as a sibling row: the auto-join sweep would then dispatch a
+    SECOND bot into the same room at the scheduled start (observed live 2026-08-17 — rows
+    26237 live + 26251 imported, one native ``mjm-dycn-qdp``, two bots).
+
+    Only the calendar identity keys are merged (``calendar_uid`` + ``calendar_sources`` and the
+    singular mirrors). ``auto_join``, ``auto_join_user_set``, ``calendar_managed``, ``scheduled_at``
+    and ``status`` are NEVER written here: adopting a live row must never re-arm it, and the row's
+    auto-join marker belongs to the user's own PATCH.
+    """
+    attach = getattr(store, "attach_calendar_source", None)
+    if attach is None:
+        return None
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    sources: Optional[list[dict]]
+    if calendar_id:
+        source = _source_entry(
+            calendar_id, calendar_name, ev["uid"], auto_join_default,
+            bot_name=bot_name, metadata=ev.get("metadata"),
+        )
+        existing = _calendar_sources(data)
+        sources = _replace_source(existing, source)
+        if sources == existing and data.get("calendar_uid") == ev["uid"]:
+            return None
+    else:
+        # legacy singular feed: never steal a row another UID already stamped
+        if data.get("calendar_uid"):
+            return None
+        sources = None
+    return await attach(user_id, row["id"], calendar_uid=ev["uid"], calendar_sources=sources)
+
+
 def _remember(rows: list, row: dict) -> None:
     """Fold a created/updated row back into the caller's row list — the sweep reads a user's rows
     ONCE per tick and drives every one of their connections off that one list."""
@@ -381,6 +423,11 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue
         if uid and uid not in by_uid:
             by_uid[uid] = row
+        # The adoption index admits EVERY non-terminal row — intent (idle/scheduled) AND the FSM
+        # statuses (requested/joining/awaiting_admission/active/needs_help/stopping). A live row is
+        # still the meeting on that link, so an imported event attaches to it (identity only)
+        # instead of creating a sibling; only completed/failed rows are past (their link may be
+        # re-met, which is what the DB's partial unique index allows).
         if row.get("native_meeting_id"):
             by_native.setdefault((row["platform"], row["native_meeting_id"]), row)
 
@@ -461,7 +508,24 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                     out["updated"].append({"id": adopted["id"], "native": adopted.get("native_meeting_id"),
                                            "status": adopted.get("status"),
                                            "when": (adopted.get("data") or {}).get("scheduled_at")})
-            continue  # an FSM row on that link → leave it alone; next sweep reconciles
+            else:
+                # an FSM row on that link (live/joining/stopping) — it IS this event's meeting.
+                # Stamp the calendar identity onto it so the terminal shows the link and the next
+                # sweep matches it by UID; never create a sibling the auto-join sweep would send a
+                # SECOND bot for, and never touch status / auto_join / scheduled_at.
+                attached = await _attach_live_source(
+                    store, user_id, manual, ev,
+                    calendar_id=calendar_id, calendar_name=calendar_name,
+                    bot_name=bot_name, auto_join_default=auto_join_default,
+                )
+                if isinstance(attached, dict) and not attached.get("error"):
+                    by_native[(ev["platform"], ev["native_meeting_id"])] = attached
+                    _remember(rows, attached)
+                    out["updated"].append({"id": attached["id"],
+                                           "native": attached.get("native_meeting_id"),
+                                           "status": attached.get("status"),
+                                           "when": (attached.get("data") or {}).get("scheduled_at")})
+            continue  # never duplicate a row that already exists for this link
 
         inherited_ws = series_ws.get(ev["uid"])  # None = no binding OR tombstoned — both mean "don't"
         created = await store.create_planned_meeting(

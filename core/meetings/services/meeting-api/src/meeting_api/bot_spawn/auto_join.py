@@ -9,6 +9,13 @@ out of the sweep's predicate, and the per-user advisory lock serializes it again
 manual "Send bot now" (that race surfaces here as ``DuplicateMeeting`` — someone already joined —
 counted, never error-stamped).
 
+Defense in depth behind that dedup: before spawning, the tick asks the repo which
+(user, platform, native) tuples a bot ALREADY owns (``list_live_meetings`` over ``LIVE_STATUSES``)
+and refuses a due row whose room is already covered by a DIFFERENT row — stamping
+``data.auto_join_error`` with the holding meeting id. Two Vexa bots in one meeting is never
+correct however the two rows came to exist (live 2026-08-17: a manual "Send bot now" row plus a
+calendar import of the same Meet that failed to adopt it).
+
 Failures are LOUD, never silent (P18/P10): a cap/quota rejection or spawn failure stamps
 ``data.auto_join_error`` (+ ``data.auto_join_next_retry`` backoff so one bad row doesn't re-fire
 every tick) — the terminal surfaces it on the meeting row.
@@ -70,6 +77,28 @@ def due_rows(rows: list[dict], *, now: datetime,
             continue
         due.append(row)
     return due
+
+
+# Every status in which a bot OWNS the room. A due row whose (user, platform, native) is held by
+# one of these on ANOTHER row must never spawn: two Vexa bots in one meeting is customer-visible
+# and never correct, however the two rows came to exist.
+LIVE_STATUSES = (
+    "requested", "joining", "awaiting_admission", "active",
+    "needs_help", "needs_human_help", "stopping",
+)
+
+
+def live_keys(rows: Optional[list]) -> dict[tuple, Any]:
+    """``{(user_id, platform, native_meeting_id): meeting_id}`` over the repo's live rows."""
+    out: dict[tuple, Any] = {}
+    for row in rows or ():
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("user_id"), row.get("platform"), row.get("native_meeting_id"))
+        if key[0] is None or not key[1] or not key[2]:
+            continue
+        out.setdefault(key, row.get("id"))
+    return out
 
 
 def _calendar_bot_name(data: dict) -> Optional[str]:
@@ -145,18 +174,25 @@ async def auto_join_tick(
 
     rows = await repo.list_scheduled_meetings()
     due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s)
-    counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0,
+                "skipped_uncapped": 0, "skipped_live": 0}
+    # Duplicate-dispatch guard (defense in depth behind create_meeting_guarded's dedup): a bot
+    # already owning this (user, platform, native) on a DIFFERENT row means the meeting is covered.
+    live = live_keys(
+        await repo.list_live_meetings() if hasattr(repo, "list_live_meetings") else None
+    )
     ctx_cache: dict[int, Optional[dict]] = {}
     uncapped_warned = False
 
-    async def _stamp_error(row: dict, message: str) -> None:
-        counters["errors"] += 1
+    async def _stamp_error(row: dict, message: str, *, counter: str = "errors",
+                           event: str = "auto_join_failed") -> None:
+        counters[counter] += 1
         next_retry = (now + timedelta(seconds=retry_backoff_s)).isoformat()
         await repo.merge_meeting_data(row["id"], {
             "auto_join_error": message,
             "auto_join_next_retry": next_retry,
         })
-        log_event("auto_join_failed", audience="user", level="warning", span="meetings.auto_join",
+        log_event(event, audience="user", level="warning", span="meetings.auto_join",
                   user_id=row["user_id"], meeting_id=str(row["id"]),
                   fields={"error": message, "next_retry": next_retry})
         if publish_status is not None:
@@ -169,6 +205,19 @@ async def auto_join_tick(
 
     for row in due:
         user_id = row["user_id"]
+        holder = live.get((user_id, row.get("platform"), row.get("native_meeting_id")))
+        if holder is not None and holder != row.get("id"):
+            # A bot is already in this room on another row — the classic shape is a manual
+            # "Send bot now" plus a calendar import of the same link that failed to adopt it
+            # (live 2026-08-17: rows 26237 live + 26251 imported, native mjm-dycn-qdp). Refuse
+            # LOUDLY (P18): the row carries the reason the terminal renders, never a silent skip.
+            await _stamp_error(
+                row,
+                f"a bot is already in this meeting (meeting {holder}) — auto-join skipped so a "
+                f"second bot never joins",
+                counter="skipped_live", event="auto_join_skipped_live",
+            )
+            continue
         gate_error = gate()
         if gate_error:
             await _stamp_error(row, gate_error)

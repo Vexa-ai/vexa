@@ -53,7 +53,7 @@ async def test_due_row_spawns_and_claims_in_place():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo, at=NOW + timedelta(seconds=30))  # inside the 60s lead window
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0}
     row = repo._meetings[mid]
     assert row["status"] == "requested"          # the SAME row was claimed
     assert row["data"]["title"] == "t"           # planned keys survive
@@ -130,7 +130,7 @@ async def test_second_tick_is_a_noop():
     _seed(repo)
     await _tick(repo, runtime)
     counters = await _tick(repo, runtime)
-    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 0, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0}
     assert len(runtime.specs) == 1  # exactly one spawn ever
 
 
@@ -220,7 +220,7 @@ async def test_unreachable_identity_skips_fail_closed():
         return None  # configured but unreachable
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx)
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 0, "skipped_live": 0}
     assert runtime.specs == []  # never spawns past a cap it could not read
 
 
@@ -230,7 +230,7 @@ async def test_no_admin_edge_fails_closed_refuses_uncapped_spawn():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo)
     counters = await _tick(repo, runtime, fetch_bot_context=None, allow_uncapped=False)
-    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 1}
+    assert counters == {"due": 1, "spawned": 0, "already": 0, "errors": 0, "skipped_uncapped": 1, "skipped_live": 0}
     assert runtime.specs == []  # never spawns uncapped past a cap we cannot resolve
 
 
@@ -261,3 +261,46 @@ def test_due_rows_window_edges():
     # malformed / missing time → never due
     assert not due_rows([{"id": 2, "user_id": USER, "platform": PLAT,
                           "native_meeting_id": NID, "data": {}}], now=NOW)
+
+
+# ---- duplicate-dispatch guard (live 2026-08-17: two Vexa bots in mjm-dycn-qdp) --------
+
+async def test_live_row_on_same_link_blocks_the_sweep():
+    """Two rows, one native id, one of them LIVE → the sweep refuses, loudly.
+
+    The staging shape: user 23 sent a bot by hand (row 26237, admitted + transcribing) while the
+    connected calendar imported the same Meet as a second row (26251). At start time the sweep
+    dispatched a SECOND bot. A duplicate dispatch is never correct however the rows arose.
+    """
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=26237, status="active", at=None)          # the manual bot, in the room
+    due = _seed(repo, mid=26251, status="scheduled", at=NOW)  # the un-adopted calendar import
+    counters = await _tick(repo, runtime)
+    assert counters["due"] == 1
+    assert counters["spawned"] == 0
+    assert counters["skipped_live"] == 1
+    assert runtime.specs == []                       # no second bot
+    assert repo._meetings[due]["status"] == "scheduled"
+    err = repo._meetings[due]["data"]["auto_join_error"]
+    assert "26237" in err and "already in this meeting" in err
+    assert repo._meetings[due]["data"]["auto_join_next_retry"]  # backoff stamped, not re-fired
+
+
+async def test_live_row_for_another_user_does_not_block():
+    """The guard is per (user, platform, native) — a different tenant in the same room is theirs."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=1, status="active", at=None, user_id=99)
+    _seed(repo, mid=2, status="scheduled", at=NOW)
+    counters = await _tick(repo, runtime)
+    assert counters["spawned"] == 1 and counters["skipped_live"] == 0
+
+
+async def test_live_keys_ignores_terminal_and_linkless_rows():
+    from meeting_api.bot_spawn.auto_join import live_keys
+
+    keys = live_keys([
+        {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID},
+        {"id": 2, "user_id": USER, "platform": "unknown", "native_meeting_id": None},
+        {"id": 3, "user_id": None, "platform": PLAT, "native_meeting_id": "x"},
+    ])
+    assert keys == {(USER, PLAT, NID): 1}
