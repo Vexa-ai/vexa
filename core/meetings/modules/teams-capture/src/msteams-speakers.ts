@@ -151,11 +151,14 @@ const TEAMS_CLOCK_PREFIX = /^\d{1,2}:\d{2}/;
 // hyphenated string is refused, which fails toward unknown rather than toward invention.
 const TEAMS_MACHINE_TOKEN =
   /^(?:[a-z0-9]+(?:[-_][a-z0-9]+)+|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+|\d+)$/;
-// A bare all-lowercase token is a handle or media label, not a canonical human identity. Meeting
-// m26132 exposed the concrete failure: Teams rendered `datenanalyse` for the participant Julian,
-// and accepting the tile text published the role/topic label as though it were the person's name.
-// Fail toward Speaker A/B until Teams supplies a canonical-looking display name. Qualified names
-// such as `leo (Unverified)` still pass because Teams supplied more than a bare handle.
+// A bare all-lowercase token on a TILE is a handle or a role/topic label, not a canonical human
+// identity: tiles carry whatever string Teams decided to render in the name slot, so accepting one
+// can publish a label as though it were the person's name. Fail toward Speaker A/B instead.
+// Qualified names such as `leo (Unverified)` pass because Teams supplied more than a bare handle.
+//
+// The refusal is lifted by CORROBORATION, never by shape: the roster panel is the name-authoritative
+// surface — it lists participants, not media — so a bare token the panel also shows as a row IS that
+// participant's chosen display name and passes. A bare token seen only on a tile stays refused.
 const TEAMS_UNCANONICAL_BARE_HANDLE = /^\p{Ll}[\p{Ll}\p{M}\p{Nd}]*$/u;
 
 /**
@@ -230,13 +233,43 @@ export function isSelfDisplayName(name: string, selfName: string | undefined): b
   return normalizeDisplayNameForIdentity(name) === self;
 }
 
+/** What the surrounding scan knows about the surface a candidate string came from.
+ *
+ * Only the bare-lowercase-handle rule consults this: every other refusal above is a property of the
+ * string itself and no surface can vouch for it. A control label is a control label on the roster
+ * too.
+ */
+export interface TeamsNameCandidateContext {
+  /** The string is being read FROM the roster panel, which lists participants and nothing else. */
+  rosterAuthoritative?: boolean;
+  /** Display names the roster panel showed this scan; they corroborate the same string on a tile. */
+  rosterNames?: Iterable<string>;
+}
+
+/** Is `value` the same identity as one of the roster panel's participant rows? */
+function isRosterCorroborated(value: string, ctx?: TeamsNameCandidateContext): boolean {
+  if (!ctx) return false;
+  if (ctx.rosterAuthoritative) return true;
+  if (!ctx.rosterNames) return false;
+  const wanted = normalizeDisplayNameForIdentity(value);
+  if (!wanted) return false;
+  for (const name of ctx.rosterNames) {
+    if (normalizeDisplayNameForIdentity(name) === wanted) return true;
+  }
+  return false;
+}
+
 /** Is this string plausibly a HUMAN display name (as opposed to a Teams control
  * label, a timer, a machine token, or Teams' own placeholder for someone it cannot
  * identify)? Exported so every name path in this package — tile resolution, the
  * roster walk AND the caption reader — applies the SAME guard: one place decides
  * what may become a name, so a rejection here can never be re-litigated by a
- * second implementation next door. */
-export function isTeamsDisplayNameCandidate(value: string): boolean {
+ * second implementation next door.
+ *
+ * `ctx` carries the one thing the string cannot carry about itself: which surface showed it. Callers
+ * that have read the roster pass it so a genuinely bare-lowercase display name — `leo`, `марина` —
+ * is admitted on the evidence of the participant list rather than refused for its shape. */
+export function isTeamsDisplayNameCandidate(value: string, ctx?: TeamsNameCandidateContext): boolean {
   const candidate = value.trim();
   if (candidate.length <= 1 || candidate.length >= 50) return false;
   const normalized = candidate.toLowerCase().replace(/[_\s-]+/g, ' ');
@@ -245,11 +278,11 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
   if (TEAMS_PLACEHOLDER_NAMES.has(normalized)) return false;
   if (TEAMS_PLACEHOLDER_NAMES.has(normalizeDisplayNameForIdentity(candidate))) return false;
   if (isGeneratedDefaultBotDisplayName(candidate)) return false;
+  if (TEAMS_UNCANONICAL_BARE_HANDLE.test(candidate) && !isRosterCorroborated(candidate, ctx)) return false;
   return !TEAMS_CONTROL_LABELS.has(normalized)
     && !TEAMS_TIMER_LABEL.test(normalized)
     && !TEAMS_CLOCK_PREFIX.test(normalized)
-    && !TEAMS_MACHINE_TOKEN.test(candidate)
-    && !TEAMS_UNCANONICAL_BARE_HANDLE.test(candidate);
+    && !TEAMS_MACHINE_TOKEN.test(candidate);
 }
 
 /**
@@ -266,18 +299,21 @@ export function isTeamsDisplayNameCandidate(value: string): boolean {
  *
  * Origin: Jacob Schooley, Vexa-ai/vexa#1024 (commit 6fab915e); the guard is added here.
  */
-export function teamsNameFromStream(element: HTMLElement): string {
+export function teamsNameFromStream(element: HTMLElement, ctx?: TeamsNameCandidateContext): string {
+  const name = rawTeamsNameFromStream(element);
+  return name && isTeamsDisplayNameCandidate(name, ctx) ? name : '';
+}
+
+/** The stream wrapper's `data-tid` exactly as Teams wrote it, before any guard. */
+function rawTeamsNameFromStream(element: HTMLElement): string {
   const voiceOutline = matchesSelector(element, VOICE_LEVEL_SELECTOR)
     ? element
     : element.querySelector(VOICE_LEVEL_SELECTOR) as HTMLElement | null;
   const streamEl = (voiceOutline && (voiceOutline as any).closest?.('[data-stream-type][data-tid]'))
     || (element as any).closest?.('[data-stream-type][data-tid]')
     || element.querySelector('[data-stream-type][data-tid]');
-  if (streamEl) {
-    const name = ((streamEl as HTMLElement).getAttribute('data-tid') || '').trim();
-    if (isTeamsDisplayNameCandidate(name)) return name;
-  }
-  return '';
+  if (!streamEl) return '';
+  return ((streamEl as HTMLElement).getAttribute('data-tid') || '').trim();
 }
 
 /**
@@ -286,7 +322,10 @@ export function teamsNameFromStream(element: HTMLElement): string {
  * Returns [] when the panel is absent — which is a fact worth having, not a failure to paper over:
  * it is precisely the m37 state, and the caller reports it rather than silently naming nobody.
  * Names go through `isTeamsDisplayNameCandidate` like every other path in this file, so the panel
- * cannot introduce a name the tiles would have been refused.
+ * cannot introduce a control label, a timer or a placeholder the tiles would have been refused. The
+ * one rule read differently here is the bare-lowercase handle: this surface lists PARTICIPANTS, so a
+ * row reading `leo` is a person named leo, and the resulting names then corroborate the same string
+ * on a tile.
  */
 export interface TeamsRosterPanelState {
   /** Distinct display names resolved from panel rows. */
@@ -295,7 +334,10 @@ export interface TeamsRosterPanelState {
   entries: Array<string | null>;
 }
 
-export function readTeamsRosterPanelState(root: ParentNode = document): TeamsRosterPanelState {
+export function readTeamsRosterPanelState(
+  root: ParentNode = document,
+  opts?: { selfName?: string },
+): TeamsRosterPanelState {
   const names: string[] = [];
   const entries: Array<string | null> = [];
   const seenNames = new Set<string>();
@@ -311,9 +353,14 @@ export function readTeamsRosterPanelState(root: ParentNode = document): TeamsRos
           if (!(entry instanceof HTMLElement)) continue;
           if (seenEntries.has(entry)) continue;
           seenEntries.add(entry);
+          // OUR OWN ROW IS NOT A PARTICIPANT — dropped before it can be named OR counted, and by
+          // the raw display string rather than the resolved one, so a bot name the candidate guard
+          // refuses (the generated `VexaBot-<hex>`) still leaves as self instead of as unresolved.
+          if (isSelfParticipantSurface(entry, opts?.selfName)) continue;
           // Same resolution order as a tile, minus the stream wrapper a roster row does not have:
           // stable attributes first, then the structural leaf scan (#1121) as the rot-proof floor.
-          const name = extractTeamsSpeakerName(entry);
+          // The panel is name-authoritative, so a bare-lowercase row is a person, not a label.
+          const name = extractTeamsSpeakerName(entry, { nameContext: { rosterAuthoritative: true } });
           entries.push(name || null);
           if (!name || seenNames.has(name)) continue;
           seenNames.add(name);
@@ -325,8 +372,8 @@ export function readTeamsRosterPanelState(root: ParentNode = document): TeamsRos
   return { names, entries };
 }
 
-export function readTeamsRosterPanel(root: ParentNode = document): string[] {
-  return readTeamsRosterPanelState(root).names;
+export function readTeamsRosterPanel(root: ParentNode = document, opts?: { selfName?: string }): string[] {
+  return readTeamsRosterPanelState(root, opts).names;
 }
 
 /** Resolve the display name carried by one participant tile.
@@ -337,35 +384,71 @@ export function readTeamsRosterPanel(root: ParentNode = document): string[] {
  */
 export function extractTeamsSpeakerName(
   element: HTMLElement,
-  opts?: { structuralFallback?: boolean },
+  opts?: { structuralFallback?: boolean; nameContext?: TeamsNameCandidateContext },
 ): string {
+  for (const raw of teamsRawDisplayStrings(element, opts)) {
+    // Control labels are rejected as whole normalized tokens. Substring
+    // matching would erase real names such as Michael and Micah.
+    if (isTeamsDisplayNameCandidate(raw, opts?.nameContext)) return raw;
+  }
+  return '';
+}
+
+/** Every string this surface offers as its display name, in resolution order, BEFORE any guard.
+ *
+ * Two questions read the same surfaces and must not disagree about what it says: "what name may this
+ * become" (the guard picks the first string it accepts) and "is this our own bot" (identity, which
+ * the guard has no say in). Sharing one collector is what keeps them in step — a bot name the guard
+ * refuses is still the bot's name, and a surface whose only string is that name must classify as
+ * self, not as an unnamed participant.
+ */
+function teamsRawDisplayStrings(
+  element: HTMLElement,
+  opts?: { structuralFallback?: boolean },
+): string[] {
+  const raw: string[] = [];
+  const push = (value: string | null | undefined): void => {
+    const text = (value || '').trim();
+    if (text) raw.push(text);
+  };
   // Primary: Teams' stable `data-tid`-on-`[data-stream-type]` name (survives Fluent
   // class-hash churn). The hashed-class selectors below are legacy fallbacks that rot.
-  const streamName = teamsNameFromStream(element);
-  if (streamName) return streamName;
+  push(rawTeamsNameFromStream(element));
   for (const selector of teamsNameSelectors) {
     const nameElement = element.querySelector(selector) as HTMLElement | null;
     if (!nameElement) continue;
-    let nameText = nameElement.textContent ||
+    push(nameElement.textContent ||
       (nameElement as any).innerText ||
       nameElement.getAttribute('title') ||
-      nameElement.getAttribute('aria-label');
-    if (!nameText || !nameText.trim()) continue;
-    nameText = nameText.trim();
-    // Control labels are rejected as whole normalized tokens. Substring
-    // matching would erase real names such as Michael and Micah.
-    if (isTeamsDisplayNameCandidate(nameText)) return nameText;
+      nameElement.getAttribute('aria-label'));
   }
   const ariaLabel = element.getAttribute('aria-label');
   if (ariaLabel && ariaLabel.includes('name')) {
     const m = ariaLabel.match(/name[:\s]+([^,]+)/i);
-    if (m && m[1]) {
-      const nameText = m[1].trim();
-      if (isTeamsDisplayNameCandidate(nameText)) return nameText;
-    }
+    if (m && m[1]) push(m[1]);
   }
-  if (opts?.structuralFallback === false) return '';
-  return plausibleNameFromLeaves(element);
+  if (opts?.structuralFallback === false) return raw;
+  for (const text of teamsLeafTexts(element)) push(text);
+  return raw;
+}
+
+/** Does this participant surface belong to the LOCAL bot, whatever Teams renders for it?
+ *
+ * Asked of the raw display strings rather than the resolved name, because the resolved name is
+ * gated on the candidate guard and the bot's own generated `VexaBot-<hex>` identity is precisely
+ * what that guard refuses. Resolving first would classify our own tile as an unnamed participant,
+ * hold the roster permanently one short of complete, and so disable elimination for everybody else.
+ */
+export function isSelfParticipantSurface(
+  element: HTMLElement,
+  selfName: string | undefined,
+  opts?: { structuralFallback?: boolean },
+): boolean {
+  if (!selfName) return false;
+  for (const raw of teamsRawDisplayStrings(element, opts)) {
+    if (isSelfDisplayName(raw, selfName)) return true;
+  }
+  return false;
 }
 
 /** First leaf-text fragment in `element` that can plausibly be a display name.
@@ -382,7 +465,16 @@ export function extractTeamsSpeakerName(
  *  rather than a second copy of it — two implementations of "what may become a name"
  *  would let a rejection here be re-litigated next door.
  */
-export function plausibleNameFromLeaves(element: HTMLElement): string {
+export function plausibleNameFromLeaves(element: HTMLElement, ctx?: TeamsNameCandidateContext): string {
+  for (const text of teamsLeafTexts(element)) {
+    if (isTeamsDisplayNameCandidate(text, ctx)) return text;
+  }
+  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+}
+
+/** Text-only leaves carrying at least one cased letter, in document order, unguarded. */
+function teamsLeafTexts(element: HTMLElement): string[] {
+  const out: string[] = [];
   const leaves = element.querySelectorAll('*');
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i] as HTMLElement;
@@ -393,12 +485,9 @@ export function plausibleNameFromLeaves(element: HTMLElement): string {
       : ((leaf as any).children?.length ?? 0);
     if (childCount !== 0) continue;
     const text = (leaf.textContent || '').trim();
-    if (
-      text.toLocaleLowerCase() !== text.toLocaleUpperCase()
-      && isTeamsDisplayNameCandidate(text)
-    ) return text;
+    if (text && text.toLocaleLowerCase() !== text.toLocaleUpperCase()) out.push(text);
   }
-  return '';   // name not resolvable yet — emit NO hint rather than a meaningless GUID
+  return out;
 }
 
 export interface TeamsSpeakerIdentity {
@@ -1177,10 +1266,10 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
   let lastCoverageKey = '';
   let lastPanelCount = 0;
   let nameSourcesAbsentAt = 0;
-  function emitRosterName(name: string): void {
+  function emitRosterName(name: string, nameContext?: TeamsNameCandidateContext): void {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
-    if (!isTeamsDisplayNameCandidate(trimmed)) return;          // the one guard every name path uses
+    if (!isTeamsDisplayNameCandidate(trimmed, nameContext)) return;  // the one guard every name path uses
     if (isSelfDisplayName(trimmed, opts.selfName)) return;   // never report ourselves, suffix or not
     const seenCount = (rosterSeen.get(trimmed) ?? 0) + 1;
     rosterSeen.set(trimmed, seenCount);
@@ -1196,6 +1285,16 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     scanCounter++;
     const namesThisScan = new Set<string>();
     let unresolvedParticipantSurfaces = 0;
+    // SECOND SURFACE: the roster panel, if the meeting has it open. Read FIRST and merged into the
+    // same stream — a name is a name whichever surface showed it — but counted separately, because
+    // "the tiles are gone and the panel saved us" is exactly the state worth being able to see in a
+    // fixture afterwards. It leads because it is the name-authoritative one: its names are what
+    // corroborate a bare-lowercase display name on a tile.
+    let panelState: TeamsRosterPanelState = { names: [], entries: [] };
+    try { panelState = readTeamsRosterPanelState(document, { selfName: opts.selfName }); }
+    catch { panelState = { names: [], entries: [] }; }
+    const panelNames = panelState.names;
+    const nameContext: TeamsNameCandidateContext = { rosterNames: panelNames };
     for (const selector of allSelectors) {
       document.querySelectorAll(selector).forEach(el => {
         if (el instanceof HTMLElement) {
@@ -1206,31 +1305,32 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
           // The roster walk is deliberately BEFORE the signal gate: a participant whose tile has no
           // voice outline is invisible to every other path in this file, and they are exactly the
           // person an elimination argument is for.
-          const rosterName = extractTeamsSpeakerName(surface);
-          if (rosterName && isSelfDisplayName(rosterName, opts.selfName)) { /* local bot */ }
-          else if (rosterName) namesThisScan.add(rosterName);
-          else unresolvedParticipantSurfaces++;
+          //
+          // OUR OWN TILE IS NEITHER NAMED NOR COUNTED, and self is decided on the raw display string
+          // rather than the resolved name: the bot's generated `VexaBot-<hex>` identity is refused by
+          // the candidate guard, so resolving first would file us as an unnamed participant and hold
+          // the roster one short of complete forever — which is exactly the state that disables
+          // elimination for everyone else in the room.
+          if (isSelfParticipantSurface(surface, opts.selfName)) { /* local bot */ }
+          else {
+            const rosterName = extractTeamsSpeakerName(surface, { nameContext });
+            if (rosterName) namesThisScan.add(rosterName);
+            else unresolvedParticipantSurfaces++;
+          }
           if (hasRequiredSignal(surface)) { observable++; observeParticipant(surface); }
           else emitSignalAbsent(surface);   // counted and reported, never hinted
         }
       });
     }
-    // SECOND SURFACE: the roster panel, if the meeting has it open. Read after the tiles and merged
-    // into the same stream — a name is a name whichever surface showed it — but counted separately,
-    // because "the tiles are gone and the panel saved us" is exactly the state worth being able to
-    // see in a fixture afterwards.
-    let panelState: TeamsRosterPanelState = { names: [], entries: [] };
-    try { panelState = readTeamsRosterPanelState(document); } catch { panelState = { names: [], entries: [] }; }
-    const panelNames = panelState.names;
     for (const n of panelNames) if (!isSelfDisplayName(n, opts.selfName)) namesThisScan.add(n);
     lastPanelCount = panelNames.length;
 
     // Emit once per name per scan (a name matched by two selectors is one participant).
-    for (const n of namesThisScan) emitRosterName(n);
+    for (const n of namesThisScan) emitRosterName(n, nameContext);
     // …and say how much of the roster this scan could read. Reported on CHANGE rather than every
     // heartbeat: it is a state, and an unchanged state repeated 1800 times is not information.
     const usableNames = new Set([...namesThisScan].filter(
-      (n) => isTeamsDisplayNameCandidate(n) && !isSelfDisplayName(n, opts.selfName)));
+      (n) => isTeamsDisplayNameCandidate(n, nameContext) && !isSelfDisplayName(n, opts.selfName)));
     // COMPLETENESS MUST FAIL CLOSED WITHOUT PRETENDING DOM ELEMENTS ARE PEOPLE. Teams may render the
     // same named participant on several selector surfaces, so resolved display names are deduped.
     // An unresolved surface cannot be deduped safely: each is therefore one additional lower-bound
@@ -1239,7 +1339,7 @@ export function createTeamsSpeakers(opts: TeamsSpeakersOptions): TeamsSpeakers {
     const nonSelfPanelEntries = panelState.entries.filter(
       (name) => !name || !isSelfDisplayName(name, opts.selfName));
     const distinctUsablePanelNames = new Set(nonSelfPanelEntries.filter(
-      (name): name is string => !!name && isTeamsDisplayNameCandidate(name)));
+      (name): name is string => !!name && isTeamsDisplayNameCandidate(name, nameContext)));
     const unresolvedPanelParticipants = Math.max(
       0, nonSelfPanelEntries.length - distinctUsablePanelNames.size);
     const participants = usableNames.size + unresolvedParticipantSurfaces + unresolvedPanelParticipants;

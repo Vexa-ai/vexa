@@ -895,21 +895,15 @@ export async function startCaptureBridge(
               w.__vexaMixedCapture = cap;
               // THE CLOCK STARTS WHEN CAPTURE STARTS, NOT WHEN AUDIO ARRIVES.
               //
-              // It used to be set inside meterAndForward — the PCM callback — which made the
-              // silence guard depend on the very thing it exists to detect the absence of. A picked
-              // track that delivers NOTHING never runs the callback, so captureStartedMs stayed
-              // null, mainAudioProvedSilent returned false on every rescan ("nothing captured yet —
-              // not evidence of silence"), and the capture-all fallback never armed. The guard
-              // caught silence-with-frames and was structurally blind to absence-of-frames.
+              // The silence guard must not depend on the very thing it exists to detect the absence
+              // of. Started here, elapsed time is measured against capture being ALIVE, so a picked
+              // track that delivers NOTHING still arms the capture-all fallback: a mix that carries
+              // no frames at all and a mix that carries silent frames reach the same verdict.
               //
-              // Meeting 26040 is that case in production: 3 tracks mirrored, mix built over 1, the
-              // transport reporting real speech (20 csrc transitions), 51 DOM hints — and ZERO
-              // audio frames, no STT call, no transcript row, and not one main-audio observation
-              // to say so. Fixture m26040; meeting 25689 was the same shape earlier.
-              //
-              // Starting the clock here means elapsed time is measured against capture being ALIVE,
-              // so silence and absence both reach the same verdict. Silence-with-frames is
-              // unaffected: it still sets energeticMs > 0 and still exits early.
+              // Anchoring the clock in the PCM callback instead would make absence-of-frames
+              // invisible — no callback, no start time, and every rescan reading "nothing captured
+              // yet, so not evidence of silence" while the meeting produces no transcript at all.
+              // Silence-with-frames is unaffected either way: it sets energeticMs > 0 and exits early.
               if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
                 w.__vexaMixCaptureStartedMs = Date.now();
               }

@@ -55,8 +55,28 @@ for (const placeholder of [
 ]) {
   check(`placeholder: "${placeholder}" can never become a name`, !isTeamsDisplayNameCandidate(placeholder), placeholder);
 }
-check('m26132: a bare lowercase media label cannot become Julian\'s name',
+// ── bare lowercase: refused on a tile, admitted when the roster says it is a person ──────────────
+// The refusal exists because a tile's name slot can hold a role or topic label; it must not exist so
+// hard that a participant who genuinely calls themselves `leo` is published as Speaker A.
+check('a bare lowercase label seen only on a tile cannot become a name',
   !isTeamsDisplayNameCandidate('datenanalyse'));
+check('a bare lowercase label stays refused when the roster lists OTHER people',
+  !isTeamsDisplayNameCandidate('datenanalyse', { rosterNames: ['Julian Weber', 'Dmitry Grankin'] }));
+check('bare "leo" alone is not yet a name', !isTeamsDisplayNameCandidate('leo'));
+check('bare "leo" IS a name once the roster panel lists it',
+  isTeamsDisplayNameCandidate('leo', { rosterNames: ['leo', 'Dmitry Grankin'] }));
+check('the roster panel itself may read a bare lowercase row as a person',
+  isTeamsDisplayNameCandidate('leo', { rosterAuthoritative: true }));
+check('a non-Latin bare lowercase name is corroborated the same way',
+  !isTeamsDisplayNameCandidate('марина')
+  && isTeamsDisplayNameCandidate('марина', { rosterNames: ['марина'] }));
+check('corroboration compares identities, so a qualified roster row vouches for the bare tile',
+  isTeamsDisplayNameCandidate('leo', { rosterNames: ['Leo (Guest)'] }));
+check('corroboration lifts ONLY the bare-handle rule — a control label on the roster is still not a name',
+  !isTeamsDisplayNameCandidate('mic_off', { rosterAuthoritative: true })
+  && !isTeamsDisplayNameCandidate('unknown user', { rosterAuthoritative: true })
+  && !isTeamsDisplayNameCandidate('video-stream-2', { rosterAuthoritative: true })
+  && !isTeamsDisplayNameCandidate('vexabot-8f264c', { rosterAuthoritative: true }));
 
 // ── and the humans still get through ─────────────────────────────────────────────────────────────
 for (const real of [

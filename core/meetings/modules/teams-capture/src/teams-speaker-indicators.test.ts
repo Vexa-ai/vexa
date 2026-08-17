@@ -647,6 +647,62 @@ const ofType = (observations: TeamsProducerObservation[], type: string): TeamsPr
     last?.named === 0 && last?.participants === 4, JSON.stringify(rosterCoverage));
   h.watcher.destroy();
 }
+{
+  // WHEN THE BOT NAME IS THE GENERATED ONE, THE BOT IS STILL THE BOT. `VexaBot-<hex>` is what
+  // meeting-api mints when the caller omits bot_name, and the candidate guard refuses that shape by
+  // design — so self must be decided before the guard runs. Decided after it, our own tile resolves
+  // to no name, counts as one unresolved participant, and holds the room at named < participants
+  // forever, which is exactly the condition that switches elimination off for the humans.
+  const tiles = [
+    makeTile('self', 'VexaBot-a1b2c3 (Unverified)', { outline: true }).tile,
+    makeTile('p1', 'Dmitry Grankin', { outline: true }).tile,
+    makeTile('p2', 'Priya Nair', { outline: false }).tile,
+  ];
+  const h = start(tiles, { selfName: 'VexaBot-a1b2c3' });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('generated self name: our own tile never enters the roster-name stream',
+    rosterNames.every((o) => !String(o.name).toLowerCase().startsWith('vexabot')),
+    JSON.stringify(rosterNames));
+  check('generated self name: our own tile is excluded from named AND from unresolved — 2/2 eliminates',
+    last?.named === 2 && last?.participants === 2, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  // The same bot, seen on the ROSTER PANEL rather than a tile: a self row is not a participant on
+  // either surface, and the row that cannot be resolved must not be counted as somebody unnamed.
+  const panelRows = [
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'VexaBot-a1b2c3 (Unverified)')]),
+    new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'Dmitry Grankin')]),
+  ];
+  const h = start([], { selfName: 'VexaBot-a1b2c3', panelRows });
+  await settle();
+  const rosterCoverage = ofType(h.observations, 'roster-coverage') as any[];
+  const last = rosterCoverage[rosterCoverage.length - 1];
+  check('generated self name: our own roster-panel row is neither named nor counted — 1/1',
+    last?.named === 1 && last?.participants === 1, JSON.stringify(rosterCoverage));
+  h.watcher.destroy();
+}
+{
+  // Roster corroboration end-to-end: a participant whose display name is genuinely bare lowercase
+  // enters the roster because the PANEL lists them, while a bare label present only on a tile does
+  // not. Both surfaces are read in one scan, and only one of them is name-authoritative.
+  const tiles = [
+    makeTile('p1', 'leo', { outline: true }).tile,
+    makeTile('p2', 'datenanalyse', { outline: false }).tile,
+  ];
+  const panelRows = [new FakeEl('div', { role: 'treeitem' }, [new FakeEl('span', {}, [], 'leo')])];
+  const h = start(tiles, { selfName: 'Vexa', panelRows });
+  await settle();
+  const rosterNames = ofType(h.observations, 'roster-name') as any[];
+  check('roster corroboration: a roster-listed bare lowercase name reaches the roster stream',
+    rosterNames.some((o) => o.name === 'leo'), JSON.stringify(rosterNames));
+  check('roster corroboration: a bare label seen only on a tile is still refused',
+    rosterNames.every((o) => o.name !== 'datenanalyse'), JSON.stringify(rosterNames));
+  h.watcher.destroy();
+}
 
 // ── 6. REALISTIC CADENCE — the shape every other block above was blind to ────
 // Every check above drives exactly ONE sample per DOM change. A real page does
