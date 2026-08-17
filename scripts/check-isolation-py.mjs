@@ -55,6 +55,15 @@ const ALLOWED_EDGES = {
   meeting_api: {
     admin_api: "shared SQLAlchemy models — admin_api.schema.models is the DB source-of-truth (pre-allowed; currently mirrored, not imported)",
   },
+  // A service composing a brick in its own domain — the meetings-side equivalent of the TS
+  // bricks' host→brick edge. The artifact pipeline's gate stage IS the presend-gate module:
+  // its `route_recipients` is the only place a broadcast is authorized, so re-implementing or
+  // wrapping it behind a local copy is precisely the failure the module exists to prevent.
+  // One-way, and the only sibling edge this service takes (the meeting API is reached over
+  // HTTP and the chat-door postman across a process boundary, so neither is an import).
+  vexa_artifact_pipeline: {
+    presend_gate: "host→brick: the pipeline composes the pre-send eligibility gate in-process; nothing may bypass or re-decide its verdict",
+  },
 };
 
 // ── discover packages: pyproject dir → { module, srcDir, deps } ───────────────────────────────

@@ -5,6 +5,7 @@ flowchart LR
     desktop["desktop"]
     meeting_api["meeting-api"]
     mcp["mcp"]
+    artifact_pipeline["artifact-pipeline"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
   end
@@ -46,6 +47,7 @@ flowchart LR
   meeting_api -->|"HTTP(S)"| system_webhook
   agent_api -->|"HTTPS"| runtime
   mcp -->|"HTTPS"| gateway
+  artifact_pipeline -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| mcp

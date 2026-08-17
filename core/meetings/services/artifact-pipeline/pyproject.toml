@@ -1,0 +1,20 @@
+[project]
+name = "vexa-artifact-pipeline"
+version = "0.12.0"
+description = "The artifact pipeline (dev v0): a completed meeting becomes a gated, per-participant context delta and is delivered. Six stages behind ports — trigger, gather, gate, render, deliver, record — composing the pre-send gate brick and consuming the meeting API as an ordinary client."
+requires-python = ">=3.11"
+dependencies = [
+    # Transport to the meeting API (BSD-3). The gather stage is an API consumer, not an import.
+    "httpx>=0.27,<1",
+    # Test harness: in-process, no network — httpx.MockTransport stands in for the gateway.
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The gate stage composes the presend-gate brick, which is a sibling Python package wired by
+# path (like the gateway-conformance harness) rather than published to an index.
+pythonpath = ["src", "tests", "../../modules/presend-gate/src"]
