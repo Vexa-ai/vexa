@@ -7,6 +7,7 @@ import type {
   Platform,
   RecordingData,
 } from "@/types/vexa";
+import { type RawMeeting, mapRawMeeting } from "@/lib/meeting-list";
 
 class VexaAPIError extends Error {
   constructor(
@@ -55,37 +56,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
-// Map raw API meeting to our Meeting type
-interface RawMeeting {
-  id: number;
-  user_id?: number;
-  platform: Platform;
-  native_meeting_id: string;
-  constructed_meeting_url?: string;
-  status: string;
-  start_time: string | null;
-  end_time: string | null;
-  bot_container_id: string | null;
-  data: Record<string, unknown>;
-  created_at: string;
-  updated_at?: string;
-}
-
-function mapMeeting(raw: RawMeeting): Meeting {
-  return {
-    id: raw.id.toString(),
-    platform: raw.platform,
-    platform_specific_id: raw.native_meeting_id,
-    status: raw.status as Meeting["status"],
-    start_time: raw.start_time,
-    end_time: raw.end_time,
-    bot_container_id: raw.bot_container_id,
-    data: raw.data as Meeting["data"],
-    created_at: raw.created_at,
-    updated_at: raw.updated_at,
-  };
-}
-
 export const vexaAPI = {
   // Meetings
   async getMeetings(params?: {
@@ -94,6 +64,7 @@ export const vexaAPI = {
     search?: string;
     status?: string;
     platform?: string;
+    exclude_planned?: boolean;
   }): Promise<{ meetings: Meeting[]; has_more: boolean }> {
     const query = new URLSearchParams();
     if (params?.limit) query.set("limit", String(params.limit));
@@ -101,11 +72,12 @@ export const vexaAPI = {
     if (params?.search) query.set("search", params.search);
     if (params?.status) query.set("status", params.status);
     if (params?.platform) query.set("platform", params.platform);
+    if (params?.exclude_planned) query.set("exclude_planned", "true");
     const qs = query.toString();
     const response = await fetch(withBasePath(`/api/vexa/meetings${qs ? `?${qs}` : ""}`));
     const data = await handleResponse<{ meetings: RawMeeting[]; has_more?: boolean }>(response);
     return {
-      meetings: (data.meetings || []).map(mapMeeting),
+      meetings: (data.meetings || []).map(mapRawMeeting),
       has_more: data.has_more ?? false,
     };
   },
@@ -113,7 +85,7 @@ export const vexaAPI = {
   async getMeeting(id: string): Promise<Meeting> {
     const response = await fetch(withBasePath(`/api/vexa/meetings/${id}`));
     const raw = await handleResponse<RawMeeting>(response);
-    return mapMeeting(raw);
+    return mapRawMeeting(raw);
   },
 
   // Transcripts
@@ -228,7 +200,7 @@ export const vexaAPI = {
       body: JSON.stringify(request),
     });
     const raw = await handleResponse<RawMeeting>(response);
-    return mapMeeting(raw);
+    return mapRawMeeting(raw);
   },
 
   async stopBot(platform: Platform, nativeId: string): Promise<void> {
@@ -304,7 +276,7 @@ export const vexaAPI = {
       body: JSON.stringify({ data }),
     });
     const raw = await handleResponse<RawMeeting>(response);
-    return mapMeeting(raw);
+    return mapRawMeeting(raw);
   },
 
   async deleteMeeting(platform: Platform, nativeId: string): Promise<void> {

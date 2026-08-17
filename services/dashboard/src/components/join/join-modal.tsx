@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Video, Loader2, Sparkles, Globe, Mic, Monitor, UserCheck } from "lucide-react";
+import { Video, Loader2, Sparkles, Globe, Mic, UserCheck } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -23,13 +23,13 @@ import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { LanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { getUserFriendlyError } from "@/lib/error-messages";
+import { resolveJoinError } from "@/lib/join-error";
+import type { ServiceDenialPresentation } from "@/lib/service-denial";
+import { ServiceDenialPanel } from "@/components/join/service-denial-panel";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { parseMeetingInput } from "@/lib/parse-meeting-input";
-import { DocsLink } from "@/components/docs/docs-link";
 import { useAuthStore } from "@/stores/auth-store";
-import { shouldTriggerZoomOAuth, startZoomOAuth } from "@/lib/zoom-oauth-client";
-import { withBasePath } from "@/lib/base-path";
+import { startZoomOAuth } from "@/lib/zoom-oauth-client";
 
 
 export function JoinModal() {
@@ -40,7 +40,6 @@ export function JoinModal() {
   const { config } = useRuntimeConfig();
   const user = useAuthStore((state) => state.user);
 
-  const [mode, setMode] = useState<"meeting" | "browser">("meeting");
   const [meetingInput, setMeetingInput] = useState("");
   const [platform, setPlatform] = useState<Platform>("google_meet");
   const [language, setLanguage] = useState("auto");
@@ -54,6 +53,9 @@ export function JoinModal() {
   });
   const [passcode, setPasscode] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
+  // A refused Join renders in the modal until the customer acts on it, rather
+  // than in a toast that expires — see `resolveJoinError`.
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
 
   // Persist bot name and language to localStorage
   useEffect(() => {
@@ -69,13 +71,13 @@ export function JoinModal() {
   // Reset form when modal closes (preserve bot name and languages)
   useEffect(() => {
     if (!isOpen) {
-      setMode("meeting");
       setMeetingInput("");
       setPlatform("google_meet");
       setIsSubmitting(false);
       setTranscribeEnabled(true);
       setPasscode("");
       setAuthenticated(false);
+      setDenial(null);
     }
   }, [isOpen]);
 
@@ -130,6 +132,7 @@ export function JoinModal() {
     }
 
     setIsSubmitting(true);
+    setDenial(null);
 
     // Path 3 (URL + platform): when parser identified platform, use parsed
     // meetingId. Otherwise (platformNeeded), send meeting_url + platform; backend
@@ -187,11 +190,17 @@ export function JoinModal() {
         return;
       }
 
-      if (
-        shouldTriggerZoomOAuth(error, request.platform) &&
-        request.platform === "zoom" &&
-        user?.email
-      ) {
+      const resolved = resolveJoinError(error, {
+        platform: request.platform,
+        canStartZoomOAuth: Boolean(user?.email),
+      });
+
+      if (resolved.kind === "denial") {
+        setDenial(resolved.presentation);
+        return;
+      }
+
+      if (resolved.kind === "zoom-oauth" && user?.email) {
         try {
           toast.info("Zoom authentication required", {
             description:
@@ -207,48 +216,17 @@ export function JoinModal() {
           toast.error("Failed to start Zoom authentication", {
             description: (oauthError as Error).message,
           });
+          return;
         }
       }
 
-      const { title, description } = getUserFriendlyError(error as Error);
-      toast.error(title, { description });
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [parsedInput, passcode, botName, language, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
-
-  const handleBrowserSession = useCallback(async () => {
-    setIsSubmitting(true);
-    try {
-      const body: Record<string, string> = { mode: "browser_session" };
-      try {
-        const git = JSON.parse(localStorage.getItem("vexa-browser-git") || "{}");
-        if (git.repo && git.token) {
-          body.workspaceGitRepo = git.repo;
-          body.workspaceGitToken = git.token;
-          body.workspaceGitBranch = git.branch || "main";
-        }
-      } catch {}
-      const response = await fetch(withBasePath("/api/vexa/bots"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ detail: "Failed" }));
-        throw new Error(err.detail || "Failed to create browser session");
+      if (resolved.kind === "toast") {
+        toast.error(resolved.title, { description: resolved.description });
       }
-      const meeting = await response.json();
-      toast.success("Browser session starting...");
-      closeModal();
-      setTimeout(() => router.push(`/meetings/${meeting.id}`), 2000);
-    } catch (error) {
-      const { title, description } = getUserFriendlyError(error as Error);
-      toast.error(title, { description });
     } finally {
       setIsSubmitting(false);
     }
-  }, [closeModal, router]);
+  }, [parsedInput, platform, passcode, botName, language, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && closeModal()}>
@@ -265,58 +243,15 @@ export function JoinModal() {
           </DialogDescription>
         </DialogHeader>
 
-        {/* Mode toggle */}
-        <div className="flex gap-1 p-1 bg-muted rounded-lg mt-2">
-          <button
-            type="button"
-            className={cn(
-              "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
-              mode === "meeting" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-            onClick={() => setMode("meeting")}
-          >
-            <Video className="h-3.5 w-3.5" />
-            Meeting
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
-              mode === "browser" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-            onClick={() => setMode("browser")}
-          >
-            <Monitor className="h-3.5 w-3.5" />
-            Browser
-          </button>
-        </div>
-
-        {mode === "browser" ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Remote browser with VNC, CDP, and SSH. Configure git workspace in Profile settings.
-            </p>
-            <Button
-              className="w-full h-12 text-base"
-              onClick={handleBrowserSession}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Starting...
-                </>
-              ) : (
-                <>
-                  <Monitor className="mr-2 h-5 w-5" />
-                  Start Browser Session
-                </>
-              )}
-            </Button>
-          </div>
-        ) : (
-
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Refused Join — paywall / limit / outage, with its one fixing action */}
+          {denial && (
+            <ServiceDenialPanel
+              presentation={denial}
+              onRetry={denial.retryable ? () => setDenial(null) : undefined}
+            />
+          )}
+
           {/* Meeting Input */}
           <div className="space-y-2">
             <Label htmlFor="meetingInput" className="sr-only">
@@ -580,7 +515,6 @@ export function JoinModal() {
             {/* <DocsLink href="/docs/rest/bots#create-bot" /> */}
           </div>
         </form>
-        )}
       </DialogContent>
     </Dialog>
   );

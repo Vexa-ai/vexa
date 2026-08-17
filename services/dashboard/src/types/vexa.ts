@@ -1,8 +1,10 @@
 // Vexa API Types
 
-export type Platform = "google_meet" | "teams" | "zoom" | "browser_session";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "browser_session";
 
 export type MeetingStatus =
+  | "idle"
+  | "scheduled"
   | "requested"
   | "joining"
   | "awaiting_admission"
@@ -52,7 +54,41 @@ export interface MeetingData {
   completion_reason?: string;
   // Status history
   status_transition?: StatusTransition[];
+  calendar_uid?: string;
+  calendar_connection_id?: string;
+  calendar_name?: string;
+  calendar_sources?: Array<{
+    id: string;
+    name: string;
+    uid: string;
+    auto_join: boolean;
+    bot_name?: string;
+    event?: CalendarEventSnapshot;
+  }>;
+  attendees?: Array<{
+    email?: string;
+    name?: string;
+    partstat?: string;
+  }>;
   [key: string]: unknown;
+}
+
+export interface CalendarPropertyValue {
+  value: string;
+  parameters?: Record<string, string | string[]>;
+}
+
+export interface CalendarComponentSnapshot {
+  name: string;
+  properties: Record<string, CalendarPropertyValue[]>;
+  components?: CalendarComponentSnapshot[];
+}
+
+export interface CalendarEventSnapshot {
+  resolved_start: string;
+  calendar: CalendarComponentSnapshot;
+  component: CalendarComponentSnapshot;
+  series_master?: CalendarComponentSnapshot;
 }
 
 export interface TranscriptSegment {
@@ -258,6 +294,15 @@ export const PLATFORM_CONFIG = {
     pattern: /^\d{9,11}$/,
     placeholder: "85173157171",
   },
+  jitsi: {
+    name: "Jitsi Meet",
+    color: "bg-blue-500",
+    textColor: "text-blue-600",
+    bgColor: "bg-blue-50",
+    icon: "video",
+    pattern: /^.+$/,
+    placeholder: "meeting-room",
+  },
   browser_session: {
     name: "Browser",
     color: "bg-gray-500",
@@ -270,6 +315,8 @@ export const PLATFORM_CONFIG = {
 } as const;
 
 export const MEETING_STATUS_CONFIG: Record<MeetingStatus, { label: string; color: string; bgColor: string }> = {
+  idle: { label: "Planned", color: "text-slate-600 dark:text-slate-400", bgColor: "bg-slate-100 dark:bg-slate-900/50" },
+  scheduled: { label: "Scheduled", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   requested: { label: "Requested", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   joining: { label: "Joining", color: "text-blue-600 dark:text-blue-400", bgColor: "bg-blue-100 dark:bg-blue-950/50" },
   awaiting_admission: { label: "Waiting", color: "text-amber-600 dark:text-amber-400", bgColor: "bg-amber-100 dark:bg-amber-950/50" },

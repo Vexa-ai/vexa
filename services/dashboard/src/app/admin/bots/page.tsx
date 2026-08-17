@@ -44,6 +44,8 @@ import { toast } from "sonner";
 import type { Meeting, MeetingStatus, Platform } from "@/types/vexa";
 
 const STATUS_CONFIG: Record<MeetingStatus, { label: string; color: string; icon: React.ElementType }> = {
+  idle: { label: "Planned", color: "bg-gray-100 text-gray-700", icon: Clock },
+  scheduled: { label: "Scheduled", color: "bg-blue-100 text-blue-700", icon: Clock },
   requested: { label: "Requested", color: "bg-gray-100 text-gray-700", icon: Clock },
   joining: { label: "Joining", color: "bg-yellow-100 text-yellow-700", icon: Play },
   awaiting_admission: { label: "Waiting", color: "bg-orange-100 text-orange-700", icon: Clock },
