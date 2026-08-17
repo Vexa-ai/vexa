@@ -5,8 +5,8 @@
  * behavior, normalizing wall-clock timestamps that cannot be byte-identical across two sequential
  * runs. Any future Teams adapter must wrap GmeetCompatibleBuffer instead of changing its internals.
  */
-import { SpeakerStreamManager as GoogleMeetBuffer } from '../../gmeet-pipeline/src/speaker-streams.js';
-import { GmeetCompatibleBuffer } from './gmeet-compatible-buffer.js';
+import { SpeakerStreamManager as GoogleMeetBuffer } from './speaker-streams.js';
+import { GmeetCompatibleBuffer } from '@vexa/transcribe-buffer';
 
 interface Segment { text: string; start: number; end: number }
 interface ManagerLike {

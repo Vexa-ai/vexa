@@ -214,8 +214,8 @@ async function main(): Promise<void> {
 
   // ── 6) TEAMS CSRC/GMEET ADAPTER: production selects the virtual-channel lane, forwards every
   //     identity input the capture bridge already collects, preserves one stable speaker key per
-  //     CSRC, and retracts a cleared draft. This is the exact composition seam that was previously
-  //     absent: module-only tests could pass while every live Teams call still selected Pyannote. ──
+  //     CSRC, and retracts a cleared draft. This is the composition seam module-only tests cannot
+  //     see: it proves the live path selects the virtual-channel lane, not a diarizer. ──
   {
     const sink = captureSink();
     let options: TeamsCsrcGmeetPipelineOptions | null = null;

@@ -27,10 +27,6 @@ notable line and the migration notes between majors.
 - **Calendar sync.** Paste a secret ICS address (`PUT /user/calendar`) and upcoming meetings with
   Meet/Zoom/Teams links import as planned meetings — no OAuth. See
   [Calendar sync](/how-to/calendar-sync).
-- **Microsoft Teams speaker attribution.** Teams uses CSRC transport activity to route the mixed
-  audio into per-speaker transcription windows with the same LocalAgreement buffering contract as
-  Google Meet. Transport-contested words remain explicitly marked instead of being assigned to the
-  wrong person.
 
 - **One gateway.** All public traffic enters through the gateway (`API_GATEWAY_HOST_PORT`, default
   `18056`); it carries authentication and per-route scopes and routes to the internal services.

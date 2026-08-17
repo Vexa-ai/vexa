@@ -69,9 +69,10 @@ export const TRACK_NAME_MIN_OWNER_SHARE = envNumber('VEXA_TRACK_NAME_OWNER_SHARE
 /** How far behind the newest event evidence is integrated, so late signals land on the right span. */
 export const TRACK_NAME_SETTLE_MS = envNumber('VEXA_TRACK_NAME_SETTLE_MS', 3000);
 /** A second track may carry the same human only when direct evidence is much stronger than the
- *  ordinary naming floor. This is deliberately shaped against UI-lag bleed: m30 accumulated
- *  14.35 s over 14 short episodes on the wrong human; m26112's rotated CSRC accumulated 27.91 s
- *  over 11 sustained episodes after the old CSRC retired. */
+ *  ordinary naming floor. These gates separate the two shapes that both look like a duplicate
+ *  claim: UI-lag bleed onto the wrong human accumulates as MANY SHORT episodes of roughly a second
+ *  each, while a genuine CSRC rotation accumulates as FEWER SUSTAINED ones. Total support, episode
+ *  count and mean episode length must all clear their floors; the mean is the discriminator. */
 export const TRACK_NAME_SUCCESSOR_MIN_SUPPORT_MS = envNumber('VEXA_TRACK_NAME_SUCCESSOR_MIN_SUPPORT_MS', 10_000);
 export const TRACK_NAME_SUCCESSOR_EPISODES = envNumber('VEXA_TRACK_NAME_SUCCESSOR_EPISODES', 3);
 export const TRACK_NAME_SUCCESSOR_AVG_EPISODE_MS = envNumber('VEXA_TRACK_NAME_SUCCESSOR_AVG_EPISODE_MS', 2000);
@@ -413,10 +414,10 @@ export class TrackNamer {
       return;
     }
     // A SECOND BOT IS NOT A PERSON. The check above asks "is this name OURS"; this one asks "is it
-    // one of OUR KIND". Meeting 25930 put another Vexa bot ("Vexa (Unverified)") in a room where the
-    // DOM yielded nothing, and a roster of exactly that one name read as complete — so elimination
-    // bound a human's speech to a bot. Scoped deliberately to the roster: a real person named Vexa
-    // can still be named by DIRECT evidence (recordHint/recordCaption do not consult this), so the
+    // one of OUR KIND". A room can carry a second bot of our own family (e.g. "Vexa (Unverified)");
+    // when the DOM yields nothing, a roster of exactly that one name reads as complete, and
+    // elimination would bind a human's speech to a bot. Scoped deliberately to the roster: a real
+    // person named Vexa can still be named by DIRECT evidence (recordHint/recordCaption do not consult this), so the
     // worst this can cost is an elimination we decline to draw, never a human who cannot be named.
     if (this.botFamily(trimmed)) {
       if (!this.rosterBotFamily.has(trimmed)) {
