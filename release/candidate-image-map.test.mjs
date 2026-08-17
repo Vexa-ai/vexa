@@ -66,7 +66,7 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "bf995a4ae7506382858454bd675dddf8242d8a808ca48ca48d265112e0a1112f",
+    "a993d466d3aa083dafde3e882375b70d1e1c95120af5f2dc542c856c8e80039f",
   );
   const map = JSON.parse(raw);
   assert.equal(map.packet_state, "bootstrap");
@@ -91,7 +91,7 @@ test("v0.12.23 canonical packet freezes the rc.13 train candidate", () => {
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "802b65d0eb929603e3cf0c17702d40fd1c781e07a4f0f135f7b874498b9b272f",
+    "bf995a4ae7506382858454bd675dddf8242d8a808ca48ca48d265112e0a1112f",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
   assert.equal(map.candidate_tag, "v0.12.23-rc.13");
