@@ -1,0 +1,73 @@
+{
+ "version": "v0.12.23",
+ "candidate": "v0.12.23-rc.14",
+ "generated_from": "v0.12.22...v0.12.23",
+ "witnessed_by": "Dmitry Grankin",
+ "witnessed_at": "2026-08-17",
+ "deployment": "helm \u2014 vexa-staging revision 192 (2026-08-17), the rc.14 candidate: vexaai/vexa-bot manifest sha256:fff8640952678f6efcd1977485599b266e0e9919ed17ce0d340397bd8940dca4, vexaai/v012-meeting-api manifest sha256:893b032d1a81284dcc946d2a9e0c6cb84c8df1c9c6ccfdb298d74e135ea4605b, vexaai/v012-admin-api manifest sha256:654c3320fd974bc80b67364eac4dab6f2c814fccc82f786a66d35cbdeb04eb60",
+ "witness_deployment": {
+  "url": "https://dashboard.staging.vexa.ai/meetings/26312",
+  "provisioned_by": "vexa-staging Helm revisions 189\u2192192 across the rc.11\u2192rc.14 candidates, deployed by the train session under the stage lock; rollback anchors verified at each step",
+  "prevalidated": [
+   "calendar API sweep: 13/14 legs pass against the documented surface (create/list/cap/patch/sync/dedup/edit/cancel/opt-out/legacy/encoding/delete/errors); the one FAIL (auto-join retry storm) fixed in #1200 and re-proven live",
+   "retry-storm live proof on rev 192: one dispatch per 300s backoff per occurrence, measured \u0394300.8s and \u0394301.8s across row recreations, stamps riding the API",
+   "duplicate dispatch: 10-way concurrent POST /bots race \u2192 exactly one 201 across four replications; uq_meeting_active_user_platform_native present and enforcing (created on staging 2026-08-17 after terminal-izing 4 stale blocker rows)",
+   "live bot lifecycle on the exact rc.14 digest (running pod imageID match): spawn\u2192join\u2192active\u2192real transcription (45 verbatim segments)\u2192stop, GMeet-compatible lane, zero Teams paths on non-Teams runs, zero error lines",
+   "denial vocabulary live: all six admit-path reasons produced with truthful bodies from the staged webapp ledger (insufficient_balance for the zero-fund class \u2014 the reason-truth fix verified in the running container); cross-surface balance consistency",
+   "storm-lite: sync idempotent under 20-way parallelism, concurrency ceiling exact under race, 50/50 uniform auth failures, 60-call hostile-id fuzz with zero 5xx",
+   "fixture replays: four production tapes (de/en, 50s\u201358min, 1\u20134 sources) structurally identical head-vs-polished; mixed-pipeline/teams-capture/meeting-api/gateway suites green (961+459 tests); 35-gate suite green; release-validate green on rc.14 (run 32068904993)"
+  ]
+ },
+ "values": [
+  {
+   "pr": "1151",
+   "title": "feat(calendar,teams): multi-calendar feeds and CSRC transcription (with the review polish)",
+   "visibility": "user",
+   "witnessed": true,
+   "observation": "Founder, live on staging rev 192, meeting 26312 (Teams, imported from his connected calendar 'test'): \"okay, this time all worked fine, calendar + bot + transcripts\". Server-side reconciliation at the same moment: 22 segments, speakers 'Dmitry Grankin' and 'tes (Unverified)' \u2014 real names on real words \u2014 zero contest markers in text, calendar-sourced row with auto_join honored. Earlier in the same witness: real provider feed imported correctly; timed auto-join fired (1 min late \u2014 timing spec deferred as #1208); an incident bot from a cloned replica calendar was diagnosed as the staging-hydration gap (vexa-platform#311, mitigated), not a candidate defect."
+  },
+  {
+   "pr": "1185",
+   "title": "one bot per room \u2014 adopt live rows, guard the auto-join dispatch",
+   "visibility": "user",
+   "witnessed": true,
+   "observation": "The originating defect was witnessed live by the founder (two bots, meeting mjm-dycn-qdp); post-fix, the concurrent-race probe produced exactly one 201 in every replication and the founder's witnessed meeting 26312 received exactly one bot per environment-user."
+  },
+  {
+   "pr": "1200",
+   "title": "one auto-join per backoff per occurrence + three disclosure fixes",
+   "visibility": "user",
+   "witnessed": "by-proxy",
+   "evidence": "live replay on rev 192: dispatch intervals 300.8s/301.8s vs the rc.13 7s storm; stamps and stated auto_join_error observable through the API; tombstone-404/PATCH-projection/snapshot-scope covered by the meeting-api suite (961 tests)"
+  },
+  {
+   "pr": "1187",
+   "title": "schema sync fails closed on unique-index failure",
+   "visibility": "backend",
+   "witnessed": "by-proxy",
+   "evidence": "admin-api started clean through the fail-closed path against the remediated staging DB at rev 191 and did not roll at rev 192 (no SchemaInvariantError, zero restarts); unit + docker-gated stack tests (87) green"
+  },
+  {
+   "pr": "1181",
+   "title": "terminal multi-calendar management",
+   "visibility": "user",
+   "witnessed": "by-proxy",
+   "evidence": "staging-only workload (prod keeps terminal disabled); 420-test suite green on the integrated candidate; plural-API semantics machine-swept 13/14"
+  },
+  {
+   "pr": "1177",
+   "title": "terminal meeting-id URLs",
+   "visibility": "user",
+   "witnessed": "by-proxy",
+   "evidence": "staging-only workload; 424-test suite incl. route/not-found/first-view cases; next build route table emits /meetings/[meetingId]"
+  },
+  {
+   "pr": "1178",
+   "title": "terminal paywall / transparent join denials",
+   "visibility": "user",
+   "witnessed": "by-proxy",
+   "evidence": "staging-only workload; founder dev-witnessed the seven denial states on the dashboard rig; terminal suite 459 tests incl. the vocabulary pin; all six reasons produced live against the staged authority"
+  }
+ ],
+ "signed_off_provenance": "Founder's witness statement given directly in the operating chat session of 2026-08-17 (\"okay, this time all worked fine, calendar + bot + transcripts\"), reconciled against server-side evidence by the train session; deferred findings recorded as Vexa-ai/vexa#1208 (auto-join timing spec), #1184 (dashboard per-meeting toggle), vexa-platform#298 (sync-refresh), #311 (replica scrub gap, mitigated)."
+}
