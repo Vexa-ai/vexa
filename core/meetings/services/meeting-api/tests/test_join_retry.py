@@ -13,11 +13,14 @@ import pytest
 
 from meeting_api.lifecycle import (
     CompletionReason,
+    JoinFailureReason,
     JoinRetryController,
     RetryClass,
     RetryPolicy,
     classify_retry,
+    evidence_reason,
     is_transient,
+    retry_decision,
 )
 from meeting_api.scheduling import FakeClock, Scheduler
 
@@ -54,7 +57,7 @@ def test_unknown_reason_is_permanent_failsafe():
 
 # ── harness ─────────────────────────────────────────────────────────────────────────────────────
 
-def _build(max_attempts=3, backoff=(30.0, 120.0, 300.0)):
+def _build(max_attempts=3, backoff=(30.0, 120.0, 300.0), retry_admission_timeout=False):
     """A controller wired to a FakeClock-gated Scheduler with a capturing dispatch.
 
     The dispatch records every fired re-spawn request and mints a NEW session_uid per attempt
@@ -81,7 +84,10 @@ def _build(max_attempts=3, backoff=(30.0, 120.0, 300.0)):
 
     controller = JoinRetryController(
         scheduler, respawn_request,
-        policy=RetryPolicy(max_attempts=max_attempts, backoff=list(backoff)),
+        policy=RetryPolicy(
+            max_attempts=max_attempts, backoff=list(backoff),
+            retry_admission_timeout=retry_admission_timeout,
+        ),
     )
     return controller, scheduler, clock, fired
 
@@ -129,7 +135,7 @@ def test_transient_retries_with_backoff_until_cap():
 def test_transient_then_success_stops_retrying():
     """If a retry succeeds, no further retry is scheduled (the caller stops on success)."""
     controller, scheduler, clock, fired = _build(max_attempts=3)
-    out = controller.on_join_failure(MEETING_ID, CompletionReason.AWAITING_ADMISSION_TIMEOUT, attempt=0)
+    out = controller.on_join_failure(MEETING_ID, CompletionReason.JOIN_FAILURE, attempt=0)
     assert out.action == "scheduled_retry"
     clock.advance(30)
     scheduler.tick()  # retry #1 fires and (in this scenario) succeeds
@@ -158,6 +164,100 @@ def test_user_stop_is_permanent():
     assert out.action == "permanent"
     clock.advance(10_000)
     assert scheduler.tick() == 0
+
+
+# ── #1190: the decision authority — evidence guard + the admission-timeout arm ──────────────────
+
+
+def _evidence(reason: JoinFailureReason, **extra) -> dict:
+    return {"reason": reason.value, "attribution": "system_fault", "source": "bot", **extra}
+
+
+def test_redirect_shaped_join_failure_is_never_retried():
+    """THE REDIRECT TRAP (#1190). All 56 six-week `teams_auth_redirect` failures land as a sealed
+    `join_failure` — TRANSIENT by the taxonomy — and are a hard tenant policy in fact. #1075's typed
+    evidence classifies them `navigation_failure`; the decision consults it and refuses."""
+    ev = _evidence(JoinFailureReason.NAVIGATION_FAILURE, detail="teams_auth_redirect")
+    # the sealed label alone still reads transient — this is exactly why the guard exists
+    assert is_transient(CompletionReason.JOIN_FAILURE)
+    assert retry_decision(CompletionReason.JOIN_FAILURE, evidence=ev) is RetryClass.PERMANENT
+
+    controller, scheduler, clock, fired = _build()
+    out = controller.on_join_failure(
+        MEETING_ID, CompletionReason.JOIN_FAILURE, attempt=0, evidence=ev
+    )
+    assert out.action == "permanent"
+    assert out.job_id is None
+    clock.advance(10_000)
+    assert scheduler.tick() == 0
+    assert fired == []
+
+
+@pytest.mark.parametrize("reason", [
+    JoinFailureReason.NAVIGATION_FAILURE,
+    JoinFailureReason.PLATFORM_REJECTION,
+    JoinFailureReason.AUTH_SESSION_MISSING,
+    JoinFailureReason.STOPPED_BEFORE_ADMISSION,
+])
+def test_permanent_evidence_reasons_override_a_transient_seal(reason):
+    assert retry_decision(
+        CompletionReason.JOIN_FAILURE, evidence=_evidence(reason)
+    ) is RetryClass.PERMANENT
+
+
+@pytest.mark.parametrize("reason", [
+    JoinFailureReason.NEVER_REACHED_LOBBY,   # selector rot — a fresh session can still win
+    JoinFailureReason.UNKNOWN,               # the honest "we don't know" population
+])
+def test_recoverable_evidence_reasons_still_retry(reason):
+    assert retry_decision(
+        CompletionReason.JOIN_FAILURE, evidence=_evidence(reason)
+    ) is RetryClass.TRANSIENT
+
+
+def test_unusable_evidence_falls_back_to_the_sealed_taxonomy():
+    """Evidence is an OVERRIDE, never a precondition: an absent / foreign / newer-vocabulary block
+    leaves the decision exactly where it was before #1190."""
+    for junk in (None, {}, {"reason": "a_reason_from_a_newer_bot"}, "nonsense", 7):
+        assert evidence_reason(junk) in (None, JoinFailureReason.UNKNOWN)
+        assert retry_decision(CompletionReason.JOIN_FAILURE, evidence=junk) is RetryClass.TRANSIENT
+        assert retry_decision(CompletionReason.EVICTED, evidence=junk) is RetryClass.PERMANENT
+
+
+def test_admission_timeout_is_not_retried_by_default():
+    """Founder ruling 2026-08-17: the bot already stood at the door for the whole lobby budget."""
+    controller, scheduler, clock, fired = _build()
+    out = controller.on_join_failure(
+        MEETING_ID, CompletionReason.AWAITING_ADMISSION_TIMEOUT, attempt=0
+    )
+    assert out.action == "permanent"
+    clock.advance(10_000)
+    assert scheduler.tick() == 0
+    assert fired == []
+
+
+def test_admission_timeout_named_only_by_the_evidence_is_also_not_retried():
+    """The ~13min `join_failure` whose evidence reads `admission_timeout` is the SAME event under a
+    different label — the arm has to close on both axes or the ruling leaks through the seal."""
+    controller, scheduler, clock, fired = _build()
+    out = controller.on_join_failure(
+        MEETING_ID, CompletionReason.JOIN_FAILURE, attempt=0,
+        evidence=_evidence(JoinFailureReason.ADMISSION_TIMEOUT),
+    )
+    assert out.action == "permanent"
+    assert scheduler.list(status="pending") == []
+
+
+def test_admission_timeout_retries_when_the_config_arm_is_on():
+    controller, scheduler, clock, fired = _build(retry_admission_timeout=True)
+    out = controller.on_join_failure(
+        MEETING_ID, CompletionReason.AWAITING_ADMISSION_TIMEOUT, attempt=0
+    )
+    assert out.action == "scheduled_retry"
+    assert out.next_at == clock.now() + 30.0
+    clock.advance(30)
+    assert scheduler.tick() == 1
+    assert len(fired) == 1
 
 
 def test_each_attempt_is_a_distinct_idempotent_job():

@@ -21,6 +21,13 @@ is wrapped in a per-loop Postgres advisory lock (``sweeps.single_flight``): the 
 interval, not once per replica. ``segment-consumer`` is intentionally left unguarded (Redis competing
 consumer). The former ``scheduler-tick`` loop was dead code (``app.state.scheduler`` was never wired —
 the ``Scheduler`` in ``scheduling/`` is an eval-only engine) and has been removed.
+
+  * **join-retry** (#1190) — the ``Scheduler`` is no longer eval-only: this entrypoint builds ONE,
+    owned by the ``JoinRetryController``, and drains it on a tick. A pre-active TRANSIENT join
+    failure schedules a bounded, backed-off ``POST /bots`` re-spawn (fresh ``meeting_session``, same
+    meeting row). Also unguarded, and for a different reason than segment-consumer: the job store is
+    in-process, so a cross-replica lock would suppress the tick of the replica actually holding the
+    job. Env-gated by ``JOIN_RETRY_ENABLED``.
 """
 from __future__ import annotations
 
@@ -182,6 +189,15 @@ def build_production_app():
         from .calendar_sync import read_stamp
         return await read_stamp(redis_client, user_id)
 
+    # JOIN-RETRY (#1190): the P3d controller, finally instantiated. Its scheduler fires the re-spawn
+    # through `_join_retry_dispatch` below; its trigger is the `join_retry` port `create_app` calls
+    # on every terminal `failed` advance. Built here (not in create_app) because it needs the same
+    # real repo/runtime the spawn path uses — and the tick loop that drains it is attached with the
+    # other background loops.
+    join_retry_coordinator, join_retry_scheduler = _build_join_retry(
+        meeting_repo, runtime_client, service_authority
+    )
+
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
@@ -200,6 +216,7 @@ def build_production_app():
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
+        join_retry=join_retry_coordinator.on_terminal_failed,
     )
 
     _attach_background_loops(
@@ -208,8 +225,112 @@ def build_production_app():
         system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
         storage=storage,
+        join_retry_scheduler=join_retry_scheduler if join_retry_coordinator.enabled else None,
     )
     return app
+
+
+# ── join-retry composition (#1190) ───────────────────────────────────────────────────────────────
+
+
+def join_retry_policy() -> "object":
+    """The env-resolved :class:`RetryPolicy`. Bounded attempts + backoff, and the founder-ruled
+    admission-timeout arm (``JOIN_RETRY_ADMISSION_TIMEOUT``, default OFF: the bot already stood at
+    the door for the whole lobby budget, so re-knocking only doubles the quota burn)."""
+    from .bot_spawn.env_flags import env_flag
+    from .lifecycle import RetryPolicy
+
+    default = RetryPolicy()
+    try:
+        max_attempts = max(1, int(os.getenv("JOIN_RETRY_MAX_ATTEMPTS") or default.max_attempts))
+    except ValueError:
+        max_attempts = default.max_attempts
+    raw_backoff = os.getenv("JOIN_RETRY_BACKOFF_S") or ""
+    backoff = []
+    for part in raw_backoff.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            backoff.append(float(part))
+        except ValueError:
+            backoff = []
+            break
+    return RetryPolicy(
+        max_attempts=max_attempts,
+        backoff=backoff or list(default.backoff),
+        retry_admission_timeout=env_flag("JOIN_RETRY_ADMISSION_TIMEOUT", False),
+    )
+
+
+def _build_join_retry(meeting_repo, runtime_client, service_authority):
+    """``(JoinRetryCoordinator, Scheduler)`` for this process.
+
+    The scheduler's dispatch is called SYNCHRONOUSLY from inside ``tick()``, while the re-spawn is an
+    ``async`` ``request_bot`` — so the dispatch hands the coroutine to the running event loop and
+    returns immediately. The call is made IN PROCESS rather than as an HTTP self-POST to the job's
+    own ``/bots`` URL, for the same reason the reconcile sweep drives the lifecycle callback in
+    process (``app._apply_lifecycle_event``): the loopback hop is fragile and buys nothing.
+
+    Bounding, therefore, is owned entirely by the controller (attempt cap + backoff + the
+    ``join_retry:{meeting_id}:{attempt}`` idempotency key), not by the scheduler's own job retry —
+    a dispatch that merely enqueues can never look "failed" to the scheduler.
+    """
+    from .bot_spawn.env_flags import env_flag
+    from .lifecycle import JoinRetryController, JoinRetryCoordinator
+    from .scheduling import Scheduler
+
+    enabled = env_flag("JOIN_RETRY_ENABLED", True)
+    meeting_api_url = os.getenv("MEETING_API_URL", "http://meeting-api:8080")
+
+    async def _respawn(body: dict) -> None:
+        from .bot_spawn.service import request_bot
+
+        try:
+            await request_bot(
+                meeting_repo,
+                runtime_client,
+                authority=service_authority,
+                user_id=body["user_id"],
+                platform=body["platform"],
+                native_meeting_id=body["native_meeting_id"],
+                meeting_url=body.get("meeting_url"),
+                # The whole point: reuse the terminal row (transcripts/recordings stay keyed to it),
+                # mint a FRESH meeting_session for this attempt.
+                continue_meeting=True,
+                token_secret=os.getenv("ADMIN_TOKEN") or None,
+                redis_url=os.getenv("REDIS_URL"),
+            )
+            log.info(
+                "join-retry re-spawned meeting=%s attempt=%s",
+                body.get("meeting_id"), body.get("attempt"),
+            )
+        except Exception:
+            # A failed re-spawn is the END of this meeting's retry chain: the attempt was consumed
+            # (the counter is already persisted) and no new terminal will arrive to drive the next
+            # one. Loud, and bounded — never a re-arm loop.
+            log.exception(
+                "join-retry re-spawn failed meeting=%s attempt=%s",
+                body.get("meeting_id"), body.get("attempt"),
+            )
+
+    def _dispatch(request: dict) -> dict:
+        body = request.get("body") or {}
+        asyncio.get_running_loop().create_task(_respawn(body))
+        return {"status": "dispatched", "attempt": body.get("attempt")}
+
+    scheduler = Scheduler(dispatch=_dispatch)
+    controller = JoinRetryController(scheduler, policy=join_retry_policy())
+    coordinator = JoinRetryCoordinator(
+        controller, meeting_repo, meeting_api_url=meeting_api_url, enabled=enabled,
+    )
+    log.info(
+        "join-retry %s (max_attempts=%s backoff=%s admission_timeout=%s)",
+        "enabled" if enabled else "DISABLED (JOIN_RETRY_ENABLED)",
+        controller.policy.max_attempts, controller.policy.backoff,
+        controller.policy.retry_admission_timeout,
+    )
+    return coordinator, scheduler
 
 
 def _minio_endpoint_url() -> str:
@@ -224,6 +345,7 @@ def _minio_endpoint_url() -> str:
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
     service_authority=None, system_webhook_sink=None, session_factory=None, storage=None,
+    join_retry_scheduler=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -638,6 +760,28 @@ def _attach_background_loops(
                 log.exception("signal tape janitor tick failed")
             await asyncio.sleep(signal_janitor_interval)
 
+    # JOIN-RETRY tick (#1190). The `scheduler-tick` loop this file removed was dead because
+    # `app.state.scheduler` was never wired; this one has an owner. DELIBERATELY NOT single-flighted:
+    # the Scheduler's job store is in-process, so each replica may only drain jobs IT scheduled — an
+    # advisory lock would let one replica's tick suppress the replica actually holding the job. The
+    # cross-replica bound is the idempotency key plus `create_meeting_guarded`'s per-user dedup.
+    join_retry_interval = float(os.getenv("JOIN_RETRY_TICK_INTERVAL_S", "5"))
+
+    async def _join_retry_loop() -> None:
+        if join_retry_scheduler is None:
+            return  # disabled (JOIN_RETRY_ENABLED=false) — no loop, no heartbeat
+        while True:
+            try:
+                fired = join_retry_scheduler.tick()
+                if fired:
+                    log.info("join-retry fired %s re-spawn job(s)", fired)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("join-retry tick failed")
+            ticks["join-retry"] = _time.monotonic()
+            await asyncio.sleep(join_retry_interval)
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -652,6 +796,7 @@ def _attach_background_loops(
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
+            asyncio.create_task(_join_retry_loop(), name="join-retry"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:

@@ -24,6 +24,10 @@ rejects illegal transitions.
   ``failed`` pre-active meeting carries in ``data.join_evidence``: WHAT happened and WHO it belongs
   to. ``classify_join_failure`` / ``attribute_join_failure`` derive them; ``build_join_evidence``
   assembles the persisted block.
+* ``JoinRetryController`` / ``retry_decision`` (P3d, WIRED in #1190) — bounded re-spawn on a
+  transient join failure, with the ``teams_auth_redirect`` trap closed by consulting the join
+  evidence at decision time. ``JoinRetryCoordinator`` is the composition-level trigger the
+  lifecycle callback calls on every pre-active ``failed`` terminal.
 """
 from .join_evidence import (
     JoinFailureAttribution,
@@ -45,13 +49,22 @@ from .machine import (
     TransitionSource,
     can_transition,
 )
+from .join_retry import (
+    JOIN_RETRY_DATA_KEY,
+    PRE_ACTIVE_FAILURE_STAGES,
+    JoinRetryCoordinator,
+    build_respawn_request,
+)
 from .retry import (
+    PERMANENT_EVIDENCE_REASONS,
     JoinRetryController,
     RetryClass,
     RetryOutcome,
     RetryPolicy,
     classify_retry,
+    evidence_reason,
     is_transient,
+    retry_decision,
 )
 from .stop import (
     LeaveCommandPublisher,
@@ -80,7 +93,14 @@ __all__ = [
     "build_join_evidence",
     "classify_join_failure",
     "LeaveCommandPublisher",
+    "JOIN_RETRY_DATA_KEY",
+    "PERMANENT_EVIDENCE_REASONS",
+    "PRE_ACTIVE_FAILURE_STAGES",
     "JoinRetryController",
+    "JoinRetryCoordinator",
+    "build_respawn_request",
+    "evidence_reason",
+    "retry_decision",
     "RetryClass",
     "RetryOutcome",
     "RetryPolicy",
