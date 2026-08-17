@@ -21,7 +21,7 @@ import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
 import { presentError } from "./apiClient";
 import { refreshMeetings } from "./liveMeetings";
-import { getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
+import { listCalendars, createCalendar, syncCalendar, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";
 
 /** The success line after a connect: lead with what the sync actually FOUND. */
@@ -48,19 +48,26 @@ const fieldStyle: CSSProperties = {
   padding: "7px 9px", color: "var(--t1)", fontSize: 12, outline: "none",
 };
 
-/** Loading tri-state so neither skin flashes: null = unknown yet. */
+/** Loading tri-state so neither skin flashes: null = unknown yet. "Connected" is now "this user
+ *  has at least one calendar CONNECTION" — the first-run card is about having none at all; the
+ *  second, third… calendar is added from Settings → Calendar. */
 function useCalendarConnected(): [boolean | null, () => void] {
   const [connected, setConnected] = useState<boolean | null>(null);
   const probe = () => {
-    getCalendarConfig().then((c) => setConnected(!!c.ics_url_set)).catch(() => setConnected(null));
+    listCalendars().then((l) => setConnected(l.length > 0)).catch(() => setConnected(null));
   };
   useEffect(probe, []);
   return [connected, probe];
 }
 
-/** The frame-5 connect modal: numbered secret-address walkthrough + paste + instant verdict. */
+/** The frame-5 connect modal: numbered secret-address walkthrough + paste + instant verdict.
+ *  This is FIRST-connect only, so it creates connection #1 with a sensible default name; renaming
+ *  it, adding more, and per-calendar policy all live in Settings → Calendar. */
+const DEFAULT_CALENDAR_NAME = "My calendar";
+
 function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; onConnected: () => void }) {
   const [url, setUrl] = useState("");
+  const [name, setName] = useState(DEFAULT_CALENDAR_NAME);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ ok: boolean; text: string } | null>(null);
@@ -70,10 +77,12 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
     if (!u || busy) return;
     setBusy(true); setErr(null); setDone(null);
     try {
-      await setCalendarConfig({ ics_url: u });
-      // paste → an ANSWER, not a silent wait (same rule as the sidebar connect)
+      const created = await createCalendar({
+        name: name.trim() || DEFAULT_CALENDAR_NAME, ics_url: u, auto_join: true,
+      });
+      // paste → an ANSWER, not a silent wait (the backend does not sync on create)
       let stamp: CalendarSyncStamp = {};
-      try { stamp = await syncCalendarNow(); } catch (e) {
+      try { stamp = await syncCalendar(created.id); } catch (e) {
         stamp = { last_error: presentError(e).detail };  // data stays raw (telemetry) — UI renders the presented stamp
       }
       refreshMeetings();
@@ -110,7 +119,11 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
           <div style={{ ...li, borderBottom: "none", color: "var(--t3)" }}><span style={num}>4</span><span>Don&rsquo;t see the secret field? Your Google Workspace admin has it locked — ask them to enable &ldquo;Secret address&rdquo; sharing, or use a personal calendar.</span></div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
+            aria-label="Calendar name" placeholder="Calendar name"
+            style={{ ...fieldStyle, flex: "none", width: 130 }} />
           <input value={url} onChange={(e) => setUrl(e.target.value)} disabled={busy}
+            type="password" autoComplete="off" aria-label="Secret ICS address"
             onKeyDown={(e) => { if (e.key === "Enter") void connect(); }}
             placeholder="https://calendar.google.com/…/basic.ics (secret address)" style={fieldStyle} />
           <button onClick={() => void connect()} disabled={busy || !url.trim()}
@@ -125,7 +138,7 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 11, color: "var(--t3)" }}>Synced every few minutes · manage or disconnect in Settings → Calendar</span>
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>Synced every few minutes · add more calendars, rename or disconnect in Settings → Calendar</span>
           {done?.ok && <button onClick={onClose} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>Done</button>}
         </div>
       </div>
@@ -246,7 +259,7 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
       </div>
       {connected === true && (
         <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--t3)" }}>
-          ✓ Calendar connected — scheduled meetings appear here as they sync. Manage it in Settings → Calendar.
+          ✓ Calendar connected — scheduled meetings appear here as they sync. Add more calendars in Settings → Calendar.
         </div>
       )}
       {modal && <ConnectCalendarModal onClose={() => setModal(false)} onConnected={reprobe} />}
