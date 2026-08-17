@@ -15,7 +15,7 @@ import {
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
 import type { Invocation } from './config.js';
-import type { JoinDriver, JoinOutcome, JoinResult } from './ports.js';
+import type { JoinDriver, JoinOutcome, JoinResult, JoinSignals } from './ports.js';
 
 /**
  * Map @vexa/join's typed AdmissionError `outcome` → a JoinOutcome (G1).
@@ -56,10 +56,63 @@ function joinPlatform(p: string): JoinPlatform {
   return (p === 'teams' || p === 'zoom' || p === 'jitsi') ? p : 'google_meet';
 }
 
-export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver {
+/**
+ * The join attempt's stopwatch (#1059, #1058).
+ *
+ * Production could see THAT a bot died on its way in and, from the row alone, nothing else — so a
+ * Teams refusal at ~20s and a Meet lobby expiry at ~13min were one undifferentiated label. The
+ * discriminator was never exotic: it is the clock. This starts when the join does, marks the moment
+ * the waiting room first appears, and reports the three intervals a classifier needs.
+ *
+ * Wall-clock (`Date.now`) by design, injectable for tests. A container-lifetime measurement does not
+ * need a monotonic source, and the interval is compared against a budget that is itself wall-clock.
+ */
+export function createJoinTimer(now: () => number = Date.now) {
+  const startedAt = now();
+  let lobbyAt: number | undefined;
+  return {
+    /** Mark the FIRST lobby observation. Idempotent — the platform may report it repeatedly. */
+    markLobby(): void {
+      if (lobbyAt === undefined) lobbyAt = now();
+    },
+    /** The signals as of this instant, merged with whatever the caller already knows. */
+    signals(extra: JoinSignals = {}): JoinSignals {
+      const at = now();
+      const out: JoinSignals = {
+        totalMs: at - startedAt,
+        reachedLobby: lobbyAt !== undefined,
+        ...extra,
+      };
+      if (lobbyAt !== undefined) {
+        out.timeToLobbyMs = lobbyAt - startedAt;
+        out.timeInLobbyMs = at - lobbyAt;
+      }
+      return out;
+    },
+  };
+}
+
+export function createBrowserJoinDriver(
+  page: Page, inv: Invocation, now: () => number = Date.now,
+): JoinDriver {
   const platform = joinPlatform(inv.platform);
+  // The deadline the CONTROL PLANE issued for this run. A lobby wait is only an "expiry" relative
+  // to the budget we ourselves handed the bot (#862) — without it, the classifier can say the bot
+  // waited 13 minutes but not whether that was the whole allowance or a third of it.
+  const lobbyBudgetMs = inv.automaticLeave?.waitingRoomTimeout;
+  // The signals as of the last join attempt's exit. This is the ONLY channel for a
+  // non-`AdmissionError` throw (a browser crash, a navigation error): that stack unwinds past every
+  // return path, so the measurements have to be parked somewhere the orchestrator's catch can still
+  // reach them. Closure state, not a field — the port stays a plain interface.
+  let lastSignals: JoinSignals | undefined;
   return {
     async join(report): Promise<JoinResult> {
+      const timer = createJoinTimer(now);
+      const signals = (extra: JoinSignals = {}): JoinSignals => {
+        const s = timer.signals({ ...(lobbyBudgetMs ? { lobbyBudgetMs } : {}), ...extra });
+        lastSignals = s;
+        return s;
+      };
       let r;
       try {
         r = await joinMeeting(page, {
@@ -69,7 +122,17 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
           passcode: inv.passcode,                      // zoom passcode screen / jitsi room password
           authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
           waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
-          hooks: { onState: (s: JoinState) => { const bs = mapState(s); if (bs) void report(bs); } },
+          hooks: {
+            onState: (s: JoinState) => {
+              // Stamp the lobby arrival BEFORE reporting: `report` is fire-and-forget and may be
+              // serialized behind an in-flight HTTP callback, so timing it would measure our own
+              // callback latency rather than the platform's. Best-effort — a stopwatch fault must
+              // never interfere with the state report it accompanies.
+              try { if (s === 'awaiting_admission') timer.markLobby(); } catch { /* fail-open */ }
+              const bs = mapState(s);
+              if (bs) void report(bs);
+            },
+          },
         });
       } catch (e) {
         // A TYPED admission verdict (denial/lobby_timeout/join_failure) → map its outcome so the
@@ -78,14 +141,24 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
         // ("auth_required: …", "host did not start …") the terminal lifecycle row would otherwise
         // lose, leaving meeting-api to synthesize "reason: None". A genuinely unexpected throw
         // (browser crash, navigation error) is NOT an AdmissionError → re-raise so the orchestrator
-        // classifies it as a transient join_failure (and stamps `reason: String(e)` itself).
-        if (e instanceof AdmissionError) return { outcome: admissionOutcomeToJoinOutcome(e.outcome), reason: e.message };
+        // classifies it as a transient join_failure (and stamps `reason: String(e)` itself) — it
+        // still gets the timings, because the orchestrator asks the driver for them on that path.
+        if (e instanceof AdmissionError) {
+          return {
+            outcome: admissionOutcomeToJoinOutcome(e.outcome),
+            reason: e.message,
+            signals: signals({ detail: e.message }),
+          };
+        }
+        signals({ detail: String(e) });   // park them for the orchestrator's catch, then re-raise
         throw e;
       }
       if (r.admitted) { await report('active'); return { outcome: 'admitted' }; }
       const outcome: JoinOutcome = (r.state === 'blocked' || r.state === 'needs_human_help') ? 'blocked' : 'rejected';
-      return { outcome, reason: `join ended in state '${r.state}' without admission` };
+      const detail = `join ended in state '${r.state}' without admission`;
+      return { outcome, reason: detail, signals: signals({ detail }) };
     },
+    lastSignals: () => lastSignals,
     onRemoval(cb) {
       if (platform === 'teams') return startTeamsRemovalMonitor(page, cb);
       if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb);
