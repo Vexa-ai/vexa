@@ -19,6 +19,7 @@ import {
   classifyNonMeetingUrl,
   isMicrosoftLoginUrl,
   meetingOriginHost,
+  redactUrl,
 } from "./auth-redirect";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
@@ -153,7 +154,7 @@ async function waitForTeamsPreJoinReadiness(
   const finalUrl = page.url();
   const offMeeting = classifyNonMeetingUrl(finalUrl, requestedHost);
   if (offMeeting) throw offMeeting;
-  log(`⚠️ Timed out waiting for Teams pre-join readiness after ${timeoutMs}ms (url=${finalUrl})`);
+  log(`⚠️ Timed out waiting for Teams pre-join readiness after ${timeoutMs}ms (url=${redactUrl(finalUrl)})`);
   return false;
 }
 
@@ -163,8 +164,11 @@ export async function joinMicrosoftTeams(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
-  // Step 1: Navigate to Teams meeting
-  log(`Step 1: Navigating to Teams meeting: ${meetingUrl}`);
+  // Step 1: Navigate to Teams meeting.
+  // Logged REDACTED (origin + path): a Teams short link carries the meeting passcode in its
+  // `?p=` query, and bot logs are read by humans and shipped off-box. Same rule the redirect
+  // errors already follow — the query is dropped whole rather than filtered key by key.
+  log(`Step 1: Navigating to Teams meeting: ${redactUrl(meetingUrl)}`);
   await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(500);
 
