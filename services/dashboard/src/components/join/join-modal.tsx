@@ -23,11 +23,13 @@ import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { LanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { getUserFriendlyError } from "@/lib/error-messages";
+import { resolveJoinError } from "@/lib/join-error";
+import type { ServiceDenialPresentation } from "@/lib/service-denial";
+import { ServiceDenialPanel } from "@/components/join/service-denial-panel";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { parseMeetingInput } from "@/lib/parse-meeting-input";
 import { useAuthStore } from "@/stores/auth-store";
-import { shouldTriggerZoomOAuth, startZoomOAuth } from "@/lib/zoom-oauth-client";
+import { startZoomOAuth } from "@/lib/zoom-oauth-client";
 
 
 export function JoinModal() {
@@ -51,6 +53,9 @@ export function JoinModal() {
   });
   const [passcode, setPasscode] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
+  // A refused Join renders in the modal until the customer acts on it, rather
+  // than in a toast that expires — see `resolveJoinError`.
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
 
   // Persist bot name and language to localStorage
   useEffect(() => {
@@ -72,6 +77,7 @@ export function JoinModal() {
       setTranscribeEnabled(true);
       setPasscode("");
       setAuthenticated(false);
+      setDenial(null);
     }
   }, [isOpen]);
 
@@ -126,6 +132,7 @@ export function JoinModal() {
     }
 
     setIsSubmitting(true);
+    setDenial(null);
 
     // Path 3 (URL + platform): when parser identified platform, use parsed
     // meetingId. Otherwise (platformNeeded), send meeting_url + platform; backend
@@ -183,11 +190,17 @@ export function JoinModal() {
         return;
       }
 
-      if (
-        shouldTriggerZoomOAuth(error, request.platform) &&
-        request.platform === "zoom" &&
-        user?.email
-      ) {
+      const resolved = resolveJoinError(error, {
+        platform: request.platform,
+        canStartZoomOAuth: Boolean(user?.email),
+      });
+
+      if (resolved.kind === "denial") {
+        setDenial(resolved.presentation);
+        return;
+      }
+
+      if (resolved.kind === "zoom-oauth" && user?.email) {
         try {
           toast.info("Zoom authentication required", {
             description:
@@ -203,11 +216,13 @@ export function JoinModal() {
           toast.error("Failed to start Zoom authentication", {
             description: (oauthError as Error).message,
           });
+          return;
         }
       }
 
-      const { title, description } = getUserFriendlyError(error as Error);
-      toast.error(title, { description });
+      if (resolved.kind === "toast") {
+        toast.error(resolved.title, { description: resolved.description });
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -229,6 +244,14 @@ export function JoinModal() {
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Refused Join — paywall / limit / outage, with its one fixing action */}
+          {denial && (
+            <ServiceDenialPanel
+              presentation={denial}
+              onRetry={denial.retryable ? () => setDenial(null) : undefined}
+            />
+          )}
+
           {/* Meeting Input */}
           <div className="space-y-2">
             <Label htmlFor="meetingInput" className="sr-only">
