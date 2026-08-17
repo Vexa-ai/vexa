@@ -85,40 +85,28 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
 });
 
-test("v0.12.23 canonical packet freezes the successful rc.10 validation", () => {
+test("v0.12.23 canonical packet freezes the rc.11 full candidate", () => {
   const raw = readFileSync(
     new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "76df3a63fd9b96aa2803bdfb51afbfd28da986feb72800433ca7ed72ff9ccb24",
+    "1f4d53bb56e85ca299809af06b566af2df55e4ba8986cf0962cf373052c36d9a",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
-  assert.equal(map.candidate_tag, "v0.12.23-rc.10");
-  assert.equal(map.build_source, "a7d49881eb8ff53b438537c59a8d480ec8f97593");
-  assert.equal(map.validation_source, "644ca4ce62de61b55abadb029ef7fbd7f7fd7757");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.11");
+  assert.equal(map.build_source, "dd93d8a8c8b422285ea6de79947aec41b1cc95f9");
   assert.equal(
-    map.validation_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/31950949704",
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/32017005855",
   );
-  for (const image of ["vexaai/vexa-bot", "vexaai/vexa-lite"]) {
-    assert.equal(map.images[image].candidate_tag, "v0.12.23-rc.10.packet2");
-    assert.equal(
-      map.images[image].build_source,
-      "e3b7041b8b9854eaaed56f999f319bdd228921fe",
-    );
-    assert.equal(
-      map.images[image].validation_run,
-      "https://github.com/Vexa-ai/vexa/actions/runs/31974122331",
-    );
-  }
   assert.equal(
     map.images["vexaai/vexa-bot"].digest,
-    "sha256:3a0c715c8e8568cf1fadf60ed305c9a023110fab659c73374e4a43e2221a0464",
+    "sha256:d2a6e562668ec6ba2e68450d978f50deb0c02c799e6e5f409f86c73bd4159306",
   );
   assert.equal(
     map.images["vexaai/vexa-lite"].digest,
-    "sha256:dd99844535bcedb8349bd50245ec8b123d0d7c632f5995ac698682f1c7f78b84",
+    "sha256:6381223e8c5363aef7105938955efbc286b8d8b1718d047065b6d12c1cc6025d",
   );
   assert.equal(Object.keys(map.images).length, 10);
   assert.equal(
