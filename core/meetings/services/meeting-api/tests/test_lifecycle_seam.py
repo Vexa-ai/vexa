@@ -1617,3 +1617,136 @@ def test_default_pre_active_grace_is_derived_from_the_issued_lobby_budget():
     assert LOBBY_BUDGET_MS == 600_000
     assert default_preactive_grace() == 660.0
     assert default_preactive_grace() > LOBBY_BUDGET_MS / 1000.0
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
+# ║ #1189 — a FAILED meeting self-documents: the bot's log tail survives the container            ║
+# ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+# `meetings.data.bot_logs` exists on 5,544 production rows and stops dead at 2026-07-18: the
+# pre-0.12 parent (`callbacks.py`) persisted it, and the rewritten lifecycle kept the SINK — the
+# 50 KiB oldest-first cap in `machine.py`, the LIST_OMIT class in `collector/projection.py` — while
+# nothing was left to FEED it. So every join-failure investigation since (26 Teams lobby deaths on
+# one account, 2026-08-17) opened with a container that had already been deleted.
+#
+# The carrier is the bot's own terminal callback (`log-ring.ts` → orchestrator `logTail`). These
+# tests are the CONTROL-PLANE half of that contract, driven through the SHIPPED app + repo — the
+# assertions are on the DB row `update_meeting_status` wrote, not on the in-process FSM record,
+# because "the FSM held it" is exactly what was true while the column went empty.
+
+def _kib_lines(n: int, *, kib: int = 1) -> list[str]:
+    """``n`` distinctly-labelled lines of ~``kib`` KiB each (a plausible bot log tail)."""
+    return [f"L{i:04d}:" + "x" * (kib * 1024 - 7) for i in range(n)]
+
+
+def _terminal_row(repo: InMemoryMeetingRepo, meeting_id: int) -> dict:
+    return repo._meetings[meeting_id]["data"]
+
+
+def test_failure_terminal_persists_bot_logs_to_the_meeting_row():
+    """A `failed` callback carrying a log tail lands it in the DB row's ``data.bot_logs``."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+    assert _post(client, connection_id="sess-uid", status="awaiting_admission").status_code == 200
+    tail = ["[bot] join-driver: still in the lobby (t=540s)", "[bot] join-driver: admission timed out"]
+    r = _post(
+        client, connection_id="sess-uid", status="failed", exit_code=1,
+        completion_reason="awaiting_admission_timeout",
+        reason="lobby budget exhausted", bot_logs=tail,
+    )
+    assert r.status_code == 200, r.text
+
+    data = _terminal_row(repo, m["id"])
+    assert data["bot_logs"] == tail, "the log tail never reached the meeting row"
+    assert data["bot_logs_truncated"] is False
+    # It rides ALONGSIDE the attribution it explains — the forensics are only useful together.
+    assert data["failure_stage"] == "awaiting_admission"
+    assert data["last_error"]["error_details"]
+
+
+def test_persisted_bot_logs_are_trimmed_to_the_byte_budget_oldest_first():
+    """60 KiB of tail is capped at the 50 KiB budget: the NEWEST lines survive, and the row says so."""
+    from meeting_api.lifecycle.machine import _BOT_LOGS_BYTE_BUDGET
+
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+    lines = _kib_lines(60)
+
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+    assert _post(
+        client, connection_id="sess-uid", status="failed", exit_code=1,
+        completion_reason="join_failure", reason="browser died", bot_logs=lines,
+    ).status_code == 200
+
+    kept = _terminal_row(repo, m["id"])["bot_logs"]
+    used = sum(len(line.encode("utf-8")) + 1 for line in kept)
+    assert used <= _BOT_LOGS_BYTE_BUDGET, f"{used} bytes persisted, budget {_BOT_LOGS_BYTE_BUDGET}"
+    assert kept[-1] == lines[-1], "the newest line — the one nearest the failure — was dropped"
+    assert kept[0] != lines[0], "nothing was trimmed"
+    assert _terminal_row(repo, m["id"])["bot_logs_truncated"] is True
+
+
+def test_bot_logs_are_dropped_from_the_LIST_projection_but_kept_on_detail():
+    """Heavy-forensics class, like ``last_error``: the list never renders it, the row still has it.
+
+    (78 MB of the outage account's list payload was `bot_logs`; the projection is what keeps
+    restoring the key from re-creating that.)"""
+    from meeting_api.collector.projection import LIST_OMIT_KEYS, project_list_data
+
+    assert "bot_logs" in LIST_OMIT_KEYS
+
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+    assert _post(
+        client, connection_id="sess-uid", status="failed", exit_code=1,
+        completion_reason="join_failure", bot_logs=_kib_lines(20),
+    ).status_code == 200
+
+    data = _terminal_row(repo, m["id"])
+    assert "bot_logs" in data, "detail must keep the forensics"
+    listed = project_list_data(data)
+    assert "bot_logs" not in listed, "the heavy tail rode the list row"
+    # The light attribution keys still ride the list row — the drop is surgical, not a blanket.
+    assert listed["completion_reason"] == "join_failure"
+    assert listed["failure_stage"] == "joining"
+
+
+def test_clean_completion_carries_no_bot_logs():
+    """A meeting that ended well is not forensics. The producer omits the tail on `completed`
+    (`orchestrator.ts` attaches it only on `failed`), so the row simply has no key."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+    assert _post(client, connection_id="sess-uid", status="active").status_code == 200
+    assert _post(
+        client, connection_id="sess-uid", status="completed", exit_code=0,
+        completion_reason="stopped",
+    ).status_code == 200
+
+    data = _terminal_row(repo, m["id"])
+    assert data["completion_reason"] == "stopped"
+    assert "bot_logs" not in data, f"a clean completion carried forensics: {list(data)}"
+    assert "bot_logs_truncated" not in data
+
+
+def test_bot_logs_survive_a_redelivered_terminal():
+    """The bot retries its terminal callback up to 3x. The redelivery is an idempotent 200 no-op —
+    it must not blank the forensics the first delivery persisted."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")
+    client = TestClient(create_app(meeting_repo=repo))
+    tail = ["[bot] capture bridge: page context destroyed"]
+
+    assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
+    ev = dict(connection_id="sess-uid", status="failed", exit_code=1,
+              completion_reason="join_failure", bot_logs=tail)
+    assert _post(client, **ev).status_code == 200
+    assert _post(client, **ev).status_code == 200          # the retry
+    assert _terminal_row(repo, m["id"])["bot_logs"] == tail
