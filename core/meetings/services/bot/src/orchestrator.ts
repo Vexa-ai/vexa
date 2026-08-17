@@ -57,6 +57,14 @@ export interface OrchestratorDeps {
    *  additionalProperties:true, so this is additive.
    *  Returns `undefined` when nothing degraded. MUST NOT throw. */
   degraded?: () => Record<string, unknown> | undefined;
+  /** Optional (#1189) — the bot's own recent console lines, consulted ONCE when a `failed`
+   *  terminal is built and attached as lifecycle.v1 `bot_logs`. The container that holds this
+   *  commentary is deleted minutes after it dies, so this event is the only way it survives; the
+   *  meeting-api sink trims it to 50 KiB oldest-first and omits it from list responses.
+   *  FAILURE ONLY — a clean `completed` carries no tail (a healthy meeting is not forensics, and
+   *  `bot_logs` was 78 MB of the outage account's `data` when it rode every row).
+   *  Returns `undefined`/`[]` when there is nothing to carry. MUST NOT throw. */
+  logTail?: () => string[] | undefined;
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
@@ -128,6 +136,16 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   let cur: BotStatus = 'joining';
   const eventTime = (): string => deps.now?.() ?? new Date().toISOString();
 
+  /** The console tail to attach to a FAILED terminal (#1189), or `{}` when there is none. Never
+   *  throws — a diagnostic must not be able to change how the meeting ended. */
+  const failureLogs = (): { bot_logs?: string[] } => {
+    if (!deps.logTail) return {};
+    try {
+      const t = deps.logTail();
+      return Array.isArray(t) && t.length > 0 ? { bot_logs: t } : {};
+    } catch { return {}; }
+  };
+
   const emit = async (status: BotStatus, extra: Partial<LifecycleEvent> = {}): Promise<void> => {
     if (status !== cur && !canTransition(cur, status)) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
@@ -140,12 +158,15 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (isTerminal(status) && deps.degraded) {
       try { degraded = deps.degraded(); } catch { degraded = undefined; }
     }
+    // …and if it FAILED, the last thing anyone hears has to include what the bot was SAYING at the
+    // time (#1189). Only on `failed`: a clean completion is not forensics.
     await deps.lifecycle.emit({
       ...base,
       status,
       timestamp: extra.timestamp ?? eventTime(),
       ...extra,
       ...(degraded ?? {}),
+      ...(status === 'failed' ? failureLogs() : {}),
     });
   };
 
@@ -217,6 +238,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           unreachable_channels: unreachable,
           reason: `${CONTROL_PLANE_UNREACHABLE}: control plane unreachable at boot (${unreachable.join(', ')}); refused to join`,
           exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
+          ...failureLogs(),
         }).catch(() => { /* the channel that would carry this is the one that is down */ });
         return { exitCode: CONTROL_PLANE_UNREACHABLE_EXIT, status: 'failed', completionReason: 'join_failure' };
       }

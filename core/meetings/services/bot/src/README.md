@@ -12,6 +12,7 @@ types; transports are adapters wired at the composition root.
 | `ports.ts` | the port interfaces the core depends on: `JoinDriver · Pipeline · TranscriptSink · LifecycleSink · ActsSource · RecordingSink`. Pure (no transport types). |
 | `test-doubles.ts` | shared L2 port doubles (`noopAloneness`, `noopActs`, `noopPipeline`, …) — one export site for every orchestrator construction in tests. |
 | `orchestrator.ts` | the `lifecycle.v1` state machine (`createOrchestrator`) — joining → awaiting_admission → active → (completed \| failed). Depends only on ports. |
+| `log-ring.ts` | the bot's own console, taped into a ≤50 KiB in-memory ring so a **`failed`** terminal can carry it out as `lifecycle.v1 bot_logs` (#1189). The container is deleted minutes after it dies; this is the only way its commentary survives. Failure-only — a clean completion is not forensics. |
 | `contracts.ts` | TS mirrors of the published `lifecycle.v1 · acts.v1 · transcript.v1` schemas + the executable `canTransition` machine. |
 | `join-driver.ts` | **JoinDriver** — wraps `@vexa/join` `joinMeeting`/leave/removal (guest + authenticated); maps `JoinState`→`BotStatus`. |
 | `pipeline.ts` | **Pipeline** — `google_meet`→`@vexa/gmeet-pipeline` (per-channel, glow-named) · `zoom`/`teams`→`@vexa/mixed-pipeline`; STT via `@vexa/transcribe-whisper`; lane sink → bot `TranscriptSink.publish`. Exposes `feedAudio`. |

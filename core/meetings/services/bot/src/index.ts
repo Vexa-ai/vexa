@@ -35,6 +35,7 @@ import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
+import { startBotLogRing } from './log-ring.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
@@ -164,6 +165,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
 
   // ── build the LIVE transports → the pure orchestrator ──
   const meetingId = meetingChannelId(inv);
+
+  // The bot's own commentary, kept in memory (≤50 KiB) so a FAILED terminal can carry it out
+  // (#1189). Started HERE — before the transports and the browser — because the lines that explain
+  // a failed join are emitted before anything else exists. Unconditional: unlike the botlog
+  // sidecar it needs no capture tape and no disk, and production runs with recording off, which is
+  // precisely where the forensics were missing. Released in the finally, AFTER the sidecar (LIFO).
+  const logRing = startBotLogRing();
 
   // lifecycle.v1: HTTP POST to meeting-api when a callback URL is configured; console-only for
   // self-host (no callback). The HTTP sink retries/backs off and never throws out of emit.
@@ -301,6 +309,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     recording: recording as RecordingSink | undefined,
     reachability,
     degraded: () => sttFaults.report(),
+    logTail: () => logRing.tail(),
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
@@ -325,6 +334,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // no diagnostic. The log tap is released first so the snapshot's own line lands in the file.
     await snapshot?.writeSnapshot().catch(() => { /* best-effort */ });
     botLog?.stop();
+    // Release the in-memory tap LAST of the two: both wrap the previous console method, so restore
+    // is LIFO or one taps the other's wrapper forever. The terminal event was already emitted
+    // inside run(), while the ring was still live.
+    logRing.stop();
     // O-TEL-1: ship the tape AFTER close() (the file is flushed and finalized there) and BEFORE the
     // process exits, because the container's disk dies with it. Best-effort by construction —
     // uploadSignalTapes never throws and never rejects, so nothing here can revise the exit code the
