@@ -46,7 +46,10 @@ function parseUTCTimestamp(timestamp) {
 
 // src/dedup.ts
 function normalizeText(t) {
-  return (t || "").trim().toLowerCase().replace(/[.,!?;:]+$/g, "").replace(/\s+/g, " ");
+  let s = (t || "").trim().toLowerCase();
+  let end = s.length;
+  while (end > 0 && ".,!?;:".includes(s[end - 1])) end--;
+  return s.slice(0, end).replace(/\s+/g, " ");
 }
 function deduplicateSegments(segments) {
   if (segments.length === 0) return segments;
