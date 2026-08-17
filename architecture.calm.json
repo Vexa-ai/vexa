@@ -267,6 +267,17 @@
    ]
   },
   {
+   "unique-id": "artifact-pipeline",
+   "node-type": "service",
+   "name": "artifact-pipeline",
+   "description": "the artifact pipeline (dev v0): a completed meeting becomes a gated, per-participant context delta and is delivered — trigger, gather, gate, render, deliver, record, each behind a port",
+   "metadata": [
+    {
+     "path": "core/meetings/services/artifact-pipeline"
+    }
+   ]
+  },
+  {
    "unique-id": "buffer",
    "node-type": "module",
    "name": "buffer",
@@ -1328,6 +1339,7 @@
       "desktop",
       "meeting-api",
       "mcp",
+      "artifact-pipeline",
       "buffer",
       "capture-codec",
       "gmeet-capture",
@@ -2080,6 +2092,36 @@
    },
    "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
    "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "artifact-pipeline-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "artifact-pipeline"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "the pipeline reads the meeting record as an ordinary API consumer (GET /meetings/{id} + the transcript route); it imports no meetings internals",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "artifact-pipeline-presend",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "artifact-pipeline"
+     },
+     "destination": {
+      "node": "presend-gate"
+     }
+    }
+   },
+   "description": "the gate stage composes the presend-gate brick in-process; its route_recipients is the only authority on who an artifact may reach"
   },
   {
    "unique-id": "gw-ma",

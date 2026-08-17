@@ -10,6 +10,7 @@ internals, never another domain (`gate:isolation`, `gate:graph`). Services are `
 | [desktop](desktop/) | the all-in-one host (gmeet subset) | ingest WS → `gmeet-pipeline` → real STT → gateway `/transcripts` · one process |
 | _bot_ | containerized capture + join + pipeline | _(3.3+)_ spawned by the runtime kernel |
 | _meeting-api_ | cloud control plane | _(3.4)_ `POST /bots` → runtime kernel |
+| [artifact-pipeline](artifact-pipeline/) | a completed meeting → gated, per-participant context deltas → delivery | trigger → gateway `GET /meetings/{id}` → `presend-gate` → renderer → postman → run log |
 
 The same bricks compose three ways — desktop (one process), bot (container), cloud (split
 services). That's "microservices, each internally a modular monolith."

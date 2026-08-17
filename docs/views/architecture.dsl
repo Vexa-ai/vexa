@@ -5,6 +5,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   service desktop
   service meeting-api
   service mcp
+  service artifact-pipeline
   module buffer
   module capture-codec
   module gmeet-capture
@@ -123,6 +124,8 @@ edges:
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
+  artifact-pipeline -req-> gateway  # the pipeline reads the meeting record as an ordinary API consumer (GET /meetings/{id} + the transcript route); it imports no meetings internals
+  artifact-pipeline -req-> presend-gate  # the gate stage composes the presend-gate brick in-process; its route_recipients is the only authority on who an artifact may reach
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
