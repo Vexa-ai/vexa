@@ -1,7 +1,7 @@
 # Workspace packages. Globs match dirs that have a package.json; empty dirs are ignored
 # (so this is green-on-empty and fills in as domains are populated, contract-first).
-# Open-core scope: core/ services + modules, packages/, and the terminal client. (The full
-# product's integrations/, sdks/, tools/, and dashboard clients are not part of this repo.)
+# Open-core pnpm scope: core/ services + modules, packages/, and the terminal client. The retained
+# deprecated Dashboard uses its committed npm lockfile and is intentionally outside this workspace.
 packages:
   - "core/runtime"
   - "core/gateway"

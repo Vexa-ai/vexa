@@ -1244,7 +1244,7 @@
    "unique-id": "dashboard",
    "node-type": "webclient",
    "name": "dashboard (deprecated)",
-   "description": "dashboard — DEPRECATED 0.10 web client, shipped as an off-by-default compose/helm option while still load-bearing (#813): the multi-user UI hosted production runs against the 0.12 core via the gateway's hosted-compat surface. External pinned image (vexaai/dashboard), not built from this tree; versions on its own tag, never global.imageTag. Deprecation exit: deleted when the terminal covers the authenticated-session/browser-session flows.",
+   "description": "dashboard — DEPRECATED web client, shipped as an off-by-default compose/helm option while still load-bearing (#813): the multi-user UI hosted production runs against the 0.12 core via the gateway's hosted-compat surface. Its auditable source is retained at services/dashboard and built with its own npm lockfile; deployments use the external pinned image vexaai/dashboard, versioned on its own tag rather than global.imageTag. Deprecation exit: deleted when the terminal covers the authenticated-session/browser-session flows.",
    "metadata": [
     {
      "path": "deploy/compose",
