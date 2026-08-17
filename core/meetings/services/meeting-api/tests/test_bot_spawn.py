@@ -311,7 +311,66 @@ def test_post_bots_omits_everyone_left_when_not_explicit(monkeypatch):
     )
     assert r.status_code == 201, r.text
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
-    assert inv["automaticLeave"] == {"waitingRoomTimeout": 600_000}
+    assert inv["automaticLeave"] == {"waitingRoomTimeout": 900_000}
+
+
+def test_post_bots_lobby_budget_default_is_fifteen_minutes(monkeypatch):
+    """#1208 — the deployment default the spawn ISSUES, with no caller opinion: 900s."""
+    monkeypatch.delenv("VEXA_LOBBY_BUDGET_S", raising=False)
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "lobby-default"},
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["waitingRoomTimeout"] == 900_000
+
+
+def test_post_bots_lobby_budget_honours_the_env_override(monkeypatch):
+    """``VEXA_LOBBY_BUDGET_S`` configures the issued deadline — read per request, not frozen at
+    import, so a deploy value takes effect without a code change."""
+    monkeypatch.setenv("VEXA_LOBBY_BUDGET_S", "1200")
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "lobby-env"},
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["waitingRoomTimeout"] == 1_200_000
+
+
+def test_lobby_budget_ignores_unusable_env_values(monkeypatch):
+    """A blank, unparseable or non-positive override falls back to the default rather than issuing a
+    zero-second deadline — a bot given a zero budget gives up before it has knocked."""
+    from meeting_api.bot_spawn.service import lobby_budget_ms
+
+    for bad in ("", "   ", "not-a-number", "0", "-5"):
+        monkeypatch.setenv("VEXA_LOBBY_BUDGET_S", bad)
+        assert lobby_budget_ms() == 900_000, bad
+
+
+def test_explicit_max_wait_for_admission_still_beats_the_env_default(monkeypatch):
+    """The caller's own opinion wins over the deployment default — the env only fills the gap."""
+    monkeypatch.setenv("VEXA_LOBBY_BUDGET_S", "900")
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet", "native_meeting_id": "lobby-explicit",
+            "automatic_leave": {"max_wait_for_admission": 45_000},
+        },
+    )
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["automaticLeave"]["waitingRoomTimeout"] == 45_000
 
 
 def test_post_bots_rejects_invalid_automatic_leave_timeout(monkeypatch):

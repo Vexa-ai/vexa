@@ -51,15 +51,44 @@ from .ports import (
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
-__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting", "LOBBY_BUDGET_MS"]
+__all__ = [
+    "request_bot", "construct_meeting_url", "DuplicateMeeting",
+    "LOBBY_BUDGET_MS", "DEFAULT_LOBBY_BUDGET_S", "lobby_budget_ms",
+]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
 # .waitingRoomTimeout``): how long the bot may sit in a lobby, silently polling, before it gives up
 # and reports its own ``awaiting_admission_timeout``. It is a DEADLINE WE WROTE, so every window the
 # control plane measures a not-yet-admitted bot against must outlast it — the reconcile sweep derives
-# its pre-active grace from this constant (``lifecycle.reconcile.default_preactive_grace``) rather
+# its pre-active grace from this budget (``lifecycle.reconcile.default_preactive_grace``) rather
 # than carrying a second, independently-drifting number (#862).
-LOBBY_BUDGET_MS = 600_000
+#
+# 15 minutes by default (#1208): an auto-joined bot is dispatched BEFORE the scheduled start
+# (``AUTO_JOIN_LEAD_S``), so it reaches the lobby before a human host is there to admit it — the
+# budget has to cover the human's lateness, not just the click. The prior 10-minute budget is
+# exactly the ~10.4-minute banding the admission-timeout failure class shows in prod (#267): bots
+# were dying ON the deadline we handed them, which is a budget too small, not a join defect.
+DEFAULT_LOBBY_BUDGET_S = 900
+LOBBY_BUDGET_MS = DEFAULT_LOBBY_BUDGET_S * 1000
+
+
+def lobby_budget_ms() -> int:
+    """The lobby budget (ms) this deployment issues — ``VEXA_LOBBY_BUDGET_S``, default 900.
+
+    Read at CALL time, never frozen at import, so every window derived from it (the reconcile
+    sweep's pre-active grace) sees the same value the spawn path issues even when the env is set
+    after import. Unparseable or non-positive values fall back to the default rather than issuing a
+    deadline of zero — a bot given a zero budget gives up before it has knocked."""
+    raw = os.getenv("VEXA_LOBBY_BUDGET_S")
+    if raw is None or not raw.strip():
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    if seconds <= 0:
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    return int(seconds * 1000)
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
@@ -497,7 +526,7 @@ async def request_bot(
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
-        automatic_leave=automatic_leave or {"waitingRoomTimeout": LOBBY_BUDGET_MS},
+        automatic_leave=automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()},
     )
 
     # 5. Spawn over runtime.v1.
