@@ -537,8 +537,12 @@ def _attach_background_loops(
     # is fetched from admin-api's internal edge. Fail-closed: unset ADMIN_API_URL/INTERNAL_API_SECRET
     # makes the cap unresolvable, so the sweep REFUSES to spawn (AUTO_JOIN_ALLOW_UNCAPPED=1 is the
     # explicit self-host opt-in); an UNREACHABLE identity likewise skips the tick.
+    from .bot_spawn.auto_join import DEFAULT_LEAD_S
+
     auto_join_interval = float(os.getenv("AUTO_JOIN_SWEEP_INTERVAL_S", "30"))
-    auto_join_lead = float(os.getenv("AUTO_JOIN_LEAD_S", "60"))
+    # The DEFAULT lives in one place (``auto_join.DEFAULT_LEAD_S``) so the sweep's own default and
+    # the entrypoint's env fallback can never drift apart. Deploy values may still override it.
+    auto_join_lead = float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S)))
     auto_join_grace = float(os.getenv("AUTO_JOIN_GRACE_S", "600"))
     auto_join_backoff = float(os.getenv("AUTO_JOIN_RETRY_BACKOFF_S", "300"))
     admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")

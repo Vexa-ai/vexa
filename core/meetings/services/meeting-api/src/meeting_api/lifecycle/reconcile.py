@@ -169,14 +169,15 @@ def _workload_evidence(bot_container_id: Optional[str], info: Optional[dict]) ->
 def default_preactive_grace() -> float:
     """The pre-active reap floor, DERIVED from the lobby budget the control plane itself issues.
 
-    A not-yet-admitted bot holds a deadline WE wrote (``bot_spawn.service.LOBBY_BUDGET_MS``, the
+    A not-yet-admitted bot holds a deadline WE wrote (``bot_spawn.service.lobby_budget_ms()``, the
     spawn's ``waitingRoomTimeout``); the window we then measure it against must outlast that deadline,
     or the control plane kills bots that are still inside the budget it granted them (#862). Deriving
     the floor — the budget plus a minute of headroom for the bot's own terminal callback to land —
-    keeps the two in lockstep: shorten the budget and the floor follows."""
-    from ..bot_spawn.service import LOBBY_BUDGET_MS
+    keeps the two in lockstep: raise ``VEXA_LOBBY_BUDGET_S`` and the floor follows, so a 15-minute
+    waiter is never reaped by a 10-minute watchdog (#1208)."""
+    from ..bot_spawn.service import lobby_budget_ms
 
-    return LOBBY_BUDGET_MS / 1000.0 + 60.0
+    return lobby_budget_ms() / 1000.0 + 60.0
 
 
 # ── bounded untracked escalation (the zombie-loop fix) ───────────────────────────────────────────

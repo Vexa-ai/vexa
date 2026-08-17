@@ -49,7 +49,11 @@ from .ports import MaxBotsExceeded, QuotaExceeded, SpawnFailed
 from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
-DEFAULT_LEAD_S = 60          # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
+# 120s (#1208): the bot must be STANDING IN THE LOBBY when the meeting starts, not setting out then
+# — spawn, browser boot and the join flow all happen inside the lead. Two minutes early plus the
+# 15-minute lobby budget (``bot_spawn.service.lobby_budget_ms``) is the pair that makes "the bot is
+# already there" true for a host who joins late.
+DEFAULT_LEAD_S = 120         # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
 DEFAULT_GRACE_S = 600        # AUTO_JOIN_GRACE_S — never join more than this AFTER scheduled_at
 DEFAULT_RETRY_BACKOFF_S = 300  # AUTO_JOIN_RETRY_BACKOFF_S — error-stamped rows wait this long
 

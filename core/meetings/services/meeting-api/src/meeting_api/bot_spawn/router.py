@@ -102,8 +102,10 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
     Admission keeps its deployment default. The active-phase silence timeout is omitted when the
     caller does not set it, allowing the bot module's configurable ten-minute default to apply.
     """
+    from .service import lobby_budget_ms
+
     if value is None:
-        return {"waitingRoomTimeout": 600_000}
+        return {"waitingRoomTimeout": lobby_budget_ms()}
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="automatic_leave must be an object")
 
@@ -125,7 +127,7 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
             raise HTTPException(status_code=422, detail=f"automatic_leave.{primary} must be a positive integer")
         return raw
 
-    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or 600_000
+    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or lobby_budget_ms()
     resolved = {"waitingRoomTimeout": waiting_room}
     no_one_joined = timeout("no_one_joined_timeout")
     everyone_left = timeout("max_time_left_alone", "everyone_left_timeout")

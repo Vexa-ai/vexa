@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from meeting_api.bot_spawn.auto_join import auto_join_tick, due_rows
+from meeting_api.bot_spawn.auto_join import DEFAULT_LEAD_S, auto_join_tick, due_rows
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 
 USER = 7
@@ -263,6 +263,42 @@ def test_due_rows_window_edges():
                           "native_meeting_id": NID, "data": {}}], now=NOW)
 
 
+def test_default_lead_dispatches_two_minutes_before_the_start():
+    """#1208 — the PRODUCT default: a meeting starting in 119s is due, one starting in 121s is not.
+    Two minutes of lead is what puts the bot in the lobby AT the scheduled start rather than
+    starting its browser then."""
+    def row(at):
+        return {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
+                "data": {"scheduled_at": at.isoformat()}}
+
+    assert DEFAULT_LEAD_S == 120
+    assert due_rows([row(NOW + timedelta(seconds=119))], now=NOW)
+    assert not due_rows([row(NOW + timedelta(seconds=121))], now=NOW)
+
+
+def test_entrypoint_lead_default_matches_the_sweep_default(monkeypatch):
+    """One default, two readers: the entrypoint's env fallback IS ``DEFAULT_LEAD_S``, so the sweep's
+    own default and the deployed default can never drift apart. Deploy values still override."""
+    import os
+
+    monkeypatch.delenv("AUTO_JOIN_LEAD_S", raising=False)
+    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 120.0
+    monkeypatch.setenv("AUTO_JOIN_LEAD_S", "60")
+    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 60.0
+
+
+def test_lead_and_lobby_budget_together_cover_a_late_host():
+    """The pair, checked as one claim (#1208): dispatched at start-120s and permitted to wait 900s,
+    the bot is still knocking 13 minutes AFTER the scheduled start — and the reconcile floor it is
+    measured against outlasts that whole window, so nothing reaps it mid-wait."""
+    from meeting_api.bot_spawn.service import lobby_budget_ms
+    from meeting_api.lifecycle.reconcile import default_preactive_grace
+
+    waits_until_s_after_start = lobby_budget_ms() / 1000.0 - DEFAULT_LEAD_S
+    assert waits_until_s_after_start == 780.0
+    assert default_preactive_grace() > lobby_budget_ms() / 1000.0
+
+
 # ---- duplicate-dispatch guard (live 2026-08-17: two Vexa bots in mjm-dycn-qdp) --------
 
 async def test_live_row_on_same_link_blocks_the_sweep():
@@ -284,6 +320,23 @@ async def test_live_row_on_same_link_blocks_the_sweep():
     err = repo._meetings[due]["data"]["auto_join_error"]
     assert "26237" in err and "already in this meeting" in err
     assert repo._meetings[due]["data"]["auto_join_next_retry"]  # backoff stamped, not re-fired
+
+
+async def test_a_bot_still_waiting_for_admission_blocks_a_second_dispatch():
+    """#1185's guard, checked for the status #1208 makes LONG-LIVED. A bot dispatched at start-2min
+    sits in ``awaiting_admission`` for up to 15 minutes — longer than the auto-join grace window —
+    so the sweep must treat that status as the room being OWNED, or the very fix that lets the bot
+    wait becomes a duplicate-bot generator."""
+    from meeting_api.bot_spawn.auto_join import LIVE_STATUSES
+
+    assert "awaiting_admission" in LIVE_STATUSES
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, mid=1, status="awaiting_admission", at=None)   # dispatched, still knocking
+    due = _seed(repo, mid=2, status="scheduled", at=NOW)       # a sibling row for the same occurrence
+    counters = await _tick(repo, runtime)
+    assert counters["spawned"] == 0 and counters["skipped_live"] == 1
+    assert runtime.specs == []
+    assert repo._meetings[due]["status"] == "scheduled"
 
 
 async def test_live_row_for_another_user_does_not_block():
