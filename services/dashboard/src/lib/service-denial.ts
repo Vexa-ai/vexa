@@ -215,13 +215,15 @@ export function serviceDenialPresentation(
 
 function unknownServiceDenial(reason: string): ServiceDenialPresentation {
   const label = reason.trim() || "unspecified";
-  // Fail loud where a developer will see it; never in the customer's face.
-  if (process.env.NODE_ENV !== "production") {
-    console.error(
-      `[service-denial] unmapped service-authority reason: ${label}. ` +
-        "Add it to serviceDenialPresentation before it reaches a customer.",
-    );
-  }
+  // Fail loud in the logs, PRODUCTION INCLUDED — never in the customer's face.
+  // An unmapped reason is a prod-only event by definition: it means the service
+  // authority (Vexa-ai/vexa-platform lib/billing-spend-policy.ts) shipped a
+  // reason ahead of this module's copy. A dev-only console.error is silent
+  // exactly where the drift actually happens, so the net has no signal.
+  console.error(
+    `[service-denial] unmapped service-authority reason: ${label}. ` +
+      "Add it to serviceDenialPresentation before it reaches a customer.",
+  );
   return {
     reason,
     kind: "unknown",

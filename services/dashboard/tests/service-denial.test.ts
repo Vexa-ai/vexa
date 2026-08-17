@@ -129,10 +129,15 @@ describe("unmapped reasons", () => {
     );
   });
 
-  it("stays quiet in production", () => {
+  it("fails loud IN PRODUCTION too — that is the only place drift happens", () => {
+    // An unmapped reason means the service authority shipped a reason ahead of
+    // this module's copy, which can only be observed in a production build. A
+    // dev-only console.error left the net with no signal at all.
     vi.stubEnv("NODE_ENV", "production");
     serviceDenialPresentation("brand_new_reason");
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("unmapped service-authority reason: brand_new_reason"),
+    );
   });
 });
 
