@@ -163,10 +163,10 @@ jobs:
               EXPECTED_TOP_DESCRIPTORS=10
               EXPECTED_PLATFORM_IDENTITIES=19
               ;;
-            v0.12.23-rc.13|v0.12.23)
+            v0.12.23-rc.14|v0.12.23)
               CANDIDATE_MAP=releases/v0.12.23/candidate-images.json
               EXPECTED_MAP_STABLE_TAG=v0.12.23
-              EXPECTED_MAP_SHA256=2973178e51794615434f2ee6fc1adf2b81b6968618e77bd258ecb6f2724aa50f
+              EXPECTED_MAP_SHA256=52d9c730984182645961080c718d38db0ff62b58f1a46ec8400f0caf1fa93540
               EXPECTED_TOP_DESCRIPTORS=10
               EXPECTED_PLATFORM_IDENTITIES=19
               ;;
