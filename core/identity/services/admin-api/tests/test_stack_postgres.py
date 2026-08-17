@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from admin_api.schema.models import (
-    APIToken, Base, Meeting, MeetingSession, Transcription, User,
+    APIToken, Base, Meeting, MeetingParticipant, MeetingSession, Transcription, User,
 )
 from admin_api.schema.sync import ensure_schema_sync
 
@@ -22,7 +22,8 @@ from conftest import requires_docker
 
 pytestmark = requires_docker
 
-EXPECTED_TABLES = {"users", "api_tokens", "meetings", "transcriptions", "meeting_sessions"}
+EXPECTED_TABLES = {"users", "api_tokens", "meetings", "transcriptions", "meeting_sessions",
+                   "meeting_participants"}
 DEAD_TABLES = {"recordings", "media_files"}
 
 
@@ -259,3 +260,53 @@ def test_recordings_live_in_meeting_data_jsonb(engine):
         m = s.get(Meeting, mid)
         assert m.data["recordings"][0]["status"] == "completed"
         assert m.data["recordings"][0]["media_files"][0]["type"] == "audio"
+
+
+def test_meeting_participants_relation(engine):
+    """MIGRATION-0005 — the roster layer, converged by `ensure_schema_sync` on an empty DB.
+
+    Asserts the three things a fake cannot: the partial functional UNIQUE index is actually built
+    (one identity per meeting+source), a participant with NO email is a legitimate row (a platform
+    panel gives a display name, not an address), and `ON DELETE CASCADE` takes the roster with the
+    meeting — a planned row can carry one before it ever runs.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    idx = {i["name"]: i for i in inspect(engine).get_indexes("meeting_participants")}
+    assert "uq_meeting_participant_identity" in idx, "identity backstop index missing"
+    assert idx["uq_meeting_participant_identity"]["unique"] is True
+    assert "ix_meeting_participant_email_lower" in idx, "lower(email) filter index missing"
+
+    with Session(engine) as s:
+        m = Meeting(user_id=1, platform="google_meet", platform_specific_id="abc-defg-hij",
+                    status="scheduled", data={})
+        s.add(m)
+        s.commit()
+        mid = m.id
+
+    # An invited identity, and an observed one with no email at all.
+    with Session(engine) as s:
+        s.add(MeetingParticipant(meeting_id=mid, email="ada@example.com", name="Ada Lovelace",
+                                 role="organizer", source="invite", data={"partstat": "ACCEPTED"}))
+        s.add(MeetingParticipant(meeting_id=mid, name="Observed Person", source="platform"))
+        s.commit()
+        assert s.query(MeetingParticipant).filter_by(meeting_id=mid).count() == 2
+
+    # Same email, same source → rejected. Same email, DIFFERENT source → allowed (two observations).
+    with Session(engine) as s:
+        s.add(MeetingParticipant(meeting_id=mid, email="ada@example.com", source="invite"))
+        with pytest.raises(IntegrityError):
+            s.commit()
+    with Session(engine) as s:
+        s.add(MeetingParticipant(meeting_id=mid, email="ada@example.com", source="platform"))
+        s.commit()
+
+    # Rows with no email are NOT covered by the partial index — two are two people, not a dupe.
+    with Session(engine) as s:
+        s.add(MeetingParticipant(meeting_id=mid, name="Another Person", source="platform"))
+        s.commit()
+
+    with Session(engine) as s:
+        s.delete(s.get(Meeting, mid))
+        s.commit()
+        assert s.query(MeetingParticipant).filter_by(meeting_id=mid).count() == 0

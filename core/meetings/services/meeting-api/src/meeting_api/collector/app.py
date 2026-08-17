@@ -39,6 +39,13 @@ from fastapi.responses import JSONResponse
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
+from .participants import (
+    PARTICIPANT_SOURCES,
+    ParticipantError,
+    normalize_email,
+    normalize_roster,
+    normalize_source,
+)
 from .ports import RedisBus, TranscriptStore
 
 
@@ -186,19 +193,33 @@ def build_router(
         offset: Optional[int] = Query(default=None, ge=0),
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
+        participant: Optional[str] = Query(
+            default=None,
+            description=(
+                "Email identity; return only meetings whose ROSTER carries it (case-insensitive). "
+                "Reaches both the participants relation and the calendar-sourced attendee list."
+            ),
+        ),
     ):
         user_id = _resolve_user_id(x_user_id)
+        # A `participant` that is not address-shaped filters to nothing and would answer 200 with an
+        # empty list — indistinguishable from "no meetings with this person". Refuse it instead.
+        if participant is not None and normalize_email(participant) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="'participant' must be an email address (e.g. someone@example.com)",
+            )
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         meetings, _has_more = await store.list_meetings(
             user_id, status=status, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces, list_view=True,
+            member_workspaces=member_workspaces, list_view=True, participant=participant,
         )
         log_event(
             "meetings_listed",
             audience="user",
             span="meetings.list",
             user_id=user_id,
-            fields={"count": len(meetings)},
+            fields={"count": len(meetings), "participant": participant},
         )
         return JSONResponse(content={"meetings": meetings})
 
@@ -268,7 +289,72 @@ def build_router(
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
+        # THE ROSTER LAYER, alongside the record — additive keys, so every field api.v1
+        # MeetingResponse declares is untouched. `participants_source == "none"` means no roster was
+        # ever captured (ABSENCE); any other value with an empty list means one was captured and was
+        # empty. Deliberately NOT joined to the speaker layer: segments keep their own `speaker`
+        # labels and nothing here claims which voice belongs to which identity — that resolution is
+        # an agentic job (collector/participants.py).
+        roster = await store.get_participants(user_id, meeting_id)
+        if roster is not None:
+            meeting = dict(meeting)
+            meeting["participants"] = roster["participants"]
+            meeting["participants_source"] = roster["participants_source"]
         return JSONResponse(content=meeting)
+
+    # --- PUT /meetings/{meeting_id}/participants → ATTACH the invitation roster (or a platform's
+    # observed one) to the record. This is the surface the mailroom calls: its captured shape
+    # (`{email, name?, role?, partstat?}`) maps here with no transformation, which is the point —
+    # it captures the roster today and has nowhere to put it.
+    #
+    # REPLACE semantics per `source`, so re-delivering an invitation, or a series whose attendee
+    # list changed, converges instead of accumulating. Owner-scoped, over the same X-API-Key →
+    # X-User-Id hop every other write uses; no new trust tier is introduced. Registered BEFORE the
+    # native `/meetings/{platform}/{native_meeting_id}` routes so the literal last segment wins the
+    # match (the same ordering constraint the record-keyed transcript read has). ---
+    @router.put("/meetings/{meeting_id}/participants")
+    async def attach_meeting_participants(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+        source = normalize_source(payload.get("source"))
+        if source is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'source' must be one of: {', '.join(PARTICIPANT_SOURCES)}",
+            )
+        if "participants" not in payload:
+            # An absent key must not be read as an empty roster — that would let a malformed call
+            # silently assert "this meeting had nobody in it", which is exactly the confusion this
+            # endpoint exists to remove.
+            raise HTTPException(
+                status_code=400,
+                detail="'participants' is required (send [] to record a captured-but-empty roster)",
+            )
+        try:
+            rows = normalize_roster(payload.get("participants"), source=source)
+        except ParticipantError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        result = await store.attach_participants(
+            user_id, meeting_id, source=source, participants=rows
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event(
+            "meeting_participants_attached", audience="user", span="meetings.participants.attach",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"source": source, "count": len(rows),
+                    "participants_source": result.get("participants_source")},
+        )
+        return JSONResponse(content=result)
 
     # --- POST /meetings → CREATE a PLANNED meeting (intent status, NO bot spawned). The user plans a
     # meeting ahead of time — with or without a meeting link, with or without a time. Status starts at

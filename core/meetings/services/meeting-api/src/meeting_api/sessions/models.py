@@ -62,6 +62,10 @@ class Meeting(Base):
     sessions = relationship(
         "MeetingSession", back_populates="meeting", cascade="all, delete-orphan"
     )
+    participants = relationship(
+        "MeetingParticipant", back_populates="meeting",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
 
     @property
     def native_meeting_id(self):
@@ -147,4 +151,46 @@ class MeetingSession(Base):
 
     __table_args__ = (
         UniqueConstraint("meeting_id", "session_uid", name="_meeting_session_uc"),
+    )
+
+
+class MeetingParticipant(Base):
+    """WHO WAS IN a meeting — the ROSTER layer, stored beside (never joined to) the speaker layer.
+
+    A **participant** is an email on an invitation; a **speaker** is an attributed voice in
+    ``transcriptions.speaker``. This table carries only the first, and carries NO mapping between
+    the two: resolving a speaker to a participant is an agentic job, not a system one (founder
+    ruling — see ``schema/MIGRATION-0005-meeting-participants.md``). Unattributed speech stays
+    unattributed.
+
+    ``email`` is nullable (an invitation always has one; a platform participant panel often gives
+    only a display name); ``source`` is ``invite`` / ``platform`` / ``inferred``; ``data`` keeps
+    what the source carried without a column of its own (``partstat``, raw iCalendar ``ROLE``).
+
+    Mirror of the AUTHORITATIVE admin-api schema (``admin_api.schema.models``), which owns the
+    table — kept in sync here so a ``metadata.create_all`` from this mirror builds the same shape.
+    """
+
+    __tablename__ = "meeting_participants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(
+        Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    email = Column(String(320), nullable=True)
+    name = Column(String(255), nullable=True)
+    role = Column(String(32), nullable=True)
+    source = Column(String(16), nullable=False)
+    joined_at = Column(DateTime, nullable=True)
+    left_at = Column(DateTime, nullable=True)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    meeting = relationship("Meeting", back_populates="participants")
+
+    __table_args__ = (
+        Index("ix_meeting_participant_email_lower", text("lower(email)")),
+        Index("uq_meeting_participant_identity", "meeting_id", "source", text("lower(email)"),
+              unique=True, postgresql_where=text("email IS NOT NULL")),
     )

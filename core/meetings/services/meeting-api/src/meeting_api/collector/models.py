@@ -12,6 +12,6 @@ the gate venv's test run — the in-memory fakes never touch it), so no ``greenl
 """
 from __future__ import annotations
 
-from ..sessions.models import Base, Meeting, Transcription
+from ..sessions.models import Base, Meeting, MeetingParticipant, Transcription
 
-__all__ = ["Base", "Meeting", "Transcription"]
+__all__ = ["Base", "Meeting", "MeetingParticipant", "Transcription"]

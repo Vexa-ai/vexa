@@ -420,12 +420,25 @@ class SqlAlchemyTranscriptStore:
         return await self._merge_live_segments(pg)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from sqlalchemy import cast, func, select, union_all
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            participant=None):
+        import json as _json
+
+        from sqlalchemy import cast, func, literal, or_, select, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
-        from .models import Meeting
+        from .models import Meeting, MeetingParticipant
+        from .participants import normalize_email
         from .projection import DEFAULT_LIST_LIMIT, project_list_data
+
+        # ROSTER filter — "every meeting with anyone @example.com", the query that unblocks
+        # meeting→CRM automation. It reaches BOTH stores deliberately: the `meeting_participants`
+        # relation (an attached roster) and `data['attendees']` (what a calendar feed already
+        # wrote, unchanged by this change), so rosters captured before the relation existed are
+        # not invisible to it. Both halves are index-servable — lower(email) on the relation, the
+        # whole-column `ix_meeting_data_gin` for the top-level containment probe — and the whole
+        # predicate is applied INSIDE each access branch, so the #800 union shape is preserved.
+        participant_email = normalize_email(participant) if participant else None
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -468,6 +481,16 @@ class SqlAlchemyTranscriptStore:
                     s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
+                if participant_email is not None:
+                    s = s.where(or_(
+                        select(MeetingParticipant.id).where(
+                            MeetingParticipant.meeting_id == Meeting.id,
+                            func.lower(MeetingParticipant.email) == participant_email,
+                        ).exists(),
+                        Meeting.data.op("@>")(cast(literal(_json.dumps(
+                            {"attendees": [{"email": participant_email}]}
+                        )), JSONB)),
+                    ))
                 if fetch_bound is not None:
                     # ORDER BY inside a compound member is only meaningful (and only kept by
                     # the compiler) together with LIMIT; an unbounded branch returns its full
@@ -1078,6 +1101,109 @@ class SqlAlchemyTranscriptStore:
             await db.delete(meeting)
             await db.commit()
             return True
+
+    # ── the ROSTER layer ───────────────────────────────────────────────────────────────────────
+    # Participants are stored and served BESIDE the speaker layer, never joined to it. Nothing here
+    # reads `transcriptions.speaker` or `data['speaker_events']`, and nothing writes a mapping
+    # between a voice and an identity — that resolution is an agentic job (see participants.py).
+
+    async def attach_participants(self, user_id, meeting_id, *, source, participants):
+        """OWNER-scoped roster REPLACE for one ``source``. Returns the composed read-back, or None."""
+        from sqlalchemy import delete, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting, MeetingParticipant
+        from .participants import capture_stamp, compose
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+
+            # Replace this source's rows only. A platform-observed roster and an invite roster are
+            # different observations of the same meeting and must not overwrite each other.
+            await db.execute(
+                delete(MeetingParticipant).where(
+                    MeetingParticipant.meeting_id == meeting_id,
+                    MeetingParticipant.source == source,
+                )
+            )
+            for row in participants:
+                db.add(MeetingParticipant(meeting_id=meeting_id, **row))
+
+            # The capture stamp is what makes an EMPTY roster representable: zero rows leave
+            # nothing in the relation, so the fact that we DID capture one lives on the meeting.
+            meeting.data = capture_stamp(
+                meeting.data, source=source, count=len(participants),
+                at=_iso_utc(datetime.now(timezone.utc)),
+            )
+            flag_modified(meeting, "data")
+            await db.commit()
+
+            stored = (await db.execute(
+                select(MeetingParticipant).where(MeetingParticipant.meeting_id == meeting_id)
+                .order_by(MeetingParticipant.id)
+            )).scalars().all()
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            rows, participants_source = compose(data, [_participant_dict(p) for p in stored])
+            return {
+                "meeting_id": meeting_id,
+                "participants": rows,
+                "participants_source": participants_source,
+            }
+
+    async def get_participants(self, user_id, meeting_id, member_workspaces=None):
+        """The roster under the SAME access union the transcript read uses. None → 404."""
+        from sqlalchemy import select
+
+        from .models import Meeting, MeetingParticipant
+        from .participants import compose
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(select(Meeting).where(Meeting.id == mid))).scalars().first()
+            if meeting is None:
+                return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            authorized = (
+                meeting.user_id == user_id
+                or user_id in (data.get("transcript_viewers") or [])
+                or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
+            )
+            if not authorized:
+                return None
+            stored = (await db.execute(
+                select(MeetingParticipant).where(MeetingParticipant.meeting_id == mid)
+                .order_by(MeetingParticipant.id)
+            )).scalars().all()
+
+        rows, participants_source = compose(data, [_participant_dict(p) for p in stored])
+        return {
+            "meeting_id": mid,
+            "participants": rows,
+            "participants_source": participants_source,
+        }
+
+
+def _participant_dict(row) -> dict:
+    """A ``MeetingParticipant`` ORM row → the plain dict ``participants.compose`` consumes (so the
+    pure composition code never imports SQLAlchemy and the in-memory fake shares it verbatim)."""
+    return {
+        "email": row.email,
+        "name": row.name,
+        "role": row.role,
+        "source": row.source,
+        "joined_at": row.joined_at,
+        "left_at": row.left_at,
+        "data": row.data if isinstance(row.data, dict) else {},
+    }
 
 
 class RedisStreamBus:

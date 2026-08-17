@@ -426,6 +426,14 @@ def create_app(
     async def delete_planned_meeting(meeting_id: int, request: Request):
         return await _forward("DELETE", _meeting(f"/meetings/{meeting_id}"), request)
 
+    # ROSTER attach — who was invited to this meeting, keyed by the RECORD. The invitation lane
+    # (mailroom) is the caller: it captures email · name · ROLE · PARTSTAT off the .ics and has had
+    # nowhere to put it. Owner-scoped downstream; declared BEFORE the 2-segment native routes so the
+    # literal `participants` segment is not matched as a native_meeting_id.
+    @app.put("/meetings/{meeting_id}/participants")
+    async def attach_meeting_participants(meeting_id: int, request: Request):
+        return await _forward("PUT", _meeting(f"/meetings/{meeting_id}/participants"), request)
+
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
     # Mint an INDEPENDENT transcript share link for a meeting (owner) — Lane A / M0.

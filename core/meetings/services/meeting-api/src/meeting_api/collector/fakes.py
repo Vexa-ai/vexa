@@ -47,6 +47,10 @@ class InMemoryTranscriptStore:
         # meeting_id -> {user_id, platform, native_meeting_id, status, start_time, end_time,
         #                data, segments: {segment_id: seg}}
         self._meetings: dict[int, dict] = {}
+        # meeting_id -> [participant row], standing in for the `meeting_participants` relation.
+        # A SEPARATE dict, not a key inside the meeting, precisely because the real thing is a
+        # separate table: a test that reads `data` must not accidentally see the roster.
+        self._participants: dict[int, list[dict]] = {}
         self._next_id = 1
         # Optional live-segment redis (fakeredis in tests) — mirrors the prod adapter's split
         # between the in-flight hash (redis) and the durable rows (the dict standing in for PG).
@@ -173,15 +177,31 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            participant=None):
+        from .participants import normalize_email
         from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
+        participant_email = normalize_email(participant) if participant else None
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
             return (m["user_id"] == user_id
                     or user_id in (data.get("transcript_viewers") or [])
                     or data.get("workspace_id") in mws)
+
+        def on_roster(mid, m):
+            """Mirror of the real store's predicate: the relation OR the pre-existing
+            ``data['attendees']`` store, case-insensitively."""
+            if participant_email is None:
+                return True
+            if any(p.get("email") == participant_email for p in self._participants.get(mid, [])):
+                return True
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            return any(
+                normalize_email(a.get("email") if isinstance(a, dict) else a) == participant_email
+                for a in (data.get("attendees") or [])
+            )
         rows = [
             (mid, m) for mid, m in self._meetings.items()
             if accessible(m)
@@ -190,6 +210,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and on_roster(mid, m)
         ]
         # newest first (by created_at desc, then id desc as a stable tiebreak)
         rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
@@ -466,7 +487,54 @@ class InMemoryTranscriptStore:
         if m["status"] not in ("idle", "scheduled"):
             return False
         del self._meetings[meeting_id]
+        # Mirrors the relation's ON DELETE CASCADE — a planned row can carry a roster before it
+        # ever runs, and it must not outlive the meeting.
+        self._participants.pop(meeting_id, None)
         return True
+
+    # ── the ROSTER layer ───────────────────────────────────────────────────────────────────────
+
+    async def attach_participants(self, user_id, meeting_id, *, source, participants):
+        from datetime import datetime, timezone
+
+        from .participants import capture_stamp, compose
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m.get("user_id") != user_id:
+            return None
+        kept = [p for p in self._participants.get(meeting_id, []) if p.get("source") != source]
+        self._participants[meeting_id] = kept + [dict(p) for p in participants]
+        m["data"] = capture_stamp(
+            m.get("data"), source=source, count=len(participants),
+            at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        rows, participants_source = compose(m["data"], self._participants[meeting_id])
+        return {
+            "meeting_id": meeting_id,
+            "participants": rows,
+            "participants_source": participants_source,
+        }
+
+    async def get_participants(self, user_id, meeting_id, member_workspaces=None):
+        from .participants import compose
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        m = self._meetings.get(mid)
+        if m is None:
+            return None
+        data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        authorized = (
+            m.get("user_id") == user_id
+            or user_id in (data.get("transcript_viewers") or [])
+            or (bool(member_workspaces) and data.get("workspace_id") in (member_workspaces or set()))
+        )
+        if not authorized:
+            return None
+        rows, participants_source = compose(data, self._participants.get(mid, []))
+        return {"meeting_id": mid, "participants": rows, "participants_source": participants_source}
 
     def _row_or_placeholder(self, meeting_id) -> dict:
         m = self._meetings.get(meeting_id)
