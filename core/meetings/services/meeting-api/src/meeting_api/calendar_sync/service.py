@@ -21,6 +21,14 @@ Adoption by link is by (platform, native) over EVERY non-terminal row, intent AN
 imported event whose meeting is already running attaches its calendar identity to that live row
 (``_attach_live_source`` — uid/sources only, never ``auto_join``/``scheduled_at``/status) rather
 than importing a sibling: a sibling is what the auto-join sweep sends a SECOND bot for.
+
+TERMINAL rows are past and are never matched or adopted — but they are not weightless. When the
+auto-join sweep dispatched for one (``data.auto_join_last_attempt``) and its bot then FAILED to
+join, the row goes terminal, leaves this module's index, and the very next sweep of the same feed
+finds an unmatched UID and creates a sibling that is due on sight — a fresh bot every sync
+interval until the grace window closes (live 2026-08-17, user 13820). So the replacement row
+CARRIES that spent attempt forward (``_spent_attempt``), scoped to the OCCURRENCE and not the UID:
+a weekly meeting whose bot failed today still sends one tomorrow.
 """
 from __future__ import annotations
 
@@ -33,6 +41,12 @@ from ..collector.meeting_link import find_meeting_link
 # started occurrence still counts as "next" (keeps a due row alive while the auto-join grace runs).
 DEFAULT_HORIZON_DAYS = 14
 DEFAULT_LOOKBACK_S = 900
+
+# How close two ``scheduled_at`` values must be to be the SAME occurrence of a UID. A feed nudging
+# a start by a few seconds between sweeps is the same occurrence; the next occurrence of any real
+# recurrence is minutes-to-days away, never inside this. Deliberately far below the shortest
+# plausible recurrence interval — the suppression this scopes must NEVER reach tomorrow's meeting.
+OCCURRENCE_MATCH_S = 300
 
 _INTENT = ("idle", "scheduled")
 _TERMINAL = ("completed", "failed")
@@ -135,9 +149,16 @@ def _component_metadata(comp, *, include_components: bool = True,
     Values stay in their canonical iCalendar representation so timezone identifiers, recurrence
     rules, custom X-properties, attendee parameters, and provider extensions survive without a
     provider-specific schema. Repeated properties remain ordered arrays.
+
+    ``recursive=False`` is load-bearing: icalendar's ``property_items`` defaults to walking the
+    component's DESCENDANTS as well, so the flat property map for one VEVENT absorbed every OTHER
+    VEVENT's UID/SUMMARY/DESCRIPTION/ATTENDEE/LOCATION when called on the Calendar, and every
+    VALARM's when called on an event (measured live 2026-08-17: four UIDs inside one event's
+    snapshot — a cross-event property bleed AND O(N²) stored bytes). Child components still ride
+    along, in their own ``components`` entries, via the explicit ``subcomponents`` walk below.
     """
     properties: dict[str, list[dict]] = {}
-    for raw_name, value in comp.property_items():
+    for raw_name, value in comp.property_items(recursive=False):
         name = str(raw_name).upper()
         if name in ("BEGIN", "END"):
             continue
@@ -356,6 +377,58 @@ async def _attach_live_source(store, user_id: int, row: dict, ev: dict, *,
     return await attach(user_id, row["id"], calendar_uid=ev["uid"], calendar_sources=sources)
 
 
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _same_occurrence(left: Any, right: Any) -> bool:
+    """Do two ISO ``scheduled_at`` values name the same occurrence (within OCCURRENCE_MATCH_S)?"""
+    a, b = _as_utc(_parse_iso(left)), _as_utc(_parse_iso(right))
+    if a is None or b is None:
+        return False
+    return abs((a - b).total_seconds()) <= OCCURRENCE_MATCH_S
+
+
+def _spent_attempt(row: dict, ev: dict) -> Optional[dict]:
+    """The auto-join backoff a TERMINAL row leaves owed to a re-import of the SAME occurrence.
+
+    ``None`` when nothing is owed. A terminal row that carries ``auto_join_last_attempt`` is a row
+    the auto-join sweep dispatched a bot for; if the bot then failed to join, the row went terminal
+    and dropped out of both the sweep's predicate and this module's ``by_uid`` index — so the very
+    next sync saw an unmatched UID and created a sibling, which was due on sight. The result was a
+    fresh bot every sync interval until the grace window expired (live 2026-08-17, user 13820:
+    26265 failed 20:06:25 → 26267 created 20:06:35 → dispatched 20:06:42).
+
+    The fix is to carry the attempt forward, not to suppress the import: the row still appears, the
+    terminal still renders it, and it re-arms once the backoff the sweep owns has elapsed.
+
+    Scoped to the OCCURRENCE, never to the UID: a weekly meeting whose bot failed today must still
+    send one tomorrow. Same UID + a ``scheduled_at`` outside ``OCCURRENCE_MATCH_S`` is a different
+    occurrence and owes nothing.
+    """
+    if row.get("status") not in _TERMINAL:
+        return None
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    attempted_at = data.get("auto_join_last_attempt")
+    if not isinstance(attempted_at, str) or not attempted_at:
+        return None  # positive evidence only — a row nothing auto-dispatched owes no backoff
+    if not _same_occurrence(data.get("scheduled_at"), ev.get("scheduled_at")):
+        return None
+    error = data.get("auto_join_error")
+    if not isinstance(error, str) or not error:
+        # The sweep's spawn SUCCEEDED and the bot failed later, so no spawn-side error was ever
+        # stamped. Say the true thing rather than nothing (P18) — this row is not firing yet, and
+        # the terminal has to be able to tell the user why.
+        error = (f"the previous auto-join for this occurrence ended '{row.get('status')}' "
+                 f"(meeting {row.get('id')}) — waiting out the auto-join backoff before retrying")
+    return {"auto_join_last_attempt": attempted_at, "auto_join_error": error}
+
+
 def _remember(rows: list, row: dict) -> None:
     """Fold a created/updated row back into the caller's row list — the sweep reads a user's rows
     ONCE per tick and drives every one of their connections off that one list."""
@@ -394,6 +467,10 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
         rows = await store.list_meetings(user_id)
     by_uid: dict[str, dict] = {}
     by_native: dict[tuple, dict] = {}
+    # Terminal rows the auto-join sweep ALREADY dispatched for, newest attempt per UID. Not an
+    # adoption index — a terminal row is never adopted — but the carrier of the retry backoff a
+    # spent attempt owes, so recreating the row cannot re-arm it instantly (see _spent_attempt).
+    terminal_attempts: dict[str, dict] = {}
     # Series workspace map (prep-v3 slice a): a NEW occurrence of a known calendar UID inherits
     # the workspace of the series' newest row that carries one — recurring meetings keep their
     # room without asking. An explicit unbind writes `workspace_unbound` on the row, which the
@@ -420,6 +497,18 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 series_stamp[uid] = stamp
                 series_ws[uid] = None if data.get("workspace_unbound") else data.get("workspace_id")
         if row.get("status") in _TERMINAL:
+            # A terminal row is past — it never matches, adopts, or gets touched. But if the
+            # auto-join sweep dispatched for it, the backoff that dispatch earned is still owed,
+            # and the row about to replace it is the only thing left to carry it. Keep the NEWEST
+            # attempt per UID; the occurrence check happens where the event is known.
+            attempted_at = _as_utc(_parse_iso(data.get("auto_join_last_attempt")))
+            if uid and attempted_at is not None:
+                held = terminal_attempts.get(uid)
+                previous = _as_utc(_parse_iso(
+                    (held.get("data") or {}).get("auto_join_last_attempt")
+                )) if held else None
+                if previous is None or previous <= attempted_at:
+                    terminal_attempts[uid] = row
             continue
         if uid and uid not in by_uid:
             by_uid[uid] = row
@@ -528,6 +617,10 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue  # never duplicate a row that already exists for this link
 
         inherited_ws = series_ws.get(ev["uid"])  # None = no binding OR tombstoned — both mean "don't"
+        # A spent auto-join attempt on THIS occurrence rides onto the new row, so the sweep sees the
+        # backoff it already earned instead of a virgin row that is due on sight.
+        spent = _spent_attempt(terminal_attempts[ev["uid"]], ev) \
+            if ev["uid"] in terminal_attempts else None
         created = await store.create_planned_meeting(
             user_id,
             platform=ev["platform"] or "unknown",   # link-less imports use the link-less-plan shape
@@ -545,6 +638,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             workspace_id=inherited_ws,
             workspace_source="series" if inherited_ws else None,
             attendees=ev.get("attendees") or None,
+            auto_join_last_attempt=(spent or {}).get("auto_join_last_attempt"),
+            auto_join_error=(spent or {}).get("auto_join_error"),
         )
         if isinstance(created, dict) and not created.get("error"):
             by_native[(ev["platform"], ev["native_meeting_id"])] = created

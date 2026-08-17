@@ -922,10 +922,17 @@ class SqlAlchemyTranscriptStore:
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
                                      calendar_source=None,
-                                     workspace_source=None, attendees=None) -> dict:
+                                     workspace_source=None, attendees=None,
+                                     auto_join_last_attempt=None,
+                                     auto_join_error=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
-        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate)."""
+        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
+
+        ``auto_join_last_attempt``/``auto_join_error`` seed the row with a backoff already earned
+        elsewhere — calendar sync passes them when this row replaces a terminal one the auto-join
+        sweep already dispatched for, so the replacement is not due the instant it exists. Written
+        in the INSERT, not patched after, so no sweep tick can see the row without them."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.exc import IntegrityError
 
@@ -951,6 +958,10 @@ class SqlAlchemyTranscriptStore:
             data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
+        if auto_join_last_attempt:
+            data["auto_join_last_attempt"] = auto_join_last_attempt
+        if auto_join_error:
+            data["auto_join_error"] = auto_join_error
         status = "scheduled" if scheduled_at else "idle"
 
         async with self._session_factory() as db:

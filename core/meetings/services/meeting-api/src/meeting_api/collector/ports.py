@@ -160,6 +160,8 @@ class TranscriptStore(Protocol):
         calendar_source: Optional[dict] = None,
         workspace_source: Optional[str] = None,
         attendees: Optional[list] = None,
+        auto_join_last_attempt: Optional[str] = None,
+        auto_join_error: Optional[str] = None,
     ) -> dict:
         """Create a PLANNED meeting row — status ``scheduled`` (when ``scheduled_at`` is set) or
         ``idle`` — with NO bot spawned. Link-less plans use ``platform='unknown'`` +
@@ -169,7 +171,13 @@ class TranscriptStore(Protocol):
         Serializes with concurrent spawns via the same per-user advisory lock
         ``create_meeting_guarded`` takes. Returns the created row (``list_meetings`` shape), or
         ``{"error": "duplicate"}`` when a NON-TERMINAL row already exists for
-        ``(user, platform, native)`` (the route maps it → 409)."""
+        ``(user, platform, native)`` (the route maps it → 409).
+
+        ``auto_join_last_attempt`` / ``auto_join_error`` seed the row with an auto-join backoff
+        earned elsewhere. Calendar sync passes them when this row replaces a TERMINAL row the
+        auto-join sweep already dispatched for, so a re-imported occurrence is not due the instant
+        it exists. They must land in the INSERT, never in a follow-up patch: a sweep tick between
+        the two would spawn."""
         ...
 
     async def update_planned_meeting(

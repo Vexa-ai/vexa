@@ -12,6 +12,28 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 
+def active_configs(configs: Optional[list], user_id: int,
+                   calendar_id: Optional[str] = None) -> list[dict]:
+    """This user's LIVE calendar connections — a TOMBSTONE is never one.
+
+    A deleted connection still gets synced by the BACKGROUND sweep (an empty feed, so ``sync_user``
+    strips its sources and retires the rows only it managed), but it is not something the user can
+    sync on demand and it is not part of any roster they may read back: they removed it. Measured
+    live 2026-08-17 — a user whose only connections were deleted got ``200`` from
+    ``POST /user/calendar/sync`` plus a ``calendars[]`` array naming every one of them, where the
+    documented answer is ``404`` (no active feed) and the roster is not theirs to see.
+
+    A PAUSED connection is NOT a tombstone: the user still has it, the panel still lists it, and
+    syncing it is how a pause takes effect. Only ``deleted`` is excluded.
+    """
+    return [
+        cfg for cfg in configs or []
+        if cfg.get("user_id") == user_id
+        and not cfg.get("deleted")
+        and (calendar_id is None or cfg.get("calendar_id") == calendar_id)
+    ]
+
+
 async def run_user_sync(
     store: Any,
     cfg: dict,

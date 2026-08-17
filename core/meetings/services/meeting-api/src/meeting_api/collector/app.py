@@ -422,6 +422,8 @@ def build_router(
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
     async def _apply_meeting_patch(user_id: int, meeting_id: int, payload) -> dict:
+        from .projection import project_calendar_sources
+
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
 
@@ -485,7 +487,12 @@ def build_router(
             native_id=row.get("native_meeting_id"), status=row.get("status"),
             when=(row.get("data") or {}).get("scheduled_at"), log_event=log_event,
         )
-        return row
+        # The raw ICS event snapshot never rides a response — on ANY read path, and the PATCH's
+        # echo of the updated row is one (measured live 2026-08-17: a PATCH reply carried the
+        # source's uid + event.resolved_start/calendar/component). Projected HERE, at the response
+        # edge, so both the row-id and the native-keyed alias get it and the STORED row — which
+        # calendar sync reconciles against — keeps the snapshot.
+        return {**row, "data": project_calendar_sources(row.get("data"))}
 
     async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
         result = await store.delete_planned_meeting(user_id, meeting_id)

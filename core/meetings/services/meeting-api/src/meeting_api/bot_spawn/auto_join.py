@@ -20,6 +20,14 @@ Failures are LOUD, never silent (P18/P10): a cap/quota rejection or spawn failur
 ``data.auto_join_error`` (+ ``data.auto_join_next_retry`` backoff so one bad row doesn't re-fire
 every tick) — the terminal surfaces it on the meeting row.
 
+Every dispatch also stamps ``data.auto_join_last_attempt`` BEFORE it is made. That records the
+attempt rather than its outcome, so it outlives outcomes this row never gets to write: a spawn
+that succeeds and a bot that then fails to JOIN takes the row terminal, calendar sync creates a
+sibling row for the same occurrence, and without the stamp the sibling was due the instant it
+existed — one bot every sync interval for the whole grace window (live 2026-08-17, user 13820).
+``calendar_sync`` carries the stamp onto the sibling, and ``due_rows`` honours it, so the ceiling
+is ONE dispatch per backoff interval per occurrence however many rows that occurrence acquires.
+
 ``auto_join`` defaults ON when the key is absent — planning a meeting with a time means the bot
 comes, opting out is the explicit act.
 
@@ -57,9 +65,22 @@ def _parse_iso(value: Any) -> Optional[datetime]:
 
 
 def due_rows(rows: list[dict], *, now: datetime,
-             lead_s: float = DEFAULT_LEAD_S, grace_s: float = DEFAULT_GRACE_S) -> list[dict]:
+             lead_s: float = DEFAULT_LEAD_S, grace_s: float = DEFAULT_GRACE_S,
+             retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S) -> list[dict]:
     """The PURE due-filter over ``scheduled`` rows: auto_join on (absent = on), a joinable link,
-    ``scheduled_at`` inside [start - lead, start + grace], and past any error backoff."""
+    ``scheduled_at`` inside [start - lead, start + grace], past any error backoff, and past the
+    backoff owed to the LAST DISPATCH ATTEMPT for this occurrence (``auto_join_last_attempt``).
+
+    The last-attempt rule is what bounds the retry storm to one dispatch per backoff interval per
+    occurrence. ``auto_join_next_retry`` only ever covered failures the sweep itself saw (a cap
+    rejection, a spawn refusal): when the spawn SUCCEEDED and the bot then failed to join, the row
+    went terminal carrying no backoff at all, calendar sync recreated a sibling for the same
+    occurrence, and the sibling was immediately due — a fresh bot every sync interval until the
+    grace window closed (measured live 2026-08-17: meeting 26265 failed 20:06:25, sibling 26267
+    created 20:06:35, dispatched 20:06:42). ``auto_join_last_attempt`` records the ATTEMPT rather
+    than its outcome, so it survives the outcome — and calendar sync carries it onto the sibling it
+    creates for the same occurrence, which is how the backoff outlives the row it was earned on.
+    """
     due: list[dict] = []
     for row in rows:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
@@ -74,6 +95,9 @@ def due_rows(rows: list[dict], *, now: datetime,
             continue
         retry_at = _parse_iso(data.get("auto_join_next_retry"))
         if retry_at is not None and now < retry_at:
+            continue
+        attempted_at = _parse_iso(data.get("auto_join_last_attempt"))
+        if attempted_at is not None and now < attempted_at + timedelta(seconds=retry_backoff_s):
             continue
         due.append(row)
     return due
@@ -173,7 +197,8 @@ async def auto_join_tick(
     gate = transcribe_gate if transcribe_gate is not None else _production_transcribe_gate
 
     rows = await repo.list_scheduled_meetings()
-    due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s)
+    due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s,
+                   retry_backoff_s=retry_backoff_s)
     counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0,
                 "skipped_uncapped": 0, "skipped_live": 0}
     # Duplicate-dispatch guard (defense in depth behind create_meeting_guarded's dedup): a bot
@@ -248,6 +273,12 @@ async def auto_join_tick(
                 continue
 
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        # Record the ATTEMPT before making it. Written first so it survives everything the attempt
+        # can do next — including the two outcomes that leave no trace on this row: a spawn that
+        # succeeds and a bot that then fails to join (the row goes terminal, and calendar sync
+        # recreates it), or a process death mid-spawn. The stamp is what ``due_rows`` and calendar
+        # sync both read to hold the next dispatch for one backoff interval.
+        await repo.merge_meeting_data(row["id"], {"auto_join_last_attempt": now.isoformat()})
         try:
             await request_bot(
                 repo, runtime,

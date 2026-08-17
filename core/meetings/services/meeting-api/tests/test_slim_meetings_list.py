@@ -153,6 +153,11 @@ def test_transcript_by_id_projects_calendar_sources_and_keeps_the_stored_snapsho
     The transcript reaches workspace members and share recipients as well as the owner, and the
     snapshot carries the whole calendar component — attendees, organizer, description. So the
     projection is unconditional, and the STORED row still has everything the sweep reconciles on.
+
+    "Unconditional" means EVERY response edge, and a PATCH's echo of the row it just wrote is one
+    — it was the edge this test's claim did not actually cover (live 2026-08-17: a PATCH reply
+    carried the source's uid plus event.resolved_start / calendar / component). The test below
+    pins both PATCH routes.
     """
     store = InMemoryTranscriptStore()
     mid = _seed_heavy(store)
@@ -168,6 +173,40 @@ def test_transcript_by_id_projects_calendar_sources_and_keeps_the_stored_snapsho
     (stored,) = store._meetings[mid]["data"]["calendar_sources"]
     assert stored["event"]["component"]["properties"]
     assert stored["uid"] == "weekly-sync@example.com"
+
+
+PROJECTED_SOURCE = {
+    "id": "calendar-primary",
+    "name": "Primary calendar",
+    "auto_join": True,
+    "bot_name": "Work Notes",
+}
+
+
+@pytest.mark.parametrize("path", ["/meetings/{mid}", "/meetings/google_meet/abc-defg-hij"])
+def test_patch_response_projects_calendar_sources_on_both_routes(path):
+    """The PATCH echo is a response, so the raw ICS snapshot is not in it — on the row-id route and
+    on the native-keyed alias, which forward to the same handler. Measured live 2026-08-17: a
+    ``PATCH /meetings/{id}`` reply shipped ``uid`` + ``event.resolved_start``/``calendar``/
+    ``component`` back to the caller."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="scheduled", data=dict(HEAVY_DATA),
+    )
+
+    r = _client(store).patch(path.format(mid=mid), headers=HEADERS,
+                             json={"title": "Renamed by the user"})
+
+    assert r.status_code == 200
+    (source,) = r.json()["data"]["calendar_sources"]
+    assert source == PROJECTED_SOURCE          # no uid, no event snapshot
+    assert "resolved_start" not in r.text
+    assert r.json()["data"]["title"] == "Renamed by the user"
+    # …and the STORED row keeps everything calendar sync reconciles against
+    (stored,) = store._meetings[mid]["data"]["calendar_sources"]
+    assert stored["uid"] == "weekly-sync@example.com"
+    assert stored["event"]["component"]["properties"]
 
 
 # ── C2 · default page size + honest has_more ───────────────────────────────────────────────────────

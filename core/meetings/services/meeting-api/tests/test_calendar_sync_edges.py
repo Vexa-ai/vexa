@@ -161,3 +161,61 @@ def test_patching_auto_join_off_survives_the_next_calendar_sweep():
     (row,) = asyncio.run(store.list_meetings(28))
     assert row["data"]["auto_join"] is False
     assert row["data"]["calendar_name"] == "Work calendar"
+
+
+# ---- ACTIVE connections only — a tombstone is neither syncable nor listable ------------------
+# Live 2026-08-17: a user whose calendar connections were ALL deleted got 200 from
+# POST /user/calendar/sync plus a `calendars[]` array naming every deleted one. The documented
+# answer is 404 (no active feed), and a roster the user already removed is not theirs to read back.
+
+def _cfg(calendar_id, *, user_id=13820, **extra):
+    return {"user_id": user_id, "calendar_id": calendar_id,
+            "calendar_name": f"{calendar_id} calendar",
+            "ics_url": f"https://cal.example/{calendar_id}.ics", **extra}
+
+
+def test_active_configs_excludes_tombstones_and_other_users():
+    from meeting_api.calendar_sync import active_configs
+
+    configs = [
+        _cfg("work"),
+        _cfg("dead", deleted=True),
+        _cfg("paused-but-mine", paused=True),
+        _cfg("someone-elses", user_id=99),
+    ]
+    assert [c["calendar_id"] for c in active_configs(configs, 13820)] == [
+        "work", "paused-but-mine",   # PAUSED is not a tombstone — the user still has it
+    ]
+
+
+def test_active_configs_empty_when_every_connection_is_deleted():
+    """The exact staging shape → the sync-now hook returns None → the route answers 404."""
+    from meeting_api.calendar_sync import active_configs
+
+    configs = [_cfg("dead-1", deleted=True), _cfg("dead-2", deleted=True)]
+    assert active_configs(configs, 13820) == []
+    assert active_configs(configs, 13820, "dead-1") == []
+    assert active_configs(None, 13820) == []
+
+
+def test_active_configs_scopes_to_one_connection():
+    from meeting_api.calendar_sync import active_configs
+
+    configs = [_cfg("work"), _cfg("personal")]
+    assert [c["calendar_id"] for c in active_configs(configs, 13820, "personal")] == ["personal"]
+    assert active_configs(configs, 13820, "never-connected") == []
+
+
+def test_no_response_ever_names_a_deleted_connection():
+    """Whatever a stamp roster is built from, a tombstone is not in it."""
+    from meeting_api.calendar_sync import active_configs, aggregate_stamps
+
+    configs = [_cfg("work"), _cfg("dead", deleted=True)]
+    stamps = [{"calendar_id": c["calendar_id"], "calendar_name": c["calendar_name"],
+               "last_sync": "2026-08-17T20:06:00+00:00", "last_error": None,
+               "counts": {"created": 0, "updated": 0, "cancelled": 0}}
+              for c in active_configs(configs, 13820)]
+
+    aggregate = aggregate_stamps(stamps)
+    assert [s["calendar_id"] for s in aggregate["calendars"]] == ["work"]
+    assert "dead" not in str(aggregate)

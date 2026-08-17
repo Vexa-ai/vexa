@@ -68,18 +68,25 @@ CALENDAR_SYNC_CONCURRENCY = 4
 
 async def _sync_user_calendars(store, redis_client, user_id: int, configs: list,
                                *, publish=None, client=None) -> list:
-    """Sync ONE user's calendar connections and return their per-connection stamps.
+    """Sync ONE user's calendar connections and return their ACTIVE connections' stamps.
 
     The user's meeting rows are read ONCE here and threaded through every connection —
     ``sync_user`` keeps the list current as it writes, so a second calendar sees the first one's
     inserts without a second full read. Each connection's stamp is persisted under its own key,
-    exactly as the per-connection panel reads it."""
+    exactly as the per-connection panel reads it.
+
+    Every config passed in IS synced, tombstones included — that empty-feed pass is how a deleted
+    connection's sources get stripped and its rows retired. But a tombstone's stamp is neither
+    persisted nor RETURNED: the returned list is what ``aggregate_stamps`` turns into the
+    user-visible ``calendars[]`` roster, and a connection the user deleted has no place in it."""
     from .calendar_sync import run_user_sync, store_stamp
 
     rows = await store.list_meetings(user_id)
     stamps = []
     for cfg in configs:
         stamp = await run_user_sync(store, cfg, publish=publish, rows=rows, client=client)
+        if cfg.get("deleted"):
+            continue
         stamp["calendar_id"] = cfg.get("calendar_id")
         stamp["calendar_name"] = cfg.get("calendar_name")
         await store_stamp(redis_client, user_id, stamp, cfg.get("calendar_id"))
@@ -185,11 +192,13 @@ def build_production_app():
             return None
         import json as _json
 
-        from .calendar_sync import aggregate_stamps, fetch_configs, store_stamp
+        from .calendar_sync import (active_configs, aggregate_stamps, fetch_configs,
+                                    store_stamp)
 
         configs = await fetch_configs(admin_api_url, internal_secret)
-        selected = [c for c in configs or [] if c.get("user_id") == user_id and
-                    (calendar_id is None or c.get("calendar_id") == calendar_id)]
+        # ACTIVE connections only — a deleted one is the background sweep's to retire, never a feed
+        # the user can sync and never a roster the response names. None here → the route's 404.
+        selected = active_configs(configs, user_id, calendar_id)
         if not selected:
             return None
 

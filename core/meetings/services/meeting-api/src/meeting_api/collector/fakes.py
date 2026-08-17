@@ -379,7 +379,9 @@ class InMemoryTranscriptStore:
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
                                      calendar_source=None,
-                                     workspace_source=None, attendees=None):
+                                     workspace_source=None, attendees=None,
+                                     auto_join_last_attempt=None,
+                                     auto_join_error=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         data: dict = {"auto_join": bool(auto_join)}
@@ -402,6 +404,10 @@ class InMemoryTranscriptStore:
             data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
+        if auto_join_last_attempt:
+            data["auto_join_last_attempt"] = auto_join_last_attempt
+        if auto_join_error:
+            data["auto_join_error"] = auto_join_error
         mid = self.seed_meeting(
             user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
             status="scheduled" if scheduled_at else "idle",

@@ -304,3 +304,39 @@ async def test_live_keys_ignores_terminal_and_linkless_rows():
         {"id": 3, "user_id": None, "platform": PLAT, "native_meeting_id": "x"},
     ])
     assert keys == {(USER, PLAT, NID): 1}
+
+
+# ---- the attempt stamp that outlives the row (live 2026-08-17: a bot every ~2.5 min) --------
+
+async def test_dispatch_records_the_attempt_before_making_it():
+    """``auto_join_last_attempt`` records the ATTEMPT, not its outcome — so it survives the two
+    outcomes that write nothing back to this row: a spawn that succeeds and a bot that then fails
+    to JOIN (the row goes terminal and calendar sync recreates it), and a death mid-spawn."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    mid = _seed(repo)
+    await _tick(repo, runtime)
+    assert repo._meetings[mid]["data"]["auto_join_last_attempt"] == NOW.isoformat()
+
+
+async def test_attempt_stamp_survives_a_failed_spawn_and_holds_the_next_tick():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient(fail=True)
+    mid = _seed(repo)
+    assert (await _tick(repo, runtime))["errors"] == 1
+    assert repo._meetings[mid]["data"]["auto_join_last_attempt"] == NOW.isoformat()
+    assert (await _tick(repo, runtime, now=NOW + timedelta(seconds=1)))["due"] == 0
+
+
+def test_due_rows_hold_a_row_carrying_a_spent_attempt_until_the_backoff_expires():
+    """The pure guard behind the storm fix: a row seeded with an attempt calendar sync carried
+    over from the terminal row it replaced is NOT due until one backoff interval has passed."""
+    def row(**extra):
+        return {"id": 26267, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
+                "data": {"scheduled_at": NOW.isoformat(), **extra}}
+
+    spent = (NOW - timedelta(seconds=10)).isoformat()
+    assert not due_rows([row(auto_join_last_attempt=spent)], now=NOW, retry_backoff_s=300)
+    assert due_rows([row(auto_join_last_attempt=spent)],
+                    now=NOW + timedelta(seconds=291), retry_backoff_s=300)
+    # a garbage stamp never silently pins a row out of the sweep forever
+    assert due_rows([row(auto_join_last_attempt="not-a-time")], now=NOW)
+    assert due_rows([row()], now=NOW)

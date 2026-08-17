@@ -720,3 +720,167 @@ async def test_shared_rows_stay_current_across_a_users_calendars():
     (row,) = await store.list_meetings(USER)
     assert [source["id"] for source in row["data"]["calendar_sources"]] == ["work", "personal"]
     assert [entry["id"] for entry in rows] == [row["id"]]
+
+
+# ---- the auto-join retry storm (live 2026-08-17, user 13820) --------------------------------
+
+class _SharedStore(InMemoryTranscriptStore):
+    """The transcript store, over rows the bot-spawn repo also understands.
+
+    Production has ONE ``meetings`` table that calendar sync and the auto-join sweep both reach
+    through different ports. The two in-memory fakes model that table twice, and the storm lives in
+    the SEAM between them — so the reproduction below has to share one table, not two. The extra
+    keys are the repo shape's (``id`` is the dict key in the store, a column in the repo)."""
+
+    def seed_meeting(self, **kwargs) -> int:
+        mid = super().seed_meeting(**kwargs)
+        row = self._meetings[mid]
+        row["id"] = mid
+        row["platform_specific_id"] = row["native_meeting_id"]
+        return mid
+
+
+def _storm_rig():
+    """(store, repo, runtime) over ONE row table — calendar sync writes it, the sweep dispatches
+    off it, exactly as the two services do against one Postgres."""
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+
+    store = _SharedStore()
+    repo = InMemoryMeetingRepo()
+    repo._meetings = store._meetings   # one table, two ports
+    repo._next_id = 10_000             # spawn-minted ids never collide with the store's
+    return store, repo, FakeRuntimeClient()
+
+
+async def _sweep(repo, runtime, at):
+    from meeting_api.bot_spawn.auto_join import auto_join_tick
+
+    return await auto_join_tick(
+        repo, runtime, transcribe_gate=lambda: None, now=at,
+        token_secret="s", redis_url="redis://r", allow_uncapped=True,
+    )
+
+
+START = datetime(2026, 7, 8, 15, 0, 0, tzinfo=timezone.utc)   # the event's own start
+
+
+async def test_failed_auto_join_does_not_restorm_through_a_recreated_row():
+    """Spawn → the bot fails to join → re-sync the SAME feed → NO second dispatch inside the
+    backoff, exactly ONE once it expires.
+
+    The measured shape (staging 2026-08-17, user 13820): meeting 26265's bot failed at 20:06:25,
+    calendar sync recreated the same UID as row 26267 at 20:06:35, and the sweep dispatched again
+    at 20:06:42 — one bot every ~2.5 minutes until the 600s grace closed. The terminal row dropped
+    out of sync's UID index, so a sibling was created; the sibling was brand new, so it carried no
+    backoff and was due on sight.
+    """
+    store, repo, runtime = _storm_rig()
+    feed = _ics(_event(start="20260708T150000Z"))
+
+    # 1. the feed imports and the sweep sends the bot
+    await sync_user(store, USER, parse_ics(feed, now=START))
+    assert (await _sweep(repo, runtime, START))["spawned"] == 1
+    (first,) = await store.list_meetings(USER)
+    assert first["status"] == "requested"
+    assert first["data"]["auto_join_last_attempt"] == START.isoformat()
+
+    # 2. the bot fails to JOIN — the row goes terminal with no spawn-side error on it
+    store._meetings[first["id"]]["status"] = "failed"
+
+    # 3. the next sync of the same feed recreates the occurrence (the terminal row is past)…
+    failed_at = START + timedelta(seconds=10)
+    result = await sync_user(store, USER, parse_ics(feed, now=failed_at))
+    assert result["counts"]["created"] == 1
+    fresh = next(r for r in await store.list_meetings(USER) if r["id"] != first["id"])
+    assert fresh["status"] == "scheduled"
+    # …carrying the spent attempt, and saying why it is not firing (P18 — never a silent hold)
+    assert fresh["data"]["auto_join_last_attempt"] == START.isoformat()
+    assert "backoff" in fresh["data"]["auto_join_error"]
+
+    # 4. …and it does NOT re-dispatch inside the backoff — the storm, absent
+    for delay in (10, 150, 299):
+        counters = await _sweep(repo, runtime, START + timedelta(seconds=delay))
+        assert counters["due"] == 0 and counters["spawned"] == 0, f"re-stormed at +{delay}s"
+    assert len(runtime.specs) == 1
+
+    # 5. one retry once the backoff expires (still inside the 600s grace)
+    counters = await _sweep(repo, runtime, START + timedelta(seconds=301))
+    assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0,
+                        "skipped_uncapped": 0, "skipped_live": 0}
+    assert len(runtime.specs) == 2
+
+
+async def test_recreated_row_carries_the_attempt_only_for_the_same_occurrence():
+    """The suppression is OCCURRENCE-scoped, never UID-scoped: a weekly meeting whose bot failed
+    today still sends one next week. Same UID, a start a week out → nothing owed, armed on sight."""
+    store, _repo, _runtime = _storm_rig()
+    weekly = _ics(_event(start="20260708T150000Z", rrule="FREQ=WEEKLY"))
+
+    # today's occurrence was dispatched for and ended failed
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="failed", data={
+            "calendar_uid": "uid-1", "auto_join": True,
+            "scheduled_at": START.isoformat(),
+            "auto_join_last_attempt": START.isoformat(),
+        },
+    )
+
+    # sync two hours later — today's occurrence is out of the window, next week's is the event
+    later = START + timedelta(hours=2)
+    result = await sync_user(store, USER, parse_ics(weekly, now=later))
+
+    assert result["counts"]["created"] == 1
+    fresh = next(r for r in await store.list_meetings(USER) if r["status"] == "scheduled")
+    assert fresh["data"]["scheduled_at"] == "2026-07-15T15:00:00+00:00"
+    assert "auto_join_last_attempt" not in fresh["data"]   # a different occurrence owes nothing
+    assert "auto_join_error" not in fresh["data"]
+
+
+async def test_terminal_row_the_sweep_never_dispatched_for_owes_no_backoff():
+    """Positive evidence only. A row that reached terminal WITHOUT an auto-join dispatch (a manual
+    "Send bot now", a meeting the user simply held) is not evidence of a spent attempt — the
+    re-imported occurrence arms normally."""
+    store, _repo, _runtime = _storm_rig()
+    feed = _ics(_event(start="20260708T150000Z"))
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", data={"calendar_uid": "uid-1", "auto_join": True,
+                                  "scheduled_at": START.isoformat()},
+    )
+
+    await sync_user(store, USER, parse_ics(feed, now=START + timedelta(seconds=10)))
+
+    fresh = next(r for r in await store.list_meetings(USER) if r["status"] == "scheduled")
+    assert "auto_join_last_attempt" not in fresh["data"]
+    assert "auto_join_error" not in fresh["data"]
+
+
+# ---- one event's snapshot is ONE event's (live 2026-08-17: 4 UIDs in one snapshot) -----------
+
+def test_event_snapshot_holds_only_its_own_properties():
+    """icalendar's ``property_items`` walks DESCENDANTS by default, so every event's stored
+    snapshot embedded every OTHER event's UID/SUMMARY/DESCRIPTION/ATTENDEE/LOCATION — a
+    cross-event disclosure inside one row, and O(N²) stored bytes. Measured live: four UIDs in
+    one event's snapshot."""
+    feed = _ics(
+        _event(uid="uid-1", summary="Mine", location="https://meet.google.com/abc-defg-hij",
+               description="my agenda"),
+        _event(uid="uid-2", summary="Someone else's board review",
+               location="https://meet.google.com/xyz-wxyz-abc", description="their agenda"),
+        _event(uid="uid-3", summary="A third", location="https://meet.google.com/qqq-wwww-eee"),
+    )
+    events = parse_ics(feed, now=NOW)["events"]
+    assert len(events) == 3
+
+    for event in events:
+        props = event["metadata"]["component"]["properties"]
+        assert [entry["value"] for entry in props["UID"]] == [event["uid"]]
+        assert len(props["SUMMARY"]) == 1
+        assert len(props["LOCATION"]) == 1
+    # and the calendar-level snapshot is the CALENDAR's properties, not every event's
+    calendar = events[0]["metadata"]["calendar"]["properties"]
+    assert set(calendar) == {"VERSION", "PRODID"}
+    # nobody else's agenda rides in mine
+    assert "their agenda" not in str(events[0]["metadata"])
+    assert "Someone else's board review" not in str(events[0]["metadata"])
