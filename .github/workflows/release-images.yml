@@ -692,9 +692,11 @@ jobs:
           BOT="$(inspect_image vexaai/vexa-bot false linux/amd64)"
           LITE="$(inspect_image vexaai/vexa-lite true linux/amd64 linux/arm64)"
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          RELEASE="v${VERSION#v}"
+          RELEASE="${RELEASE%%-*}"
           jq -n \
             --arg schema_version "1" \
-            --arg release "v0.12.18" \
+            --arg release "$RELEASE" \
             --arg candidate_tag "$VERSION" \
             --arg base_candidate_tag "$BASE_VERSION" \
             --arg source "$GITHUB_SHA" \

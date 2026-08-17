@@ -91,7 +91,7 @@ test("v0.12.23 canonical packet freezes the successful rc.10 validation", () => 
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "5ad5bd86f5eb8e8a9fe48ef921189998b81fd09af621375b2bf7539d00c37562",
+    "76df3a63fd9b96aa2803bdfb51afbfd28da986feb72800433ca7ed72ff9ccb24",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
   assert.equal(map.candidate_tag, "v0.12.23-rc.10");
@@ -100,6 +100,25 @@ test("v0.12.23 canonical packet freezes the successful rc.10 validation", () => 
   assert.equal(
     map.validation_run,
     "https://github.com/Vexa-ai/vexa/actions/runs/31950949704",
+  );
+  for (const image of ["vexaai/vexa-bot", "vexaai/vexa-lite"]) {
+    assert.equal(map.images[image].candidate_tag, "v0.12.23-rc.10.packet2");
+    assert.equal(
+      map.images[image].build_source,
+      "e3b7041b8b9854eaaed56f999f319bdd228921fe",
+    );
+    assert.equal(
+      map.images[image].validation_run,
+      "https://github.com/Vexa-ai/vexa/actions/runs/31974122331",
+    );
+  }
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:3a0c715c8e8568cf1fadf60ed305c9a023110fab659c73374e4a43e2221a0464",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-lite"].digest,
+    "sha256:dd99844535bcedb8349bd50245ec8b123d0d7c632f5995ac698682f1c7f78b84",
   );
   assert.equal(Object.keys(map.images).length, 10);
   assert.equal(
@@ -250,6 +269,11 @@ test("release-images consumes the planner's dynamic matrix instead of a literal 
     workflow,
     /node release\/dockerhub-tag-audit\.mjs[\s\S]*--target "\$VERSION"/,
   );
+  assert.match(
+    workflow,
+    /RELEASE="v\$\{VERSION#v\}"[\s\S]*RELEASE="\$\{RELEASE%%-\*\}"[\s\S]*--arg release "\$RELEASE"/,
+  );
+  assert.doesNotMatch(workflow, /--arg release "v0\.12\.18"/);
   assert.doesNotMatch(
     workflow.match(/outputs:[\s\S]*?steps:\n/)?.[0] ?? "",
     /changed_images/,

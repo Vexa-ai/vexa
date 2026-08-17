@@ -146,33 +146,41 @@
     },
     "vexaai/vexa-bot": {
       "class": "prod_deployed",
-      "digest": "sha256:459d626d18c5551559da6edb68c136731836184ce0f4143a29567c5aa00f68a1",
+      "digest": "sha256:3a0c715c8e8568cf1fadf60ed305c9a023110fab659c73374e4a43e2221a0464",
       "platforms": ["linux/amd64"],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:459d626d18c5551559da6edb68c136731836184ce0f4143a29567c5aa00f68a1",
-          "config_digest": "sha256:4118e84fc00083b70a75331dfc7d5f95a540eb26f6e0f94d88f166a327d3d2af"
+          "manifest_digest": "sha256:3a0c715c8e8568cf1fadf60ed305c9a023110fab659c73374e4a43e2221a0464",
+          "config_digest": "sha256:a457f70191ec4befe4f5b46de59b07e5e64bc19b606c786b55151c14cb27ddf9"
         }
       },
       "attestations": false,
-      "evidence": "candidate build run 31948654678 at a7d49881; exact bot digest deployed on STAGE Helm revision 185"
+      "candidate_tag": "v0.12.23-rc.10.packet2",
+      "build_source": "e3b7041b8b9854eaaed56f999f319bdd228921fe",
+      "validation_source": "e3b7041b8b9854eaaed56f999f319bdd228921fe",
+      "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/31974122331",
+      "evidence": "Packet2 Bot+Lite delta build and validation run 31974122331 at e3b7041b; exact bot digest witnessed on STAGE Helm revision 188 and PROD Helm revision 135"
     },
     "vexaai/vexa-lite": {
       "class": "oss_only",
-      "digest": "sha256:c392bc8f38b513481fecd896be3607e85775a5ad128603175b34bb4edd850997",
+      "digest": "sha256:dd99844535bcedb8349bd50245ec8b123d0d7c632f5995ac698682f1c7f78b84",
       "platforms": ["linux/amd64", "linux/arm64"],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:232ef59eaa654a7f5d08113e2e9cb94b917d9fdd34967ca7515dc5c628f94796",
-          "config_digest": "sha256:1a0126713b6f801e9b1925291076df17fdf25fdc25970428161c59002d5c3a0e"
+          "manifest_digest": "sha256:95ae0a2e0717205458448ce09bfec6d7108b6e4cfadacc072b671d0ce233df29",
+          "config_digest": "sha256:df9e365c3034997fd9a300e008e2ff9ee95acfc07d76ab724aac2d4e2cf89430"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:0d74949c35317720d57b112dfbc5a84e490cc93ac8fa612c7ebbf3c62a0b354f",
-          "config_digest": "sha256:75e42d039421babab8deb2fc53b6de081c5a80e9da6e93b5ca105a9a9ba533f7"
+          "manifest_digest": "sha256:3f3ed086cfbcc330ed1acbf6c9b640eb3cc8df84614cdd49e845ae690ae8abb1",
+          "config_digest": "sha256:8424ef84e4fd5e12987df5c37bb424a6e32cf6b3c9c8afdaaf557b52c15f7c86"
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 31948654678 at a7d49881; exact registry identities collected after the image job completed"
+      "candidate_tag": "v0.12.23-rc.10.packet2",
+      "build_source": "e3b7041b8b9854eaaed56f999f319bdd228921fe",
+      "validation_source": "e3b7041b8b9854eaaed56f999f319bdd228921fe",
+      "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/31974122331",
+      "evidence": "Packet2 Bot+Lite delta build and validation run 31974122331 at e3b7041b; native amd64 and arm64 Lite boot/front-door checks passed"
     }
   }
 }
