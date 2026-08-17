@@ -33,6 +33,18 @@ Pass one of these as `platform`:
 
 The bot joins like any participant — no plugins, no host configuration.
 
+For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–15 digits, the one
+Teams prints beside a passcode) or by the **thread id** from a `…/l/meetup-join/19:meeting_…@thread.v2`
+link. With the numeric ID, send the passcode as `passcode` — the bot joins at
+`…/meet/<id>?p=<passcode>`, and the passcode is kept off the stored `constructed_meeting_url` and
+out of the logs. Add `teams_base_host` for a non-default cloud (`teams.live.com` for personal
+meetings, `gov.teams.microsoft.us` / `dod.teams.microsoft.us` for GCC-High and DoD); hosts outside
+the Teams web clients are rejected with `422`. Sending the full `meeting_url` settles host and
+passcode together.
+
+Only `passcode` is read. `password`, `meeting_password` and similar aliases are rejected with a
+`422` naming the right field, rather than accepted and dropped.
+
 For `jitsi`, the full `meeting_url` is **required** (like Zoom): a Jitsi room name is scoped
 to a deployment — `MyRoom` exists on meet.jit.si *and* on every self-hosted instance — so only
 the URL says which one to join. The `native_meeting_id` reflects that scoping: the bare room
