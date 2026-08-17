@@ -208,6 +208,12 @@ work: connect your calendar (ICS) and planned meetings appear with attendees —
 0.12 ships a **new Terminal UI** built to put the backend's scale — thousands of bots and
 agents — to work on your actual week. It opens on your meetings: coming up, live now, to review.
 
+> **Dashboard transition:** the hosted multi-user Dashboard source is retained under
+> [`services/dashboard`](services/dashboard) so the source for the UI deployed at vexa.ai stays
+> auditable. It is deprecated in favor of Terminal for new self-hosted installations; Dashboard
+> remains maintained only while hosted authenticated-session and browser-session workflows move
+> to Terminal.
+
 - **An agent in your meeting, with your knowledge.** Open a live call: the transcript streams
   speaker-attributed, and the agent has the live conversation *and* your workspace in context.
   Ask mid-call "what did we promise them last time?" — or research a person, company, or
