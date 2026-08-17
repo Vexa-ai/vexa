@@ -66,7 +66,7 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "a993d466d3aa083dafde3e882375b70d1e1c95120af5f2dc542c856c8e80039f",
+    "bf995a4ae7506382858454bd675dddf8242d8a808ca48ca48d265112e0a1112f",
   );
   const map = JSON.parse(raw);
   assert.equal(map.packet_state, "bootstrap");
@@ -85,7 +85,7 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
 });
 
-test("v0.12.23 canonical packet freezes the rc.12 train candidate", () => {
+test("v0.12.23 canonical packet freezes the rc.13 train candidate", () => {
   const raw = readFileSync(
     new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
   );
@@ -94,23 +94,23 @@ test("v0.12.23 canonical packet freezes the rc.12 train candidate", () => {
     "802b65d0eb929603e3cf0c17702d40fd1c781e07a4f0f135f7b874498b9b272f",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
-  assert.equal(map.candidate_tag, "v0.12.23-rc.12");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.13");
   assert.equal(map.build_source, "d71cc2c3923a4c7ffc9003131893bf58ecff0c38");
   assert.equal(
     map.build_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/32042491383",
+    "https://github.com/Vexa-ai/vexa/actions/runs/32053040714",
   );
   assert.equal(
     map.validation_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/32043858377",
+    "https://github.com/Vexa-ai/vexa/actions/runs/32053040714",
   );
   assert.equal(
     map.images["vexaai/vexa-bot"].digest,
-    "sha256:2f095ed0957e289491ca6cee37f0aeae0e54ebcc0eafcacd95ba87c043ea0006",
+    "sha256:aabafc86a4c30c1b6166fc277e5ac573962f734ad2ff741b004c3cf4b2b65e08",
   );
   assert.equal(
     map.images["vexaai/vexa-lite"].digest,
-    "sha256:260137d2079eb6e0c848851331b3dab90d50b32bd83243c1ea5349989effbde7",
+    "sha256:d4df83120e46e606a3cc7e8f1b4ffbec090046a1d8b909ef802dd820ab57d6ba",
   );
   assert.equal(Object.keys(map.images).length, 10);
   assert.equal(
