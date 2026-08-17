@@ -18,6 +18,9 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { parseMeetingInput } from "./meetingId";
+import { readApiFailure } from "./apiClient";
+import { resolveJoinError, type ServiceDenialPresentation } from "./serviceDenial";
+import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { getJitsiHosts } from "./jitsiHosts";
 import { presentError } from "./apiClient";
 import { refreshMeetings } from "./liveMeetings";
@@ -151,12 +154,13 @@ function DropBotInline() {
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
   const send = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     const parsed = parseMeetingInput(u, await getJitsiHosts());
-    if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); return; }
-    setSent("sending"); setMsg(null);
+    if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); return; }
+    setSent("sending"); setMsg(null); setDenial(null);
     try {
       const r = await fetch("/api/bots", {
         method: "POST",
@@ -167,12 +171,18 @@ function DropBotInline() {
         setSent("ok"); setUrl("");
         refreshMeetings(); setTimeout(refreshMeetings, 2000); setTimeout(refreshMeetings, 6000);
       } else {
-        const detail = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
         setSent("err");
-        setMsg(r.status === 429 ? "You're at your meeting limit — stop one first."
-          : r.status === 409 ? "That meeting already has a bot."
-            : r.status === 401 ? "Not signed in — sign in and retry."
-              : `Couldn't send (${r.status})${detail ? `: ${detail}` : ""}`);
+        if (r.status === 429) setMsg("You're at your meeting limit — stop one first.");
+        else if (r.status === 409) setMsg("That meeting already has a bot.");
+        else if (r.status === 401) setMsg("Not signed in — sign in and retry.");
+        else {
+          // Everything else used to land as `Couldn't send (403): {"code":"service_not_allowed",…}`
+          // — the raw denial payload, in the user's face. A service-authority refusal now gets its
+          // own panel; the rest still goes through the presenter seam.
+          const state = resolveJoinError(await readApiFailure(r, "/api/bots"));
+          if (state.kind === "denial") { setDenial(state.presentation); setMsg(null); }
+          else setMsg(state.headline);
+        }
       }
     } catch { setSent("err"); setMsg("Couldn't reach the server."); }
   };
@@ -187,7 +197,9 @@ function DropBotInline() {
         </button>
       </div>
       {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", lineHeight: 1.4 }}>Bot sent — admit it in the meeting.</div>}
-      {sent === "err" && msg && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>⚠ {msg}</div>}
+      {denial
+        ? <ServiceDenialPanel presentation={denial} onRetry={() => void send()} />
+        : sent === "err" && msg && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>⚠ {msg}</div>}
     </div>
   );
 }
