@@ -11,7 +11,9 @@ import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
-import { ApiError, presentError } from "./apiClient";
+import { ApiError, presentError, readApiFailure } from "./apiClient";
+import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
+import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
@@ -276,20 +278,18 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
 };
 const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
 
-type MeetingActionFailure = { actionId: string; actionLabel: string; native: string; message: string };
+type MeetingActionFailure = {
+  actionId: string; actionLabel: string; native: string; message: string;
+  /** Set when the service authority REFUSED (403 service_not_allowed / 503 authority-unavailable).
+   *  The row renders the panel instead of the one-line message, and does not auto-clear it. */
+  denial?: ServiceDenialPresentation | null;
+};
 type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
 type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
 
-/** A non-ok action response as a STRUCTURED failure (status + backend detail), never a raw body. */
-async function readFailure(r: Response): Promise<ApiError> {
-  let detail = "";
-  try {
-    const b = (await r.json()) as { detail?: unknown; error?: unknown };
-    const d = b?.detail ?? b?.error;
-    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
-  } catch { /* body wasn't JSON — the status alone is the signal */ }
-  return new ApiError(r.status, detail, r.url);
-}
+/** A non-ok action response as a STRUCTURED failure (status + backend detail + the intact body),
+ *  never a raw string. Shared with `getJson`'s error path so both edges produce the same object. */
+const readFailure = (r: Response): Promise<ApiError> => readApiFailure(r);
 
 /** User-truth message for a failed bot/row action (issue #674): a `404` means the backend no
  *  longer has this meeting — the list re-snapshot (runMeetingAction's `finally`) reconciles the
@@ -300,6 +300,10 @@ export function presentMeetingActionFailure(error: unknown): string {
     if (error.status === 404) return "This meeting is no longer active — refreshing the list.";
     if (error.status === 409) return "That meeting already has a bot.";
   }
+  // A service-authority refusal (paywall / cap / billing outage) says WHY in its own words —
+  // "Your key doesn't have access to this." is a lie about a bot the account simply cannot afford.
+  const denial = serviceDenialFromError(error);
+  if (denial) return `${denial.title} — ${denial.body}`;
   return presentError(error).headline;
 }
 
@@ -310,7 +314,7 @@ async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, r
   } catch (error) {
     // Operator channel keeps the full plumbing (P18); the UI channel gets the presented truth.
     console.warn("meeting action failed", { ...action, message: String(error instanceof Error ? error.message : error) });
-    onFailure?.({ ...action, message: presentMeetingActionFailure(error) });
+    onFailure?.({ ...action, message: presentMeetingActionFailure(error), denial: serviceDenialFromError(error) });
   } finally {
     refreshMeetings();
   }
@@ -456,6 +460,9 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const isIntent = INTENT_STATUSES.has(m.live_status ?? "");
   useEffect(() => {
     if (!actionFailure) return;
+    // A service denial is a thing the user must ACT on (add funds, finish setup, raise the cap) —
+    // it must not evaporate on a 6s timer the way a transient "already has a bot" should.
+    if (actionFailure.denial) return;
     const t = window.setTimeout(() => setActionFailure(null), 6000);
     return () => window.clearTimeout(t);
   }, [actionFailure]);
@@ -474,7 +481,11 @@ function MeetingRow({ m }: { m: MeetingMock }) {
           ⚠ Auto-join failed: {m.auto_join_error}
         </div>
       )}
-      {actionFailure && (
+      {actionFailure?.denial ? (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ServiceDenialPanel presentation={actionFailure.denial} />
+        </div>
+      ) : actionFailure && (
         <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.35 }}>
           {actionFailure.actionLabel} failed: {actionFailure.message}
         </div>
@@ -649,13 +660,15 @@ function MeetingsList() {
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
     const parsed = parseMeetingInput(u, await getJitsiHosts());
-    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setTimeout(() => setSent(null), 5000); return; }
-    setSent("sending"); setErrMsg(null);
+    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); setTimeout(() => setSent(null), 5000); return; }
+    setSent("sending"); setErrMsg(null); setDenial(null);
+    let refused = false;
     try {
       // POST /bots through the authed gateway proxy (X-API-Key injected server-side from the cookie token).
       const r = await fetch("/api/bots", {
@@ -671,15 +684,21 @@ function MeetingsList() {
       } else {
         // Surface the REAL reason, not a generic "bad link" (the cap/dup/auth cases are common).
         setSent("err");
-        setErrMsg(
-          r.status === 429 ? "You're at your meeting limit — stop one first."
-            : r.status === 409 ? "That meeting already has a bot."
-              : r.status === 401 ? "Not signed in — sign in and retry."
-                : presentError(await readFailure(r)).headline,
-        );
+        if (r.status === 429) { setErrMsg("You're at your meeting limit — stop one first."); }
+        else if (r.status === 409) { setErrMsg("That meeting already has a bot."); }
+        else if (r.status === 401) { setErrMsg("Not signed in — sign in and retry."); }
+        else {
+          // 403 service_not_allowed / 503 service_authority_unavailable are the service authority
+          // refusing, not an access fault: they get their own words and their own fix.
+          const state = resolveJoinError(await readFailure(r));
+          if (state.kind === "denial") { setDenial(state.presentation); setErrMsg(null); refused = true; }
+          else setErrMsg(state.headline);
+        }
       }
     } catch { setSent("err"); setErrMsg("Couldn't reach the server."); }
-    setTimeout(() => setSent(null), 5000);
+    // The transient flash clears itself; a denial panel is sticky until the next attempt — a
+    // paywall the user has to act on must not vanish on a 5s timer.
+    if (!refused) setTimeout(() => setSent(null), 5000);
   };
   return (
     <div style={{ padding: "8px" }}>
@@ -697,7 +716,9 @@ function MeetingsList() {
           </button>
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
-        {sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
+        {denial
+          ? <ServiceDenialPanel presentation={denial} onRetry={() => void addBot()} />
+          : sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
         <div style={{ marginTop: 8 }}>
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />
