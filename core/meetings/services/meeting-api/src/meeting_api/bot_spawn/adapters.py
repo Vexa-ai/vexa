@@ -95,6 +95,27 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def find_active_rows(self, user_id, platform, native_meeting_id) -> list:
+        """Every non-terminal row for (user, platform, native), newest first — the user-stop's
+        eviction set. ``stopping`` is included: it is still non-terminal, and the caller
+        de-duplicates on ``data.stop_requested``, not on status."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                    Meeting.status.notin_(("completed", "failed")),
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            )
+            return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
+
     async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
         from sqlalchemy import select
 

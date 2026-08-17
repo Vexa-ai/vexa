@@ -34,6 +34,22 @@ class MeetingRepo(Protocol):
         set; ``stopping`` is in-flight too — see ``_ACTIVE_STATUSES``)."""
         ...
 
+    async def find_active_rows(
+        self, user_id: int, platform: str, native_meeting_id: str
+    ) -> list[dict]:
+        """EVERY non-terminal row the user has for ``(platform, native_id)``, newest first.
+
+        ``find_active`` answers "is this room taken?" and returns one row, which is all the POST
+        dedup needs. The user STOP needs all of them: a stop means the MEETING, not one container.
+        A second row on the same link is not hypothetical — it is the shape the auto-join sweep's
+        duplicate guard exists for (a manual "Send bot now" plus a calendar import that failed to
+        adopt it, live 2026-08-17) — and stopping only the newest left the sibling waiting in the
+        lobby to walk in after the user had said no.
+
+        ACTIVE here includes ``stopping``: a row already on its way out is still non-terminal, and
+        the caller de-duplicates on the ``stop_requested`` flag rather than on status."""
+        ...
+
     async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
         """Any user's ACTIVE meeting whose spawn carried this ``userdata_s3_path``
         (``meeting.data.auth_userdata_path``), or ``None``. The per-identity serialization

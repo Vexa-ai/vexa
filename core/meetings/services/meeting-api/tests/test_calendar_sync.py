@@ -839,14 +839,21 @@ async def test_recreated_row_carries_the_attempt_only_for_the_same_occurrence():
 
 async def test_terminal_row_the_sweep_never_dispatched_for_owes_no_backoff():
     """Positive evidence only. A row that reached terminal WITHOUT an auto-join dispatch (a manual
-    "Send bot now", a meeting the user simply held) is not evidence of a spent attempt — the
-    re-imported occurrence arms normally."""
+    "Send bot now" whose bot could not get in) is not evidence of a spent attempt — the re-imported
+    occurrence arms normally, with no backoff to wait out.
+
+    The fixture is a FAILED row, not a completed one. A completed row is a served occurrence and is
+    no longer recreated at all (``lifecycle.occurrence`` — an occurrence whose bot did the job never
+    gets another), so it cannot carry this rule; the retry-eligible shape is the pre-active failure.
+    """
     store, _repo, _runtime = _storm_rig()
     feed = _ics(_event(start="20260708T150000Z"))
     store.seed_meeting(
         user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
-        status="completed", data={"calendar_uid": "uid-1", "auto_join": True,
-                                  "scheduled_at": START.isoformat()},
+        status="failed", data={"calendar_uid": "uid-1", "auto_join": True,
+                               "completion_reason": "join_failure",
+                               "failure_stage": "joining",
+                               "scheduled_at": START.isoformat()},
     )
 
     await sync_user(store, USER, parse_ics(feed, now=START + timedelta(seconds=10)))
