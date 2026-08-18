@@ -1,0 +1,7 @@
+# Never commit judge working state: prompts and responses carry transcript text.
+bundle/
+responses/
+*.namemap.json
+flags.jsonl
+verdicts.json
+__pycache__/
