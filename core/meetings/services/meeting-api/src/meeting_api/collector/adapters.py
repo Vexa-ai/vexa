@@ -784,13 +784,6 @@ class SqlAlchemyTranscriptStore:
                 await self._redis.hdel(segments_hash_key(meeting_id), *ids)
             except Exception:  # noqa: BLE001 — best-effort; the DB delete is the durable backstop
                 pass
-            # Leg 1b: TOMBSTONE the retracted ids. A deletion is the one change a changed-since cursor
-            # cannot express as data — the segment is simply gone, so an incremental follower would
-            # keep serving a draft the full transcript no longer contains. The tombstone carries the
-            # retraction instant, so `?since=` reports it as `retracted_segment_ids` on the very poll
-            # that would otherwise have gone silent. Recorded HERE, where the retraction is
-            # introduced, rather than reconstructed by the reader.
-            await self._record_retractions(meeting_id, ids)
         # Leg 2: delete any already-flushed rows.
         from sqlalchemy import bindparam
         from sqlalchemy import text as sql_text
@@ -801,6 +794,16 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             await db.execute(stmt, {"mid": int(meeting_id), "sids": ids})
             await db.commit()
+        # Leg 3: TOMBSTONE the retracted ids. A deletion is the one change a changed-since cursor
+        # cannot express as data — the segment is simply gone, so an incremental follower would keep
+        # serving a draft the full transcript no longer contains. The tombstone carries the retraction
+        # instant, so `?since=` reports it as `retracted_segment_ids` on the very poll that would
+        # otherwise have gone silent. Recorded HERE, where the retraction is introduced, rather than
+        # reconstructed by the reader — and only AFTER both deletes committed: a tombstone for a row
+        # that is still in Postgres would tell a follower to drop a segment a full read still returns,
+        # and the follower could never recover it (the durable stamp predates its cursor). Failing the
+        # other way leaves a stale segment in the follower's hands, which the next full read fixes.
+        await self._record_retractions(meeting_id, ids)
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink — UPSERT a batch of flushed segments into ``transcriptions``
