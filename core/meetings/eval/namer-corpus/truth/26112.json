@@ -1,0 +1,71 @@
+{
+ "tape": "26112",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "v0.12.23-rc.6",
+ "duration_s": 408.5,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {},
+ "untruthed": {
+  "1053": "no truth: \"P2\" is 0.45 concentrated on this track (< 0.7)",
+  "1266": "no truth: \"P1\" is 0.29 concentrated on this track (< 0.7)",
+  "201": "no truth: 3 unambiguous hint instants (< 5)",
+  "414": "no truth: \"P1\" is 0.62 concentrated on this track (< 0.7)",
+  "840": "no truth: leading name purity 0.57 < 0.8"
+ },
+ "ambiguous_hint_instants": 83,
+ "roster_first_seen_s": {
+  "P2": 0.0,
+  "P1": 0.0
+ },
+ "roster_coverage": [
+  [
+   0.0,
+   2,
+   2
+  ],
+  [
+   115.3,
+   1,
+   1
+  ],
+  [
+   169.9,
+   2,
+   2
+  ],
+  [
+   245.0,
+   0,
+   0
+  ],
+  [
+   285.0,
+   1,
+   1
+  ],
+  [
+   305.0,
+   2,
+   2
+  ],
+  [
+   350.0,
+   1,
+   1
+  ]
+ ],
+ "judge": null,
+ "counts": {
+  "csrc": 130,
+  "hints": 270,
+  "roster": 13,
+  "ticks": 821
+ }
+}

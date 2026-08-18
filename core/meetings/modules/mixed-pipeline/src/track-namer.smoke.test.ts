@@ -551,6 +551,106 @@ check('identity suffix normalization keeps its existing semantics without a back
       && n.naming('new')?.successorOf === 'old', JSON.stringify(n.stats().how));
 }
 
+// ── The 26424 shape: a name earned while the roster was still one participant short ─────────────
+//
+// Meeting 26424, witnessed live by the founder: track csrc:201 was accepted as "Matt" at +65.5 s on
+// 3.8 s of evidence, while the Meet roster held ONLY "Matt" — the second participant's first roster
+// sighting was ten seconds away. The acceptance was permanent, so 28 minutes of 93.2 %-contrary
+// evidence could not revise it, exclusivity then correctly refused "Matt" to the track that really
+// was Matt, and one human's entire side of the meeting printed under the other's name.
+//
+// Note what does NOT catch it: the roster had been QUIET for thirty-five seconds at the moment of
+// acceptance, and coverage called itself complete at 1-of-1. The only contradiction available then
+// is that the transport was already carrying two humans while the roster listed one.
+{
+  const named: Array<[string, string]> = [];
+  const n = namer({ onNamed: (t, nm) => named.push([t, nm]) });
+  // The roster knows one participant, says so twice, and then goes quiet.
+  n.recordRosterName('Matt', 0);
+  n.recordRosterName('Matt', 5000);
+  n.recordRosterCoverage(1, 1, 5000);
+  // Both humans are audible from the start. The other one is heard first and no tile follows it.
+  n.setTrackActive('840', true, 1000);
+  n.setTrackActive('840', false, 4000);
+  n.tick(5000);
+  // Two clean coincidences of "Matt" on the WRONG track — the only name the UI can offer yet.
+  for (const t0 of [10_000, 20_000]) {
+    n.setTrackActive('201', true, t0);
+    n.recordHint('Matt', t0 + 2000);                      // lag-corrected to t0 + 1000
+    n.setTrackActive('201', false, t0 + 3000);
+    n.tick(t0 + 4000);
+  }
+  check('the premature name is published at once — the fix costs no latency',
+    n.nameFor('201') === 'Matt', JSON.stringify(n.stats().how));
+  // …and only NOW does the roster show the second participant it had all along.
+  n.recordRosterName('Dmitry Grankin', 45_000);
+  n.recordRosterName('Dmitry Grankin', 46_000);
+  n.recordRosterCoverage(2, 2, 46_000);
+  // From here the tiles are honest: each track's own name lights on its own solo spans.
+  for (const t0 of [50_000, 90_000, 130_000, 170_000]) {
+    n.setTrackActive('201', true, t0);
+    n.recordHint('Dmitry Grankin', t0 + 2000);
+    n.recordHint('Dmitry Grankin', t0 + 4000);
+    n.setTrackActive('201', false, t0 + 6000);
+    n.tick(t0 + 8000);
+    n.setTrackActive('840', true, t0 + 10_000);
+    n.recordHint('Matt', t0 + 12_000);
+    n.recordHint('Matt', t0 + 14_000);
+    n.setTrackActive('840', false, t0 + 16_000);
+    n.tick(t0 + 18_000);
+  }
+  n.finish();
+  check('THE 26424 FAILURE: the late-appearing participant gets his own name, not the other one\'s',
+    n.nameFor('201') === 'Dmitry Grankin', `${n.nameFor('201')} — ${JSON.stringify(n.stats().evidence)}`);
+  check('…and the name the premature acceptance had locked away goes to the man who is that name',
+    n.nameFor('840') === 'Matt', `${n.nameFor('840')} — ${JSON.stringify(n.stats().how)}`);
+  check('the wrong name was RELEASED, not quietly overwritten — the host repaints through a letter',
+    named.some(([t, nm]) => t === '201' && nm.startsWith('Speaker')), JSON.stringify(named));
+}
+
+// ── The boundary: revisable until the roster settles, permanent the instant it does ──────────────
+{
+  const n = namer();
+  // A one-participant meeting: the roster is settled from the start and nothing here is provisional.
+  n.recordRosterName('Ana', 0);
+  n.recordRosterName('Ana', 1000);
+  n.recordRosterCoverage(1, 1, 1000);
+  for (const t0 of [2000, 6000]) {
+    n.setTrackActive('1', true, t0);
+    n.recordHint('Ana', t0 + 2000);
+    n.setTrackActive('1', false, t0 + 3000);
+    n.tick(t0 + 3500);
+  }
+  check('a single-participant meeting is named exactly when its evidence lands',
+    n.nameFor('1') === 'Ana', JSON.stringify(n.stats().how));
+  // Somebody joins at 20 s. The roster grows, so what is earned in the next 5 s stays revisable.
+  n.recordRosterName('Bo', 20_000);
+  n.recordRosterName('Bo', 20_500);
+  n.recordRosterCoverage(2, 2, 20_500);
+  for (const t0 of [21_000, 23_500]) {
+    n.setTrackActive('2', true, t0);
+    n.recordHint('Bo', t0 + 1000);
+    n.setTrackActive('2', false, t0 + 2000);
+    n.tick(t0 + 2100);
+  }
+  check('a name earned inside the unsettled window is published immediately',
+    n.nameFor('2') === 'Bo', JSON.stringify(n.stats().how));
+  check('the established name is NOT disturbed by the join', n.nameFor('1') === 'Ana');
+  // The roster has now been quiet for the settle window and lists everyone the transport can hear.
+  n.tick(25_600);
+  // Contrary evidence after the boundary is exactly the 93 %-contrary stream 26424 had to refuse
+  // for 28 minutes: past settle, an accepted name is permanent again.
+  for (let t = 30_000; t < 120_000; t += 10_000) {
+    n.setTrackActive('2', true, t);
+    n.recordHint('Cy', t + 2000);
+    n.recordHint('Cy', t + 4000);
+    n.setTrackActive('2', false, t + 6000);
+    n.tick(t + 7000);
+  }
+  check('past the settle boundary the name is permanent again — later evidence cannot move it',
+    n.nameFor('2') === 'Bo', `${n.nameFor('2')} — ${JSON.stringify(n.stats().evidence)}`);
+}
+
 // ── Teams' canonical-identity floor ─────────────────────────────────────────────────────────────
 {
   const n = namer({ requireCanonicalDisplayName: true });

@@ -30,6 +30,9 @@
  *   • **A settle delay.** Evidence is integrated only up to `newest - settleMs`, so a hint that
  *     arrives late still lands on the span it describes. Names therefore arrive a few seconds
  *     after the speech does — which is what the retroactive rename path is FOR.
+ *   • **Revisable until the roster settles.** A name earned while the roster is still discovering
+ *     the room is published at once but stays open to revision, because the exclusivity that earned
+ *     it was measured against a name universe that was incomplete. See `rosterSettled`.
  *
  * A track with no evidence is NOT guessed. It publishes as a stable "Speaker A/B/C" by
  * first-heard order and stays that way. Unknown stays unknown.
@@ -98,9 +101,10 @@ const RETENTION_MS = 120_000;
 /** How many separate scans a roster name must appear in before elimination may use it. A name that
  *  flickered once through a rotting selector is not a participant. */
 export const TRACK_NAME_ROSTER_SIGHTINGS = envNumber('VEXA_TRACK_NAME_ROSTER_SIGHTINGS', 2);
-/** How long the roster must have shown NO NEW NAME before an elimination may be drawn from it.
- *  Elimination is a last resort and must be taken LATE: a roster fills one name at a time, so it
- *  passes through states that look decidable and are not. */
+/** How long the roster must have shown NO NEW NAME before it counts as SETTLED.
+ *  A roster fills one name at a time, so it passes through states that look decidable and are not.
+ *  Elimination may not be drawn from an unsettled roster, and a name earned from evidence against
+ *  one is published but stays revisable — see `rosterSettled`. */
 export const TRACK_NAME_ROSTER_SETTLE_MS = envNumber('VEXA_TRACK_NAME_ROSTER_SETTLE_MS', 5000);
 
 /**
@@ -289,6 +293,11 @@ export class TrackNamer {
   /** (trackId → name → evidence). */
   private evidence = new Map<string, Map<string, TrackEvidence>>();
   private named = new Map<string, TrackNaming>();
+  /** Tracks whose evidence-based name was earned while the roster was NOT settled. They are
+   *  published like any other name — withholding one costs latency in every meeting to buy nothing
+   *  — but they are re-derived on every evaluation and may change or be withdrawn until the roster
+   *  settles. See `rosterSettled`. */
+  private provisional = new Set<string>();
   /** name → the first track that earned it. Later transport epochs may join the same identity but
    *  never replace this anchor, so elimination and ordinary exclusivity still see it as claimed. */
   private owner = new Map<string, string>();
@@ -498,10 +507,39 @@ export class TrackNamer {
     if (tMs !== undefined) this.newest = Math.max(this.newest, tMs);
   }
 
+  /**
+   * IS THE ROSTER A SET WE MAY DECIDE AGAINST YET?
+   *
+   * Two conditions, and the second one is what meeting 26424 cost. There, track 201 was accepted as
+   * "Matt" at +35 s on 3.8 s of evidence — correctly, by every rule this file had, because the
+   * roster held exactly one name and had held it, quietly, for thirty-five seconds. The second
+   * participant's first roster sighting was ten seconds away. Acceptance was permanent, so the 93 %
+   * contrary evidence of the next 28 minutes could not revise it, exclusivity then refused "Matt"
+   * to the man who is Matt, and one human's entire side of the meeting printed under the other's
+   * name.
+   *
+   *   1. **Quiet.** No name the roster had never shown before, for `rosterSettleMs`.
+   *   2. **Not provably incomplete.** The transport has not heard MORE distinct humans than the
+   *      roster lists. A roster of one, while two sources are audible, is not a settled roster — it
+   *      is a roster that has not caught up, however long it has been still. This is the only signal
+   *      available at +35 s, and it is a hard contradiction rather than an inference.
+   *
+   * A meeting whose roster never reports at all is settled by definition: there is nothing to wait
+   * for, and blocking on a signal that will never arrive would suppress every name in the meeting.
+   */
+  private rosterSettled(atMs: number): boolean {
+    if (this.rosterChangedAt === -Infinity) return true;
+    if (Math.max(atMs, this.newest) - this.rosterChangedAt < this.rosterSettleMs) return false;
+    return this.roster.size >= this.trackFirstSeen.size;
+  }
+
   /** Move the integrator's clock (called on every audio frame — cheap when nothing moved). */
   tick(tMs: number): void {
     this.newest = Math.max(this.newest, tMs);
     this.advance(this.newest - this.settleMs);
+    // A provisional name is re-derived as time passes, not only when new evidence lands: the roster
+    // settling is itself an event, and the instant it settles the name it leaves standing is frozen.
+    if (this.provisional.size > 0) for (const trackId of [...this.provisional]) this.evaluate(trackId, this.newest);
     // Elimination is time-gated on a quiet roster, so it has to be re-tested as time passes — no
     // further roster sighting is coming once the room has settled.
     this.eliminate(this.newest);
@@ -514,6 +552,8 @@ export class TrackNamer {
     // Successor evidence may have crossed its threshold long before teardown. Re-evaluate every
     // unnamed track now that the complete transport history can prove no predecessor returned.
     for (const trackId of this.evidence.keys()) if (!this.named.has(trackId)) this.evaluate(trackId, this.newest);
+    // Last word on anything still open: the roster will not change again after teardown.
+    for (const trackId of [...this.provisional]) this.evaluate(trackId, this.newest);
     this.eliminate(this.newest);
     this.finalizing = false;
   }
@@ -676,6 +716,7 @@ export class TrackNamer {
   reset(): void {
     this.trackSpans.clear(); this.nameSpans.clear(); this.evidence.clear();
     this.named.clear(); this.owner.clear(); this.roster.clear(); this.canonical.clear();
+    this.provisional.clear(); this.rosterChangedAt = -Infinity;
     this.trackFirstSeen.clear(); this.trackLastEnded.clear(); this.activeTracks.clear();
     this.rosterPolluted.clear(); this.rosterCoverage = null; this.order = []; this.letters.clear();
     this.hintEvents = [];
@@ -777,12 +818,15 @@ export class TrackNamer {
   /** Can this track's leading candidate be believed yet? */
   private evaluate(trackId: string, atMs: number): void {
     const existing = this.named.get(trackId);
+    // A PROVISIONAL name is re-derived rather than defended: it was earned against a roster that
+    // had not finished discovering the room, so the later evidence is entitled to overturn it.
+    const revisable = existing !== undefined && this.provisional.has(trackId);
     // A track named by ELIMINATION may still be re-examined, for one purpose only: to upgrade the
     // record when direct evidence arrives for the same name. Elimination can beat the evidence path
     // to the punch — on the m36 tape a track was labelled [elimination] while holding 46.9 s of its
     // own unambiguous DOM evidence, so the audit trail understated its own confidence and read as
     // the weaker claim. The NAME never changes here; only the account of how it was reached.
-    if (existing && existing.source === 'evidence') return;
+    if (existing && existing.source === 'evidence' && !revisable) return;
     const byName = this.evidence.get(trackId);
     if (!byName) return;
     // A transport id can rotate while the human does not. This path is intentionally evaluated
@@ -790,6 +834,80 @@ export class TrackNamer {
     // It does not "re-let" a name to an alternating source: the candidate must be a wholly later
     // epoch and carry sustained, independently leading evidence rather than one-second UI bleed.
     if (!existing && this.evaluateSuccessor(trackId, byName, atMs)) return;
+    if (revisable) { this.reconsider(trackId, existing!, atMs); return; }
+    const verdict = this.verdict(trackId, byName);
+    if (!verdict) return;
+    const { lead, ranked, share } = verdict;
+    if (existing) {
+      // Same name, better provenance: upgrade in place. A DIFFERENT name is never accepted — an
+      // elimination that has already been published is not overturned by later evidence, it is a
+      // contradiction worth seeing rather than silently resolving.
+      if (existing.name !== this.canonicalCase(lead.name) && existing.name !== lead.name) {
+        this.log(`track ${trackId} evidence names "${lead.name}" but it was already eliminated to "${existing.name}" — keeping the published name`);
+        return;
+      }
+      existing.source = 'evidence';
+      existing.confidence = share;
+      existing.evidence = ranked;
+      this.log(`track ${trackId} upgraded to [evidence] (${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s))`);
+      return;
+    }
+    this.bind(trackId, lead.name, 'evidence', share, ranked, atMs,
+      `${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)}`);
+  }
+
+  /**
+   * Re-derive a name that was earned against an unsettled roster, and freeze it once the roster is.
+   *
+   * Three outcomes: the evidence still says the same person (keep it, and freeze if the roster has
+   * settled); it now says someone else (repaint to them); or it no longer clears the bar at all
+   * (withdraw — the track goes back to Speaker A/B/C, which is the honest state, and the name is
+   * released so the track that genuinely owns it can earn it).
+   */
+  private reconsider(trackId: string, existing: TrackNaming, atMs: number): void {
+    const byName = this.evidence.get(trackId);
+    const verdict = byName ? this.verdict(trackId, byName) : null;
+    const settled = this.rosterSettled(atMs);
+    if (verdict && (this.canonicalCase(verdict.lead.name) === existing.name || verdict.lead.name === existing.name)) {
+      existing.confidence = verdict.share;
+      existing.evidence = verdict.ranked;
+      if (settled) {
+        this.provisional.delete(trackId);
+        this.log(`track ${trackId} → "${existing.name}" settled (roster stable, ${Math.round(verdict.lead.supportMs)}ms)`);
+      }
+      return;
+    }
+    this.withdraw(trackId, verdict
+      ? `evidence now names "${verdict.lead.name}"`
+      : `evidence no longer supports it (roster was still filling when it was accepted)`);
+    if (verdict) {
+      this.bind(trackId, verdict.lead.name, 'evidence', verdict.share, verdict.ranked, atMs,
+        `${Math.round(verdict.lead.supportMs)}ms over ${verdict.lead.episodes} episode(s), share ${verdict.share.toFixed(2)}`);
+      return;
+    }
+    // A released name may be exactly what another track has been refused all meeting.
+    for (const other of this.order) if (other !== trackId && !this.named.has(other)) this.evaluate(other, atMs);
+  }
+
+  /** Take a provisional name back off a track and release it. The host repaints, as it does for
+   *  every other change of label; a wrong name left standing is the alternative. */
+  private withdraw(trackId: string, why: string): void {
+    const naming = this.named.get(trackId);
+    if (!naming) return;
+    this.named.delete(trackId);
+    this.provisional.delete(trackId);
+    for (const [name, holder] of [...this.owner]) if (holder === trackId) this.owner.delete(name);
+    this.log(`track ${trackId} released "${naming.name}" — ${why}`);
+    this.letters.delete(trackId);
+    this.noteHeard(trackId);
+    this.relabelUnnamed();
+  }
+
+  /** The name this track's evidence currently supports, or null. Pure: consults state, changes none. */
+  private verdict(
+    trackId: string,
+    byName: Map<string, TrackEvidence>,
+  ): { lead: TrackEvidence; ranked: TrackEvidence[]; share: number } | null {
     // EVIDENCE FOR SOMEONE ELSE'S NAME IS NOT DISAGREEMENT. A track accrues time for a name that
     // another track has ALREADY EARNED purely because the tiles lag the audio by about a second —
     // the bleed this file's exclusivity rule exists to catch. Once that name is settled on another
@@ -812,34 +930,19 @@ export class TrackNamer {
     const lead = ranked[0];
     // Corroborated by COUNT (several separate coincidences) or by WEIGHT (one long unambiguous
     // one). Either is corroboration; only the count was expressible before.
-    if (!lead) return;
+    if (!lead) return null;
     const corroborated = lead.episodes >= this.corroborations || lead.supportMs >= this.soloEpisodeMs;
-    if (!corroborated) return;
+    if (!corroborated) return null;
     const total = ranked.reduce((s, e) => s + e.supportMs, 0);
     const share = total > 0 ? lead.supportMs / total : 0;
-    if (share < this.minShare) return;                        // this track's tiles disagree
+    if (share < this.minShare) return null;                        // this track's tiles disagree
     const holder = this.owner.get(lead.name) ?? this.owner.get(this.canonicalCase(lead.name));
-    if (holder !== undefined && holder !== trackId) return;   // that person is already someone else
+    if (holder !== undefined && holder !== trackId) return null;   // that person is already someone else
     // Exclusivity the other way: does this track hold the clear majority of that NAME's evidence?
     let nameTotal = 0;
     for (const [, m] of this.evidence) { const e = m.get(lead.name); if (e) nameTotal += e.supportMs; }
-    if (nameTotal > 0 && lead.supportMs / nameTotal < this.minOwnerShare) return;
-    if (existing) {
-      // Same name, better provenance: upgrade in place. A DIFFERENT name is never accepted — an
-      // elimination that has already been published is not overturned by later evidence, it is a
-      // contradiction worth seeing rather than silently resolving.
-      if (existing.name !== this.canonicalCase(lead.name) && existing.name !== lead.name) {
-        this.log(`track ${trackId} evidence names "${lead.name}" but it was already eliminated to "${existing.name}" — keeping the published name`);
-        return;
-      }
-      existing.source = 'evidence';
-      existing.confidence = share;
-      existing.evidence = ranked;
-      this.log(`track ${trackId} upgraded to [evidence] (${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s))`);
-      return;
-    }
-    this.bind(trackId, lead.name, 'evidence', share, ranked, atMs,
-      `${Math.round(lead.supportMs)}ms over ${lead.episodes} episode(s), share ${share.toFixed(2)}`);
+    if (nameTotal > 0 && lead.supportMs / nameTotal < this.minOwnerShare) return null;
+    return { lead, ranked, share };
   }
 
   /** Join a strictly later transport epoch to an already proved human identity. */
@@ -900,6 +1003,10 @@ export class TrackNamer {
   ): void {
     const display = this.canonicalCase(name);
     this.named.set(trackId, { name: display, confidence, source, evidence, atMs, ...(successorOf ? { successorOf } : {}) });
+    // Only the EVIDENCE path can be premature this way. Elimination already refuses to fire against
+    // an unsettled roster, and a successor is only ever bound at finalization.
+    if (source === 'evidence' && !successorOf && !this.rosterSettled(atMs)) this.provisional.add(trackId);
+    else this.provisional.delete(trackId);
     if (!successorOf) {
       this.owner.set(name, trackId);
       if (display !== name) this.owner.set(display, trackId);
@@ -963,7 +1070,11 @@ export class TrackNamer {
     // corroborating and the second appearing it looks exactly like a decidable 1-and-1. Eliminating
     // there is a race, not an argument — on the real m30 tape it produced the RIGHT answer for
     // entirely the WRONG reason, which is how it stayed invisible.
-    if (Math.max(atMs, this.newest) - this.rosterChangedAt < this.rosterSettleMs) return;
+    // …and NOT PROVABLY BEHIND. Quiet is not the same as complete: on meeting 26424 the roster sat
+    // still on one name for 35 s while the transport was already carrying two humans, and coverage
+    // called itself 1-of-1 the whole time. `rosterSettled` adds that one contradiction to the quiet
+    // test; everything else about this rule is unchanged.
+    if (!this.rosterSettled(atMs)) return;
     const unclaimed = [...this.roster.keys()]
       .filter((n) => !this.owner.has(n) && !this.owner.has(this.canonicalCase(n)));
     if (unclaimed.length !== 1) return;
