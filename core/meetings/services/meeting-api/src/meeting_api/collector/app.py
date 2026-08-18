@@ -275,7 +275,7 @@ def build_router(
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
     ):
-        from .projection import project_calendar_sources
+        from .projection import project_response_data
 
         user_id = _resolve_user_id(x_user_id)
         meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
@@ -286,7 +286,7 @@ def build_router(
         # response edge, because the same store call feeds calendar sync — which reads the
         # snapshot and writes it back, so a strip inside the store would erase it.
         return JSONResponse(content={
-            **meeting, "data": project_calendar_sources(meeting.get("data")),
+            **meeting, "data": project_response_data(meeting.get("data")),
         })
 
     # --- POST /meetings → CREATE a PLANNED meeting (intent status, NO bot spawned). The user plans a
@@ -422,7 +422,7 @@ def build_router(
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
     async def _apply_meeting_patch(user_id: int, meeting_id: int, payload) -> dict:
-        from .projection import project_calendar_sources
+        from .projection import project_response_data
 
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
@@ -492,7 +492,7 @@ def build_router(
         # source's uid + event.resolved_start/calendar/component). Projected HERE, at the response
         # edge, so both the row-id and the native-keyed alias get it and the STORED row — which
         # calendar sync reconciles against — keeps the snapshot.
-        return {**row, "data": project_calendar_sources(row.get("data"))}
+        return {**row, "data": project_response_data(row.get("data"))}
 
     async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
         result = await store.delete_planned_meeting(user_id, meeting_id)

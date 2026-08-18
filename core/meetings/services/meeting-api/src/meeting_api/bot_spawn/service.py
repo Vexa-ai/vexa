@@ -521,7 +521,8 @@ async def request_bot(
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
-        # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS).
+        # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS)
+        # and from every API response edge (collector.projection.RESPONSE_OMIT_KEYS).
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:
