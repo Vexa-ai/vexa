@@ -85,32 +85,32 @@ test("v0.12.23 bootstrap packet freezes build identity without claiming validati
   );
 });
 
-test("v0.12.23 canonical packet freezes the rc.15 train candidate", () => {
+test("v0.12.23 canonical packet freezes the rc.16 train candidate", () => {
   const raw = readFileSync(
     new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "4a344e3084a7af1d62d78598dac869bdfb4dfdd5607445102d9fe53ce14a589a",
+    "f51bf640fb156a67c75a59783fbe59d64f4f10cfb04b7b2fb13331fc5cdf8006",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
-  assert.equal(map.candidate_tag, "v0.12.23-rc.15");
-  assert.equal(map.build_source, "519ab205676a8f8c957cbb09ada48ce3a2f46197");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.16");
+  assert.equal(map.build_source, "de0ebe201d3a651b2a89c71b1302d2f1b89c3fcd");
   assert.equal(
     map.build_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/32078414374",
+    "https://github.com/Vexa-ai/vexa/actions/runs/32095685040",
   );
   assert.equal(
     map.validation_run,
-    "https://github.com/Vexa-ai/vexa/actions/runs/32079644886",
+    "https://github.com/Vexa-ai/vexa/actions/runs/32095685040",
   );
   assert.equal(
     map.images["vexaai/vexa-bot"].digest,
-    "sha256:cca74c5e1e7e6667bcc142271c5c55d78842fcb29ca20d2108bdceab3815d169",
+    "sha256:8432d734d06f57a31e099c10f962e7a4a12aa499c2256618c00d962498fc360a",
   );
   assert.equal(
     map.images["vexaai/vexa-lite"].digest,
-    "sha256:098ddffdc24e997f93bfe18a8f43c486b5fd00c5787a834e66550a3f2751de11",
+    "sha256:95012b360bcd732d42b9dfefa95d431ef4b448a00aeccd605f2cdd888abb25b6",
   );
   assert.equal(Object.keys(map.images).length, 10);
   assert.equal(

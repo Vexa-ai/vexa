@@ -2,15 +2,15 @@
   "schema_version": 1,
   "release": "v0.12.23",
   "stable_tag": "v0.12.23",
-  "candidate_tag": "v0.12.23-rc.15",
-  "build_source": "519ab205676a8f8c957cbb09ada48ce3a2f46197",
-  "validation_source": "1f1ab20449cdaa046281c04c21823a3042e660a3",
-  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/32078414374",
-  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/32079644886",
+  "candidate_tag": "v0.12.23-rc.16",
+  "build_source": "de0ebe201d3a651b2a89c71b1302d2f1b89c3fcd",
+  "validation_source": "de0ebe201d3a651b2a89c71b1302d2f1b89c3fcd",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/32095685040",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/32095685040",
   "images": {
     "vexaai/v012-admin-api": {
       "class": "prod_deployed",
-      "digest": "sha256:bb1d89af350f2dba4bf6450abfc9998fcae6754ca45678aad41c6dc33a4d1358",
+      "digest": "sha256:7a9edd66cf3a6b70816fc581b22080127c2a31f99f4acaa839c803c257b4f361",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -26,11 +26,11 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-runtime": {
       "class": "prod_deployed",
-      "digest": "sha256:23605b3f52b8159334e0ba345c25a1ffba56343e2039bcf6ac047c584913965f",
+      "digest": "sha256:e0535d6f9406da1e9adb44faf00df51cbced579e6a2c0a4c2982bb83024b5006",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -46,11 +46,11 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-agent-worker": {
       "class": "oss_only",
-      "digest": "sha256:f00861bc0bed5e470d0c90ab7f07e8245576164bc97b05e69b6cb5c4cf2b51b5",
+      "digest": "sha256:b1e0c158b6d33b290c11e0be70083c59d479a591653e3b2b45e3f6771bfa5da9",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -66,11 +66,11 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-agent-api": {
       "class": "oss_only",
-      "digest": "sha256:a3ebb596f7808d07c1af014b50d5ac34eacf9a82995abaf786df5e8e14326585",
+      "digest": "sha256:570b718656599f50459f17913740bbe9f0d6ab29ae77defab4627be726fefda2",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -86,31 +86,31 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-meeting-api": {
       "class": "prod_deployed",
-      "digest": "sha256:82a2e5b8ae711a1e12b37120d3a06a6c2acbd8aac46b7133360d1ac7b65afacc",
+      "digest": "sha256:12e840fd22469d5fe04cf71242ee3e392f4da8377a6736cbebc31641c9a0fecd",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:dba42ab6f6cf97f339364d836f8bc63f0ec07ebfa42714d8b00ece713923769f",
-          "config_digest": "sha256:73763844496dd278d4ca8ac2348f0df6218c975213a77b83d9f41f2d3cea6167"
+          "manifest_digest": "sha256:4c9acb5f207e96cd11d9d17464f57bc1cc71ddd3fef48ce0fc554e79ec47afaf",
+          "config_digest": "sha256:69f16f91a899108fa730bff9caf26a31f29cf37f623880dc881809c46fbcc5aa"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:b9fb426a94832ea4afa9d30da9df4384ed6890b3fd71dfd5ccd04fb8f9b620d3",
-          "config_digest": "sha256:8775a46de4f79fd1d79161dc78754530b4e7bc467ad1441b01df07127be4ea63"
+          "manifest_digest": "sha256:0b65a2c754fa0249fa6754136cd5dafbf23736b307ea373099c0e5de41d30296",
+          "config_digest": "sha256:c013bba41f4e8c404699365b6d35f372bf3af3248d067f64c2c95171f72b758f"
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-gateway": {
       "class": "prod_deployed",
-      "digest": "sha256:4429af8236f04919af3e3ea2e554c6b98f9188d9d479e1201b27a83bb6ad0983",
+      "digest": "sha256:57dc4020c0bab80d92a1a823565b0107834fea98c807ee12e89475d31bd36c07",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -126,11 +126,11 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-mcp": {
       "class": "oss_only",
-      "digest": "sha256:4ea4285d9fb1817b59998aeed3d297f9d570d7796c6c3cfd3340299cab1c4bb4",
+      "digest": "sha256:d5ca39a8a4f43d073a9a708f0914d712ad119353497b3a882d1de0a7c1a8c546",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -146,11 +146,11 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/v012-terminal": {
       "class": "oss_only",
-      "digest": "sha256:967e607ef16aea60d89c16fe56c571ca00a1c1964b2903e4d954f8a10b822c2e",
+      "digest": "sha256:e1b6049efbbf1a1c2237b14d257c80655e01777ce9808e6df90c92152b73939e",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -166,42 +166,42 @@
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/vexa-bot": {
       "class": "prod_deployed",
-      "digest": "sha256:cca74c5e1e7e6667bcc142271c5c55d78842fcb29ca20d2108bdceab3815d169",
+      "digest": "sha256:8432d734d06f57a31e099c10f962e7a4a12aa499c2256618c00d962498fc360a",
       "platforms": [
         "linux/amd64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:cca74c5e1e7e6667bcc142271c5c55d78842fcb29ca20d2108bdceab3815d169",
-          "config_digest": "sha256:f46e34e7217f76a1cd5329fbad339992a92cf40fbc9b5af4d768cf506a769ece"
+          "manifest_digest": "sha256:8432d734d06f57a31e099c10f962e7a4a12aa499c2256618c00d962498fc360a",
+          "config_digest": "sha256:40b69cc7c41a6381b5b54e5d3508ea1d3f34c082784d500d1788dbe4e26d2a3a"
         }
       },
       "attestations": false,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     },
     "vexaai/vexa-lite": {
       "class": "oss_only",
-      "digest": "sha256:098ddffdc24e997f93bfe18a8f43c486b5fd00c5787a834e66550a3f2751de11",
+      "digest": "sha256:95012b360bcd732d42b9dfefa95d431ef4b448a00aeccd605f2cdd888abb25b6",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:9fdca240efe5f867d5442177a1e8f7c0263b37624cf46776947049a02b827aff",
-          "config_digest": "sha256:8f0ce33801ee70bcb6ba6ff3ed4b761c0fb8eaf40639afca6b6db389297dc36c"
+          "manifest_digest": "sha256:fdfb9ef69f9d089159b2a2d886d2ce9a876687e88f2a8e3778ac6eb1e5ffbc88",
+          "config_digest": "sha256:8c5796e979ab54999a6818c29bff3f07d9bbee947d40015b6cd835c0dca59672"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:77850eb07d02c782aa91ff7934c044ba4c64a6519122bd9ce74309b0a0ace5b6",
-          "config_digest": "sha256:6f98d36571c681ced26cc9f45d7c80f3ccac8ceed7f2cca229a0344d058e47d5"
+          "manifest_digest": "sha256:591e226b950df2569b7b3e93a27522e75297a39bacb33bccade2212cd6a8fe98",
+          "config_digest": "sha256:cd3b7909a18131ff2147fc1c77212e7267ed6d60f04846c1f18cbc92cb015402"
         }
       },
       "attestations": true,
-      "evidence": "candidate build run 32078414374 at 519ab205; exact registry identities collected after the image job completed"
+      "evidence": "candidate build run 32095685040 at de0ebe20; exact registry identities collected after the image job completed"
     }
   }
 }
