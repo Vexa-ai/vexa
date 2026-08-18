@@ -324,7 +324,9 @@ class SqlAlchemyTranscriptStore:
         }
         return snap, seg_by_id, order
 
-    async def _merge_live_segments(self, pg: "tuple[dict, dict, list]") -> dict:
+    async def _merge_live_segments(
+        self, pg: "tuple[dict, dict, list]", *, viewer_is_owner: bool,
+    ) -> dict:
         """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
         assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
         is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
@@ -332,8 +334,14 @@ class SqlAlchemyTranscriptStore:
 
         This is a RESPONSE edge, so ``data`` goes through ``project_response_data``: calendar sources
         reduced to their identity + policy keys (the raw ICS event snapshot is sweep state, not anyone's
-        transcript), and credential/authorization keys dropped — this read authorizes a transcript-share
-        recipient and a bound-workspace member too, not only the owner."""
+        transcript), credential material dropped for everyone, and the owner's private configuration
+        dropped for everyone but the owner — this read authorizes a transcript-share recipient and a
+        bound-workspace member too, not only the owner.
+
+        ``viewer_is_owner`` is REQUIRED (no default) because both callers already know it: the
+        native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
+        evaluates an explicit owner branch inside its authorization check. Passing the decision down
+        beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
         from .projection import project_response_data
 
         snap, seg_by_id, order = pg
@@ -371,7 +379,7 @@ class SqlAlchemyTranscriptStore:
             "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
-            "data": project_response_data(data),
+            "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
         }
 
@@ -395,7 +403,9 @@ class SqlAlchemyTranscriptStore:
                 return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._merge_live_segments(pg)
+        # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
+        # path is by construction the caller's own — the native-keyed read has no share branch.
+        return await self._merge_live_segments(pg, viewer_is_owner=True)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
@@ -415,8 +425,9 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
+            is_owner = meeting.user_id == user_id                                   # (a) owner
             authorized = (
-                meeting.user_id == user_id                                          # (a) owner
+                is_owner
                 or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
                 or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)  # (b) bound ws member
             )
@@ -424,7 +435,9 @@ class SqlAlchemyTranscriptStore:
                 return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._merge_live_segments(pg)
+        # The response projection reuses branch (a) above — the SAME decision that authorized this
+        # read decides which tier of the blob it may carry, so the two can never disagree.
+        return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -510,6 +523,10 @@ class SqlAlchemyTranscriptStore:
                 has_more = False
 
             def _row(m):
+                # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
+                # response projection's viewer tier both read it, so a row can never claim to be the
+                # caller's while being projected as a stranger's, or the reverse.
+                is_owner = m.user_id == user_id
                 row = {
                     "id": m.id,
                     "user_id": m.user_id,
@@ -525,7 +542,7 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
-                    "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
+                    "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
@@ -536,8 +553,13 @@ class SqlAlchemyTranscriptStore:
                     # materialized every byte of `data` — 180 MB for one production account, 144 MB of
                     # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
                     # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
-                    # (the detail view, calendar sync, reconciliation) leave both flags off.
-                    "data": project_list_data(m.data) if (list_view or slim)
+                    # (the detail view, calendar sync, reconciliation) leave both flags off — and
+                    # those callers project at their own response edge (app.py) or are internal.
+                    #
+                    # #1243 follow-up: the projection is VIEWER-AWARE. The owner keeps their own
+                    # webhook config here, which is where a 0.10 client reads it back
+                    # (`test_10_user_webhook_config_flow`); a share/workspace reader does not.
+                    "data": project_list_data(m.data, viewer_is_owner=is_owner) if (list_view or slim)
                     else (m.data if isinstance(m.data, dict) else {}),
                 }
                 return row

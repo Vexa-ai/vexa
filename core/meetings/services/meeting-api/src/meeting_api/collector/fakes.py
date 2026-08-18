@@ -115,11 +115,12 @@ class InMemoryTranscriptStore:
         matches.sort(key=lambda kv: (kv[1].get("created_at") or "", kv[0]), reverse=True)
         return matches[0][0]
 
-    async def _transcript_doc(self, mid) -> dict:
+    async def _transcript_doc(self, mid, *, viewer_is_owner: bool) -> dict:
         """Build the api.v1 ``TranscriptionResponse`` for row ``mid`` — shared by ``get_transcript``
         (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
-        by-id read returns exactly that row's segments/notes. Mirrors the real store's response
-        projection of the calendar sources."""
+        by-id read returns exactly that row's segments/notes. Mirrors the real store's viewer-aware
+        response projection, ``viewer_is_owner`` included — the fake and the real store must agree on
+        what a share recipient receives, since most of the suite drives the fake."""
         from .projection import project_response_data
 
         m = self._meetings[mid]
@@ -147,7 +148,7 @@ class InMemoryTranscriptStore:
             "end_time": m["end_time"],
             "recordings": m["data"].get("recordings", []),
             "notes": m["data"].get("notes"),
-            "data": project_response_data(m["data"]),
+            "data": project_response_data(m["data"], viewer_is_owner=viewer_is_owner),
             "segments": [_segment_to_api(s) for s in segments],
         }
 
@@ -155,7 +156,9 @@ class InMemoryTranscriptStore:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:
             return None
-        return await self._transcript_doc(mid)
+        # ``_find`` matches on ``m["user_id"] == user_id`` (mirroring the real store's SQL), so a row
+        # reached by the native-keyed path is always the caller's own.
+        return await self._transcript_doc(mid, viewer_is_owner=True)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript authorized by owner OR transcript-viewer OR bound-workspace member (mirrors
@@ -168,12 +171,14 @@ class InMemoryTranscriptStore:
         if m is None:
             return None
         data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        is_owner = m.get("user_id") == user_id
         authorized = (
-            m.get("user_id") == user_id
+            is_owner
             or user_id in (data.get("transcript_viewers") or [])
             or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
         )
-        return await self._transcript_doc(mid) if authorized else None
+        # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
+        return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -209,6 +214,9 @@ class InMemoryTranscriptStore:
             has_more = False
 
         def _row(mid, m):
+            # One ownership decision per row, feeding both `shared` and the projection's viewer tier
+            # (mirrors the real store's `_row`).
+            is_owner = m["user_id"] == user_id
             row = {
                 "id": mid,
                 "user_id": m["user_id"],
@@ -222,12 +230,14 @@ class InMemoryTranscriptStore:
                 # api.v1 MeetingResponse declares these at top level; the values live in `data`.
                 "completion_reason": (m.get("data") or {}).get("completion_reason") if isinstance(m.get("data"), dict) else None,
                 "failure_stage": (m.get("data") or {}).get("failure_stage") if isinstance(m.get("data"), dict) else None,
-                "shared": m["user_id"] != user_id,
+                "shared": not is_owner,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
                 # #584 list_view / #803 slim: both drop the heavy detail keys and keep the light
                 # metadata. Only a caller that genuinely renders full `data` leaves both off.
-                "data": project_list_data(m["data"]) if (list_view or slim) else m["data"],
+                # The response omissions are viewer-aware — the owner keeps their own webhook config.
+                "data": project_list_data(m["data"], viewer_is_owner=is_owner) if (list_view or slim)
+                else m["data"],
             }
             return row
 

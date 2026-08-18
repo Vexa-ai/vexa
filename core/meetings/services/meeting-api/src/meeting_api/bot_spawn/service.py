@@ -520,9 +520,12 @@ async def request_bot(
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
-        # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
-        # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS)
-        # and from every API response edge (collector.projection.RESPONSE_OMIT_KEYS).
+        # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
+        # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
+        # the API response edge the treatment splits (collector.projection): `webhook_secret` is
+        # never served to anyone (SENSITIVE_OMIT_KEYS); `webhook_url`/`webhook_events` are served to
+        # the OWNER — the v0.10 REST contract reads them back off the meeting row — and stripped for
+        # a share/workspace reader (OWNER_ONLY_KEYS).
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:

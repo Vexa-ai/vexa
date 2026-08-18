@@ -285,8 +285,15 @@ def build_router(
         # Full `data` minus the raw ICS event snapshot: the projection happens HERE, at the
         # response edge, because the same store call feeds calendar sync — which reads the
         # snapshot and writes it back, so a strip inside the store would erase it.
+        #
+        # The projection is viewer-aware, and the viewer decision is READ BACK from the row rather
+        # than re-derived: `list_meetings` already evaluated its access union and stamped `shared`
+        # (`m.user_id != user_id`) on every row it returns. `is False` and not `not ...` on purpose —
+        # an absent or unknown `shared` must fall to the STRICT view, not the permissive one.
+        viewer_is_owner = meeting.get("shared") is False
         return JSONResponse(content={
-            **meeting, "data": project_response_data(meeting.get("data")),
+            **meeting,
+            "data": project_response_data(meeting.get("data"), viewer_is_owner=viewer_is_owner),
         })
 
     # --- POST /meetings → CREATE a PLANNED meeting (intent status, NO bot spawned). The user plans a
@@ -492,7 +499,12 @@ def build_router(
         # source's uid + event.resolved_start/calendar/component). Projected HERE, at the response
         # edge, so both the row-id and the native-keyed alias get it and the STORED row — which
         # calendar sync reconciles against — keeps the snapshot.
-        return {**row, "data": project_response_data(row.get("data"))}
+        #
+        # `viewer_is_owner=True` is a property of the write, not an assumption: `update_planned_meeting`
+        # selects `WHERE Meeting.id == meeting_id AND Meeting.user_id == user_id` (the fake mirrors it
+        # with the same guard) and returns None otherwise, so a non-owner never reaches this line —
+        # PATCH has no share or workspace branch. The echo is the owner reading their own row back.
+        return {**row, "data": project_response_data(row.get("data"), viewer_is_owner=True)}
 
     async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
         result = await store.delete_planned_meeting(user_id, meeting_id)
