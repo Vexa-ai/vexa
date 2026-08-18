@@ -1,19 +1,17 @@
 ---
 title: "MCP server"
-description: "Vexa's meeting capabilities as MCP tools — working on self-hosted compose, not yet on hosted or Kubernetes."
+description: "Vexa's meeting capabilities as MCP tools — live on the hosted service, on Kubernetes, and on self-hosted compose."
 ---
 
-<Warning>
-**Read the boundary before you wire anything.** The MCP server is real, runs as its own service,
-and is fronted by the gateway at `/mcp` on **self-hosted Docker Compose from 0.12.18 onward**. It is
-**not available on hosted [vexa.ai](https://vexa.ai), and not available on Kubernetes** — the Helm
-chart does not deploy the service at all, so there is no `/mcp` route there to point a client at.
+The MCP server runs as its own service and is fronted by the gateway at `/mcp` on **self-hosted
+Docker Compose from 0.12.18 onward**, on **Kubernetes**, and on the **hosted service** at
+`https://api.cloud.vexa.ai/mcp`.
 
-The gateway forward is module-tested (streamed relay, verbatim status, typed 502/504) but the
-transport has **not been proven against a real MCP client end-to-end**
-([#888](https://github.com/Vexa-ai/vexa/issues/888)). Treat a working session as something you
-should verify yourself, not something we have witnessed for you.
-</Warning>
+Verified against the hosted service on 2026-08-18: `initialize` returns
+`Vexa MCP Service (v0.12)` over protocol `2024-11-05`, `tools/list` returns the nine tools below,
+`prompts/list` returns the four prompts, and tool calls carry the caller's own credential through to
+the gateway. That is the end-to-end client proof
+[#888](https://github.com/Vexa-ai/vexa/issues/888) was waiting for.
 
 ## What it is
 
@@ -42,12 +40,27 @@ Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
 
-## Connect a client (self-hosted compose)
+`update_bot_config` wraps a route that is not wired in the v0.12 open core and returns `404` — see
+[Meetings API → Manage the bot](/api/meetings#manage-the-bot). The other eight reach live routes.
 
-Requires a compose deployment on **0.12.18 or later** — that is the release in which the gateway
-began fronting `/mcp`.
+## Connect a client
 
-```json
+Point the client at the **gateway**, not at the MCP service's own port — the gateway is the
+authenticated front door.
+
+```json Hosted
+{
+  "mcpServers": {
+    "Vexa": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://api.cloud.vexa.ai/mcp",
+               "--header", "Authorization: Bearer ${VEXA_API_KEY}"]
+    }
+  }
+}
+```
+
+```json Self-hosted compose
 {
   "mcpServers": {
     "Vexa": {
@@ -59,8 +72,8 @@ began fronting `/mcp`.
 }
 ```
 
-`18056` is the compose `API_GATEWAY_HOST_PORT`. Point at the gateway, not at the MCP service's own
-port — the gateway is the authenticated front door.
+Self-hosted compose requires **0.12.18 or later** — that is the release in which the gateway began
+fronting `/mcp`. `18056` is the compose `API_GATEWAY_HOST_PORT`.
 
 The key may arrive as `X-API-Key` or as the MCP transport's `Authorization: Bearer <key>`; both are
 forwarded on. Auth at the edge is fail-closed and identical to every other route
@@ -87,11 +100,6 @@ never sees.
 
 ## What is not available
 
-- **Hosted.** No MCP endpoint on [vexa.ai](https://vexa.ai).
-- **Kubernetes / Helm.** The chart deploys no MCP service and defines no route — see
-  [#1035](https://github.com/Vexa-ai/vexa/issues/1035).
-- **End-to-end proof.** No real MCP client session has been witnessed
-  ([#888](https://github.com/Vexa-ai/vexa/issues/888)).
 - **Tools blocked on API parity** — these wrap REST routes the public API does not expose yet, and
   will be ported when the routes land: `delete_recording` · `get_recording_media_download` ·
   `get_recording_config` / `update_recording_config` · `create_transcript_share_link` ·

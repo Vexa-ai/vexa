@@ -232,7 +232,7 @@ self-hosted and can be left untouched.
 ### Per-user limiter (post-auth, on by default)
 
 A token-bucket limiter keyed by user id fires *after* the API key is resolved — it catches one token
-driving too much traffic. On for self-hosted by default.
+driving too much traffic. On by default.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -240,14 +240,14 @@ driving too much traffic. On for self-hosted by default.
 | `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
 | `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
 
-### Edge guard (pre-auth, off by default for self-hosted)
+### Edge guard (pre-auth, off by default)
 
 An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
 — so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is
 answered with `429` at the edge and never reaches admin-api. An IP that keeps offending past a threshold
-is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. Hosted runs this
-on; self-hosted defaults OFF. The code default is `GUARD_ENABLED=true`; the deploy surfaces set
-`GUARD_ENABLED=false` for self-hosted, so you opt in by overriding it.
+is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. The code default
+is `GUARD_ENABLED=true`; the deploy surfaces set `GUARD_ENABLED=false`, so you opt in by overriding
+it. Whether the hosted service runs this layer is a deployment setting and is not published here.
 
 <Note>
 `GUARD_ENABLED=false` is the kill switch — flip it to `true` to turn the whole edge layer on. When
@@ -258,7 +258,7 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GUARD_ENABLED` | `true` (code) / `false` (self-hosted deploy) | Kill switch for the entire edge layer. |
+| `GUARD_ENABLED` | `true` (code) / `false` (deploy surfaces) | Kill switch for the entire edge layer. |
 | `GUARD_ENABLE_REDIS` | `true` | Share rate/ban state across processes via the existing `REDIS_URL` (`false` → in-memory only, per-process). |
 | `GUARD_RATE_LIMIT_RPM` | `600` | Per-IP request cap per minute; `0` disables rate limiting. |
 | `GUARD_RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds. |

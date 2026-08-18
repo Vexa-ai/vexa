@@ -3,6 +3,22 @@ title: "Agent API"
 description: "The control plane — dispatch a unit, stream a chat turn, manage routines, read the workspace."
 ---
 
+<Warning>
+**Not available on the hosted service, and not available on Kubernetes.** The gateway mounts
+`/agent/*` and resolves your key, but no agent-api workload is deployed on either — every route on
+this page answers `502 {"detail":"upstream unreachable: ConnectError"}` on
+`https://api.cloud.vexa.ai`. Verified 2026-08-18 against the hosted gateway and the production
+cluster. Tracked as
+[vexa-platform#324](https://github.com/Vexa-ai/vexa-platform/issues/324).
+
+The two streamed routes fail worse than the rest: `POST /agent/chat` and `GET /agent/meeting/stream`
+open `200 text/event-stream` and close with **zero bytes** — no `error` frame, no `done` — so a
+client reads a successful empty stream rather than an outage. Same issue.
+
+This page documents the surface as built and as it runs on self-hosted Docker Compose. Do not build
+a hosted integration against it until the tracking issue closes.
+</Warning>
+
 The agent API is Vexa's **control plane**. It turns triggers into [dispatches](/core/agents) and streams
 their output; it does no execution itself — it validates and hands off to the [runtime](/core/runtime).
 Endpoints are fronted by the gateway, which carries authentication and per-route scopes; the service
