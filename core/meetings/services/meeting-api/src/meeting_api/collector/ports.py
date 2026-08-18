@@ -30,15 +30,21 @@ class TranscriptStore(Protocol):
     home — there is NO separate recordings table)."""
 
     async def get_transcript(
-        self, user_id: int, platform: str, native_meeting_id: str
+        self, user_id: int, platform: str, native_meeting_id: str,
+        since: "Optional[datetime]" = None,
     ) -> Optional[dict]:
         """The transcript document for ``(user, platform, native_id)`` — an api.v1
         ``TranscriptionResponse``-shaped dict (id, platform, status, start/end, segments[], …),
-        or ``None`` when the user owns no such meeting (the route maps ``None`` → 404)."""
+        or ``None`` when the user owns no such meeting (the route maps ``None`` → 404).
+
+        ``since`` is the incremental-read cursor (``collector/cursor.py``): only segments CHANGED at
+        or after it are returned, plus ``retracted_segment_ids`` for the ones deleted in that window.
+        Every response carries ``next_since`` — the watermark for the caller's next poll."""
         ...
 
     async def get_transcript_by_id(
-        self, user_id: int, meeting_id: int, member_workspaces: "Optional[set[str]]" = None
+        self, user_id: int, meeting_id: int, member_workspaces: "Optional[set[str]]" = None,
+        since: "Optional[datetime]" = None,
     ) -> Optional[dict]:
         """The transcript document for a SPECIFIC meeting ROW (``meeting.id``), authorized by owner OR
         transcript-share viewer OR bound-workspace member (``member_workspaces``) — the same api.v1
