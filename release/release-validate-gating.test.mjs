@@ -125,7 +125,7 @@ const mapFor = (candidateTag, stableTag) => ({
 
 test("a freeze build of an unreviewed rc no longer fails — identity is deferred, not asserted", (t) => {
   const run = runIdentityGate(t, {
-    version: "v0.12.23-rc.19",
+    version: "v0.12.23-rc.20",
     promote: false,
     prerelease: true,
   });
@@ -135,14 +135,14 @@ test("a freeze build of an unreviewed rc no longer fails — identity is deferre
 });
 
 test("a stale map naming an EARLIER candidate does not make the new candidate's identity knowable", (t) => {
-  // The exact rc.19-after-rc.18 shape: releases/v0.12.23/candidate-images.json exists on the
+  // The exact rc.20-after-rc.19 shape: releases/v0.12.23/candidate-images.json exists on the
   // branch, but it describes rc.18. Treating "a map file exists" as "identity is knowable"
   // would reproduce #1237 one commit later.
   const run = runIdentityGate(t, {
-    version: "v0.12.23-rc.19",
+    version: "v0.12.23-rc.20",
     promote: false,
     prerelease: true,
-    map: mapFor("v0.12.23-rc.18", "v0.12.23"),
+    map: mapFor("v0.12.23-rc.19", "v0.12.23"),
   });
   assert.equal(run.status, 0, run.stdout + run.stderr);
   assert.equal(run.outputs.enforce, "false");
@@ -152,7 +152,7 @@ test("a stale map naming an EARLIER candidate does not make the new candidate's 
 
 test("a promote request on an unreviewed version still fails closed", (t) => {
   const run = runIdentityGate(t, {
-    version: "v0.12.23-rc.19",
+    version: "v0.12.23-rc.20",
     promote: true,
     prerelease: true,
   });
@@ -174,14 +174,14 @@ test("a stable version with no reviewed identity still fails closed", (t) => {
 
 test("a committed map that NAMES this candidate makes identity knowable — unreviewed fails closed", (t) => {
   const run = runIdentityGate(t, {
-    version: "v0.12.23-rc.19",
+    version: "v0.12.23-rc.20",
     promote: false,
     prerelease: true,
-    map: mapFor("v0.12.23-rc.19", "v0.12.23"),
+    map: mapFor("v0.12.23-rc.20", "v0.12.23"),
   });
   assert.notEqual(run.status, 0);
   assert.match(run.stdout, /has no reviewed, packet-bound candidate-map identity/);
-  assert.match(run.stdout, /already names v0\.12\.23-rc\.19/);
+  assert.match(run.stdout, /already names v0\.12\.23-rc\.20/);
 });
 
 test("a committed map whose STABLE tag is this version fails closed when unreviewed", (t) => {
@@ -199,7 +199,7 @@ test("a committed map whose STABLE tag is this version fails closed when unrevie
 
 test("a reviewed version enforces and hands the pinned packet identity to the validator", (t) => {
   const run = runIdentityGate(t, {
-    version: "v0.12.23-rc.18",
+    version: "v0.12.23-rc.19",
     promote: false,
     prerelease: true,
   });
@@ -209,7 +209,7 @@ test("a reviewed version enforces and hands the pinned packet identity to the va
     CANDIDATE_MAP: "releases/v0.12.23/candidate-images.json",
     EXPECTED_MAP_STABLE_TAG: "v0.12.23",
     EXPECTED_MAP_SHA256:
-      "3422d02f02985ab0f02fc47f58a6b4b3e23f0163397f1073c004fe44624d764f",
+      "d148968bd66518804dc4d90976fd376accba5be006c961e9a1d9885ac221b2ec",
     EXPECTED_TOP_DESCRIPTORS: "10",
     EXPECTED_PLATFORM_IDENTITIES: "19",
   });
