@@ -21,13 +21,12 @@ COPY services/dashboard/public ./public
 COPY services/dashboard/scripts ./scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
 COPY services/dashboard/components.json ./
-COPY VERSION /repo/VERSION
 COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
 
 # Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
 #
 # The generator validates any env/build-arg override against the canonical
-# VERSION and Chart.yaml copied above, then the assertion checks the compiled
+# Chart.yaml appVersion copied above, then the assertion checks the compiled
 # Next.js bundle. This prevents digest-retagged or stale-build dashboard images
 # from silently displaying an older release identity.
 ARG NEXT_PUBLIC_VEXA_OSS_VERSION
@@ -61,5 +60,28 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+
+# Provenance disclosure (OCI image spec), the registry-readable half of build
+# identity. The published image answers "which commit is this?" off its own
+# config, so provenance survives without shell access to the machine that built
+# it. `latest-drift` reads image.revision back the same way.
+#
+# Fail closed: an unset revision is exactly the unidentifiable build this
+# disclosure exists to prevent, so the build stops rather than publishing one.
+ARG VEXA_IMAGE_REVISION
+ARG VEXA_IMAGE_CREATED
+ARG VEXA_IMAGE_VERSION
+ARG VEXA_IMAGE_SOURCE=https://github.com/Vexa-ai/vexa
+
+RUN [ -n "$VEXA_IMAGE_REVISION" ] || { \
+      echo "ERROR: VEXA_IMAGE_REVISION build-arg is required (git commit sha)" >&2; exit 1; }
+
+LABEL org.opencontainers.image.title="Vexa Dashboard" \
+      org.opencontainers.image.description="Vexa Dashboard web UI" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="$VEXA_IMAGE_SOURCE" \
+      org.opencontainers.image.revision="$VEXA_IMAGE_REVISION" \
+      org.opencontainers.image.created="$VEXA_IMAGE_CREATED" \
+      org.opencontainers.image.version="$VEXA_IMAGE_VERSION"
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
