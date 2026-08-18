@@ -42,6 +42,33 @@ export function isHiddenDeletedMeeting(meeting: Meeting): boolean {
   return meeting.data?.redacted === true || !meeting.platform_specific_id;
 }
 
+// #1222: the list orders by MEETING EVENT time with non-terminal rows pinned first — the exact
+// key the server emits (meeting-api list_meetings: status-pin DESC, COALESCE(data.scheduled_at,
+// start_time, created_at) DESC, id DESC). A calendar-managed row is created at IMPORT time, so
+// the old created_at sort buried a meeting that was live right now under every row created since
+// the import. The client sort must match or pagination merges re-shuffle the server's pages.
+const PINNED_STATUSES = new Set<Meeting["status"]>([
+  "scheduled", "requested", "joining", "awaiting_admission", "active", "stopping",
+]);
+
+function eventTime(meeting: Meeting): number {
+  const scheduled = typeof meeting.data?.scheduled_at === "string"
+    ? Date.parse(meeting.data.scheduled_at) : NaN;
+  if (!Number.isNaN(scheduled)) return scheduled;
+  const start = meeting.start_time ? Date.parse(meeting.start_time) : NaN;
+  if (!Number.isNaN(start)) return start;
+  const created = Date.parse(meeting.created_at);
+  return Number.isNaN(created) ? 0 : created;
+}
+
+export function compareMeetingsListOrder(a: Meeting, b: Meeting): number {
+  const pin = Number(PINNED_STATUSES.has(b.status)) - Number(PINNED_STATUSES.has(a.status));
+  if (pin !== 0) return pin;
+  const time = eventTime(b) - eventTime(a);
+  if (time !== 0) return time;
+  return (Number(b.id) || 0) - (Number(a.id) || 0);
+}
+
 export function prepareMeetingPage(
   rawMeetings: RawMeeting[],
   hasMore: boolean,
@@ -49,8 +76,6 @@ export function prepareMeetingPage(
   const meetings = rawMeetings
     .map(mapRawMeeting)
     .filter((meeting) => !isHiddenDeletedMeeting(meeting));
-  meetings.sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
+  meetings.sort(compareMeetingsListOrder);
   return { meetings, hasMore };
 }

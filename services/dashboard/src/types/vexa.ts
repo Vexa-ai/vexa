@@ -54,6 +54,9 @@ export interface MeetingData {
   completion_reason?: string;
   // Status history
   status_transition?: StatusTransition[];
+  // The meeting's EVENT time (ISO-8601) — set on planned/calendar-managed rows; the list
+  // orders by it (#1222).
+  scheduled_at?: string;
   calendar_uid?: string;
   calendar_connection_id?: string;
   calendar_name?: string;
