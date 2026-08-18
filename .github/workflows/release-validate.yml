@@ -166,7 +166,7 @@ jobs:
             v0.12.23-rc.18|v0.12.23)
               CANDIDATE_MAP=releases/v0.12.23/candidate-images.json
               EXPECTED_MAP_STABLE_TAG=v0.12.23
-              EXPECTED_MAP_SHA256=31f8740b6a95948c1d4e845e5dd59534a53ca1086081442cab576573aa4fa76c
+              EXPECTED_MAP_SHA256=3422d02f02985ab0f02fc47f58a6b4b3e23f0163397f1073c004fe44624d764f
               EXPECTED_TOP_DESCRIPTORS=10
               EXPECTED_PLATFORM_IDENTITIES=19
               ;;
