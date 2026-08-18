@@ -1,0 +1,14 @@
+{
+ "_": "Line 3 of the truth method: linguistic self-incrimination (vocative + self-identification), from the label-blind judge of Vexa-ai/vexa#1224 as measured in Vexa-ai/vexa#1225. Verdicts are recorded as AGREEMENT with this harness's mechanical truth rather than restated in the judge's own labels — that PR pseudonymizes per meeting too, and its P-numbers are not this harness's P-numbers. Absent from a tape means no judged verdict exists for it, not that the judge disagreed.",
+ "26424": {
+  "source": "Vexa-ai/vexa#1225 calibration (fixtures manifest + calibration/REPORT.md)",
+  "signals": ["vocative", "self_id"],
+  "flagged_segments": 3,
+  "scorer_contradictions": 3,
+  "flagged_precision": 1.0,
+  "track_precision": 1.0,
+  "track_recall": 1.0,
+  "agrees_with_mechanical_truth": true,
+  "note": "A clean two-way track swap, and the judge found it from the words alone: one track thanks the other participant by name, the other says it is nice to meet him. Independent of csrc, of the roster, and of the namer."
+ }
+}
