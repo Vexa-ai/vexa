@@ -108,8 +108,8 @@ path weakens confirmation of non-prefix revisions or the CSRC ownership gate.
 
 Contested words are detected only from routed-CSRC overlap, matching contiguous text, and close
 consensus word times. When both implicated rows have confirmed, both rows remain and the exact phrase
-is wrapped as `⟦words⟧{CSRC A↔CSRC B}`. There is no speaker-owner heuristic, winner, loser, or row
-deletion. The future session-local diarization design is documented in:
+is wrapped as `[words]`. There is no speaker-owner heuristic, winner, loser, or row deletion. The
+future session-local diarization design is documented in:
 
 ```text
 /Users/dmitriygrankin/dev/vexa-csrc-virtual-channels/core/meetings/modules/mixed-pipeline/TEAMS_CSRC_CONTESTED_TRANSCRIPTS.md

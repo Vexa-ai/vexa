@@ -254,26 +254,26 @@ export function detectTeamsWordContest(
   };
 }
 
-function wrapTokenRange(text: string, tokenStart: number, tokenLength: number, csrc: number, rivalCsrc: number): string {
+function wrapTokenRange(text: string, tokenStart: number, tokenLength: number): string {
   const tokens = tokenizeTeamsContestText(text);
   if (!tokens[tokenStart] || !tokens[tokenStart + tokenLength - 1]) return text;
   const start = tokens[tokenStart].start;
   const end = tokens[tokenStart + tokenLength - 1].end;
-  return `${text.slice(0, start)}⟦${text.slice(start, end)}⟧{CSRC ${csrc}↔CSRC ${rivalCsrc}}${text.slice(end)}`;
+  return `${text.slice(0, start)}[${text.slice(start, end)}]${text.slice(end)}`;
 }
 
 export function markTeamsWordContests(row: TeamsContestRow, contests: TeamsWordContest[]): string {
   const relevant = contests.filter((contest) => contest.leftSegmentId === row.segmentId
     || contest.rightSegmentId === row.segmentId);
   const ranges = relevant.map((contest) => contest.leftSegmentId === row.segmentId
-    ? { start: contest.leftTokenStart, length: contest.tokenLength, rival: contest.rightCsrc }
-    : { start: contest.rightTokenStart, length: contest.tokenLength, rival: contest.leftCsrc })
+    ? { start: contest.leftTokenStart, length: contest.tokenLength }
+    : { start: contest.rightTokenStart, length: contest.tokenLength })
     .sort((left, right) => right.start - left.start || right.length - left.length);
   let text = row.text;
   let lastStart = Number.POSITIVE_INFINITY;
   for (const range of ranges) {
     if (range.start + range.length > lastStart) continue;
-    text = wrapTokenRange(text, range.start, range.length, row.csrc, range.rival);
+    text = wrapTokenRange(text, range.start, range.length);
     lastStart = range.start;
   }
   return text;

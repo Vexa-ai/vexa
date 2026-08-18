@@ -2,13 +2,13 @@ import { detectContestedWords } from './teams-contested-word-detector.mjs';
 
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 
-export function flagContestedText(text, contestedText, csrc, rivalCsrc) {
+export function flagContestedText(text, contestedText) {
   const source = String(text ?? '');
   const needle = String(contestedText ?? '');
   const start = source.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
   if (!needle || start < 0) return source;
   const end = start + needle.length;
-  return `${source.slice(0, start)}⟦${source.slice(start, end)}⟧{CSRC ${csrc}↔CSRC ${rivalCsrc}}${source.slice(end)}`;
+  return `${source.slice(0, start)}[${source.slice(start, end)}]${source.slice(end)}`;
 }
 
 export function buildContestPlan(result) {
@@ -34,10 +34,8 @@ export function buildContestPlan(result) {
 }
 
 export function toTranscriptSegment(event, cutStartMs, contest = null) {
-  const party = contest?.evidence?.runtime?.parties?.find((row) => String(row.segmentId) === String(event.segmentId));
-  const rival = contest?.evidence?.runtime?.parties?.find((row) => String(row.segmentId) !== String(event.segmentId));
   const text = contest
-    ? flagContestedText(event.text, contest.contestedText, party?.csrc ?? event.csrc, rival?.csrc)
+    ? flagContestedText(event.text, contest.contestedText)
     : String(event.text ?? '');
   const latencyMs = finite(event.emittedAtMs) - finite(event.startMs);
   return {

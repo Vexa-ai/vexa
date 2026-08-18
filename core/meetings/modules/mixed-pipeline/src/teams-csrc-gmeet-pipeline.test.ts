@@ -238,22 +238,18 @@ await contestedPipeline.requestTranscription(201);
 await contestedPipeline.requestTranscription(840);
 const contestedRows = [...contestedDurable.values()].filter((segment) => segment.completed);
 const contestedTextCallbacks = contestedCallbacks.filter((segment) => segment.text.trim());
-check('every live publication callback keeps contest diagnostics out of transcript text',
+check('every live publication callback keeps rival CSRC identity out of transcript text',
   contestedTextCallbacks.length > 0
     && contestedTextCallbacks.every((segment) => !segment.text.includes('{CSRC ')
-      && !segment.text.includes('⟦') && !segment.text.includes('↔'))
-    && contestedTextCallbacks.every((segment) => segment.csrc === 201
-      ? segment.text === 'ask amazing amazing like really good'
-      : segment.csrc === 840 && segment.text === 'amazing amazing like really good answer'),
+      && !segment.text.includes('⟦') && !segment.text.includes('↔')),
   JSON.stringify(contestedCallbacks));
-check('actual Teams pipeline keeps confirmed public text verbatim when it detects a contest',
+check('actual Teams pipeline brackets exact duplicated words symmetrically before API publication',
   contestedRows.some((segment) => segment.csrc === 201
-    && segment.text === 'ask amazing amazing like really good')
+    && segment.text === 'ask [amazing amazing like really good]')
     && contestedRows.some((segment) => segment.csrc === 840
-      && segment.text === 'amazing amazing like really good answer')
-    && contestedRows.every((segment) => !segment.text.includes('{CSRC ') && !segment.text.includes('⟦')),
+      && segment.text === '[amazing amazing like really good] answer'),
   JSON.stringify(contestedRows));
-check('the pipeline health still exposes the unresolved pair without mutating transcript text', contestedPipeline.health().contestedPairs === 1,
+check('the pipeline health exposes the unresolved pair', contestedPipeline.health().contestedPairs === 1,
   JSON.stringify(contestedPipeline.health()));
 await contestedPipeline.dispose();
 
