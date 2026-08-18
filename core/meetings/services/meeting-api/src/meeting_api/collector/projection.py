@@ -139,6 +139,57 @@ SENSITIVE_KEY_SUFFIXES = (
 DEFAULT_LIST_LIMIT = 50
 
 
+# #1222: the list orders by the MEETING EVENT time, not row-creation time. A calendar-managed row
+# is created at IMPORT time — possibly days before the meeting — so `created_at DESC` buried a
+# meeting that was live RIGHT NOW under every row created since the import (witnessed in production
+# 2026-08-18: the founder, in the meeting, could not find it in the list). Two-part sort key, shared
+# verbatim by the real store's SQL (`meeting_event_time()` + the status pin, adapters.py) and the
+# in-memory fake so they can never diverge:
+#   1. non-terminal rows pin ABOVE terminal ones — the meeting happening (or about to happen) always
+#      leads the list;
+#   2. within each group, event time DESC: COALESCE(data.scheduled_at, start_time, created_at).
+# `needs_help` is FSM-non-terminal but deliberately NOT pinned — the pin set is the issue's ruling
+# (scheduled/requested/joining/awaiting_admission/active/stopping), and a needs-help row still ranks
+# by its event time.
+LIST_PIN_STATUSES = frozenset({
+    "scheduled", "requested", "joining", "awaiting_admission", "active", "stopping",
+})
+
+
+def _event_ts(value: Any) -> Optional[str]:
+    """One timestamp → a lexicographically comparable naive-UTC ISO string, or None.
+
+    Accepts the shapes the stores hold: ISO-8601 strings (with `Z`, an offset, or naive = UTC)
+    and datetimes. Malformed input is None — the caller falls through COALESCE-style, exactly
+    like the SQL `meeting_event_time()`'s exception guard."""
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat()
+
+
+def list_order_key(meeting: Dict[str, Any]) -> tuple:
+    """The list-view sort key for one meeting row (sort with ``reverse=True``).
+
+    ``(pinned, event_time)`` — the caller appends its own stable tiebreak (row id)."""
+    data = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
+    event = (_event_ts(data.get("scheduled_at"))
+             or _event_ts(meeting.get("start_time"))
+             or _event_ts(meeting.get("created_at"))
+             or "")
+    return (meeting.get("status") in LIST_PIN_STATUSES, event)
+
+
 def project_calendar_sources(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Return ``data`` with each calendar source reduced to :data:`CALENDAR_SOURCE_LIST_KEYS`.
 

@@ -189,7 +189,43 @@ def _backfill_token_scopes(conn: Connection):
                     "to %s", result.rowcount, _FULL_TOKEN_SCOPES)
 
 
+# MIGRATION-0005 — the meetings-list EVENT-time ordering (#1222).
+#
+# The list orders by COALESCE(data->>'scheduled_at', start_time, created_at) with non-terminal
+# rows pinned first. That COALESCE must live in an expression INDEX (the list's union branches are
+# top-N index walks, #800), and an index expression must be IMMUTABLE — a bare text→timestamptz
+# cast is only STABLE (it reads DateStyle/TimeZone). This wrapper declares the cast IMMUTABLE,
+# which is sound here because `scheduled_at` is written as ISO-8601 (calendar sync + the meetings
+# API validate it) and any unparsable value falls through the exception guard instead of failing
+# row writes via index maintenance. Naive-UTC `timestamp` return to match the column types.
+#
+# CREATE OR REPLACE, run BEFORE create_all/_sync_indexes: the two ix_meeting_*_event_order index
+# expressions (models.py) reference it, and both the fresh-DB and the additive path must find it.
+# Prod builds it out-of-band first — see MIGRATION-0005-meeting-event-order.md.
+_MEETING_EVENT_TIME_FN = """
+CREATE OR REPLACE FUNCTION meeting_event_time(
+    data jsonb, start_time timestamp, created_at timestamp
+) RETURNS timestamp
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
+BEGIN
+    RETURN COALESCE(
+        ((data ->> 'scheduled_at')::timestamptz AT TIME ZONE 'UTC'),
+        start_time,
+        created_at
+    );
+EXCEPTION WHEN OTHERS THEN
+    RETURN COALESCE(start_time, created_at);
+END
+$fn$
+"""
+
+
+def _sync_functions(conn: Connection):
+    conn.execute(text(_MEETING_EVENT_TIME_FN))
+
+
 def _ensure_schema_sync(conn: Connection, base):
+    _sync_functions(conn)                              # MIGRATION-0005 fn (indexes reference it)
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
     _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
