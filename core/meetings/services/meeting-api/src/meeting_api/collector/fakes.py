@@ -120,7 +120,7 @@ class InMemoryTranscriptStore:
         (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
         by-id read returns exactly that row's segments/notes. Mirrors the real store's response
         projection of the calendar sources."""
-        from .projection import project_calendar_sources
+        from .projection import project_response_data
 
         m = self._meetings[mid]
         by_id = dict(m["segments"])
@@ -147,7 +147,7 @@ class InMemoryTranscriptStore:
             "end_time": m["end_time"],
             "recordings": m["data"].get("recordings", []),
             "notes": m["data"].get("notes"),
-            "data": project_calendar_sources(m["data"]),
+            "data": project_response_data(m["data"]),
             "segments": [_segment_to_api(s) for s in segments],
         }
 

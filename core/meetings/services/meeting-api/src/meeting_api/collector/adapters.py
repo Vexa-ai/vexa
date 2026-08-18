@@ -330,10 +330,11 @@ class SqlAlchemyTranscriptStore:
         is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
         hold a snapshot/transaction open (the #508 fix).
 
-        This is a RESPONSE edge, so the calendar sources it ships are projected to their identity +
-        policy keys (``project_calendar_sources``) — the raw ICS event snapshot is sweep state, not
-        anyone's transcript."""
-        from .projection import project_calendar_sources
+        This is a RESPONSE edge, so ``data`` goes through ``project_response_data``: calendar sources
+        reduced to their identity + policy keys (the raw ICS event snapshot is sweep state, not anyone's
+        transcript), and credential/authorization keys dropped — this read authorizes a transcript-share
+        recipient and a bound-workspace member too, not only the owner."""
+        from .projection import project_response_data
 
         snap, seg_by_id, order = pg
         data = snap["data"]
@@ -370,7 +371,7 @@ class SqlAlchemyTranscriptStore:
             "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
-            "data": project_calendar_sources(data),
+            "data": project_response_data(data),
             "segments": segments,
         }
 
