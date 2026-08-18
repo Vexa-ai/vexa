@@ -140,6 +140,8 @@ class InMemoryMeetingRepo:
             row["status"] = "requested"
             row["end_time"] = None
             row["bot_container_id"] = None
+            # Claiming a planned row begins a new run, so a stale stop marker must not survive.
+            row["data"].pop("stop_requested", None)
             row["data"] = {**row["data"], **dict(data or {})}
             return dict(row)
         # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
@@ -186,7 +188,9 @@ class InMemoryMeetingRepo:
         row["end_time"] = None
         row["bot_container_id"] = None
         # Clear the prior terminal attribution but KEEP the row + its transcripts/recordings.
-        for k in ("completion_reason", "failure_stage"):
+        # A continued run is a new bot attempt; never inherit the previous run's user-stop
+        # marker or runtime-death synthesis can report a false user cancellation (#1109).
+        for k in ("completion_reason", "failure_stage", "stop_requested"):
             row["data"].pop(k, None)
         for key, value in (data_patch or {}).items():
             if value is None:

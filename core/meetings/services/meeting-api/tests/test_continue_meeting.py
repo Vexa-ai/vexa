@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import DuplicateMeeting, request_bot
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.lifecycle.reconcile import synthesize_terminal_for_dead_workload
 
 SECRET = "test-admin-token"
 USER = 7
@@ -94,6 +95,48 @@ async def test_continue_preserves_prior_transcript():
     # and the new session is a fresh key under the SAME meeting
     new_session = [s for s in second["data"]["sessions"] if s != first_session][0]
     assert new_session != first_session
+
+
+async def test_continue_clears_prior_user_stop_before_runtime_failure():
+    """A retry is a new run, so a prior DELETE must not make its dead workload look user-stopped.
+
+    Without this reset, runtime-confirmed destruction of a replacement bot is synthesized as
+    ``stopped by the user ... (never admitted)`` even though the user never stopped the replacement.
+    """
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    first = await _spawn(repo, runtime)
+    mid = first["id"]
+    repo.set_status(mid, "failed")
+    repo._meetings[mid]["data"]["stop_requested"] = True
+
+    second = await _spawn(repo, runtime, continue_meeting=True)
+    assert second["data"].get("stop_requested") is None
+
+    repo.set_status(mid, "awaiting_admission")
+    repo._meetings[mid]["bot_container_id"] = "wl-replacement-dead"
+    terminal: list[dict] = []
+
+    async def drive_terminal(body: dict):
+        terminal.append(body)
+
+    class _Log:
+        def warning(self, *args, **kwargs):
+            return None
+
+        def info(self, *args, **kwargs):
+            return None
+
+    driven = await synthesize_terminal_for_dead_workload(
+        repo,
+        "wl-replacement-dead",
+        "stopped",
+        drive_terminal,
+        log=_Log(),
+    )
+
+    assert driven is True
+    assert terminal[0]["completion_reason"] == "awaiting_admission_timeout"
+    assert terminal[0]["reason"] == "workload stopped while awaiting admission (never admitted)"
 
 
 async def test_continue_without_prior_terminal_creates_fresh_meeting():

@@ -144,7 +144,11 @@ class SqlAlchemyMeetingRepo:
             m.end_time = None
             m.bot_container_id = None
             data = dict(m.data) if isinstance(m.data, dict) else {}
-            for k in ("completion_reason", "failure_stage"):
+            # A continued run is a new bot attempt. Do not carry the prior run's user-stop
+            # intent into it: the lifecycle reaper uses this flag to attribute a dead workload
+            # to an actual DELETE, and a stale value produces the false "stopped by the user"
+            # diagnostic reported in #1109.
+            for k in ("completion_reason", "failure_stage", "stop_requested"):
                 data.pop(k, None)
             for key, value in (data_patch or {}).items():
                 if value is None:
@@ -489,6 +493,10 @@ class SqlAlchemyMeetingRepo:
             )).scalars().first()
             if claimable is not None:
                 planned = dict(claimable.data) if isinstance(claimable.data, dict) else {}
+                # Claiming a planned row starts a fresh run. A planned row should not normally
+                # have a stop marker, but clear it defensively before merging spawn data so the
+                # marker remains exclusively an intent from the current user-stop request.
+                planned.pop("stop_requested", None)
                 claimable.status = "requested"
                 claimable.end_time = None
                 claimable.bot_container_id = None
