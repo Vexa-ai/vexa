@@ -1,0 +1,202 @@
+{
+ "version": "1",
+ "generated_at": "2026-08-18T11:23:38+00:00",
+ "judge": {
+  "model": "claude-opus-5",
+  "backend": "prepared",
+  "prompt_sha256": "0aa2c1f8ed15f3e31870c94b0c53b3fa97e9acf6643d25a21c14f51585c89f2c",
+  "chunk_size": 120
+ },
+ "corpus": {
+  "owner_user_id": 23,
+  "meetings_inventoried": 777,
+  "meetings_judged": 107,
+  "segments_judged": 32568
+ },
+ "signals": [
+  "vocative",
+  "self_id"
+ ],
+ "calibration": {
+  "meetings": [
+   26424,
+   26298
+  ],
+  "flagged_precision": 1.0,
+  "track_precision": 1.0,
+  "track_recall": 1.0,
+  "segment_recall": 0.0114
+ },
+ "fixtures": [
+  {
+   "fixture_id": "mis-26424-csrc-201",
+   "meeting_id": 26424,
+   "platform": "teams",
+   "lane": "csrc",
+   "track": "csrc-201",
+   "label": "P1",
+   "implied_label": "P2",
+   "verdict": "MISLABELED",
+   "tier": "gold",
+   "tier_reason": "tape carries csrc + observations; separation and roster timing replay offline and agree with the linguistic verdict",
+   "segments": 71,
+   "tape": {
+    "bucket": "vexa-recordings",
+    "prefix": "signal/23/26424/",
+    "session_uid": "812de312-e055-40d2-beda-3591689155a1",
+    "parts": [
+     "botlog",
+     "captured-signal",
+     "csrc",
+     "observations",
+     "stt",
+     "transcript"
+    ]
+   },
+   "evidence": [
+    {
+     "segment_id": "csrc-201:6:1787045675053",
+     "signal": "vocative",
+     "named": "P1",
+     "direction": "not_speaker",
+     "label": "P1",
+     "t_start": 1787045675.053,
+     "span_len": 24
+    },
+    {
+     "segment_id": "csrc-201:45:1787047170818",
+     "signal": "vocative",
+     "named": "P1",
+     "direction": "not_speaker",
+     "label": "P1",
+     "t_start": 1787047170.818,
+     "span_len": 10
+    }
+   ]
+  },
+  {
+   "fixture_id": "mis-26424-csrc-840",
+   "meeting_id": 26424,
+   "platform": "teams",
+   "lane": "csrc",
+   "track": "csrc-840",
+   "label": "P2",
+   "implied_label": "P1",
+   "verdict": "MISLABELED",
+   "tier": "gold",
+   "tier_reason": "tape carries csrc + observations; separation and roster timing replay offline and agree with the linguistic verdict",
+   "segments": 181,
+   "tape": {
+    "bucket": "vexa-recordings",
+    "prefix": "signal/23/26424/",
+    "session_uid": "812de312-e055-40d2-beda-3591689155a1",
+    "parts": [
+     "botlog",
+     "captured-signal",
+     "csrc",
+     "observations",
+     "stt",
+     "transcript"
+    ]
+   },
+   "evidence": [
+    {
+     "segment_id": "csrc-840:3:1787045533017",
+     "signal": "vocative",
+     "named": "P2",
+     "direction": "not_speaker",
+     "label": "P2",
+     "t_start": 1787045533.017,
+     "span_len": 18
+    }
+   ]
+  },
+  {
+   "fixture_id": "mis-12304-048df514-a32c-4d5e-a343-25853ab7d45f",
+   "meeting_id": 12304,
+   "platform": "google_meet",
+   "lane": "unkeyed",
+   "track": "048df514-a32c-4d5e-a343-25853ab7d45f",
+   "label": "P3",
+   "implied_label": null,
+   "verdict": "MISLABELED",
+   "tier": "silver",
+   "tier_reason": "linguistic signal only \u2014 no session tape retained",
+   "segments": 102,
+   "tape": null,
+   "evidence": [
+    {
+     "segment_id": "048df514-a32c-4d5e-a343-25853ab7d45f:speaker-0:8",
+     "signal": "vocative",
+     "named": "P2",
+     "direction": "not_speaker",
+     "label": "P2",
+     "t_start": 560.734,
+     "span_len": 50
+    }
+   ]
+  },
+  {
+   "fixture_id": "mis-15496-0c65098d-da81-414b-a0fe-f3f997f5db59",
+   "meeting_id": 15496,
+   "platform": "google_meet",
+   "lane": "unkeyed",
+   "track": "0c65098d-da81-414b-a0fe-f3f997f5db59",
+   "label": "P1",
+   "implied_label": null,
+   "verdict": "MISLABELED",
+   "tier": "silver",
+   "tier_reason": "linguistic signal only \u2014 no session tape retained",
+   "segments": 298,
+   "tape": null,
+   "evidence": [
+    {
+     "segment_id": "0c65098d-da81-414b-a0fe-f3f997f5db59:speaker-1:76",
+     "signal": "vocative",
+     "named": "P4",
+     "direction": "not_speaker",
+     "label": "P4",
+     "t_start": 3277.115,
+     "span_len": 27
+    }
+   ]
+  },
+  {
+   "fixture_id": "mis-26042-turn",
+   "meeting_id": 26042,
+   "platform": "teams",
+   "lane": "mixed",
+   "track": "turn",
+   "label": "P1",
+   "implied_label": "P2",
+   "verdict": "MISLABELED",
+   "tier": "silver",
+   "tier_reason": "tape carries csrc + observations, but this transcript's lane emitted no per-track key (mixed) \u2014 the linguistic verdict cannot be tied to a track",
+   "segments": 262,
+   "tape": {
+    "bucket": "vexa-recordings",
+    "prefix": "signal/23/26042/",
+    "session_uid": "1889e3e6-476c-4217-b30a-ab947abc126e",
+    "parts": [
+     "botlog",
+     "captured-signal",
+     "csrc",
+     "observations",
+     "stt",
+     "transcript"
+    ]
+   },
+   "evidence": [
+    {
+     "segment_id": "turn:0:0",
+     "signal": "vocative",
+     "named": "P1",
+     "direction": "not_speaker",
+     "label": "P1",
+     "t_start": 1786543186.896,
+     "span_len": 6
+    }
+   ]
+  }
+ ]
+}

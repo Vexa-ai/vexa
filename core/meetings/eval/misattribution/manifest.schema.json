@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vexa.ai/schemas/misattribution-fixture-manifest-v1.json",
+  "title": "Speaker-misattribution fixture manifest v1",
+  "description": "Content-free index of production-derived attribution errors. Carries ids, spans, signal types, verdicts and tape paths ONLY — never transcript text, never a real participant name. Pseudonyms (P1, P2, ...) are meeting-local and the map that produces them never leaves the operator's machine.",
+  "type": "object",
+  "required": ["version", "generated_at", "corpus", "signals", "fixtures"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": "1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "judge": {
+      "type": "object",
+      "description": "Provenance of the judge run that produced these fixtures.",
+      "properties": {
+        "model": {"type": "string"},
+        "backend": {"type": "string", "enum": ["anthropic", "cli", "prepared"]},
+        "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "chunk_size": {"type": "integer"}
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "required": ["owner_user_id", "meetings_inventoried", "meetings_judged"],
+      "properties": {
+        "owner_user_id": {"type": "integer", "description": "Corpus boundary: a single owning user. One manifest never mixes owners."},
+        "meetings_inventoried": {"type": "integer"},
+        "meetings_judged": {"type": "integer"},
+        "segments_judged": {"type": "integer"}
+      }
+    },
+    "signals": {
+      "type": "array",
+      "description": "The admitted signal classes. Adding a class is a doctrine change, not a config change.",
+      "items": {"enum": ["vocative", "self_id"]}
+    },
+    "calibration": {
+      "type": "object",
+      "description": "Measured on meetings whose true track ownership is independently known.",
+      "properties": {
+        "meetings": {"type": "array", "items": {"type": "integer"}},
+        "flagged_precision": {"type": ["number", "null"]},
+        "track_precision": {"type": ["number", "null"]},
+        "track_recall": {"type": ["number", "null"]},
+        "segment_recall": {"type": ["number", "null"]}
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fixture_id", "meeting_id", "platform", "lane", "track", "label", "verdict", "tier", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "fixture_id": {"type": "string", "description": "Stable id: mis-<meeting_id>-<track>."},
+          "meeting_id": {"type": "integer"},
+          "platform": {"type": "string", "enum": ["google_meet", "teams", "zoom", "jitsi", "browser_session"]},
+          "lane": {
+            "enum": ["csrc", "channel", "mixed", "unkeyed"],
+            "description": "csrc = CSRC virtual-channel pipeline; channel = per-participant gmeet ch-N; mixed = single mixed stream with DOM hints; unkeyed = legacy segments with no track key."
+          },
+          "track": {"type": "string", "description": "Virtual-track key as emitted by the pipeline (csrc-201, ch-0, ...)."},
+          "label": {"type": ["string", "null"], "description": "Pseudonym the pipeline rendered for this track."},
+          "implied_label": {"type": ["string", "null"], "description": "Pseudonym the evidence implies instead, when determinable."},
+          "verdict": {"enum": ["MISLABELED", "CLEAN", "INSUFFICIENT"]},
+          "tier": {
+            "enum": ["gold", "silver"],
+            "description": "gold = the linguistic signal AND the session tape agree (csrc separation + roster timing replayable offline). silver = linguistic signal only, because the lane recorded no cross-check signal."
+          },
+          "tier_reason": {"type": "string"},
+          "segments": {"type": "integer"},
+          "tape": {
+            "type": ["object", "null"],
+            "properties": {
+              "bucket": {"type": "string"},
+              "prefix": {"type": "string"},
+              "session_uid": {"type": "string"},
+              "parts": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["segment_id", "signal", "named", "direction"],
+              "additionalProperties": false,
+              "properties": {
+                "segment_id": {"type": "string"},
+                "signal": {"enum": ["vocative", "self_id"]},
+                "named": {"type": "string", "pattern": "^P[0-9]+$"},
+                "direction": {"enum": ["not_speaker", "is_speaker"]},
+                "label": {"type": ["string", "null"]},
+                "t_start": {"type": ["number", "null"]},
+                "span_len": {"type": ["integer", "null"], "description": "Character length of the quote span. The span itself is content and is NOT stored."}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

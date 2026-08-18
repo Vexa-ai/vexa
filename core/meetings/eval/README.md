@@ -118,3 +118,5 @@ pnpm observe <platform> <native_meeting_id>            # from the repo root
 ./bin/eval.sh observe <platform> <native_meeting_id>   # or from here — e.g. youtube 53yPfrqbpkE
 pnpm observe                                           # watch ALL sessions
 ```
+
+> **Attribution train:** speaker-misattribution fixtures derived from production transcripts live in [`misattribution/`](misattribution/README.md) — a two-signal (vocative + self-identification) judge, a deterministic scorer, and the fixture manifest the attribution work regresses against.
