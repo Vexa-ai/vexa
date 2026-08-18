@@ -53,7 +53,9 @@ async def test_merge_assembles_response_and_merges_live_redis():
         "s-redis": json.dumps({"start": 1.0, "end": 2.0, "text": "in-flight", "segment_id": "s-redis"})}})
     store = SqlAlchemyTranscriptStore(session_factory=None, redis_client=redis)
 
-    doc = await store._merge_live_segments((_snap(), seg_by_id, order))
+    # ``viewer_is_owner`` is the caller's access decision, threaded in by both read paths; this test
+    # is about the MERGE, so it drives the owner view (what the native-keyed read always passes).
+    doc = await store._merge_live_segments((_snap(), seg_by_id, order), viewer_is_owner=True)
 
     # Top-level shape: exact keys, exact order.
     assert list(doc.keys()) == EXPECTED_KEYS
@@ -74,6 +76,6 @@ async def test_merge_without_redis_returns_persisted_only():
     """redis_client=None (or an empty hash) → the persisted segments still assemble cleanly, no crash."""
     seg_by_id, order = _pg_part()
     store = SqlAlchemyTranscriptStore(session_factory=None, redis_client=None)
-    doc = await store._merge_live_segments((_snap(), seg_by_id, order))
+    doc = await store._merge_live_segments((_snap(), seg_by_id, order), viewer_is_owner=True)
     assert [s["segment_id"] for s in doc["segments"]] == ["s-pg"]
     assert list(doc.keys()) == EXPECTED_KEYS
