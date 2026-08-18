@@ -31,6 +31,12 @@ is ONE dispatch per backoff interval per occurrence however many rows that occur
 ``auto_join`` defaults ON when the key is absent — planning a meeting with a time means the bot
 comes, opting out is the explicit act.
 
+The bot that comes is the SAME bot POST /bots sends: recording and transcription resolve through
+``env_flags.resolve_spawn_flag``, the one resolver the route uses, so a calendar bot records like a
+manual one (#1216). Passing nothing meant inheriting ``request_bot``'s ``recording_enabled=False``
+default, and every calendar-joined meeting on stage rev 194 came back unrecorded while manual ones
+recorded — a split default nobody chose.
+
 The tick is a pure-ish function over injected ports (repo, runtime, context fetcher, clock) — the
 entrypoint (``__main__``) wraps it in the standard poll loop; tests drive single ticks offline.
 """
@@ -45,6 +51,7 @@ from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
+from .env_flags import resolve_spawn_flag
 from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
 from .service import DuplicateMeeting, request_bot
 
@@ -225,6 +232,16 @@ async def auto_join_tick(
     )
     ctx_cache: dict[int, Optional[dict]] = {}
     uncapped_warned = False
+    # A calendar bot records and transcribes exactly like a manual one (founder ruling
+    # 2026-08-17: the split default is not a policy, it is a bug). `request_bot` defaults
+    # `recording_enabled=False` for its own callers' safety, so a sweep that passed nothing spawned
+    # every calendar bot with `capture_modes=None` — no recording pipeline, `data.recording_enabled
+    # = false`, and a dashboard that says "No audio recording for this meeting" as if that were
+    # normal (#1216; stage rev 194 meeting 26353 auto/0 recordings vs 26354 manual/893KB master.webm,
+    # 10 of 10 auto-joined rows unrecorded). Resolved through the SAME resolver POST /bots uses, so
+    # the two spawners cannot drift again; there is no per-user setting today, and this invents none.
+    recording_enabled = resolve_spawn_flag("RECORDING_ENABLED", default=True)
+    transcribe_enabled = resolve_spawn_flag("TRANSCRIBE_ENABLED", default=True)
 
     async def _stamp_error(row: dict, message: str, *, counter: str = "errors",
                            event: str = "auto_join_failed") -> None:
@@ -305,6 +322,8 @@ async def auto_join_tick(
                 native_meeting_id=row["native_meeting_id"],
                 meeting_url=data.get("constructed_meeting_url"),
                 bot_name=_calendar_bot_name(data) or ctx.get("bot_name"),
+                recording_enabled=recording_enabled,
+                transcribe_enabled=transcribe_enabled,
                 max_concurrent=ctx.get("max_concurrent"),
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
