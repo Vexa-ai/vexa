@@ -7,8 +7,17 @@
  * the index.ts authenticated branch) — same options, single source of truth.
  */
 import { chromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { BrowserContext, Page } from 'playwright';
 import { BROWSER_DATA_DIR } from './session-store';
+
+// Anti-detection: register the stealth evasions ONCE at module load — playwright-extra's `chromium`
+// then applies them to every launchPersistentContext below. The two launch flags we already set
+// (--disable-blink-features=AutomationControlled + stripping --enable-automation) only mask
+// navigator.webdriver; the stealth plugin patches the rest of the fingerprint surface Google Meet's
+// anti-abuse reads to bucket a bot into "With potential risks" — navigator.plugins/languages,
+// WebGL vendor/renderer, chrome.runtime, permissions, iframe.contentWindow, and more.
+chromium.use(StealthPlugin());
 
 export interface LaunchPersistentOptions {
   /** Chromium profile dir — the durable session lives here. Defaults to BROWSER_DATA_DIR. */
