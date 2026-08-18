@@ -806,7 +806,7 @@ async def test_failed_auto_join_does_not_restorm_through_a_recreated_row():
     # 5. one retry once the backoff expires (still inside the 600s grace)
     counters = await _sweep(repo, runtime, START + timedelta(seconds=301))
     assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0,
-                        "skipped_uncapped": 0, "skipped_live": 0}
+                        "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
     assert len(runtime.specs) == 2
 
 

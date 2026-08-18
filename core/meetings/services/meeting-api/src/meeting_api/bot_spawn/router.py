@@ -31,6 +31,7 @@ from .ports import (
     AuthSessionNotConfigured,
     MaxBotsExceeded,
     MeetingRepo,
+    MeetingStopped,
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
@@ -441,6 +442,11 @@ def build_router(
                     "reason": "service_authority_unavailable",
                 },
             )
+        except MeetingStopped as e:
+            # The user's stop wins over this spawn — either it raced the workload creation, or the
+            # request asked to CONTINUE a stopped meeting. 409 (conflicting state), not 5xx: nothing
+            # is broken, and the detail names the request that works.
+            raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

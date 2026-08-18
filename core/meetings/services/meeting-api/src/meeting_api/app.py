@@ -435,7 +435,18 @@ def _mount_lifecycle(
         connection_id = body.get("connection_id")
         if connection_id:
             existing = sink.store.get(connection_id)
-            if existing is None or existing.status is None:
+            # A TERMINAL event also re-reads the row, even for a record this process already
+            # advanced. The user-stop flag is written to the DB by the stop path and NEVER through
+            # this FSM, so an in-process record that has seen `joining` has no way to know a DELETE
+            # landed — and it is exactly at the terminal edge that the difference is written down
+            # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
+            # `stop_requested=true` on the row). One extra read per meeting, at its last event.
+            terminal_event = body.get("status") in ("completed", "failed")
+            if (
+                existing is None
+                or existing.status is None
+                or (terminal_event and not existing.stop_requested)
+            ):
                 try:
                     persisted = await meeting_repo.get_lifecycle_state_by_session(
                         session_uid=connection_id

@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
+from .machine import dominant_completion_reason
 
 
 async def _teardown_verdict(
@@ -359,7 +360,9 @@ async def reconcile_stale_nonterminal_sweep(
         terminal = "failed" if status in _PRE_ACTIVE_NONTERMINAL else "completed"
         body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
         if terminal == "completed":
-            body["completion_reason"] = "stopped" if stop_requested else "left_alone"
+            body["completion_reason"] = dominant_completion_reason(
+                "left_alone", stop_requested=stop_requested
+            )
             if stop_requested:
                 body["data"] = {"stop_requested": True}
         else:
@@ -474,9 +477,10 @@ def _pre_active_completion_reason(status: Optional[str], stop_requested: bool = 
     ended for a reason no re-spawn can improve on. ``stopped`` is the sealed user-terminal reason
     and is PERMANENT, which is what keeps a deliberate cancellation from being re-spawned three
     times (#807 — the stage still lands in ``failure_stage``, so no attribution is lost)."""
-    if stop_requested:
-        return "stopped"
-    return "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure"
+    return dominant_completion_reason(
+        "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure",
+        stop_requested=stop_requested,
+    )
 
 
 async def synthesize_terminal_for_dead_workload(
