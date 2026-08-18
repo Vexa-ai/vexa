@@ -6,6 +6,7 @@ import {
   createTranscriptManager,
 } from "@vexaai/transcript-rendering";
 import {
+  compareMeetingsListOrder,
   type InitialMeetingsPage,
   isHiddenDeletedMeeting,
   MEETINGS_PAGE_SIZE,
@@ -164,9 +165,8 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       const PAGE = MEETINGS_PAGE_SIZE;
       const result = await vexaAPI.getMeetings({ limit: PAGE, offset: 0, ...activeFilters });
       const meetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
-      meetings.sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
+      // #1222: match the server's list ordering (event time, non-terminal rows pinned).
+      meetings.sort(compareMeetingsListOrder);
       // #304: advance _offset by the UNFILTERED page size (PAGE), NOT by
       // meetings.length. The API returns up to PAGE rows; client-side
       // filter may drop some (redacted shells); next request must ask
@@ -210,9 +210,8 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       const seen = new Set(meetings.map((m) => m.id));
       const deduped = newMeetings.filter((m) => !seen.has(m.id));
       const merged = [...meetings, ...deduped];
-      merged.sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
+      // #1222: match the server's list ordering (event time, non-terminal rows pinned).
+      merged.sort(compareMeetingsListOrder);
       set({
         meetings: merged,
         hasMore: result.has_more,
