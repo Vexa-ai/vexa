@@ -209,7 +209,7 @@ test("a reviewed version enforces and hands the pinned packet identity to the va
     CANDIDATE_MAP: "releases/v0.12.23/candidate-images.json",
     EXPECTED_MAP_STABLE_TAG: "v0.12.23",
     EXPECTED_MAP_SHA256:
-      "7b71dd212974a7e3a7f6cf50524e40fa75dcb868da0f474e75956c0569adbedf",
+      "c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6",
     EXPECTED_TOP_DESCRIPTORS: "10",
     EXPECTED_PLATFORM_IDENTITIES: "19",
   });
