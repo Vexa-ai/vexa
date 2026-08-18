@@ -45,7 +45,7 @@ from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
-from .ports import MaxBotsExceeded, QuotaExceeded, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
 from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
@@ -88,6 +88,19 @@ def due_rows(rows: list[dict], *, now: datetime,
     due: list[dict] = []
     for row in rows:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        # THE USER SAID NO — checked first, before every rate and window rule below, because none of
+        # them can express "never" (F1, stage rev 193 row 26306: DELETE on a still-`scheduled`
+        # occurrence answered 200 and set `stop_requested`, and this sweep dispatched it anyway at
+        # 02:52:16 — the bot joined a meeting the user had already cancelled). `occurrence.
+        # disposition` enforces the same rule for TERMINAL rows; a scheduled row never reached it,
+        # because a scheduled row is not terminal. Founder ruling 2026-08-17: "explicit stop must be
+        # stop, evict."
+        #
+        # The stop path now terminalizes a planned row outright (``stop_router``), so a flagged
+        # `scheduled` row should no longer exist at all. This stays as the standing guarantee: no
+        # row carrying the user's stop is EVER due, whichever writer left it in this state.
+        if data.get("stop_requested"):
+            continue
         if data.get("auto_join") is False:
             continue
         if not row.get("native_meeting_id") or row.get("platform") in (None, "", "unknown"):
@@ -204,7 +217,7 @@ async def auto_join_tick(
     due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s,
                    retry_backoff_s=retry_backoff_s)
     counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0,
-                "skipped_uncapped": 0, "skipped_live": 0}
+                "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
     # Duplicate-dispatch guard (defense in depth behind create_meeting_guarded's dedup): a bot
     # already owning this (user, platform, native) on a DIFFERENT row means the meeting is covered.
     live = live_keys(
@@ -302,6 +315,15 @@ async def auto_join_tick(
         except DuplicateMeeting:
             # a manual "Send bot now" (or a racing sweep) already claimed it — success, not an error
             counters["already"] += 1
+            continue
+        except MeetingStopped:
+            # The user stopped it between this tick's read and the spawn fence. Not an error and not
+            # a backoff-worthy failure: the row is already terminalized as stopped by the fence, and
+            # `due_rows` will never offer it again. Counted so the sweep's numbers stay honest.
+            counters["stopped"] += 1
+            log_event("auto_join_stopped", audience="user", span="meetings.auto_join",
+                      user_id=user_id, meeting_id=str(row["id"]),
+                      fields={"reason": "the user stopped this meeting while the bot was starting"})
             continue
         except (MaxBotsExceeded, QuotaExceeded) as e:
             await _stamp_error(row, str(e) or "bot concurrency limit reached")

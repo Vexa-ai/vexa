@@ -24,7 +24,7 @@ from datetime import timedelta
 import pytest
 
 from meeting_api.calendar_sync import parse_ics, sync_user
-from meeting_api.lifecycle.machine import CompletionReason
+from meeting_api.lifecycle.machine import CompletionReason, dominant_completion_reason
 from meeting_api.lifecycle.occurrence import (
     KNOWN_REASONS,
     Disposition,
@@ -223,6 +223,76 @@ async def test_cell_dispatch_through_the_live_seam(cell: Cell):
         assert counters["spawned"] == 0 and not runtime.specs, (
             f"{cell.name}: a bot went back into the meeting — {cell.why}"
         )
+
+
+# ---------------------------------------------------------------------------------------------
+# THE STOP-DOMINANCE COLUMN. Not a row in the table — a property OF the table.
+#
+# The matrix above asks "given how the run ended, may we go back?". This asks the orthogonal
+# question the rev-193 storm answered wrong: "given that the USER STOPPED IT, does how the run
+# happened to end matter at all?". It must not, for ANY cell — which is why this is a column
+# applied to every row rather than three more rows chosen by whoever wrote them.
+#
+# The storm (2026-08-18, stage rev 193): a DELETE that lost a race left the row terminal as
+# `join_failure` — a reason `retry.py` classes TRANSIENT — with `stop_requested` true the whole
+# time. Classification alone was not enough: the reason must be dominated at the WRITE, because
+# every reader that keys on `completion_reason` and not on the flag would otherwise re-dispatch.
+# So the column is asserted in both places, the classifier and the writer.
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cell", MATRIX, ids=lambda c: c.name)
+def test_stop_dominance_classification(cell: Cell):
+    """Add the user's stop to ANY terminal shape in the table and the verdict becomes USER_STOPPED.
+
+    Including the SERVED cells: a bot that was evicted from the room, or rejected by the host, or
+    ran out its own clock, is still a bot the user separately said no to — and neither verdict
+    dispatches, so the stronger one is the honest record of why."""
+    data = cell.data(START.isoformat())
+    data["stop_requested"] = True
+    row = {"id": 1, "status": cell.status, "data": data}
+
+    assert disposition(row) is USER_STOPPED, (
+        f"{cell.name}: `stop_requested` did not dominate — the row's own terminal reason "
+        f"({cell.reason!r}) outranked the user's intent, which is the F3 defect"
+    )
+    assert not disposition(row).dispatchable
+
+
+@pytest.mark.parametrize("cell", MATRIX, ids=lambda c: c.name)
+def test_stop_dominance_at_the_writers(cell: Cell):
+    """...and every writer of a terminal reason records `stopped`, not the cell's own reason.
+
+    The classifier reads `data`; these produce it. A reason written as `join_failure` on a stopped
+    row is re-dispatchable to every consumer that never looks at the flag — including
+    ``retry.py``'s TRANSIENT/PERMANENT taxonomy, which is what actually let 26313 back in."""
+    assert dominant_completion_reason(cell.reason, stop_requested=True) == "stopped"
+    # ...while a run nobody stopped keeps its own reason, unchanged.
+    assert dominant_completion_reason(cell.reason, stop_requested=False) == cell.reason
+
+
+@pytest.mark.parametrize("cell", MATRIX, ids=lambda c: c.name)
+async def test_stop_dominance_through_the_live_seam(cell: Cell):
+    """The consequence, through the same real path every other cell is driven through: whatever
+    this terminal shape is, once the user has stopped it NO bot goes back in.
+
+    The SERVED and USER_STOPPED cells already assert this; running it for the RETRY cells too is
+    the point — those are precisely the shapes that WOULD dispatch, so this proves the flag is what
+    stops them rather than the outcome doing it anyway."""
+    store, repo, runtime = _storm_rig()
+    feed = _ics(_event(start="20260708T150000Z"))
+    data = cell.data(START.isoformat())
+    data["stop_requested"] = True
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status=cell.status, data=data,
+    )
+
+    await sync_user(store, USER, parse_ics(feed, now=START + timedelta(seconds=10)))
+    counters = await _sweep(repo, runtime, START + timedelta(seconds=301))
+
+    assert counters["spawned"] == 0 and not runtime.specs, (
+        f"{cell.name} + stop_requested: a bot went back into a meeting the user had stopped"
+    )
 
 
 # ---------------------------------------------------------------------------------------------

@@ -49,6 +49,33 @@ class CompletionReason(str, Enum):
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"
 
 
+# The one terminal reason a user stop resolves to, at EVERY stage.
+USER_STOP_REASON = CompletionReason.STOPPED.value
+
+
+def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
+    """``stop_requested`` DOMINATES every completion-reason writer — one rule, one place.
+
+    A stop that loses a race still ends the run, and the row must record WHY THE USER ENDED IT, not
+    whichever fault the race happened to reach first. Witnessed on stage rev 193 (row 26313): a
+    DELETE landed 0.4s after the POST, the bot was torn down before it could join, and the terminal
+    was written ``join_failure`` — a reason ``retry.py`` classes TRANSIENT, so the occurrence stayed
+    eligible for re-dispatch while ``data.stop_requested`` was true the whole time. The reason is the
+    user's intent; the race is an accident of scheduling and has no business overwriting it.
+
+    Founder ruling 2026-08-17: *"explicit stop must be stop, evict."*
+
+    Applied at EVERY site that writes a terminal reason: the FSM advance
+    (``LifecycleSink.apply_change`` below), the reconcile sweeps
+    (``reconcile._pre_active_completion_reason`` + the was-active branch), and the by-id
+    spawn-failure write (``MeetingRepo.fail_meeting``). ``lifecycle.occurrence`` then reads the
+    result as ``USER_STOPPED`` — which is why the dominance has to hold at the WRITE, not only at
+    the classification: a row whose reason says ``join_failure`` is re-dispatchable to every reader
+    that never looks at the flag.
+    """
+    return USER_STOP_REASON if stop_requested else reason
+
+
 class FailureStage(str, Enum):
     """lifecycle.v1 `FailureStage` — furthest stage reached, for `failed` attribution."""
 
@@ -293,6 +320,14 @@ class MeetingStore:
         illegal; there the durable row may represent progress committed by another API replica.
         """
         rec = self.get_or_create(connection_id)
+        # The user's stop intent is carried ALWAYS, outside the status guard, and only ever raised:
+        # it is durable state the stop path wrote straight to the DB row (never through this FSM),
+        # it is monotonic (nothing un-presses stop), and the terminal-reason rule below depends on
+        # this record knowing it. Guarding it behind `rec.status is None` was the F3 hole — a record
+        # already advanced to `joining` in this process never learned the DELETE had landed, so its
+        # terminal was written with the bot's own `join_failure`.
+        if isinstance(persisted_data, dict) and persisted_data.get("stop_requested"):
+            rec.stop_requested = True
         if rec.status is None or replace_stale:
             seeded = bot_status_from_persisted(persisted_status)
             if seeded is not None:
@@ -365,6 +400,19 @@ class LifecycleSink:
         StatusChange (webhook body)."""
         return self.apply_change(event).record
 
+    @staticmethod
+    def _terminal_reason(
+        rec: MeetingRecord, event: Dict[str, Any]
+    ) -> Optional[CompletionReason]:
+        """The reason to record on a terminal advance — the bot's, unless the USER stopped it.
+
+        The bot reports what IT saw (it was killed mid-join → ``join_failure``). When the record
+        carries the user's stop intent, that intent is the truth about why the run ended, and it
+        wins here at the WRITE — see ``dominant_completion_reason``."""
+        raw = event.get("completion_reason")
+        raw = dominant_completion_reason(raw, stop_requested=rec.stop_requested)
+        return CompletionReason(raw) if raw else None
+
     def apply_change(
         self,
         event: Dict[str, Any],
@@ -434,13 +482,11 @@ class LifecycleSink:
             rec.error_details = str(event["error_details"])
 
         if to is BotStatus.COMPLETED:
-            raw = event.get("completion_reason")
-            rec.completion_reason = CompletionReason(raw) if raw else None
+            rec.completion_reason = self._terminal_reason(rec, event)
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
             rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
-            raw = event.get("completion_reason")
-            rec.completion_reason = CompletionReason(raw) if raw else None
+            rec.completion_reason = self._terminal_reason(rec, event)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
                 rec.error_details = (

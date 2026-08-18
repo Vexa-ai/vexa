@@ -18,12 +18,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from ..lifecycle.machine import dominant_completion_reason
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
+    MeetingStopped,
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
+    _archive_completion,
+    _stopped_reopen_detail,
     reconcile_grace_for_status,
 )
 
@@ -151,7 +155,15 @@ class InMemoryMeetingRepo:
             row["status"] = "requested"
             row["end_time"] = None
             row["bot_container_id"] = None
-            row["data"] = {**row["data"], **dict(data or {})}
+            planned = dict(row["data"])
+            # A THIS-REQUEST dispatch supersedes an earlier stop ON THE PLAN. Legacy zombie rows
+            # exist (a scheduled row flagged by a rev-193 DELETE that never terminalized it), and
+            # claiming one while the flag rides along would make the spawn fence abort the very bot
+            # the user just asked for. The flag records intent about the run that WAS planned; this
+            # is a new one. (Post-fix, a stop terminalizes the planned row, so it is not claimable
+            # at all — this only ever meets rows written by an older build.)
+            planned.pop("stop_requested", None)
+            row["data"] = {**planned, **dict(data or {})}
             return dict(row)
         # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
         mid = self._next_id
@@ -201,14 +213,23 @@ class InMemoryMeetingRepo:
             else:
                 m["data"][k] = v
 
+    async def get_meeting(self, meeting_id) -> Optional[dict]:
+        row = self._meetings.get(meeting_id)
+        # A COPY, like every other read: the spawn fence must observe committed row state, never
+        # alias the live dict (which would make the fence pass trivially in-process and hide the
+        # very race it exists to close).
+        return dict(row) if row else None
+
     async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         row = self._meetings[meeting_id]
+        if row["data"].get("stop_requested"):
+            raise MeetingStopped(_stopped_reopen_detail(meeting_id))
         row["status"] = "requested"
         row["end_time"] = None
         row["bot_container_id"] = None
-        # Clear the prior terminal attribution but KEEP the row + its transcripts/recordings.
-        for k in ("completion_reason", "failure_stage"):
-            row["data"].pop(k, None)
+        # KEEP the row + its transcripts/recordings, and keep the prior run's ENDING too — archived,
+        # not erased (the SAME helper the SQL adapter uses).
+        _archive_completion(row["data"])
         for key, value in (data_patch or {}).items():
             if value is None:
                 row["data"].pop(key, None)
@@ -228,14 +249,21 @@ class InMemoryMeetingRepo:
         row["bot_container_id"] = bot_container_id
         return dict(row)
 
-    async def fail_meeting(self, *, meeting_id, reason, failure_stage="requested") -> Optional[dict]:
+    async def fail_meeting(
+        self, *, meeting_id, reason, failure_stage="requested",
+        completion_reason="start_failed", data=None,
+    ) -> Optional[dict]:
         row = self._meetings.get(meeting_id)
         if row is None:
             return None
         row["status"] = "failed"
-        row["data"]["failure_stage"] = failure_stage
+        row["data"].update(dict(data or {}))
+        if failure_stage is not None:
+            row["data"]["failure_stage"] = failure_stage
         row["data"]["failure_reason"] = reason
-        row["data"]["completion_reason"] = "start_failed"
+        row["data"]["completion_reason"] = dominant_completion_reason(
+            completion_reason, stop_requested=bool(row["data"].get("stop_requested"))
+        )
         return dict(row)
 
     async def get_status_by_session(self, *, session_uid) -> Optional[str]:
