@@ -41,6 +41,7 @@ COPY core/meetings/services/meeting-api/src ./src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json   ./meetings/contracts/invocation.v1/invocation.schema.json
 COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json     ./meetings/contracts/lifecycle.v1/lifecycle.schema.json
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json         ./meetings/contracts/webhook.v1/webhook.schema.json
+COPY core/meetings/contracts/acts.v1/acts.schema.json               ./meetings/contracts/acts.v1/acts.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json          ./runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json        ./runtime/contracts/schedule.v1/schedule.schema.json
 
