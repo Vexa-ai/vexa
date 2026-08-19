@@ -62,7 +62,10 @@ export interface LifecycleEvent {
 
 /** The legal transitions — the machine the bot MUST obey (lifecycle.v1/README.md). */
 export const LIFECYCLE_TRANSITIONS: Record<BotStatus, readonly BotStatus[]> = {
-  joining: ['awaiting_admission', 'active', 'failed'],
+  // needs_help is reachable straight from joining: a blocker can appear BEFORE the lobby (a consent
+  // gate / captcha the bot hits before it ever reports awaiting_admission), and it must be able to
+  // escalate for a human rather than silently poll to timeout.
+  joining: ['awaiting_admission', 'active', 'needs_help', 'failed'],
   awaiting_admission: ['active', 'needs_help', 'failed'],
   needs_help: ['active', 'failed'],
   active: ['completed', 'failed'],
