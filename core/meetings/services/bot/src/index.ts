@@ -30,7 +30,7 @@ import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
-import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
+import { createBotPipeline, createLivePipeline, createSttConfigRef, createTranscribe, serr, type BotPipeline, type SttConfigRef } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
@@ -105,12 +105,14 @@ function deriveMaxActiveMs(inv: Invocation, everyoneLeftMs: number, env: NodeJS.
  * wired here at the composition root. The orchestrator's `subscribe(handler)` registers its
  * handler; we fan the live source's messages to it plus `voice`.
  */
-function teeActs(source: ActsSource, voice: (act: Act) => void | Promise<void>): ActsSource {
+export function teeActs(source: ActsSource, ...extra: ((act: Act) => void | Promise<void>)[]): ActsSource {
   return {
     subscribe(handler) {
       return source.subscribe((act) => {
         void Promise.resolve(handler(act)).catch((e) => console.error(`[bot] acts: orchestrator handler rejected: ${String(e)}`));
-        void Promise.resolve(voice(act)).catch((e) => console.error(`[bot] acts: voice handler rejected: ${String(e)}`));
+        for (const h of extra) {
+          void Promise.resolve(h(act)).catch((e) => console.error(`[bot] acts: '${act.action}' handler rejected: ${String(e)}`));
+        }
       });
     },
   };
@@ -122,6 +124,23 @@ function voiceHandler(speak: SpeakController): (act: Act) => Promise<void> {
   return async (act) => {
     if (act.action === 'speak') await speak.speak(act.text, act.voice);
     else if (act.action === 'speak_stop') await speak.stop();
+  };
+}
+
+/** The bot's config-act handler: acts.v1 `reconfigure` writes the meeting's live stt config, which
+ *  the transcribe closure reads on its NEXT call — so the language/task change takes effect from
+ *  the next utterance, with no respawn. The apply is LOUD (old→new on one line): a transcript that
+ *  changes language mid-file is unreadable without the boundary being in the log. */
+export function configHandler(cfg: SttConfigRef): (act: Act) => void {
+  const show = (c: { language?: string; task?: string }): string =>
+    `language=${c.language ?? '(detect)'} task=${c.task ?? '(default)'}`;
+  return (act) => {
+    if (act.action !== 'reconfigure') return;
+    const { from, to, changed } = cfg.apply(act);
+    console.log(
+      `[bot] reconfigure: ${show(from)} → ${show(to)}${changed ? '' : ' (no change)'}`
+      + (act.allowedLanguages ? ` [allowedLanguages accepted, not enforced: ${act.allowedLanguages.join(',')}]` : ''),
+    );
   };
 }
 
@@ -189,6 +208,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
+  // The meeting's LIVE stt config: seeded from the invocation's spawn-time language, then written
+  // by acts.v1 `reconfigure` and read by the transcribe closure on every STT call (#516). Built
+  // BEFORE the browser so an act arriving during boot is applied to the box rather than dropped —
+  // the pipeline picks it up on its first transcribe.
+  const sttConfig = createSttConfigRef({ language: inv.language ?? undefined });
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
   // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
   // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
@@ -221,8 +245,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
     botPipeline = createBotPipeline(inv, transcript, {
+      // The live stt config a `reconfigure` act writes — passed here so the lane's own
+      // createTranscribe reads the SAME box the acts tee writes (one value, one writer).
+      sttConfig,
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
-      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv, sttConfig), signalRecorder.path) : undefined,
       config: speakerStreamConfig,
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
@@ -276,8 +303,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       },
     });
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
+    // Config: `reconfigure` writes the live stt box the transcribe closure reads per call (#516).
     const speak = createSpeakController(session.page, inv);
-    acts = teeActs(liveActs, voiceHandler(speak));
+    acts = teeActs(liveActs, voiceHandler(speak), configHandler(sttConfig));
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);
     join = noBrowserJoinDriver(String(e));

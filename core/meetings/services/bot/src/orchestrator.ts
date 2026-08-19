@@ -181,8 +181,10 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   // SIGTERM seam uses — so a Stop is honored NO MATTER the phase it arrives in: ACTIVE ⇒ graceful
   // leave; PRE-ACTIVE (still knocking in the lobby) ⇒ abort the join → WITHDRAW the ask-to-join
   // request (#889). Routing `leave` straight to `signalEnd` used to only end the ACTIVE phase, so a
-  // lobby `leave` did nothing. reconfigure + voice acts are handled by the live pipeline adapter
-  // (no-op for the machine; voice agent is DEFERRED this increment).
+  // lobby `leave` did nothing. `reconfigure` and the voice acts are teed to their own handlers at
+  // the composition root (index.ts): `reconfigure` writes the live stt config the transcribe
+  // closure reads, `speak`/`speak_stop` drive the SpeakController. Both are no-ops for THIS
+  // machine — it owns the meeting's phase, not the pipeline's config.
   async function handle(act: Act): Promise<void> {
     if (act.action === 'leave') stop('stopped');
   }

@@ -37,9 +37,54 @@ import { isMixedLanePlatform, type Invocation, type Platform } from './config.js
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
-/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
- *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
+/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The lane
+ *  never knows about config: the closure reads the meeting's LIVE stt config (SttConfigRef) on
+ *  every call, so a mid-meeting `reconfigure` act changes the next request without a respawn. */
 export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+
+/** The transcription config a running bot applies to its NEXT STT request (acts.v1 `Reconfigure`).
+ *  `language` undefined ⇒ let the model detect; `task` undefined ⇒ the service default
+ *  (`transcribe`). */
+export interface SttConfig {
+  language?: string;
+  task?: string;
+}
+
+/** The mutable box the transcribe closure reads per call. One per meeting, built at the
+ *  composition root and handed to both `createTranscribe` (reader) and the acts tee (writer) —
+ *  a single value with exactly one writer, never two closures holding their own copy. */
+export interface SttConfigRef {
+  /** The config the NEXT `transcribe` call will use. */
+  readonly current: SttConfig;
+  /** Apply an acts.v1 `Reconfigure`. Absent/undefined fields are left alone; an explicit `null`
+   *  CLEARS the field (back to model-detect / service-default) — the contract types both
+   *  `language` and `task` as `string | null`. Returns the before/after pair and whether anything
+   *  actually moved, so the caller can log old→new (a silent apply is unauditable). */
+  apply(fields: { language?: string | null; task?: string | null }): {
+    from: SttConfig;
+    to: SttConfig;
+    changed: boolean;
+  };
+}
+
+/** Build the live stt-config box, seeded from the invocation's spawn-time language. */
+export function createSttConfigRef(seed: SttConfig = {}): SttConfigRef {
+  let current: SttConfig = { ...seed };
+  return {
+    get current() {
+      return current;
+    },
+    apply(fields) {
+      const from = current;
+      const to: SttConfig = { ...from };
+      if ('language' in fields) to.language = fields.language ?? undefined;
+      if ('task' in fields) to.task = fields.task ?? undefined;
+      const changed = to.language !== from.language || to.task !== from.task;
+      current = to;
+      return { from, to, changed };
+    },
+  };
+}
 
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
  *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
@@ -319,20 +364,22 @@ function createMixedBotPipeline(
   };
 }
 
-/** Build the real STT transcribe closure from invocation.v1 — language baked into the call so
- *  the lane never knows about config. transcribeEnabled=false ⇒ a no-op transcribe (the engine
- *  still runs turn gating but emits empty text; recording-only meetings need no STT). */
-export function createTranscribe(inv: Invocation): Transcribe {
+/** Build the real STT transcribe closure from invocation.v1. `config` is the meeting's live
+ *  stt-config box, READ ON EVERY CALL — the language/task the request carries is whatever the box
+ *  holds at that moment, so a `reconfigure` act between two calls changes the second one.
+ *  transcribeEnabled=false ⇒ a no-op transcribe (the engine still runs turn gating but emits empty
+ *  text; recording-only meetings need no STT). */
+export function createTranscribe(inv: Invocation, config?: SttConfigRef): Transcribe {
+  const cfg = config ?? createSttConfigRef({ language: inv.language ?? undefined });
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
-    return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
+    return async () => ({ text: '', language: cfg.current.language ?? 'en', duration: 0, segments: [] });
   }
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
   });
-  const language = inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  return (pcm, prompt) => client.transcribe(pcm, cfg.current.language, prompt, cfg.current.task);
 }
 
 /**
@@ -352,9 +399,13 @@ export function createBotPipeline(
     /** Where the lane's own typed observations go (the turn-spine switch). Wired at the
      *  composition root to the capture-signal recorder's observations sidecar. */
     onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void;
+    /** The meeting's live stt config — the box a `reconfigure` act writes and the transcribe
+     *  closure reads per call. Omitted ⇒ a private box seeded from the invocation (spawn-time
+     *  language, immutable for the meeting). */
+    sttConfig?: SttConfigRef;
   } = {},
 ): BotPipeline {
-  const transcribe = opts.transcribe ?? createTranscribe(inv);
+  const transcribe = opts.transcribe ?? createTranscribe(inv, opts.sttConfig);
   if (isMixedLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),

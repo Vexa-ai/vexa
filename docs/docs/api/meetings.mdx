@@ -277,11 +277,41 @@ confirmations.
 
 ## Manage the bot
 
+### Change a running bot's language or task
+
+<ParamField body="language" type="string | null">ISO code (e.g. `es`). Pins every subsequent STT
+call to this language. `null` clears the pin — the model detects each window again. **Omit the
+field entirely to leave it as it is**; omitted and `null` are not the same.</ParamField>
+<ParamField body="task" type="string | null">`transcribe` (same-language text) or `translate`
+(foreign speech → English text). `null` returns to the service default.</ParamField>
+<ParamField body="allowedLanguages" type="string[]">Accepted for `acts.v1` compatibility and
+forwarded to the bot, but **inert** — nothing enforces it today. It is not stored and not echoed
+back.</ParamField>
+
 ```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
 curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"language":"es","task":"translate"}'
 ```
+
+```json 202
+{
+  "status": "reconfiguring",
+  "meeting_id": 12345,
+  "native_meeting_id": "abc-defg-hij",
+  "config": { "language": "es", "task": "translate" }
+}
+```
+
+The change **takes effect from the next transcription window** — the utterance in flight when the
+call lands finishes under the old config, and Whisper's prompt continuity can smear the first
+sentence across the switch. `202` means the command reached the bot's channel; `404` means no
+active bot on that link (a completed meeting has no live config); `422` means the body named no
+config field, an unknown field, or a wrongly-typed one; `503` means the command bus is
+unreachable and **nothing reached the bot** — retry.
+
+On Zoom and Teams the STT language changes exactly as on Google Meet, but a segment whose language
+Whisper does not report is still tagged with the language the bot was **spawned** with.
 
 ```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
@@ -298,9 +328,9 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 ```
 
 <Note>
-**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
-call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
-return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+**Speak** (`POST …/speak`, TTS into the call) rides the live bot-control plane and is not yet wired in
+the v0.12 open-core stack — it currently returns `404`. Send-a-bot, stop, **config**, **running bots**
+(`GET /bots/status`), list, and transcripts are live.
 </Note>
 
 ```bash List meetings — GET /meetings

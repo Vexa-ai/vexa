@@ -15,6 +15,7 @@ and stays in their ecosystem (FastAPI + redis + DB).
 |---|---|---|---|
 | calls | api-gateway / agent-api | `POST /bots` | request a bot (platform + native id + per-user webhook cfg) → eager `MeetingSession` |
 | calls | api-gateway / agent-api | `DELETE /bots/{platform}/{native}` | user-stop → leave command + workload teardown |
+| calls | api-gateway / agent-api | `PUT /bots/{platform}/{native}/config` | mid-call config → `acts.v1` `reconfigure` on the bot's command channel (language/task) |
 | calls | dashboard / agent-api | `GET /meetings` | the user's meetings (live + past), api.v1 `MeetingListResponse` |
 | calls | dashboard / agent-api | `GET /transcripts/{platform}/{native}` | the meeting transcript, api.v1 `TranscriptionResponse` |
 | calls | api-gateway `/ws` | `POST /ws/authorize-subscribe` | identity-scoped subscribe authorization |
@@ -50,6 +51,7 @@ Levels: **L1** contract conformance (`test_contract_conformance`, `collector_con
 ## Status
 
 - ✅ delivered — `POST /bots` (invocation.v1 + runtime.v1 spawn) · `DELETE /bots/{platform}/{native}` user-stop
+  · `PUT /bots/{platform}/{native}/config` mid-call reconfigure (#516)
 - ✅ delivered — `lifecycle.v1` callback receiver + FSM, durable DB persist + restart rehydration
 - ✅ delivered — collector: `transcription_segments` → DB, publish `tc:meeting:{id}:mutable` + `bm:meeting:{id}:status`
 - ✅ delivered — `GET /meetings` (live + past per user) · `GET /transcripts` · `POST /ws/authorize-subscribe`

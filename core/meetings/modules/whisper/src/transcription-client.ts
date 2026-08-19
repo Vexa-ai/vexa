@@ -119,12 +119,12 @@ export class TranscriptionClient {
    * Converts to WAV, POSTs to transcription-service, returns parsed result.
    * Retries on transient failures (503, network errors).
    */
-  async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
+  async transcribe(audioData: Float32Array, language?: string, prompt?: string, task?: string): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const result = await this.sendRequest(wavBuffer, language, prompt);
+        const result = await this.sendRequest(wavBuffer, language, prompt, task);
         return result;
       } catch (err: any) {
         // Normalize anything non-HTTP (abort/network) into a typed fault too, so the
@@ -154,7 +154,7 @@ export class TranscriptionClient {
   /**
    * Send the WAV buffer to the transcription-service as multipart form data.
    */
-  private async sendRequest(wavBuffer: Buffer, language?: string, prompt?: string): Promise<TranscriptionResult> {
+  private async sendRequest(wavBuffer: Buffer, language?: string, prompt?: string, task?: string): Promise<TranscriptionResult> {
     // Build multipart form data manually (no external dependency needed)
     const boundary = `----FormBoundary${Date.now().toString(36)}`;
 
@@ -189,6 +189,17 @@ export class TranscriptionClient {
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="language"\r\n\r\n` +
         `${language}\r\n`
+      ));
+    }
+
+    // Task part (if specified): `transcribe` (same-language text) or `translate` (foreign speech →
+    // English text). The service reads it as an OpenAI-compatible form field and defaults to
+    // `transcribe`, so omitting it is the unchanged wire.
+    if (task) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="task"\r\n\r\n` +
+        `${task}\r\n`
       ));
     }
 

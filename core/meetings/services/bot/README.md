@@ -20,7 +20,7 @@ composition root (`src/index.ts`).
 | publishes | gateway → dashboard | redis pub/sub `tc:meeting:{id}:mutable` | live mutable `transcript.v1` segment |
 | produces | meeting-api | HTTP POST → `inv.meetingApiCallbackUrl` | `lifecycle.v1` status events (retry/backoff) |
 | produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
-| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
+| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands — `leave` (orchestrator) · `reconfigure` (live STT language/task) · `speak` / `speak_stop` |
 
 ### Pre-join reachability gate (#530)
 
@@ -67,5 +67,7 @@ autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-
 - ✅ delivered — `transcript.v1` egress (redis stream + mutable pub/sub)
 - ✅ delivered — `lifecycle.v1` HTTP callback (retry/backoff, never crashes the bot)
 - ✅ delivered — `acts.v1` ingress (redis subscriber; unknown acts dropped, never thrown)
+- ✅ delivered — `reconfigure` applied to the LIVE pipeline: the transcribe closure reads the meeting's
+  stt config per call, so a mid-meeting language/task change lands on the next STT request (#516)
 - ✅ delivered — recording assembler core (webm/wav/seq, L2/L3)
 - 🟡 partial — browser join + capture + recording-upload + speak (wired; L4-gated, proven on VM via `eval/`, not unit tests)

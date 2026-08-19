@@ -47,7 +47,7 @@ class InMemoryCommandPublisher:
         return 0
 
 
-def _resolve_user_id(x_user_id: Optional[str]) -> int:
+def resolve_user_id(x_user_id: Optional[str]) -> int:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="Missing user identity")
     try:
@@ -80,7 +80,7 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         native_meeting_id: str,
         x_user_id: Optional[str] = Header(default=None),
     ):
-        user_id = _resolve_user_id(x_user_id)
+        user_id = resolve_user_id(x_user_id)
         # A3: the sealed path param is the `Platform` enum → an unsupported platform is a 422
         # (validation error), not a 404. Reject it BEFORE find_active (which would miss → 404),
         # mirroring the POST /bots platform guard. Valid platforms keep idempotent-delete

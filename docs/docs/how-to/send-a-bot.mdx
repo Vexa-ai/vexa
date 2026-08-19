@@ -124,16 +124,20 @@ of polling, subscribe over **WebSocket** — see the [Meetings API](/api/meeting
 ## 3. Manage and stop
 
 ```bash
+# change the language mid-call — the German standup an English guest just joined
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"language":"en"}'
+
 # stop the bot / leave the call
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
 
-<Note>
-Mid-call reconfiguration (`PUT …/config`, change language/task while the bot is in the call) rides
-the live bot-control plane and is **not yet wired in the v0.12 open-core stack** — it currently
-returns `404`. Set `language` and `task` on the `POST /bots` spawn. See the
-[Meetings API](/api/meetings#manage-the-bot).
-</Note>
+The bot stays in the call and applies the change to its **next** transcription window — the
+utterance in flight finishes under the old setting. Send `{"language": null}` to drop back to
+auto-detect, or `{"task":"translate"}` to render foreign speech as English text. Fields you omit
+are left alone. Full request/response shape:
+[Meetings API](/api/meetings#change-a-running-bots-language-or-task).
 
 The audio **recording** lands in your object storage — retrieve it via `GET /recordings`
 ([Meetings API](/api/meetings#recordings)).
