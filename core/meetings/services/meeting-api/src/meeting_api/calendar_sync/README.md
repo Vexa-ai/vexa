@@ -15,8 +15,11 @@ domain).
   store primitives `POST /meetings` uses (advisory-locked). Intent rows follow the feed; FSM rows
   are never touched; a manual plan on the same link is ADOPTED (uid stamped), not duplicated;
   vanished/cancelled UIDs retire their still-planned rows.
-- `fetch_ics(url)` — **SSRF-pinned** (`webhooks/ssrf.build_pinned_transport`), 2 MB cap, no
-  redirects. `fetch_configs(admin_api_url, secret)` — the internal discovery hop.
+- `fetch_ics(url)` — **SSRF-pinned** (`webhooks/ssrf.build_pinned_transport`), no redirects, and
+  size-budgeted at `CALENDAR_MAX_ICS_BYTES` (default 10 MB). The body **streams**: the not-a-feed
+  sniff runs on the first bytes and the budget is checked per chunk, so an oversize feed is
+  abandoned mid-download rather than buffered and then judged.
+  `fetch_configs(admin_api_url, secret)` — the internal discovery hop.
 
 ## Wiring (entrypoint)
 `meeting_api.__main__._attach_background_loops` runs one sweep per `CALENDAR_SYNC_INTERVAL_S`

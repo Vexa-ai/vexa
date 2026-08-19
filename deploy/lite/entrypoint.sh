@@ -38,6 +38,8 @@ export DISPLAY="${DISPLAY:-:99}"
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-lite-internal-secret}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-}"
+# #1182: ICS feed size cap — a secret iCal address exports the whole calendar, history and all.
+export CALENDAR_MAX_ICS_BYTES="${CALENDAR_MAX_ICS_BYTES:-10485760}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
 # profile forwards configured values to every spawned bot process.
