@@ -1,0 +1,173 @@
+name: dashboard-image
+# The hosted Dashboard image, built where its provenance survives.
+#
+# `vexaai/dashboard` was the one image in the release set whose provenance was
+# not registry-verifiable: hand-built on an operator's host and shipped with a
+# classic `docker push`, which cannot carry an attestation. The build record
+# existed only in that host's local buildx cache, one `docker buildx prune` from
+# gone, and the image config carried no labels at all.
+#
+# This workflow is the attested path. Every push emits SLSA provenance
+# (mode=max) and an SBOM as registry referrers, and stamps the OCI labels, so
+# the answer to "what is this image and where did it come from?" is readable
+# from Docker Hub by anyone, with no SSH access to any machine.
+#
+# Dashboard is deliberately NOT in releases/*/candidate-images.json: it is a
+# hosted platform deployment, deprecated in favour of Terminal for new
+# self-hosted installs, and it does not carry an OSS release tag. It is built
+# here — in the repo that owns its source — rather than joining the OSS
+# candidate set. See services/dashboard/README.md § Build and provenance.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to publish (e.g. 0.10.6.4-<slug>). Defaults to a timestamp.'
+        required: false
+        type: string
+      move_dev:
+        description: 'Point :dev at this build'
+        required: false
+        default: true
+        type: boolean
+  pull_request:
+    paths:
+      - 'services/dashboard/**'
+      - 'packages/transcript-rendering/**'
+      - '.github/workflows/dashboard-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # A build that never runs in CI is a build nobody knows is broken. This proves
+  # the image assembles from a clean checkout of the merge result — the check
+  # that a repo-root COPY of a file no longer in the tree would have failed.
+  verify-builds:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push) — the Dockerfile still assembles from this tree
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/dashboard/Dockerfile
+          push: false
+          build-args: |
+            VEXA_IMAGE_REVISION=${{ github.event.pull_request.head.sha }}
+            VEXA_IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            VEXA_API_URL=http://build-only.invalid
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Hub credentials present?
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] \
+            || { echo "::error ::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not configured"; exit 1; }
+
+      - name: Resolve the publish identity
+        id: id
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$(date -u +%y%m%d-%H%M)}"
+          # The tag lands in an image reference; keep it to what a reference allows.
+          case "$TAG" in
+            *[!A-Za-z0-9._-]*) echo "::error ::illegal tag '$TAG'"; exit 1 ;;
+          esac
+          {
+            echo "tag=$TAG"
+            echo "revision=$GITHUB_SHA"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "✓ publishing vexaai/dashboard:$TAG from $GITHUB_SHA"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # provenance=mode=max + sbom=true are what make this build inspectable
+      # from the registry. Dropping them returns the image to the unverifiable
+      # state this workflow exists to end.
+      - name: Build + push with SLSA provenance and SBOM
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/dashboard/Dockerfile
+          push: true
+          platforms: linux/amd64
+          provenance: mode=max
+          sbom: true
+          tags: vexaai/dashboard:${{ steps.id.outputs.tag }}
+          build-args: |
+            VEXA_IMAGE_REVISION=${{ steps.id.outputs.revision }}
+            VEXA_IMAGE_CREATED=${{ steps.id.outputs.created }}
+            VEXA_IMAGE_VERSION=${{ steps.id.outputs.tag }}
+            VEXA_IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
+
+      # Fail closed on the exact defect that motivated this workflow: an image
+      # on the registry whose provenance cannot be read back off the registry.
+      - name: Read the provenance back off Docker Hub
+        env:
+          REF: vexaai/dashboard:${{ steps.id.outputs.tag }}
+          WANT_REV: ${{ steps.id.outputs.revision }}
+        run: |
+          set -euo pipefail
+          GOT_REV="$(docker buildx imagetools inspect "$REF" --format '{{json .Image}}' | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          imgs=list(d.values()) if isinstance(d,dict) and "config" not in d and "Config" not in d else [d]
+          for i in imgs:
+              lab=(i.get("config") or i.get("Config") or {}).get("Labels") or {}
+              r=lab.get("org.opencontainers.image.revision")
+              if r: print(r); break')"
+          [ "$GOT_REV" = "$WANT_REV" ] \
+            || { echo "::error ::revision label is '$GOT_REV', expected '$WANT_REV'"; exit 1; }
+
+          PROV="$(docker buildx imagetools inspect "$REF" --format '{{json .Provenance}}')"
+          [ -n "$PROV" ] && [ "$PROV" != "null" ] && [ "$PROV" != "{}" ] \
+            || { echo "::error ::no provenance attestation reached the registry for $REF"; exit 1; }
+
+          echo "✓ $REF carries revision $GOT_REV and a registry-readable provenance attestation"
+
+      - name: Point :dev at this build
+        if: inputs.move_dev
+        run: |
+          docker buildx imagetools create \
+            -t vexaai/dashboard:dev "vexaai/dashboard:${{ steps.id.outputs.tag }}"
+          echo "✓ :dev → ${{ steps.id.outputs.tag }}"
+
+      - name: Publish the build receipt
+        env:
+          REF: vexaai/dashboard:${{ steps.id.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$REF" --raw > dashboard-image-descriptor.json
+          {
+            echo "### vexaai/dashboard:${{ steps.id.outputs.tag }}"
+            echo ""
+            echo "- revision: \`${{ steps.id.outputs.revision }}\`"
+            echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- built by: \`${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\`"
+            echo "- provenance: SLSA mode=max, readable via \`docker buildx imagetools inspect --format '{{json .Provenance}}'\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-image-${{ steps.id.outputs.tag }}
+          path: dashboard-image-descriptor.json

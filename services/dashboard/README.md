@@ -46,6 +46,62 @@ docker run --rm -p 3000:3000 \
 
 Then open `http://localhost:3000`. (The container listens on port 3000; the `npm run dev` server uses port 3001.)
 
+## Build and provenance
+
+**This repository (`Vexa-ai/vexa`) owns the Dashboard build.** The source lives here
+under `services/dashboard`, and the image is built here — not in `Vexa-ai/vexa-platform`,
+which holds no Dashboard source and runs no image-building CI.
+
+Dashboard is a hosted platform deployment and is deliberately **not** part of the OSS
+candidate set in `releases/*/candidate-images.json`. It carries its own tag line rather
+than an OSS release tag, and it is deprecated in favour of
+[Terminal](../../clients/terminal) for new self-hosted installations. Being outside the
+candidate map is a release-scope decision, not a provenance exemption: the image is still
+built on an attested path.
+
+### The attested path
+
+[`.github/workflows/dashboard-image.yml`](../../.github/workflows/dashboard-image.yml) is
+how `vexaai/dashboard` is published. Run it via workflow dispatch with the tag to publish.
+Each run stamps the OCI labels, emits SLSA provenance (`mode=max`) and an SBOM as registry
+referrers, and then reads them back off Docker Hub — the run fails if the provenance did
+not reach the registry.
+
+A pull request touching `services/dashboard/**` builds the image without pushing, so a
+Dockerfile that no longer assembles is caught before it reaches a release.
+
+### Manual builds
+
+`make push` in this directory is the manual equivalent, for when CI is not an option:
+
+```bash
+make push IMAGE_TAG=0.10.6.4-myslug
+```
+
+It builds and pushes in a single `docker buildx build --push --provenance=mode=max
+--sbom=true` invocation. That single invocation is the point — building first and
+`docker push`-ing afterwards leaves the attestation in the local build record, where it is
+one `docker buildx prune` from gone and reachable only by shell access to the build host.
+The target refuses to run against a dirty tree, since the revision label would then name a
+source that does not match what was built.
+
+### Verifying a published image
+
+```bash
+make verify TAG=0.10.6.4-myslug
+```
+
+Or directly, against any image in the release set:
+
+```bash
+docker buildx imagetools inspect vexaai/dashboard:<tag> --format '{{json .Provenance}}'
+docker buildx imagetools inspect vexaai/dashboard:<tag> --format '{{json .Image}}'
+```
+
+The image config carries `org.opencontainers.image.revision`, `.source`, `.created`, and
+`.version`. `revision` is the commit this image was built from; it is the field the
+`latest-drift` workflow reads to detect stale published images.
+
 ## Local Development
 
 The dashboard lives in the Vexa monorepo at `services/dashboard/`.
