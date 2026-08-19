@@ -149,19 +149,33 @@ def build_production_app():
 
     # Calendar-sync user edges (GET/POST /user/calendar/sync): the SAME one-user pass the
     # background sweep runs, on demand — paste-a-feed gets an immediate result instead of a
-    # silent wait for the next tick (fail loud to the user). None-returns mean "no feed / sync
-    # unavailable" and the route answers 404/503 accordingly.
+    # silent wait for the next tick (fail loud to the user). ``None`` means authoritative no-feed;
+    # typed discovery faults remain retryable 503s and are never collapsed into that 404.
     async def _calendar_sync_now(user_id: int):
         admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
         internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
-        if not (admin_api_url and internal_secret):
-            return None
         import json as _json
+        from datetime import datetime, timezone
 
-        from .calendar_sync import fetch_configs, run_user_sync, store_stamp
+        from .calendar_sync import (
+            CALENDAR_CONFIG_UNAVAILABLE_DETAIL,
+            CalendarConfigDiscoveryError,
+            CalendarConfigDiscoveryKind,
+            fetch_user_config,
+            run_user_sync,
+            store_stamp,
+        )
 
-        configs = await fetch_configs(admin_api_url, internal_secret)
-        cfg = next((c for c in configs or [] if c.get("user_id") == user_id), None)
+        try:
+            if not (admin_api_url and internal_secret):
+                raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONFIGURATION)
+            cfg = await fetch_user_config(admin_api_url, internal_secret, user_id)
+        except CalendarConfigDiscoveryError:
+            await store_stamp(redis_client, user_id, {
+                "last_sync": datetime.now(timezone.utc).isoformat(),
+                "last_error": CALENDAR_CONFIG_UNAVAILABLE_DETAIL,
+            })
+            raise
         if cfg is None:
             return None
 
@@ -589,7 +603,7 @@ def _attach_background_loops(
 
         async def _tick():
             configs = await fetch_configs(admin_api_url, internal_secret)
-            for cfg in configs or []:
+            for cfg in configs:
                 try:  # one bad feed never stalls the sweep
                     stamp = await run_user_sync(transcript_store, cfg, publish=_cal_publish)
                 except Exception:

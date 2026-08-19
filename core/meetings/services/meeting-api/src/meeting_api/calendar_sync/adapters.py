@@ -7,13 +7,48 @@ flip can never turn the poller into an internal-network probe. Size-capped: a fe
 ``MAX_ICS_BYTES`` is refused, not parsed.
 
 ``fetch_configs`` asks admin-api's internal edge (X-Internal-Secret) which users have a feed
-connected — the secret URL crosses only this internal hop.
+connected — the secret URL crosses only this internal hop. A validated list (including ``[]``)
+is authoritative. Transport/auth/upstream/shape faults raise a typed, sanitized exception so a
+caller can never mistake an unavailable identity service for "no feed connected".
 """
 from __future__ import annotations
 
-from typing import Optional
+from enum import StrEnum
+from typing import Optional, TypedDict
 
 MAX_ICS_BYTES = 2 * 1024 * 1024  # 2 MB — a personal calendar feed is KBs; refuse anything huge
+CALENDAR_CONFIG_UNAVAILABLE_DETAIL = "calendar configuration is temporarily unavailable"
+
+
+class CalendarConfig(TypedDict):
+    user_id: int
+    ics_url: str
+    auto_join: bool
+
+
+class CalendarConfigDiscoveryKind(StrEnum):
+    CONFIGURATION = "configuration"
+    TRANSPORT = "transport"
+    CONNECTIVITY = "connectivity"
+    AUTHENTICATION = "authentication"
+    UPSTREAM_STATUS = "upstream_status"
+    RESPONSE_SHAPE = "response_shape"
+
+
+class CalendarConfigDiscoveryError(RuntimeError):
+    """Sanitized failure of admin-api's internal calendar-config discovery edge.
+
+    ``kind`` is safe for system telemetry. The exception deliberately carries no URL, credential,
+    response body, user/account id, or underlying exception text.
+    """
+
+    source = "admin_api.calendar_configs"
+
+    def __init__(self, kind: CalendarConfigDiscoveryKind):
+        if not isinstance(kind, CalendarConfigDiscoveryKind):
+            raise TypeError("kind must be a CalendarConfigDiscoveryKind")
+        self.kind = kind
+        super().__init__(f"calendar config discovery failed ({kind.value})")
 
 
 async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str], Optional[str]]:
@@ -49,21 +84,74 @@ async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str]
 
 
 async def fetch_configs(admin_api_url: str, internal_secret: str,
-                        *, timeout_s: float = 10.0) -> Optional[list[dict]]:
-    """``[{user_id, ics_url, auto_join}]`` from admin-api's internal calendar-configs edge, or
-    ``None`` when identity is unreachable (the sweep skips the tick — fail-closed, not fail-silent)."""
+                        *, timeout_s: float = 10.0) -> list[CalendarConfig]:
+    """Return admin-api's authoritative ``[{user_id, ics_url, auto_join}]`` list.
+
+    A successful empty list means no user has a feed. Every non-authoritative outcome raises
+    ``CalendarConfigDiscoveryError``; callers may therefore reserve absence/404 for a completed,
+    validated discovery response only.
+    """
     import httpx
+
+    if not admin_api_url or not internal_secret:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONFIGURATION)
+    try:
+        parsed_admin_api_url = httpx.URL(admin_api_url)
+    except (TypeError, httpx.InvalidURL):
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONFIGURATION) from None
+    if parsed_admin_api_url.scheme not in ("http", "https") or not parsed_admin_api_url.host:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONFIGURATION)
+    endpoint = f"{str(parsed_admin_api_url).rstrip('/')}/internal/calendar-configs"
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             resp = await client.get(
-                f"{admin_api_url.rstrip('/')}/internal/calendar-configs",
+                endpoint,
                 headers={"X-Internal-Secret": internal_secret},
             )
-        if resp.status_code != 200:
-            return None
+    except (httpx.InvalidURL, httpx.UnsupportedProtocol, httpx.LocalProtocolError):
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONFIGURATION) from None
+    except httpx.TimeoutException:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.TRANSPORT) from None
+    except httpx.RequestError:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.CONNECTIVITY) from None
+
+    if resp.status_code in (401, 403):
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.AUTHENTICATION)
+    if resp.status_code != 200:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.UPSTREAM_STATUS)
+
+    try:
         body = resp.json()
-        configs = body.get("configs") if isinstance(body, dict) else None
-        return configs if isinstance(configs, list) else None
-    except Exception:
-        return None
+    except ValueError:
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE) from None
+
+    configs = body.get("configs") if isinstance(body, dict) else None
+    if not isinstance(configs, list):
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE)
+    validated: list[CalendarConfig] = []
+    seen_user_ids: set[int] = set()
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE)
+        user_id = cfg.get("user_id")
+        if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id in seen_user_ids:
+            raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE)
+        seen_user_ids.add(user_id)
+        if not isinstance(cfg.get("ics_url"), str) or not cfg["ics_url"]:
+            raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE)
+        if not isinstance(cfg.get("auto_join"), bool):
+            raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.RESPONSE_SHAPE)
+        validated.append({
+            "user_id": user_id,
+            "ics_url": cfg["ics_url"],
+            "auto_join": cfg["auto_join"],
+        })
+    return validated
+
+
+async def fetch_user_config(admin_api_url: str, internal_secret: str, user_id: int,
+                            *, timeout_s: float = 10.0) -> Optional[CalendarConfig]:
+    """Return the gateway-bound user's config, or ``None`` after authoritative absence only."""
+    configs = await fetch_configs(admin_api_url, internal_secret, timeout_s=timeout_s)
+    return next((cfg for cfg in configs if cfg["user_id"] == user_id), None)

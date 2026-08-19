@@ -115,6 +115,11 @@ def _is_blocked_ip(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # not a valid IP — block
+    # IPv4-mapped IPv6 (for example ::ffff:127.0.0.1) carries an IPv4 address through an IPv6
+    # literal. Classify the embedded address against the IPv4 blocklist; otherwise mapped
+    # loopback/private/metadata targets bypass the IPv6-only ranges below.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     nets = _BLOCKED_IPV4_NETWORKS if ip.version == 4 else _BLOCKED_IPV6_NETWORKS
     return any(ip in net for net in nets)
 

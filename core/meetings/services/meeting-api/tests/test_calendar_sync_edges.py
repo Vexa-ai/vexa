@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from meeting_api.collector import create_app
 from meeting_api.collector.fakes import InMemoryTranscriptStore
+from meeting_api.calendar_sync import CalendarConfigDiscoveryError, CalendarConfigDiscoveryKind
 
 
 class _CaptureRedis:
@@ -69,6 +70,39 @@ def test_post_sync_now_404_when_no_feed():
     client, _ = _client(now_result=None)
     r = client.post("/user/calendar/sync", headers={"X-User-Id": "28"})
     assert r.status_code == 404
+
+
+def test_post_sync_discovery_fault_is_sanitized_retryable_503():
+    events = []
+
+    async def sync_now(_user_id: int):
+        raise CalendarConfigDiscoveryError(CalendarConfigDiscoveryKind.AUTHENTICATION)
+
+    def log_event(name, **fields):
+        events.append({"name": name, **fields})
+        return events[-1]
+
+    app = create_app(
+        InMemoryTranscriptStore(), redis=_CaptureRedis(),
+        calendar_sync_now=sync_now, calendar_sync_status=None,
+        log_event=log_event,
+    )
+    r = TestClient(app).post("/user/calendar/sync", headers={"X-User-Id": "28"})
+
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": "calendar configuration is temporarily unavailable",
+        "code": "calendar_config_discovery_unavailable",
+        "retryable": True,
+    }
+    assert r.headers["Retry-After"] == "1"
+    assert r.headers["Cache-Control"] == "no-store"
+    assert events[-1]["name"] == "calendar_config_discovery_failed"
+    assert events[-1]["fields"] == {
+        "source": "admin_api.calendar_configs",
+        "reason": "authentication",
+    }
+    assert "secret" not in repr(events).lower()
 
 
 def test_unwired_hooks_503():
