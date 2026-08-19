@@ -113,8 +113,10 @@ class TransitionSource(str, Enum):
 # status is `joining`, so that is the machine's de-facto entry.
 LEGAL_TRANSITIONS: Dict[Optional[BotStatus], frozenset[BotStatus]] = {
     None: frozenset({BotStatus.JOINING}),  # initial: a record's first event must be `joining`
+    # needs_help straight from joining: a blocker (consent gate / captcha) can appear BEFORE the
+    # lobby, so the bot must be able to escalate for a human without first reaching awaiting_admission.
     BotStatus.JOINING: frozenset(
-        {BotStatus.AWAITING_ADMISSION, BotStatus.ACTIVE, BotStatus.FAILED}
+        {BotStatus.AWAITING_ADMISSION, BotStatus.ACTIVE, BotStatus.NEEDS_HELP, BotStatus.FAILED}
     ),
     BotStatus.AWAITING_ADMISSION: frozenset(
         {BotStatus.ACTIVE, BotStatus.NEEDS_HELP, BotStatus.FAILED}
