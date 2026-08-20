@@ -1,5 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useService } from "../platform";
+import { LayoutServiceId } from "../workbench/layout";
 import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
@@ -69,6 +71,14 @@ function ProcessedTranscript() {
 
 function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   const { meeting, transcript } = useMeeting();
+  const layout = useService(LayoutServiceId);
+  // Name the tab from the loaded meeting — a meeting opened by `?meeting=<id>` before the list loaded
+  // opens as the generic "Meeting"; once the title arrives, rename the tab to match the list/prep views.
+  useEffect(() => {
+    if (meetingId && meeting.title && meeting.title !== "Meeting") {
+      layout.setTitle(`meeting:${meetingId}`, meeting.title.split(" — ")[0]);
+    }
+  }, [layout, meetingId, meeting.title]);
   const live = meeting.live === true;
   const hasNotes = (transcript.notes?.length ?? 0) > 0;
   // Durable truth wins over a stale list `live` flag ([N8] — the row can stay stuck on a live

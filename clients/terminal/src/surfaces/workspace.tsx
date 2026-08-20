@@ -9,7 +9,7 @@ import { registerList, registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -33,15 +33,28 @@ function parseEntity(text: string): { fm: [string, string][]; body: string } {
   return { fm, body: m[2] };
 }
 function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
-  // Frontmatter [[wikilinks]] are clickable: navigate the doc pane in place when it provides
-  // a navigator (Obsidian-style), else fall back to the OPEN_ENTITY_EVENT tab path.
+  // Frontmatter [[wikilinks]] AND markdown [text](href) links are clickable (Obsidian-style): a
+  // wikilink / internal path navigates the doc pane (or opens a tab); a `?meeting=<id>` href opens the
+  // meeting canvas; http(s) opens externally. Lets a meeting note carry its recording links in metadata.
   const open = (wikilink: string) => navigate
     ? navigate({ wikilink })
     : window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink } }));
-  return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[")
-    ? <span key={i} onClick={() => open(part.slice(2, -2))}
-        style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>
-    : <span key={i}>{part}</span>);
+  return text.split(/(\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))/).map((part, i) => {
+    if (part.startsWith("[[")) return <span key={i} onClick={() => open(part.slice(2, -2))}
+      style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>;
+    const md = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (md) {
+      const [, label, href] = md;
+      const meeting = href.match(/[?&]meeting=([^&#]+)/);
+      if (meeting) return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: decodeURIComponent(meeting[1]) } }))}>{label}</span>;
+      if (/^https?:/i.test(href)) return <a key={i} href={href} target="_blank" rel="noreferrer noopener"
+        style={{ color: "var(--blue)" }}>{label}</a>;
+      return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: href } }))}>{label}</span>;
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 // [[Title]] / relative-path resolution lives in ui-kit/docLinks (resolveDocRef) — shared
