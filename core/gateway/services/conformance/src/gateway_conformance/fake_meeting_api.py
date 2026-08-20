@@ -194,8 +194,11 @@ def build_fake_downstream() -> FastAPI:
 
     @app.post("/bots/{platform}/{native_meeting_id}/speak")
     async def speak(platform: str, native_meeting_id: str):
-        # The real bot-manager returns the meeting it acted on.
-        return _golden("MeetingResponse.example.json")
+        return {"status": "accepted", "meeting_id": 1}
+
+    @app.delete("/bots/{platform}/{native_meeting_id}/speak")
+    async def stop_speaking(platform: str, native_meeting_id: str):
+        return {"status": "accepted", "meeting_id": 1}
 
     # --- recordings (gateway forwards /recordings to meeting-api; no sealed api.v1 component) ---
     @app.get("/recordings")

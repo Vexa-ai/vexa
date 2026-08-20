@@ -371,6 +371,10 @@ def build_router(
             )
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
+        raw_voice_agent_enabled = body.get("voice_agent_enabled")
+        if raw_voice_agent_enabled is not None and not isinstance(raw_voice_agent_enabled, bool):
+            raise HTTPException(status_code=422, detail="'voice_agent_enabled' must be a boolean")
+        voice_agent_enabled = raw_voice_agent_enabled is True
 
         try:
             meeting = await request_bot(
@@ -388,6 +392,7 @@ def build_router(
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
                 transcribe_enabled=transcribe_enabled,
+                voice_agent_enabled=True if voice_agent_enabled else None,
                 automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as

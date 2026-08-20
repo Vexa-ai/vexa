@@ -36,6 +36,8 @@ export interface TtsPlayback {
    *  playback finishes. Best-effort: a synthesis/playback failure logs + resolves (never throws out
    *  — the voice handler must not break the orchestrator). */
   speak(text: string, voice?: string): Promise<void>;
+  /** Play a complete base64 WAV through the bot's virtual microphone. */
+  playAudio(audioBase64: string): Promise<void>;
   /** Interrupt any in-flight playback (barge-in) + re-mute. */
   stop(): void;
 }
@@ -93,5 +95,33 @@ export function createTtsPlayback(log: (m: string) => void = () => { /* */ }): T
     });
   };
 
-  return { speak, stop };
+  const playAudio = async (audioBase64: string): Promise<void> => {
+    const audio = Buffer.from(audioBase64, 'base64');
+    if (audio.length < 12 || audio.toString('ascii', 0, 4) !== 'RIFF'
+        || audio.toString('ascii', 8, 12) !== 'WAVE') {
+      log('[tts] speak_audio rejected: payload is not WAV');
+      return;
+    }
+    stop();
+    await new Promise<void>((resolve) => {
+      setTtsMute(false, log);
+      const p = spawn('paplay', ['--device=tts_sink'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      proc = p;
+      let settled = false;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        if (proc === p) proc = null;
+        setTtsMute(true, log);
+        resolve();
+      };
+      p.stderr?.on('data', (d: Buffer) => log(`[tts] paplay: ${d.toString().trim()}`));
+      p.on('exit', done);
+      p.on('error', (error) => { log(`[tts] paplay error: ${String(error)}`); done(); });
+      p.stdin?.on('error', (error) => log(`[tts] paplay stdin: ${String(error)}`));
+      p.stdin?.end(audio);
+    });
+  };
+
+  return { speak, playAudio, stop };
 }

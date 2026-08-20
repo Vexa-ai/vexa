@@ -1,13 +1,12 @@
 ---
 title: "Interactive bots"
-description: "Speaking, chatting, screen-sharing bots — what is actually reachable in 0.12, what is proven at the bot layer but unwired at the API, and where the interactive shape is being decided."
+description: "Speaking, chatting, screen-sharing bots — what is reachable in 0.12, what still awaits live proof, and where the interactive shape is being decided."
 ---
 
 <Warning>
-**Honest status:** the interactive capability family this page once advertised is **partially available
-in 0.12**. Chat *read* works. Speak, chat *write*, screen share and avatar are contract-sealed but not
-reachable through the API today. The API shape for interactive capabilities is under active design —
-it is **not** a straight restoration of the pre-0.12 endpoints.
+**Honest status:** the interactive capability family is **partially available in 0.12**. Chat *read*
+and voice-agent speak are service-wired. Speak is module-tested but still awaiting its live Google Meet
+witness. Chat *write*, screen share and avatar remain contract-sealed but unreachable through the API.
 </Warning>
 
 ## Per-surface status (0.12, verified against the tree)
@@ -15,18 +14,19 @@ it is **not** a straight restoration of the pre-0.12 endpoints.
 | Surface | Contract (`api.v1`) | Reachable today | Notes |
 |---|---|---|---|
 | Chat **read** | sealed | ✅ `GET /bots/{platform}/{native_meeting_id}/chat` | mounted and served |
-| **Speak** | sealed | ❌ 404 | proven live at the bot layer (acts.v1 `speak` → TTS → virtual mic), **not wired at the API layer** — tracked in [#514](https://github.com/Vexa-ai/vexa/issues/514) |
+| **Speak** | sealed | 🟡 `POST/DELETE /bots/{platform}/{native_meeting_id}/speak` | text TTS and supplied WAV/PCM reach acts.v1 and the virtual mic in module tests; live Google Meet witness pending in [#514](https://github.com/Vexa-ai/vexa/issues/514) |
 | Chat **write** | sealed | ❌ 404 | Teams chat write is prepared as [#500](https://github.com/Vexa-ai/vexa/issues/500) |
 | Screen share | sealed | ❌ 404 | planned back in 0.12.x |
 | Avatar / virtual camera | sealed | ❌ 404 | planned back in 0.12.x |
 
-"Sealed" means the endpoint shape is frozen in the public API contract; it does not mean served. A call
-to an unmounted surface returns `404` on every deployment.
+"Sealed" means the endpoint shape is frozen in the public API contract; it does not by itself mean served.
+The per-surface table is the current implementation status.
 
 ## What you can do today
 
 - **Read the meeting chat** while a bot is in the room: `GET /bots/{platform}/{native_meeting_id}/chat`
   with a `bot`-scoped API key.
+- **Speak through a voice-enabled bot** with `POST …/speak`, and interrupt with `DELETE …/speak`.
 - **Capture and transcribe** as usual — the interactive gaps do not affect transcription, recordings,
   or the transcript API.
 

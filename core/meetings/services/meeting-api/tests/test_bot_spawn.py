@@ -43,6 +43,18 @@ def test_invocation_conforms_to_invocation_v1():
     assert inv["connectionId"] == "conn-1"
 
 
+def test_invocation_carries_voice_agent_gate_when_enabled():
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(
+        meeting_id=1, platform="google_meet",
+        meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
+        token=token, native_meeting_id="abc-defg-hij", connection_id="conn-1",
+        redis_url="redis://redis:6379/0",
+    )
+    assert build_invocation(**base, voice_agent_enabled=True)["voiceAgentEnabled"] is True
+    assert "voiceAgentEnabled" not in build_invocation(**base)
+
+
 def test_invocation_carries_stt_creds_when_provided():
     """The bot can only transcribe if the invocation carries the STT URL+token (the mock-bot/dashboard
     validation found these were dropped). When provided they ride the invocation; when not, they are
@@ -258,6 +270,36 @@ def test_post_bots_201(monkeypatch):
                     json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
     assert r.status_code == 201, r.text
     assert r.json()["status"] == "requested"
+
+
+def test_post_bots_threads_voice_agent_gate_to_workload(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    response = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet",
+            "native_meeting_id": "voice-enabled",
+            "voice_agent_enabled": True,
+        },
+    )
+    assert response.status_code == 201, response.text
+    invocation = json.loads(runtime.specs[0]["env"]["VEXA_BOT_CONFIG"])
+    assert invocation["voiceAgentEnabled"] is True
+
+
+def test_post_bots_rejects_non_boolean_voice_agent_gate(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    response = _client().post(
+        "/bots", headers=HEADERS,
+        json={
+            "platform": "google_meet",
+            "native_meeting_id": "voice-invalid",
+            "voice_agent_enabled": "yes",
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_post_bots_forwards_automatic_leave_to_invocation(monkeypatch):

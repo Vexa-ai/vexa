@@ -147,6 +147,7 @@ def build_invocation(
     recording_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
     capture_signal_enabled: Optional[bool] = None,
+    voice_agent_enabled: Optional[bool] = None,
     recording_upload_url: Optional[str] = None,
     transcription_service_url: Optional[str] = None,
     transcription_service_token: Optional[str] = None,
@@ -188,6 +189,7 @@ def build_invocation(
         # VEXA_CAPTURE_SIGNAL env default (the local hot-loop path); the spawn path always passes an
         # explicit boolean so a prod bot never has to guess.
         "captureSignalEnabled": capture_signal_enabled,
+        "voiceAgentEnabled": voice_agent_enabled,
         "recordingUploadUrl": recording_upload_url,
         "meetingApiCallbackUrl": meeting_api_callback_url,
         "internalSecret": internal_secret,

@@ -535,6 +535,10 @@ def create_app(
     async def speak(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
 
+    @app.delete("/bots/{platform}/{native_meeting_id}/speak")
+    async def stop_speaking(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("DELETE", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
+
     # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the
     # row it displays (owner-scoped downstream). Registered BEFORE the native route so `by-id` is not
     # matched as a {platform}. Forwarded verbatim; the auth/identity prep (X-User-Id) is shared.

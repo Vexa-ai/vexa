@@ -59,7 +59,7 @@ async function uploadMockChunk(inv: Invocation, log: (m: string) => void): Promi
   if (!res.ok) throw new Error(`recording upload ${res.status}`);
 }
 
-/** Tee the live acts source so a `speak` act publishes a marker transcript segment (proves the
+/** Tee the live acts source so a `speak`/`speak_audio` act publishes a marker segment (proves the
  *  acts.v1 round-trip end-to-end through the backend), while `leave` still reaches the orchestrator. */
 function teeSpeak(source: ActsSource, transcript: TranscriptSink, inv: Invocation): ActsSource {
   return {
@@ -67,6 +67,7 @@ function teeSpeak(source: ActsSource, transcript: TranscriptSink, inv: Invocatio
       return source.subscribe((act: Act) => {
         void Promise.resolve(handler(act)).catch(() => {});
         if (act.action === 'speak') void transcript.publish(mockSegment(inv, 999, `[mock spoke: ${act.text ?? ''}]`)).catch(() => {});
+        if (act.action === 'speak_audio') void transcript.publish(mockSegment(inv, 1000, '[mock played audio]')).catch(() => {});
       });
     },
   };

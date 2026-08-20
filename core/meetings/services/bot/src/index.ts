@@ -35,7 +35,8 @@ import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession } from './capture-bridge.js';
+import { createVoiceActHandler } from './voice-act-handler.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -113,15 +114,6 @@ function teeActs(source: ActsSource, voice: (act: Act) => void | Promise<void>):
         void Promise.resolve(voice(act)).catch((e) => console.error(`[bot] acts: voice handler rejected: ${String(e)}`));
       });
     },
-  };
-}
-
-/** The bot's voice-act handler: route acts.v1 speak / speak_stop to the SpeakController. The
- *  other voice acts (chat/screen/avatar) are out of this increment's scope. */
-function voiceHandler(speak: SpeakController): (act: Act) => Promise<void> {
-  return async (act) => {
-    if (act.action === 'speak') await speak.speak(act.text, act.voice);
-    else if (act.action === 'speak_stop') await speak.stop();
   };
 }
 
@@ -283,7 +275,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     });
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
     const speak = createSpeakController(session.page, inv);
-    acts = teeActs(liveActs, voiceHandler(speak));
+    acts = teeActs(liveActs, createVoiceActHandler(speak));
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);
     join = noBrowserJoinDriver(String(e));

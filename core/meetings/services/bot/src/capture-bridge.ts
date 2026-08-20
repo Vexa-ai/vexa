@@ -1198,6 +1198,8 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
 export interface SpeakController {
   /** Begin speaking `text` (TTS synthesized + injected via the VM's PulseAudio chain). */
   speak(text: string, voice?: string): Promise<void>;
+  /** Play caller-rendered WAV audio through the same virtual microphone. */
+  speakAudio(audioBase64: string): Promise<void>;
   /** Stop any in-flight speech (barge-in). */
   stop(): Promise<void>;
 }
@@ -1236,6 +1238,14 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       // (b) synthesize via the TTS service + stream PCM to tts_sink → virtual_mic (the bot's mic).
       await tts.speak(text, voice).catch((e) => console.error(`[bot] speak: tts failed: ${String(e)}`));
       await setMic(false);                                    // (c) re-mute after the tail
+    },
+    async speakAudio(audioBase64: string): Promise<void> {
+      if (!enabled) { console.error('[bot] speak_audio ignored: voiceAgentEnabled is false'); return; }
+      console.log(`[bot] speak_audio: ${audioBase64.length} base64 chars`);
+      await setMic(true);
+      await tts.playAudio(audioBase64)
+        .catch((e) => console.error(`[bot] speak_audio: playback failed: ${String(e)}`));
+      await setMic(false);
     },
     async stop(): Promise<void> {
       if (!enabled) return;
