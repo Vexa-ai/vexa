@@ -118,7 +118,7 @@ never sees.
 **The open-source Helm chart does not deploy the MCP service.**
 [`deploy/helm/charts/vexa`](https://github.com/Vexa-ai/vexa/tree/main/deploy/helm) renders no MCP
 Deployment or Service and sets no `MCP_URL` on the gateway, so `/mcp` on a chart install has no
-service behind it. Compose and the hosted service are the two supported ways to reach MCP today.
+service behind it. Compose and the hosted service are the two ways to reach MCP today.
 
 Vexa's own hosted service does run MCP on Kubernetes — through the separate platform chart that
 operates [vexa.ai](https://vexa.ai), not through the chart above. Reach it at
