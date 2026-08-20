@@ -60,10 +60,16 @@ settings ("Reset" in Google Calendar) — then reconnect with the new address.
 
 ## 2. Connect it — and get an answer immediately
 
-In the hosted dashboard, open **Calendar** from the sidebar. Give the connection a recognizable
+On hosted Vexa, the dashboard lives at **[dashboard.vexa.ai](https://dashboard.vexa.ai)** — a
+different host from `vexa.ai`, which carries the site and sign-in and has no calendar page. Sign
+in there and open **Calendar** from the sidebar. Give the connection a recognizable
 name such as **Work** or **Personal**, paste the secret address, choose whether meetings from that
 calendar should auto-join, and click **Connect**. Repeat this for each feed you want Vexa to follow
 (up to 10 active connections).
+
+Everything the dashboard does here is the [calendar API](/api/calendar) underneath, so a self-hosted
+deployment — which ships the API but not the hosted dashboard — connects feeds the same way with
+`POST /user/calendars`. The API is the complete surface; the examples are below.
 
 The same page groups **Upcoming auto-joins** by source calendar. Each calendar has its own
 **Default bot name**, used when that calendar arms an unattended join. For a meeting present in
