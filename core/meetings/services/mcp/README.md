@@ -31,7 +31,7 @@ redis, never reaches into meeting-api or admin-api directly.
 | `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` |
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
-| `report_issue` | pure (no gateway hop) — the calling agent files a ticket; POSTed to `VEXA_TICKET_SINK_URL` |
+| `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
 
 **Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help` (ported; edited only where they referenced unported tools).
@@ -94,11 +94,17 @@ Alongside it the sink receives capped `logs` with a `logs_truncated` flag, a ser
 SHA-256 prefix of the caller's API key. The response mirrors Linode's ticket object: `id`,
 `status`, `severity`, `opened`, `updated`, `opened_by`, `entity`.
 
-**The entity pointer is authorisation-checked.** A supplied `meeting_id` is resolved by asking the
-**gateway** for the caller's meetings **with the caller's own key** — so a caller can only ever
-resolve a meeting they own, and the check belongs to the gateway rather than to a trust decision
-made here. An id that is unowned, unknown, or unresolvable still files the ticket, quoted as text
-with `entity: null`; a ticket we refused to accept teaches us nothing.
+**The caller is authenticated before the operator's credential is spent.** Every ticket is filed
+with the operator's sink token, so the route first asks the **gateway** for the caller's meetings
+**with the caller's own key**. A key the gateway rejects gets 401 and never reaches the sink; a
+gateway that cannot answer fails closed with 502. This happens whether or not a `meeting_id` is
+supplied — a ticket naming no meeting is exactly the one with no other reason to touch the gateway.
+
+**The entity pointer is authorisation-checked by the same hop.** Because the gateway answered for
+the caller's own key, a caller can only ever resolve a meeting they own, and the check belongs to
+the gateway rather than to a trust decision made here. An id that is unowned, unknown, or
+unresolvable still files the ticket, quoted as text with `entity: null`; a ticket we refused to
+accept teaches us nothing.
 
 ### Safety properties this route commits to
 
@@ -108,7 +114,8 @@ with `entity: null`; a ticket we refused to accept teaches us nothing.
 | **Ticket text is data, never instruction** | forwarded verbatim, never parsed, never executed, never fed to an agent of ours |
 | **SSRF closed by construction** | there is no url-shaped field, and **nothing a caller sends is ever dereferenced**. The only URL this route opens is the operator's `VEXA_TICKET_SINK_URL`. Links belong in the text, where a human reads them |
 | **No path to account state** | the service has no DB, no ORM, no redis — a test walks the package's imports to keep it that way, so a ticket write cannot touch meetings or users |
-| **Bounded input** | whole-body ceiling 64 KB (413 before the JSON parser), `logs` 4000 chars, text fields 2000, empty required fields refused |
+| **Bounded input** | `logs` 4000 chars, text fields 2000, empty required fields refused. A declared `Content-Length` over 64 KB is refused with 413 — but that is a check in the handler, not ahead of the parser: a malformed body fails validation (422) before the cap is reached, and a chunked body declaring no length skips it entirely. A true pre-parse ceiling belongs at the gateway and is not there yet |
+| **The caller's credential is checked before the operator's is spent** | the route asks the gateway for the caller's own meetings first; a key the gateway rejects gets 401 and never reaches the sink, with or without a `meeting_id`. A gateway that cannot answer fails closed (502) |
 | **Off by default** | no sink env → 503, and nothing else in the service changes |
 
 **What this route does NOT carry, and the public door will need.** The authenticated door sits

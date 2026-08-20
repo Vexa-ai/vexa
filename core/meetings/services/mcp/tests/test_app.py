@@ -185,6 +185,44 @@ def test_report_issue_without_sink_returns_503(client, gateway, auth, monkeypatc
     assert _sink_requests(gateway) == []  # nothing left the process
 
 
+# Filing spends the OPERATOR's sink credential, so the caller's own credential is checked first.
+# The ticket carrying no meeting_id is the case that matters: it is the one with no other reason
+# to touch the gateway, so it is the one an unvalidated key would ride through.
+TICKET_NO_MEETING = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+
+
+def test_report_issue_refuses_a_credential_the_gateway_rejects(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("GET", "/meetings")] = (401, {"detail": "Invalid API key"})
+
+    r = client.post("/report-issue", headers=auth, json=TICKET_NO_MEETING)
+
+    assert r.status_code == 401
+    assert r.headers["www-authenticate"] == "Bearer"
+    assert _sink_requests(gateway) == []  # the operator's token was never spent
+
+
+def test_report_issue_refuses_when_the_gateway_cannot_answer(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("GET", "/meetings")] = (500, {"detail": "gateway is unwell"})
+
+    r = client.post("/report-issue", headers=auth, json=TICKET_NO_MEETING)
+
+    assert r.status_code == 502  # fail closed: unverifiable is not the same as authorised
+    assert _sink_requests(gateway) == []
+
+
+def test_report_issue_files_a_ticket_that_names_no_meeting(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+
+    r = client.post("/report-issue", headers=auth, json=TICKET_NO_MEETING)
+
+    assert r.status_code == 200
+    body = json.loads(_sink_requests(gateway)[-1].content)
+    assert body["meeting_id"] is None
+    assert body["entity"] is None
+
+
 def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth, monkeypatch):
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     r = client.post("/report-issue", headers=auth, json=TICKET)
@@ -317,12 +355,14 @@ def test_report_issue_sink_failure_surfaces_as_502(client, gateway: FakeGateway,
     assert "sink rejected" in str(r.json()["detail"])
 
 
-def test_report_issue_without_meeting_id_never_touches_the_gateway(client, gateway: FakeGateway, auth, monkeypatch):
-    """Stateless by design: with no entity to resolve, a ticket goes to the sink only."""
+def test_report_issue_without_meeting_id_still_authenticates_the_caller(client, gateway: FakeGateway, auth, monkeypatch):
+    """With no entity to resolve there is still a credential to check, and it is checked once."""
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     payload = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
     client.post("/report-issue", headers=auth, json=payload)
-    assert [r for r in gateway.requests if r.url.host == "gateway.test"] == []
+    hops = [r for r in gateway.requests if r.url.host == "gateway.test"]
+    assert [(r.method, r.url.path) for r in hops] == [("GET", "/meetings")]
+    assert hops[0].headers["X-API-Key"] == API_KEY   # the caller's own key, never the operator's
     assert json.loads(_sink_requests(gateway)[-1].content)["entity"] is None
 
 
@@ -349,9 +389,13 @@ def test_report_issue_resolves_entity_only_for_a_meeting_the_caller_owns(
 
 
 def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
-    """A quoted id the caller does not own is text, never a resolved join — and never fatal."""
+    """A quoted id the caller does not own is text, never a resolved join — and never fatal.
+
+    The gateway answers with the caller's OWN meetings, so an id belonging to someone else is
+    simply absent from the reply; it is never a 403.
+    """
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
-    gateway.routes[("GET", "/meetings")] = (403, {"detail": "not yours"})
+    gateway.routes[("GET", "/meetings")] = (200, [{"native_meeting_id": "mine", "platform": "google_meet"}])
     r = client.post("/report-issue", headers=auth, json={**TICKET, "meeting_id": "someone-elses"})
     assert r.status_code == 200
     assert r.json()["entity"] is None
@@ -393,7 +437,8 @@ def test_report_issue_has_no_url_shaped_field_and_fetches_nothing(client, gatewa
     }
     r = client.post("/report-issue", headers=auth, json=poisoned)
     assert r.status_code == 200
-    assert {q.url.host for q in gateway.requests} == {"sink.test"}   # nothing in the text was fetched
+    # The auth hop and the sink, and nothing else: no host named in the caller's text was fetched.
+    assert {q.url.host for q in gateway.requests} == {"gateway.test", "sink.test"}
     assert "169.254.169.254" in json.loads(_sink_requests(gateway)[-1].content)["what_happened"]
 
 

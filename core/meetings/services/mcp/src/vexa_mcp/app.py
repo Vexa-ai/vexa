@@ -644,32 +644,47 @@ def create_app(
                 ),
             )
 
-        # The entity pointer, authorisation-checked. We resolve the meeting through the GATEWAY with
-        # the CALLER'S OWN KEY, so a caller can only ever resolve a meeting they own — the check is
-        # the gateway's, not a trust decision made here. Resolution is best-effort: an unresolvable
-        # or unowned id still files the ticket (with the id quoted as text, entity null), because a
-        # ticket we refused to accept teaches us nothing.
+        # Authenticate the caller BEFORE spending the operator's credential. The gateway is the only
+        # authority on whether a key is real; this service never makes that call itself. Filing costs
+        # the operator's sink token and writes into an operator surface, so a caller we cannot
+        # authenticate never reaches the sink — with or without a meeting_id. Failing closed is the
+        # point: an unverifiable caller is refused rather than filed on the operator's behalf.
+        try:
+            meetings = await make_request("GET", f"{base_url}/meetings", api_key)
+        except HTTPException as exc:
+            if exc.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid credentials (send Authorization: Bearer <VEXA_API_KEY>).",
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail="Could not verify your credentials with the gateway; the ticket was not filed.",
+            ) from exc
+
+        # The entity pointer, authorisation-checked. The gateway answered above for the CALLER'S OWN
+        # KEY, so a caller can only ever resolve a meeting they own — the check is the gateway's, not
+        # a trust decision made here. Resolution stays best-effort: an unresolvable or unowned id
+        # still files the ticket (with the id quoted as text, entity null), because a ticket we
+        # refused to accept teaches us nothing.
         entity: Optional[Dict[str, Any]] = None
         if data.meeting_id:
-            try:
-                meetings = await make_request("GET", f"{base_url}/meetings", api_key)
-                rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
-                for m in rows if isinstance(rows, list) else []:
-                    if not isinstance(m, dict):
-                        continue
-                    if m.get("native_meeting_id") != data.meeting_id:
-                        continue
-                    if data.platform and m.get("platform") != data.platform:
-                        continue
-                    entity = {
-                        "type": "meeting",
-                        "id": data.meeting_id,
-                        "platform": m.get("platform"),
-                        "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
-                    }
-                    break
-            except HTTPException:
-                entity = None  # not owned, not found, or the gateway is unhappy — never fatal
+            rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
+            for m in rows if isinstance(rows, list) else []:
+                if not isinstance(m, dict):
+                    continue
+                if m.get("native_meeting_id") != data.meeting_id:
+                    continue
+                if data.platform and m.get("platform") != data.platform:
+                    continue
+                entity = {
+                    "type": "meeting",
+                    "id": data.meeting_id,
+                    "platform": m.get("platform"),
+                    "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
+                }
+                break
 
         fingerprint = _fingerprint(data.deployment, data.what_happened)
         opened = datetime.now(timezone.utc).isoformat()
