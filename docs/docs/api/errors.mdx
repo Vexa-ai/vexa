@@ -68,9 +68,10 @@ Two layers gate the gateway, in order:
 1. **Per-IP edge throttle (pre-auth).** An optional fastapi-guard edge layer caps requests per client IP
    *before* the API key is validated — so an IP flooding invalid keys, or rotating many keys from one IP
    to defeat the per-user limiter, is answered with `429` at the edge and never reaches admin-api. An IP
-   that keeps offending past a threshold is **auto-banned for a window**. Self-hosted default: **OFF**
-   (`GUARD_ENABLED=false`); set `GUARD_ENABLED=true` + `GUARD_RATE_LIMIT_RPM` to turn it on. Hosted runs
-   it on. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+   that keeps offending past a threshold is **auto-banned for a window**. **On by default everywhere** —
+   code, compose and Helm — so you opt out, not in: `GUARD_ENABLED=false` (or `gateway.guard.enabled=false`)
+   removes the layer, `GUARD_RATE_LIMIT_RPM=0` keeps it installed but stops rate limiting.
+   See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
 2. **Per-user limiter (post-auth).** A token-bucket limiter keyed by user id fires *after* the key is
    resolved — it catches one token driving too much traffic across many IPs. Self-hosted: **ON** by
    default (`GATEWAY_RATE_LIMIT_RPS` / `GATEWAY_RATE_LIMIT_BURST`, see [Configuration](/configuration)).

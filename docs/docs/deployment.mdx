@@ -143,9 +143,9 @@ server {
 }
 ```
 
-If you publish the **gateway** (`:18056`) through a reverse proxy and turn on the edge guard
-(`GUARD_ENABLED=true`), set `GUARD_TRUSTED_PROXIES` to the proxy's IP and have the proxy forward the
-real client IP:
+If you publish the **gateway** (`:18056`) through a reverse proxy, set `GUARD_TRUSTED_PROXIES` to the
+proxy's IP and have the proxy forward the real client IP. The edge guard is **on by default**, so this
+applies unless you have explicitly opted out:
 
 ```nginx
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
