@@ -73,6 +73,7 @@
       {
         "group": "Architecture",
         "pages": [
+          "architecture/evaluation",
           "architecture/modules",
           "architecture/execution",
           "architecture/dispatch",
