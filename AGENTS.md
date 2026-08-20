@@ -14,7 +14,8 @@ This file is the actor contract: intake, claim, and how a session behaves in the
 ## Researching Vexa? Start here
 
 - **Found something** (bug, gap, docs lie)? **File a GitHub issue** — every report enters
-  `state: incoming` and a 3-day triage SLA. Findings are contributions.
+  `state: incoming` and waits for triage — three days is our target and we are not hitting it
+  (measured 2026-08-20: 26 waiting, median 13 days). Findings are contributions.
 - **Want to contribute?** The whole roadmap comes back in one public GraphQL call:
 
 ```bash
