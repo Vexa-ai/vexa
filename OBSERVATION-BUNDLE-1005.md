@@ -220,7 +220,7 @@ All 34 gates green, including:
 
 **Two environmental reds, both resolved, neither caused by this diff.** The first `gates all` run failed
 `gate:compose` with `Error response from daemon: No such container: dcfe28d7c034…`. That container is
-a **2-week-old exited container from another checkout** (`/Users/dmitriygrankin/dev/vexa-926`, label
+a **2-week-old exited container from another checkout** (label
 `com.docker.compose.project=vexa-compose-gate`) holding the `vexa-compose-gate_redis-data` volume; the
 daemon holds a dangling reference the volume cannot be freed from. The conftest ships
 `COMPOSE_PROJECT` explicitly "override on a shared host" — running under `vexa-gate-1005` is green.
@@ -235,7 +235,7 @@ degraded host, in three stages, each recorded rather than retried away:
    down to **1.6 GiB free** after the k3d cluster and the compose image builds. I tore down the k3d
    cluster and the `vexa-gate-1005` compose project to return the space (2.8 GiB free after).
 2. `gate:python` then blocked indefinitely at `core/identity/services/admin-api` — a **concurrent
-   session** (`/Users/dmitriygrankin/dev/vexa-turbine-first-turn`) was running that same package's
+   session** in a separate local checkout was running that same package's
    testcontainer suite at the same time. Both processes sat at 0% CPU. `admin-api` is untouched by
    this diff.
 3. The runtime suite then hung too. Bisected to exactly one file: **`tests/test_docker_backend.py`**,
@@ -386,7 +386,7 @@ disappeared because a cluster was reachable, so the real-Pod lifecycle test actu
   `busybox:1.36`. Whether `vexaai/vexa-bot` runs inside `2048Mi` is untested; the shipped default
   is a starting point, not a measurement. **Nobody should treat the default as a validated bot
   memory budget.**
-- **OpenShift restricted SCC on the SPAWNED Pods.** Untested here (k3d has no SCC). The buyer proved
+- **OpenShift restricted SCC on the SPAWNED Pods.** Untested here (k3d has no SCC). The reporting operator proved
   control-plane SCC; the spawned Pod is a *different* object and a restricted SCC may still require
   `runAsNonRoot` / dropped capabilities / a `seccompProfile` that this change does not add. Called
   out in the test kit as the top thing to watch.
@@ -453,8 +453,8 @@ The three validation scripts (`quota-ns.yaml`, `quota-validate.py`, `a3-live.py`
 
 The value the issue asks for is real and observed: both shipped workload classes are admitted into a
 namespace that rejects undeclared containers, sized apart, with every pre-existing Pod field intact,
-and the red control reproduces on demand. The two things I would not let ride into a customer test
+and the red control reproduces on demand. The two things I would not let ride into an external validation run
 unstated are (a) the shipped `meetingBot.memoryMb: 2048` default is a *guess*, not a measurement, and
 a bad guess becomes a mid-meeting OOM kill rather than a visible failure; and (b) the spawned-Pod SCC
-question on OpenShift is genuinely open — the buyer's earlier control-plane SCC proof does not carry
+question on OpenShift is genuinely open — that operator's earlier control-plane SCC proof does not carry
 to a `kubectl create`d bare Pod. Both are in the test kit as the first things to look at.
