@@ -22,6 +22,10 @@ gets a page that answers it — that is the whole loop, and you are the only one
 - **Building on Vexa right now?** Say so in the issue and name the deployment shape (cloud,
   Docker Compose, Kubernetes) and the version. Integration reports are the ones we act on
   fastest, because they carry the context we do not have.
+- **What to include, and the human-readable version of all of the above:**
+  https://docs.vexa.ai/support.md — in particular why a meeting report needs the meeting id
+  and platform: they are the join key between your account of what happened and our own record
+  of the same meeting.
 - **Helping a contributor pick work?** The whole roadmap comes back in **one public GraphQL
   call** (any GitHub token reads a public project):
 
