@@ -3,6 +3,8 @@
 Asserts the seam the service exists for: every tool forwards to the RIGHT gateway path
 with the caller's key as X-API-Key, and auth is fail-closed (401 with a Bearer hint).
 """
+import json
+
 from conftest import API_KEY, FakeGateway
 
 
@@ -155,3 +157,137 @@ def test_downstream_error_propagates(client, gateway: FakeGateway, auth):
     r = client.get("/bot-status", headers=auth)
     assert r.status_code == 403
     assert "Insufficient scope" in str(r.json()["detail"])
+
+
+# --- report_issue: the mouth's write direction (biz#434, Grow-Mouth § The ticket) ------
+
+SINK_URL = "http://sink.test/tickets"
+
+TICKET = {
+    "what_i_tried": "POST /bots for a google_meet room via the MCP request_meeting_bot tool",
+    "what_happened": "The bot never appeared in the meeting and bot-status stayed empty for 3 min",
+    "deployment": "self-hosted 0.12.3",
+    "meeting_id": "abc-defg-hij",
+    "platform": "google_meet",
+    "logs": "RuntimeError: admission timeout",
+}
+
+
+def _sink_requests(gateway: FakeGateway):
+    return [r for r in gateway.requests if r.url.host == "sink.test"]
+
+
+def test_report_issue_without_sink_returns_503(client, gateway, auth, monkeypatch):
+    monkeypatch.delenv("VEXA_TICKET_SINK_URL", raising=False)
+    r = client.post("/report-issue", headers=auth, json=TICKET)
+    assert r.status_code == 503
+    assert "not configured" in str(r.json()["detail"])
+    assert _sink_requests(gateway) == []  # nothing left the process
+
+
+def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", headers=auth, json=TICKET)
+    assert r.status_code == 200
+    assert r.json()["status"] == "received"
+
+    req = _sink_requests(gateway)[-1]
+    assert (req.method, str(req.url)) == ("POST", SINK_URL)
+    body = json.loads(req.content)
+    assert body["what_i_tried"] == TICKET["what_i_tried"]
+    assert body["what_happened"] == TICKET["what_happened"]
+    assert body["deployment"] == "self-hosted 0.12.3"
+    # the join key onto the cluster's own record of the same meeting
+    assert body["meeting_id"] == "abc-defg-hij"
+    assert body["platform"] == "google_meet"
+    assert body["logs"] == "RuntimeError: admission timeout"
+    assert body["logs_truncated"] is False
+    assert body["source"] == "vexa-mcp"
+    assert body["reported_at"]                      # server-side timestamp
+    assert body["fingerprint"] == r.json()["fingerprint"]
+
+
+def test_report_issue_fingerprint_is_stable_and_content_derived(client, gateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    first = client.post("/report-issue", headers=auth, json=TICKET).json()["fingerprint"]
+    same = client.post("/report-issue", headers=auth, json={**TICKET, "logs": "other"}).json()["fingerprint"]
+    other = client.post(
+        "/report-issue", headers=auth, json={**TICKET, "what_happened": "totally different failure"}
+    ).json()["fingerprint"]
+    assert first == same        # dedupe key: deployment + what_happened
+    assert first != other
+
+
+def test_report_issue_never_forwards_the_api_key(client, gateway: FakeGateway, auth, monkeypatch):
+    """The sink gets a salted fingerprint of the key, never the credential itself."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    monkeypatch.setenv("VEXA_TICKET_SINK_TOKEN", "sink-secret")
+    client.post("/report-issue", headers=auth, json=TICKET)
+
+    req = _sink_requests(gateway)[-1]
+    raw = req.content.decode()
+    assert API_KEY not in raw
+    assert API_KEY not in json.dumps(dict(req.headers))
+    assert "x-api-key" not in {k.lower() for k in req.headers}
+    body = json.loads(raw)
+    assert len(body["caller_fingerprint"]) == 16
+    assert body["caller_fingerprint"] != API_KEY
+    # the sink's own token authenticates this hop, not the caller's key
+    assert req.headers["authorization"] == "Bearer sink-secret"
+
+
+def test_report_issue_caller_fingerprint_is_stable_per_key(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    client.post("/report-issue", headers=auth, json=TICKET)
+    mine = json.loads(_sink_requests(gateway)[-1].content)["caller_fingerprint"]
+    client.post("/report-issue", headers=auth, json=TICKET)
+    again = json.loads(_sink_requests(gateway)[-1].content)["caller_fingerprint"]
+    client.post("/report-issue", headers={"X-API-Key": "someone-else"}, json=TICKET)
+    theirs = json.loads(_sink_requests(gateway)[-1].content)["caller_fingerprint"]
+    assert mine == again
+    assert mine != theirs
+
+
+def test_report_issue_truncates_oversized_logs(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "logs": "x" * 9000})
+    assert r.status_code == 200
+    body = json.loads(_sink_requests(gateway)[-1].content)
+    assert len(body["logs"]) == 4000
+    assert body["logs_truncated"] is True
+
+
+def test_report_issue_caps_long_text_fields(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    client.post("/report-issue", headers=auth, json={**TICKET, "what_happened": "y" * 9000})
+    body = json.loads(_sink_requests(gateway)[-1].content)
+    assert len(body["what_happened"]) == 2000
+
+
+def test_report_issue_rejects_empty_fields(client, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "what_happened": "   "})
+    assert r.status_code == 422
+    r = client.post("/report-issue", headers=auth, json={"what_i_tried": "a"})
+    assert r.status_code == 422
+
+
+def test_report_issue_requires_auth(client, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", json=TICKET)
+    assert r.status_code == 401
+
+
+def test_report_issue_sink_failure_surfaces_as_502(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("POST", "/tickets")] = (500, {"detail": "boom"})
+    r = client.post("/report-issue", headers=auth, json=TICKET)
+    assert r.status_code == 502
+    assert "sink rejected" in str(r.json()["detail"])
+
+
+def test_report_issue_never_touches_the_gateway(client, gateway: FakeGateway, auth, monkeypatch):
+    """Stateless by design: a ticket goes to the sink only — never past the gateway."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    client.post("/report-issue", headers=auth, json=TICKET)
+    assert [r for r in gateway.requests if r.url.host == "gateway.test"] == []

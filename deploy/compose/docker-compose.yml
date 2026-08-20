@@ -437,6 +437,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      # report_issue ticket sink. Unset (the default) → the tool answers 503 "not configured"
+      # and nothing else changes; set the URL to let calling agents file tickets to your webhook.
+      - VEXA_TICKET_SINK_URL=${VEXA_TICKET_SINK_URL:-}
+      - VEXA_TICKET_SINK_TOKEN=${VEXA_TICKET_SINK_TOKEN:-}
+      - VEXA_TICKET_FINGERPRINT_SALT=${VEXA_TICKET_FINGERPRINT_SALT:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
       interval: 10s

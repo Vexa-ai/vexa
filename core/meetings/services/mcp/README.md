@@ -15,9 +15,10 @@ redis, never reaches into meeting-api or admin-api directly.
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | serves | MCP clients | `POST/GET /mcp` (streamable HTTP) | tool calls + prompt gets; auth = `Authorization: Bearer <VEXA_API_KEY>` (back-compat: raw `Authorization` or `X-API-Key`) |
+| calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
 | calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
 
-## Tools (9)
+## Tools (10)
 
 | Tool | Wraps |
 |---|---|
@@ -30,6 +31,7 @@ redis, never reaches into meeting-api or admin-api directly.
 | `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` |
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
+| `report_issue` | pure (no gateway hop) — the calling agent files a ticket; POSTed to `VEXA_TICKET_SINK_URL` |
 
 **Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help` (ported; edited only where they referenced unported tools).
@@ -49,6 +51,23 @@ the routes land:
 
 The 0.10.6 interactive-bot / calendar / webhook / TTS tool families predate the carve and are
 likewise out of scope here.
+
+## Ticketing (`report_issue`) configuration
+
+`report_issue` is the one tool that writes outward instead of reading. It is **env-configured
+and off by default**, so a self-hoster who sets nothing gets a clean 503 rather than a crash:
+
+| env | required | meaning |
+|---|---|---|
+| `VEXA_TICKET_SINK_URL` | yes, to enable the tool | webhook this service POSTs each ticket to. Unset → `report_issue` returns 503 with a message pointing at GitHub issues. |
+| `VEXA_TICKET_SINK_TOKEN` | optional | sent to the sink as `Authorization: Bearer <token>` — authenticates *this hop*, not the caller. |
+| `VEXA_TICKET_FINGERPRINT_SALT` | recommended | salt for `caller_fingerprint`. Set a deployment-specific value so fingerprints are not comparable across deployments. |
+
+The forwarded body carries the agent's four fields, optional `meeting_id`/`platform` (the join
+key onto our own record of the same meeting), capped `logs` with a `logs_truncated` flag, a
+server-side `reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint`
+— a salted SHA-256 prefix of the caller's API key. **The API key itself is never sent to the
+sink**, and ticket text is forwarded verbatim as data; this service never interprets it.
 
 ## Gateway exposure
 
@@ -111,9 +130,12 @@ caller's `X-API-Key`; fail-closed 401; downstream status/detail passthrough).
 
 ## Status
 
-- ✅ delivered — 9 tools + 4 prompts over the v0.12 public API, streamable-HTTP `/mcp` mount
+- ✅ delivered — 10 tools + 4 prompts over the v0.12 public API, streamable-HTTP `/mcp` mount
 - ✅ delivered — auth passthrough (Bearer / raw Authorization / X-API-Key → gateway `X-API-Key`)
 - ✅ delivered — compose service (`mcp`, port 8010) + healthcheck
+- 🟡 shipped, unwitnessed — `report_issue` (biz#434). Module-tested end to end against a fake
+  sink; no sink is configured on any deployment yet, so on cloud and self-host it answers 503
+  until `VEXA_TICKET_SINK_URL` is set.
 - 🟡 shipped, unwitnessed — gateway-fronted `/mcp` (streamed forward at the edge, #795). The
   forward is in the gateway and in compose, and is module-tested (streamed relay, verbatim status,
   typed 502/504) — but no real MCP client has completed a session against it (#888). See

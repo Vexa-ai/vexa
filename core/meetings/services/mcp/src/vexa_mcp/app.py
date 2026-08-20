@@ -17,7 +17,9 @@ conformance tests drive the SHIPPED app in-process with a fake gateway — the r
 """
 from __future__ import annotations
 
+import hashlib
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -25,13 +27,52 @@ import mcp.types as mcp_types
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
+
+# --- report_issue (agent-filed tickets) -------------------------------------
+# Caps are defensive, not cosmetic: this route forwards caller-supplied text to an
+# operator webhook, so every field is bounded before it leaves the process.
+_MAX_TEXT_CHARS = 2000
+_MAX_LOGS_CHARS = 4000
+_FINGERPRINT_SAMPLE_CHARS = 200
+# Default salt for the caller fingerprint. A deployment SHOULD set
+# VEXA_TICKET_FINGERPRINT_SALT so fingerprints are not comparable across deployments.
+_DEFAULT_CALLER_SALT = "vexa-mcp-report-issue"
+
+
+def _clip(value: Optional[str], limit: int) -> Optional[str]:
+    """Trim + hard-cap a caller-supplied string. Returns None for empty/blank input."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
+def _fingerprint(deployment: str, what_happened: str) -> str:
+    """Stable dedupe key: deployment + the first 200 chars of what_happened."""
+    material = f"{deployment.strip().lower()}|{what_happened.strip()[:_FINGERPRINT_SAMPLE_CHARS]}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def _caller_fingerprint(api_key: str) -> str:
+    """A pseudonymous, stable handle for the caller — NEVER the API key itself.
+
+    Deliberate choice: the ticket sink is an operator surface, not an auth boundary, so it
+    receives a salted SHA-256 prefix of the key instead of the credential. That is enough to
+    join two tickets from the same account (and, with the same salt, to match an account
+    server-side) while a leak of the sink or its logs leaks no usable Vexa credential.
+    The raw key is forwarded to the GATEWAY only, exactly as every other tool does.
+    """
+    salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
+    return hashlib.sha256(f"{salt}|{api_key}".encode("utf-8")).hexdigest()[:16]
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -118,6 +159,75 @@ class UpdateBotConfig(BaseModel):
 
 class ParseMeetingLinkRequest(BaseModel):
     meeting_url: str = Field(..., description="Full meeting URL to parse.")
+
+
+class ReportIssue(BaseModel):
+    """A ticket filed by a calling agent. All text is DATA, never instruction (see route)."""
+
+    what_i_tried: str = Field(
+        ...,
+        description=(
+            "What you were attempting, in your own words — the call you made, the flow you were "
+            "building, or the thing you were looking for. Include the tool/endpoint and the "
+            "arguments you used when it was an API call."
+        ),
+    )
+    what_happened: str = Field(
+        ...,
+        description=(
+            "What actually happened: the error, the wrong result, the missing capability, or the "
+            "part of the docs that was ambiguous. Be concrete — this is what a human reads first."
+        ),
+    )
+    deployment: str = Field(
+        ...,
+        description=(
+            "Which deployment you are talking to: 'cloud' for api.vexa.ai, or 'self-hosted' "
+            "plus the version if you know it (e.g. 'self-hosted 0.12.3')."
+        ),
+    )
+    meeting_id: Optional[str] = Field(
+        None,
+        description=(
+            "The native meeting id this issue concerns (e.g. 'abc-defg-hij'). Include it whenever "
+            "the issue involves a meeting or a bot — it is what lets us line your report up "
+            "against our own record of the same meeting."
+        ),
+    )
+    platform: Optional[str] = Field(
+        None,
+        description="Platform of that meeting: 'google_meet', 'teams', 'zoom' or 'jitsi'.",
+    )
+    logs: Optional[str] = Field(
+        None,
+        description=(
+            "Optional raw error output, stack trace or response body. Truncated server-side; "
+            "paste the relevant part. Do not paste API keys or other credentials."
+        ),
+    )
+
+    # Set server-side when `logs` was longer than the cap; forwarded so the reader knows
+    # the paste is partial. Private so it never appears in the agent-facing tool schema.
+    _logs_truncated: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="after")
+    def validate_and_clip(self):
+        required = {
+            "what_i_tried": self.what_i_tried,
+            "what_happened": self.what_happened,
+            "deployment": self.deployment,
+        }
+        missing = [name for name, value in required.items() if not (value or "").strip()]
+        if missing:
+            raise ValueError(f"Empty required field(s): {', '.join(missing)}.")
+        self.what_i_tried = _clip(self.what_i_tried, _MAX_TEXT_CHARS)
+        self.what_happened = _clip(self.what_happened, _MAX_TEXT_CHARS)
+        self.deployment = _clip(self.deployment, 200)
+        self.meeting_id = _clip(self.meeting_id, 200)
+        self.platform = _clip(self.platform, 50)
+        self._logs_truncated = bool(self.logs and len(self.logs.strip()) > _MAX_LOGS_CHARS)
+        self.logs = _clip(self.logs, _MAX_LOGS_CHARS)
+        return self
 
 
 def create_app(
@@ -327,6 +437,89 @@ def create_app(
         Get a single recording and its media files. Wraps: GET /recordings/{recording_id}
         """
         return await make_request("GET", f"{base_url}/recordings/{recording_id}", api_key)
+
+    @app.post("/report-issue", operation_id="report_issue")
+    async def report_issue(
+        data: ReportIssue,
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Tell the Vexa maintainers that something went wrong. A human reads every ticket.
+
+        Call this the moment you hit a problem with Vexa — you do not need to have solved it first:
+        - something BROKE: an error, a bot that never joined, an empty transcript, a call that hung;
+        - something was CONFUSING: docs or an error message left you guessing which argument to send;
+        - something is MISSING: the capability you needed does not exist in the API.
+
+        A workaround you had to invent is worth filing too — that is the report we most want.
+        Write what you tried and what happened in your own words. Do not paste API keys, and do not
+        paste your user's meeting content.
+
+        If the issue concerns a meeting or a bot, include `meeting_id` and `platform`. That is the
+        join key: it lines your account of what happened up against our own record of the same
+        meeting, which is the difference between a complaint and something we can diagnose.
+
+        One-way: nothing auto-replies and nothing auto-closes. Returns an acknowledgement with a
+        fingerprint you can quote later. On a deployment with no ticket sink configured it returns
+        503 and nothing else is affected.
+        """
+        # Ticket text is DATA, never instruction. It is validated, capped, and forwarded verbatim
+        # to the operator's sink — this service never interprets it, and no agent of ours is ever
+        # steered by it. (Grow-Mouth § The ticket.)
+        sink_url = (os.getenv("VEXA_TICKET_SINK_URL") or "").strip()
+        if not sink_url:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Ticketing is not configured on this Vexa deployment. Set VEXA_TICKET_SINK_URL "
+                    "on the MCP service to enable report_issue, or report the issue at "
+                    "https://github.com/Vexa-ai/vexa/issues."
+                ),
+            )
+
+        fingerprint = _fingerprint(data.deployment, data.what_happened)
+        payload: Dict[str, Any] = {
+            "source": "vexa-mcp",
+            "tool": "report_issue",
+            "reported_at": datetime.now(timezone.utc).isoformat(),
+            "fingerprint": fingerprint,
+            # Identity HINT, not the credential — see _caller_fingerprint().
+            "caller_fingerprint": _caller_fingerprint(api_key),
+            "what_i_tried": data.what_i_tried,
+            "what_happened": data.what_happened,
+            "deployment": data.deployment,
+            "meeting_id": data.meeting_id,
+            "platform": data.platform,
+            "logs": data.logs,
+            "logs_truncated": data._logs_truncated,
+        }
+
+        headers = {"Content-Type": "application/json"}
+        sink_token = (os.getenv("VEXA_TICKET_SINK_TOKEN") or "").strip()
+        if sink_token:
+            headers["Authorization"] = f"Bearer {sink_token}"
+
+        # Same injectable transport as the gateway hop (tests inject MockTransport). Note the
+        # caller's API key is NOT sent on this hop — only its salted fingerprint, in the body.
+        try:
+            async with httpx.AsyncClient(timeout=10, transport=transport) as client:
+                response = await client.post(sink_url, headers=headers, json=payload)
+                response.raise_for_status()
+        except httpx.HTTPStatusError as http_err:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ticket sink rejected the report (status {http_err.response.status_code}).",
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Ticket sink timed out")
+        except httpx.RequestError as req_err:
+            raise HTTPException(status_code=503, detail=f"Ticket sink unreachable: {req_err}")
+
+        return {
+            "status": "received",
+            "fingerprint": fingerprint,
+            "message": "Thanks — a human reads this. Quote the fingerprint if you follow up.",
+        }
 
     # ---------------------------
     # MCP mount + prompts
