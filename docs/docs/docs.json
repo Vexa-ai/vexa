@@ -105,6 +105,7 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "troubleshooting/completion-reasons",
           "support",
           "sdks",
           "vexa-mcp",
