@@ -88,6 +88,7 @@
         "pages": [
           "api/meetings",
           "api/calendar",
+          "api/settings",
           "api/agent",
           "api/errors"
         ]
@@ -149,6 +150,10 @@
     {
       "source": "/websocket",
       "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/settings",
+      "destination": "/api/settings"
     },
     {
       "source": "/self-hosted-management",
