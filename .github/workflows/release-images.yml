@@ -181,6 +181,9 @@ jobs:
         run: |
           bash deploy/helm/tests/test_helm_lint.sh
           bash deploy/helm/tests/test_template.sh
+          # #1006 — the mirror-only invariant: no image this chart can cause a cluster to pull may
+          # fall back to a public registry, helm hooks and runtime-spawned Pods included.
+          bash deploy/helm/tests/test_mirror_only.sh
 
       - name: Pinned render — every image ref follows global.imageTag
         env:

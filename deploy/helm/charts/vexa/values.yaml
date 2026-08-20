@@ -229,11 +229,42 @@ runtime:
   service:
     type: ClusterIP
     port: 8090
-  # Images the runtime spawns. browserImage = the bot (published ~3.6GB, a reference, never built by
-  # this chart). agentImage/agentWorkerImage default to the v012 agent repos at global.imageTag.
-  browserImage: ""            # empty → follows global.imageTag (fallback vexaai/vexa-bot:v012)
-  agentImage: "vexaai/v012-agent-api:v012"
-  agentWorkerImage: "vexaai/v012-agent-worker:v012"
+  # ---------------------------------------------------------------------------------------------
+  # Images the runtime SPAWNS on demand. These never appear as a `image:` field in any manifest —
+  # they are handed to the runtime as BROWSER_IMAGE / AGENT_IMAGE / AGENT_WORKER_IMAGE env, and the
+  # runtime creates the Pod. A private mirror must therefore hold them even though `kubectl get
+  # deploy -o yaml` never names them. browserImage = the bot (published ~3.6 GB, a reference, never
+  # built by this chart).
+  #
+  # Each image takes ONE identity, resolved by the same rule everywhere in this chart (see
+  # charts/vexa/README.md § Image references):
+  #   1. <x>Image            — an explicit full reference. WINS; global.imageTag never rewrites it.
+  #   2. <x>ImageDigest      — sha256:<64 hex> → "<repository>@<digest>".
+  #   3. <x>ImageRepository + <x>ImageTag — the legacy composed path; global.imageTag, when set,
+  #                            supplies the tag.
+  # Setting BOTH an explicit reference and a digest fails the render rather than picking one, as
+  # does a malformed digest. Empty repository/tag on the composed leg fails too.
+  #
+  # #1006: before this, agentImage and agentWorkerImage were DISCARDED whenever global.imageTag was
+  # set, so a mirror-only cluster rendered Docker Hub references it could not pull. The defaults
+  # below render byte-identically to the previous defaults.
+  browserImage: ""
+  browserImageDigest: ""
+  browserImageRepository: "vexaai/vexa-bot"
+  browserImageTag: "v012"
+
+  agentImage: ""
+  agentImageDigest: ""
+  # Empty repository/tag → the agent-api Deployment's own image.repository/image.tag, so mirroring
+  # `agentApi.image` carries the spawned copy with it.
+  agentImageRepository: ""
+  agentImageTag: ""
+
+  agentWorkerImage: ""
+  agentWorkerImageDigest: ""
+  agentWorkerImageRepository: "vexaai/v012-agent-worker"
+  agentWorkerImageTag: "v012"
+  # ---------------------------------------------------------------------------------------------
   logLevel: "info"
   speakerStream:
     minAudioSec: ""
@@ -411,6 +442,22 @@ minio:
   image:
     repository: minio/minio
     tag: latest
+  # The MinIO client image the post-install bucket-init Job runs. That Job is a helm HOOK, so it is
+  # easy to miss when inventorying what a cluster pulls — and the install fails without it. Same one
+  # identity rule as every other image here: `reference` (an explicit full reference) wins, else
+  # `digest` → repository@digest, else image.repository:image.tag. Deliberately NOT wired to
+  # global.imageTag — this is a third-party image, not part of the Vexa release set.
+  #
+  # #1006: the Job used to hardcode `minio/mc:latest` — unconfigurable AND mutable. The default
+  # below is the exact RELEASE tag `minio/mc:latest` resolved to when it was pinned (both
+  # sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727), so the bytes an
+  # unconfigured install pulls are unchanged; only the identity became explicit.
+  mc:
+    reference: ""   # explicit full reference — wins over repository/tag/digest below
+    digest: ""      # sha256:<64 hex> → "<repository>@<digest>"
+    image:
+      repository: minio/mc
+      tag: RELEASE.2025-08-13T08-35-41Z
   accessKey: vexa-access-key
   secretKey: vexa-secret-key
   bucket: vexa

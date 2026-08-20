@@ -202,7 +202,12 @@ const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  const r = withEdited(MINIO_JOB, "image: minio/mc:latest", "image: somevendor/unaudited:1.2",
+  // Anchor on the image LINE, not on a specific value: #1006 replaced the hardcoded
+  // `minio/mc:latest` with a configurable helper call, so a literal-string anchor
+  // silently became a fixture that could not be built — and this test correctly
+  // refused to pass vacuously rather than proving nothing. The regex keeps exactly
+  // one `image:` key; a duplicate would change what helm renders, not just what it pins.
+  const r = withEdited(MINIO_JOB, /^(\s*)image: .*$/m, "$1image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
   assert.match(r.out, /undeclared pinned image/);
