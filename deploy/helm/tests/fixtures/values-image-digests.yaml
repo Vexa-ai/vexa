@@ -1,0 +1,46 @@
+global:
+  imageTag: ""
+
+gateway:
+  image: {repository: vexaai/v012-gateway, tag: "", digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+adminApi:
+  image: {repository: vexaai/v012-admin-api, tag: "", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+meetingApi:
+  image: {repository: vexaai/v012-meeting-api, tag: "", digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+runtime:
+  image: {repository: vexaai/v012-runtime, tag: "", digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  browserImage: ""
+  browserImageRepository: vexaai/vexa-bot
+  browserImageDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  agentImage: ""
+  agentImageRepository: vexaai/v012-agent-api
+  agentImageDigest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  agentWorkerImage: ""
+  agentWorkerImageRepository: vexaai/v012-agent-worker
+  agentWorkerImageDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+agentApi:
+  image: {repository: vexaai/v012-agent-api, tag: "", digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+terminal:
+  image: {repository: vexaai/v012-terminal, tag: "", digest: "sha256:3333333333333333333333333333333333333333333333333333333333333333"}
+dashboard:
+  enabled: true
+  image: {repository: vexaai/dashboard, tag: "", digest: "sha256:4444444444444444444444444444444444444444444444444444444444444444"}
+migrations:
+  enabled: true
+  image: {repository: vexaai/v012-meeting-api, tag: "", digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555"}
+pgbouncer:
+  enabled: true
+  image: ""
+  imageRepository: edoburu/pgbouncer
+  imageDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+postgres:
+  image: ""
+  imageRepository: postgres
+  imageDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+redis:
+  image: ""
+  imageRepository: redis
+  imageDigest: "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+minio:
+  image: {repository: minio/minio, tag: "", digest: "sha256:9999999999999999999999999999999999999999999999999999999999999999"}
+  clientImage: {repository: minio/mc, tag: "", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}

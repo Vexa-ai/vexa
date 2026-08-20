@@ -42,7 +42,8 @@ spec:
         - name: migrations
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ default .Values.meetingApi.image.repository .Values.migrations.image.repository }}:{{ .Values.global.imageTag | default (default .Values.meetingApi.image.tag .Values.migrations.image.tag) }}"
+          {{- $migrationImage := dict "repository" (default .Values.meetingApi.image.repository .Values.migrations.image.repository) "tag" (default .Values.meetingApi.image.tag .Values.migrations.image.tag) "digest" (default .Values.meetingApi.image.digest .Values.migrations.image.digest) }}
+          image: {{ include "vexa.imageRef" (dict "root" . "image" $migrationImage "useGlobalTag" true) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
             - /bin/sh

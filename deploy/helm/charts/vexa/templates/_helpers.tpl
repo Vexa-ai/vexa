@@ -33,6 +33,65 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-%s" (include "vexa.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Render a structured image reference. Digest mode is deliberately exclusive with every tag source:
+an operator must clear both the component tag and (where applicable) global.imageTag. This makes a
+supposedly immutable release fail before Kubernetes sees it when a mutable selector survives.
+
+Call: include "vexa.imageRef" (dict "root" . "image" .Values.gateway.image "useGlobalTag" true)
+*/}}
+{{- define "vexa.imageRef" -}}
+{{- $root := required "vexa.imageRef requires root" .root -}}
+{{- if $root.Values.sourceRevision -}}
+{{- $sealedRevision := required "OSS-SOURCE-REVISION is required when sourceRevision is set" (trim ($root.Files.Get "OSS-SOURCE-REVISION")) -}}
+{{- if ne $root.Values.sourceRevision $sealedRevision -}}
+{{- fail "sourceRevision does not match packaged OSS source" -}}
+{{- end -}}
+{{- end -}}
+{{- $image := required "vexa.imageRef requires image" .image -}}
+{{- $repository := required "image.repository is required" $image.repository -}}
+{{- $digest := default "" $image.digest -}}
+{{- $tag := default "" $image.tag -}}
+{{- $globalTag := "" -}}
+{{- if .useGlobalTag -}}
+{{- $globalTag = default "" $root.Values.global.imageTag -}}
+{{- end -}}
+{{- if $digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "invalid image digest %q for %s: expected sha256 followed by 64 lowercase hexadecimal characters" $digest $repository) -}}
+{{- end -}}
+{{- if or $tag $globalTag -}}
+{{- fail (printf "image %s selects digest %s but also selects a mutable tag; clear image.tag and global.imageTag" $repository $digest) -}}
+{{- end -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- $effectiveTag := default $tag $globalTag -}}
+{{- required (printf "image.tag is required for %s when image.digest is empty" $repository) $effectiveTag | printf "%s:%s" $repository -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Preserve legacy scalar image values while allowing an explicit immutable repository+digest. */}}
+{{- define "vexa.scalarImageRef" -}}
+{{- $legacy := default "" .legacy -}}
+{{- $repository := default "" .repository -}}
+{{- $digest := default "" .digest -}}
+{{- if $digest -}}
+{{- if $legacy -}}
+{{- fail "a scalar image tag and imageDigest cannot both be set; clear image when using imageRepository+imageDigest" -}}
+{{- end -}}
+{{- $repository = required "imageRepository is required when imageDigest is set" $repository -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "invalid image digest %q for %s: expected sha256 followed by 64 lowercase hexadecimal characters" $digest $repository) -}}
+{{- end -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- if $repository -}}
+{{- fail "imageRepository cannot be set without imageDigest" -}}
+{{- end -}}
+{{- required "legacy image is required when imageDigest is empty" $legacy -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.redisUrl" -}}
 {{- if .Values.redis.enabled -}}
 {{- printf "redis://%s.%s.svc.%s:%d/0" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain (.Values.redis.service.port | int) -}}
@@ -99,7 +158,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
 this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
 {{- define "vexa.botImage" -}}
-{{- if .Values.runtime.browserImage -}}
+{{- if or .Values.runtime.browserImageDigest .Values.runtime.browserImageRepository -}}
+{{- if .Values.global.imageTag -}}
+{{- fail "runtime.browserImageDigest and global.imageTag cannot both be set" -}}
+{{- end -}}
+{{- include "vexa.scalarImageRef" (dict "legacy" .Values.runtime.browserImage "repository" .Values.runtime.browserImageRepository "digest" .Values.runtime.browserImageDigest) -}}
+{{- else if .Values.runtime.browserImage -}}
 {{- .Values.runtime.browserImage -}}
 {{- else if .Values.global.imageTag -}}
 {{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
@@ -110,7 +174,12 @@ vexaai/vexa-bot:v012
 
 {{/* The agent-api image ref (AGENT_IMAGE the runtime spawns workers from). global.imageTag wins. */}}
 {{- define "vexa.agentImage" -}}
+{{- if or .Values.runtime.agentImageDigest .Values.runtime.agentImageRepository -}}
 {{- if .Values.global.imageTag -}}
+{{- fail "runtime.agentImageDigest and global.imageTag cannot both be set" -}}
+{{- end -}}
+{{- include "vexa.scalarImageRef" (dict "legacy" .Values.runtime.agentImage "repository" .Values.runtime.agentImageRepository "digest" .Values.runtime.agentImageDigest) -}}
+{{- else if .Values.global.imageTag -}}
 {{- printf "%s:%s" .Values.agentApi.image.repository .Values.global.imageTag -}}
 {{- else -}}
 {{- .Values.runtime.agentImage | default (printf "%s:%s" .Values.agentApi.image.repository .Values.agentApi.image.tag) -}}
@@ -119,7 +188,12 @@ vexaai/vexa-bot:v012
 
 {{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
 {{- define "vexa.agentWorkerImage" -}}
+{{- if or .Values.runtime.agentWorkerImageDigest .Values.runtime.agentWorkerImageRepository -}}
 {{- if .Values.global.imageTag -}}
+{{- fail "runtime.agentWorkerImageDigest and global.imageTag cannot both be set" -}}
+{{- end -}}
+{{- include "vexa.scalarImageRef" (dict "legacy" .Values.runtime.agentWorkerImage "repository" .Values.runtime.agentWorkerImageRepository "digest" .Values.runtime.agentWorkerImageDigest) -}}
+{{- else if .Values.global.imageTag -}}
 {{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
 {{- else -}}
 {{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}

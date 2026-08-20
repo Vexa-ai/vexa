@@ -58,7 +58,7 @@ spec:
       {{- end }}
       containers:
         - name: minio
-          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.minio.image "useGlobalTag" false) | quote }}
           imagePullPolicy: IfNotPresent
           command:
             - minio

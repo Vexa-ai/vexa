@@ -28,7 +28,7 @@ spec:
       {{- end }}
       containers:
         - name: minio-init
-          image: minio/mc:latest
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.minio.clientImage "useGlobalTag" false) | quote }}
           imagePullPolicy: IfNotPresent
           # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
           # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.

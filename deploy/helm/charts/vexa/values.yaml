@@ -109,6 +109,7 @@ gateway:
   image:
     repository: vexaai/v012-gateway
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 8000
@@ -146,6 +147,7 @@ adminApi:
   image:
     repository: vexaai/v012-admin-api
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 8001
@@ -181,6 +183,7 @@ meetingApi:
   image:
     repository: vexaai/v012-meeting-api
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 8080
@@ -226,14 +229,21 @@ runtime:
   image:
     repository: vexaai/v012-runtime
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 8090
   # Images the runtime spawns. browserImage = the bot (published ~3.6GB, a reference, never built by
   # this chart). agentImage/agentWorkerImage default to the v012 agent repos at global.imageTag.
-  browserImage: ""            # empty → follows global.imageTag (fallback vexaai/vexa-bot:v012)
-  agentImage: "vexaai/v012-agent-api:v012"
-  agentWorkerImage: "vexaai/v012-agent-worker:v012"
+  browserImage: ""            # legacy full tag ref; clear when using browserImageRepository+Digest
+  browserImageRepository: ""
+  browserImageDigest: ""
+  agentImage: "vexaai/v012-agent-api:v012" # legacy full tag ref; clear for digest mode
+  agentImageRepository: ""
+  agentImageDigest: ""
+  agentWorkerImage: "vexaai/v012-agent-worker:v012" # legacy full tag ref; clear for digest mode
+  agentWorkerImageRepository: ""
+  agentWorkerImageDigest: ""
   logLevel: "info"
   speakerStream:
     minAudioSec: ""
@@ -270,6 +280,7 @@ agentApi:
   image:
     repository: vexaai/v012-agent-api
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 8100
@@ -293,6 +304,7 @@ terminal:
   image:
     repository: vexaai/v012-terminal
     tag: v012
+    digest: ""
   service:
     type: ClusterIP
     port: 3000
@@ -319,6 +331,7 @@ dashboard:
   image:
     repository: vexaai/dashboard
     tag: 0.10.6.3.14
+    digest: ""
   service:
     type: ClusterIP
     port: 3000
@@ -343,6 +356,7 @@ migrations:
   image:
     repository: ""
     tag: ""
+    digest: ""
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 200m, memory: 256Mi }
@@ -354,6 +368,8 @@ pgbouncer:
   # fixed slot budget or when scaling replicas. When on, every service's DB_HOST routes through it.
   enabled: false
   image: edoburu/pgbouncer:latest
+  imageRepository: ""
+  imageDigest: ""
   replicaCount: 1
   poolMode: transaction
   defaultPoolSize: 20
@@ -370,6 +386,8 @@ pgbouncer:
 postgres:
   enabled: true
   image: postgres:17-alpine
+  imageRepository: ""
+  imageDigest: ""
   credentialsSecretName: postgres-credentials
   idleInTransactionTimeoutMs: 60000
   service:
@@ -388,6 +406,8 @@ redis:
   # Redis ≥7.4. Wire-compatible (RESP): the `redis.*` keys, redisConfig.url, and the durability
   # helper are unchanged so existing values overrides keep working; only the engine swaps (#653).
   image: valkey/valkey:8-alpine
+  imageRepository: ""
+  imageDigest: ""
   service:
     port: 6379
   persistence:
@@ -411,6 +431,11 @@ minio:
   image:
     repository: minio/minio
     tag: latest
+    digest: ""
+  clientImage:
+    repository: minio/mc
+    tag: latest
+    digest: ""
   accessKey: vexa-access-key
   secretKey: vexa-secret-key
   bucket: vexa
