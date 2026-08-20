@@ -17,7 +17,8 @@ gets a page that answers it — that is the whole loop, and you are the only one
   OpenShift; found Helm docs, found nothing on egress" is worth more to us than a bug report.
   A human reads every one.
 - **Found a bug, a gap, or a page that contradicts the code?** Same place — every report
-  enters `state: incoming` with a 3-day triage SLA. Findings are contributions, and a page
+  enters `state: incoming` and waits for triage — three days is our target and we are not
+  hitting it (measured 2026-08-20: 26 waiting, median 13 days). Findings are contributions, and a page
   that lies is the highest-priority thing you can hand us.
 - **Building on Vexa right now?** Say so in the issue and name the deployment shape (cloud,
   Docker Compose, Kubernetes) and the version. Integration reports are the ones we act on
