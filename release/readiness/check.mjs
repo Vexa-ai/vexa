@@ -292,7 +292,21 @@ export function validateManifest(doc, expectedRelease) {
     if (leg.kind === "agent" && !hasProtocol) {
       fail(`${label}: an agent leg's oracle must be a protocol document`);
     }
-    if (hasCommand) requireText(leg.oracle, "command", label);
+    if (hasCommand) {
+      requireText(leg.oracle, "command", label);
+      // A version pinned INSIDE the oracle is the fourth place this release's number appears, after
+      // release / candidate_map / receipts_dir. The other three are checked above; without this one
+      // a manifest copied forward keeps running the previous release's oracle and reports green for
+      // a batch it never walked — the failure is silent, because the command still succeeds.
+      for (const pinned of leg.oracle.command.matchAll(/RELEASE_VERSION=(\S+)/g)) {
+        if (pinned[1] !== doc.release) {
+          fail(
+            `${label}: oracle pins RELEASE_VERSION=${pinned[1]} but this manifest is ${doc.release} ` +
+            `— the oracle would run against another release`,
+          );
+        }
+      }
+    }
     if (hasProtocol) {
       requireText(leg.oracle, "protocol", label);
       if (!PROTOCOL_PATH.test(leg.oracle.protocol)) {

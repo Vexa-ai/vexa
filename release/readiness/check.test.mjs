@@ -41,7 +41,7 @@ function validManifest(release = RELEASE) {
         title: "TRAIN VALUE as of PRs",
         kind: "machine",
         phase: "formation",
-        oracle: { command: "node scripts/release-value-gate.mjs" },
+        oracle: { command: `RELEASE_VERSION=${release} node scripts/release-value-gate.mjs` },
         receipt: `releases/${release}/readiness/train-value.receipt.json`,
         identity: {
           binds_candidate_map: true,
@@ -278,6 +278,14 @@ test("refuses a manifest whose binding targets are not this release's frozen art
   const wrongDir = validManifest();
   wrongDir.receipts_dir = "releases/v0.12.23/receipts";
   assert.throws(() => validateManifest(wrongDir), /receipts_dir must be/);
+
+  // The fourth place the release number appears is inside a machine leg's oracle. A manifest copied
+  // forward with this one left behind still runs — against the PREVIOUS release's batch — and
+  // reports green, which is the one failure here that makes no noise at all.
+  const staleOracle = validManifest();
+  const valueLeg = staleOracle.legs.find((leg) => leg.oracle?.command?.includes("RELEASE_VERSION="));
+  valueLeg.oracle.command = valueLeg.oracle.command.replace(/RELEASE_VERSION=\S+/, "RELEASE_VERSION=v0.12.22");
+  assert.throws(() => validateManifest(staleOracle), /would run against another release/);
 
   const wrongVersion = validManifest();
   assert.throws(() => validateManifest(wrongVersion, "v0.12.24"), /does not match requested/);
