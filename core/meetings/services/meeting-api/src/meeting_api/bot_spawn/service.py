@@ -396,7 +396,19 @@ async def request_bot(
     reused_row: Optional[dict] = None
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
-        if latest and latest.get("status") in _TERMINAL_STATUSES:
+        latest_data = (latest or {}).get("data") or {}
+        deletion = latest_data.get("artifact_deletion") or {}
+        recording_delete = any(
+            r.get("deletion_pending") for r in (latest_data.get("recordings") or [])
+            if isinstance(r, dict)
+        )
+        # A row whose artifacts are deleted, or being deleted, is not reusable: reopening it in place
+        # would attach a new run to a record the owner has erased. Such a request falls through to the
+        # fresh-insert path and gets a NEW row, which is what "deleted" has to mean.
+        if (
+            latest and latest.get("status") in _TERMINAL_STATUSES
+            and not deletion and not recording_delete
+        ):
             # F4 — a row the USER STOPPED is never reopened. `continue_meeting` reopens a terminal
             # row IN PLACE (clearing its terminal attribution) with none of the guarded-create path's
             # protections, so it was the one way back into a run the user had ended: on stage rev

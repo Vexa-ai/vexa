@@ -65,12 +65,6 @@
       "path": "/bots/id/{meeting_id}",
       "reason": "api.v1 declares it (desc: 'Forward to meeting-api GET /bots/{meeting_id}') but the gateway maps the meeting-detail read to GET /meetings/{meeting_id} instead; the dashboard reads /meetings/{id}. Deferred reconcile (drop from api.v1 or implement) is a lane:contract change (A1/A2, MATURITY-FINDINGS.md).",
       "issue": "https://github.com/Vexa-ai/vexa/issues/591"
-    },
-    {
-      "method": "DELETE",
-      "path": "/recordings/{recording_id}",
-      "reason": "api.v1 declares recording delete; not implemented in the 0.12 carve (no consumer wired it — recording delete rides DELETE /meetings/{platform}/{native}, which purges the meeting's recordings). Deferred reconcile (A2, MATURITY-FINDINGS.md).",
-      "issue": "https://github.com/Vexa-ai/vexa/issues/591"
     }
   ],
   "shape_gaps": [

@@ -89,6 +89,17 @@ class RecordingRepo(Protocol):
         """The ``user_id`` that owns ``meeting_id`` — used to scope ``GET /recordings`` listing."""
         ...
 
+    async def prepare_recording_deletion(
+        self, user_id: int, recording_id: int
+    ) -> Optional[dict]:
+        """Lock and mark one owner-scoped recording deletion-pending while retaining its paths.
+
+        Returns ``None`` for unknown/unowned and ``{"error": "conflict"}`` for a non-terminal
+        meeting. The pending marker prevents ``continue_meeting`` from reopening the terminal row
+        while object deletion is in flight.
+        """
+        ...
+
     async def list_meeting_recordings(self, user_id: int) -> list[dict]:
         """Every recording across the user's meetings (for ``GET /recordings``)."""
         ...

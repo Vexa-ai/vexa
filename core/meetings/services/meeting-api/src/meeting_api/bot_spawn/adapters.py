@@ -184,6 +184,15 @@ class SqlAlchemyMeetingRepo:
             # is either visible here or lands on a row this txn has already moved.
             if data.get("stop_requested"):
                 raise MeetingStopped(_stopped_reopen_detail(meeting_id))
+            # The same last line of defense for deletion: a row whose artifacts are erased, or being
+            # erased, is not reusable. Under the same lock, so a deletion committing concurrently is
+            # either visible here or lands on a row this txn has already moved.
+            deletion_pending = data.get("artifact_deletion") or any(
+                r.get("deletion_pending") for r in (data.get("recordings") or [])
+                if isinstance(r, dict)
+            )
+            if m.status not in ("completed", "failed") or deletion_pending:
+                raise DuplicateMeeting("Terminal meeting is no longer reusable")
             m.status = "requested"
             m.end_time = None
             m.bot_container_id = None
