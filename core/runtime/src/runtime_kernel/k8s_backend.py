@@ -91,7 +91,16 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
-    if not volumes and not tolerations and not node_selector:
+    # Meeting-bot Pods run Chromium's NAMESPACE sandbox as a non-root user (bot image + entrypoint.sh)
+    # instead of --no-sandbox — which needs user namespaces, so relax seccomp for the BOT Pod only
+    # (identified by VEXA_BOT_CONFIG). Pod-level securityContext, so `kubectl run --overrides` json-merges
+    # it WITHOUT touching the generated containers list (same merge seam as tolerations/nodeSelector).
+    # CHROME_NO_SANDBOX=1 keeps the legacy root + --no-sandbox path — no override needed.
+    bot_unconfined = (
+        "VEXA_BOT_CONFIG" in env
+        and (env.get("CHROME_NO_SANDBOX") or "").strip().lower() not in ("1", "true", "yes")
+    )
+    if not volumes and not tolerations and not node_selector and not bot_unconfined:
         return None
     # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
     # strategic), so a containers entry here wipes the generated container — image, env, command —
@@ -107,6 +116,8 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
         spec["tolerations"] = tolerations
     if node_selector:
         spec["nodeSelector"] = node_selector
+    if bot_unconfined:
+        spec["securityContext"] = {"seccompProfile": {"type": "Unconfined"}}
     return {"spec": spec}
 
 

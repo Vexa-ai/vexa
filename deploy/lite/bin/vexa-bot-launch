@@ -3,16 +3,94 @@
 # Vexa Lite — meeting-bot launcher (process backend)
 # =============================================================================
 # The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
-# meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
-# NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
-# (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
-# inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+# meeting-bot profile (BOT_COMMAND). The bot's full constructor arrives in the inherited
+# env as VEXA_BOT_CONFIG (invocation.v1).
+#
+# PER-BOT CAPTURE ISOLATION. supervisord owns a single shared Xvfb :99 + a single record_sink for
+# the whole container. That is safe only for ONE meeting at a time: two overlapping meetings (or a
+# leftover browser window from a failed/stopped bot) share the same display + sink, so one bot's
+# recorder captures another meeting's video (x11grab of the whole :99) and/or audio (record_sink.
+# monitor). To make cross-meeting recording STRUCTURALLY impossible, each bot gets its OWN Xvfb
+# display and its OWN PulseAudio record sink, torn down when it exits. Chromium and the recorder
+# follow via DISPLAY / PULSE_SINK / RECORD_AUDIO_SOURCE. If allocation fails we fall back to the
+# shared :99 / default sink (degraded, single-meeting-safe) so a bot still runs.
 set -u
 
-export DISPLAY="${DISPLAY:-:99}"
+RES="${VIDEO_RESOLUTION:-1920x1080}"
+DISPLAY_NUM=""; XVFB_PID=""; FLUX_PID=""; REC_SINK_MOD=""
 
-# Run from the bot package dir so its relative schema path (src→../../../contracts) and the
-# pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The
-# page-side capture bundle is at /app/browser-utils.global.js (capture-bridge injects that path).
+cleanup() {
+  [ -n "$FLUX_PID" ] && kill "$FLUX_PID" 2>/dev/null
+  [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null
+  [ -n "$REC_SINK_MOD" ] && pactl unload-module "$REC_SINK_MOD" 2>/dev/null
+  [ -n "$DISPLAY_NUM" ] && rm -f "/tmp/.X${DISPLAY_NUM}-lock" 2>/dev/null
+}
+trap cleanup EXIT
+
+# ── Allocate a free X display (:101..:250), serialized with flock so concurrent bot launches
+#    can't pick the same number. Xvfb creates /tmp/.X<N>-lock atomically as the ownership marker.
+#    CRITICAL: background children (Xvfb) must NOT inherit fd 9, or they hold the lock for their whole
+#    lifetime and the NEXT bot's flock deadlocks — hence `9>&-` on Xvfb and `exec 9>&-` after. The
+#    `-w 10` timeout is a last-resort guard so allocation can never block a bot forever. ──
+exec 9>/tmp/vexa-bot-display.lock
+flock -w 10 9 || true
+for n in $(seq 101 250); do
+  if [ ! -e "/tmp/.X${n}-lock" ]; then DISPLAY_NUM="$n"; break; fi
+done
+if [ -n "$DISPLAY_NUM" ]; then
+  Xvfb ":${DISPLAY_NUM}" -screen 0 "${RES}x24" -ac +extension GLX +render -noreset \
+    >"/tmp/xvfb-${DISPLAY_NUM}.log" 2>&1 9>&- &
+  XVFB_PID=$!
+  for _ in $(seq 1 50); do [ -e "/tmp/.X${DISPLAY_NUM}-lock" ] && break; sleep 0.1; done
+fi
+exec 9>&-   # release the allocation lock in THIS shell (Xvfb already dropped its copy via 9>&-)
+
+if [ -n "$DISPLAY_NUM" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
+  export DISPLAY=":${DISPLAY_NUM}"
+  # A WM so Chromium's --start-fullscreen window sizes/maps cleanly, as on the shared :99.
+  DISPLAY=":${DISPLAY_NUM}" fluxbox >"/tmp/fluxbox-${DISPLAY_NUM}.log" 2>&1 &
+  FLUX_PID=$!
+  # Per-bot record sink (48 kHz stereo, matching setup-pulseaudio-sinks.sh). Chromium renders meeting
+  # audio HERE via PULSE_SINK; the recorder captures ITS monitor via RECORD_AUDIO_SOURCE. TTS still
+  # targets the shared tts_sink explicitly, so the speak path is unaffected.
+  REC_SINK="record_sink_${DISPLAY_NUM}"
+  REC_SINK_MOD="$(pactl load-module module-null-sink sink_name="$REC_SINK" \
+    sink_properties=device.description="RecordSink${DISPLAY_NUM}" rate=48000 channels=2 2>/dev/null || true)"
+  if [ -n "$REC_SINK_MOD" ]; then
+    export PULSE_SINK="$REC_SINK"
+    export RECORD_AUDIO_SOURCE="${REC_SINK}.monitor"
+  fi
+  echo "[vexa-bot-launch] isolated capture: DISPLAY=$DISPLAY sink=${REC_SINK:-<default>}" >&2
+else
+  DISPLAY_NUM=""   # allocation failed — don't let cleanup touch the shared :99 lock
+  XVFB_PID=""
+  export DISPLAY="${DISPLAY:-:99}"
+  echo "[vexa-bot-launch] WARNING: no isolated display available — sharing :99 (single-meeting only)" >&2
+fi
+
+# Run from the bot package dir so its relative schema path and pnpm-linked workspace deps resolve.
 cd /app/core/meetings/services/bot
-exec node dist/index.js
+
+# Run the worker as a CHILD (not exec) so the cleanup trap tears down the display + sink on exit.
+# Forward stop signals to it. NON-ROOT (uid vexa) so Chromium runs its namespace sandbox (no banner);
+# CHROME_NO_SANDBOX=1 keeps the legacy root path. setpriv passes the exported env (DISPLAY/PULSE_SINK/
+# RECORD_AUDIO_SOURCE) through — it does not reset the environment.
+case "${CHROME_NO_SANDBOX:-}" in
+  1|true|yes|TRUE|YES)
+    node dist/index.js &
+    ;;
+  *)
+    setpriv --reuid=vexa --regid=vexa --init-groups env HOME=/home/vexa node dist/index.js &
+    ;;
+esac
+BOT_PID=$!
+trap 'kill -TERM "$BOT_PID" 2>/dev/null' TERM INT
+wait "$BOT_PID"
+EXIT_CODE=$?
+# If a trapped signal interrupted the wait, make sure the worker is really gone before we tear down.
+if kill -0 "$BOT_PID" 2>/dev/null; then
+  kill -TERM "$BOT_PID" 2>/dev/null
+  wait "$BOT_PID" 2>/dev/null
+  EXIT_CODE=$?
+fi
+exit "$EXIT_CODE"

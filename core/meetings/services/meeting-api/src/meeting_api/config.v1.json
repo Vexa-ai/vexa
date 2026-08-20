@@ -146,6 +146,84 @@
    ]
   },
   {
+   "key": "RECORD_VIDEO",
+   "class": "defaulted",
+   "default": "false",
+   "description": "deployment default for whether recording also captures the meeting VIDEO (the Xvfb display). Default OFF ⇒ audio-only recording (no encode cost). When true, the bot's one ffmpeg records audio+video → live MPEG-DASH; captureModes becomes [audio, video].",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "VIDEO_HWACCEL",
+   "class": "defaulted",
+   "default": "none",
+   "description": "recording video hardware accel, forwarded to the bot (extra_env): none → software encode (low CPU on libx264, expensive on libvpx-vp9/libsvtav1); vaapi → Intel/AMD VA-API (needs /dev/dri passthrough); nvenc → NVIDIA NVENC (needs the nvidia runtime). Composes with RECORD_VIDEO_CODEC into an encoder — an impossible combo (e.g. nvenc + vp9) fails the spawn with a named error. Forwarded to the bot only when set",
+   "targets": []
+  },
+  {
+   "key": "RECORD_VIDEO_CODEC",
+   "class": "defaulted",
+   "default": "h264",
+   "description": "recording video codec (when RECORD_VIDEO=true): h264 (default — universal, plays natively in Safari/iOS HLS) | hevc (~40% smaller, Safari-native + nvenc, but Firefox support is spotty) | vp9 (royalty-free, plays in Chrome/Firefox via hls.js but NOT native Safari, and encode is CPU-heavy — no NVENC VP9) | av1 (smallest, but Safari needs A17/M3+ hardware and software encode is very slow). Composes with VIDEO_HWACCEL. Forwarded to the bot when set",
+   "targets": []
+  },
+  {
+   "key": "RECORD_AUDIO_CODEC",
+   "class": "defaulted",
+   "default": "aac",
+   "description": "recording audio codec: aac (default — universal, plays in native Safari/iOS HLS) | opus (higher quality at low bitrate, plays in Chrome/Firefox via hls.js but NOT Safari — Safari decodes no Opus in any streaming/HLS pipeline). Applies to audio-only recordings too. Forwarded to the bot when set",
+   "targets": []
+  },
+  {
+   "key": "VIDEO_RESOLUTION",
+   "class": "defaulted",
+   "default": "1920x1080",
+   "description": "recording capture resolution as WIDTHxHEIGHT, forwarded to the bot (extra_env). Drives the bot's Xvfb screen, the Chromium --window-size, and the recorder ffmpeg's x11grab -video_size together (all three must match). Lower resolution cuts encode CPU roughly with the pixel count — e.g. 1280x800. Forwarded only when set",
+   "targets": []
+  },
+  {
+   "key": "RECORD_SEGMENT_SECONDS",
+   "class": "defaulted",
+   "default": "15",
+   "description": "DASH segment length in seconds (default 15). Sets the recorder ffmpeg's -seg_duration and the keyframe cadence so each segment is independently decodable. Forwarded to the bot via extra_env only when set",
+   "targets": []
+  },
+  {
+   "key": "RECORD_AUDIO_SOURCE",
+   "class": "defaulted",
+   "default": "record_sink.monitor",
+   "description": "PulseAudio source the recorder ffmpeg captures meeting audio from (default record_sink.monitor — the dedicated unmuted recording sink set up by setup-pulseaudio-sinks.sh). Forwarded to the bot via extra_env only when set",
+   "targets": []
+  },
+  {
+   "key": "RECORDING_COMBINED_AUDIO_CODEC",
+   "class": "defaulted",
+   "default": "",
+   "description": "audio codec for the combined-download mp4 remuxed from the recording's HLS. Empty (default) stream-COPIES the recording's audio (zero transcode, near-instant; the download matches the recording, whose video is always copied too). Set to an ffmpeg encoder name to TRANSCODE the audio — 'aac' (universal, incl. QuickTime) or 'libopus' (smaller, but not QuickTime/Safari). Setting this re-encodes the audio, so only do it when the download needs a different codec than the recording. Read by meeting-api at combined-download build time",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "ENABLE_COMBINED_RECORDING",
+   "class": "defaulted",
+   "default": "false",
+   "description": "gates the muxed audio+video 'combined' download — a single downloadable mp4 remuxed from the recording's live DASH (default OFF). When off, meeting-api never builds it and GET /recordings/{id}/master?type=combined 404s with status 'disabled' so the player hides the download control. When on, the player shows a download that builds ON-DEMAND the first time it is requested (202 'preparing' while ffmpeg remuxes, then a link) — or ahead of time when AUTO_COMBINED_RECORDING is also on. Read by meeting-api",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "AUTO_COMBINED_RECORDING",
+   "class": "defaulted",
+   "default": "false",
+   "description": "when ENABLE_COMBINED_RECORDING is on, also build the combined download automatically the moment a recording completes (its final DASH manifest lands), so the download is ready without the first request paying the remux latency (default OFF — build lazily on first request). Read by meeting-api",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "BOT_AUTHENTICATED",
    "class": "defaulted",
    "default": "false",

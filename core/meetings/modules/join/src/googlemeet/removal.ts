@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../_host";
 import { googleRemovalIndicators } from "./selectors";
+import { dismissGoogleMeetPopups } from "./leave";
 
 // Function to check if bot has been removed from the meeting
 export async function checkForGoogleRemoval(page: Page): Promise<boolean> {
@@ -32,6 +33,7 @@ export function startGoogleRemovalMonitor(page: Page, onRemoval?: () => void | P
   
   const removalCheckInterval = setInterval(async () => {
     try {
+      await dismissGoogleMeetPopups(page).catch(() => {});
       const isRemoved = await checkForGoogleRemoval(page);
       if (isRemoved && !removalDetected) {
         removalDetected = true; // Prevent duplicate detection
