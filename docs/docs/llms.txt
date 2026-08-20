@@ -49,7 +49,8 @@ most coding agents).
 
 ## Docs
 
-- [Quickstart](https://docs.vexa.ai/quickstart.md): clone → running stack → bot in a meeting
+- [Quickstart](https://docs.vexa.ai/quickstart.md): hosted (sign in → API key → one call) or self-host (clone → running stack → bot in a meeting)
+- [Send a bot](https://docs.vexa.ai/how-to/send-a-bot.md): get a key (hosted or self-hosted), send the bot, read the transcript
 - [Authentication](https://docs.vexa.ai/authentication.md): API keys and scopes
 - [Meetings API](https://docs.vexa.ai/api/meetings.md): plan meetings, send bots, real-time transcripts, recordings
 - [Agent API](https://docs.vexa.ai/api/agent.md): dispatch units, chat turns, routines, workspace
