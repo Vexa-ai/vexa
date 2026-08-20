@@ -105,6 +105,7 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "support",
           "sdks",
           "vexa-mcp",
           "changelog"
@@ -388,6 +389,18 @@
     {
       "source": "/cookbook/share-transcript-url.md",
       "destination": "/chatgpt-transcript-share-links.md"
+    },
+    {
+      "source": "/feedback",
+      "destination": "/support"
+    },
+    {
+      "source": "/contact",
+      "destination": "/support"
+    },
+    {
+      "source": "/tell-us",
+      "destination": "/support"
     }
   ]
 }
