@@ -9,10 +9,15 @@ each channel-**turn**, bound at the turn's onset and held through overlap. Ident
 is **carried** (bound at capture), never derived — no diarizer, no post-hoc namer.
 Contrast [`mixed-pipeline`](../) (one mixed stream, names from hints).
 
-Each `(channel, turn)` is its own stream over the shared engine
-([`buffer`](../buffer/) LocalAgreement + [`whisper`](../whisper/) stt.v1, injected),
+Each `(channel, turn)` is its own stream over the pipeline-local `SpeakerStreamManager`
+([`buffer`](../buffer/) contains its parity-locked shared successor; [`whisper`](../whisper/)
+supplies stt.v1),
 emitting **sealed `transcript.v1`** segments to a `TranscriptSink`. The host wraps
 those into the bus envelopes.
+
+Google Meet intentionally remains unchanged in this release. Teams is proving the shared
+`GmeetCompatibleBuffer` first; after that diverse-fixture proof, a later release may replace
+`src/speaker-streams.ts` with the shared import and remove the duplicate implementation.
 
 ## Surface
 `createGmeetPipeline` · `SpeakerStreamManager` · `isHallucination` · `setLogger` ·

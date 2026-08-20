@@ -189,7 +189,8 @@ stack still boots.
 |---|---|---|
 | `DEFAULT_BOT_NAME` | — | Bot participant name used when the caller omits `bot_name` in `POST /bots`. Falls back to `VexaBot-{random}` if unset. |
 | `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
-| `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
+| `AUTO_JOIN_LEAD_S` | `120` | The bot is sent this many seconds *before* the scheduled time, so it is already standing in the lobby when the meeting starts. |
+| `VEXA_LOBBY_BUDGET_S` | `900` | How long a spawned bot waits for admission before giving up (`automatic_leave.waitingRoomTimeout`). The reconciler's pre-active grace derives from this, so raising it never leaves a waiting bot reaped early. |
 | `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
 | `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
 | `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |

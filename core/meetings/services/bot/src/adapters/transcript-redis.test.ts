@@ -94,6 +94,97 @@ async function main(): Promise<void> {
     check('string-id: channel = tc:meeting:abc-defg-hij:mutable', pubs[0]?.channel === 'tc:meeting:abc-defg-hij:mutable', pubs[0]?.channel);
   }
 
+  // ── Teams/GMeet-compatible live envelope: same-id mutates, distinct pending ids coexist ──
+  {
+    const { client, pubs } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42, liveEnvelope: 'speaker-snapshot' });
+    const draftA = { ...seg, segment_id: 'csrc-201:1000', speaker: '', speaker_key: 'csrc:201', text: 'hello', completed: false };
+    const draftAGrown = { ...draftA, text: 'hello world' };
+    const draftB = { ...seg, segment_id: 'csrc-201:2000', speaker: '', speaker_key: 'csrc:201', text: 'next thought', completed: false };
+    await sink.publish(draftA);
+    await sink.publish(draftAGrown);
+    await sink.publish(draftB);
+
+    const first = JSON.parse(pubs[0]!.message);
+    const grown = JSON.parse(pubs[1]!.message);
+    const coexist = JSON.parse(pubs[2]!.message);
+    check('snapshot: stable CSRC key is the replacement scope', first.speaker === 'csrc:201', String(first.speaker));
+    check('snapshot: same id replaces its draft text', grown.pending.length === 1 && grown.pending[0].text === 'hello world', JSON.stringify(grown.pending));
+    check('snapshot: distinct pending ids coexist', coexist.pending.length === 2, JSON.stringify(coexist.pending));
+
+    await sink.publish({ ...draftAGrown, completed: true });
+    const confirmed = JSON.parse(pubs[3]!.message);
+    check('snapshot: confirmation replaces only its own draft',
+      confirmed.confirmed.length === 1 && confirmed.confirmed[0].segment_id === draftA.segment_id
+        && confirmed.pending.length === 1 && confirmed.pending[0].segment_id === draftB.segment_id,
+      JSON.stringify(confirmed));
+
+    await sink.retract?.([draftB.segment_id]);
+    const withdrawal = JSON.parse(pubs[4]!.message);
+    check('snapshot: retract announces the withdrawn ids on the mutable channel',
+      withdrawal.type === 'transcript_retract' && JSON.stringify(withdrawal.segment_ids) === JSON.stringify([draftB.segment_id]),
+      JSON.stringify(withdrawal));
+    const cleared = JSON.parse(pubs[5]!.message);
+    check('snapshot: retract publishes the surviving complete pending set',
+      cleared.speaker === 'csrc:201' && cleared.confirmed.length === 0 && cleared.pending.length === 0,
+      JSON.stringify(cleared));
+  }
+
+  // ── retract of a CONFIRMED id (in no pending map) still reaches the live channel ──
+  // A timeout-promoted draft that a later ownership check rejects is confirmed, not pending; the
+  // snapshot republish can withdraw nothing, so the id-addressed message is what clears the row.
+  {
+    const { client, pubs } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42, liveEnvelope: 'speaker-snapshot' });
+    const confirmed = { ...seg, segment_id: 'csrc-201:1000', speaker: '', speaker_key: 'csrc:201', completed: true };
+    await sink.publish(confirmed);
+    const before = pubs.length;
+
+    await sink.retract?.([confirmed.segment_id]);
+    check('confirmed-retract: exactly one live message', pubs.length === before + 1, String(pubs.length - before));
+    const msg = JSON.parse(pubs[before]!.message);
+    check('confirmed-retract: type = transcript_retract', msg.type === 'transcript_retract', String(msg.type));
+    check('confirmed-retract: carries the segment id',
+      JSON.stringify(msg.segment_ids) === JSON.stringify([confirmed.segment_id]), JSON.stringify(msg.segment_ids));
+    check('confirmed-retract: meeting.id threaded', msg.meeting?.id === 42, String(msg.meeting?.id));
+  }
+
+  // ── retract/publish interleave: a publish that lands mid-retract must not resurrect the id ──
+  // The transcriber retracts a draft and re-publishes the same speaker key in one synchronous
+  // stack, and the pipeline fires both fire-and-forget onto one FIFO connection.
+  {
+    const xadds: Array<{ resolve: () => void }> = [];
+    const pubs: string[] = [];
+    const client: RedisTranscriptClient = {
+      // Hold every XADD open so the retract is provably still mid-flight when the publish runs.
+      xAdd() { return new Promise((resolve) => { xadds.push({ resolve: () => resolve('1-0') }); }); },
+      async publish(_channel, message) { pubs.push(message); return 1; },
+    };
+    const sink = createRedisTranscriptSink({ client, meetingId: 42, liveEnvelope: 'speaker-snapshot' });
+
+    const stale = { ...seg, segment_id: 'csrc-201:1000', speaker: '', speaker_key: 'csrc:201', text: 'stale', completed: false };
+    const fresh = { ...seg, segment_id: 'csrc-201:3000', speaker: '', speaker_key: 'csrc:201', text: 'fresh', completed: false };
+    const published = sink.publish(stale);
+    xadds[0]!.resolve();
+    await published;
+
+    const retracting = sink.retract!([stale.segment_id]);   // fire-and-forget: XADD still pending
+    const republishing = sink.publish(fresh);               // interleaves on the same speaker key
+    xadds[1]!.resolve();
+    xadds[2]!.resolve();
+    await Promise.all([retracting, republishing]);
+
+    const snapshots = pubs.map((m) => JSON.parse(m)).filter((m) => m.type === 'transcript');
+    const carriesRetracted = snapshots.some(
+      (m) => (m.pending ?? []).some((s: TranscriptSegment) => s.segment_id === stale.segment_id)
+        && m.pending.some((s: TranscriptSegment) => s.segment_id === fresh.segment_id),
+    );
+    check('interleave: the mid-retract publish snapshots WITHOUT the retracted id', !carriesRetracted, JSON.stringify(snapshots));
+    const last = snapshots[snapshots.length - 1];
+    check('interleave: the surviving pending set is the fresh draft alone',
+      last.pending.length === 1 && last.pending[0].segment_id === fresh.segment_id, JSON.stringify(last?.pending));
+  }
+
   if (failed) { console.error(`\n❌ transcript-redis (L3): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ transcript-redis (L3): XADDs the transcription_segments stream + PUBLISHes tc:meeting:{id}:mutable, payload round-trips a schema-valid transcript.v1 segment.');
 }

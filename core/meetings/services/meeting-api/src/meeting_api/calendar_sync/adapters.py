@@ -16,20 +16,36 @@ from typing import Optional
 MAX_ICS_BYTES = 2 * 1024 * 1024  # 2 MB — a personal calendar feed is KBs; refuse anything huge
 
 
-async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str], Optional[str]]:
-    """GET the ICS feed over the SSRF-pinned transport → ``(feed_text, None)`` on success or
-    ``(None, human_reason)`` on any failure. The reason is USER-FACING (it becomes the feed's
-    ``last_error`` and is shown in the terminal's calendar panel), so it names the actual
-    problem — an HTML page instead of a feed, a bad status, oversize — never a stack trace."""
+def build_ics_client(*, timeout_s: float = 15.0):
+    """A pinned httpx client for ICS fetches — the ONE place the transport is configured.
+
+    A sweep that reuses a single client across a tick's feeds keeps connection pooling and TLS
+    handshakes amortized; ``fetch_ics`` builds a per-call one when no client is passed.
+    """
     import httpx
 
     from ..webhooks.ssrf import build_pinned_transport
 
+    return httpx.AsyncClient(
+        timeout=timeout_s, transport=build_pinned_transport(), follow_redirects=False,
+    )
+
+
+async def fetch_ics(url: str, *, timeout_s: float = 15.0,
+                    client=None) -> tuple[Optional[str], Optional[str]]:
+    """GET the ICS feed over the SSRF-pinned transport → ``(feed_text, None)`` on success or
+    ``(None, human_reason)`` on any failure. The reason is USER-FACING (it becomes the feed's
+    ``last_error`` and is shown in the terminal's calendar panel), so it names the actual
+    problem — an HTML page instead of a feed, a bad status, oversize — never a stack trace.
+
+    ``client`` (optional) is a caller-owned pinned client — pass one to share a connection pool
+    across a sweep; the caller owns its lifetime."""
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout_s, transport=build_pinned_transport(), follow_redirects=False,
-        ) as client:
+        if client is not None:
             resp = await client.get(url)
+        else:
+            async with build_ics_client(timeout_s=timeout_s) as owned:
+                resp = await owned.get(url)
         if resp.status_code in (301, 302, 303, 307, 308):
             return None, "the URL redirects — paste the final feed URL (Google: the 'Secret address in iCal format')"
         if resp.status_code != 200:

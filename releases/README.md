@@ -31,6 +31,53 @@ Release happens before the witness pass is signed.
    `:vX.Y.Z` images and runs `release-validate` with **`promote: false`** — the L4 legs prove the
    published bytes, but `:v012` does **not** move. The release candidate now exists to be witnessed.
 
+   That run proves the published manifests resolve with their required platforms and that every
+   validation leg passes on the published bytes. It does **not** prove the *packet-bound
+   candidate-map identity*, because the map records the digests this build has only just
+   published — at freeze time the identity is not unreviewed, it is unknowable. The run says so:
+   a `candidate-map identity DEFERRED` notice and a ⚠️ in guarantee line 1. Step 1a closes it.
+
+### 1a. Bind, validate, freeze — the human step (load-bearing, once per candidate)
+
+Nothing automates this and nothing can: pinning a map's sha256 into the workflow **is** the
+review. Until it is done, the candidate has no reviewed identity — which is exactly what the
+promote and stable-tag gates refuse to move on.
+
+1. **Bind the packet.** Write `releases/v<BASE>/candidate-images.json` from the *exact published*
+   registry identities of the ten images (10 top descriptors, 19 platform identities — the bot is
+   amd64-only), then pin its hash in **both** places that assert it:
+   - the reviewed-identity table in the `resolve` job of
+     [`.github/workflows/release-validate.yml`](../.github/workflows/release-validate.yml)
+     (`CANDIDATE_MAP` / `EXPECTED_MAP_STABLE_TAG` / `EXPECTED_MAP_SHA256` / the two counts), and
+   - the canonical-packet assertion in
+     [`release/candidate-image-map.test.mjs`](../release/candidate-image-map.test.mjs).
+
+   ```bash
+   REF=vexaai/vexa-lite:vX.Y.Z-rc.N
+   docker buildx imagetools inspect "$REF" --format '{{json .}}' | jq '.manifest'   # top + platforms
+   docker manifest inspect -v "$REF" | jq -r '.[].OCIManifest.config.digest'        # image configs
+   node release/candidate-image-map.mjs check releases/vX.Y.Z/candidate-images.json vX.Y.Z
+   shasum -a 256 releases/vX.Y.Z/candidate-images.json     # → EXPECTED_MAP_SHA256
+   ```
+
+   Commit as `release: bind <candidate> train-candidate packet`.
+
+2. **Validate.** Dispatch `release-validate` standalone **from that branch** with
+   `version: vX.Y.Z-rc.N`, `promote: false`. The identity check now enforces (the arm exists), and
+   the legs re-run in minutes against the already-published images — no rebuild.
+
+3. **Freeze.** Write the run's `validation_source` / `validation_run` back into the map, re-hash,
+   and re-pin the new `EXPECTED_MAP_SHA256` in the same two places (writing the fields changes the
+   map, so the hash changes with them). Commit as
+   `release: freeze <candidate> validation identity (run <id>, all legs green)`.
+
+**Where the identity check stays fail-closed** — a deferral is only ever the freeze window:
+any `promote: true` dispatch, any stable (non-prerelease) version, and any version a committed
+map already names all still refuse to run without a reviewed, pinned identity. `promote` carries
+its own independent stable-promotion map table on top of that, and `release-images`'
+`alias-candidate` job proves every digest against the committed map before a stable tag is
+written. See [`Vexa-ai/vexa#1237`](https://github.com/Vexa-ai/vexa/issues/1237).
+
 2. **Witness** — the human walks a **DELIVERED deployment** (D-L4): the agent provisions a fresh
    self-host of the **published** `:vX.Y.Z` images, pre-validates it autonomously (health, UI,
    auth path, STT readiness), and hands the human a **running UI URL — never a setup recipe**.

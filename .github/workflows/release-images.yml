@@ -692,9 +692,11 @@ jobs:
           BOT="$(inspect_image vexaai/vexa-bot false linux/amd64)"
           LITE="$(inspect_image vexaai/vexa-lite true linux/amd64 linux/arm64)"
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          RELEASE="v${VERSION#v}"
+          RELEASE="${RELEASE%%-*}"
           jq -n \
             --arg schema_version "1" \
-            --arg release "v0.12.18" \
+            --arg release "$RELEASE" \
             --arg candidate_tag "$VERSION" \
             --arg base_candidate_tag "$BASE_VERSION" \
             --arg source "$GITHUB_SHA" \
@@ -734,6 +736,15 @@ jobs:
   # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
   # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
   # on the `release-promote` Environment for the owner's approval before :v012 moves.
+  #
+  # #1237 — what this nested call can and cannot prove at FREEZE time. release-validate's
+  # packet-bound candidate-map identity check reads a map that records the digests THIS build
+  # has only just published, so on a new rc the map cannot exist yet. release-validate defers
+  # that one check (with a notice in its run summary and a line in the guarantee block) and
+  # runs every other leg against the published bytes; a human then binds the packet and
+  # dispatches release-validate standalone, where the identity IS enforced. The consequence
+  # for this workflow's conclusion is the point: release-images is red when the build or the
+  # published artifacts are wrong, and green when they are not.
   validate:
     needs: [preflight, build, build-bot, alias-candidate, sbom]
     if: >-

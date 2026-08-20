@@ -31,6 +31,7 @@ __export(index_exports, {
   groupSegments: () => groupSegments,
   parseUTCTimestamp: () => parseUTCTimestamp,
   recomputeTranscripts: () => recomputeTranscripts,
+  retractSegments: () => retractSegments,
   sortByStartTime: () => sortByStartTime,
   sortSegments: () => sortSegments,
   upsertSegments: () => upsertSegments
@@ -45,7 +46,10 @@ function parseUTCTimestamp(timestamp) {
 
 // src/dedup.ts
 function normalizeText(t) {
-  return (t || "").trim().toLowerCase().replace(/[.,!?;:]+$/g, "").replace(/\s+/g, " ");
+  let s = (t || "").trim().toLowerCase();
+  let end = s.length;
+  while (end > 0 && ".,!?;:".includes(s[end - 1])) end--;
+  return s.slice(0, end).replace(/\s+/g, " ");
 }
 function deduplicateSegments(segments) {
   if (segments.length === 0) return segments;
@@ -302,6 +306,25 @@ function applyTranscriptTick(state, confirmed, pending, speaker) {
   if (!changed) return null;
   return recomputeTranscripts(state);
 }
+function retractSegments(state, segmentIds) {
+  if (!segmentIds || segmentIds.length === 0) return null;
+  const ids = new Set(segmentIds);
+  let changed = false;
+  for (const [key, seg] of state.confirmed) {
+    if (!ids.has(key) && !ids.has(segKey(seg))) continue;
+    state.confirmed.delete(key);
+    changed = true;
+  }
+  for (const [speaker, segs] of state.pendingBySpeaker) {
+    const kept = segs.filter((s) => !ids.has(segKey(s)));
+    if (kept.length === segs.length) continue;
+    if (kept.length > 0) state.pendingBySpeaker.set(speaker, kept);
+    else state.pendingBySpeaker.delete(speaker);
+    changed = true;
+  }
+  if (!changed) return null;
+  return recomputeTranscripts(state);
+}
 function recomputeTranscripts(state) {
   const confirmedBySpeaker = /* @__PURE__ */ new Map();
   for (const seg of state.confirmed.values()) {
@@ -377,6 +400,10 @@ function createTranscriptManager() {
       return finalize(bootstrapConfirmed(state, segments));
     },
     handleMessage(message) {
+      if (message.type === "transcript_retract") {
+        const result2 = retractSegments(state, message.segment_ids || []);
+        return result2 ? finalize(result2) : null;
+      }
       if (message.type !== "transcript") return null;
       const confirmed = message.confirmed || [];
       const pending = message.pending || [];
@@ -408,6 +435,7 @@ function createTranscriptManager() {
   groupSegments,
   parseUTCTimestamp,
   recomputeTranscripts,
+  retractSegments,
   sortByStartTime,
   sortSegments,
   upsertSegments

@@ -40,6 +40,11 @@ need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
 need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
 need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
 need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
+# A terminating meeting-api must stay alive until EndpointSlice/kube-proxy stops routing its IP.
+# Without this drain, deleting co-located replicas produces immediate connection refusals even
+# while another replica remains Ready.
+need 1 'terminationGracePeriodSeconds: 30' "meeting-api termination budget rendered"
+need 1 '^[[:space:]]+- "sleep 5"$' "meeting-api preStop endpoint-drain delay rendered"
 # #677: agent-api MUST get VEXA_MEETING_API_URL or its live-SSE owner-lookup calls the compose-only
 # http://meeting-api:8080 (unresolvable in-cluster) → fail-closed 403 for the meeting's own owner.
 # Only agent-api carries the VEXA_-prefixed spelling, so assert exactly 1.

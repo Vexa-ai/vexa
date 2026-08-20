@@ -1,0 +1,71 @@
+{
+ "tape": "26424",
+ "platform": "teams",
+ "source": "prod-signal-tape",
+ "image_version": "v0.12.23-rc.10.packet2",
+ "duration_s": 1687.4,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "201": {
+   "name": "P1",
+   "instants": 257,
+   "purity": 0.8482,
+   "owner_share": 0.744
+  },
+  "840": {
+   "name": "P2",
+   "instants": 629,
+   "purity": 0.8808,
+   "owner_share": 0.9342
+  }
+ },
+ "untruthed": {},
+ "ambiguous_hint_instants": 227,
+ "roster_first_seen_s": {
+  "P2": 0.0,
+  "P1": 45.0
+ },
+ "roster_coverage": [
+  [
+   0.0,
+   1,
+   1
+  ],
+  [
+   45.0,
+   2,
+   2
+  ],
+  [
+   1690.0,
+   0,
+   1
+  ]
+ ],
+ "judge": {
+  "source": "Vexa-ai/vexa#1225 calibration (fixtures manifest + calibration/REPORT.md)",
+  "signals": [
+   "vocative",
+   "self_id"
+  ],
+  "flagged_segments": 3,
+  "scorer_contradictions": 3,
+  "flagged_precision": 1.0,
+  "track_precision": 1.0,
+  "track_recall": 1.0,
+  "agrees_with_mechanical_truth": true,
+  "note": "A clean two-way track swap, and the judge found it from the words alone: one track thanks the other participant by name, the other says it is nice to meet him. Independent of csrc, of the roster, and of the namer."
+ },
+ "counts": {
+  "csrc": 330,
+  "hints": 1253,
+  "roster": 9,
+  "ticks": 6246
+ }
+}

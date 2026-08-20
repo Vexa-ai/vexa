@@ -35,6 +35,8 @@ export interface TranscriptionClientConfig {
   maxRetries?: number;
   /** Base delay between retries in ms. Default: 1000 */
   retryDelayMs?: number;
+  /** Per-request timeout in ms. Default: 30000 */
+  requestTimeoutMs?: number;
   /** Sample rate of input audio. Default: 16000 */
   sampleRate?: number;
   /** Max speech segment duration in seconds. Whisper forces a segment split at this length.
@@ -95,6 +97,7 @@ export class TranscriptionClient {
   private apiToken: string | undefined;
   private maxRetries: number;
   private retryDelayMs: number;
+  private requestTimeoutMs: number;
   private sampleRate: number;
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
@@ -108,6 +111,7 @@ export class TranscriptionClient {
     this.apiToken = config.apiToken;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
     this.sampleRate = config.sampleRate ?? 16000;
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
@@ -239,7 +243,7 @@ export class TranscriptionClient {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
     try {
       const response = await fetch(this.serviceUrl, {

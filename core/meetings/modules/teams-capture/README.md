@@ -6,12 +6,15 @@ Runs **inside the meeting page**. Like Zoom, Teams delivers one mixed audio stre
 [`@vexa/mixed-capture-core`](../mixed-capture-core/)), so this brick provides only the **WHO** signal —
 no audio of its own:
 
-- `createTeamsSpeakers` — watches Teams' voice-level "blue-square" outline
-  (`[data-tid="voice-level-stream-outline"]` + `vdi-frame-occlusion` on it or an ancestor = actively
-  speaking; NO caption dependency) and emits debounced speaking start/stop per participant → a
-  `mixed-capture.v1` **hint** (kind `dom-outline`). A ~2 s heartbeat re-asserts the current speaker so a
-  consumer that started mid-turn learns who's talking without waiting for the next transition. This
-  module OWNS the Teams speaker-detection selectors — it also exports `teamsParticipantSelectors`,
+- `createTeamsSpeakers` — discovers both Teams' exact voice-level "blue-square" outline
+  (`[data-tid="voice-level-stream-outline"]`) and stable participant stream wrapper
+  (`[data-stream-type][data-tid]`) directly, then canonicalizes nested tile/list surfaces onto them.
+  Ordered style, aria and class indicators emit debounced speaking start/stop per participant → a
+  `mixed-capture.v1` **hint** (kind `dom-outline`), with NO caption dependency. A ~2 s heartbeat
+  re-asserts the current speaker so a consumer that started mid-turn learns who's talking without
+  waiting for the next transition. Missing outlines emit value-free structural diagnostics rather
+  than names or DOM text. This module OWNS the Teams speaker-detection selectors — it also exports
+  `teamsParticipantSelectors`,
   `teamsNameSelectors`, `teamsParticipantIdSelectors`, `teamsMeetingContainerSelectors` (single source;
   the bot's `selectors.ts` re-exports from here).
 - `createTeamsChat` — reads the chat panel (content tier); emits each new message as `{ sender, text }`.

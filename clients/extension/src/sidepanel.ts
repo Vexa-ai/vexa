@@ -93,6 +93,14 @@ function connectFeed(): void {
     ws.onmessage = (e) => {
       try {
         const m = JSON.parse(e.data);
+        if (m.type === 'transcript_retract') {
+          // Id-addressed withdrawal: the row behind those ids is gone. A pending snapshot reaches
+          // only one speaker's drafts, so this is what clears an already-confirmed row live.
+          mgr.handleMessage({ type: 'transcript_retract', segment_ids: m.segment_ids || [] });
+          txSegs = mgr.getSegments();
+          if (state.status === 'capturing' && !state.paused) renderFeed();
+          return;
+        }
         if (m.type !== 'transcript') return;
         const conf = (m.confirmed || []).map(toBrickSeg);
         const pend = (m.pending || []).map(toBrickSeg);

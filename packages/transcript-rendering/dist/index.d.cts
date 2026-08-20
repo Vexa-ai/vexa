@@ -175,6 +175,18 @@ declare function bootstrapConfirmed<T extends TranscriptSegment>(state: Transcri
  */
 declare function applyTranscriptTick<T extends TranscriptSegment>(state: TranscriptState<T>, confirmed: T[], pending?: T[], speaker?: string | null): T[] | null;
 /**
+ * Withdraw segments by id, in both lanes.
+ *
+ * The producer retracts an id when the row behind it is gone — a draft superseded
+ * under a new id, or a confirmed row a later ownership check refused. A pending
+ * snapshot can only ever withdraw drafts, so the id-addressed retraction is the
+ * only thing that clears a confirmed row without a reload.
+ *
+ * Returns the recomputed sorted transcript array, or `null` if no id matched
+ * (callers can skip a state update in that case).
+ */
+declare function retractSegments<T extends TranscriptSegment>(state: TranscriptState<T>, segmentIds: string[]): T[] | null;
+/**
  * Recompute the merged transcript array from confirmed + pending maps.
  *
  * Confirmed segments are always included. Pending segments are included only
@@ -219,6 +231,23 @@ interface TranscriptMessage {
     ts?: string;
 }
 /**
+ * Withdrawal of previously-delivered segments, by id.
+ *
+ * Format: `{ type: "transcript_retract", segment_ids: [...] }`. The producer sends it
+ * alongside any pending snapshot, because a snapshot replaces only one speaker's drafts
+ * and cannot reach a confirmed row.
+ */
+interface TranscriptRetractMessage {
+    type: 'transcript_retract';
+    meeting?: {
+        id?: number;
+    };
+    segment_ids?: string[];
+    ts?: string;
+}
+/** Anything the gateway's mutable channel delivers to the rendering pipeline. */
+type TranscriptWireMessage = TranscriptMessage | TranscriptRetractMessage;
+/**
  * High-level transcript manager that encapsulates the full pipeline.
  *
  * Consumers feed it raw WS messages or REST bootstrap data and get back
@@ -242,7 +271,7 @@ interface TranscriptManager<T extends TranscriptSegment = TranscriptSegment> {
     /** Load initial segments from REST. Clears previous state. Returns ready-to-render segments. */
     bootstrap(segments: T[]): T[];
     /** Process a raw WS message. Returns updated segments if state changed, null otherwise. */
-    handleMessage(message: TranscriptMessage): T[] | null;
+    handleMessage(message: TranscriptWireMessage): T[] | null;
     /** Get current deduplicated, sorted segments without processing a new message. */
     getSegments(): T[];
     /** Access the underlying state (for advanced use cases). */
@@ -256,4 +285,4 @@ interface TranscriptManager<T extends TranscriptSegment = TranscriptSegment> {
  */
 declare function createTranscriptManager<T extends TranscriptSegment = TranscriptSegment>(): TranscriptManager<T>;
 
-export { type GroupingOptions, type SegmentGroup, type TranscriptManager, type TranscriptMessage, type TranscriptSegment, type TranscriptState, addSegment, applyTranscriptTick, bootstrapConfirmed, bootstrapSegments, createTranscriptManager, createTranscriptState, deduplicateByIdentity, deduplicateSegments, groupSegments, parseUTCTimestamp, recomputeTranscripts, sortByStartTime, sortSegments, upsertSegments };
+export { type GroupingOptions, type SegmentGroup, type TranscriptManager, type TranscriptMessage, type TranscriptRetractMessage, type TranscriptSegment, type TranscriptState, type TranscriptWireMessage, addSegment, applyTranscriptTick, bootstrapConfirmed, bootstrapSegments, createTranscriptManager, createTranscriptState, deduplicateByIdentity, deduplicateSegments, groupSegments, parseUTCTimestamp, recomputeTranscripts, retractSegments, sortByStartTime, sortSegments, upsertSegments };

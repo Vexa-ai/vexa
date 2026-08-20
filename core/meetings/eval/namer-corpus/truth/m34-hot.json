@@ -1,0 +1,38 @@
+{
+ "tape": "m34-hot",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "453d37c1",
+ "duration_s": 285.6,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "414": {
+   "name": "P2",
+   "instants": 43,
+   "purity": 1.0,
+   "owner_share": 0.86
+  }
+ },
+ "untruthed": {
+  "201": "no truth: \"P2\" is 0.14 concentrated on this track (< 0.7)"
+ },
+ "ambiguous_hint_instants": 25,
+ "roster_first_seen_s": {
+  "P1": 0.0,
+  "P2": 30.0
+ },
+ "roster_coverage": [],
+ "judge": null,
+ "counts": {
+  "csrc": 135,
+  "hints": 110,
+  "roster": 6,
+  "ticks": 692
+ }
+}

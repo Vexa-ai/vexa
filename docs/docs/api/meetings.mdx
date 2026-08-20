@@ -142,53 +142,19 @@ tunable on a self-host — see [Configuration](/configuration).
 
 ## Calendar sync
 
-Connect a calendar's **secret ICS address** and upcoming meetings import as planned records
-automatically (only events carrying a recognizable Meet/Zoom/Teams link; one record per event —
-the next occurrence of a recurring series). The URL is a secret: read-backs return it **masked**.
-`auto_join` here is the **global default** stamped onto imported meetings.
+Connect up to ten named ICS feeds through the [Calendar API](/api/calendar). Each connection owns
+its auto-join policy and bot name. Sync imports every upcoming event as a planned meeting: events
+with Meet/Zoom/Teams links are armed for auto-join, while link-less events remain visible with
+`platform: "unknown"` until a link appears.
 
-```bash PUT /user/calendar
-curl -X PUT "$API_BASE/user/calendar" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true}'
-```
+Imported rows retain normalized scheduling/participant fields and the complete per-source ICS
+snapshot under `data.calendar_sources[].event`. Moves, cancellations, attendee changes, and custom
+provider metadata follow the feed only while the meeting remains planned; calendar sync never
+rewrites a meeting after the bot lifecycle claims it.
 
-```bash GET /user/calendar
-curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar"
-```
-
-```json Response
-{ "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true }
-```
-
-Pasting the wrong kind of URL fails at save: a calendar *page* (e.g. Google's `/calendar/embed`)
-is rejected with a `422` that points at the right field — the **Secret address in iCal format**
-(on Google Workspace domains an admin policy can hide that field; see
-[Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address) for the unlock).
-
-**Sync feedback** — connecting from the Terminal runs a sync immediately; over the API the same
-two edges are yours:
-
-```bash POST /user/calendar/sync — run the sync NOW, get the result
-curl -X POST "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
-```
-
-```json Response
-{ "last_sync": "2026-07-08T15:30:00+00:00", "last_error": null,
-  "counts": { "created": 3, "updated": 0, "cancelled": 0 } }
-```
-
-```bash GET /user/calendar/sync — the last sync's status
-curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar/sync"
-```
-
-`last_error`, when set, is a human-readable reason (wrong-URL kind, HTTP status, oversize,
-redirect, not-ICS content) — the same strings the Terminal panel shows. `404` on the POST means no
-feed is connected; `503` means the deployment has calendar sync disabled (see
-[Configuration](/configuration#auto-join--calendar-sync)).
-
-Disconnect with `{"ics_url": null}`. See [Calendar sync](/how-to/calendar-sync) for where to find
-the secret address.
+See the [Calendar API reference](/api/calendar) for connection CRUD, per-connection sync endpoints,
+request/response schemas, compatibility endpoints, error statuses, and metadata persistence. See
+[Calendar sync](/how-to/calendar-sync) for Google Calendar and Outlook setup.
 
 ## Send a bot to a meeting
 
@@ -316,11 +282,17 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 The two list endpoints — `GET /bots` and `GET /meetings` — return **lightweight rows**. Each row keeps
 its light metadata (id, status, times, `title`, connected docs) but **omits the heavy `data` detail
 keys**: `speaker_events`, `bot_logs`, `recordings`, `status_transition`, `chat_messages`,
-`error_details`, and `last_error`. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the
-detail endpoint is unaffected and still returns every key.
+`error_details`, `last_error`, and the complete `calendar_sources` event snapshots. Compact calendar
+identity such as `calendar_connection_id`, `calendar_uid`, and `scheduled_at` remains available in a
+list row. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the detail endpoint is
+unaffected and still returns every key.
 
 The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
 to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
+Pass `exclude_planned=true` to either endpoint when rendering run/transcript history: the server
+removes `idle` and `scheduled` plans before applying `limit` and `offset`. An explicit `status=...`
+filter takes precedence. This keeps future Calendar entries on schedule surfaces without letting
+them consume a history page.
 
 ## Speaker-attributed transcripts
 

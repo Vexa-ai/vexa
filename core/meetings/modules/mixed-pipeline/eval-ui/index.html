@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Teams CSRC · audio-aligned transcript replay</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: light-dark(rgb(26 28 31), rgb(255 255 255));
+      --dim: light-dark(rgb(75 79 86), rgb(183 187 195));
+      --border: light-dark(rgb(26 28 31 / 14%), rgb(255 255 255 / 14%));
+      --popover: light-dark(rgb(255 255 255), rgb(45 45 45));
+      --series-1: light-dark(rgb(51 156 255), rgb(131 195 255));
+      --series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+      --series-3: light-dark(rgb(45 167 83), rgb(116 213 139));
+      --series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+      --series-5: light-dark(rgb(31 153 146), rgb(90 203 194));
+      --cursor: light-dark(rgb(126 87 230), rgb(170 145 239));
+      --gap: light-dark(rgb(194 46 72), rgb(255 100 124));
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--fg); background: light-dark(#fff, #11151b); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    #app { position: relative; width: 100%; padding: 14px 16px 18px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    h1 { margin: 0 0 3px; font: 650 18px/1.2 system-ui, sans-serif; }
+    p, footer { margin: 0; color: var(--dim); font-size: 11px; }
+    .receipt { flex: none; color: var(--dim); font-size: 11px; }
+    audio { width: 100%; height: 34px; margin: 0 0 8px; }
+    .word-contests { margin: 0 0 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--series-2) 7%, transparent); }
+    .word-contests[hidden] { display: none; }
+    .word-contests h2 { margin: 0 0 2px; font: 650 12px/1.3 system-ui, sans-serif; }
+    .word-contests p { margin: 0 0 7px; }
+    .word-contest-list { display: grid; gap: 5px; }
+    .word-contest-list button { display: grid; grid-template-columns: minmax(245px, auto) 1fr; gap: 4px 10px; width: 100%; padding: 7px 9px; color: var(--fg); background: color-mix(in srgb, var(--popover) 92%, transparent); border: 1px solid var(--border); border-radius: 6px; text-align: left; font: inherit; cursor: pointer; }
+    .word-contest-list button.contested-card { border-left: 6px solid var(--series-2); }
+    .word-contest-list button:hover, .word-contest-list button:focus-visible { border-color: var(--series-2); outline: none; }
+    .word-contest-meta { grid-column: 1 / -1; color: var(--dim); white-space: nowrap; }
+    .word-contest-text { overflow-wrap: anywhere; }
+    .word-contest-party, .word-contest-context { grid-column: 1 / -1; padding: 5px 7px; border-radius: 4px; overflow-wrap: anywhere; }
+    .word-contest-party b, .word-contest-context b { display: block; margin-bottom: 2px; color: var(--dim); font-size: 10px; letter-spacing: .035em; }
+    .word-contest-context { padding-top: 2px; padding-bottom: 2px; color: var(--dim); }
+    .word-contest-evidence { grid-column: 1 / -1; color: var(--dim); font-size: 10px; overflow-wrap: anywhere; }
+    svg { display: block; width: 100%; min-height: 300px; overflow: visible; }
+    text { fill: var(--fg); font-size: 11px; }
+    .axis { fill: var(--dim); font-size: 10px; }
+    .track-label { font-weight: 650; }
+    .frame { fill: transparent; stroke: var(--border); cursor: crosshair; }
+    .grid { stroke: color-mix(in srgb, var(--border) 65%, transparent); stroke-dasharray: 2 5; }
+    .base { stroke: color-mix(in srgb, var(--border) 72%, transparent); }
+    .raw-span { cursor: pointer; fill: transparent; stroke-width: 1; stroke-dasharray: 3 2; opacity: .72; }
+    .accepted-span { cursor: pointer; stroke-width: 1; opacity: .84; transition: opacity .12s, stroke-width .12s; }
+    .accepted-span.gap { stroke: var(--gap); stroke-width: 2; }
+    .raw-span:hover, .accepted-span:hover { opacity: 1; stroke-width: 2.5; }
+    .candidate { pointer-events: none; }
+    .candidate.word-contest, .pending, .single { pointer-events: auto; cursor: pointer; }
+    .candidate.word-contest { stroke: var(--series-2); stroke-width: 2; stroke-dasharray: 2 2; }
+    .pending { fill: transparent; stroke-dasharray: 2 2; }
+    .single { fill: color-mix(in srgb, var(--series-5) 42%, transparent); stroke: var(--series-5); }
+    .cursor { stroke: var(--cursor); stroke-width: 2; pointer-events: none; }
+    .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 7px 0 8px 88px; color: var(--dim); font-size: 10px; }
+    .legend i { display: inline-block; width: 12px; height: 7px; margin-right: 5px; vertical-align: 1px; border-radius: 2px; }
+    .tooltip { position: absolute; z-index: 4; display: none; pointer-events: none; max-width: min(620px, calc(100% - 32px)); padding: 9px 11px; color: var(--fg); background: var(--popover); border: 1px solid var(--border); border-radius: 7px; box-shadow: 0 7px 28px rgb(0 0 0 / 25%); white-space: pre-wrap; }
+    .error { margin: 40px auto; max-width: 760px; padding: 16px; color: var(--gap); border: 1px solid var(--gap); border-radius: 8px; white-space: pre-wrap; }
+    code { color: var(--fg); }
+    @media (max-width: 720px) { .word-contest-list button { grid-template-columns: 1fr; gap: 3px; } }
+  </style>
+</head>
+<body>
+  <main id="app">Loading evaluation…</main>
+  <script type="module">
+    import { bootTeamsCsrcTimeline } from '/_viewer/teams-csrc-timeline.mjs';
+    bootTeamsCsrcTimeline().catch((error) => {
+      const app = document.getElementById('app');
+      app.className = 'error';
+      app.textContent = error instanceof Error ? error.stack : String(error);
+    });
+  </script>
+</body>
+</html>

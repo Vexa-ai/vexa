@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
+from .machine import dominant_completion_reason
 
 
 async def _teardown_verdict(
@@ -169,14 +170,15 @@ def _workload_evidence(bot_container_id: Optional[str], info: Optional[dict]) ->
 def default_preactive_grace() -> float:
     """The pre-active reap floor, DERIVED from the lobby budget the control plane itself issues.
 
-    A not-yet-admitted bot holds a deadline WE wrote (``bot_spawn.service.LOBBY_BUDGET_MS``, the
+    A not-yet-admitted bot holds a deadline WE wrote (``bot_spawn.service.lobby_budget_ms()``, the
     spawn's ``waitingRoomTimeout``); the window we then measure it against must outlast that deadline,
     or the control plane kills bots that are still inside the budget it granted them (#862). Deriving
     the floor — the budget plus a minute of headroom for the bot's own terminal callback to land —
-    keeps the two in lockstep: shorten the budget and the floor follows."""
-    from ..bot_spawn.service import LOBBY_BUDGET_MS
+    keeps the two in lockstep: raise ``VEXA_LOBBY_BUDGET_S`` and the floor follows, so a 15-minute
+    waiter is never reaped by a 10-minute watchdog (#1208)."""
+    from ..bot_spawn.service import lobby_budget_ms
 
-    return LOBBY_BUDGET_MS / 1000.0 + 60.0
+    return lobby_budget_ms() / 1000.0 + 60.0
 
 
 # ── bounded untracked escalation (the zombie-loop fix) ───────────────────────────────────────────
@@ -358,7 +360,9 @@ async def reconcile_stale_nonterminal_sweep(
         terminal = "failed" if status in _PRE_ACTIVE_NONTERMINAL else "completed"
         body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
         if terminal == "completed":
-            body["completion_reason"] = "stopped" if stop_requested else "left_alone"
+            body["completion_reason"] = dominant_completion_reason(
+                "left_alone", stop_requested=stop_requested
+            )
             if stop_requested:
                 body["data"] = {"stop_requested": True}
         else:
@@ -473,9 +477,10 @@ def _pre_active_completion_reason(status: Optional[str], stop_requested: bool = 
     ended for a reason no re-spawn can improve on. ``stopped`` is the sealed user-terminal reason
     and is PERMANENT, which is what keeps a deliberate cancellation from being re-spawned three
     times (#807 — the stage still lands in ``failure_stage``, so no attribution is lost)."""
-    if stop_requested:
-        return "stopped"
-    return "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure"
+    return dominant_completion_reason(
+        "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure",
+        stop_requested=stop_requested,
+    )
 
 
 async def synthesize_terminal_for_dead_workload(
