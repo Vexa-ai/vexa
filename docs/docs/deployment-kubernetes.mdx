@@ -205,6 +205,108 @@ auto-join sweep cannot resolve the per-user cap. The meeting-api then **fails cl
 spawn** rather than spawn uncapped; set `AUTO_JOIN_ALLOW_UNCAPPED=1` only if you deliberately want
 uncapped auto-join spawns on a self-host.
 
+## Exposing the cluster — ingress and TLS
+
+The chart ships an optional Ingress, **off by default**. Enabling it fronts the Terminal, which
+is the human entry point: it proxies `/ws` to the gateway and `/api` to agent-api/admin-api
+server-side, so one hostname is usually enough.
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx          # your controller's IngressClass
+  host: vexa.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: vexa-tls
+      hosts:
+        - vexa.example.com
+```
+
+`tls` is passed through to the Ingress `spec.tls` verbatim, so it is ordinary Kubernetes TLS —
+the chart neither issues nor terminates certificates itself. Either let cert-manager populate
+`secretName` via the annotation above, or create the Secret yourself:
+
+```bash
+kubectl -n vexa create secret tls vexa-tls --cert=fullchain.pem --key=privkey.pem
+```
+
+`annotations` are rendered onto the Ingress unchanged, which is also where controller-specific
+settings go — body size, proxy timeouts, and the long-lived-connection settings a WebSocket
+upgrade needs on `/ws`.
+
+### Exposing the raw API as well
+
+`paths` defaults to a single rule sending `/` to the Terminal on port 3000. Add a second rule if
+external clients should reach the gateway directly:
+
+```yaml
+ingress:                    # the same `ingress:` key as above — one block, not two
+  enabled: true
+  className: nginx
+  host: vexa.example.com
+  paths:
+    - path: /
+      pathType: Prefix
+      service: terminal
+      servicePort: 3000
+    - path: /api
+      pathType: Prefix
+      service: gateway
+      servicePort: 8000
+```
+
+A path entry that omits `service` defaults to the gateway.
+
+### Tell the Terminal its external origin
+
+Enabling the Ingress is not sufficient on its own. `terminal.publicUrl` is empty by default —
+correct for cluster-internal or `port-forward` access — and it is what sets `NEXTAUTH_URL` and
+`TERMINAL_URL`. Left empty behind a public hostname, cookie security and the OAuth callback are
+computed against the wrong origin:
+
+```yaml
+terminal:
+  publicUrl: https://vexa.example.com
+```
+
+### Sign-in providers — Google and Microsoft
+
+The Terminal's Google and Microsoft buttons each self-gate on their own credentials: set **both**
+the client id and the client secret and that button appears; leave either empty and it stays
+hidden. The chart has no dedicated fields for them — pass them through `terminal.extraEnv`, which
+is rendered onto the Deployment verbatim, so `valueFrom` works where a literal would put a secret
+in your values file:
+
+```yaml
+terminal:                                 # the same `terminal:` key as above — one block, not two
+  publicUrl: https://vexa.example.com
+  extraEnv:
+    - name: MICROSOFT_CLIENT_ID
+      value: "<application (client) id>"
+    - name: MICROSOFT_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef: { name: vexa-oauth, key: microsoft-client-secret }
+    # "common" = work/school + personal; or a single org tenant id. Unset ⇒ common.
+    - name: MICROSOFT_TENANT_ID
+      value: "common"
+    # Google is the same shape, minus the tenant:
+    - name: GOOGLE_CLIENT_ID
+      value: "<client id>"
+    - name: GOOGLE_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef: { name: vexa-oauth, key: google-client-secret }
+```
+
+Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
+(or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
+
+<Note>
+Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —
+reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.
+</Note>
+
 ## The deprecated dashboard (optional)
 
 The 0.10 dashboard — the multi-user web UI that predates the Terminal — ships as an
