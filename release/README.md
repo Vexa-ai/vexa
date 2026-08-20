@@ -31,3 +31,26 @@ packet afterwards. That step is the review, and it is written down in
 [`releases/README.md` § Bind, validate, freeze](../releases/README.md).
 `release-validate-gating.test.mjs` holds both halves in place: the freeze path
 may defer, and every promote / stable / already-mapped path still fails closed.
+
+## `readiness/` — the six-leg production-readiness harness
+
+`readiness/check.mjs` proves that a release's readiness coverage exists rather
+than being asserted. Six legs cover a candidate — train value as of PRs, blast
+radius as of PRs, full functionality (the validate legs plus API coverage as of
+the docs), security, compliance, and the promotion ceremony — and
+`releases/<version>/readiness.yaml` declares each one: whether a command or an
+agent protocol is its oracle, where its receipt lives, what its receipt binds
+to, and whether it fires at train formation, at staging, or both.
+
+The runner checks every receipt a phase requires: present, parseable, GREEN, and
+bound to the **current** candidate map sha. That binding is the mechanism.
+Re-cutting a candidate rewrites `releases/<version>/candidate-images.json`, so
+every receipt taken against the old bytes is stranded — the runner names those
+legs and prints the reason the manifest declares for each, because a review of a
+diff that is no longer shipping is not coverage.
+
+Full operator documentation — phases, receipt shape, the agent protocols — is in
+[`readiness/README.md`](readiness/README.md). The `readiness` job on
+`release-validate` is **advisory on this train and blocking on the next**;
+nothing `needs` it today, and it never substitutes for the witness or value
+gates, which stay human.
