@@ -897,6 +897,47 @@ def test_sse_relays_retract_marker(monkeypatch):
     assert "turn:1:p0" in body        # carrying the withdrawn segment id
 
 
+class _ResumedSessionRedis:
+    """A REUSED meeting row (tc:meeting:{id} is shared across sessions): the live tail delivers a prior
+    session's session_end, THEN a new session's session_start + a fresh segment. Empty polls follow.
+    `exists`→0 so, WITHOUT the ending-reset fix, the first empty drain poll would fire meeting-end via
+    the `not has_proc` branch — the premature "Meeting ended" over a live meeting."""
+    def __init__(self):
+        self._reads = 0
+
+    def xrevrange(self, key, count=1):
+        return []            # nothing to seed — the stale end arrives on the LIVE tail below
+
+    def exists(self, key):
+        return 0             # no copilot proc stream
+
+    def xread(self, last, count=500, block=0):
+        import json as _j
+        self._reads += 1
+        if self._reads == 1:
+            return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps({"type": "session_end"})})])]
+        if self._reads == 2:
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "uid": "m1"})})])]
+        if self._reads == 3:
+            return [("tc:meeting:m1", [("3-0", {"payload": _j.dumps(
+                {"type": "transcription", "segments": [{"speaker": "J", "text": "still live", "start": 9, "segment_id": "s9"}]})})])]
+        return []            # idle — with the fix `ending` is cleared, so NO meeting-end fires
+
+
+def test_sse_session_start_clears_stale_ending_no_premature_end(monkeypatch):
+    """Regression (terminal showed "Meeting ended" over a still-live meeting): when a REUSED row's live
+    tail carries a prior session_end followed by the new session's session_start + a real segment, the
+    stream must CLEAR the stale `ending` and NOT emit a premature meeting-end. The segment is relayed."""
+    fr = _ResumedSessionRedis()
+    c = _stream_client(fr, monkeypatch)
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        assert r.status_code == 200
+        body = "".join(r.iter_text())
+    assert '"still live"' in body                           # the resumed session's segment reached the view
+    assert '"meeting-end"' not in body                      # the stale session_end did NOT close the live view
+
+
 # ── SSE cross-tenant ownership regression (P0 — the FIX-FIRST blocker) ────────────────────────────
 # The by-row-id SSE feed `/api/meeting/stream` must OWNER-SCOPE the row like the WS `/ws` path + the
 # by-id REST path do. Pre-fix it read `tc:meeting:{meeting_id}` straight off the caller-supplied query

@@ -951,10 +951,12 @@ def test_continuous_untracked_past_window_escalates_once_with_evidence():
     assert repo._meetings[m["id"]]["status"] == "failed"
 
 
-def test_stopping_untracked_past_window_escalates_too():
+def test_stopping_untracked_past_window_escalates_on_stop_grace():
     """The `stopping` zombie (user pressed Stop, then the runtime restarted on the process backend):
-    the teardown stays unconfirmable (404) forever — past the window it converges to `failed`
-    instead of retrying the dead DELETE every sweep for eternity."""
+    the teardown stays unconfirmable (404) forever. A stop was EXPLICITLY requested, so it converges
+    on the SHORT stop_grace — NOT the long untracked window — instead of sitting stuck for 10 min (or,
+    across a redeploy burst that keeps resetting the in-process window, ~forever). The restart-mid-
+    leave stuck-meeting fix."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="stopping")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-gone"
@@ -963,10 +965,12 @@ def test_stopping_untracked_past_window_escalates_too():
     client = TestClient(create_app(meeting_repo=repo))
     tracker: dict = {}
 
-    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    # untracked_grace stays LONG (a live *active* bot keeps its full patience); a `stopping` row
+    # converges on stop_grace regardless — proving it's the short window driving the escalation.
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=600.0, stop_grace=0.0) == 0
     assert repo._meetings[m["id"]]["status"] == "stopping"  # window opened
 
-    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 1
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=600.0, stop_grace=0.0) == 1
     assert repo._meetings[m["id"]]["status"] == "failed"
     assert runtime.deleted == []
 
@@ -1215,7 +1219,12 @@ def test_non_terminal_advance_does_not_emit_session_end():
     _post(client, connection_id="sess-uid", status="active")
 
     stream = f"tc:meeting:{m['id']}"
-    assert stream not in redis.streams, "session_end emitted while the meeting is still live"
+    # A non-terminal advance must NOT emit session_end (that would end the live view). It DOES write a
+    # session_start marker on `active` — the signal the terminal SSE uses to clear a prior session's
+    # stale session_end when a re-sent bot reuses this meeting row.
+    entries = redis.streams.get(stream, [])
+    assert not any(p.get("type") == "session_end" for p in entries), "session_end emitted while the meeting is still live"
+    assert any(p.get("type") == "session_start" for p in entries), "session_start marker not emitted on active"
     assert "tc:meeting:m1" not in redis.streams
 
 
