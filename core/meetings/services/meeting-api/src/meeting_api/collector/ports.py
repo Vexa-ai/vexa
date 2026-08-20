@@ -65,6 +65,39 @@ class TranscriptStore(Protocol):
         (the body of ``MeetingListResponse``)."""
         ...
 
+    async def completion_summary(
+        self,
+        user_id: int,
+        *,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> dict:
+        """How this user's meetings are ENDING — counts per ``status`` and per
+        ``data->>'completion_reason'`` (#1292).
+
+        The per-meeting reason has shipped since v0.12.16, but only one meeting at a time: to learn
+        that a third of their runs die in the lobby a caller had to page the whole of ``GET /bots``
+        and tally the field. This is that tally, done in SQL.
+
+        Returns ``{window, total, by_status, by_completion_reason}``. Four rules the SQL adapter and
+        the in-memory fake BOTH keep, because a caller that cannot trust them will re-derive the
+        numbers itself and we are back where we started:
+
+        * **Counts only — never a rate, ratio or percentage.** The ten sealed ``CompletionReason``
+          values are not commensurable: a bot the USER stopped and a bot that could not join are both
+          "not completed" and mean opposite things. Publishing a single ratio over them invites the
+          wrong denominator, which is a mistake this project has made repeatedly on its own data.
+        * **Terminal-with-no-reason is its own ``unrecorded`` bucket** — never dropped, never folded
+          into a real reason. A reader must be able to tell "we do not know" from "it did not happen".
+        * **Only terminal meetings appear in ``by_completion_reason``.** In-flight runs have no reason
+          yet; they are counted in ``by_status`` and absent here rather than bucketed.
+        * **Reasons are reported exactly as recorded**, including values outside the sealed enum
+          (``bot_spawn/adapters.py`` writes ``start_failed``, which is in neither). Normalising at the
+          read edge would manufacture conformance and hide the writer's bug.
+        """
+        ...
+
     async def authorize_subscribe(
         self, user_id: int, platform: str, native_meeting_id: str,
         member_workspaces: "Optional[set[str]]" = None,
