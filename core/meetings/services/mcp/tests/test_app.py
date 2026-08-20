@@ -189,7 +189,7 @@ def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     r = client.post("/report-issue", headers=auth, json=TICKET)
     assert r.status_code == 200
-    assert r.json()["status"] == "received"
+    assert r.json()["status"] == "new"
 
     req = _sink_requests(gateway)[-1]
     assert (req.method, str(req.url)) == ("POST", SINK_URL)
@@ -205,6 +205,37 @@ def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth
     assert body["source"] == "vexa-mcp"
     assert body["reported_at"]                      # server-side timestamp
     assert body["fingerprint"] == r.json()["fingerprint"]
+    # canonical Linode-shaped pair, composed server-side so every ticket surface lands one shape
+    assert body["summary"] == TICKET["what_happened"][:63] + "\u2026"
+    assert len(body["summary"]) <= 64
+    assert TICKET["what_i_tried"] in body["description"]
+    assert TICKET["what_happened"] in body["description"]
+
+
+def test_report_issue_response_mirrors_the_ticket_object(client, gateway: FakeGateway, auth, monkeypatch):
+    """Linode's response shape: id · status · severity · opened · updated · opened_by · entity."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("POST", "/tickets")] = (200, {"id": 4711})
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "severity": 2, "version": "0.12.23"})
+    body = r.json()
+    assert body["id"] == 4711                       # the sink's id when the sink issues one
+    assert body["status"] == "new"
+    assert body["severity"] == 2
+    assert body["opened"] == body["updated"]
+    assert body["opened_by"] == json.loads(_sink_requests(gateway)[-1].content)["caller_fingerprint"]
+    assert "entity" in body
+    assert json.loads(_sink_requests(gateway)[-1].content)["version"] == "0.12.23"
+
+
+def test_report_issue_id_falls_back_to_fingerprint(client, gateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", headers=auth, json=TICKET).json()
+    assert r["id"] == r["fingerprint"]              # no store here; the sink issues ids or we don't
+
+
+def test_report_issue_severity_out_of_range_rejected(client, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    assert client.post("/report-issue", headers=auth, json={**TICKET, "severity": 9}).status_code == 422
 
 
 def test_report_issue_fingerprint_is_stable_and_content_derived(client, gateway, auth, monkeypatch):
@@ -286,8 +317,113 @@ def test_report_issue_sink_failure_surfaces_as_502(client, gateway: FakeGateway,
     assert "sink rejected" in str(r.json()["detail"])
 
 
-def test_report_issue_never_touches_the_gateway(client, gateway: FakeGateway, auth, monkeypatch):
-    """Stateless by design: a ticket goes to the sink only — never past the gateway."""
+def test_report_issue_without_meeting_id_never_touches_the_gateway(client, gateway: FakeGateway, auth, monkeypatch):
+    """Stateless by design: with no entity to resolve, a ticket goes to the sink only."""
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
-    client.post("/report-issue", headers=auth, json=TICKET)
+    payload = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+    client.post("/report-issue", headers=auth, json=payload)
     assert [r for r in gateway.requests if r.url.host == "gateway.test"] == []
+    assert json.loads(_sink_requests(gateway)[-1].content)["entity"] is None
+
+
+def test_report_issue_resolves_entity_only_for_a_meeting_the_caller_owns(
+    client, gateway: FakeGateway, auth, monkeypatch
+):
+    """The entity pointer is authorisation-checked: resolution runs through the GATEWAY with the
+    caller's own key, so an id the key does not own never resolves."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("GET", "/meetings")] = (200, [
+        {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "id": 7},
+    ])
+    r = client.post("/report-issue", headers=auth, json=TICKET)
+    assert r.json()["entity"] == {
+        "type": "meeting",
+        "id": "abc-defg-hij",
+        "platform": "google_meet",
+        "url": "/transcripts/google_meet/abc-defg-hij",
+    }
+    # the ownership check is the gateway's, made with the caller's key — never a local decision
+    lookup = [q for q in gateway.requests if q.url.path == "/meetings"][-1]
+    assert lookup.headers["x-api-key"] == API_KEY
+    assert json.loads(_sink_requests(gateway)[-1].content)["entity"]["id"] == "abc-defg-hij"
+
+
+def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
+    """A quoted id the caller does not own is text, never a resolved join — and never fatal."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("GET", "/meetings")] = (403, {"detail": "not yours"})
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "meeting_id": "someone-elses"})
+    assert r.status_code == 200
+    assert r.json()["entity"] is None
+    body = json.loads(_sink_requests(gateway)[-1].content)
+    assert body["entity"] is None
+    assert body["meeting_id"] == "someone-elses"     # quoted, not resolved
+
+
+def test_report_issue_meeting_absent_from_callers_meetings_does_not_resolve(
+    client, gateway: FakeGateway, auth, monkeypatch
+):
+    """The gateway answers 200 with the caller's OWN meetings; an id that is not among them is not
+    the caller's, so it must not resolve — the entity comes from the answer, never from the input."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    gateway.routes[("GET", "/meetings")] = (200, [
+        {"platform": "google_meet", "native_meeting_id": "some-other-room", "id": 1},
+    ])
+    r = client.post("/report-issue", headers=auth, json=TICKET)
+    assert r.status_code == 200
+    assert r.json()["entity"] is None
+    assert json.loads(_sink_requests(gateway)[-1].content)["entity"] is None
+
+
+# --- prod-owner acceptance conditions (design note § 4b) ---------------------
+
+def test_report_issue_has_no_url_shaped_field_and_fetches_nothing(client, gateway: FakeGateway, auth, monkeypatch):
+    """SSRF closed by construction: no field the server dereferences, and the only URL opened is
+    the operator's env-configured sink."""
+    from vexa_mcp.app import ReportIssue
+
+    fields = set(ReportIssue.model_fields)
+    assert not [f for f in fields if "url" in f.lower() or "uri" in f.lower() or "link" in f.lower()]
+
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    poisoned = {
+        **{k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")},
+        "what_happened": "see http://169.254.169.254/latest/meta-data/ and file:///etc/passwd",
+        "logs": "http://localhost:6379/ http://internal.svc/admin",
+    }
+    r = client.post("/report-issue", headers=auth, json=poisoned)
+    assert r.status_code == 200
+    assert {q.url.host for q in gateway.requests} == {"sink.test"}   # nothing in the text was fetched
+    assert "169.254.169.254" in json.loads(_sink_requests(gateway)[-1].content)["what_happened"]
+
+
+def test_report_issue_body_size_cap(client, gateway: FakeGateway, auth, monkeypatch):
+    """A whole-body ceiling, refused before the JSON parser sees it."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "logs": "x" * 200_000})
+    assert r.status_code == 413
+    assert _sink_requests(gateway) == []
+
+
+def test_ticket_path_touches_no_database():
+    """The sink is isolated from the meetings DB by construction: this service has no DB at all —
+    no driver, no session, no ORM anywhere in the package it could reach account state through."""
+    import ast
+    import pathlib
+
+    import vexa_mcp
+
+    pkg = pathlib.Path(vexa_mcp.__file__).parent
+    banned = {"sqlalchemy", "psycopg", "psycopg2", "asyncpg", "sqlite3", "redis", "aioredis",
+              "databases", "alembic", "pymongo"}
+    for path in sorted(pkg.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            hit = banned.intersection(names)
+            assert not hit, f"{path.name} imports {hit} — the ticket path must not reach account state"

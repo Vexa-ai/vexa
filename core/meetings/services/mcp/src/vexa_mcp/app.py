@@ -40,6 +40,14 @@ _DEFAULT_GATEWAY_URL = "http://gateway:8000"
 # operator webhook, so every field is bounded before it leaves the process.
 _MAX_TEXT_CHARS = 2000
 _MAX_LOGS_CHARS = 4000
+# Linode's ticket shape (POST /v4/support/tickets): summary 1-64, description 1-65,000. We store
+# the same canonical pair so the MCP tool, the future API endpoint and the docs form all land one
+# shape in the sink — the agent-facing arguments below are composed into it server-side.
+_MAX_SUMMARY_CHARS = 64
+# Whole-body ceiling. The handler caps every field, but a caller can still push megabytes at the
+# JSON parser; this refuses before parsing. NOTE this is the HANDLER's cap — the public
+# (key-less) door must ALSO carry a body cap + per-IP limit at the GATEWAY layer (see README).
+_MAX_BODY_BYTES = 64 * 1024
 _FINGERPRINT_SAMPLE_CHARS = 200
 # Default salt for the caller fingerprint. A deployment SHOULD set
 # VEXA_TICKET_FINGERPRINT_SALT so fingerprints are not comparable across deployments.
@@ -60,6 +68,26 @@ def _fingerprint(deployment: str, what_happened: str) -> str:
     """Stable dedupe key: deployment + the first 200 chars of what_happened."""
     material = f"{deployment.strip().lower()}|{what_happened.strip()[:_FINGERPRINT_SAMPLE_CHARS]}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def _summary_of(what_happened: str) -> str:
+    """The Linode-shaped `summary` (1-64 chars): the first line/clause of what happened."""
+    first_line = what_happened.strip().splitlines()[0].strip()
+    if len(first_line) <= _MAX_SUMMARY_CHARS:
+        return first_line
+    return first_line[: _MAX_SUMMARY_CHARS - 1].rstrip() + "\u2026"
+
+
+def _description_of(data: "ReportIssue") -> str:
+    """The Linode-shaped `description`: the whole story, composed from the agent's answers."""
+    parts = [f"What I tried:\n{data.what_i_tried}", f"What happened:\n{data.what_happened}"]
+    where = data.deployment + (f" {data.version}" if data.version else "")
+    parts.append(f"Deployment: {where}")
+    if data.meeting_id:
+        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.meeting_id}")
+    if data.logs:
+        parts.append(f"Logs:\n{data.logs}")
+    return "\n\n".join(parts)
 
 
 def _caller_fingerprint(api_key: str) -> str:
@@ -198,6 +226,16 @@ class ReportIssue(BaseModel):
         None,
         description="Platform of that meeting: 'google_meet', 'teams', 'zoom' or 'jitsi'.",
     )
+    severity: Optional[int] = Field(
+        None,
+        ge=1,
+        le=3,
+        description="Optional severity: 1 = major (blocked), 2 = moderate, 3 = low.",
+    )
+    version: Optional[str] = Field(
+        None,
+        description="Optional Vexa version of that deployment, if you know it (e.g. '0.12.23').",
+    )
     logs: Optional[str] = Field(
         None,
         description=(
@@ -205,6 +243,10 @@ class ReportIssue(BaseModel):
             "paste the relevant part. Do not paste API keys or other credentials."
         ),
     )
+    # NOTE (SSRF, closed by construction): there is deliberately NO url-shaped field here and no
+    # field this service ever dereferences. A reporter who wants to point at something puts it in
+    # the text, where it is stored and shown to a human and never fetched. The only URL this route
+    # ever opens is VEXA_TICKET_SINK_URL, which comes from the operator's env, never from a caller.
 
     # Set server-side when `logs` was longer than the cap; forwarded so the reader knows
     # the paste is partial. Private so it never appears in the agent-facing tool schema.
@@ -225,6 +267,7 @@ class ReportIssue(BaseModel):
         self.deployment = _clip(self.deployment, 200)
         self.meeting_id = _clip(self.meeting_id, 200)
         self.platform = _clip(self.platform, 50)
+        self.version = _clip(self.version, 100)
         self._logs_truncated = bool(self.logs and len(self.logs.strip()) > _MAX_LOGS_CHARS)
         self.logs = _clip(self.logs, _MAX_LOGS_CHARS)
         return self
@@ -441,6 +484,7 @@ def create_app(
     @app.post("/report-issue", operation_id="report_issue")
     async def report_issue(
         data: ReportIssue,
+        request: Request,
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
@@ -457,15 +501,29 @@ def create_app(
 
         If the issue concerns a meeting or a bot, include `meeting_id` and `platform`. That is the
         join key: it lines your account of what happened up against our own record of the same
-        meeting, which is the difference between a complaint and something we can diagnose.
+        meeting, which is the difference between a complaint and something we can diagnose. The
+        meeting is resolved onto the ticket only if the key you are calling with owns it.
 
-        One-way: nothing auto-replies and nothing auto-closes. Returns an acknowledgement with a
-        fingerprint you can quote later. On a deployment with no ticket sink configured it returns
-        503 and nothing else is affected.
+        Put links, if you have them, in the text — nothing you send here is ever fetched by us.
+
+        One-way: nothing auto-replies and nothing auto-closes. Returns the ticket
+        (`id` · `status` · `severity` · `opened` · `opened_by` · `entity`). On a deployment with no
+        ticket sink configured it returns 503 and nothing else is affected.
         """
         # Ticket text is DATA, never instruction. It is validated, capped, and forwarded verbatim
-        # to the operator's sink — this service never interprets it, and no agent of ours is ever
-        # steered by it. (Grow-Mouth § The ticket.)
+        # to the operator's sink — this service never interprets it, never dereferences anything in
+        # it, and no agent of ours is ever steered by it. (Grow-Mouth § The ticket.)
+        #
+        # Whole-body ceiling, before the field-level caps: refuse the megabyte payload rather than
+        # parse it. The authenticated door also sits behind the gateway's per-user rate limiter;
+        # the key-less door in the design note needs a per-IP limit and this cap AT THE GATEWAY.
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > _MAX_BODY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Ticket body too large (max {_MAX_BODY_BYTES} bytes). Trim `logs`.",
+            )
+
         sink_url = (os.getenv("VEXA_TICKET_SINK_URL") or "").strip()
         if not sink_url:
             raise HTTPException(
@@ -477,19 +535,56 @@ def create_app(
                 ),
             )
 
+        # The entity pointer, authorisation-checked. We resolve the meeting through the GATEWAY with
+        # the CALLER'S OWN KEY, so a caller can only ever resolve a meeting they own — the check is
+        # the gateway's, not a trust decision made here. Resolution is best-effort: an unresolvable
+        # or unowned id still files the ticket (with the id quoted as text, entity null), because a
+        # ticket we refused to accept teaches us nothing.
+        entity: Optional[Dict[str, Any]] = None
+        if data.meeting_id:
+            try:
+                meetings = await make_request("GET", f"{base_url}/meetings", api_key)
+                rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
+                for m in rows if isinstance(rows, list) else []:
+                    if not isinstance(m, dict):
+                        continue
+                    if m.get("native_meeting_id") != data.meeting_id:
+                        continue
+                    if data.platform and m.get("platform") != data.platform:
+                        continue
+                    entity = {
+                        "type": "meeting",
+                        "id": data.meeting_id,
+                        "platform": m.get("platform"),
+                        "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
+                    }
+                    break
+            except HTTPException:
+                entity = None  # not owned, not found, or the gateway is unhappy — never fatal
+
         fingerprint = _fingerprint(data.deployment, data.what_happened)
+        opened = datetime.now(timezone.utc).isoformat()
+        caller = _caller_fingerprint(api_key)
         payload: Dict[str, Any] = {
             "source": "vexa-mcp",
             "tool": "report_issue",
-            "reported_at": datetime.now(timezone.utc).isoformat(),
+            "reported_at": opened,
             "fingerprint": fingerprint,
             # Identity HINT, not the credential — see _caller_fingerprint().
-            "caller_fingerprint": _caller_fingerprint(api_key),
+            "caller_fingerprint": caller,
+            # Canonical ticket pair (Linode-shaped), composed from the agent's answers so every
+            # ticket surface lands ONE shape in the sink.
+            "summary": _summary_of(data.what_happened),
+            "description": _description_of(data),
+            # The agent's own words, kept discrete for the reader and for later labelling.
             "what_i_tried": data.what_i_tried,
             "what_happened": data.what_happened,
             "deployment": data.deployment,
+            "version": data.version,
+            "severity": data.severity,
             "meeting_id": data.meeting_id,
             "platform": data.platform,
+            "entity": entity,
             "logs": data.logs,
             "logs_truncated": data._logs_truncated,
         }
@@ -501,10 +596,17 @@ def create_app(
 
         # Same injectable transport as the gateway hop (tests inject MockTransport). Note the
         # caller's API key is NOT sent on this hop — only its salted fingerprint, in the body.
+        # The URL is the OPERATOR'S env value; no caller-supplied string is ever fetched.
+        sink_body: Any = None
         try:
             async with httpx.AsyncClient(timeout=10, transport=transport) as client:
                 response = await client.post(sink_url, headers=headers, json=payload)
                 response.raise_for_status()
+                if response.content:
+                    try:
+                        sink_body = response.json()
+                    except Exception:
+                        sink_body = None
         except httpx.HTTPStatusError as http_err:
             raise HTTPException(
                 status_code=502,
@@ -515,10 +617,22 @@ def create_app(
         except httpx.RequestError as req_err:
             raise HTTPException(status_code=503, detail=f"Ticket sink unreachable: {req_err}")
 
+        # Ticket object, mirroring Linode's response (id · status · severity · opened · updated ·
+        # opened_by · entity). This service holds no store, so the id is the sink's when the sink
+        # returns one, and the content fingerprint otherwise.
+        ticket_id = None
+        if isinstance(sink_body, dict):
+            ticket_id = sink_body.get("id") or sink_body.get("ticket_id")
         return {
-            "status": "received",
+            "id": ticket_id if ticket_id is not None else fingerprint,
+            "status": "new",
+            "severity": data.severity,
+            "opened": opened,
+            "updated": opened,
+            "opened_by": caller,
+            "entity": entity,
             "fingerprint": fingerprint,
-            "message": "Thanks — a human reads this. Quote the fingerprint if you follow up.",
+            "message": "Thanks — a human reads this. Quote the ticket id if you follow up.",
         }
 
     # ---------------------------

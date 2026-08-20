@@ -63,13 +63,39 @@ and off by default**, so a self-hoster who sets nothing gets a clean 503 rather 
 | `VEXA_TICKET_SINK_TOKEN` | optional | sent to the sink as `Authorization: Bearer <token>` — authenticates *this hop*, not the caller. |
 | `VEXA_TICKET_FINGERPRINT_SALT` | recommended | salt for `caller_fingerprint`. Set a deployment-specific value so fingerprints are not comparable across deployments. |
 
-The forwarded body carries the agent's four fields, optional `meeting_id`/`platform` (the join
-key onto our own record of the same meeting), capped `logs` with a `logs_truncated` flag, a
-server-side `reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint`
-— a salted SHA-256 prefix of the caller's API key. **The API key itself is never sent to the
-sink**, and ticket text is forwarded verbatim as data; this service never interprets it.
+The ticket shape follows Linode's support-ticket API (`POST /v4/support/tickets`): a canonical
+`summary` (≤64 chars) + `description` pair, an optional `severity` (1/2/3), and **one entity
+pointer** — theirs is `linode_id`, ours is `meeting_id` + `platform`. The agent-facing arguments
+(`what_i_tried` / `what_happened` / `deployment` / `version`) are composed into that pair
+server-side, so the MCP tool and any later HTTP ticket surface land **one shape** in the sink.
+Alongside it the sink receives capped `logs` with a `logs_truncated` flag, a server-side
+`reported_at`, a content-derived `fingerprint` for dedupe, and `caller_fingerprint` — a salted
+SHA-256 prefix of the caller's API key. The response mirrors Linode's ticket object: `id`,
+`status`, `severity`, `opened`, `updated`, `opened_by`, `entity`.
 
-## Gateway exposure
+**The entity pointer is authorisation-checked.** A supplied `meeting_id` is resolved by asking the
+**gateway** for the caller's meetings **with the caller's own key** — so a caller can only ever
+resolve a meeting they own, and the check belongs to the gateway rather than to a trust decision
+made here. An id that is unowned, unknown, or unresolvable still files the ticket, quoted as text
+with `entity: null`; a ticket we refused to accept teaches us nothing.
+
+### Safety properties this route commits to
+
+| Property | How it is held |
+|---|---|
+| **The API key is never forwarded to the sink** | only `caller_fingerprint`, a salted SHA-256 prefix; asserted with a negative control in `tests/test_app.py` |
+| **Ticket text is data, never instruction** | forwarded verbatim, never parsed, never executed, never fed to an agent of ours |
+| **SSRF closed by construction** | there is no url-shaped field, and **nothing a caller sends is ever dereferenced**. The only URL this route opens is the operator's `VEXA_TICKET_SINK_URL`. Links belong in the text, where a human reads them |
+| **No path to account state** | the service has no DB, no ORM, no redis — a test walks the package's imports to keep it that way, so a ticket write cannot touch meetings or users |
+| **Bounded input** | whole-body ceiling 64 KB (413 before the JSON parser), `logs` 4000 chars, text fields 2000, empty required fields refused |
+| **Off by default** | no sink env → 503, and nothing else in the service changes |
+
+**What this route does NOT carry, and the public door will need.** The authenticated door sits
+behind the gateway's per-user rate limiter, which keys on the resolved `user_id`. The **key-less**
+ticket route in the design note has no user to key on, so its per-IP rate limit **and** its body-size
+cap must be enforced at the **gateway** layer (`edge_guard`'s per-IP layer), not only in a handler.
+
+## Gateway exposure## Gateway exposure
 
 The gateway fronts this service at **`/mcp`** (`core/gateway/services/gateway/src/gateway/app.py`,
 target `MCP_URL`, compose `http://mcp:8010`), so an MCP client points at the same authenticated
