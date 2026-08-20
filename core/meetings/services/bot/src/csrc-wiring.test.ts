@@ -7,8 +7,9 @@
  * whose exposeFunction/evaluate run in-process. Three properties, each of which was invisible
  * before it was wired:
  *
- *   1. the mixed lane STARTS the transport sensor (both platform branches ride the same shared
- *      init — a poller that only ran on Teams would leave the Zoom topology question unanswerable);
+ *   1. the mixed lane STARTS the transport sensor (the still-mixed platforms — Teams/Jitsi — ride the
+ *      same shared init, gated on no platform-specific branch; Zoom now captures per-track and returns
+ *      before this init, like gmeet, so Teams is the vehicle that proves the shared init still fires);
  *   2. transitions cross to Node with an EPOCH timestamp and reach the telemetry sink;
  *   3. every typed observation the page produces — the mix topology, a sensor fault, a watcher
  *      reporting no signal — crosses into the fixture instead of dying with the pod's log.
@@ -160,15 +161,17 @@ const telemetry: CsrcCapableSink & ObservationCapableSink = {
   captureCsrc: (r) => transitions.push(r),
   captureObservation: (o) => observations.push(o),
 };
-// zoom, deliberately: the sensor is platform-agnostic and rides the SHARED mixed init, so proving
-// it on the branch that is NOT Teams is what says the Teams branch is not carrying it.
-const inv = { platform: 'zoom', botName: 'Vexa Bot', connectionId: 'test' } as unknown as Invocation;
+// teams, deliberately: the sensor is platform-agnostic and rides the SHARED mixed init. Zoom left
+// the mixed lane (isPerTrackLanePlatform — it captures per-track and returns before this init, like
+// gmeet), so the plain mixed branch that still reaches the sensor is Teams/Jitsi. Driving Teams
+// proves the init is not gated on any platform-specific branch.
+const inv = { platform: 'teams', botName: 'Vexa Bot', connectionId: 'test' } as unknown as Invocation;
 
 const t0 = Date.now();
 const stop = await startCaptureBridge(page, inv, pipeline, telemetry);
 const tick = (n = 1) => { for (const cb of [...intervals]) for (let i = 0; i < n; i++) cb(); };
 
-check('the mixed lane started the transport sensor (zoom — the shared init, not a Teams branch)',
+check('the mixed lane started the transport sensor (teams — the shared init, not a per-track branch)',
   !!g.__vexaCsrcPoll, `poll=${!!g.__vexaCsrcPoll}`);
 check('the mix topology crossed as DATA, not only as a log line',
   observations.some((o) => o.observation.type === 'mix-topology' && o.observation.streams === 1),

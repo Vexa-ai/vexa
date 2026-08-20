@@ -4,7 +4,7 @@
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
  *  RIGHT (resizable/collapsible): the persistent workspace chat, grounded by the active center tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
@@ -27,7 +27,7 @@ import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly } from "../app/mode";
 
@@ -301,7 +301,7 @@ export function Workbench() {
     if (meetOnly || layout.store.getState().activeList !== "sessions") return;
     try {
       if (localStorage.getItem("vexa.openWorkspace")) layout.setActiveList("files");
-      else if (localStorage.getItem("vexa.openMeeting")) layout.setActiveList("meetings");
+      else if (localStorage.getItem("vexa.openMeeting") || localStorage.getItem("vexa.openMeetingRef")) layout.setActiveList("meetings");
     } catch { /* noop — a locked-down localStorage just means no early reveal */ }
     // once, on mount (a fresh page load after the redeem reload) — deps intentionally empty
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -323,6 +323,27 @@ export function Workbench() {
     window.addEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
   }, [layout]);
+
+  // A `?meeting=<platform>/<native>` deep-link (clicked in a meeting note, or the cold-load URL) →
+  // resolve the native id to its meeting row and open the canvas (transcript + recording).
+  const openMeetingByRef = useCallback((mid: string) => {
+    // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
+    // in the meetings list opens); the canvas fetches its transcript/recording by that id.
+    const id = mid.trim();
+    if (!id) return;
+    const m = liveMeetingsNow().find((x) => String(x.id) === id);
+    if (layout.store.getState().activeList === "sessions") layout.setActiveList("meetings");
+    layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
+  }, [layout]);
+
+  useEffect(() => {
+    const onOpenMeeting = (e: Event) => {
+      const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
+      if (ref) openMeetingByRef(ref);
+    };
+    window.addEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+    return () => window.removeEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+  }, [openMeetingByRef]);
 
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
@@ -363,6 +384,12 @@ export function Workbench() {
   }, [activeTab]);
 
   const resolveFirstView = async (fresh: boolean) => {
+    // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
+    // directly. Explicit navigation wins over the plan below.
+    try {
+      const mref = localStorage.getItem("vexa.openMeetingRef");
+      if (mref) { localStorage.removeItem("vexa.openMeetingRef"); openMeetingByRef(mref); return; }
+    } catch { /* noop */ }
     // an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload)
     let sharedMeetingId: string | null = null;
     try { sharedMeetingId = localStorage.getItem("vexa.openMeeting"); if (sharedMeetingId) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
