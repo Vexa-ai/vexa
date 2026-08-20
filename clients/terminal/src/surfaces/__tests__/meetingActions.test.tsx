@@ -76,7 +76,7 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     const { url, init, body } = lastFetch();
     expect(url).toBe("/api/bots");
     expect(init.method).toBe("POST");
-    expect(body).toEqual({ platform: "google_meet", native_meeting_id: NATIVE, meeting_url: `https://meet.google.com/${NATIVE}`, bot_name: "Vexa" });
+    expect(body).toEqual({ platform: "google_meet", native_meeting_id: NATIVE, meeting_url: `https://meet.google.com/${NATIVE}` });
   });
 
   it("active→Stop DELETEs the bot by platform+native (the gateway /api/bots route)", () => {
