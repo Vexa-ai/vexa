@@ -29,9 +29,15 @@ Pass one of these as `platform`:
 | Google Meet | `google_meet` |
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
-| Jitsi Meet | `jitsi` |
+| Jitsi Meet | `jitsi` * |
 
 The bot joins like any participant — no plugins, no host configuration.
+
+\* **Jitsi is join + capture offline-proven; live validation is pending.** Meet, Zoom and Teams are
+production. On Jitsi the bot joins and records audio, but transcripts are not yet proven live —
+[#883](https://github.com/Vexa-ai/vexa/issues/883) reports a witness run on self-hosted
+docker-jitsi-meet where the speaker binder matched **0 of 122** frames and the meeting completed
+with 0 transcript segments. Track [#570](https://github.com/Vexa-ai/vexa/issues/570).
 
 For `jitsi`, the full `meeting_url` is **required** (like Zoom): a Jitsi room name is scoped
 to a deployment — `MyRoom` exists on meet.jit.si *and* on every self-hosted instance — so only
@@ -170,7 +176,7 @@ guessing. Undetermined windows yield `language: null`. (0.10's `allowed_language
 the 0.12 API.)</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
 <ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
-<ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an audio/video recording. Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
+<ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an **audio** recording (see [Recordings](/how-to/recordings) — there is no video recording path). Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
 
 ```bash POST /bots
 curl -X POST "$API_BASE/bots" \
@@ -296,8 +302,12 @@ them consume a history page.
 
 ## Speaker-attributed transcripts
 
-Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
-until it binds) — with **word-level timestamps** (`words[]`) and a `confidence`. Speaker attribution is
+Each segment carries **word-level timestamps** (`words[]`) and a `confidence`, and most segments are
+**diarized** — attributed to a bound speaker display name. **Attribution is not guaranteed:** when the
+binder cannot resolve a turn it publishes the segment with an **empty speaker** rather than guessing, so
+your client must handle unattributed segments. Under heavy crosstalk roughly **4–7% of rows publish
+unnamed** ([v0.12.22 release notes](https://github.com/Vexa-ai/vexa/releases/tag/v0.12.22)).
+Speaker attribution is
 text-level (who said what), via speaker binding / clustering / captions — *not* separate audio tracks.
 Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
 
