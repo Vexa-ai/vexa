@@ -612,3 +612,31 @@ async def test_s3_storage_list_paginates_past_1000_keys():
     listed = await storage.list(prefix)
     assert len(listed) == 1500, f"expected all 1500 keys across pages, got {len(listed)}"
     assert listed == sorted(keys)
+
+
+def test_a_persisted_path_outside_the_owners_namespace_is_never_deleted():
+    """A ``storage_path`` is data, not authority: deletion stays inside ``recordings/{user_id}/``.
+
+    Server-derived paths always satisfy this, so the negative control has to forge one — which is
+    exactly the precondition worth pinning, because the day a ``storage_path`` becomes writable
+    from a request is the day this is the only thing standing between a delete and another tenant.
+    """
+    import asyncio
+
+    from meeting_api.recordings.deletion import recording_object_keys
+
+    storage = InMemoryStorage()
+    mine = f"recordings/{USER}/1/{SESSION_UID}/audio/000000.wav"
+    theirs = "recordings/999/1/conn-xyz/audio/000000.wav"
+    storage.blobs[mine] = b"mine"
+    storage.blobs[theirs] = b"theirs"
+
+    recording = {
+        "id": 1, "user_id": USER, "session_uid": SESSION_UID,
+        "media_files": [{"storage_path": mine}, {"storage_path": theirs}],
+    }
+
+    keys = asyncio.run(recording_object_keys(storage, recording))
+
+    assert mine in keys
+    assert theirs not in keys, "a foreign-owner path must never enter the delete set"

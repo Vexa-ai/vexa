@@ -126,6 +126,12 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/recordings/{recording_id}/master"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}/media/{media_file_id}/raw"): BOT_OR_TX,
     ("GET", "/recordings/{recording_id}/media/{media_file_id}/download"): BOT_OR_TX,
+    # Destruction is not a read, so it does not inherit the reads' scope. A `tx` key is handed out
+    # for transcript access — to an integration, to an MCP agent — and must never carry the power to
+    # erase an account's recordings and transcripts permanently. The map being per-(method, path) is
+    # what makes declaring this separately possible; declaring it BOT_OR_TX would hand every
+    # read-only key a delete.
+    ("DELETE", "/recordings/{recording_id}"): BOT,
     # --- calendar connections: BOT, because auto-join spawns bots from the feed ---
     ("GET", "/user/calendar"): BOT,
     ("PUT", "/user/calendar"): BOT,

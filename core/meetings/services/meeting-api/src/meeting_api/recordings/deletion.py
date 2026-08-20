@@ -24,15 +24,27 @@ def _recording_prefix(recording: dict) -> Optional[str]:
     return f"recordings/{user_id}/{recording_id}/{session_uid}/"
 
 
+def _owner_prefix(recording: dict) -> Optional[str]:
+    """The owner's whole object namespace — the boundary a deletion may never reach past."""
+    user_id = recording.get("user_id")
+    return f"recordings/{user_id}/" if user_id is not None else None
+
+
 async def recording_object_keys(storage: Storage, recording: dict) -> list[str]:
     """Discover every current object plus any explicitly persisted legacy/master path."""
     keys: set[str] = set()
     prefix = _recording_prefix(recording)
     if prefix:
         keys.update(await storage.list(prefix))
+    owner_prefix = _owner_prefix(recording)
     for media_file in recording.get("media_files") or []:
         path = media_file.get("storage_path") if isinstance(media_file, dict) else None
-        if path:
+        # A persisted path is data, not authority. Every writer derives it from
+        # ``chunk_storage_key(user_id=owner, ...)``, so it already lies inside the owner's namespace
+        # and this rejects nothing today. It is what keeps the blast radius owner-bounded if a
+        # ``storage_path`` ever becomes writable from a request, or a backend normalises ``..``:
+        # the worst such a path could then do is name another object of the SAME owner.
+        if path and owner_prefix and path.startswith(owner_prefix):
             keys.add(path)
     return sorted(keys)
 
