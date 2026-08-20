@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from control_plane.workspace_routines import load_routine_file, reconcile_workspace_routines, set_routine_file_enabled
+from control_plane.workspace_routines import (
+    load_routine_file,
+    reconcile_workspace_routines,
+    routine_cards_for_subject,
+    set_routine_file_enabled,
+)
 from tests.test_routines import _FakeScheduler
 
 
@@ -157,3 +162,23 @@ def test_reconcile_removed_or_disabled_file_cancels_job(tmp_path):
 
     assert result.cancelled == 2
     assert scheduler.jobs == []
+
+
+def test_routine_cards_skip_workspace_readmes(tmp_path):
+    workspaces = tmp_path / "workspaces"
+    _write(workspaces / "u_jane" / "routines" / "README.md", "# Routine examples\n")
+    _write(
+        workspaces / "u_jane" / "routines" / "brief.md",
+        "---\nenabled: true\ncron: '0 9 * * *'\nprompt: Do the brief.\n---\n",
+    )
+    scheduler = _FakeScheduler()
+    reconcile_workspace_routines(
+        "u_jane",
+        scheduler=scheduler,
+        invocations_url="http://agent-api:8100/invocations",
+        workspaces_dir=workspaces,
+    )
+
+    cards = routine_cards_for_subject("u_jane", jobs=scheduler.jobs, workspaces_dir=workspaces)
+
+    assert [card["name"] for card in cards] == ["brief"]
