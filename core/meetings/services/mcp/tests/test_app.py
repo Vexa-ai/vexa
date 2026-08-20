@@ -427,3 +427,124 @@ def test_ticket_path_touches_no_database():
                 continue
             hit = banned.intersection(names)
             assert not hit, f"{path.name} imports {hit} — the ticket path must not reach account state"
+
+
+# --- the sink FORMAT switch: raw (default, unchanged) vs github (an issue tracker IS the sink) ---
+
+GH_SINK_URL = "http://sink.test/repos/acme/tickets/issues"
+
+
+def _gh(monkeypatch, **env):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", GH_SINK_URL)
+    monkeypatch.setenv("VEXA_TICKET_SINK_FORMAT", "github")
+    monkeypatch.delenv("VEXA_TICKET_SINK_LABELS", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_raw_is_the_default_and_is_byte_unchanged(client, gateway: FakeGateway, auth, monkeypatch):
+    """No format env → exactly the payload the pre-switch service posted, exactly those headers."""
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    monkeypatch.delenv("VEXA_TICKET_SINK_FORMAT", raising=False)
+    monkeypatch.setenv("VEXA_TICKET_SINK_TOKEN", "sink-secret")
+    client.post("/report-issue", headers=auth, json={**TICKET, "severity": 2, "version": "0.12.23"})
+    req = _sink_requests(gateway)[-1]
+    body = json.loads(req.content)
+    assert set(body) == {
+        "source", "tool", "reported_at", "fingerprint", "caller_fingerprint", "summary",
+        "description", "what_i_tried", "what_happened", "deployment", "version", "severity",
+        "meeting_id", "platform", "entity", "logs", "logs_truncated",
+    }
+    assert req.headers["content-type"] == "application/json"
+    assert req.headers["authorization"] == "Bearer sink-secret"
+    assert "x-github-api-version" not in req.headers
+    assert "title" not in body and "labels" not in body
+
+
+def test_unknown_format_falls_back_to_raw(client, gateway: FakeGateway, auth, monkeypatch):
+    monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
+    monkeypatch.setenv("VEXA_TICKET_SINK_FORMAT", "jira-someday")
+    client.post("/report-issue", headers=auth, json=TICKET)
+    body = json.loads(_sink_requests(gateway)[-1].content)
+    assert body["source"] == "vexa-mcp" and "title" not in body
+
+
+def test_github_format_maps_the_ticket_onto_an_issue(client, gateway: FakeGateway, auth, monkeypatch):
+    _gh(monkeypatch, VEXA_TICKET_SINK_TOKEN="gh-token")
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "severity": 1, "version": "0.12.24"})
+    assert r.status_code == 200
+
+    req = _sink_requests(gateway)[-1]
+    assert (req.method, str(req.url)) == ("POST", GH_SINK_URL)
+    assert req.headers["accept"] == "application/vnd.github+json"
+    assert req.headers["x-github-api-version"] == "2022-11-28"
+    assert req.headers["authorization"] == "Bearer gh-token"
+
+    body = json.loads(req.content)
+    assert set(body) == {"title", "body", "labels"}
+    assert body["title"] == TICKET["what_happened"][:63] + "…"
+    assert len(body["title"]) <= 64
+    md = body["body"]
+    # every field of the canonical ticket survives into the rendered issue
+    assert TICKET["what_i_tried"] in md
+    assert TICKET["what_happened"] in md
+    assert TICKET["logs"] in md
+    assert "self-hosted 0.12.3" in md and "0.12.24" in md and "**severity:** 1" in md
+    assert r.json()["fingerprint"] in md
+    assert r.json()["opened_by"] in md
+    assert "report_issue" in md and "Vexa MCP" in md
+
+
+def test_github_body_calls_out_the_meeting_join_key(client, gateway: FakeGateway, auth, monkeypatch):
+    _gh(monkeypatch)
+    client.post("/report-issue", headers=auth, json=TICKET)
+    md = json.loads(_sink_requests(gateway)[-1].content)["body"]
+    _, heading, tail = md.partition("### Join key")
+    assert heading, "the join key needs its own heading — it joins the report to our own record"
+    section = tail.split("###", 1)[0]              # only what sits UNDER that heading
+    assert "abc-defg-hij" in section
+    assert "google_meet" in section
+
+
+def test_github_body_states_when_no_meeting_was_supplied(client, gateway: FakeGateway, auth, monkeypatch):
+    _gh(monkeypatch)
+    ticket = {k: v for k, v in TICKET.items() if k not in {"meeting_id", "platform"}}
+    client.post("/report-issue", headers=auth, json=ticket)
+    md = json.loads(_sink_requests(gateway)[-1].content)["body"]
+    assert "### Join key" in md
+    assert "none supplied" in md
+
+
+def test_github_labels_default_to_state_incoming(client, gateway: FakeGateway, auth, monkeypatch):
+    _gh(monkeypatch)
+    client.post("/report-issue", headers=auth, json=TICKET)
+    assert json.loads(_sink_requests(gateway)[-1].content)["labels"] == ["state: incoming"]
+
+
+def test_github_labels_are_configurable(client, gateway: FakeGateway, auth, monkeypatch):
+    _gh(monkeypatch, VEXA_TICKET_SINK_LABELS="state: incoming, agent-filed ,bug")
+    client.post("/report-issue", headers=auth, json=TICKET)
+    assert json.loads(_sink_requests(gateway)[-1].content)["labels"] == [
+        "state: incoming", "agent-filed", "bug",
+    ]
+
+
+def test_github_response_number_and_html_url_reach_the_calling_agent(
+    client, gateway: FakeGateway, auth, monkeypatch
+):
+    _gh(monkeypatch)
+    gateway.routes[("POST", "/repos/acme/tickets/issues")] = (
+        201, {"id": 99887766, "number": 512, "html_url": "https://github.com/acme/tickets/issues/512"},
+    )
+    body = client.post("/report-issue", headers=auth, json=TICKET).json()
+    assert body["id"] == 512                       # the number a human quotes, not the db row id
+    assert body["url"] == "https://github.com/acme/tickets/issues/512"
+
+
+def test_github_format_still_never_forwards_the_api_key(client, gateway: FakeGateway, auth, monkeypatch):
+    """The negative control, re-run through the new wire shape."""
+    _gh(monkeypatch, VEXA_TICKET_SINK_TOKEN="gh-token")
+    client.post("/report-issue", headers=auth, json={**TICKET, "logs": f"key={API_KEY}"[:0] or "boom"})
+    req = _sink_requests(gateway)[-1]
+    assert API_KEY not in req.content.decode()
+    assert API_KEY not in json.dumps(dict(req.headers))

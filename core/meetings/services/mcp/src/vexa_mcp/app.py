@@ -90,6 +90,114 @@ def _description_of(data: "ReportIssue") -> str:
     return "\n\n".join(parts)
 
 
+# --- ticket sink adapters ----------------------------------------------------
+# The sink is an OPERATOR surface. `raw` (the default) posts the canonical ticket payload to an
+# opaque webhook — byte-for-byte what self-hosters already get. `github` maps the same payload
+# onto GitHub's issue API so a deployment can use an issue tracker it already runs as the sink,
+# with no new infrastructure. Nothing about the payload's construction changes between the two;
+# only the wire shape of this one hop does.
+_SINK_FORMAT_RAW = "raw"
+_SINK_FORMAT_GITHUB = "github"
+_DEFAULT_SINK_LABELS = "state: incoming"
+_GITHUB_API_VERSION = "2022-11-28"
+
+
+def _sink_format() -> str:
+    """Operator-selected wire shape for the sink hop. Unknown/unset → `raw` (today's behaviour)."""
+    value = (os.getenv("VEXA_TICKET_SINK_FORMAT") or "").strip().lower()
+    return _SINK_FORMAT_GITHUB if value == _SINK_FORMAT_GITHUB else _SINK_FORMAT_RAW
+
+
+def _sink_labels() -> List[str]:
+    """Labels applied to a github-format ticket. Comma-separated; default `state: incoming`."""
+    raw = os.getenv("VEXA_TICKET_SINK_LABELS")
+    if raw is None or not raw.strip():
+        raw = _DEFAULT_SINK_LABELS
+    return [label.strip() for label in raw.split(",") if label.strip()]
+
+
+def _github_issue_body(payload: Dict[str, Any]) -> str:
+    """Render the canonical ticket payload as the markdown body of a GitHub issue.
+
+    Every field the sink would have received in `raw` appears here — nothing is dropped, because
+    the issue IS the ticket on this deployment. The meeting join key gets its own heading: it is
+    what lines the reporter's account up against our own record of the same meeting.
+    """
+    lines: List[str] = []
+    lines.append("_Filed by a calling agent through the Vexa MCP `report_issue` tool._")
+    lines.append("")
+    lines.append("### What I tried")
+    lines.append(str(payload.get("what_i_tried") or "—"))
+    lines.append("")
+    lines.append("### What happened")
+    lines.append(str(payload.get("what_happened") or "—"))
+    lines.append("")
+    lines.append("### Join key")
+    if payload.get("meeting_id"):
+        lines.append(f"- **meeting_id:** `{payload['meeting_id']}`")
+        lines.append(f"- **platform:** `{payload.get('platform') or 'unknown'}`")
+        entity = payload.get("entity")
+        if isinstance(entity, dict):
+            lines.append(f"- **resolved entity:** `{entity.get('type')}` → `{entity.get('url')}`")
+        else:
+            lines.append("- **resolved entity:** none (not owned by the calling key, or not found)")
+    else:
+        lines.append("- none supplied — this ticket is not bound to a meeting.")
+    lines.append("")
+    lines.append("### Deployment")
+    lines.append(f"- **deployment:** {payload.get('deployment')}")
+    lines.append(f"- **version:** {payload.get('version') or 'not stated'}")
+    lines.append(f"- **severity:** {payload.get('severity') if payload.get('severity') is not None else 'not stated'}")
+    lines.append("")
+    if payload.get("logs"):
+        lines.append("### Logs")
+        truncated = " (truncated server-side)" if payload.get("logs_truncated") else ""
+        lines.append(f"Pasted by the reporting agent{truncated}:")
+        lines.append("")
+        lines.append("```")
+        lines.append(str(payload["logs"]))
+        lines.append("```")
+        lines.append("")
+    lines.append("### Provenance")
+    lines.append(f"- **source:** `{payload.get('source')}` · **tool:** `{payload.get('tool')}`")
+    lines.append(f"- **reported_at:** `{payload.get('reported_at')}`")
+    lines.append(f"- **fingerprint:** `{payload.get('fingerprint')}` (content-derived, for dedupe)")
+    lines.append(
+        f"- **caller_fingerprint:** `{payload.get('caller_fingerprint')}` "
+        "(salted hash of the calling key — never the key itself)"
+    )
+    return "\n".join(lines)
+
+
+def _sink_request(payload: Dict[str, Any], sink_token: str) -> tuple:
+    """(headers, json_body) for the sink hop, per VEXA_TICKET_SINK_FORMAT.
+
+    `raw` is byte-unchanged from before the switch existed: the canonical payload, with an
+    optional bearer token. `github` maps it onto `{title, body, labels}` with GitHub's headers.
+    """
+    if _sink_format() == _SINK_FORMAT_GITHUB:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+        }
+        if sink_token:
+            headers["Authorization"] = f"Bearer {sink_token}"
+        body: Dict[str, Any] = {
+            "title": payload.get("summary"),
+            "body": _github_issue_body(payload),
+        }
+        labels = _sink_labels()
+        if labels:
+            body["labels"] = labels
+        return headers, body
+
+    headers = {"Content-Type": "application/json"}
+    if sink_token:
+        headers["Authorization"] = f"Bearer {sink_token}"
+    return headers, payload
+
+
 def _caller_fingerprint(api_key: str) -> str:
     """A pseudonymous, stable handle for the caller — NEVER the API key itself.
 
@@ -507,8 +615,9 @@ def create_app(
         Put links, if you have them, in the text — nothing you send here is ever fetched by us.
 
         One-way: nothing auto-replies and nothing auto-closes. Returns the ticket
-        (`id` · `status` · `severity` · `opened` · `opened_by` · `entity`). On a deployment with no
-        ticket sink configured it returns 503 and nothing else is affected.
+        (`id` · `status` · `severity` · `opened` · `opened_by` · `entity`), plus `url` when the
+        deployment's sink issues one — tell your human where the report landed. On a deployment
+        with no ticket sink configured it returns 503 and nothing else is affected.
         """
         # Ticket text is DATA, never instruction. It is validated, capped, and forwarded verbatim
         # to the operator's sink — this service never interprets it, never dereferences anything in
@@ -589,10 +698,8 @@ def create_app(
             "logs_truncated": data._logs_truncated,
         }
 
-        headers = {"Content-Type": "application/json"}
         sink_token = (os.getenv("VEXA_TICKET_SINK_TOKEN") or "").strip()
-        if sink_token:
-            headers["Authorization"] = f"Bearer {sink_token}"
+        headers, sink_payload = _sink_request(payload, sink_token)
 
         # Same injectable transport as the gateway hop (tests inject MockTransport). Note the
         # caller's API key is NOT sent on this hop — only its salted fingerprint, in the body.
@@ -600,7 +707,7 @@ def create_app(
         sink_body: Any = None
         try:
             async with httpx.AsyncClient(timeout=10, transport=transport) as client:
-                response = await client.post(sink_url, headers=headers, json=payload)
+                response = await client.post(sink_url, headers=headers, json=sink_payload)
                 response.raise_for_status()
                 if response.content:
                     try:
@@ -621,9 +728,18 @@ def create_app(
         # opened_by · entity). This service holds no store, so the id is the sink's when the sink
         # returns one, and the content fingerprint otherwise.
         ticket_id = None
+        ticket_url = None
         if isinstance(sink_body, dict):
-            ticket_id = sink_body.get("id") or sink_body.get("ticket_id")
-        return {
+            # `number` + `html_url` are GitHub's; `id`/`ticket_id`/`url` cover a raw webhook that
+            # issues its own. Whatever the sink named the ticket, the calling agent gets it back so
+            # it can tell its human WHERE the report went.
+            if _sink_format() == _SINK_FORMAT_GITHUB:
+                # GitHub carries both: `id` is the global db row, `number` is what a human quotes.
+                ticket_id = sink_body.get("number") or sink_body.get("id")
+            else:
+                ticket_id = sink_body.get("id") or sink_body.get("ticket_id")
+            ticket_url = sink_body.get("html_url") or sink_body.get("url")
+        ack: Dict[str, Any] = {
             "id": ticket_id if ticket_id is not None else fingerprint,
             "status": "new",
             "severity": data.severity,
@@ -634,6 +750,9 @@ def create_app(
             "fingerprint": fingerprint,
             "message": "Thanks — a human reads this. Quote the ticket id if you follow up.",
         }
+        if ticket_url:
+            ack["url"] = ticket_url
+        return ack
 
     # ---------------------------
     # MCP mount + prompts

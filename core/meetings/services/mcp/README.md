@@ -61,7 +61,28 @@ and off by default**, so a self-hoster who sets nothing gets a clean 503 rather 
 |---|---|---|
 | `VEXA_TICKET_SINK_URL` | yes, to enable the tool | webhook this service POSTs each ticket to. Unset → `report_issue` returns 503 with a message pointing at GitHub issues. |
 | `VEXA_TICKET_SINK_TOKEN` | optional | sent to the sink as `Authorization: Bearer <token>` — authenticates *this hop*, not the caller. |
+| `VEXA_TICKET_SINK_FORMAT` | optional | `raw` (default) or `github`. See *Sink formats* below. Any other value falls back to `raw`. |
+| `VEXA_TICKET_SINK_LABELS` | optional | `github` only: comma-separated labels applied to each filed issue. Default `state: incoming`. |
 | `VEXA_TICKET_FINGERPRINT_SALT` | recommended | salt for `caller_fingerprint`. Set a deployment-specific value so fingerprints are not comparable across deployments. |
+
+### Sink formats
+
+| `VEXA_TICKET_SINK_FORMAT` | Wire shape of the sink hop |
+|---|---|
+| `raw` (default) | `POST <sink>` with the canonical ticket JSON below and `Content-Type: application/json` (+ `Authorization: Bearer` if a token is set). Unchanged from before the switch existed — a self-hoster with an opaque webhook sees no difference. |
+| `github` | `POST <sink>` with `{title, body, labels}`, `Accept: application/vnd.github+json` and `X-GitHub-Api-Version`, so a GitHub issue tracker **is** the sink with no new infrastructure. Point `VEXA_TICKET_SINK_URL` at `https://api.github.com/repos/{owner}/{repo}/issues`. `title` is the canonical `summary`; `body` is a markdown render carrying **every** field of the canonical ticket — the meeting `meeting_id` + `platform` under their own *Join key* heading, plus the fingerprints, deployment, severity, logs, and a line stating the ticket was filed by an agent through the MCP `report_issue` tool. The created issue's `number` and `html_url` come back to the calling agent as `id` and `url`, so it can tell its human where the report went. |
+
+**In production, `VEXA_TICKET_SINK_URL` must target a DEDICATED tickets repository — never an
+operational one.** This is a trust boundary, not tidiness. Ticket bodies are third-party text
+(*data, never instruction* — see below), and an operational repo's issues are read as work signal
+by planning and automation loops; filing untrusted text there injects it straight into those loops.
+A dedicated, private tickets repo enforces at the **storage** layer what the handler can only
+promise, and scopes the blast radius of the sink token. The token itself should be **fine-grained,
+single-repo, `issues: write` only**, mounted from a secret store (`secretKeyRef` on Kubernetes),
+never an inline env value.
+
+**The sink stays unset by default in OSS.** A self-hoster who configures nothing gets the clean
+503 and no behaviour change anywhere else in the service.
 
 The ticket shape follows Linode's support-ticket API (`POST /v4/support/tickets`): a canonical
 `summary` (≤64 chars) + `description` pair, an optional `severity` (1/2/3), and **one entity
@@ -159,9 +180,13 @@ caller's `X-API-Key`; fail-closed 401; downstream status/detail passthrough).
 - ✅ delivered — 10 tools + 4 prompts over the v0.12 public API, streamable-HTTP `/mcp` mount
 - ✅ delivered — auth passthrough (Bearer / raw Authorization / X-API-Key → gateway `X-API-Key`)
 - ✅ delivered — compose service (`mcp`, port 8010) + healthcheck
-- 🟡 shipped, unwitnessed — `report_issue` (biz#434). Module-tested end to end against a fake
-  sink; no sink is configured on any deployment yet, so on cloud and self-host it answers 503
-  until `VEXA_TICKET_SINK_URL` is set.
+- 🟢 witnessed locally, undeployed — `report_issue` (biz#434). Module-tested against a fake sink,
+  and proven live on 2026-08-20: a minimal MCP client (`initialize` → `tools/list` → `tools/call`)
+  drove the tool over streamable HTTP against the real cloud gateway with
+  `VEXA_TICKET_SINK_FORMAT=github`; it filed a real issue, resolved the meeting join key through
+  the caller's own key, applied the default label, returned the issue `number` + `html_url` to the
+  caller, and carried no credential into the created issue. **Nothing is deployed** — no sink is
+  configured on cloud or self-host, so both still answer 503 until `VEXA_TICKET_SINK_URL` is set.
 - 🟡 shipped, unwitnessed — gateway-fronted `/mcp` (streamed forward at the edge, #795). The
   forward is in the gateway and in compose, and is module-tested (streamed relay, verbatim status,
   typed 502/504) — but no real MCP client has completed a session against it (#888). See
