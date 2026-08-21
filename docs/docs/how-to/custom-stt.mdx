@@ -10,6 +10,10 @@ implements the same request shape.
 Use this path when you want a different ASR model without changing the bot, meeting-api, or live
 transcript pipeline.
 
+To transcribe **later** instead — or on hardware Vexa never talks to — send the bot with
+transcription off and collect the audio afterwards:
+[Capture now, transcribe later](/how-to/deferred-transcription).
+
 ## Contract
 
 Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends multipart form data:
@@ -46,6 +50,23 @@ that path.
 If the backend ignores the `model` form part, leave `TRANSCRIPTION_MODEL` unset. If it validates model
 ids, set the exact served name.
 
+## Before you swap: the bundled model has a knob
+
+The bundled faster-whisper service chooses its model from `MODEL_SIZE`, which defaults to
+**`large-v3-turbo`** (`core/meetings/services/transcription/src/transcription/main.py`). Turbo is a
+faster, lighter distillation of `large-v3` — it trades some accuracy for speed and VRAM, and how much
+depends on the language. If accuracy on yours matters more than latency, change one variable before
+you go looking for a different engine:
+
+```bash
+MODEL_SIZE=large-v3
+```
+
+Set it on the **transcription unit** (`deploy/transcription/.env`), not on the main stack. That unit
+ignores the `model` form part a caller sends and serves whatever `MODEL_SIZE` names, so
+`TRANSCRIPTION_MODEL` has no effect on it — `TRANSCRIPTION_MODEL` exists for backends that *validate*
+a model id. See `deploy/transcription/README.md`.
+
 ## Example: FunASR or SenseVoice
 
 <Note>
@@ -58,8 +79,11 @@ bot-in-meeting run and the `platform_settings` override path remain unwitnessed 
 are tracked in [#863](https://github.com/Vexa-ai/vexa/issues/863).
 </Note>
 
-Self-hosted FunASR/SenseVoice gateways are reported to be a good fit when you need local Chinese,
-mixed Chinese-English, Cantonese, Japanese, or Korean transcription.
+A self-hosted FunASR/SenseVoice gateway is a **working example of this contract**: a real non-Vexa
+backend that has been run against Vexa's own client and answered with non-empty verbose responses.
+That is a claim about **portability**, not about quality. **Which model transcribes your languages
+best is your decision — Vexa does not benchmark third-party models.** Measure your own audio before
+you switch.
 
 Run or deploy a gateway that accepts:
 

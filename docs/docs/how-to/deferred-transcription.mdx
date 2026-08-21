@@ -1,0 +1,157 @@
+---
+title: "Capture now, transcribe later"
+description: "Record a meeting without transcribing it, then download the audio and run it through your own speech-to-text — on your schedule, on your hardware."
+---
+
+Vexa can join a meeting, capture the audio, and **not transcribe it**. You collect the recording
+afterwards and put it through whatever speech-to-text you like — a batch job overnight, a model on
+your own GPU, a vendor Vexa never talks to.
+
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
+This is not the same as [Use a custom STT endpoint](/how-to/custom-stt), which keeps Vexa's
+real-time pipeline and swaps the engine behind it. Here there is no engine: nothing is transcribed
+during the call, and the audio file is the deliverable.
+
+## Two flags, not one
+
+**`transcribe_enabled: false` on its own leaves you nothing to retrieve.** It turns transcription
+off. It does not turn recording on — recording is gated separately by `recording_enabled`, and a bot
+that ran with both off captured a meeting that now exists nowhere.
+
+Set both:
+
+```bash POST /bots
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa",
+       "transcribe_enabled":false,"recording_enabled":true}'
+```
+
+Each flag resolves the same way: an explicit value in the request wins, else the deployment's
+`TRANSCRIBE_ENABLED` / `RECORDING_ENABLED` env, else `true`. A non-boolean is refused with `422`
+rather than coerced.
+
+Because `transcribe_enabled` is `false`, the spawn does not require an STT backend, so the `503`
+that normally refuses a bot on a deployment with no speech-to-text configured cannot fire. A
+capture-only bot joins a stack that has no ASR at all.
+
+The meeting's `transcription_provider` is frozen to `"none"` at spawn — the durable record that this
+meeting was never transcribed by anyone. It surfaces in the `meeting.completed` webhook's
+[`service_provenance`](/api/meetings#completion-service-provenance) block.
+
+## Confirm nothing was transcribed
+
+```bash GET /transcripts/{platform}/{native_meeting_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/transcripts/google_meet/abc-defg-hij"
+```
+
+```json Response — 200
+{ "segments": [] }
+```
+
+An empty segment list is the **expected** result here, not a failure. With transcription off the bot
+builds a no-op transcriber: audio still flows through capture and turn-gating, no speech-to-text
+client is ever constructed, and every window returns empty text. Nothing leaves for any STT service,
+and there is nothing to poll for.
+
+## Find the recording
+
+```bash GET /recordings
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
+```
+
+```json Response — 200
+{
+  "recordings": [
+    {
+      "id": 481159273044,
+      "meeting_id": 12345,
+      "status": "completed",
+      "media_files": [
+        { "id": 730928415562, "type": "audio", "format": "webm",
+          "file_size_bytes": 31233, "duration_seconds": 41.6, "is_final": true }
+      ]
+    }
+  ]
+}
+```
+
+Wait for `status: "completed"`. While the bot is still in the call the recording exists with
+`status: "in_progress"` and grows chunk by chunk.
+
+## `/master` hands you JSON, not audio
+
+**The `master` route returns metadata.** It finalizes the recording and tells you where the bytes
+are; it does not serve them.
+
+```bash GET /recordings/{recording_id}/master
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/481159273044/master?type=audio"
+```
+
+```json Response — 200
+{
+  "id": 481159273044,
+  "type": "audio",
+  "storage_path": "…/audio/master.webm",
+  "media_file_id": 730928415562,
+  "raw_url": "/recordings/481159273044/media/730928415562/raw?type=audio",
+  "duration_seconds": 41.6
+}
+```
+
+**`media_file_id` is not the recording id.** Both are independent random 12-digit numbers and
+neither can be derived from the other. Repeating the recording id in the byte path —
+`/recordings/481159273044/media/481159273044/raw` — answers `404 No such media file`. Use the
+`raw_url` the response hands you, or read `media_files[].id` off the recording. Never construct it.
+
+## Download the audio
+
+```bash GET — the raw_url from above
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/481159273044/media/730928415562/raw?type=audio" \
+  -o meeting.webm
+```
+
+`200` with `Content-Type: audio/webm` (or `audio/wav` where the deployment records WAV). The body is
+a real WebM container: its first four bytes are the EBML magic `1a 45 df a3`.
+
+The route honours HTTP `Range`, so you can pull the file in parts, resume an interrupted transfer,
+or stream it straight into a transcoder. See
+[Retrieve a meeting recording](/how-to/recordings#range-requests-playback-and-seek).
+
+## Transcribe it on your own terms
+
+From here it is an ordinary audio file. Nothing about the next step is Vexa's: feed it to a local
+Whisper, an OpenAI-compatible endpoint, a batch service, or leave it in cold storage until somebody
+asks. Until you fetch it, the recording sits in the bucket configured by `MINIO_*`
+([Configuration](/configuration#database-storage)) — on a self-host, your own object storage, which
+the audio never leaves.
+
+## What this path covers
+
+| | |
+|---|---|
+| **Audio** | Yes. One `audio` media file per recording, WebM or WAV. |
+| **Video** | **No.** `recording_enabled: true` asks the bot for audio *and* video, but no video capture path ships — the video recorder has no callers, `media_files` only ever holds an `audio` entry, and `playback_url.video` stays `null`. Tracked in [#980](https://github.com/Vexa-ai/vexa/issues/980). |
+| **Per-speaker audio** | No. Speaker separation exists only as text in the transcript, and this path has no transcript. |
+| **Real-time transcription by a backend of yours** | A **different** route — `PUT /user/transcription` ([Settings API](/api/settings#transcription-backend)), which keeps transcription live and points it at your endpoint. It is not part of this path and is not exercised by it; see [#1031](https://github.com/Vexa-ai/vexa/issues/1031) for known defects in it before you rely on it. |
+
+<Note>
+**What has been verified.** The sequence on this page — capture-only spawn, empty transcript,
+finalized recording, `/master`, byte download — was run end-to-end against the hosted API on
+2026-08-21: a bot joined a live Google Meet with `transcribe_enabled: false` and
+`recording_enabled: true`, both participants spoke, `GET /transcripts/…` returned zero segments, and
+the downloaded body was a WebM whose length matched the recording's `file_size_bytes` exactly.
+
+Not verified by that run: video recording (there is no video path), WAV-format deployments, and the
+real-time customer-backend route above.
+</Note>
+
+## Related
+
+- [Retrieve a meeting recording](/how-to/recordings) — listing, `Range` playback, where the bytes live.
+- [Use a custom STT endpoint](/how-to/custom-stt) — keep transcription live, change the engine.
+- [Meetings API](/api/meetings#send-a-bot-to-a-meeting) — the full `POST /bots` parameter set.
