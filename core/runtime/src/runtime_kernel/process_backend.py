@@ -26,6 +26,7 @@ from typing import Optional
 
 from .backend import WorkloadHandle
 from .isolation import apply_process_isolation, child_env_for, plan_process_isolation, preexec_for
+from .models import Resources
 from .mounts import mount_set
 from .profiles import Runnable
 
@@ -78,7 +79,16 @@ class ProcessBackend:
         # exit codes are unobservable without a live handle anyway.
         self._capture: dict[str, dict] = {}
 
-    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+    def start(
+        self,
+        workload_id: str,
+        runnable: Runnable,
+        env: dict[str, str],
+        resources: Optional[Resources] = None,
+    ) -> WorkloadHandle:
+        """``resources`` is accepted and NOT enforced: a child process has no admission gate to
+        satisfy, and cgroup limits are the host's concern on this substrate. The enforcement
+        boundary is k8s-only and no parity is claimed."""
         if not runnable.command:
             raise ValueError("process backend requires a command")
         # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem — there is

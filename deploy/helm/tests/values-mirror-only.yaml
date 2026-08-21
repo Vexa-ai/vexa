@@ -1,0 +1,84 @@
+# Mirror-only fixture (#1006) — every image this chart can cause a cluster to pull is pointed at a
+# single private registry, and NOTHING may fall back to a public one.
+#
+# `registry.internal.invalid` is deliberately unresolvable: the fixture is a RENDER proof, and a
+# reference that cannot resolve makes an accidental live pull impossible. `tests/test_mirror_only.sh`
+# renders this file and asserts every container image plus every runtime-spawn image reference
+# carries the prefix below.
+#
+# `global.imageTag` is set ON PURPOSE. It is the load-bearing part of the fixture: a global tag must
+# supply a tag to the images that have no explicit identity, and must never rewrite one that does.
+
+global:
+  imageTag: "v0.0.0-mirror"
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: internal-registry-pull
+
+secrets:
+  adminApiToken: "test-admin-token"
+  internalApiSecret: "vexa-internal-secret"
+  dispatchSigningKey: "dev-dispatch-signing-key"
+
+# ---- long-running components: repository from the mirror, tag from global.imageTag ----
+gateway:
+  image:
+    repository: registry.internal.invalid/vexa/v012-gateway
+adminApi:
+  image:
+    repository: registry.internal.invalid/vexa/v012-admin-api
+meetingApi:
+  image:
+    repository: registry.internal.invalid/vexa/v012-meeting-api
+agentApi:
+  image:
+    repository: registry.internal.invalid/vexa/v012-agent-api
+terminal:
+  image:
+    repository: registry.internal.invalid/vexa/v012-terminal
+
+runtime:
+  backend: "k8s"
+  image:
+    repository: registry.internal.invalid/vexa/v012-runtime
+  # The three SPAWNED workloads, one per identity form the chart accepts, so the fixture proves all
+  # three legs at once:
+  #   bot          → explicit full reference carrying a digest
+  #   agent        → explicit full reference carrying a tag
+  #   agent-worker → repository + digest (composed by the chart)
+  # None of them may be rewritten by global.imageTag above.
+  browserImage: "registry.internal.invalid/vexa/vexa-bot@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  agentImage: "registry.internal.invalid/vexa/v012-agent-api:mirrored-2222"
+  agentWorkerImageRepository: "registry.internal.invalid/vexa/v012-agent-worker"
+  agentWorkerImageDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+
+# ---- bundled infrastructure + install hooks ----
+postgres:
+  image: registry.internal.invalid/mirror/postgres:17-alpine
+redis:
+  image: registry.internal.invalid/mirror/valkey:8-alpine
+pgbouncer:
+  enabled: true
+  image: registry.internal.invalid/mirror/pgbouncer:latest
+
+minio:
+  image:
+    repository: registry.internal.invalid/mirror/minio
+    tag: mirrored
+  # The post-install bucket-init Job. Before #1006 this Job ignored every value here and pulled
+  # `minio/mc:latest` from Docker Hub.
+  mc:
+    digest: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    image:
+      repository: registry.internal.invalid/mirror/mc
+
+# The migrations Job is off by default; a mirror-only operator running it must be covered too.
+migrations:
+  enabled: true
+
+# The deprecated dashboard stays off (its own pinned tag, not part of the release set).
+dashboard:
+  enabled: false
+
+ingress:
+  enabled: false
