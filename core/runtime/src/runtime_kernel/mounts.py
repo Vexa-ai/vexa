@@ -133,7 +133,7 @@ def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: st
     mount on its own PVC is a later WP. Pure + env-driven (no kubectl) so the k8s mount plumbing is
     unit-tested offline.
 
-    Returns ``(volumes, volume_mounts)`` ready to splat into a Pod ``--overrides`` spec."""
+    Returns ``(volumes, volume_mounts)`` ready to merge into a Pod spec and its container."""
     if not pvc_name or not store_target:
         return [], []
     vol_name = "workspace-store"
