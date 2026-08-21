@@ -271,18 +271,27 @@ def create_app(
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
 
+    # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
+    # uses this same port to delete objects before its transcript/JSONB finalization.
+    if storage is None:
+        storage = _recordings_fakes().InMemoryStorage()
+
+    async def _delete_recording_objects(recording: dict) -> list[str]:
+        from .recordings.deletion import delete_recording_objects
+
+        return await delete_recording_objects(storage, recording)
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
     app.include_router(_build_collector_router(transcript_store, redis,
                                             calendar_sync_now=calendar_sync_now,
-                                            calendar_sync_status=calendar_sync_status))
+                                            calendar_sync_status=calendar_sync_status,
+                                            artifact_object_deleter=_delete_recording_objects))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
-    if storage is None:
-        storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---

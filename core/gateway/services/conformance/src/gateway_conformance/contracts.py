@@ -134,5 +134,6 @@ def api_core_paths() -> list[tuple[str, str]]:
         ("/transcripts/{platform}/{native_meeting_id}", "get"),
         ("/recordings", "get"),
         ("/recordings/{recording_id}", "get"),
+        ("/recordings/{recording_id}", "delete"),
         ("/meetings", "get"),
     ]
