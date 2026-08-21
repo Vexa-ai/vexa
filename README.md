@@ -4,15 +4,16 @@
 
 # Vexa
 
-**Open-source, self-hosted meeting bot & transcription API.**
+**Open-source meeting bots and real-time transcription — cloud or fully self-hosted.**
 
-A bot joins your Google Meet, Microsoft Teams, Zoom, and Jitsi calls and streams speaker-attributed
-transcripts in real time through an API *you* host — then feeds sandboxed agents that build a
-Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
+A bot joins your Google Meet, Microsoft Teams, and Zoom calls and streams speaker-attributed
+transcripts in real time — through our API or one *you* host — then feeds sandboxed agents that build
+a Markdown knowledge base your team owns. Apache-2.0, air-gap-ready. (Jitsi: join + capture
+offline-proven, live validation pending — [#883](https://github.com/Vexa-ai/vexa/issues/883).)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.12-informational.svg)](#-status--roadmap)
-[![Self-hosted](https://img.shields.io/badge/deploy-self--hosted-success.svg)](#-quickstart)
+[![Version](https://img.shields.io/badge/version-0.12-informational.svg)](#️-status--roadmap)
+[![Deploy](https://img.shields.io/badge/deploy-cloud%20or%20self--hosted-success.svg)](#-quickstart)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/Ga9duGkVz9)
 
 **[vexa.ai](https://vexa.ai)** runs Vexa 0.12 for meeting bots and transcription.
@@ -30,9 +31,10 @@ your meetings become.
 
 No one else has all three:
 
-1. **Vexa is *in* the meeting.** A real bot joins Meet, Teams, Zoom, and Jitsi and streams
-   speaker-attributed transcripts live. That bot fleet is the genuinely hard part — every
-   "chat with your docs" tool starts *after* a transcript exists. Vexa produces it.
+1. **Vexa is *in* the meeting.** A real bot joins Meet, Teams and Zoom — Jitsi offline-proven, live
+   validation pending — and streams speaker-attributed transcripts live. That bot fleet is the
+   genuinely hard part — every "chat with your docs" tool starts *after* a transcript exists. Vexa
+   produces it.
 
 2. **Your knowledge is files you own.** Meetings compile into Markdown in a git repo —
    portable, diffable, greppable. Knowledge as code.
@@ -46,28 +48,25 @@ No one else has all three:
 
 ---
 
-## Table of contents
-
-- [Quickstart](#-quickstart)
-- [How it works](#-how-it-works)
-- [The agentic runtime](#-the-agentic-runtime)
-- [Agents & your workspace](#-agents--your-workspace)
-- [The Terminal: AI-augmented meetings](#️-the-terminal-ai-augmented-meetings)
-- [How-to recipes](#-how-to-recipes)
-- [Deployment options](#-deployment-options)
-- [Deploy & configure](#-deploy--configure)
-- [How Vexa is different](#-how-vexa-is-different)
-- [For regulated enterprises](#-for-regulated-enterprises)
-- [API reference](#-api-reference)
-- [Status & roadmap](#-status--roadmap)
-- [Community & contributing](#-community--contributing)
-- [License](#-license)
-
----
-
 ## ⚡ Quickstart
 
-Self-host the whole stack on one host, then explore it in the Terminal or drive it over the API.
+**Just want a bot in a meeting?** Use the hosted service — no install. Sign in at
+[vexa.ai/signin](https://vexa.ai/signin), copy your key from [your account page](https://vexa.ai/account),
+and send a bot:
+
+```bash
+curl -X POST "https://api.cloud.vexa.ai/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+```
+
+New accounts get **$5 of free bot credit, no card required** — about 16 hours of bot time at
+$0.30/hr ([pricing](https://vexa.ai/pricing)). More calls: [Send a bot](https://docs.vexa.ai/how-to/send-a-bot).
+
+### Or self-host the whole stack
+
+That is also how you get the agent plane, which is not part of the hosted service.
+Self-host on one host, then explore it in the Terminal or drive it over the API.
 Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works fine for a local
 evaluation — everything runs in containers either way.
 
@@ -77,14 +76,14 @@ air-gapped setup. By default `POST /bots` **requires** STT and answers **503** w
 (`make all` warns when the credentials block in `.env` is empty). Capture-only is an explicit opt-out:
 `{"transcribe_enabled": false}` on the spawn (or set `TRANSCRIBE_ENABLED=false` for the deployment).
 
-> **Build machine:** The full stack (`make all`) requires at least **8 vCPUs and 16 GB RAM**. A smaller
-> box can run `make lite` (the single-container all-in-one image) but `make all` (Docker Compose) will
-> likely fail or timeout. `make lite` is the lighter path for resource-constrained hosts.
+> **Build machine:** `make all` **pulls** the published, release-validated images — no build, so a
+> modest box is fine. `make lite` (the single-container all-in-one image) is lighter still. Building
+> from this checkout instead (`make dev`, for contributors) wants **8 vCPUs and 16 GB RAM**.
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all      # full Docker Compose stack — seeds .env, builds, prints your API key + URLs
-make bot      # build the meeting bot from source (required before a bot can join)
+make all      # full Docker Compose stack — seeds .env, pulls the images (bot included),
+              # prints your API key + URLs. Contributors: `make dev` builds from this checkout.
 ```
 
 When `make all` finishes it prints your key and URLs:
@@ -199,7 +198,7 @@ work: connect your calendar (ICS) and planned meetings appear with attendees —
 
 > **Status (honest):** capture, transcription, and speaker attribution are **production**; the
 > agent dispatch core is **built and proven live** end-to-end. What's still landing is tracked in
-> [Status](#-status--roadmap).
+> [Status](#️-status--roadmap).
 
 ---
 
@@ -269,7 +268,7 @@ curl -X POST "$API_BASE/agent/events" -H "X-API-Key: $API_KEY" -H "Content-Type:
 
 > **Live-meeting copilot** — cards for people, decisions, and action items *during* the call
 > (`POST /agent/meeting/start` → stream `GET /agent/meeting/stream`) — is on the roadmap; see
-> [Status](#-status--roadmap).
+> [Status](#️-status--roadmap).
 
 ---
 
@@ -295,7 +294,7 @@ multiuser from the start. One compliance rule when you go multiuser: other users
 on an **API key** (Commercial Terms), never a personal subscription credential — the
 [licensing page](https://docs.vexa.ai/model-credentials-licensing) spells out the boundary, and
 Settings → Models enforces per-user/global credential resolution. K8s backend status is tracked
-honestly in [Status](#-status--roadmap).
+honestly in [Status](#️-status--roadmap).
 
 ---
 
@@ -319,8 +318,8 @@ container, bound to loopback:
   Or use a free hosted token at [vexa.ai/account](https://vexa.ai/account) while testing.
 - **Bring your own inference** — point the agent at your own LLM endpoint; no inference leaves the network.
 - **Air-gapped** — everything in-VPC, **zero egress** — the posture the regulated verticals require.
-- **Targets** — `make all` · `make bot` (build the bot image from source — required, not pulled) ·
-  `make lite` · `make up` / `make down` · `make help`. Expose the Terminal via a TLS reverse proxy for
+- **Targets** — `make all` (pulls) · `make dev` (builds from this checkout) · `make lite` ·
+  `make probe` (full-journey smoke) · `make down` · `make help`. Expose the Terminal via a TLS reverse proxy for
   production; full guide in the [docs](https://docs.vexa.ai).
 
 ---
@@ -338,7 +337,7 @@ Against the tools developers actually weigh for meeting capture:
 |---|:---:|:---:|:---:|
 | Self-hosted / own your data | ✅ | ❌ their cloud | ✅ |
 | Real-time transcript API | ✅ | ✅ | 🟡 build it |
-| Joins **Meet + Teams + Zoom + Jitsi** | ✅ | 🟡 varies | ❌ enormous effort |
+| Joins **Meet + Teams + Zoom + Jitsi** | ✅ 3 production · 🟡 Jitsi | 🟡 varies | ❌ enormous effort |
 | Speaker attribution | ✅ | ✅ | 🟡 build it |
 | Knowledge as files you own | ✅ | ❌ | 🟡 build it |
 | Agents over your workspace | ✅ | ❌ | ❌ |
@@ -350,8 +349,9 @@ And it's *complementary* to the document-RAG and "second brain" tools — feed t
 attributed transcripts and let them do what they're good at.
 
 The full field — including [Attendee](https://github.com/attendee-labs/attendee) (the other
-open-source meeting-bot API) and the local-notetaker tools — is mapped honestly, trade-offs and
-all, in [How Vexa compares](https://docs.vexa.ai/comparison).
+meeting-bot API, source-available under the **Elastic License 2.0**, which does not permit providing
+it to third parties as a hosted or managed service) and the local-notetaker tools — is mapped
+honestly, trade-offs and all, in [How Vexa compares](https://docs.vexa.ai/comparison).
 
 ---
 
@@ -370,7 +370,7 @@ Companion** on the axes they structurally can't move:
 | Models | Vendor-hosted, fixed | **Bring your own** — local or hosted LLMs |
 | Commercial model | Rented, per-seat subscription | **Owned** — Apache-2.0, no per-seat tax |
 | Adaptable | Generic; no custom vocabulary; vendor roadmap queue | **Your engineers extend it directly** — domain vocabulary, underserved languages, custom workflows |
-| Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom + Jitsi** |
+| Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom** (+ Jitsi, live validation pending) |
 | Data control | Transits the vendor's cloud | **Never leaves your perimeter** |
 | Extensibility | Closed black box | Open source, API-first |
 
@@ -424,7 +424,9 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 | `POST` | `/agent/events` | Fire an integration event that dispatches an agent (e.g. email triage) |
 | `GET` | `/agent/workspace/tree` · `/agent/workspace/file` | Browse and read your Markdown workspace |
 
-`platform` ∈ `google_meet` · `teams` · `zoom` · `jitsi`. Full reference: **[docs.vexa.ai](https://docs.vexa.ai)**.
+`platform` ∈ `google_meet` · `teams` · `zoom` · `jitsi`. The gateway also serves an **MCP endpoint**
+at `/mcp` for agent clients ([docs](https://docs.vexa.ai/vexa-mcp)). Full reference:
+**[docs.vexa.ai](https://docs.vexa.ai)**.
 
 > **v0.12 note:** live bot-control — `PUT /bots/{…}/config` (change language/task mid-call) and
 > `POST /bots/{…}/speak` (TTS into the call) — plus the live-meeting copilot (`/agent/meeting/*`) and
@@ -435,13 +437,13 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 
 ## 🗺️ Status & roadmap
 
-Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.ai) — never aspirational):
+Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.ai/roadmap/status) — never aspirational):
 
 | Capability | State |
 |---|---|
 | Bot joins **Meet / Teams / Zoom** | ✅ Production |
 | Bot joins **Jitsi Meet** (meet.jit.si + self-hosted) | 🆕 Built & offline-proven; live validation pending |
-| Real-time transcription (Whisper) + speaker attribution | ✅ Production |
+| Real-time transcription (Whisper) + speaker attribution | ✅ Production — attribution is not guaranteed: the binder publishes an empty speaker rather than guessing (~4–7% of rows under heavy crosstalk) |
 | Redis transcript streaming | ✅ Production |
 | Recordings to your own object storage (MinIO) | ✅ Available |
 | **Runtime — Docker backend** (container per workload) | ✅ Production |
@@ -466,7 +468,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 - **Discord** — [discord.gg/Ga9duGkVz9](https://discord.gg/Ga9duGkVz9)
 - **Roadmap** — the [board](https://github.com/orgs/Vexa-ai/projects/2), grouped by contributor
   lane, with [milestones](https://github.com/Vexa-ai/vexa/milestones) as the version gates.
-- **Contributing** — [how delivery works](docs/docs/governance/delivery.mdx): prepared issues
+- **Contributing** — [how delivery works](https://docs.vexa.ai/governance/delivery): prepared issues
   with acceptance tables that *guarantee* merge, and human validation credited as a first-class
   contribution (one page, law and how-to together).
 - **Contributor rights** — [one rights choice plus DCO](CONTRIBUTOR_RIGHTS.md) for individuals;
