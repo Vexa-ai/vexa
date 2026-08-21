@@ -82,3 +82,48 @@ test("no swallow sites remain in gates.mjs", () => {
     "a gate is back to `e.stdout || e.stderr` and will report empty failures again",
   );
 });
+
+// ── The fresh-worktree hint (#1107, second defect) ───────────────────────────────────────────
+// Restoring the message was half the fix. The message a fresh worktree produces is a Node
+// module-resolution stack trace, which still does not tell the operator that the fix is one
+// install command. The hint is asserted here — including that it names THIS repo's package
+// manager, because a hint pointing at the wrong one sends the operator down a wrong path that
+// also corrupts the lockfile.
+
+function loadFail() {
+  const src = readFileSync(join(ROOT, "scripts", "gates.mjs"), "utf8");
+  const m = src.match(/const DEPS_MISSING = [^\n]*\nconst fail = \(msgs\) => \{[\s\S]*?\n\};/);
+  assert(m, "gates.mjs no longer defines fail() alongside DEPS_MISSING — the hint has no home");
+  return new Function(`${m[0]}; return fail;`)();
+}
+
+function captureStderr(fn) {
+  const lines = [];
+  const original = console.error;
+  console.error = (...args) => lines.push(args.join(" "));
+  try { fn(); } finally { console.error = original; }
+  return lines.join("\n");
+}
+
+test("a missing dependency earns the install hint", () => {
+  const fail = loadFail();
+  const e = realFailure('process.stderr.write("Error [ERR_MODULE_NOT_FOUND]: Cannot find package \'ajv\'"); process.exit(1)');
+  const printed = captureStderr(() => fail([`schema core/agent/contracts/event.v1:\n${loadErrText()(e)}`]));
+  assert.match(printed, /hint:/, "the operator gets no hint for the commonest cause");
+  assert.match(printed, /pnpm install/);
+});
+
+test("the hint names pnpm — the package manager this repo actually uses", () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.match(pkg.packageManager ?? "", /^pnpm@/, "package.json no longer pins pnpm — the hint text is now wrong");
+  const src = readFileSync(join(ROOT, "scripts", "gates.mjs"), "utf8");
+  const hint = src.match(/hint: did you run `([^`]+)`/);
+  assert(hint, "the install hint is gone");
+  assert.equal(hint[1], "pnpm install", "the hint must name the repo's package manager, not npm/yarn");
+});
+
+test("an ordinary gate failure gets no hint", () => {
+  const fail = loadFail();
+  const printed = captureStderr(() => fail(["schema core/agent/contracts/event.v1:\ngolden does not match schema"]));
+  assert.doesNotMatch(printed, /hint:/, "the hint fires on failures that have nothing to do with dependencies");
+});
