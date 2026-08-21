@@ -1,0 +1,144 @@
+---
+title: "Get a meeting's participants"
+description: "Build a speaker roster from the transcript — and know what that roster is not."
+---
+
+There is **no participants endpoint** in the current API. The list you can build today comes from the
+transcript, and it answers one question only:
+
+> **Who spoke, and was named?**
+
+That is not the same as who attended. A participant who joined and never spoke leaves no trace anywhere
+in the current core. Read [What this list is not](#what-this-list-is-not) before you show it to a user as
+an attendance list — the failure mode is silent, and an empty roster looks exactly like data.
+
+## Derive the roster from the transcript
+
+Every segment on `GET /transcripts/{platform}/{native_meeting_id}` carries a nullable `speaker` field
+holding the bound display name. Its distinct non-empty values are your roster.
+
+```bash GET /transcripts/{platform}/{native_meeting_id}
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/transcripts/google_meet/abc-defg-hij"
+```
+
+```json Response (trimmed)
+{
+  "segments": [
+    { "segment_id": "sess_9c2a:spk1:12400", "speaker": "Jane Liu",    "text": "Let's lock pricing.",  "start": 12.4, "end": 15.1 },
+    { "segment_id": "sess_9c2a:spk2:16800", "speaker": "Amir Haddad", "text": "Agreed.",              "start": 16.8, "end": 17.9 },
+    { "segment_id": "sess_9c2a:spk0:18200", "speaker": "",            "text": "— sorry, go ahead.",   "start": 18.2, "end": 19.0 }
+  ]
+}
+```
+
+**An unattributed turn publishes with an empty `speaker`, deliberately.** When the binder cannot resolve
+who spoke it refuses rather than guessing, and the refusal is not addressed to your user: a row labelled
+"Speaker" would be the product announcing a failed claim inside the customer's own transcript. So the
+label is blanked at the publish boundary and the internal identity stays internal.
+
+That gives you two values to skip:
+
+| Value of `speaker` | Meaning | Do |
+|---|---|---|
+| `null` or `""` | The binder could not name this turn. | Skip. Never treat empty as a person. |
+| `"Speaker"`, `"Speaker A"`, `seg_12` | Internal refusal labels from **transcripts recorded before** those labels were blanked. They can still appear in stored history. | Skip. None of these is somebody's name. |
+| Anything else | A bound display name. | Keep. |
+
+```python Roster from a completed meeting
+import os, re, requests
+
+# Internal refusal labels that may survive in older stored transcripts.
+UNATTRIBUTED = re.compile(r"^(?:seg_\d+|Speaker(?: [A-Z]+)?)$")
+
+r = requests.get(
+    f"{os.environ['API_BASE']}/transcripts/google_meet/abc-defg-hij",
+    headers={"X-API-Key": os.environ["API_KEY"]},
+    timeout=30,
+)
+r.raise_for_status()
+segments = r.json()["segments"]
+
+def named(seg):
+    name = (seg.get("speaker") or "").strip()
+    return name if name and not UNATTRIBUTED.match(name) else None
+
+# Distinct speakers, ordered by first utterance.
+roster, seen = [], set()
+for seg in sorted(segments, key=lambda s: s["start"]):
+    name = named(seg)
+    if name and name not in seen:
+        seen.add(name)
+        roster.append(name)
+
+unattributed = sum(1 for s in segments if not named(s))
+print(roster, f"({unattributed}/{len(segments)} segments unattributed)")
+```
+
+Carry that `unattributed` count into whatever you build. It is the honest confidence signal for the
+roster, and it is what tells you when to stop trusting it.
+
+<Note>
+**Derive the roster after the meeting completes.** Attribution is not final while a meeting runs — a turn
+published unattributed can be **repainted later**, keyed by `segment_id`, once the binder resolves it. A
+roster computed mid-meeting will change under you. Wait for meeting `status` to reach `completed`, or
+re-derive on every update instead of caching the first answer.
+</Note>
+
+Segments also carry a `speaker_key` — the stable transport identity of a track, which survives even when
+the display name is blank, so distinct-but-unnamed speakers stay distinct. It is useful for *counting*
+voices you cannot name. Note that it is not part of the sealed `api.v1` contract, so treat it as
+best-effort rather than guaranteed.
+
+## What this list is not
+
+| It does not include | Why |
+|---|---|
+| **Silent attendees** | Nothing in the current core records who was *present*. The bot's platform modules watch tiles that emit a speaking signal, so someone who never speaks is never observed. |
+| **Speakers the binder could not name** | Published with an empty `speaker` rather than a guess — correct behaviour, but it means a real person can be absent from the roster. |
+| **Invitees who did not attend** | The transcript only knows about audio. For who was *asked*, use the calendar feed you connected under [Calendar sync](/how-to/calendar-sync). |
+
+An empty roster therefore means **attendance was never captured**. It can never mean "nobody attended",
+and a client that renders it that way will be wrong on exactly the meetings that matter.
+
+## Do not read `data.participants` or `data.speaker_events`
+
+Older integrations read a roster off `meeting.data->'participants'`, and speaker activity off
+`meeting.data->'speaker_events'`, on `GET /meetings/{meeting_id}`.
+
+**Neither key has been written since the 0.12 cutover** (2026-07-18). It was a clean cliff, not a decay,
+and there is **no replacement table** — the bot still resolves the roster during the meeting, and it is
+dropped on the write path. Tracked as [#861](https://github.com/Vexa-ai/vexa/issues/861), open.
+
+Both keys remain declared as optional fields in the lifecycle contract, so a client reading them gets an
+absent key or an empty list rather than an error. Code that reads that as "nobody was in the meeting"
+reports a hard `0` for every meeting — which is how the loss was found, on an ops dashboard whose `0`
+read as a bot failure and cost real triage time.
+
+Use the transcript-derived roster above instead.
+
+## Known limits
+
+The roster is only as good as speaker attribution, and attribution has open defects worth knowing before
+you build on it:
+
+| Limit | Effect on your roster |
+|---|---|
+| Roughly **4–7% of rows publish unnamed** under heavy crosstalk ([v0.12.22 release notes](https://github.com/Vexa-ai/vexa/releases/tag/v0.12.22)) | A quiet participant whose few turns all landed in crosstalk can be missed entirely. |
+| Attribution reported **unusable past ~4 participants** ([#510](https://github.com/Vexa-ai/vexa/issues/510), open) | On larger meetings treat names as unreliable, not merely incomplete. |
+| **Teams/Zoom name resolution misses** on live DOM ([#797](https://github.com/Vexa-ai/vexa/issues/797), open) | More unnamed turns on those platforms than on Google Meet. |
+| Speech is **never credited to another notetaker's tile** ([#1221](https://github.com/Vexa-ai/vexa/issues/1221), open) | With another vendor's bot in the call, speech routed through it is misattributed. |
+
+See [Speaker-attributed transcripts](/api/meetings#speaker-attributed-transcripts) for how attribution
+works and why unresolved turns publish empty.
+
+## Not available yet: a participants endpoint
+
+A dedicated read endpoint that merges calendar invitees with heard speakers — each row labelled with its
+source — is **designed and open, not shipped**. It is not callable on any release today.
+
+- [#451](https://github.com/Vexa-ai/vexa/issues/451) — the feature request.
+- [#1275](https://github.com/Vexa-ai/vexa/pull/1275) — the open pull request implementing it.
+
+Until that merges and ships, the transcript-derived roster above is the supported path. When it ships,
+this page and the [Meetings API reference](/api/meetings) will carry the endpoint and the migration.
