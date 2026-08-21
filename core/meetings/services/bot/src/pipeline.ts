@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -424,9 +424,17 @@ export function createTranscribe(inv: Invocation): Transcribe {
 }
 
 /**
- * The composition-root factory: pick the transcription lane on platform and wire STT + sink.
- * Google Meet uses native per-channel capture, Teams uses CSRC virtual channels over the shared
- * GMeet window, and Zoom/Jitsi keep the legacy mixed segmenter.
+ * The composition-root factory: pick the lane on platform and wire stt + sink. Three engines:
+ *   • PER-CHANNEL (@vexa/gmeet-pipeline) — overlap-safe, name-at-onset. Google Meet (per-<audio>
+ *     channels) AND Zoom (per-WebRTC-track channels, confirmed multi-stream + stable; named
+ *     page-side by the track→name resolver). A track = one speaker, so overlap is separated by the
+ *     tracks themselves — no pyannote, no cluster naming.
+ *   • CSRC/GMeet (createTeamsBotPipeline) — Teams, whose one mixed track carries RTP
+ *     contributing-source (CSRC) virtual channels; each CSRC is a per-speaker channel over the
+ *     shared GMeet window, so Teams gets per-channel overlap safety without per-track streams.
+ *   • MIXED (@vexa/mixed-pipeline) — pyannote cut + time-windowed hint naming. Jitsi only, whose
+ *     per-track topology is NOT yet witnessed live. It flips to per-channel once
+ *     isPerTrackLanePlatform includes it.
  */
 export function createBotPipeline(
   inv: Invocation,
@@ -435,8 +443,8 @@ export function createBotPipeline(
     transcribe?: Transcribe;
     config?: SpeakerStreamManagerConfig;
     onError?: (e: unknown) => void;
-    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
-     *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
+    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects an observer
+     *  (pins what reaches the transcriber: name, kind, tMs). Only consulted on the mixed lane. */
     createMixedTranscriber?: MixedTranscriberFactory;
     /** Teams-only CSRC/GMeet lane construction seam. It is separate from the legacy mixed factory
      * so a test cannot accidentally prove Pyannote while production selects virtual channels. */
@@ -452,7 +460,9 @@ export function createBotPipeline(
       transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
     );
   }
-  if (isMixedLanePlatform(inv.platform)) {
+  // Zoom rides the per-channel (gmeet) lane per-track; only Jitsi remains on the legacy mixed
+  // segmenter (Teams returned above via its CSRC/GMeet lane).
+  if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
