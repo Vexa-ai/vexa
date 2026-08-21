@@ -16,7 +16,36 @@ const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
 const skippable = (name) => name.startsWith(".") || SKIP.has(name);
 const rel = (p) => p.slice(ROOT.length + 1) || ".";
-const fail = (msgs) => { for (const m of msgs) console.error("  ✗ " + m); return false; };
+// Every gate's errors print through here, so the missing-dependency hint lives here too: it is
+// appended AFTER each caller's .slice(), so the one line that tells the operator what to actually
+// do can never be the part that gets truncated, and no individual gate has to remember to say it.
+// A fresh worktree has no node_modules, and a gate failing for that reason reads like a code
+// defect until something names the real fix (Vexa-ai/vexa#1107).
+const DEPS_MISSING = /ERR_MODULE_NOT_FOUND|Cannot find (?:module|package)/;
+const fail = (msgs) => {
+  for (const m of msgs) console.error("  ✗ " + m);
+  if (msgs.some((m) => DEPS_MISSING.test(String(m))))
+    console.error("  → hint: did you run `pnpm install` in this worktree? A fresh worktree has no node_modules.");
+  return false;
+};
+
+// Text of a failed execSync, for the operator who has to act on it.
+//
+// The obvious `errText(e)` is wrong, and wrong in the worst
+// possible direction: with `stdio: "pipe"` a child that writes only to stderr leaves
+// `e.stdout` as a ZERO-LENGTH Buffer, and an empty Buffer is an object, so it is TRUTHY.
+// The `||` chain short-circuits on it and the real diagnostic is discarded — the gate prints
+// its own name, a colon, and nothing. Measured on 2026-08-10: every gate:schema failure had
+// been silent since the gate was written, and the only move left to the operator is
+// `--no-verify`, which is precisely the habit these hooks exist to prevent
+// (Vexa-ai/vexa#1107).
+//
+// Prefer stdout, fall back to stderr, then to the error itself — choosing on LENGTH, never
+// on truthiness.
+const errText = (e) => {
+  const out = e?.stdout?.length ? e.stdout : (e?.stderr?.length ? e.stderr : e);
+  return (out ?? "").toString();
+};
 
 function walkDirs(dir = ROOT, acc = []) {
   for (const name of readdirSync(dir)) {
@@ -121,7 +150,7 @@ function gateIsolation() {
     .filter(([, s]) => existsSync(s));
   for (const [d, s] of found) {
     try { execSync(`node ${JSON.stringify(s)}`, { stdio: "pipe" }); }
-    catch (e) { return fail([`isolation failed in ${rel(d)}: ${(e.stdout || e.stderr || e).toString().slice(0, 300)}`]); }
+    catch (e) { return fail([`isolation failed in ${rel(d)}: ${errText(e).slice(0, 300)}`]); }
   }
   console.log(`  ✓ gate:isolation — ${found.length} brick(s) checked`);
   return true;
@@ -133,7 +162,7 @@ function gateGraph() {
   const targets = ["core", "integrations", "clients", "sdks", "schemas", "tools"]
     .filter((d) => existsSync(join(ROOT, d)));
   try { execSync(`npx depcruise --config .dependency-cruiser.cjs --no-progress ${targets.join(" ")}`, { stdio: "pipe" }); }
-  catch (e) { return fail([`dependency-cruiser:\n${(e.stdout || e.stderr || e).toString()}`]); }
+  catch (e) { return fail([`dependency-cruiser:\n${errText(e)}`]); }
   console.log("  ✓ gate:graph — acyclic + allowed-edges");
   return true;
 }
@@ -146,7 +175,7 @@ function gateGraph() {
 function gateIsolationPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
   try { execSync(`node ${JSON.stringify(s)} --mode=isolation`, { stdio: "pipe" }); }
-  catch (e) { return fail([`python isolation:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  catch (e) { return fail([`python isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:isolation-py — every Python sibling import is own-module, declared, or an allowed edge");
   return true;
 }
@@ -159,7 +188,7 @@ function gateIsolationPy() {
 function gateGraphPy() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
   try { execSync(`node ${JSON.stringify(s)} --mode=graph`, { stdio: "pipe" }); }
-  catch (e) { return fail([`python graph:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  catch (e) { return fail([`python graph:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:graph-py — Python cross-package edges acyclic + allow-listed");
   return true;
 }
@@ -172,7 +201,7 @@ function gateGraphPy() {
 function gateTestIsolation() {
   const s = join(ROOT, "scripts", "check-isolation-py.mjs");
   try { execSync(`node ${JSON.stringify(s)} --mode=test-isolation`, { stdio: "pipe" }); }
-  catch (e) { return fail([`python test-isolation:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  catch (e) { return fail([`python test-isolation:\n${errText(e).slice(0, 1200)}`]); }
   console.log("  ✓ gate:test-isolation — no Python test imports a sibling module's internals (test lane gated, P2)");
   return true;
 }
@@ -185,7 +214,7 @@ function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");
   if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
   try { execSync(`node ${JSON.stringify(s)} --check`, { stdio: "pipe" }); }
-  catch (e) { return fail([`arch-report:\n${(e.stdout || e.stderr || e).toString().slice(0, 900)}`]); }
+  catch (e) { return fail([`arch-report:\n${errText(e).slice(0, 900)}`]); }
   console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
   return true;
 }
@@ -219,7 +248,7 @@ function gateSchema() {
   if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
   for (const d of contracts) {
     try { execSync(`node ${JSON.stringify(join(d, "validate.mjs"))} --check`, { stdio: "pipe" }); }
-    catch (e) { return fail([`schema ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+    catch (e) { return fail([`schema ${rel(d)}:\n${errText(e)}`]); }
   }
   console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);
   return true;
@@ -260,7 +289,7 @@ function gatePython() {
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
   for (const d of pkgs) {
     try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`pytest ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+    catch (e) { return fail([`pytest ${rel(d)}:\n${errText(e)}`]); }
   }
   console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
   return true;
@@ -279,7 +308,7 @@ function gateStack() {
   if (!pkgs.length) { console.log("  ✓ gate:stack — no stack-eval packages yet (green-on-empty)"); return true; }
   for (const d of pkgs) {
     try { execSync("uv run pytest -q tests", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`stack-eval ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+    catch (e) { return fail([`stack-eval ${rel(d)}:\n${errText(e).slice(-2000)}`]); }
   }
   console.log(`  ✓ gate:stack — ${pkgs.length} backing-stack eval package(s) · testcontainers green-or-skip`);
   return true;
@@ -302,7 +331,7 @@ function gateCompose() {
   catch { console.log("  ✓ gate:compose — docker not available → skip (green-or-skip)"); return true; }
   if (!existsSync(runner)) return fail([`gate:compose — compose stack present but no readiness proof (deploy/compose/bin/stack-test missing)`]);
   try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
-  catch (e) { return fail([`compose stack-readiness proof:\n${(e.stdout || e.stderr || e).toString().slice(-3000)}`]); }
+  catch (e) { return fail([`compose stack-readiness proof:\n${errText(e).slice(-3000)}`]); }
   console.log("  ✓ gate:compose — REAL compose stack proven bot-ready (health·auth·transcript·recording·control-plane)");
   return true;
 }
@@ -340,7 +369,7 @@ function gateNode() {
   });
   if (!pkgs.length) { console.log("  ✓ gate:node — no buildable packages yet (green-on-empty)"); return true; }
   try { execSync("npx turbo run build test --output-logs=errors-only", { cwd: ROOT, stdio: "pipe" }); }
-  catch (e) { return fail([`turbo build/test:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+  catch (e) { return fail([`turbo build/test:\n${errText(e).slice(-2000)}`]); }
   console.log(`  ✓ gate:node — ${pkgs.length} package(s) · build + test green`);
   return true;
 }
@@ -356,7 +385,7 @@ function gateEvalBaseline() {
   if (!existsSync(verify)) { console.log("  ✓ gate:eval-baseline — no worker-eval harness yet (green-on-empty)"); return true; }
   if (!existsSync(baseline)) return fail(["gate:eval-baseline — core/meetings/eval/BASELINE.md (recorded L4 ground truth) missing"]);
   try { execSync(`bash ${JSON.stringify(verify)}`, { cwd: ROOT, stdio: "pipe" }); }
-  catch (e) { return fail([`eval-baseline oracle self-test:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  catch (e) { return fail([`eval-baseline oracle self-test:\n${errText(e).slice(-1500)}`]); }
   console.log("  ✓ gate:eval-baseline — worker-L4 eval oracle self-test passes + BASELINE.md recorded (reusable instrument; live score is B:V1)");
   return true;
 }
@@ -606,7 +635,7 @@ function gateHealth() {
   if (missing.length) return fail(missing.map((d) => `HTTP service exposes no liveness eval: ${rel(d)}/tests/test_health.py missing`));
   for (const d of svcs) {
     try { execSync("uv run pytest -q tests/test_health.py", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`health ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+    catch (e) { return fail([`health ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
   console.log(`  ✓ gate:health — ${svcs.length} HTTP service(s) answer a conforming /health`);
   return true;
@@ -620,7 +649,7 @@ function gateAccess() {
   if (!pkgs.length) return fail(["gate:access — no tests/test_access.py anywhere (canAccess default-deny is unproven)"]);
   for (const d of pkgs) {
     try { execSync("uv run pytest -q tests/test_access.py", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`access ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+    catch (e) { return fail([`access ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
   console.log(`  ✓ gate:access — ${pkgs.length} access deny-test(s) green (default-deny, P20)`);
   return true;
@@ -648,7 +677,7 @@ function gateContractConformance() {
   if (!pkgs.length) return fail(["gate:contract-conformance — no tests/test_contract_conformance.py (api.v1↔impl conformance is unproven)"]);
   for (const d of pkgs) {
     try { execSync("uv run pytest -q tests/test_contract_conformance.py", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`contract-conformance ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+    catch (e) { return fail([`contract-conformance ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
   console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (impl⊆contract + contract⊆impl + golden shapes; gaps audited in KNOWN_GAPS.json)`);
   return true;
@@ -664,7 +693,7 @@ function gateTracing() {
   if (!pkgs.length) return fail(["gate:tracing — no tests/test_tracing.py (distributed trace is unproven)"]);
   for (const d of pkgs) {
     try { execSync("uv run pytest -q tests/test_tracing.py", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`tracing ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+    catch (e) { return fail([`tracing ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
   console.log(`  ✓ gate:tracing — trace_id threads every hop; logs conform to logevent.v1`);
   return true;
@@ -682,7 +711,7 @@ function gateReplay() {
   if (!pkgs.length) return fail(["gate:replay — no package exposes a `replay` harness (deterministic replay is unproven)"]);
   for (const d of pkgs) {
     try { execSync("pnpm run replay", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`replay ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+    catch (e) { return fail([`replay ${rel(d)}:\n${errText(e).slice(-2000)}`]); }
   }
   console.log(`  ✓ gate:replay — ${pkgs.length} deterministic replay harness(es) green (same in ⇒ same out)`);
   return true;
@@ -700,7 +729,7 @@ function gateTelemetry() {
   if (!taps.length) return fail(["gate:telemetry — no capture-bridge TelemetrySink unit test (src/telemetry.test.ts)"]);
   for (const d of taps) {
     try { execSync("pnpm exec tsx src/telemetry.test.ts", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`telemetry ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+    catch (e) { return fail([`telemetry ${rel(d)}:\n${errText(e).slice(-2000)}`]); }
   }
   console.log(`  ✓ gate:telemetry — captured-signal.v1 + flagged-issue.v1 present; capture tap proven`);
   return true;
@@ -749,7 +778,7 @@ function gateExecutionEnv() {
   const real = join(ROOT, "deploy", "execution-targets.json");
   const files = [example, ...(existsSync(real) ? [real] : [])];
   try { execSync(`node ${JSON.stringify(v)} ${files.map((f) => `--file ${JSON.stringify(f)}`).join(" ")}`, { stdio: "pipe" }); }
-  catch (e) { return fail([`execution-env registry:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  catch (e) { return fail([`execution-env registry:\n${errText(e).slice(-1500)}`]); }
   console.log(`  ✓ gate:execution-env — ${files.length} registry file(s) conform to execution-targets.v1${existsSync(real) ? "" : " (template only — real registry gitignored/absent)"}`);
   return true;
 }
@@ -1015,7 +1044,7 @@ function gateConfigContract() {
     if (!existsSync(declPath)) { errs.push(`${svc.service}: declaration missing (${svc.decl})`); continue; }
     // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
     try { execSync(`node ${JSON.stringify(join(CONFIG_CONTRACT_DIR, "validate.mjs"))} --check --file ${JSON.stringify(declPath)}`, { stdio: "pipe" }); }
-    catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${(e.stdout || e.stderr || e).toString().slice(-800)}`); continue; }
+    catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${errText(e).slice(-800)}`); continue; }
     // 2. the vendored preflight is the canonical one, byte for byte
     if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)
       errs.push(`${svc.service}: ${svc.preflight} is missing or has drifted from deploy/contracts/config.v1/preflight.py (vendor it VERBATIM)`);
@@ -1078,7 +1107,7 @@ function gateDbSchema() {
   if (!existsSync(SCHEMA_SEAL)) return fail(["gate:db-schema — schema.seal.json missing (run `pnpm seal:schema` to freeze the current DB schema)"]);
   let current;
   try { current = _schemaDigest(); }
-  catch (e) { return fail([`gate:db-schema — could not compute the schema digest (python3 scripts/schema_digest.py):\n${(e.stdout || e.stderr || e).toString().slice(-600)}`]); }
+  catch (e) { return fail([`gate:db-schema — could not compute the schema digest (python3 scripts/schema_digest.py):\n${errText(e).slice(-600)}`]); }
   const cur = _flattenSchema(current);
   const old = _flattenSchema(JSON.parse(readFileSync(SCHEMA_SEAL, "utf8")));
   const errs = [];
