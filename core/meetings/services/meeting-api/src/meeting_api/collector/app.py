@@ -266,6 +266,41 @@ def build_router(
             "running": running, "running_bots": running, "count": len(running),
         })
 
+    # --- GET /meetings/completion-summary → how this account's meetings are ENDING (#1292).
+    #
+    # MUST stay declared ABOVE `GET /meetings/{meeting_id}`: that route parses its segment as `int`,
+    # so a literal path registered after it is shadowed and answers 422 instead of 200. FastAPI
+    # matches in declaration order, and there is no test that would catch the reorder for you.
+    #
+    # The per-meeting reason has shipped since v0.12.16, but one meeting at a time. Without this a
+    # caller asking "why do my bots keep failing?" had to page their entire history and tally the
+    # field client-side — so every integrator wrote the same loop, and anyone who did not simply
+    # counted `status != completed` and drew a conclusion about us that the ten reasons do not
+    # support. Counts only: see `build_completion_summary` for why no ratio is published here.
+    @router.get("/meetings/completion-summary")
+    async def meetings_completion_summary(
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        since: Optional[str] = Query(default=None),
+        until: Optional[str] = Query(default=None),
+        platform: Optional[str] = Query(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        summary = await store.completion_summary(
+            user_id, since=since, until=until, platform=platform,
+        )
+        log_event(
+            "meetings_completion_summarized",
+            audience="user",
+            span="meetings.completion_summary",
+            user_id=user_id,
+            # The TOTAL only — never the per-reason split. This log line ships to operators, and a
+            # reason histogram here would recreate, in our own telemetry, exactly the collapsed
+            # artefact this endpoint exists to replace.
+            fields={"total": summary.get("total", 0)},
+        )
+        return JSONResponse(content=summary)
+
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's
     # meeting — but one row is read instead of the caller's entire history (#803). Full `data` is

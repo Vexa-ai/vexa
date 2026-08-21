@@ -60,6 +60,82 @@ A meeting is **one record from plan to transcript**:
 | Live (bot FSM) | `requested` · `joining` · `awaiting_admission` · `needs_help` · `active` · `stopping` | the bot lifecycle |
 | Terminal | `completed` · `failed` | — |
 
+### Why a meeting ended — `completion_reason`
+
+`status` tells you a run finished; `completion_reason` tells you **why**. Every terminal meeting
+carries it as a typed top-level field on `GET /bots`, `GET /meetings`, `GET /meetings/{meeting_id}`
+and on the `meeting.completed` / `bot.failed` webhooks. `failure_stage` (`requested` · `joining` ·
+`awaiting_admission` · `active`) rides alongside it, recording how far the bot got.
+
+**Most endings are not errors.** Of the ten reasons, only two are the platform failing to do its
+job — the rest are the ordinary result of putting a bot into other people's calendars, and reading
+them as failures will give you a number that means nothing:
+
+| `completion_reason` | What happened | Whose action |
+|---|---|---|
+| `stopped` | you stopped the bot | **yours** |
+| `left_alone` | everyone left, so the bot left too | a normal ending |
+| `startup_alone` | nobody was in the meeting when it joined | the meeting didn't happen |
+| `evicted` | the host removed the bot | the **host's** |
+| `awaiting_admission_timeout` | it waited in the lobby and nobody admitted it | the **host's** |
+| `awaiting_admission_rejected` | the host denied admission | the **host's** |
+| `max_bot_time_exceeded` | it hit the configured time cap | your configuration |
+| `validation_error` | the request was malformed | **yours** — check the call |
+| `join_failure` | the bot could not join | **ours** |
+| `auth_session_missing` | no authenticated session was available | ours, or your credentials |
+
+<Note>
+A meeting can be `completed` and still have ended early — `completed` means the run reached a
+terminal state cleanly, not that anything was captured. Check the segment count for that.
+</Note>
+
+### How your meetings are ending — `GET /meetings/completion-summary`
+
+The counts across your account, so you don't have to page your history and tally them yourself.
+
+```bash Completion summary — GET /meetings/completion-summary
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings/completion-summary?since=2026-07-21T00:00:00Z"
+```
+
+```json
+{
+  "window": { "since": "2026-07-21T00:00:00Z", "until": null },
+  "total": 412,
+  "by_status": { "completed": 361, "failed": 44, "active": 5, "requested": 2 },
+  "by_completion_reason": {
+    "stopped": 203,
+    "left_alone": 96,
+    "startup_alone": 41,
+    "awaiting_admission_timeout": 14,
+    "evicted": 7,
+    "join_failure": 6,
+    "unrecorded": 35
+  }
+}
+```
+
+<ParamField query="since" type="string">ISO-8601 lower bound on the meeting's creation time, inclusive. Omit for unbounded.</ParamField>
+<ParamField query="until" type="string">ISO-8601 upper bound, **exclusive** — adjacent windows tile without counting a meeting twice.</ParamField>
+<ParamField query="platform" type="string">Restrict to one platform.</ParamField>
+
+Four things worth knowing before you build on it:
+
+- **It counts your own meetings only.** A meeting shared with you belongs to its owner's summary,
+  not yours.
+- **`by_completion_reason` covers terminal meetings only.** In-flight runs appear in `by_status`
+  and are absent here — they have no reason *yet*, which is not the same as having none.
+- **`unrecorded` is a real bucket**, not an error. It counts terminal meetings that recorded no
+  reason, so the buckets always sum to the terminal count and you can see what we don't know.
+- **The response carries no rate, and you should be careful deriving one.** The ten reasons are not
+  interchangeable, so a single "failure rate" over them answers no question you actually have. If
+  you want to track the platform's reliability, `join_failure` and `auth_session_missing` are the
+  reasons that are ours; if you want to track meeting hygiene, the lobby and `startup_alone` counts
+  are the ones that move.
+
+An unparseable `since`/`until` is ignored rather than rejected — the `window` in the response echoes
+the bounds actually applied, so a `null` there means your bound was dropped.
+
 Sending a bot to a planned meeting (yours or auto-join's) **upgrades the same record in place** —
 its title, workspace binding, and transcript stay together. `PATCH`/`DELETE` work only while the
 record is still planned; once the bot lifecycle owns it they answer `409`.

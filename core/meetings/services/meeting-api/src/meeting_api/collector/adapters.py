@@ -574,6 +574,65 @@ class SqlAlchemyTranscriptStore:
             result = [_row(m) for m in rows]
             return (result, has_more) if list_view else result
 
+    async def completion_summary(self, user_id, *, since=None, until=None, platform=None):
+        """Two GROUP BYs over the caller's OWN meetings; :func:`build_completion_summary` shapes them.
+
+        **Owner-scoped on purpose — deliberately NOT the access union `list_meetings` uses.** That
+        union also returns meetings shared TO the caller, which are somebody else's bot runs. Folding
+        those into "how are MY meetings ending" would answer a question nobody asked with data the
+        caller cannot act on, and would leak the shape of another account's reliability into theirs.
+        One condition on ``user_id`` also keeps this on ``ix_meeting_user_created_at``.
+
+        Counted in SQL, never in Python: the whole point is to stop callers paging their entire
+        history to tally a field, so doing it here by fetching every row would just move the cost.
+        """
+        from sqlalchemy import func, select
+
+        from .models import Meeting
+        from .projection import (
+            TERMINAL_STATUSES,
+            build_completion_summary,
+            format_window_bound,
+            parse_window_bound,
+        )
+
+        since_dt, until_dt = parse_window_bound(since), parse_window_bound(until)
+
+        async with self._session_factory() as db:
+            conds = [Meeting.user_id == user_id]
+            if platform:
+                conds.append(Meeting.platform == platform)
+            if since_dt is not None:
+                conds.append(Meeting.created_at >= since_dt)
+            if until_dt is not None:
+                # Half-open [since, until): adjacent windows tile without double-counting the
+                # boundary row, so a caller stitching months together gets each meeting once.
+                conds.append(Meeting.created_at < until_dt)
+
+            status_rows = (
+                await db.execute(
+                    select(Meeting.status, func.count()).where(*conds).group_by(Meeting.status)
+                )
+            ).all()
+
+            # `.astext` (the JSONB ``->>``) yields SQL NULL both when the key is absent and when it
+            # holds JSON null; `build_completion_summary` folds either into `unrecorded`.
+            reason_col = Meeting.data["completion_reason"].astext
+            reason_rows = (
+                await db.execute(
+                    select(reason_col, func.count())
+                    .where(*conds, Meeting.status.in_(TERMINAL_STATUSES))
+                    .group_by(reason_col)
+                )
+            ).all()
+
+        return build_completion_summary(
+            {s: n for s, n in status_rows},
+            {r: n for r, n in reason_rows},
+            since=format_window_bound(since_dt),
+            until=format_window_bound(until_dt),
+        )
+
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
         (a) OWNERSHIP (unchanged) — the meeting's owner may always subscribe;

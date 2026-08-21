@@ -250,6 +250,60 @@ class InMemoryTranscriptStore:
         result = [_row(mid, m) for mid, m in rows]
         return (result, has_more) if list_view else result
 
+    async def completion_summary(self, user_id, *, since=None, until=None, platform=None):
+        """In-memory mirror of the SQL adapter's two GROUP BYs (#1292).
+
+        Owner-scoped, matching the adapter: ``m["user_id"] == user_id`` and NOT the access union
+        `list_meetings` uses. A meeting shared TO this caller is somebody else's bot run and does not
+        belong in their own picture of how their meetings end.
+
+        Bucketing, ordering, the ``unrecorded`` fold and the half-open window all come from
+        :mod:`.projection`, so this cannot drift from production by construction — the only thing
+        that differs is where the rows are counted.
+        """
+        from .projection import (
+            TERMINAL_STATUSES,
+            build_completion_summary,
+            format_window_bound,
+            parse_window_bound,
+        )
+
+        since_dt, until_dt = parse_window_bound(since), parse_window_bound(until)
+
+        def _in_window(m) -> bool:
+            created = parse_window_bound(m.get("created_at"))
+            if created is None:
+                # No parseable creation time: keep the row rather than silently shrinking the
+                # account's totals. An over-count a caller can see beats a quiet under-count.
+                return True
+            if since_dt is not None and created < since_dt:
+                return False
+            # Half-open [since, until) — adjacent windows tile without double-counting.
+            return not (until_dt is not None and created >= until_dt)
+
+        rows = [
+            m for m in self._meetings.values()
+            if m["user_id"] == user_id
+            and (platform is None or m["platform"] == platform)
+            and _in_window(m)
+        ]
+
+        status_counts: dict = {}
+        reason_counts: dict = {}
+        for m in rows:
+            status_counts[m["status"]] = status_counts.get(m["status"], 0) + 1
+            if m["status"] in TERMINAL_STATUSES:
+                data = m.get("data") if isinstance(m.get("data"), dict) else {}
+                raw = data.get("completion_reason")
+                reason_counts[raw] = reason_counts.get(raw, 0) + 1
+
+        return build_completion_summary(
+            status_counts,
+            reason_counts,
+            since=format_window_bound(since_dt),
+            until=format_window_bound(until_dt),
+        )
+
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is not None:
