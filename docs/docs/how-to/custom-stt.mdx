@@ -10,6 +10,10 @@ implements the same request shape.
 Use this path when you want a different ASR model without changing the bot, meeting-api, or live
 transcript pipeline.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ## Contract
 
 Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends multipart form data:
