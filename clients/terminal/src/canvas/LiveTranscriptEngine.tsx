@@ -92,7 +92,7 @@ const menuItemStyle: React.CSSProperties = {
 };
 
 function ContestedText({ text }: { text: string }): React.ReactElement | null {
-  const pattern = /⟦([^⟧]+)⟧\{([^}]+)\}/g;
+  const pattern = /\[([^\]]+)\]/g;
   const parts: React.ReactNode[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -121,7 +121,7 @@ function ContestedText({ text }: { text: string }): React.ReactElement | null {
 
 /** Render a block's text. With `entities` → inline highlights; without → plain text (raw mode). */
 function BlockText({ text, entities, actions }: { text: string; entities?: EngineEntity[]; actions?: EngineActions }) {
-  if (/⟦[^⟧]+⟧\{[^}]+\}/.test(text)) return <ContestedText text={text} />;
+  if (/\[[^\]]+\]/.test(text)) return <ContestedText text={text} />;
   if (!entities || !entities.length) return <>{text}</>;
   const spans = splitTextIntoSpans(text, entities);
   return (

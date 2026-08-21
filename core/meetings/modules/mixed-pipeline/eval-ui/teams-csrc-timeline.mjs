@@ -13,7 +13,7 @@ export function flagContestedWords(row, annotation) {
   const start = text.toLocaleLowerCase().indexOf(String(annotation.contestedText).toLocaleLowerCase());
   if (start < 0) return text;
   const end = start + String(annotation.contestedText).length;
-  return `${text.slice(0, start)}⟦${text.slice(start, end)}⟧{CSRC ${row.csrc}↔CSRC ${annotation.rivalCsrc}}${text.slice(end)}`;
+  return `${text.slice(0, start)}[${text.slice(start, end)}]${text.slice(end)}`;
 }
 
 export function buildTimelineModel(result, annotationDocument = null) {
@@ -111,20 +111,20 @@ export function mountTeamsCsrcTimeline(root, model, { audioUrl, dataUrl, annotat
     <header>
       <div>
         <h1>Teams CSRC · audio-aligned transcript replay</h1>
-        <p>Meeting ${fmt(model.cutStartSec)}–${fmt(model.cutStartSec + model.durationSec)} · dashed = raw CSRC · fill = routed audio · lower bar = confirmed transcript · ⟦words⟧{CSRC A↔CSRC B} = contested wording</p>
+        <p>Meeting ${fmt(model.cutStartSec)}–${fmt(model.cutStartSec + model.durationSec)} · dashed = raw CSRC · fill = routed audio · lower bar = confirmed transcript · [words] = contested wording</p>
       </div>
       <div class="receipt" id="receipt"></div>
     </header>
     <audio id="audio" controls preload="metadata"></audio>
     <section class="word-contests"${contestedRows.length ? '' : ' hidden'}>
       <h2>Contested words · ownership unresolved</h2>
-      <p>Both CSRC rows remain. Only the shared words are wrapped as ⟦words⟧{CSRC A↔CSRC B}; no winner is inferred. Click a card to listen.</p>
+      <p>Both CSRC rows remain. Only the shared words are wrapped as [words]; no winner is inferred. Click a card to listen.</p>
       <div class="word-contest-list">
         ${contestedRows.map(({ row, rivalRow, annotation }) => `
           <button type="button" class="contested-card" data-contested-seek="${row.startSec}" data-segment-id="${escapeHtml(row.segmentId)}">
             <span class="word-contest-meta">${fmt(row.startSec)} · duplicated phrase: “${escapeHtml(annotation.contestedText)}”</span>
-            <span class="word-contest-party"><b>CONTESTED — CSRC ${row.csrc}</b>${escapeHtml(flagContestedWords(row, { contestedText: annotation.contestedText, rivalCsrc: rivalRow.csrc }))}</span>
-            <span class="word-contest-party"><b>CONTESTED — CSRC ${rivalRow.csrc}</b>${escapeHtml(flagContestedWords(rivalRow, { contestedText: annotation.contestedText, rivalCsrc: row.csrc }))}</span>
+            <span class="word-contest-party"><b>CONTESTED — CSRC ${row.csrc}</b>${escapeHtml(flagContestedWords(row, { contestedText: annotation.contestedText }))}</span>
+            <span class="word-contest-party"><b>CONTESTED — CSRC ${rivalRow.csrc}</b>${escapeHtml(flagContestedWords(rivalRow, { contestedText: annotation.contestedText }))}</span>
             <span class="word-contest-context"><b>DETECTED BY</b>${escapeHtml(annotation.reason)}</span>
             ${annotation.evidence ? `<span class="word-contest-evidence">${annotation.evidence.sharedRoutedMs} ms shared audio · ${annotation.evidence.matchedTokens} matching words · ${annotation.evidence.medianWordDeltaMs} ms median word-time delta</span>` : ''}
           </button>`).join('')}
@@ -299,7 +299,7 @@ export function mountTeamsCsrcTimeline(root, model, { audioUrl, dataUrl, annotat
   legend.innerHTML = model.tracks.map((track, index) => `<span><i style="background:${palette[index % palette.length]}"></i>CSRC ${track}</span>`).join('')
     + '<span>outline = raw</span><span>fill = routed audio</span><span>lower = confirmed</span>'
     + '<span>orange dashed = contested; both rows kept</span>'
-    + '<span>⟦words⟧{CSRC A↔CSRC B} = contested wording</span><span><i style="background:var(--series-5)"></i>single-pass</span>';
+    + '<span>[words] = contested wording</span><span><i style="background:var(--series-5)"></i>single-pass</span>';
   audio.addEventListener('timeupdate', () => {
     const cursor = svg.querySelector('[data-cursor="true"]');
     if (!cursor) return;

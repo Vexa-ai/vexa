@@ -53,7 +53,7 @@ export default function TeamsPipelineWitness(): React.ReactElement {
     setSegments(rows.map((row) => ({
       speaker: row.speaker,
       // Contest ownership is a pipeline/API concern. The ordinary renderer understands the
-      // wire marker, but this page must not infer or rewrite speaker ownership independently.
+      // bracketed marker, but this page must not infer or rewrite speaker ownership independently.
       text: row.text,
       tsMs: row.startMs,
       id: row.segmentId,
@@ -62,7 +62,7 @@ export default function TeamsPipelineWitness(): React.ReactElement {
     setConfirmedCount(rows.filter((row) => row.completed).length);
     setPendingCount(rows.filter((row) => !row.completed).length);
     setTranscriptEdgeMs(rows.length ? Math.max(...rows.map((row) => row.endMs)) : null);
-    setContestedCount(rows.filter((row) => /⟦[^⟧]+⟧\{[^}]+\}/.test(row.text)).length);
+    setContestedCount(rows.filter((row) => /\[[^\]]+\]/.test(row.text)).length);
     const names = [...new Set(rows.map((row) => row.speaker).filter((name) => name && !/^Speaker [A-Z]+$/.test(name)))];
     setIdentity(names.length ? `Named live: ${names.join(", ")}` : "Awaiting corroboration — Speaker A/B are explicit unknowns");
   };
