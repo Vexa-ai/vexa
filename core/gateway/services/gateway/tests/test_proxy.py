@@ -261,6 +261,25 @@ def test_native_chat_read_forwards_to_meeting_api():
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
 
 
+def test_native_participants_read_forwards_to_meeting_api():
+    """#451: GET /meetings/{platform}/{native}/participants forwards, path-for-path, to the
+    owner-scoped meeting-api read. The edge adds no roster logic of its own — it must not, or the
+    ownership check would live in two places and only one of them would be tested."""
+    client, downstream = _client()
+    r = client.get("/meetings/google_meet/abc-defg-hij/participants", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij/participants")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_participants_read_without_a_key_is_401():
+    """Fail-closed: an unauthenticated participants read never reaches meeting-api at all."""
+    client, downstream = _client()
+    assert client.get("/meetings/google_meet/abc-defg-hij/participants").status_code == 401
+    assert downstream.last is None
+
+
 def test_recording_download_alias_forwards_to_raw():
     """#579 C3: GET /recordings/{id}/media/{mid}/download aliases to the .../raw byte route."""
     client, downstream = _client()
