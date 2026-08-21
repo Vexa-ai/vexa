@@ -71,8 +71,10 @@ def test_get_meetings_conforms():
     body = r.json()
     assert_api_conforms("MeetingListResponse", body)
     assert len(body["meetings"]) == 2
-    # newest first
-    assert body["meetings"][0]["platform"] == "zoom"
+    # #1222: the live (non-terminal) meeting pins above the newer-created terminal row —
+    # the list orders by (non-terminal pin, event time), not created_at recency.
+    assert body["meetings"][0]["platform"] == "google_meet"
+    assert body["meetings"][1]["platform"] == "zoom"
 
 
 def test_get_meetings_filters():
