@@ -10,6 +10,10 @@ implements the same request shape.
 Use this path when you want a different ASR model without changing the bot, meeting-api, or live
 transcript pipeline.
 
+To transcribe **later** instead — or on hardware Vexa never talks to — send the bot with
+transcription off and collect the audio afterwards:
+[Capture now, transcribe later](/how-to/deferred-transcription).
+
 ## Contract
 
 Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends multipart form data:

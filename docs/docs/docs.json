@@ -32,6 +32,7 @@
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
+          "how-to/deferred-transcription",
           "n8n",
           "interactive-bots"
         ]
