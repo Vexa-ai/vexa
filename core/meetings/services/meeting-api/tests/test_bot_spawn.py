@@ -165,6 +165,35 @@ async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
 
 
+async def test_fresh_spawn_purges_transcript_stream_but_continue_does_not(monkeypatch):
+    """A FRESH meeting must start on an EMPTY transcript stream, so a reused row id (e.g. after a DB
+    id-sequence reset without a redis flush) can't carry a prior generation's session_end → the
+    terminal showing "Meeting ended" before the first word. The injected purge fires with the new row
+    id on a fresh insert, and NOT on continue_meeting (which intentionally keeps the reused stream)."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    purged: list[int] = []
+
+    async def _purge(mid):
+        purged.append(mid)
+
+    kw = dict(redis_url="r", token_secret=SECRET, meeting_api_url="http://meeting-api:8080",
+              transcript_stream_purge=_purge)
+
+    first = await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                              native_meeting_id="abc-defg-hij", **kw)
+    assert purged == [first["id"]]            # fresh insert → the NEW row's stream is purged
+
+    # the meeting completes; a CONTINUED bot reuses the SAME row and must NOT purge (keeps continuity)
+    repo.set_status(first["id"], "completed")
+    purged.clear()
+    second = await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                               native_meeting_id="abc-defg-hij", continue_meeting=True, **kw)
+    assert second["id"] == first["id"]
+    assert purged == []                       # continue_meeting KEEPS the reused row's stream
+
+
 def test_iso_utc_marks_naive_utc_with_z():
     # Meeting time columns are naive but hold UTC. Serializing must emit a Z marker so a browser
     # parses it as UTC and renders local — a bare isoformat is read as LOCAL (the 6h-skew bug).

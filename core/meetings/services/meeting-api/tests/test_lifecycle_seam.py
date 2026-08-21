@@ -1219,7 +1219,12 @@ def test_non_terminal_advance_does_not_emit_session_end():
     _post(client, connection_id="sess-uid", status="active")
 
     stream = f"tc:meeting:{m['id']}"
-    assert stream not in redis.streams, "session_end emitted while the meeting is still live"
+    # A non-terminal advance must NOT emit session_end (that would end the live view). It DOES write a
+    # session_start marker on `active` — the signal the terminal SSE uses to clear a prior session's
+    # stale session_end when a re-sent bot reuses this meeting row.
+    entries = redis.streams.get(stream, [])
+    assert not any(p.get("type") == "session_end" for p in entries), "session_end emitted while the meeting is still live"
+    assert any(p.get("type") == "session_start" for p in entries), "session_start marker not emitted on active"
     assert "tc:meeting:m1" not in redis.streams
 
 

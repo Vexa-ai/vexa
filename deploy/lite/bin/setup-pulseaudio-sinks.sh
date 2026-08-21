@@ -27,3 +27,14 @@ pactl set-default-source virtual_mic 2>/dev/null || true
 # of a TTS utterance and re-mutes after, so on-demand speaking still works.
 pactl set-sink-mute tts_sink 1 2>/dev/null || true
 pactl set-source-mute virtual_mic 1 2>/dev/null || true
+
+# --- record_sink: the RECORDING capture path (separate from the mic path above) ----------------
+# A second null sink at 48 kHz (WebRTC's native rate → no resample on capture), made the DEFAULT
+# output so Chromium renders meeting audio HERE, not into tts_sink. Its monitor is a clean, UNMUTED
+# capture point for the recorder's ffmpeg (`-f pulse -i record_sink.monitor`). Because TTS targets
+# tts_sink explicitly (paplay --device=tts_sink) and the mic is tts_sink.monitor→virtual_mic, moving
+# Chromium's output off tts_sink means the bot's mic carries ONLY its own TTS — no meeting-audio
+# feedback (it also makes the tts_sink mute a belt-and-suspenders rather than load-bearing). Best-effort.
+pactl load-module module-null-sink sink_name=record_sink \
+  sink_properties=device.description="RecordSink" rate=48000 channels=2 2>/dev/null || true
+pactl set-default-sink record_sink 2>/dev/null || true

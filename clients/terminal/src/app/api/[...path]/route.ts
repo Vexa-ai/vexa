@@ -77,6 +77,19 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
       return new Response(null, { status: upstream.status, headers: { "Cache-Control": "no-cache" } });
     }
 
+    // Non-JSON responses — the MPEG-DASH manifest (application/dash+xml) and its BINARY fMP4 segments
+    // (video/mp4, audio/webm) that the recording player streams — must pass through VERBATIM. Reading
+    // them with .text() UTF-8-mangles binary and forcing application/json breaks dash.js. Stream the
+    // upstream body through with its real Content-Type (+ range/length headers when present).
+    if (contentType && !contentType.includes("application/json")) {
+      const passHeaders: Record<string, string> = { "Content-Type": contentType, "Cache-Control": "no-cache" };
+      for (const h of ["Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"]) {
+        const v = upstream.headers.get(h);
+        if (v) passHeaders[h] = v;
+      }
+      return new Response(upstream.body, { status: upstream.status, headers: passHeaders });
+    }
+
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },

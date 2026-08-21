@@ -7,8 +7,17 @@
  * the index.ts authenticated branch) — same options, single source of truth.
  */
 import { chromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { BrowserContext, Page } from 'playwright';
 import { BROWSER_DATA_DIR } from './session-store';
+
+// Anti-detection: register the stealth evasions ONCE at module load — playwright-extra's `chromium`
+// then applies them to every launchPersistentContext below. The two launch flags we already set
+// (--disable-blink-features=AutomationControlled + stripping --enable-automation) only mask
+// navigator.webdriver; the stealth plugin patches the rest of the fingerprint surface Google Meet's
+// anti-abuse reads to bucket a bot into "With potential risks" — navigator.plugins/languages,
+// WebGL vendor/renderer, chrome.runtime, permissions, iframe.contentWindow, and more.
+chromium.use(StealthPlugin());
 
 export interface LaunchPersistentOptions {
   /** Chromium profile dir — the durable session lives here. Defaults to BROWSER_DATA_DIR. */
@@ -28,13 +37,57 @@ export async function launchPersistentBrowser(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const dataDir = opts.dataDir ?? BROWSER_DATA_DIR;
   const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
+  // Playwright DISABLES Chromium's sandbox by default (chromiumSandbox:false) — and it does so by
+  // INJECTING --no-sandbox itself, which paints the "unsupported command-line flag" banner over the
+  // recording no matter what we remove from `args`. The bot runs NON-ROOT under seccomp=unconfined, so
+  // the sandbox works: enable it (Playwright then omits the flag → no banner). The CHROME_NO_SANDBOX=1
+  // escape hatch (root hosts / no userns) flips it back off, and getSandboxBrowserArgs re-adds the flag.
+  const noSandbox = ['1', 'true', 'yes'].includes((process.env.CHROME_NO_SANDBOX || '').trim().toLowerCase());
   const context = await chromium.launchPersistentContext(dataDir, {
     headless: opts.headless ?? false,
+    chromiumSandbox: !noSandbox,
     ignoreDefaultArgs: ['--enable-automation'],
     args: opts.args,
     viewport: null,
     locale,
   });
+  // Anti-detection the stealth plugin misses under playwright-extra. Measured live (with stealth
+  // active) that the bot's browser still leaks the tells below; patch them on every frame/navigation.
+  await context.addInitScript(() => {
+    const g: any = globalThis;
+    // WebGL: the container has NO GPU, so ANGLE falls back to SwiftShader — a strong "server/VM/bot"
+    // signal Google Meet's anti-abuse reads (and the reason toggling hardware-acceleration can't help:
+    // there is no device to accelerate onto). Report a plausible real Intel/Mesa GPU consistent with
+    // the Linux UA for the UNMASKED vendor (37445) / renderer (37446) parameters. Covers WebGL1+2.
+    const spoof: Record<number, string> = {
+      37445: 'Google Inc. (Intel)',
+      37446: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)',
+    };
+    const patchGL = (proto: any): void => {
+      if (!proto || !proto.getParameter) return;
+      const orig = proto.getParameter;
+      const wrapped = function (this: any, param: number): any {
+        return param in spoof ? spoof[param] : orig.call(this, param);
+      };
+      try { (wrapped as any).toString = orig.toString.bind(orig); } catch { /* keep going */ }
+      proto.getParameter = wrapped;
+    };
+    patchGL(g.WebGLRenderingContext && g.WebGLRenderingContext.prototype);
+    patchGL(g.WebGL2RenderingContext && g.WebGL2RenderingContext.prototype);
+    // navigator.deviceMemory: real Chrome exposes it; absent on the bot.
+    try {
+      if (g.navigator && g.navigator.deviceMemory === undefined) {
+        Object.defineProperty(g.navigator, 'deviceMemory', { get: () => 8, configurable: true });
+      }
+    } catch { /* best-effort */ }
+    // chrome.runtime: window.chrome is present (stealth) but runtime is missing — a headless tell.
+    try {
+      if (g.chrome && !g.chrome.runtime) {
+        g.chrome.runtime = { id: undefined, connect: () => {}, sendMessage: () => {} };
+      }
+    } catch { /* best-effort */ }
+  });
+
   const pages = context.pages();
   const page = pages.length > 0 ? pages[0] : await context.newPage();
   return { context: context as BrowserContext, page: page as Page };
