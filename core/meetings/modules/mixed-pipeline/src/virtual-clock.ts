@@ -37,6 +37,16 @@ export class VirtualClock {
   now(): number { return this.t; }
   heartbeatsFired(): number { return this.fired; }
 
+  /**
+   * How far the lane's clock has been moved since the tape's first timestamp — that is, the real
+   * waiting this tier replaced. Paired with `heartbeatsFired()` it states the tier's whole claim as
+   * two numbers the run can report about ITSELF: this much lane time passed, this many heartbeats
+   * fired inside it. `virtual-time-equivalence.test.ts` asserts against these rather than against
+   * how long a 1x run happened to take on the same machine, so the check measures the mechanism and
+   * not the runner.
+   */
+  advancedMs(): number { return this.t - this.opts.startMs; }
+
   setHeartbeat(fn: () => void, everyMs: number): () => void {
     const beat: Heartbeat = { fn, everyMs, nextAt: this.t + everyMs, cancelled: false };
     this.beats.push(beat);
