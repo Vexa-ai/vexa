@@ -93,16 +93,14 @@ export function Rail(p: {
                 <button aria-label={`${p.collapsed[proj.id] ? "Expand" : "Collapse"} ${proj.name}`} onClick={() => p.onToggleCollapse(proj.id)}
                   style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", padding: 0, width: 12, fontSize: 10, lineHeight: 1, fontFamily: "var(--sans)", transform: p.collapsed[proj.id] ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>▾</button>
                 <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{proj.name}</span>
-                {proj.builtin === "org" && <span style={{ ...ty.meta }}>admin</span>}
-                {!proj.builtin && proj.chats.length === 0 && (
+                                {!proj.builtin && proj.chats.length === 0 && (
                   <button title="Delete project (no chats)" aria-label={`Delete project ${proj.name}`} onClick={() => p.onDeleteProject(proj.id)}
                     style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "0 2px", fontFamily: "var(--sans)" }}>×</button>
                 )}
-                {proj.builtin !== "org" && <button title={`New chat in ${proj.name}`} aria-label={`New chat in ${proj.name}`} onClick={() => p.onNewChat(proj.id)} style={row.ghostPlus}>+</button>}
+                <button title={`New chat in ${proj.name}`} aria-label={`New chat in ${proj.name}`} onClick={() => p.onNewChat(proj.id)} style={row.ghostPlus}>+</button>
               </div>
               {!p.collapsed[proj.id] && (<>
               {proj.builtin === "personal" && chatRow(sel.kind === "personal" && !sel.session, "main", null, () => p.onSelect({ kind: "personal", id: "personal", label: "Personal" }), "main")}
-              {proj.builtin === "org" && chatRow(sel.kind === "org", "setup", null, () => p.onSelect({ kind: "org", id: "org", label: "Organisation" }), "org")}
               {proj.chats.map((c) => chatRow(sel.session === c.id, c.label, null,
                 () => p.onSelect({ kind: "project", id: proj.id, label: proj.name, session: c.id, chatLabel: c.label }), c.id,
                 () => p.onDeleteChat(proj.id, c.id)))}
