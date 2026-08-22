@@ -76,9 +76,19 @@ regulated estate that can mean a review with its own clock. Two fallbacks, in or
   breach. The rule stays the same — the binding is settled before anything fans out — settled by
   the organiser's click instead of by the address.
 
+  **Binding can also be settled before the meeting, in the invite itself:** a tag in the
+  meeting's description — `#room:architecture-review`. The description is organiser-authored, so
+  the authority is the same as the click, just earlier — and the group receives its artifacts
+  immediately, with no round-trip. The tag binds the meeting's calendar identity, so a tagged
+  recurring series is attributed to the room on every occurrence. Three refusals keep it safe: a
+  tag binds only if the organiser is admitted to that room by its membership mode (otherwise
+  knowing a room's name would let anyone write into its record); an unknown room name never
+  creates a room — typo, personal, notice; and an invited group address always outranks a tag.
+
   End to end: invite the one address → the invitation email books the bot → it attends and the
-  record is captured → the agent runs in the **organiser's personal workspace** and mails them
-  their artifact, which carries *assign to a room* → on assignment the agent **runs again in the
+  record is captured → if the invite carried a valid `#room:` tag the meeting is already bound
+  and the group path runs at once; otherwise the agent runs in the **organiser's personal
+  workspace** and mails them their artifact, which carries *assign to a room* → on assignment the agent **runs again in the
   room's workspace**, once per participant — a re-run, never a forward of the personal document —
   and every recipient's email is also the door: reading needs nothing, and chatting is the first
   click, where account and membership begin. Fan-out honours the room's membership mode: an
