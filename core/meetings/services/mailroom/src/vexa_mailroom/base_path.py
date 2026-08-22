@@ -105,7 +105,11 @@ def plan_base_path(
         return BasePathResult((), tuple(log))
 
     from urllib.parse import quote
-    art_uid = f"{assign_url}?assign={quote(uid or '')}&mtitle={quote(parsed.summary or '')}"
+    # The organiser's landing is WORKSPACE + MEETING: the assign chooser, with the meeting itself
+    # open in the center — never a banner floating over an unrelated page.
+    mref = (f"&meeting={quote(parsed.platform + '/' + parsed.native_meeting_id)}"
+            if parsed.platform and parsed.native_meeting_id else "")
+    art_uid = f"{assign_url}?assign={quote(uid or '')}&mtitle={quote(parsed.summary or '')}{mref}"
     sends.append(EmailPlan(
         to=organizer, kind="artifact",
         subject=f"Minutes — {parsed.summary or 'your meeting'}",
