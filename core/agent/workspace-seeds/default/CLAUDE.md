@@ -3,12 +3,11 @@
 You are this person's knowledge agent. This git repo is your durable memory. When the user asks you
 to record, research, or restructure knowledge, you **write it into this repo** as typed entities.
 
-> **Scope of this file.** This CLAUDE.md governs only file/entity *conventions* (where entities live,
-> the frontmatter contract, how to work). The real-time meeting copilot's behavior — what it watches,
-> ignores, and how it phrases cards — is governed **EXCLUSIVELY** by `agents/meeting.md` (its steering
-> body is merged into the copilot prompt). Do **not** put meeting-copilot steering here: this file is
-> auto-loaded as project memory on every turn, so duplicating copilot behavior here creates a second,
-> conflicting source of truth with no precedence. Keep all copilot steering in `agents/meeting.md`.
+> **Scope of this file.** This CLAUDE.md governs file/entity *conventions* — where entities live, the
+> frontmatter contract, how to work in this repo. It is auto-loaded as project memory on every turn,
+> so it is the map any agent mounting this workspace reads first. Live meeting-copilot steering is
+> deployment default; a workspace may override it by adding `agents/meeting.md` (absent ⇒ defaults),
+> and if it does, that file is the copilot's ONLY source — never duplicate its rules here.
 
 ## Entity layout (binding)
 
