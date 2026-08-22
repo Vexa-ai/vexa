@@ -19,11 +19,17 @@ Every turn, the assistant works inside a stack of exactly three mounts:
 So context is made, not configured: the organisation tier says *where* the assistant works, the
 system tier says *who* it works for, and the write workspace says *what* it is working on now.
 
-**Writing `_global` is the admin's first-setup act.** It is read-only to everyone in daily use —
-which means someone must write it once, at installation. That is a guided conversation, not a
-file-editing exercise: the first admin's chat walks them through it — what the organisation is,
-its mail domain, the terms that mean something here, what must never leave — and writes the
-organisation tier from their answers. Amending it later is the same conversation again, admin-only.
+**There is one workspace-setup flow, and it is a conversation.** The same chat-driven flow
+instantiates three ways, differing only in who runs it and which workspace it writes:
+
+| Who | Sets up | The conversation covers |
+|---|---|---|
+| **The admin, at installation** | `_global` | what the organisation is, its mail domain, the terms that mean something here, what must never leave. Read-only to everyone after; amending it is the same conversation again, admin-only. |
+| **A person, on first arrival** | their Personal space | who they are, their role — the assistant infers what it can (their email, what they said in the meeting they arrived from) and asks only what it cannot. |
+| **A member, creating a group** | the group | what the meeting series is about, what the group should pay attention to, who belongs. |
+
+One flow, not three — the assistant asks, infers, confirms, and writes the target workspace's
+seed. Nothing exists until the conversation says what the space is for.
 
 ## Three words, exactly
 
