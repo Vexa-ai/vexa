@@ -1,6 +1,6 @@
 ---
 title: "Your extract"
-description: "The room's minutes, addressed to one person: what changed for you because this meeting happened."
+description: "The group's minutes, addressed to one person: what changed for you because this meeting happened."
 ---
 
 <Note>**Status:** produced and gated in dev; delivery over SMTP works; the agent-written artifact
@@ -9,11 +9,11 @@ waits on the credential decision. See [status](/minutes/status).</Note>
 ## Definition
 
 An **extract** is one output addressed to **exactly one person** about **one meeting**: the part
-of the room's minutes that changed something for them.
+of the group's minutes that changed something for them.
 
-The room keeps one record. Each member receives their own reading of it.
+The group keeps one record. Each member receives their own reading of it.
 
-An extract is deliberately *not* a summary. A summary is one text for a room, mostly restating what
+An extract is deliberately *not* a summary. A summary is one text for a group, mostly restating what
 everyone present already heard. A delta is different for every recipient, and its value is
 highest for the person who was least central to the conversation — the one who now has to act
 on something decided while they listened.
@@ -25,7 +25,7 @@ Sections appear only when they have content. An artifact where nothing changed f
 
 | Section | Answers |
 |---|---|
-| **Decided — affects you** | what the room settled that lands on your desk |
+| **Decided — affects you** | what the group settled that lands on your desk |
 | **You committed to** | what you said you would do, with any date attached |
 | **Owed to you** | what someone else took on for you |
 | **Changed since** | how this differs from the last time this group met |
@@ -36,7 +36,7 @@ dates and numbers, because a delta that generalises is a summary again.
 
 ## Three rules it obeys
 
-**It is not conditioned on whether you spoke.** Presence is enough for the room to have changed
+**It is not conditioned on whether you spoke.** Presence is enough for the group to have changed
 something for you. A person who listened for an hour still has a context delta.
 
 **It always links to its record.** The transcript is one click away, every time. This is the
@@ -44,13 +44,13 @@ honesty valve: transcription is imperfect, and a confident artifact built on a b
 is worse than nothing. When attribution is degraded, the artifact says so in a line rather than
 quietly asserting who said what.
 
-**It is built only from what the recipient is entitled to see.** A member of the room gets an
-extract informed by everything the room knows. Everyone else gets one built from the meeting
-record and **their own** room — never from a room they do not belong to. The same rule, applied
+**It is built only from what the recipient is entitled to see.** A member of the group gets an
+extract informed by everything the group knows. Everyone else gets one built from the meeting
+record and **their own** group — never from a group they do not belong to. The same rule, applied
 from wherever the recipient stands.
 
 Who the recipient *is* comes from the organisation's own directory, and is used only in their own
-extract and kept only in their own room. It is their data, serving them.
+extract and kept only in their own group. It is their data, serving them.
 
 ## How it is actually produced
 
@@ -58,7 +58,7 @@ When a meeting completes, the system raises **one event per participant** — an
 *who it concerns* — and each dispatches **a normal agent in the group's workspace**, prompted for
 that person.
 
-That is the same agent that answers chat, running the same way. It reads what the room knows, the
+That is the same agent that answers chat, running the same way. It reads what the group knows, the
 transcript and the prior record, and it writes.
 
 Three consequences worth holding on to:
@@ -89,7 +89,7 @@ conversation cannot be recalled.
 
 The signal that matters most is the **roster**, not the transcript — a real meeting whose
 speaker attribution collapsed looks, in the text alone, exactly like a recording of one person
-in a room. Because meetings arrive [by invitation](/minutes/invitation), the roster is
+in a group. Because meetings arrive [by invitation](/minutes/invitation), the roster is
 known before a word is transcribed.
 
 ## Delivery

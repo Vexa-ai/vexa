@@ -31,11 +31,11 @@ binding, not by address:**
 | Mechanism | When | Cost |
 |---|---|---|
 | **`#group:` tag** in the invite description — `#group:architecture-review` | before the meeting | typed once per meeting identity |
-| **Organiser's click** on their artifact — *assign to a room* | after the meeting | one click, once |
+| **Organiser's click** on their artifact — *assign to a group* | after the meeting | one click, once |
 | **Neither** | — | the meeting is **personal**, and stays so |
 
 The binding sticks to the meeting's **calendar identity**: tag a recurring series once and every
-occurrence is attributed to the room from then on — the tag is not re-read, re-typed, or needed
+occurrence is attributed to the group from then on — the tag is not re-read, re-typed, or needed
 again. An ad-hoc meeting is tagged (or assigned) individually.
 
 **Unbound is private, always.** Recurrence is not groupness — a weekly 1:1 is recurring and
@@ -46,7 +46,7 @@ attendee list, or the subject matter.
 ### The tag
 
 The description is **organiser-authored**, so the tag carries exactly the authority of the click,
-just earlier — and the room receives its artifacts immediately, with no round-trip. Three
+just earlier — and the group receives its artifacts immediately, with no round-trip. Three
 refusals keep it safe:
 
 - A tag binds only if the organiser is admitted to that group by its membership mode — otherwise
@@ -110,7 +110,7 @@ the mailbox is not enough. Otherwise anyone could forward an invitation and put 
 a meeting its organiser never agreed to. The organiser receives an explanation instead.
 
 **An invitation with no timezone is refused, not guessed.** A floating start time is legal in the
-calendar standard and unambiguous only to the sender. Guessing a default would dial into a room
+calendar standard and unambiguous only to the sender. Guessing a default would dial into a group
 an hour off.
 
 **An unresolvable invitation produces no group effect** — a notice to the sender, and nothing

@@ -19,15 +19,15 @@ or running in production. This page exists so no other page has to hedge.
 | **Writing the artifact** | **template only** | a deterministic template proves the loop end to end. The real thing is the agentic workspace operation — the same one that answers chat — and it needs the model backend wired per deployment. See [running it on your own model](/minutes/model). |
 | **Email delivery** | built in dev | SMTP, against a local sink; a production relay is a config value |
 | **Inbound mail (mailbox ingest)** | **not built** | invitations are parsed and series bind, but nothing polls a real mailbox yet — in dev, mail is read from a test sink's API. One IMAP poller against the assistant's one mailbox closes it. |
-| **`#group:` binding tag** | **not built** | the tag in the invite description that assigns a meeting identity to a room — see [how meetings arrive](/minutes/invitation#the-tag) |
-| **Post-hoc assignment** | **not built** | the *assign to a room* affordance on the personal artifact, and the re-run it triggers |
+| **`#group:` binding tag** | **not built** | the tag in the invite description that assigns a meeting identity to a group — see [how meetings arrive](/minutes/invitation#the-tag) |
+| **Post-hoc assignment** | **not built** | the *assign to a group* affordance on the personal artifact, and the re-run it triggers |
 | **The door + steering write** | built in dev | signed single-use links, lazy identity, scope enforcement, steering into the personal layer |
 | **The conversation behind the door** | **not built** | the reply box records; it does not answer |
 | **Participants on the record** | built in dev | invite roster stored and filterable |
 | **Context stack + triage** | built in dev | four layers, policy routing, owner triage, write-only secrets |
-| **The interface** | **built in dev** | a `minutes` terminal mode: three surfaces register (rooms · meetings · chat), the rest do not. Rooms are single-select — one room per meeting-bound turn — and the developer affordances (git panel, private-store toggle, repo attach) are absent |
-| **Room creation** | **built in dev** | a conversation, not a form: the assistant asks what the room is about, infers the kind of meeting from the answer, names the shape it picked so a wrong guess is correctable in one reply, and writes the room's purpose + index at creation |
-| **Room removal** | **built in dev** | confirmed by name; unshares then deletes, and resolves the rename that unsharing performs |
+| **The interface** | **built in dev** | a `minutes` terminal mode: three surfaces register (groups · meetings · chat), the rest do not. Groups are single-select — one group per meeting-bound turn — and the developer affordances (git panel, private-store toggle, repo attach) are absent |
+| **Group creation** | **built in dev** | a conversation, not a form: the assistant asks what the group is about, infers the kind of meeting from the answer, names the shape it picked so a wrong guess is correctable in one reply, and writes the group's purpose + index at creation |
+| **Group removal** | **built in dev** | confirmed by name; unshares then deletes, and resolves the rename that unsharing performs |
 | **Running on your own model** | **built in dev** | see [Running it on your own model](/minutes/model) — an opt-in Anthropic front door, plus a pass-through for server-specific parameters. Proven against an OpenAI-only endpoint, not yet against a production model server |
 | **Read-only membership** | **blocked** | see below |
 | **Organisation membership** | **blocked** | see below |
@@ -40,8 +40,8 @@ or running in production. This page exists so no other page has to hedge.
 has both roles, but **only read/write is currently invitable** — the read-only tier is retained in
 the permission lattice and deliberately not offered when minting an invitation.
 
-Minutes needs it: most members of a room should be able to receive extracts and ask questions
-without being able to rewrite what the room knows. Re-enabling it is a small change to what an
+Minutes needs it: most members of a group should be able to receive extracts and ask questions
+without being able to rewrite what the group knows. Re-enabling it is a small change to what an
 invitation may mint, not a new permission model.
 
 **Second: "your organisation" membership cannot be expressed yet.** Invitations match an exact
@@ -78,7 +78,7 @@ learns. Composition and routing remain real, but they belong to the terminal and
 own assistant chat — not to this product.
 
 **What is genuinely new here:** meetings arriving by invitation to a workspace's own address; the
-eligibility gate; the extract as a per-person reading of the room's minutes; and delivery by email with a
+eligibility gate; the extract as a per-person reading of the group's minutes; and delivery by email with a
 one-click door. Those four are the product. The rest is a naming convention over machinery that
 exists.
 
