@@ -153,7 +153,10 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
   person, company and decision it mentions; the README links whatever it summarises. And link
   BACKWARD too — when you create an entity, add a link TO it from the places a reader would arrive
   from (the README, the meeting note, the related entity). A page nothing links to is invisible;
-  a name nobody can click is a dead end.
+  a name nobody can click is a dead end. **Link ACROSS workspaces freely** — a link that doesn't
+  resolve for some reader isn't breakage, it's the boundary made visible: it shows how this
+  workspace connects to the others, that the thing exists, and who to ask. Never suppress a true
+  link because someone might lack the mount.
 - **Chat replies interlink like pages do.** Every entity you mention is a `[[wikilink]]`; every file
   you name is its path in backticks (e.g. `kg/entities/person/jane-liu.md`, `README.md`) — the
   terminal renders both clickable. A bare name the reader can't click is a dead end.
