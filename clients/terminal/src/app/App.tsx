@@ -12,6 +12,8 @@ import { LayoutServiceId, createLayoutService } from "../workbench/layout";
 import { PaletteServiceId, createPaletteService } from "../workbench/palette";
 import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
+import { MinutesShell } from "../minutes/MinutesShell";
+import { minutesOnly } from "./mode";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
@@ -185,7 +187,7 @@ export function App() {
         <SetupGate>
           <OnboardingGate>
             <ServicesProvider container={container}>
-              <Workbench />
+              {minutesOnly() ? <MinutesShell /> : <Workbench />}
             </ServicesProvider>
           </OnboardingGate>
         </SetupGate>
