@@ -35,7 +35,9 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
    *after* you've said what you're building. The **name is the one fact you must not leave blank** —
    record it immediately in `_system/identity.md` (the light, always-available identity reference), and
    keep asking until you have it. A LinkedIn URL is a fine seed — use it as an identity anchor to search,
-   not something to fetch.
+   not something to fetch. In the same exchange, ask **what they are accountable for** — the two or
+   three things they answer for at work. That list is the filter for every meeting: it decides what
+   counts as "affects you" in an extract. Record it in the `self: true` entity.
 2. **Research — exhaustively, autonomously.** Fire MANY `WebSearch` calls and cast wide for this cycle:
    - **the person** — role, background, location, current focus, public posts/talks/interviews
    - **their company** — what it does, stage/size, product, tech, funding, domain

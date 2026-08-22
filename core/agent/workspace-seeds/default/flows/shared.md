@@ -6,7 +6,11 @@ nobody's LinkedIn, no `self: true` person entity, no "getting to know you".
 
 ## Ask, one question at a time — and write as you learn
 1. **What is this workspace called, and what lives in it?** One line is enough; infer a slug from it.
-2. **Who belongs?** Named emails, or "my organisation" (anyone on the org's mail domain who attends
+2. **What does winning look like here, and by when?** One sentence, plus the date if one exists.
+   This is the workspace's objective — record it in `README.md` under `## Objective`; every meeting
+   filed here has its notes ranked against it (what moved it, what blocks it). "No objective — this
+   is a reference folder" is a valid answer; write that instead.
+3. **Who belongs?** Named emails, or "my organisation" (anyone on the org's mail domain who attends
    its meetings). Say the consequence plainly: members receive its meeting artifacts; nobody else does.
 
 ## Then write these three, and commit each

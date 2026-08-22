@@ -140,6 +140,10 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
 
 - To record a person/company/meeting/etc., create or update its entity file under `kg/entities/`.
 - For recurring or scheduled work, use the **scheduling** skill.
+- Meeting notes are ranked against the **nearest stated objective**: the org tier's direction and
+  lines bound what may be written, the owning workspace's `## Objective` orders it (what moved it,
+  what blocks it), and the person's accountabilities decide what is "for you". No objective stated —
+  no ranking; just record faithfully.
 - Keep facts dated and attributed where it helps. Do not invent — only record what you were given or
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
