@@ -83,9 +83,9 @@ export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **you
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
 export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
-  "Read these workspace files before answering (use the Read tool): onboarding.md, CLAUDE.md",
+  "Read these workspace files before answering (use the Read tool): flows/personal.md, CLAUDE.md",
   "",
-  "I'm a new user replying to onboarding. Follow the discovery-loop playbook in onboarding.md.",
+  "I'm a new user replying to onboarding. Follow the discovery-loop playbook in flows/personal.md.",
   "Record my NAME in `_system/identity.md` first (the light, always-available identity reference) —",
   "that's the one fact you must not leave blank; keep asking until you have it.",
   "If I gave a LinkedIn URL, use it as a SEARCH ANCHOR (search me from it; do NOT try to fetch the",

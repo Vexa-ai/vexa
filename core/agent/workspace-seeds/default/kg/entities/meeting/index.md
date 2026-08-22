@@ -1,7 +1,5 @@
 # meeting
 
-Meetings — one file per meeting at `meeting/<slug>.md` (slug = `<date>-<topic>`).
+Meetings — one file per meeting at `meeting/<yyyy-mm-dd-slug>.md`.
 
-- [[Acme intro call]] — 2026-06-12
-
-_The entry above is a **seeded example** (frontmatter `example: true`) — demo data, not a real record._
+_No entities yet — meetings file themselves here as they happen. Shape: [`../../templates/meeting.md`](../../templates/meeting.md)._

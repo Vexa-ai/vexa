@@ -21,12 +21,12 @@ from shared.gitenv import scrubbed_git_env
 # workspace has no governance root.
 REQUIRED_SEED_PATHS = ("CLAUDE.md",)
 
-# The seeds ROOT is a registry of named templates — one validated seed per subdir
-# (``workspace-seeds/<name>/``). Flavors today: ``default`` (the default — a LIGHT, ready-to-go scaffold
-# whose README is the onboarding-dashboard the user first sees) and ``finos`` (the default scaffold PLUS a
-# pre-loaded FINOS-ecosystem knowledge graph, selectable via ``VEXA_DEFAULT_TEMPLATE=finos`` or an explicit
-# ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change. ``resolve_seed_dir`` is the
-# single selection seam.
+# ONE seed (``workspace-seeds/default/``): a light scaffold whose README is the dashboard the user
+# first sees, whose kg/ ships empty (entity SHAPES live in kg/templates/), and whose flows/ carries
+# the scaffolding conversations — the flow read at setup is chosen by WHY the workspace is being
+# created (personal | shared | global), not by which tree was copied. Flavors were removed
+# deliberately: variation lives in flows and content written after seeding, never in parallel
+# template trees that drift. ``VEXA_WORKSPACE_SEED_DIR`` remains for tests/special deploys.
 DEFAULT_TEMPLATE = "default"
 DEFAULT_SEEDS_ROOT = "/app/workspace-seeds"
 

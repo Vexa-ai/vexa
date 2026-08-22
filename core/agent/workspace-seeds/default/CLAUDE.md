@@ -9,6 +9,17 @@ to record, research, or restructure knowledge, you **write it into this repo** a
 > deployment default; a workspace may override it by adding `agents/meeting.md` (absent ⇒ defaults),
 > and if it does, that file is the copilot's ONLY source — never duplicate its rules here.
 
+## Setting this workspace up — read the flow that matches why it exists
+
+The scaffolding conversations live in [`flows/`](flows/README.md). When this workspace is being set
+up, read exactly ONE:
+
+- **[`flows/personal.md`](flows/personal.md)** — it belongs to one person (their durable memory)
+- **[`flows/shared.md`](flows/shared.md)** — several people work out of it (a series, a vendor, a team)
+- **[`flows/global.md`](flows/global.md)** — it is the organisation tier (`_global`), admin only
+
+Entity shapes live in [`kg/templates/`](kg/templates/README.md) — skeletons, never knowledge.
+
 ## Entity layout (binding)
 
 - One markdown file per entity at **`kg/entities/<type>/<slug>.md`** (e.g.
