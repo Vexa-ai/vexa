@@ -9,8 +9,8 @@ import type { CSSProperties } from "react";
 export const T = {
   railW: 248,
   pagesMin: 300,
-  pagesMax: 720,
   pagesDefault: 384,
+  conversationMin: 420,
   headerH: 46,
   rowPadX: 8,
 } as const;

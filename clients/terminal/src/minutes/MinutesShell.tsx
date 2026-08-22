@@ -19,6 +19,7 @@ import { DeleteCeremony } from "./DeleteCeremony";
 import { loadProjects, saveProjects, type Project } from "./projects";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail, isHeld } from "./Rail";
+import { clampPagesWidth } from "./pagesWidth";
 import { T, surface } from "./tokens";
 import type { Page, Sel, View } from "./types";
 
@@ -96,16 +97,14 @@ export function MinutesShell() {
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
     const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
-    return Number.isFinite(n) && n >= T.pagesMin && n <= T.pagesMax ? n : T.pagesDefault;
+    return clampPagesWidth(Number.isFinite(n) && n >= T.pagesMin ? n : T.pagesDefault, window.innerWidth);
   });
   const dragging = useRef(false);
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (!dragging.current) return;
       e.preventDefault();
-      const room = window.innerWidth - T.railW - 420;   // never squeeze the conversation below ~420
-      const w = Math.min(Math.min(T.pagesMax, room), Math.max(T.pagesMin, window.innerWidth - e.clientX));
-      setPagesW(w);
+      setPagesW(clampPagesWidth(window.innerWidth - e.clientX, window.innerWidth));
     };
     const up = () => {
       if (!dragging.current) return;
@@ -119,7 +118,7 @@ export function MinutesShell() {
   }, []);
   const startDrag = () => { dragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; };
   const nudge = (d: number) => setPagesW((w) => {
-    const n = Math.min(T.pagesMax, Math.max(T.pagesMin, w + d));
+    const n = clampPagesWidth(w + d, window.innerWidth);
     try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
     return n;
   });
