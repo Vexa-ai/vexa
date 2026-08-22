@@ -28,7 +28,8 @@ import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
-import { meetingsOnly } from "../app/mode";
+import { meetingsOnly, minutesOnly } from "../app/mode";
+import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
@@ -350,12 +351,43 @@ export function Workbench() {
       if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
       layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
     };
+    // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
+    // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
+    // one click away from the page's own transcript link. Fall through to the canvas otherwise.
+    const openArtifactFirst = async (m: ReturnType<typeof find>) => {
+      if (!minutesOnly() || !native) { openRow(m); return; }
+      const path = `kg/entities/meeting/${native}.md`;
+      try {
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+        if (r.ok) {
+          layout.openTab({ id: `doc:${path}`, title: m ? m.title.split(" — ")[0] : "Your minutes", kind: "doc", params: { path } });
+          // The click WAS the consent to set up (founder ruling 2026-08-22): start the agent on
+          // everything it can know — the artifact + transcript in the workspace, the reader's own
+          // login email — and have it ask the ONE thing it cannot infer: their position. Once per
+          // meeting door, ever; a revisit must not re-run onboarding.
+          const kicked = `vexa.doorKickoff.${native}`;
+          if (!localStorage.getItem(kicked)) {
+            localStorage.setItem(kicked, "1");
+            window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+              `[minutes-door-kickoff] A reader just arrived through the door of meeting ${native}. ` +
+              `Read kg/entities/meeting/${native}.md and kg/entities/meeting/${native}.transcript.md. ` +
+              `Their login email identifies them — infer their name from it and find them in the transcript. ` +
+              `Set up this workspace: record their identity in _system/identity.md, create person entities for the other participants, ` +
+              `and link the meeting page. From what they said in the meeting, form a HYPOTHESIS of their role. ` +
+              `Then reply briefly: greet them by name, one line on what you have set up, state your role hypothesis ` +
+              `as a guess to confirm or correct — and ask nothing else.` } }));
+          }
+          return;
+        }
+      } catch { /* no artifact page — the meeting canvas is the honest fallback */ }
+      openRow(m);
+    };
     const first = find();
-    if (first || !native) { openRow(first); return; }
+    if (first || !native) { void openArtifactFirst(first); return; }
     let tries = 0;
     const timer = setInterval(() => {
       const m = find();
-      if (m || ++tries >= 10) { clearInterval(timer); openRow(m); }
+      if (m || ++tries >= 10) { clearInterval(timer); void openArtifactFirst(m); }
     }, 500);
   }, [layout]);
 
