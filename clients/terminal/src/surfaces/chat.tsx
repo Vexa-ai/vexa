@@ -1008,11 +1008,12 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {(contextRef || ambientEligible || includeSchedule === true || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
+        {(contextRef || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
-                sees today's schedule; × turns it off for this session; ghost chip re-adds */}
-            {ambientOn ? (
+                sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
+                for now (founder 2026-08-22) — the context still flows, the chip just doesn't. */}
+            {minutesOnly() ? null : ambientOn ? (
               <span title="The agent sees your schedule (today, upcoming, live) on this surface"
                 style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t2)", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "2px 4px 2px 9px" }}>
                 <Icon name="cal" size={10} /> Schedule · today
