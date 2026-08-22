@@ -48,12 +48,34 @@ your best draft attached where one exists. The items:
 5. **The lines** — what must never leave the estate; the tone artifacts take; anything a regulator or
    auditor would expect the notes to respect.
 
-**Write MDX, not plain prose — the terminal renders it rich.** Every named thing on the page is a
-link: the organisation is `[[OeNB]]`-style wikilinked to its entity under `kg/entities/`, every
-source is a markdown link, every glossary term links its entity or its defining source. Provenance
-asides go in `<Note>` blocks; use `<CardGroup>`/`<Card>` where a set of items scans better as
-cards. A page with no `[[wikilink]]` is a page with no web — the read-back is not clean until the
-page is interconnected.
+**The page must LOOK alive to a human scanning it — walls of grey prose fail the read-back.**
+Shape to imitate (not verbatim — the SHAPE):
+
+```mdx
+# [[Acme]] — organisation tier
+
+<Note>Drafted from [About](…) and the [Annual Report](…); confirmed by the admin 2026-08-22.</Note>
+
+## What it is
+One tight, entity-linked paragraph. No more.
+
+## Direction
+**One bold lead per objective — one line each.** The "against what" state is 3 short bullets,
+numbers bolded, not a wall paragraph.
+
+## Inside · Language · Lines
+Compact: a table for the glossary, one line per `(unset)` item. Boilerplate about what a section
+*would* hold gets one clause, never a paragraph.
+
+## Connected
+<CardGroup cols={2}><Card title="Acme" icon="building" href="kg/entities/organization/acme.md">the org record</Card>…</CardGroup>
+```
+
+Taste rules: provenance appears ONCE per section as a small `<Note>` or trailing italic line —
+never a repeating italic paragraph after every block. Every named thing is a link (`[[wikilink]]`
+to entities, markdown links to sources). Long paragraphs get broken at the first bolded lead. A
+page with no `[[wikilink]]`, no `<Note>`, and no visual rhythm is not done — the read-back is not
+clean until a human could SCAN it in ten seconds.
 
 Typically 1–2 are draftable from public sources and 3–5 (the real inside domains, the house
 shorthand, the actual lines) are the residue only the admin can settle — but always test each
