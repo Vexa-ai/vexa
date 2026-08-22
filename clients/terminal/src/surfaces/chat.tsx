@@ -876,7 +876,7 @@ export function Chat({ params = {} }: ChatProps) {
         s.turns.length
           ? { ...s, loaded: true, loading: false }
           : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
-                ? (liveMeetingsNow().some((m) => m.status === "past") ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
+                ? (liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))) ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
                 : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
       ));
       onboardingArmedRef.current = true;
@@ -1072,7 +1072,7 @@ export function Chat({ params = {} }: ChatProps) {
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
       <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : (minutesOnly()
-          ? (liveMeetingsNow().some((mm) => mm.status === "past")
+          ? (liveMeetingsNow().some((mm) => ["completed","stopped","failed"].includes(String((mm as { live_status?: string }).live_status)))
               ? MINUTES_ONBOARDING_GREETING.replace("👋 ", "")
               : MINUTES_PREP_GREETING.replace("👋 ", "")).replace(/\*\*/g, "")
           : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />

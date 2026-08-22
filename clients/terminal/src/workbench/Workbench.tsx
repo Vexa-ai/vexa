@@ -350,7 +350,7 @@ export function Workbench() {
       const id = m ? String(m.id) : (native ? "" : ref);
       if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
       const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
-      layout.openTab({ id: `meeting:${id}`, title: (m && m.title !== "Shared meeting" ? m.title.split(" — ")[0] : null) ?? stashedTitle ?? "Meeting", kind: "meeting", params: { meetingId: id } });
+      layout.openTab({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"),   // the emailed name wins — the row often only knows the platform·code fallback kind: "meeting", params: { meetingId: id } });
     };
     // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
     // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
