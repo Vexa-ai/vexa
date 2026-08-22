@@ -378,13 +378,44 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     message was NOT taken (worker exited in the race window) → the dispatcher respawns. A warm
     in-topic message carries a ``nonce`` the ack echoes so the watchdog can match ITS delivery.
     """
-    def run_message(prompt: str, turn_id: str, nonce: str | None = None) -> None:
+    # Mid-turn injection (VEXA_MIDTURN_INJECT=1): between output events, drain the in-topic and hand
+    # arriving user messages to the RUNNING harness turn via the adapter's stdin mailbox — the reply
+    # continues in the same turn (better responsiveness than queue-until-turn-end). A message the
+    # mailbox can't take (no active stdin) is left IN the stream for the between-turns loop.
+    def _drain_inject(cursor: list) -> None:
+        try:
+            from llm import claude_code as _cc
+        except Exception:  # noqa: BLE001
+            return
+        if not _cc.midturn_enabled():
+            return
+        try:
+            resp = stream.xread({in_topic: cursor[0]}, count=8, block=None)
+        except Exception:  # noqa: BLE001
+            return
+        for _name, entries in resp or []:
+            for entry_id, fields in entries:
+                msg = json.loads(fields.get("turn", "{}"))
+                text = msg.get("prompt", "")
+                if msg.get("type") == "stop" or not text:
+                    return  # leave stop (and everything after) for the outer loop
+                if not _cc.inject_user_message(text):
+                    return  # no active stdin — leave queued
+                cursor[0] = entry_id
+                # satisfy the dispatcher's warm-delivery watchdog: the injected message WAS taken
+                if msg.get("nonce"):
+                    stream.xadd(out_topic, {"event": json.dumps({"type": "turn-accepted", "nonce": msg["nonce"], "injected": True})})
+                stream.xadd(out_topic, {"event": json.dumps({"type": "user-injected", "text": text})})
+
+    def run_message(prompt: str, turn_id: str, nonce: str | None = None, cursor: list | None = None) -> None:
         ack: dict = {"type": "turn-accepted", "turn_id": turn_id}
         if nonce:
             ack["nonce"] = nonce
         stream.xadd(out_topic, {"event": json.dumps(ack)})
         for ev in turn(prompt):
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
+            if cursor is not None:
+                _drain_inject(cursor)
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
 
     # Anchor the in-topic cursor at the BOOT-TIME tail, before the entrypoint turn runs. The
@@ -403,23 +434,24 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         except Exception:  # noqa: BLE001 — tail anchoring is an upgrade, never a boot blocker
             last = "$"
 
+    cursor = [last]  # shared with _drain_inject: mid-turn-consumed entries advance it
     first = start_prompt(start)
     if first:
-        run_message(first, "t0")
+        run_message(first, "t0", cursor=cursor)
 
     n = 0
     while True:
-        resp = stream.xread({in_topic: last}, count=1, block=idle_ms)
+        resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
             return  # idle → exit 0 → container reaped
         for _name, entries in resp:
             for entry_id, fields in entries:
-                last = entry_id
+                cursor[0] = entry_id
                 msg = json.loads(fields.get("turn", "{}"))
                 if msg.get("type") == "stop":
                     return
                 n += 1
-                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"))
+                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor)
 
 
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())

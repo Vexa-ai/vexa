@@ -522,11 +522,12 @@ def test_persist_envelope_roundtrips_and_conforms_to_schema(tmp_path):
     path = tmp_path / "kg" / "entities" / "meeting" / "m1.envelope.json"
     persist_envelope(path, envelope)
     assert json.loads(path.read_text()) == envelope
+    # The seed no longer ships agents/ (2026-08-22: absent ⇒ deployment defaults), so schema
+    # validation is TOLERANT: no schema → no errors, load → None. A workspace that adds its own
+    # agents/meeting.schema.json opts back into strict validation.
     assert validate_envelope(envelope, _SEED_DIR) == []
-    # a malformed envelope (missing required `cards`) yields errors against the real schema
-    assert validate_envelope({"notes": []}, _SEED_DIR)
-    # the schema actually loaded from the seed path
-    assert load_meeting_schema(_SEED_DIR) is not None
+    assert validate_envelope({"notes": []}, _SEED_DIR) == []
+    assert load_meeting_schema(_SEED_DIR) is None
     # tolerant: a seed dir without the schema → None / no errors (behavior unchanged)
     assert load_meeting_schema(tmp_path) is None
     assert validate_envelope({"bogus": 1}, tmp_path) == []

@@ -110,6 +110,7 @@ def build_argv(
     session: Optional[str] = None,
     model: Optional[str] = None,
     mcp_config: Optional[str] = None,
+    stdin_mode: bool = False,
 ) -> list[str]:
     """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
 
@@ -119,8 +120,13 @@ def build_argv(
     granted MCP tools (the toolbelt) and nothing else. The container sandbox is the other
     enforcement layer.
     """
-    argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-            "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    if stdin_mode:
+        # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
+        argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    else:
+        argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+                "--include-partial-messages", "--permission-mode", "acceptEdits"]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]
@@ -131,6 +137,72 @@ def build_argv(
     if model:
         argv += ["--model", model]
     return argv
+
+
+# ── mid-turn injection (VEXA_MIDTURN_INJECT=1) ────────────────────────────────────
+# In stdin mode the CLI keeps reading `--input-format stream-json` user messages while a turn runs —
+# a message written here joins the CURRENT turn (the engine polls the unit in-stream between output
+# events and calls inject_user_message). The mailbox is module-level because the injection point
+# (engine.serve) sits four frozen contracts away from the subprocess handle.
+import threading as _threading
+
+_STDIN_LOCK = _threading.Lock()
+_ACTIVE_STDIN = None  # the running turn's proc.stdin, when stdin mode is active
+
+
+def midturn_enabled() -> bool:
+    return os.environ.get("VEXA_MIDTURN_INJECT", "") == "1"
+
+
+def _user_message_json(text: str) -> str:
+    return json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+
+
+def inject_user_message(text: str) -> bool:
+    """Write a user message into the RUNNING turn's stdin. False = no active stdin (caller should
+    leave the message queued for the between-turns loop instead)."""
+    with _STDIN_LOCK:
+        w = _ACTIVE_STDIN
+        if w is None:
+            return False
+        try:
+            w.write(_user_message_json(text) + "\n")
+            w.flush()
+            return True
+        except Exception:  # noqa: BLE001 — a closing pipe just means the turn is ending
+            return False
+
+
+def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Iterator[str]:
+    """stdin-mode exec: the prompt travels as the first stream-json user message and stdin STAYS
+    OPEN for mid-turn injection; a `result` line closes it (turn over → CLI exits)."""
+    global _ACTIVE_STDIN
+    proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env=harness_subprocess_env())
+    assert proc.stdout is not None and proc.stdin is not None
+    try:
+        proc.stdin.write(_user_message_json(first_message) + "\n")
+        proc.stdin.flush()
+        with _STDIN_LOCK:
+            _ACTIVE_STDIN = proc.stdin
+        for line in proc.stdout:
+            yield line
+            if '"type":"result"' in line or '"type": "result"' in line:
+                with _STDIN_LOCK:
+                    _ACTIVE_STDIN = None
+                try:
+                    proc.stdin.close()
+                except Exception:  # noqa: BLE001
+                    pass
+    finally:
+        with _STDIN_LOCK:
+            _ACTIVE_STDIN = None
+        try:
+            proc.stdin.close()
+        except Exception:  # noqa: BLE001
+            pass
+        proc.wait()
 
 
 def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
@@ -217,9 +289,14 @@ class ClaudeCodeHarness:
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
-        argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                          mcp_config=mcp_config)
-        yield from parse_stream_json(self._exec(argv, str(work)))
+        if midturn_enabled() and self._exec is _exec_subprocess:
+            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
+                              mcp_config=mcp_config, stdin_mode=True)
+            yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt))
+        else:
+            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
+                              mcp_config=mcp_config)
+            yield from parse_stream_json(self._exec(argv, str(work)))
 
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
         # chats are saved to / resumed from the PRIVATE continuity root (the _system mount when the
