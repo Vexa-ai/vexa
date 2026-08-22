@@ -85,6 +85,12 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ANTHROPIC_API_KEY
                   optional: true
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: CLAUDE_CODE_OAUTH_TOKEN
+                  optional: true
             - name: ANTHROPIC_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
