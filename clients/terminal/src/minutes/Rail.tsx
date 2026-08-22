@@ -36,6 +36,7 @@ export function Rail(p: {
   onNewChat: (projectId: string) => void; onNewProject: () => void; onNewWorkspace: () => void;
   collapsed: Record<string, boolean>; onToggleCollapse: (projectId: string) => void;
   onDeleteChat: (projectId: string, chatId: string) => void; onDeleteProject: (projectId: string) => void;
+  onDeleteWorkspace: (workspaceId: string) => void;
 }) {
   const { view, sel } = p;
   const meetRow = (m: MeetingMock) => {
@@ -112,7 +113,13 @@ export function Rail(p: {
           <h2 style={{ ...lensRow, marginTop: 14 }}>Workspaces<button title="New workspace — a conversation scaffolds it" aria-label="New workspace" onClick={p.onNewWorkspace} style={row.ghostPlus}>+</button></h2>
           <div style={wsRow}>personal<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>you</span></div>
           {p.memberships.map((m) => (
-            <div key={"ws-" + m.workspace_id} style={wsRow}>{m.workspace_id}<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>{m.role}</span></div>
+            <div key={"ws-" + m.workspace_id} className="vx-ws-row" style={wsRow}>{m.workspace_id}<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>{m.role}</span>
+              {m.role === "owner" && (
+                <button title={`Delete workspace ${m.workspace_id} — removes its data for every member`} aria-label={`Delete workspace ${m.workspace_id}`}
+                  onClick={() => p.onDeleteWorkspace(m.workspace_id)}
+                  className="vx-ws-del" style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
+              )}
+            </div>
           ))}
           <div style={wsRow}>_global<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>everyone · ro</span></div>
         </>)}

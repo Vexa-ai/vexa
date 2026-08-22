@@ -10,7 +10,7 @@ import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
   listSharedMemberships, readActiveSet, setSharedActive, deactivateWorkspace,
-  readWorkspaceFile, createSharedWorkspace, type Membership,
+  readWorkspaceFile, createSharedWorkspace, unshareWorkspace, deleteWorkspace, type Membership,
 } from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
@@ -56,6 +56,24 @@ export function MinutesShell() {
     });
     if (sel.kind === "project" && sel.id === projectId) void select({ kind: "personal", id: "personal", label: "Personal" });
   };
+  // Deleting an OWNED shared workspace: confirm, un-share (owner-only server check) → the tree moves
+  // to a private slug → delete that slug. Projects that referenced it drop it from their sets.
+  const deleteOwnedWorkspace = async (workspaceId: string) => {
+    if (!window.confirm(`Delete workspace ${workspaceId}? This removes its data for every member and cannot be undone.`)) return;
+    try {
+      const { slug } = await unshareWorkspace(workspaceId);
+      await deleteWorkspace(slug);
+    } catch (e) { window.alert(`Could not delete ${workspaceId}: ${e instanceof Error ? e.message : e}`); return; }
+    setProjects((prev) => {
+      const next = prev
+        .map((pr) => ({ ...pr, set: pr.set.filter((w) => w !== workspaceId) }))
+        .filter((pr) => pr.builtin || pr.set.some((w) => w !== "_global") || pr.id === "org");
+      saveProjects(next); return next;
+    });
+    await listSharedMemberships().then(setMemberships).catch(() => undefined);
+    if (sel.kind === "project" && !projects.find((pr) => pr.id === sel.id)) void select({ kind: "personal", id: "personal", label: "Personal" });
+  };
+
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
     const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
@@ -228,7 +246,7 @@ export function MinutesShell() {
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}
         onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={() => void newWorkspace()}
-        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} />
+        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={(id) => void deleteOwnedWorkspace(id)} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />
