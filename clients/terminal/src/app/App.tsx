@@ -52,7 +52,10 @@ function InviteGate({ children }: { children: ReactNode }) {
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
   useEffect(() => {
     if (!meeting) return;
-    try { localStorage.setItem("vexa.openMeetingRef", meeting); } catch { /* locked-down storage */ }
+    try {
+      localStorage.setItem("vexa.openMeetingRef", meeting);
+      const t = params.get("mtitle"); if (t) localStorage.setItem("vexa.openMeetingTitle", t);
+    } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [meeting, invite, tshare]);
 

@@ -349,7 +349,8 @@ export function Workbench() {
     const openRow = (m: ReturnType<typeof find>) => {
       const id = m ? String(m.id) : (native ? "" : ref);
       if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
-      layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
+      const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
+      layout.openTab({ id: `meeting:${id}`, title: (m && m.title !== "Shared meeting" ? m.title.split(" — ")[0] : null) ?? stashedTitle ?? "Meeting", kind: "meeting", params: { meetingId: id } });
     };
     // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
     // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
@@ -398,8 +399,9 @@ export function Workbench() {
     // invite time) — then the retry loop below finds it.
     if (minutesOnly()) {
       const platform = ref.slice(0, slash);
+      const title = (() => { try { return localStorage.getItem("vexa.openMeetingTitle") || undefined; } catch { return undefined; } })();
       void fetch("/api/minutes/ensure-meeting", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ platform, native }) }).catch(() => undefined);
+        body: JSON.stringify({ platform, native, title }) }).catch(() => undefined);
     }
     let tries = 0;
     const timer = setInterval(() => {
