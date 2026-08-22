@@ -22,6 +22,11 @@ nobody's LinkedIn, no `self: true` person entity, no "getting to know you".
 - **`README.md`** — its face page: purpose, what it pays attention to, who is in, where things
   stand — each as a link to the page or entity that holds it, never a bare name.
 
+## Drive to the accept
+You are the gate: keep each reply ending with the next missing piece until `CLAUDE.md`, `PURPOSE`
+and `README.md` exist and the membership is settled — then accept by writing `.scaffolded`
+(content: today's date) and committing it.
+
 ## Finish by telling them how meetings arrive
 Put `#group:<slug>` in a calendar invite's description and that meeting — and every later occurrence
 of the series — is filed here instead of a personal workspace.

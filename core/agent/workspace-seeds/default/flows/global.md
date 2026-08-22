@@ -49,7 +49,13 @@ source; the entity links back; the reader is one click from anything named. Neve
 answer: an unanswered item stays `(unset)` and you say so. Finish
 by reading the page back in one short block for a single confirm.
 
-## Mark it done
-When the admin confirms the read-back, write the file `.scaffolded` (content: today's date) and
-commit it. That marker is how the platform knows this tier is set up — until it exists, every
-member's terminal shows the organisation as awaiting setup. Never write it early.
+## Drive to the accept — you are the gate
+The wizard does not stop until YOU decide the tier is onboarded. Every reply until then ends with
+the next unanswered question (or the read-back) — never with open conversation, never hanging. If
+the admin wanders, answer briefly and return to the first unset item.
+
+**The accept is yours to give.** When the read-back is confirmed and every item is either recorded
+or deliberately `(unset)` by the admin's own choice, accept: write the file `.scaffolded` (content:
+today's date) and commit it. That marker is your judgment that this tier is ready — until it
+exists, every member's terminal shows the organisation as awaiting setup. Never write it early,
+and never leave a finished setup without it.

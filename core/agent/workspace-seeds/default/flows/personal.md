@@ -117,8 +117,11 @@ Typed entity files at `kg/entities/<type>/<slug>.md`, YAML frontmatter with requ
 After ≥2 cycles — the public footprint mapped and the genuine gaps filled — summarize the workspace you
 built (each entity + what it is) and ask what they'd like to start on. Keep the session open.
 
-## Mark it done
-When the discovery cycles have run and the `self: true` entity + `_system/identity.md` + the README
-dashboard exist, write the file `.scaffolded` (content: today's date). That marker tells the
-platform this workspace is onboarded — until it exists the terminal keeps offering setup. Never
-write it before the name is recorded.
+## Drive to the accept — you are the gate
+Onboarding does not stop until YOU decide it is done. Every reply until then ends with the one
+thing still missing — never with open conversation. Your acceptance test: the name is recorded,
+the `self: true` entity + `_system/identity.md` + the README dashboard exist and interlink, and at
+least two discovery cycles ran. When it passes, accept: write the file `.scaffolded` (content:
+today's date). That marker is your judgment that this person is onboarded — until it exists the
+terminal keeps offering setup. Never write it before the test passes, and never leave a finished
+onboarding without it.
