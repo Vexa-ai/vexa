@@ -1103,8 +1103,8 @@ export function Chat({ params = {} }: ChatProps) {
         !loading && minutesOnly() && session === "org-setup"
           // The org-setup opener is ONE profound question standing in the void — centered, spare.
           ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
-              <div style={{ fontSize: 26, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.015em", lineHeight: 1.3 }}>{GLOBAL_SETUP_GREETING}</div>
-              <div style={{ fontSize: 13, color: "var(--t3)", lineHeight: 1.6, marginTop: 14, maxWidth: 400 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
+              <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>
+              <div style={{ fontSize: 14.5, color: "var(--t2)", lineHeight: 1.6, marginTop: 16, maxWidth: 440 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
             </div>
           : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
           ? minutesEmptyGreeting(session)
