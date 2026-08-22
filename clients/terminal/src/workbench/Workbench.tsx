@@ -387,6 +387,10 @@ export function Workbench() {
       } catch { /* no artifact page — the meeting canvas is the honest fallback */ }
       openRow(m);
     };
+    // An assign-link landing must show the GROUPS rail — the banner (and the decision) live
+    // there; the meeting opens in the center regardless.
+    const assigning = (() => { try { return !!localStorage.getItem("vexa.assignMeeting"); } catch { return false; } })();
+    if (assigning) layout.setActiveList("files");
     const first = find();
     if (first || !native) { void openArtifactFirst(first); return; }
     let tries = 0;
