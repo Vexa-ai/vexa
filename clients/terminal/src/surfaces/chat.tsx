@@ -936,10 +936,32 @@ export function Chat({ params = {} }: ChatProps) {
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
   const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
 
+  // Messages typed while the agent is mid-turn QUEUE instead of silently dropping: the bubble
+  // appears immediately (dimmed, "queued"), and fires as its own turn the moment the current one
+  // ends. A queued bubble that never sends (navigation away) is dropped with its ref — it was
+  // never in the session.
+  const queuedRef = useRef<{ id: string; display: string; prompt: string }[]>([]);
+  useEffect(() => {
+    if (busy) return;
+    const next = queuedRef.current.shift();
+    if (!next) return;
+    updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== next.id) }));
+    void send(next.display, next.prompt, "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
   const onSubmit = async () => {
     const v = value.trim();
     const hasAttachments = attachments.length > 0;
-    if ((!v && !hasAttachments) || busy || uploading) return;
+    if ((!v && !hasAttachments) || uploading) return;
+    if (busy) {
+      if (!v || hasAttachments) return;   // queue plain text only; attachments wait for idle
+      const qid = `q-${Date.now().toString(36)}`;
+      queuedRef.current.push({ id: qid, display: v, prompt: isRoutineCommand(v) ? routineCreationPrompt(v) : v });
+      updateChatState(chatKey, (s) => ({ ...s, turns: [...s.turns, { id: qid, role: "user", text: v }] }));
+      setValue("");
+      return;
+    }
     stickToBottomRef.current = true;  // sending re-attaches follow-the-stream
     window.setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
     if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }

@@ -89,7 +89,13 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
   return (
     <>
       {turns.map((t, i) => {
-        if (t.role === "user") return <div key={t.id} style={{ marginBottom: 16 }}><div style={bubble}>{t.text}</div></div>;
+        if (t.role === "user") {
+          const queued = t.id.startsWith("q-");   // typed mid-turn; fires when the current turn ends
+          return <div key={t.id} style={{ marginBottom: 16 }}>
+            <div style={{ ...bubble, opacity: queued ? 0.55 : 1 }}>{t.text}</div>
+            {queued && <div style={{ textAlign: "right", fontSize: 10, color: "var(--t3)", fontFamily: "var(--mono)", marginTop: 3 }}>queued</div>}
+          </div>;
+        }
         if (t.role === "insight") return (
           <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 14 }}>
             <Icon name="spark" size={15} style={{ color: "var(--accent)", marginTop: 1, flex: "none" }} />
