@@ -113,10 +113,14 @@ export function Rail(p: {
           ))}
           <h2 style={{ ...lensRow, marginTop: 14 }}>Workspaces<button title="New workspace — a conversation scaffolds it" aria-label="New workspace" onClick={p.onNewWorkspace} style={row.ghostPlus}>+</button></h2>
           {p.scaffolded.personal === false
-            ? <button onClick={p.onSetupPersonal} disabled={p.scaffolded.global === false}
-                title={p.scaffolded.global === false ? "Finish the organisation setup first" : "Run your personal onboarding"}
-                style={{ ...wsRow, width: "100%", textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: p.scaffolded.global === false ? "var(--t3)" : "var(--accent)", cursor: p.scaffolded.global === false ? "default" : "pointer", fontWeight: 600 }}>
-                Set up personal workspace…</button>
+            ? <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={p.onSetupPersonal} disabled={p.scaffolded.global === false}
+                  title={p.scaffolded.global === false ? "Finish the organisation setup first" : "Run your personal onboarding"}
+                  style={{ ...wsRow, flex: 1, textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: p.scaffolded.global === false ? "var(--t3)" : "var(--accent)", cursor: p.scaffolded.global === false ? "default" : "pointer", fontWeight: 600 }}>
+                  Set up personal workspace…</button>
+                <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
+                  style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 4px", lineHeight: 1, flex: "none" }}>×</button>
+              </div>
             : <div style={wsRow}>personal<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>you</span>
                 <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
                   style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
@@ -131,9 +135,13 @@ export function Rail(p: {
             </div>
           ))}
           {p.scaffolded.global === false
-            ? <button onClick={p.onSetupGlobal} title="The organisation tier is not set up — finish this first"
-                style={{ ...wsRow, width: "100%", textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: "var(--accent)", cursor: "pointer", fontWeight: 600 }}>
-                Set up global workspace…</button>
+            ? <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={p.onSetupGlobal} title="The organisation tier is not set up — finish this first"
+                  style={{ ...wsRow, flex: 1, textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: "var(--accent)", cursor: "pointer", fontWeight: 600 }}>
+                  Set up global workspace…</button>
+                <button title="Wipe the organisation tier to the empty seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
+                  style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 4px", lineHeight: 1, flex: "none" }}>×</button>
+              </div>
             : <div style={wsRow}>_global<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>everyone · ro</span>
                 <button title="Reset the organisation tier to the seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
                   style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
