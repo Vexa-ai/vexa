@@ -44,7 +44,7 @@ const SHAPES = {
     match: /1:1|one.on.one|hiring|interview|candidate|coaching|feedback|performance/i,
   },
   project: {
-    label: "a project group",
+    label: "a project workspace",
     focus: ["Milestones and their state", "Risks somebody named", "Who is waiting on whom"],
     match: /project|launch|delivery|milestone|sprint|release|migration|rollout/i,
   },
@@ -66,7 +66,7 @@ const addressOf = (name: string) =>
 export function RoomOnboarding({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [phase, setPhase] = useState<Phase>("name");
   const [msgs, setMsgs] = useState<Msg[]>([
-    { who: "a", text: "Let’s set up a group. What should it be called?\n\nA group usually carries the name of the meeting it serves — “Architecture review”, “Acme renewal”, “Monday standup”." },
+    { who: "a", text: "Let’s scaffold a workspace. What should it be called?\n\nA workspace usually carries the name of the meeting series or the work it holds — “Architecture review”, “Acme renewal”, “Monday standup”." },
   ]);
   const [input, setInput] = useState("");
   const [name, setName] = useState("");
@@ -106,7 +106,7 @@ export function RoomOnboarding({ onClose, onCreated }: { onClose: () => void; on
         say("Added. Anything else — or “looks right”?");
         return;
       }
-      say("Good. Last thing — who belongs in this group?");
+      say("Good. Last thing — who belongs in this workspace?");
       setPhase("who");
       return;
     }
@@ -169,7 +169,7 @@ export function RoomOnboarding({ onClose, onCreated }: { onClose: () => void; on
   );
 
   return (
-    <Modal title="New shared group" onClose={onClose} width={470}>
+    <Modal title="New workspace" onClose={onClose} width={470}>
       <div style={{ display: "flex", flexDirection: "column", height: 430 }}>
         <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4 }}>
           {msgs.map((m, i) => (
@@ -191,7 +191,7 @@ export function RoomOnboarding({ onClose, onCreated }: { onClose: () => void; on
         )}
         {phase === "focus" && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 7, padding: "10px 0 2px" }}>
-            {chip("Looks right", () => { setInput("looks right"); setTimeout(() => { const t = "looks right"; setMsgs((m) => [...m, { who: "u", text: t }]); say("Good. Last thing — who belongs in this group?"); setPhase("who"); setInput(""); }, 0); }, true)}
+            {chip("Looks right", () => { setInput("looks right"); setTimeout(() => { const t = "looks right"; setMsgs((m) => [...m, { who: "u", text: t }]); say("Good. Last thing — who belongs in this workspace?"); setPhase("who"); setInput(""); }, 0); }, true)}
           </div>
         )}
         {phase === "done" ? (

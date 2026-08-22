@@ -321,6 +321,7 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   const currentTitle = sessionTitle(activeSummary);
   const iconButton: CSSProperties = { width: 28, height: 28, borderRadius: 7, border: "1px solid transparent", background: "transparent", color: "var(--t3)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" };
 
+  if (minutesOnly()) return null;  // MINUTES: the rail owns chats — no second header inside the panel
   return (
     <div ref={menuRef} style={{ height: 38, flex: "none", position: "relative", display: "flex", alignItems: "center", gap: 4, padding: "0 8px", borderBottom: "1px solid var(--line)", background: "var(--panel)", minWidth: 0 }}>
       <button
