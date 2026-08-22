@@ -25,7 +25,12 @@ model_list:
   - model_name: fallback                        # dev convenience only
     litellm_params:
       model: os.environ/LLM_SHIM_FALLBACK_MODEL
-      api_base: https://openrouter.ai/api/v1
+      # The provider must be NAMED. Left to infer, LiteLLM reads the vendor off the model id
+      # ("anthropic/…" → the Anthropic provider), posts the wrong dialect to the wrong path, and
+      # OpenRouter replies with its marketing HTML — surfacing as an unreadable 500. And it has to
+      # be this field rather than an "openrouter/" prefix, because os.environ/ substitutes only as
+      # a WHOLE value: "openrouter/os.environ/NAME" is sent literally.
+      custom_llm_provider: openrouter
       api_key: os.environ/OPENROUTER_API_KEY
       # no extra_body: a hosted gateway neither needs nor accepts the thinking flag
 

@@ -551,6 +551,7 @@ services:
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
     image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
+    networks: [vexa]     # MUST match the stack: on the default network the agent cannot resolve it
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
     volumes:
@@ -564,7 +565,7 @@ services:
       #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d
       # Consumed only by that local file's fallback leg; empty (and unused) in a shipped deployment.
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - LLM_SHIM_FALLBACK_MODEL=${LLM_SHIM_FALLBACK_MODEL:-anthropic/claude-sonnet-4}
+      - LLM_SHIM_FALLBACK_MODEL=${LLM_SHIM_FALLBACK_MODEL:-google/gemini-2.5-flash-lite}
     extra_hosts:
       - "host.docker.internal:host-gateway"   # so an endpoint on the HOST is reachable from here
     healthcheck:
