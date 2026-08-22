@@ -13,5 +13,12 @@ export const STT_PATH = "/v1/audio/transcriptions";
 export function sttEndpoint(configuredUrl: string): string {
   const base = (configuredUrl ?? "").trim().replace(/\/+$/, "");
   if (!base) return "";
-  return base.endsWith(STT_PATH) ? base : `${base}${STT_PATH}`;
+  if (base.endsWith(STT_PATH)) return base;
+  // A base that already carries the /v1 prefix (e.g. https://api.groq.com/openai/v1)
+  // would double-path into /v1/v1/... — strip the overlap before appending.
+  const overlap = "/v1";
+  if (base.endsWith(overlap) && STT_PATH.startsWith(overlap + "/")) {
+    return base + STT_PATH.slice(overlap.length);
+  }
+  return `${base}${STT_PATH}`;
 }
