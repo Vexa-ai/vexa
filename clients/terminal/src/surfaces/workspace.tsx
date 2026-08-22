@@ -490,6 +490,25 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // the name, who belongs, and (after creation) the invite it minted — so nothing exists until the
   // person has said what the room is for and who is in it.
   const [roomWiz, setRoomWiz] = useState<null | true>(null);
+  // MINUTES `?assign=` — an organiser followed the artifact email's "assign to a group" link. The
+  // uid was stashed by the App gate; while set, clicking a group ASSIGNS the meeting to it (via the
+  // local-dev seam) instead of mounting. One meeting, one group; cancel clears the stash.
+  const [assignUid, setAssignUid] = useState<string | null>(() => {
+    try { return minutesOnly() ? localStorage.getItem("vexa.assignMeeting") : null; } catch { return null; }
+  });
+  const [assignDone, setAssignDone] = useState<string | null>(null);  // group display name after success
+  const doAssign = async (wsId: string, display: string) => {
+    if (!assignUid) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/minutes/assign", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ uid: assignUid, workspaceId: wsId }) });
+      if (!r.ok) throw new Error(`assign failed (${r.status})`);
+      try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ }
+      setAssignUid(null); setAssignDone(display);
+    } catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
   const [confirmDelete, setConfirmDelete] = useState<null | { slug: string; display: string }>(null);
   const [sharedMemberships, setSharedMemberships] = useState<Membership[]>([]);  // ALL shared (incl switched-off)
   const [err, setErr] = useState<string | null>(null);
@@ -541,6 +560,11 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   };
 
   const selectRoom = async (slug: string, mounted: boolean) => {
+    if (assignUid) {  // assign mode: the personal row is not a target — clicking it keeps the meeting personal
+      try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ }
+      setAssignUid(null);
+      return;
+    }
     if (mounted) return;
     setBusy(true); setErr(null);
     try {
@@ -699,6 +723,19 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         <Icon name="folder" size={12} />{minutesOnly() ? "groups" : "workspaces"}
       </div>
       {open && (<>
+        {assignUid && (
+          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--accent)", borderRadius: 6, color: "var(--t1)" }}>
+            <b>Assign this meeting to a group</b> — click the group below that should own it (and its
+            series, if recurring).{" "}
+            <a onClick={(e) => { e.preventDefault(); try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ } setAssignUid(null); }}
+               style={{ cursor: "pointer", textDecoration: "underline" }}>Keep it personal</a>
+          </div>
+        )}
+        {assignDone && (
+          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--ok, #2e7d32)", borderRadius: 6, color: "var(--t1)" }}>
+            Assigned to <b>{assignDone}</b>. The group's minutes for this meeting are on their way.
+          </div>
+        )}
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
@@ -756,7 +793,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               {minutesOnly() ? (
                 <span role="radio" aria-checked={mounted} tabIndex={0}
-                  onClick={() => void selectShared(wsId, mounted)}
+                  onClick={() => assignUid ? void doAssign(wsId, wsId) : void selectShared(wsId, mounted)}
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectShared(wsId, mounted); } }}
                   title={mounted ? `${wsId} — the group you are in` : `Open ${wsId}`}
                   aria-label={`${wsId} — shared group, ${mem.role}${mounted ? ", the group you are in" : ""}`}

@@ -328,10 +328,23 @@ export function Workbench() {
   const openMeetingByRef = useCallback((mid: string) => {
     // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
     // in the meetings list opens); the canvas fetches its transcript/recording by that id.
-    const id = mid.trim();
-    if (!id) return;
-    const m = liveMeetingsNow().find((x) => String(x.id) === id);
+    const ref = mid.trim();
+    if (!ref) return;
+    // Two ref forms: a bare meeting ROW id, or `<platform>/<native>` (the email door links use the
+    // latter — the meeting's calendar-independent identity). Resolve either against the list.
+    const rows = liveMeetingsNow();
+    const slash = ref.indexOf("/");
+    // The mapped row's `platform` is a display label ("Google Meet"), so a platform/native ref
+    // matches on the native id — unique enough for a door link; the row id remains the tab key.
+    const m = slash > 0
+      ? rows.find((x) => (x as { native_id?: string }).native_id === ref.slice(slash + 1))
+      : rows.find((x) => String(x.id) === ref);
+    const id = m ? String(m.id) : (slash > 0 ? "" : ref);
     if (layout.store.getState().activeList === "sessions") layout.setActiveList("meetings");
+    if (!id) {  // an unresolvable platform/native ref: land on the meetings list, never a broken tab
+      layout.setActiveList("meetings");
+      return;
+    }
     layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
   }, [layout]);
 

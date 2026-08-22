@@ -35,6 +35,15 @@ function InviteGate({ children }: { children: ReactNode }) {
   const invite = params.get("invite");
   const tshare = params.get("tshare");
   const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
+  const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
+
+  // MINUTES `?assign=` (from the organiser's artifact email): stash the meeting uid; the groups
+  // surface renders the chooser. Same clean-URL discipline as `?meeting=`.
+  useEffect(() => {
+    if (!assign) return;
+    try { localStorage.setItem("vexa.assignMeeting", assign); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [assign, invite, tshare]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
