@@ -6,6 +6,25 @@ description: "Six rules. A meeting has one workspace, and everything else follow
 <Note>**Status:** the rules are designed here; the underlying workspace, membership and isolation
 machinery **already ships** — see [what is real today](/minutes/status).</Note>
 
+## How the assistant's context is composed
+
+Every turn, the assistant works inside a stack of exactly three mounts:
+
+| Mount | Access | What it carries |
+|---|---|---|
+| **Your system space** (hidden) | private, per person | who you are — identity, sessions, settings. Present on every turn, even with everything else switched off. Never shareable. |
+| **`_global` — the organisation** | **read-only**, mounted for **everyone** | where the assistant is working: the organisation's name and domain, its glossary, its house rules. One repo; a change here reaches every member's assistant on their next turn. |
+| **The write workspace** | read-write, exactly one | the thing being actively worked: your Personal space, or the one group the turn belongs to. All writing lands here. |
+
+So context is made, not configured: the organisation tier says *where* the assistant works, the
+system tier says *who* it works for, and the write workspace says *what* it is working on now.
+
+**Writing `_global` is the admin's first-setup act.** It is read-only to everyone in daily use —
+which means someone must write it once, at installation. That is a guided conversation, not a
+file-editing exercise: the first admin's chat walks them through it — what the organisation is,
+its mail domain, the terms that mean something here, what must never leave — and writes the
+organisation tier from their answers. Amending it later is the same conversation again, admin-only.
+
 ## Three words, exactly
 
 | | What it is | Meetings get in by |
