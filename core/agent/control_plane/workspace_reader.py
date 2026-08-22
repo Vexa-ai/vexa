@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Optional
 
 
-def _tool_op(name: str) -> dict:
+def _tool_op(name: str, args: Optional[dict] = None) -> dict:
     """Classify a claude tool name into one of the terminal's op labels (read/search/edit/git/web/tool).
-    Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn."""
+    Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn — including the
+    touched ``file`` (+``wrote``) that powers the transcript's actionable file chips."""
     t = (name or "").lower()
     if any(k in t for k in ("read", "cat", "open")) and "edit" not in t:
         label = "read"
@@ -26,7 +27,12 @@ def _tool_op(name: str) -> dict:
         label = "web"
     else:
         label = "tool"
-    return {"label": label}
+    op = {"label": label}
+    fp = (args or {}).get("file_path")
+    if isinstance(fp, str) and fp:
+        op["file"] = fp
+        op["wrote"] = label == "edit"
+    return op
 
 
 def _block_text(content) -> str:
@@ -254,7 +260,7 @@ class WorkspaceReader:
                 cur_agent["text"] += _block_text(content)
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "tool_use":
-                        cur_agent["ops"].append(_tool_op(b.get("name", "")))
+                        cur_agent["ops"].append(_tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None))
             # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
         flush_agent()
         return turns

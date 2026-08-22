@@ -18,10 +18,10 @@ import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
-function toolOp(tool: string): Op {
+function toolOp(tool: string, args?: Record<string, unknown>): Op {
   const t = tool.toLowerCase();
   // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
   const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
@@ -31,13 +31,17 @@ function toolOp(tool: string): Op {
     : /web|fetch|http/.test(t) ? [opIcon.web, "Browsing"]
     : /bash|exec|run/.test(t) ? [opIcon.tool, "Running"]
     : [opIcon.tool, tool];
-  return { icon, label: verb === tool ? tool : `${verb} · ${tool}`, status: "done" };
+  // the touched doc, when the tool call names one — powers the turn's actionable file chips
+  const file = typeof args?.file_path === "string" ? (args.file_path as string) : undefined;
+  const wrote = !!file && /edit|write|append|notebook/.test(t);
+  const name = file ? file.split("/").filter(Boolean).pop() : undefined;
+  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "done", file, wrote };
 }
 
 /** the backend history turn shape (GET /api/sessions/:session/history) */
 type HistoryTurn =
   | { role: "user"; text: string }
-  | { role: "agent"; text: string; ops?: { label: string }[]; commit?: string };
+  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean }[]; commit?: string };
 
 type AgentTurn = Extract<Turn, { role: "agent" }>;
 type ChatSessionState = {
@@ -97,8 +101,10 @@ function patchAgentTurn(key: string, agentId: string, fn: (turn: AgentTurn) => A
 
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
 const OP_VERB: Record<string, string> = { read: "Reading", search: "Searching", edit: "Writing", git: "Committing", web: "Browsing", tool: "Working" };
-function historyOp(op: { label: string }): Op {
-  return { icon: opIcon[op.label] ?? opIcon.tool, label: OP_VERB[op.label] ?? op.label, status: "done" };
+function historyOp(op: { label: string; file?: string; wrote?: boolean }): Op {
+  const name = op.file ? op.file.split("/").filter(Boolean).pop() : undefined;
+  const verb = OP_VERB[op.label] ?? op.label;
+  return { icon: opIcon[op.label] ?? opIcon.tool, label: name ? `${verb} · ${name}` : verb, status: "done", file: op.file, wrote: op.wrote };
 }
 
 type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
@@ -548,7 +554,7 @@ type ChatProps = Partial<TabProps>;
 function minutesEmptyGreeting(session: string): string {
   const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
   if (session === "org-setup")
-    return GLOBAL_SETUP_GREETING;
+    return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
   if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
     return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
   if (session.startsWith("meet-")) {
@@ -832,7 +838,7 @@ export function Chat({ params = {} }: ChatProps) {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
           onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
-          onTool: (tool) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool)] })),
+          onTool: (tool, args) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool, args)] })),
           onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
@@ -1093,7 +1099,14 @@ export function Chat({ params = {} }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
-      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
+      <ChatConversation turns={turns} busy={busy || loading} empty={
+        !loading && minutesOnly() && session === "org-setup"
+          // The org-setup opener is ONE profound question standing in the void — centered, spare.
+          ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
+              <div style={{ fontSize: 26, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.015em", lineHeight: 1.3 }}>{GLOBAL_SETUP_GREETING}</div>
+              <div style={{ fontSize: 13, color: "var(--t3)", lineHeight: 1.6, marginTop: 14, maxWidth: 400 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
+            </div>
+          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
           ? minutesEmptyGreeting(session)
           : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
     </AgentWindow>

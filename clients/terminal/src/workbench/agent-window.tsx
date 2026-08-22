@@ -7,10 +7,11 @@
 import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState } from "react";
 import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
+import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
 export type OpStatus = "running" | "done" | "error";
-export interface Op { icon: string; label: string; status: OpStatus }   // icon ∈ ui-kit (file/search/edit/git/web/zap…)
+export interface Op { icon: string; label: string; status: OpStatus; file?: string; wrote?: boolean }   // icon ∈ ui-kit; file = workspace doc the op touched
 /** The live phase of an in-flight agent turn (see chatStream `ChatPhase`), plus when it began so the UI
  *  can tick an elapsed-seconds counter. Rendered as a verbose status line so the pane never looks frozen. */
 export type TurnPhase = "connecting" | "working" | "reconnecting" | "stalled";
@@ -67,6 +68,19 @@ function OpRow({ op }: { op: Op }) {
   );
 }
 
+// ── files the turn created/edited — ACTIONABLE chips: click opens the doc in the pages panel ──
+function FileChip({ path }: { path: string }) {
+  const name = path.split("/").filter(Boolean).pop() ?? path;
+  return (
+    <button
+      onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path } }))}
+      title={path}
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>
+      <Icon name="edit" size={11} />{name}
+    </button>
+  );
+}
+
 // ── the conversation: a timeline of user bubbles · agent turns (ops + text) · insights ──
 export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
   const bubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
@@ -96,6 +110,15 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
               </div>
             )}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}><Markdown>{t.text}</Markdown></div>}
+            {(() => {
+              // every file the turn WROTE, deduped — the output's actionable surface
+              const files = [...new Set(t.ops.filter((o) => o.wrote && o.file).map((o) => o.file as string))];
+              return files.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 9 }}>
+                  {files.map((f) => <FileChip key={f} path={f} />)}
+                </div>
+              );
+            })()}
             {busy && last && (t.status
               ? <StatusLine status={t.status} />
               : (!t.text && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}

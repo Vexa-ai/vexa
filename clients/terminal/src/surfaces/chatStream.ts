@@ -33,7 +33,7 @@ export type ChatStreamCallbacks = {
   /** an agent message-delta with non-empty text (the first one clears the "starting" placeholder) */
   onDelta: (text: string) => void;
   /** a tool-call step to show as an operation */
-  onTool: (tool: string) => void;
+  onTool: (tool: string, args?: Record<string, unknown>) => void;
   /** the turn committed to the workspace (terminal) */
   onCommit: (sha: string | undefined) => void;
   /** the turn was rejected by workspace.v1 governance (terminal) */
@@ -229,7 +229,7 @@ export async function streamChatTurn(
             if (ev.text) { sawVisibleOutput = true; cb.onDelta(ev.text); }
             break;
           case "tool-call":
-            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool");
+            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args);
             break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);

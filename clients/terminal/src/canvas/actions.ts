@@ -85,10 +85,11 @@ export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
 // ORG (_global) setup: the first agent message is DETERMINISTIC given the seed, so it is CACHED —
 // rendered instantly as the empty-state greeting, no LLM turn. The admin's first reply carries the
 // grounding below (compactStoredUserText strips it on reload), so processing starts from one answer.
-export const GLOBAL_SETUP_GREETING =
-  "Welcome — this conversation sets up your organisation's shared ground: the few facts every meeting " +
-  "assistant here reads before it writes anything. First — what is the organisation called, and in one " +
-  "line, what is it?";
+// The opener is ONE profound question standing in the void — not a paragraph. The subline is the
+// only context it needs.
+export const GLOBAL_SETUP_GREETING = "What is this organisation?";
+export const GLOBAL_SETUP_GREETING_SUB =
+  "Its name, and one line on what it exists to do — the first fact every assistant here reads before it writes anything.";
 export const GLOBAL_SETUP_GROUNDING = ONBOARDING_KICKOFF_MARK + [
   "You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow",
   "it exactly — research-first (draft answers from public sources, bring them for approval), org voice,",
