@@ -101,7 +101,8 @@ def plan_base_path(
         entry("suppress", "*", f"organiser outside org domain: {organizer}")
         return BasePathResult((), tuple(log))
 
-    art_uid = f"{assign_url}?uid={uid}"
+    from urllib.parse import quote
+    art_uid = f"{assign_url}?assign={quote(uid or '')}&mtitle={quote(parsed.summary or '')}"
     sends.append(EmailPlan(
         to=organizer, kind="artifact",
         subject=f"Minutes — {parsed.summary or 'your meeting'}",
@@ -126,10 +127,14 @@ def plan_base_path(
         if _domain(addr) != org:
             entry("suppress", addr, "outside org domain")
             continue
+        # The chat door deep-links the meeting itself when the invite carried a resolvable
+        # conference link; the uid form is the fallback the terminal can still look up.
+        ref = (f"{chat_url}?meeting={parsed.platform}/{parsed.native_meeting_id}"
+               if parsed.platform and parsed.native_meeting_id else f"{chat_url}?uid={uid}")
         sends.append(EmailPlan(
             to=addr, kind="chat_invite",
             subject=f"Chat with “{parsed.summary or 'your meeting'}”",
-            body=_chat_invite_body(parsed, organizer, f"{chat_url}?uid={uid}")))
+            body=_chat_invite_body(parsed, organizer, ref)))
         entry("send", addr, "org-domain participant chat invite")
 
     return BasePathResult(tuple(sends), tuple(log))
