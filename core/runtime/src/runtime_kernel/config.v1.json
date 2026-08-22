@@ -208,6 +208,13 @@
    "description": "API-key credential path, brokered into spawned workers (alternative to the subscription mount)"
   },
   {
+   "key": "CLAUDE_CODE_OAUTH_TOKEN",
+   "class": "capability",
+   "capability": "model_inference",
+   "secret": true,
+   "description": "Claude Code subscription OAuth as env (`claude setup-token`) — the env twin of the HOST_CLAUDE_CREDENTIALS file mount, brokered into spawned workers"
+  },
+  {
    "key": "ANTHROPIC_AUTH_TOKEN",
    "class": "capability",
    "capability": "model_inference",
