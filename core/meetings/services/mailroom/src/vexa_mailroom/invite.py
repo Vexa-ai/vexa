@@ -98,6 +98,8 @@ class ParsedMail:
     organizer: Optional[str] = None
     series_start: Optional[str] = None     # the master DTSTART (ISO UTC) — the RRULE's anchor
     floating_start: bool = False           # DTSTART carried no zone: refused, never guessed
+    description: Optional[str] = None      # the event DESCRIPTION, verbatim (organiser-authored)
+    group_tag: Optional[str] = None        # `#group:<name>` parsed from the description, or None
     platform: Optional[str] = None
     native_meeting_id: Optional[str] = None
     meeting_url: Optional[str] = None
@@ -135,6 +137,16 @@ class ParsedMail:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────────────────────
+
+def _group_tag(description: str) -> Optional[str]:
+    """``#group:<name>`` from the organiser-authored description — the in-band series binding.
+
+    First occurrence wins; the name is slug-shaped (lowercase alnum + dash). Anything else is not
+    a tag: a malformed tag NEVER binds (the caller refuses loudly, it does not guess)."""
+    import re as _re
+    m = _re.search(r"#group:([A-Za-z0-9][A-Za-z0-9-]*)", description or "")
+    return m.group(1).lower() if m else None
+
 
 def _addresses(value: Any) -> list[str]:
     """Header value(s) → lowercase bare addresses (``Name <a@b>``, ``mailto:a@b``, folded lists)."""
@@ -383,6 +395,8 @@ def parse_invite(raw: bytes, *, now: Optional[datetime] = None,
         uid=uid or None,
         sequence=sequence,
         summary=_text(comp, "SUMMARY").strip() or None,
+        description=_text(comp, "DESCRIPTION") or None,
+        group_tag=_group_tag(_text(comp, "DESCRIPTION")),
         dtstart=occurrence.isoformat() if occurrence else None,
         series_start=series_start.isoformat() if series_start else None,
         floating_start=_is_floating(comp),
