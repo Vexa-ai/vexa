@@ -92,8 +92,9 @@ export const GLOBAL_SETUP_GREETING_SUB =
   "Just the name is enough — I'll research the rest and bring it back for your sign-off.";
 export const GLOBAL_SETUP_GROUNDING = ONBOARDING_KICKOFF_MARK + [
   "You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow",
-  "it exactly — research-first (draft answers from public sources, bring them for approval), org voice,",
-  "one question at a time, `(unset)` discipline. Your mount of /workspaces/_global is READ-WRITE — you",
+  "it exactly — ONE autonomous pass: research and WRITE every item the public record can answer, then ask",
+  "only the residual admin-only questions together. Org voice, `(unset)` discipline. Your mount of",
+  "/workspaces/_global is READ-WRITE — you",
   "are its one sanctioned writer; commit each answer there. Your opener (asking the organisation's name)",
   "was already displayed from cache — do NOT re-greet; the admin's reply to it follows. If _global",
   "already holds answers, continue from the first unset item — never re-ask what is recorded.",

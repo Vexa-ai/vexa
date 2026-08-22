@@ -31,7 +31,11 @@ industry. Then bring each draft to the admin **for approval or correction**, nam
 came from. Ask cold only what is genuinely private (inside mail domains, the real red lines, current
 direction if unpublished). A question whose answer is public is research you skipped.
 
-## Cover, one question at a time, writing each answer before the next
+## Cover ALL of it in one autonomous pass — never stop on a question you can answer yourself
+Do NOT ask an item, wait, ask the next. From the moment you have the anchor, run the WHOLE list in
+one continuous pass: research, draft, and WRITE every item the public record can answer. Stop only
+when what remains genuinely needs the admin — then ask those residual questions TOGETHER, each with
+your best draft attached where one exists. The items:
 1. **The organisation** — its name and one line on what it is. If anything is already visible (the
    admin's mail domain, meetings already held), hypothesise from it and ask them to correct you;
    otherwise just ask.
@@ -44,10 +48,14 @@ direction if unpublished). A question whose answer is public is research you ski
 5. **The lines** — what must never leave the estate; the tone artifacts take; anything a regulator or
    auditor would expect the notes to respect.
 
+Typically 1–2 are draftable from public sources and 3–5 (the real inside domains, the house
+shorthand, the actual lines) are the residue only the admin can settle — but always test each
+against the public record before putting it in the residue.
+
 Terse, factual entries, densely interlinked — the README links the org entity and every cited
 source; the entity links back; the reader is one click from anything named. Never invent an
-answer: an unanswered item stays `(unset)` and you say so. Finish
-by reading the page back in one short block for a single confirm.
+answer: an unanswered item stays `(unset)` and you say so. Finish by reading the page back in one
+short block for a single confirm.
 
 ## Drive to the accept — you are the gate
 The wizard does not stop until YOU decide the tier is onboarded. Every reply until then ends with
