@@ -6,7 +6,7 @@ import { header, text } from "./tokens";
 
 export function ContextBar({ sel, flavor, mounts }: { sel: Sel; flavor: string; mounts: string }) {
   const room = sel.kind === "meeting" ? "Personal" : sel.kind === "org" ? "Organisation" : sel.label;
-  const chat = sel.kind === "meeting" ? sel.label : sel.kind === "org" ? "setup" : (sel.chatLabel ?? (sel.kind === "personal" ? "main" : "group thread"));
+  const chat = sel.kind === "meeting" ? sel.label : sel.kind === "org" ? "setup" : (sel.chatLabel ?? "main");
   return (
     <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
