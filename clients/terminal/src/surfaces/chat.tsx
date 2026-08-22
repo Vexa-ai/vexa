@@ -4,6 +4,7 @@
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { minutesOnly } from "../app/mode";
+import { liveMeetingsNow } from "./liveMeetings";
 import { useService, useStore, CommandServiceId } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
@@ -17,7 +18,7 @@ import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -874,7 +875,9 @@ export function Chat({ params = {} }: ChatProps) {
       updateChatState(key, (s) => (
         s.turns.length
           ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly() ? MINUTES_ONBOARDING_GREETING : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
+          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
+                ? (liveMeetingsNow().some((m) => m.status === "past") ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
+                : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
       ));
       onboardingArmedRef.current = true;
     };

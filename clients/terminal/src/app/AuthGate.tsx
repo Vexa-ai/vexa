@@ -25,6 +25,22 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // MINUTES magic link: emailed door links carry ?as=<recipient> — the click IS the sign-in
+  // (dev form; prod is a signed token). Runs once; on success the normal me-poll sees the cookie.
+  const [magicTried, setMagicTried] = useState(false);
+  useEffect(() => {
+    if (magicTried) return;
+    const as_ = new URLSearchParams(window.location.search).get("as");
+    if (!as_) { setMagicTried(true); return; }
+    fetch("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: as_ }) })
+      .then(() => { setMagicTried(true); setStatus("checking");
+        const u = new URL(window.location.href); u.searchParams.delete("as");
+        window.history.replaceState(null, "", u.toString());
+        fetch("/api/auth/me", { cache: "no-store" }).then((r) => setStatus(r.ok ? "in" : "out"));
+      })
+      .catch(() => setMagicTried(true));
+  }, [magicTried]);
+
   useEffect(() => {
     let active = true;
     fetch("/api/auth/me", { cache: "no-store" })

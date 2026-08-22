@@ -393,6 +393,14 @@ export function Workbench() {
     if (assigning) layout.setActiveList("files");
     const first = find();
     if (first || !native) { void openArtifactFirst(first); return; }
+    // The door must NEVER land on a void: if this user has no row for the meeting the link names,
+    // mint one (dev seam; in prod the mailroom creates rows for every resolved participant at
+    // invite time) — then the retry loop below finds it.
+    if (minutesOnly()) {
+      const platform = ref.slice(0, slash);
+      void fetch("/api/minutes/ensure-meeting", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform, native }) }).catch(() => undefined);
+    }
     let tries = 0;
     const timer = setInterval(() => {
       const m = find();
