@@ -153,6 +153,9 @@ services:
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
+      # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL now come from env_file (above), NOT environment: — an
       # `environment:` ${VAR} entry interpolates the AMBIENT SHELL first and silently shadowed .env (prod 401).
