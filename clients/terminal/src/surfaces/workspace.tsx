@@ -771,7 +771,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
                   style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
               ) : (
-                <span onClick={() => !busy && openManage(slug, { name: display })}
+                <span onClick={() => assignUid ? void selectRoom(slug, false) : (!busy && openManage(slug, { name: display }))}
                   title="Open the manage panel (rename · on/off · GitHub · purpose · participants)"
                   style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: busy ? "default" : "pointer" }}>{display}</span>
               )}
@@ -806,7 +806,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   title={mounted ? "Mounted — uncheck to switch off (you stay a member)" : "Switched off — check to mount"}
                   label={`${wsId} — shared (${mem.role})`} />
               )}
-              <span onClick={() => openManage(wsId, { shared: true, name: wsId })}
+              <span onClick={() => assignUid ? void doAssign(wsId, wsId) : openManage(wsId, { shared: true, name: wsId })}
                 title="Open the manage panel (GitHub · purpose · participants)"
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
               {minutesOnly() && mem.role === "owner" && (

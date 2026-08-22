@@ -332,20 +332,31 @@ export function Workbench() {
     if (!ref) return;
     // Two ref forms: a bare meeting ROW id, or `<platform>/<native>` (the email door links use the
     // latter — the meeting's calendar-independent identity). Resolve either against the list.
-    const rows = liveMeetingsNow();
     const slash = ref.indexOf("/");
     // The mapped row's `platform` is a display label ("Google Meet"), so a platform/native ref
     // matches on the native id — unique enough for a door link; the row id remains the tab key.
-    const m = slash > 0
-      ? rows.find((x) => (x as { native_id?: string }).native_id === ref.slice(slash + 1))
-      : rows.find((x) => String(x.id) === ref);
-    const id = m ? String(m.id) : (slash > 0 ? "" : ref);
+    // The list loads asynchronously and a door click resolves on a COLD dock, so an unresolved
+    // ref RETRIES for a few seconds before giving up — otherwise the race eats the landing.
+    const native = slash > 0 ? ref.slice(slash + 1) : null;
+    const find = () => {
+      const rows = liveMeetingsNow();
+      return native
+        ? rows.find((x) => (x as { native_id?: string }).native_id === native)
+        : rows.find((x) => String(x.id) === ref);
+    };
     if (layout.store.getState().activeList === "sessions") layout.setActiveList("meetings");
-    if (!id) {  // an unresolvable platform/native ref: land on the meetings list, never a broken tab
-      layout.setActiveList("meetings");
-      return;
-    }
-    layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
+    const openRow = (m: ReturnType<typeof find>) => {
+      const id = m ? String(m.id) : (native ? "" : ref);
+      if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
+      layout.openTab({ id: `meeting:${id}`, title: m ? m.title.split(" — ")[0] : "Meeting", kind: "meeting", params: { meetingId: id } });
+    };
+    const first = find();
+    if (first || !native) { openRow(first); return; }
+    let tries = 0;
+    const timer = setInterval(() => {
+      const m = find();
+      if (m || ++tries >= 10) { clearInterval(timer); openRow(m); }
+    }, 500);
   }, [layout]);
 
   useEffect(() => {

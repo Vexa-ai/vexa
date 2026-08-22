@@ -3,6 +3,7 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
+import { minutesOnly } from "../app/mode";
 import { useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
@@ -685,8 +686,16 @@ function MeetingsList() {
     <div style={{ padding: "8px" }}>
       <div style={{ display: "flex", alignItems: "center", padding: "6px 4px 6px" }}>
         <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", flex: 1 }}>meetings</span>
-        <CalendarSyncButton />
+        {!minutesOnly() && <CalendarSyncButton />}
       </div>
+      {/* MINUTES: meetings arrive by INVITATION — no paste-a-link, no bot button, no calendar
+          sync, no plan-a-meeting. The rail states the mechanism instead of offering workarounds. */}
+      {minutesOnly() ? (
+        <div style={{ padding: "0 8px 10px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+          Invite the assistant&rsquo;s address to any calendar event — meetings appear here after
+          they happen.
+        </div>
+      ) : (
       <div style={{ padding: "0 4px 10px" }}>
         <div style={{ display: "flex", gap: 6 }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
@@ -703,11 +712,12 @@ function MeetingsList() {
           <CalendarSyncButton variant="row" />
         </div>
       </div>
+      )}
       {/* The day itself renders in the center (Today) — the sidebar only links there. */}
       <button onClick={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
         style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "10px 9px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, cursor: "pointer" }}
         onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t2)")} onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}>
-        {all.length === 0 ? "No meetings yet — paste a Meet link above, or open Today →" : "Your meetings are in Today →"}
+        {all.length === 0 ? (minutesOnly() ? "No meetings yet — they arrive by invitation" : "No meetings yet — paste a Meet link above, or open Today →") : "Your meetings are in Today →"}
       </button>
     </div>
   );
