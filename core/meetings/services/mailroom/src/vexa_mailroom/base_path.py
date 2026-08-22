@@ -58,9 +58,12 @@ def _artifact_body(parsed: ParsedMail, transcript_summary: str, assign_url: str)
 
 
 def _chat_invite_body(parsed: ParsedMail, organizer: str, chat_url: str) -> str:
+    # The door mints the reader's WORKSPACE with this meeting in it — chat is always scoped to a
+    # workspace; the meeting is the context it points at. The copy says what they get.
     return (
         f"You were in “{parsed.summary or 'a meeting'}” with {organizer}.\n"
-        f"Vexa kept the minutes. Ask it anything about the meeting:\n"
+        f"Vexa kept the minutes — in your own workspace, with this meeting in it.\n"
+        f"Open it and ask anything:\n"
         f"{chat_url}\n"
     )
 
