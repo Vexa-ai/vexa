@@ -37,6 +37,7 @@ export function Rail(p: {
   collapsed: Record<string, boolean>; onToggleCollapse: (projectId: string) => void;
   onDeleteChat: (projectId: string, chatId: string) => void; onDeleteProject: (projectId: string) => void;
   onDeleteWorkspace: (workspaceId: string) => void; onResetWorkspace: (target: "personal" | "_global") => void;
+  scaffolded: { global: boolean | null; personal: boolean | null }; onSetupGlobal: () => void; onSetupPersonal: () => void;
 }) {
   const { view, sel } = p;
   const meetRow = (m: MeetingMock) => {
@@ -111,10 +112,15 @@ export function Rail(p: {
             </div>
           ))}
           <h2 style={{ ...lensRow, marginTop: 14 }}>Workspaces<button title="New workspace — a conversation scaffolds it" aria-label="New workspace" onClick={p.onNewWorkspace} style={row.ghostPlus}>+</button></h2>
-          <div style={wsRow}>personal<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>you</span>
-            <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
-              style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
-          </div>
+          {p.scaffolded.personal === false
+            ? <button onClick={p.onSetupPersonal} disabled={p.scaffolded.global === false}
+                title={p.scaffolded.global === false ? "Finish the organisation setup first" : "Run your personal onboarding"}
+                style={{ ...wsRow, width: "100%", textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: p.scaffolded.global === false ? "var(--t3)" : "var(--accent)", cursor: p.scaffolded.global === false ? "default" : "pointer", fontWeight: 600 }}>
+                Set up personal workspace…</button>
+            : <div style={wsRow}>personal<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>you</span>
+                <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
+                  style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
+              </div>}
           {p.memberships.map((m) => (
             <div key={"ws-" + m.workspace_id} className="vx-ws-row" style={wsRow}>{m.workspace_id}<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>{m.role}</span>
               {m.role === "owner" && (
@@ -124,10 +130,14 @@ export function Rail(p: {
               )}
             </div>
           ))}
-          <div style={wsRow}>_global<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>everyone · ro</span>
-            <button title="Reset the organisation tier to the seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
-              style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
-          </div>
+          {p.scaffolded.global === false
+            ? <button onClick={p.onSetupGlobal} title="The organisation tier is not set up — finish this first"
+                style={{ ...wsRow, width: "100%", textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: "var(--accent)", cursor: "pointer", fontWeight: 600 }}>
+                Set up global workspace…</button>
+            : <div style={wsRow}>_global<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>everyone · ro</span>
+                <button title="Reset the organisation tier to the seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
+                  style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
+              </div>}
         </>)}
       </div>
 

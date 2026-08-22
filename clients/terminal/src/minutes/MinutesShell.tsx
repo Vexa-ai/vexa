@@ -5,7 +5,7 @@
  *  A PROJECT is private — your bundle of workspaces to chat over. Chats live in projects.
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -88,6 +88,7 @@ export function MinutesShell() {
       : "Wipes your personal workspace back to the empty seed (git history survives). Your entities, notes and dashboard are removed; onboarding starts over.",
     run: async () => {
       try { await resetWorkspace(target); } catch (e) { window.alert(`Could not reset ${target}: ${e instanceof Error ? e.message : e}`); return; }
+      probeScaffolded();
       void select({ kind: "personal", id: "personal", label: "Personal" });
     },
   });
@@ -235,6 +236,31 @@ export function MinutesShell() {
   // whole job is scaffolding one. The workspace is created up front (so the agent has a real rw
   // mount to seed), then the conversation names it, writes CLAUDE.md + PURPOSE + README, and
   // settles membership. Founder ruling: the conversation is the wizard.
+  // `.scaffolded` (written by the setup flows as their FINAL act) is the platform's signal that a
+  // structural tier is ready. Absent → the rail offers a Setup button instead of the workspace row.
+  const [scaffolded, setScaffolded] = useState<{ global: boolean | null; personal: boolean | null }>({ global: null, personal: null });
+  const probeScaffolded = useCallback(() => {
+    void readWorkspaceFile(".scaffolded", { slug: "_global" }).then((c) => setScaffolded((x) => ({ ...x, global: c !== null }))).catch(() => undefined);
+    void readWorkspaceFile(".scaffolded").then((c) => setScaffolded((x) => ({ ...x, personal: c !== null }))).catch(() => undefined);
+  }, []);
+  useEffect(() => { probeScaffolded(); const t = setInterval(probeScaffolded, 20000); return () => clearInterval(t); }, [probeScaffolded]);
+
+  // Setup entry points — the buttons the rail shows while a tier awaits setup.
+  const setupGlobal = () => {
+    // ensure the Organisation project row exists (it may have been deleted), then open its setup chat
+    setProjects((prev) => {
+      if (prev.some((pr) => pr.id === "org")) return prev;
+      const next = [...prev, { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: "org-setup", label: "setup" }] }];
+      saveProjects(next); return next;
+    });
+    void select({ kind: "project", id: "org", label: "Organisation", session: "org-setup", chatLabel: "setup" },
+      projects.find((pr) => pr.id === "org") ?? { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: "org-setup", label: "setup" }] });
+  };
+  const setupPersonal = () => {
+    void select({ kind: "personal", id: "personal", label: "Personal" });
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 400);
+  };
+
   const newWorkspace = async () => {
     const stamp = new Date().toISOString().slice(5, 16).replace(/[-:T]/g, "");
     let created: { workspace_id: string } | null = null;
@@ -264,7 +290,8 @@ export function MinutesShell() {
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}
         onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={() => void newWorkspace()}
-        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace} />
+        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace}
+        scaffolded={scaffolded} onSetupGlobal={setupGlobal} onSetupPersonal={setupPersonal} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />

@@ -46,3 +46,8 @@ direction if unpublished). A question whose answer is public is research you ski
 
 Terse, factual entries. Never invent one: an unanswered item stays `(unset)` and you say so. Finish
 by reading the page back in one short block for a single confirm.
+
+## Mark it done
+When the admin confirms the read-back, write the file `.scaffolded` (content: today's date) and
+commit it. That marker is how the platform knows this tier is set up — until it exists, every
+member's terminal shows the organisation as awaiting setup. Never write it early.

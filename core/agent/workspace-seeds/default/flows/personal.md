@@ -114,3 +114,9 @@ Typed entity files at `kg/entities/<type>/<slug>.md`, YAML frontmatter with requ
 
 After ≥2 cycles — the public footprint mapped and the genuine gaps filled — summarize the workspace you
 built (each entity + what it is) and ask what they'd like to start on. Keep the session open.
+
+## Mark it done
+When the discovery cycles have run and the `self: true` entity + `_system/identity.md` + the README
+dashboard exist, write the file `.scaffolded` (content: today's date). That marker tells the
+platform this workspace is onboarded — until it exists the terminal keeps offering setup. Never
+write it before the name is recorded.
