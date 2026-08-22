@@ -152,8 +152,9 @@ def plan_base_path(
             continue
         # The chat door deep-links the meeting itself when the invite carried a resolvable
         # conference link; the uid form is the fallback the terminal can still look up.
-        ref = (f"{chat_url}?meeting={parsed.platform}/{parsed.native_meeting_id}"
-               if parsed.platform and parsed.native_meeting_id else f"{chat_url}?uid={uid}")
+        from urllib.parse import quote as _q
+        ref = (f"{chat_url}?meeting={parsed.platform}/{parsed.native_meeting_id}&as={_q(addr)}&mtitle={_q(parsed.summary or '')}"
+               if parsed.platform and parsed.native_meeting_id else f"{chat_url}?uid={uid}&as={_q(addr)}")
         sends.append(EmailPlan(
             to=addr, kind="chat_invite",
             subject=f"Chat with “{parsed.summary or 'your meeting'}”",

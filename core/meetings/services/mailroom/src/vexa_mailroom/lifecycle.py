@@ -104,13 +104,17 @@ def main(argv: list[str] | None = None) -> int:
     p = parse("gcal-create-single-outsider.ics")
     organiser = p.organizer or ""
     known = st["persons"].get(organiser, "new")
-    door = f"{T}/?meeting={p.platform}/{p.native_meeting_id}"
+    from urllib.parse import quote
+    door = (f"{T}/?meeting={p.platform}/{p.native_meeting_id}&as={quote(organiser)}&mtitle={quote(p.summary or '')}")
     if known == "new":
-        body = (f"I'm booked for “{p.summary}”.\n\nAfter the meeting, minutes go to you, and every "
-                f"{a.org_domain} participant gets their own. Outside addresses receive nothing.\n\n"
-                f"New here? Your workspace is one click away — it will hold this meeting:\n{door}\n")
+        body = (f"I'm booked for “{p.summary}”.\n\n"
+                f"Want it to land well? Open the meeting and brief me — what you want out of it, "
+                f"anything I should read, who matters. I'll walk in prepared:\n{door}\n\n"
+                f"Afterwards, minutes go to you, and every {a.org_domain} participant gets their "
+                f"own. Outside addresses receive nothing.\n")
     else:
-        body = f"I'm booked for “{p.summary}”. Minutes follow after the meeting.\n"
+        body = (f"I'm booked for “{p.summary}”. Brief me before, or just read the minutes after:\n"
+                f"{door}\n")
     mail.send(organiser, f"Booked — {p.summary}", body)
     st["persons"][organiser] = "invited" if known == "new" else known
     _step("1", "flow 5 · confirm email", f"person({organiser}): {known}",
