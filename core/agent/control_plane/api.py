@@ -2052,7 +2052,9 @@ def create_app(
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
             if not settings.global_system_workspace_path:
                 raise HTTPException(status_code=404, detail="no _global configured")
-            path = Path(settings.global_system_workspace_path)
+            # write through the WORKSPACES-DIR mount (rw in dev) — the host-path mirror mount is ro
+            candidates = [Path(settings.workspaces_dir) / "_global", Path(settings.global_system_workspace_path)]
+            path = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), candidates[0])
         elif target == "personal":
             path = Path(wsr.workspace_dir(subject))
         else:
