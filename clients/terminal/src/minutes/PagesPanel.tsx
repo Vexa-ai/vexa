@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { writeWorkspaceFile } from "../surfaces/workspaceApi";
+import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
 import { header, surface, type as ty } from "./tokens";
 
@@ -63,8 +64,7 @@ export function PagesPanel(p: {
         {p.body === null
           ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
           : mode === "edit"
-            ? <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
-                style={{ flex: 1, width: "100%", minHeight: 0, resize: "none", background: "var(--bg)", border: "none", outline: "none", color: "var(--t1)", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.65, padding: "16px 18px" }} />
+            ? <MarkdownEditor value={draft} onChange={setDraft} />
             : <MdxDoc>{p.body}</MdxDoc>}
       </div>
     </>
