@@ -151,6 +151,13 @@ export async function mintTranscriptShare(opts: { platform: string; native_meeti
 
 /** Make one of YOUR workspaces shareable (promote a private one to shared if needed) → returns the
  *  shareable workspace_id. Lets ANY workspace be shared after creation — no share-vs-not at create time. */
+/** Set a workspace's PURPOSE line — the one-liner the mount preamble declares to the agent. */
+export async function setWorkspacePurpose(slug: string, purpose: string): Promise<{ purpose: string }> {
+  return getJson(`/api/workspace/purpose`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug, purpose }),
+  });
+}
+
 export async function shareEnableWorkspace(slug: string): Promise<{ workspace_id: string; promoted: boolean }> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}/share-enable`, { method: "POST" });
 }

@@ -131,6 +131,9 @@ MODEL_AUTH_ENV_ALLOWLIST = (
     "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint; openai_compat base-url fallback
     "VEXA_LLM_API_KEY",         # llm/ completion adapters' first-class credential (deliberately no Settings field)
     "VEXA_LLM_BASE_URL",        # llm/ completion adapters' first-class endpoint (pairs with the key above)
+    "VEXA_LLM_EXTRA_BODY",      # server-specific request fields the OpenAI dialect cannot express
+                                # (e.g. a self-hosted Qwen needs {"chat_template_kwargs":
+                                # {"enable_thinking": false}} or it returns no valid JSON at all)
 )
 
 
@@ -180,6 +183,11 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     if api_key:
         env["ANTHROPIC_AUTH_TOKEN"] = api_key
         env["VEXA_LLM_API_KEY"] = api_key
+    extra_body = (config.get("extra_body") or "").strip()
+    if extra_body:
+        # Passed through verbatim; the adapter parses it and fails loudly on malformed JSON rather
+        # than silently dropping a setting the deployment depends on.
+        env["VEXA_LLM_EXTRA_BODY"] = extra_body
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:

@@ -16,7 +16,7 @@ import { registerList, registerTab } from "../contributions";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { Icon } from "../ui-kit";
-import { meetingsOnly } from "../app/mode";
+import { reducedMode } from "../app/mode";
 
 interface StreamStat { len?: number; last_id?: string | null; last_type?: string }
 interface PipelineRow {
@@ -358,7 +358,7 @@ function AdminLeft() {
 
 // Nothing registers unless the server confirms the caller is an allowlisted admin (404 for
 // everyone else — see app/api/admin/*). Absent in meetings-only mode like the other agent surfaces.
-if (!meetingsOnly() && typeof window !== "undefined") {
+if (!reducedMode() && typeof window !== "undefined") {
   void fetch("/api/admin/me", { cache: "no-store" })
     .then((r) => {
       if (!r.ok) return;

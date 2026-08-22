@@ -63,3 +63,29 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: strin
     });
   }
 }
+
+/** DELETE — removing one of the caller's own workspaces (a Minutes room's final step). Same
+ *  authenticated edge as the reads/writes; the backend refuses the baseline, so the seed slot
+ *  cannot be deleted through here either. */
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
+  const refused = refusedResponse();
+  if (refused) return refused;
+  const { seg } = await ctx.params;
+  try {
+    const apiKey = await resolveApiKey();
+    const upstream = await fetch(`${GATEWAY_URL}/agent/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+      method: "DELETE",
+      headers: apiKey ? { "X-API-Key": apiKey } : {},
+    });
+    return new Response(await upstream.text(), {
+      status: upstream.status,
+      headers: { "Content-Type": upstream.headers.get("Content-Type") || "application/json" },
+    });
+  } catch (err) {
+    console.error("[terminal-api] workspace delete proxy failed", err);
+    return new Response(JSON.stringify({ error: "upstream_unavailable" }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+}

@@ -212,7 +212,11 @@ class CalendarUpdate(BaseModel):
 # resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
 # (dispatch/bot_spawn only override what is set here).
 MODEL_MODES = ("subscription", "custom")
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key")
+# extra_body: server-specific request fields the OpenAI dialect cannot express, as a JSON string.
+# Load-bearing for self-hosted vLLM/Qwen, which returns NO valid JSON unless thinking is disabled
+# via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
+# could only be configured deployment-wide, never through BYOT.
+_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "extra_body")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,

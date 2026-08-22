@@ -536,6 +536,40 @@ services:
   # floating outside all of them. Start it explicitly:
   #     docker compose --profile dashboard up -d
   # Deprecation exit: when the Terminal covers the flows above, this block is deleted, not ported.
+  # ─── The Anthropic front door (opt-in) ────────────────────────────────────────────────────────
+  # The workspace agent's harness speaks the ANTHROPIC dialect (/v1/messages); self-hosted model
+  # servers (vLLM, Ollama, llama.cpp) speak only the OPENAI dialect (/v1/chat/completions). Hosted
+  # gateways such as OpenRouter serve both, so they need nothing here. This service is the missing
+  # front door for a deployment running its OWN model — the whole product on your own hardware,
+  # with no traffic leaving the estate.
+  #
+  # OFF by default: most deployments point at an endpoint that already serves both dialects.
+  #     docker compose --profile llm-shim up -d llm-shim
+  # See ./llm-shim/README.md — especially the extra_body block, load-bearing for a Qwen upstream.
+  llm-shim:
+    profiles: ["llm-shim"]
+    # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
+    # dialects move. Bump it on purpose, never implicitly.
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
+    ports:
+      - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
+    volumes:
+      - ./llm-shim/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      - LLM_SHIM_MODEL=${LLM_SHIM_MODEL:-local-model}
+      - LLM_SHIM_UPSTREAM=${LLM_SHIM_UPSTREAM:-http://host.docker.internal:8899/v1}
+      - LLM_SHIM_UPSTREAM_KEY=${LLM_SHIM_UPSTREAM_KEY:-none}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so an endpoint on the HOST is reachable from here
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
   dashboard:
     profiles: ["dashboard"]
     image: ${DASHBOARD_IMAGE:-vexaai/dashboard:0.10.6.3.14}

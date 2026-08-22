@@ -43,7 +43,7 @@ def test_subscription_garbage_file(tmp_path):
 # ── custom endpoint ───────────────────────────────────────────────────────────────────────────
 
 def test_custom_endpoint_auth_failure():
-    out = ct.test_custom_endpoint("https://gw.example", "bad-key",
+    out = ct.test_custom_endpoint("https://gw.example", "bad-key", "m1",
                                   post=lambda u, p, h: (401, "{}"))
     assert not out["ok"] and "Authentication FAILED" in out["summary"]
 
@@ -60,25 +60,27 @@ def test_custom_endpoint_ok_anthropic_dialect():
 def test_custom_endpoint_falls_back_to_openai_dialect():
     def post(url, payload, headers):
         return (404, "") if url.endswith("/v1/messages") else (200, "{}")
-    out = ct.test_custom_endpoint("https://gw.example", "k", post=post)
+    out = ct.test_custom_endpoint("https://gw.example", "k", "m1", post=post)
     assert out["ok"]
 
 
 def test_custom_endpoint_unreachable():
     def post(url, payload, headers):
         raise OSError("connection refused")
-    out = ct.test_custom_endpoint("https://gw.example", "k", post=post)
+    out = ct.test_custom_endpoint("https://gw.example", "k", "m1", post=post)
     assert not out["ok"] and "unreachable" in out["summary"]
 
 
 def test_run_models_test_routes_custom_vs_subscription(tmp_path):
-    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "k"},
+    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "k",
+                              "model": "m1"},
                              env={}, post=lambda u, p, h: (200, "{}"))
     assert out["mode"] == "custom" and out["ok"]
     out = ct.run_models_test({}, env={}, creds_path=str(tmp_path / "absent"))
     assert out["mode"] == "subscription" and not out["ok"]
     # secrets never echo in provenance
-    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "SECRET"},
+    out = ct.run_models_test({"mode": "custom", "base_url": "https://gw", "api_key": "SECRET",
+                              "model": "m1"},
                              env={}, post=lambda u, p, h: (200, "{}"))
     assert "api_key" not in out["config"] and "SECRET" not in json.dumps(out)
 
@@ -213,3 +215,33 @@ def test_transcription_probe_hits_the_transcriptions_path_once():
         assert seen == [("https://api.openai.com/v1/audio/transcriptions", "sk-good")], (
             f"{configured} → {seen}"
         )
+
+
+def test_custom_endpoint_requires_a_model_and_guesses_no_vendor():
+    """MODEL-AGNOSTIC: with no model named, say so — never ping someone else's endpoint with a
+    guessed vendor model name (a Qwen server answering "model not found: claude-…" reads as a
+    broken endpoint when the real fault is an unset field)."""
+    called: list = []
+
+    def post(url, payload, headers):
+        called.append(url)
+        return (200, "{}")
+
+    out = ct.test_custom_endpoint("https://gw.example", "k", "", post=post)
+    assert not out["ok"]
+    assert "no model set" in out["summary"]
+    assert called == [], "must not call the endpoint at all without a model"
+
+
+def test_base_url_already_carrying_v1_is_not_doubled():
+    """Both spellings of a base URL are common; appending a second /v1 produced /v1/v1/... — a 404
+    that reads as a broken endpoint when the configuration was correct."""
+    seen: list = []
+
+    def post(url, payload, headers):
+        seen.append(url)
+        return (404, "") if url.endswith("/v1/messages") else (200, "{}")
+
+    out = ct.test_custom_endpoint("https://gw.example/v1", "k", "m1", post=post)
+    assert out["ok"]
+    assert all("/v1/v1/" not in u for u in seen), seen

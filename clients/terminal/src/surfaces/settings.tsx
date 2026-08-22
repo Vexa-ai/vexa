@@ -6,6 +6,7 @@
  *  durable home. Sections are a left nav (no sub-routing; one tab, local state). */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { registerTab } from "../contributions";
+import { minutesOnly } from "../app/mode";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { presentError } from "./apiClient";
@@ -307,4 +308,5 @@ function SettingsView() {
   );
 }
 
-registerTab("settings", SettingsView);
+// Minutes has no settings hub — a participant configures nothing.
+if (!minutesOnly()) registerTab("settings", SettingsView);
