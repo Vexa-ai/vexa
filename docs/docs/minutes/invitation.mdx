@@ -1,11 +1,10 @@
 ---
 title: "How meetings arrive"
-description: "One mailbox, every address. Inviting the assistant is the whole of it — and no calendar is ever read."
+description: "One address. Inviting the assistant is the whole of it — and no calendar is ever read."
 ---
 
-<Note>**Status:** invitation parsing and series binding are built in dev; the catch-all mail
-domain described here is a deployment step that is not yet wired. See
-[what is real today](/minutes/status).</Note>
+<Note>**Status:** invitation parsing and series binding are built in dev; the mailbox ingest and
+the two binding mechanisms are not yet wired. See [what is real today](/minutes/status).</Note>
 
 ## The mechanism
 
@@ -20,79 +19,52 @@ credential anywhere in the deployment that can read anyone's calendar.** For a r
 that is not a convenience — it is the difference between a pilot that starts this month and one
 that waits on an internal request with no stated lead time.
 
-## One mailbox. Every address already exists.
+## One address, ever
 
-A single subdomain is pointed at one catch-all mailbox — one MX record, set once at install:
+The assistant has **one ordinary mailbox** — `vexa@example.com`. Requesting it is a routine
+service-account ticket in any estate; there is no mail-routing change, no subdomain, no connector,
+and nothing else to ask an admin for, ever.
 
-```
-meetings.example.com   MX → the assistant's mailbox (catch-all)
-```
+Everyone invites that same address to any meeting. **Which room a meeting belongs to is settled by
+binding, not by address:**
 
-From that moment **every address on that domain already resolves**, so a group costs nothing to
-create:
+| Mechanism | When | Cost |
+|---|---|---|
+| **`#room:` tag** in the invite description — `#room:architecture-review` | before the meeting | typed once per meeting identity |
+| **Organiser's click** on their artifact — *assign to a room* | after the meeting | one click, once |
+| **Neither** | — | the meeting is **personal**, and stays so |
 
-| Invite this | The meeting belongs to |
-|---|---|
-| `architecture-review@meetings.example.com` | the Architecture review group |
-| `monday-standup@meetings.example.com` | the Monday standup group |
-| `vexa@meetings.example.com` | **you** — the global assistant, your personal workspace |
+The binding sticks to the meeting's **calendar identity**: tag a recurring series once and every
+occurrence is attributed to the room from then on — the tag is not re-read, re-typed, or needed
+again. An ad-hoc meeting is tagged (or assigned) individually.
 
-Creating a group does not provision a mailbox, request an address, or wait on IT. It starts
-using an address that already works.
+**Unbound is private, always.** Recurrence is not groupness — a weekly 1:1 is recurring and
+private — and the two mistakes are not symmetric: a group meeting kept private costs one click, a
+private meeting fanned out to a group is a breach. Nothing is ever inferred from the title, the
+attendee list, or the subject matter.
 
-**Self-hosted deployments own this outright** — their domain, their mailbox, their perimeter.
-Mail about their meetings never leaves their estate.
+### The tag
 
-## In an Exchange estate
+The description is **organiser-authored**, so the tag carries exactly the authority of the click,
+just earlier — and the room receives its artifacts immediately, with no round-trip. Three
+refusals keep it safe:
 
-Where all meetings are internal mail — a bank, a ministry — the catch-all needs **no DNS change
-and no mailbox**. It is one send connector, created once by a mail admin:
+- A tag binds only if the organiser is admitted to that room by its membership mode — otherwise
+  knowing a room's name would let anyone write into its record.
+- An unknown room name never creates a room. Typo → personal, with a notice.
+- A tag by anyone other than the organiser does not exist: attendees cannot edit the invitation
+  that is sent.
 
-```
-address space:  meetings.example.com          (internal-only subdomain)
-smarthost:      the Minutes host, port 25     (the stack's SMTP ingress)
-```
+### The click
 
-Exchange routes by domain and never validates the localpart, so from that moment every address on
-the subdomain already routes to the assistant. No mailbox license, no recipient objects in the
-directory, no OAuth grant — and no per-group ticket, ever.
+Any unbound meeting's artifact goes to the organiser alone, written from their perspective,
+carrying one affordance: *keep this yours, or assign it to a room*. Doing nothing keeps it private
+forever. Assigning a recurring meeting binds the series; a single meeting binds itself.
 
-An invitation to a localpart **no group has claimed** does not create one silently. The organiser
-receives a reply saying the address is unclaimed and where to create the group — a typo must not
-mint a workspace.
-
-The connector is the thing to ask for by name — but it touches core mail routing, and in a
-regulated estate that can mean a review with its own clock. Two fallbacks, in order:
-
-- **One mailbox with plus-addressing** (`vexa+architecture-review@…`): per-group addresses with a
-  routine account request. **Exchange Online only** — on-prem Exchange does not support it.
-- **One mailbox, binding done in the product** — the floor that works everywhere. Everyone
-  invites the same address, and **every unbound meeting is personal**: the artifact goes to the
-  organiser alone, carrying one affordance — *keep this yours, or assign it to a room*. Doing
-  nothing keeps it private forever. Assigning a recurring meeting binds the series, so every later
-  occurrence flows to the room; a single meeting binds itself. Nothing is inferred — recurrence is
-  not groupness (a weekly 1:1 is recurring and private), and the two mistakes are not symmetric:
-  a group meeting kept private costs one click, a private meeting fanned out to a group is a
-  breach. The rule stays the same — the binding is settled before anything fans out — settled by
-  the organiser's click instead of by the address.
-
-  **Binding can also be settled before the meeting, in the invite itself:** a tag in the
-  meeting's description — `#room:architecture-review`. The description is organiser-authored, so
-  the authority is the same as the click, just earlier — and the group receives its artifacts
-  immediately, with no round-trip. The tag binds the meeting's calendar identity, so a tagged
-  recurring series is attributed to the room on every occurrence. Three refusals keep it safe: a
-  tag binds only if the organiser is admitted to that room by its membership mode (otherwise
-  knowing a room's name would let anyone write into its record); an unknown room name never
-  creates a room — typo, personal, notice; and an invited group address always outranks a tag.
-
-  End to end: invite the one address → the invitation email books the bot → it attends and the
-  record is captured → if the invite carried a valid `#room:` tag the meeting is already bound
-  and the group path runs at once; otherwise the agent runs in the **organiser's personal
-  workspace** and mails them their artifact, which carries *assign to a room* → on assignment the agent **runs again in the
-  room's workspace**, once per participant — a re-run, never a forward of the personal document —
-  and every recipient's email is also the door: reading needs nothing, and chatting is the first
-  click, where account and membership begin. Fan-out honours the room's membership mode: an
-  outside attendee receives the room's artifact only if the mode says anyone in the room.
+Assignment is a **re-run, never a forward**: the agent runs again in the room's workspace, once
+per participant — what a group receives was written from what the group knows, not leaked from a
+personal workspace. Fan-out honours the room's membership mode: an outside attendee receives the
+room's artifact only if the mode says anyone in the room.
 
 ## Personal meetings need no address of their own
 

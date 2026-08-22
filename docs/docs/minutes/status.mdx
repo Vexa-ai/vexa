@@ -18,7 +18,9 @@ or running in production. This page exists so no other page has to hedge.
 | **Post-meeting dispatch** | built in dev | gather → gate → write → deliver → run log; 66 extracts from the same corpus; non-meetings produce zero |
 | **Writing the artifact** | **template only** | a deterministic template proves the loop end to end. The real thing is the agentic workspace operation — the same one that answers chat — and it needs the model backend wired per deployment. See [running it on your own model](/minutes/model). |
 | **Email delivery** | built in dev | SMTP, against a local sink; a production relay is a config value |
-| **Inbound mail (SMTP ingress)** | **not built** | invitations are parsed and series bind, but the stack has no `:25` listener yet — in dev, mail is read from a test sink's API. This is the one piece between the design and an Exchange send connector pointing at us. See [how meetings arrive](/minutes/invitation#in-an-exchange-estate). |
+| **Inbound mail (mailbox ingest)** | **not built** | invitations are parsed and series bind, but nothing polls a real mailbox yet — in dev, mail is read from a test sink's API. One IMAP poller against the assistant's one mailbox closes it. |
+| **`#room:` binding tag** | **not built** | the tag in the invite description that assigns a meeting identity to a room — see [how meetings arrive](/minutes/invitation#the-tag) |
+| **Post-hoc assignment** | **not built** | the *assign to a room* affordance on the personal artifact, and the re-run it triggers |
 | **The door + steering write** | built in dev | signed single-use links, lazy identity, scope enforcement, steering into the personal layer |
 | **The conversation behind the door** | **not built** | the reply box records; it does not answer |
 | **Participants on the record** | built in dev | invite roster stored and filterable |

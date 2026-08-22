@@ -36,10 +36,10 @@ included by attending, outsiders never are, nothing to maintain.
 
 Naming it produces its address:
 
-> **Architecture review → `architecture-review@meetings.your-domain`**
+> **Architecture review → add `#room:architecture-review` to the meeting description**
 
 **Nothing is provisioned to make that address work.** One mail domain was pointed at one
-catch-all mailbox when the product was installed, so every address on it already resolves — see
+assistant's one mailbox; the tag in the description does the rest — see
 [how meetings arrive](/minutes/invitation).
 
 Do this for the meetings your organisation actually holds. It is the only setup step that
@@ -92,8 +92,8 @@ system.
 ## Self-hosted
 
 The person who runs the install is the admin. Setup is **one MX record** pointing a subdomain at
-the assistant's catch-all mailbox, plus the model credential and mail relay — all set once, in
+the assistant's one mailbox, plus the model credential and mail relay — all set once, in
 the deploy configuration, by the same person in the same sitting they were already having.
 
-Every group address afterwards lives on **your** domain and lands in **your** mailbox. Mail about
+Everything afterwards lands in **your** mailbox on **your** domain. Mail about
 your meetings never leaves your estate.

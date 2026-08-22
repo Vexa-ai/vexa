@@ -2,7 +2,7 @@
 
 The meeting-knowledge product, designed in the open through its own documentation. Nine pages,
 readable in order: `manifest` (what it is and how it spreads) → `invitation` (how meetings arrive:
-the catch-all domain, the Exchange send connector, and the one-mailbox fallback ladder) →
+one mailbox, the `#room:` tag, the post-hoc assignment) →
 `artifact` (the per-participant extract and how it is actually produced) → `steering` →
 `interface` → `workspaces` → `setup` → `model` (running on your own model: the /v1/messages
 requirement and the llm-shim) → `status` (what is real today, kept honest).
