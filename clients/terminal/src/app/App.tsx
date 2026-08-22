@@ -41,7 +41,10 @@ function InviteGate({ children }: { children: ReactNode }) {
   // surface renders the chooser. Same clean-URL discipline as `?meeting=`.
   useEffect(() => {
     if (!assign) return;
-    try { localStorage.setItem("vexa.assignMeeting", assign); } catch { /* locked-down storage */ }
+    try {
+      localStorage.setItem("vexa.assignMeeting", assign);
+      const t = params.get("mtitle"); if (t) localStorage.setItem("vexa.assignMeetingTitle", t);
+    } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [assign, invite, tshare]);
 

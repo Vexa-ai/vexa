@@ -497,6 +497,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     try { return minutesOnly() ? localStorage.getItem("vexa.assignMeeting") : null; } catch { return null; }
   });
   const [assignDone, setAssignDone] = useState<string | null>(null);  // group display name after success
+  const assignTitle = (() => { try { return localStorage.getItem("vexa.assignMeetingTitle"); } catch { return null; } })();
   const doAssign = async (wsId: string, display: string) => {
     if (!assignUid) return;
     setBusy(true); setErr(null);
@@ -504,7 +505,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       const r = await fetch("/api/minutes/assign", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ uid: assignUid, workspaceId: wsId }) });
       if (!r.ok) throw new Error(`assign failed (${r.status})`);
-      try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ }
+      try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ }
       setAssignUid(null); setAssignDone(display);
     } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
@@ -561,7 +562,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
 
   const selectRoom = async (slug: string, mounted: boolean) => {
     if (assignUid) {  // assign mode: the personal row is not a target — clicking it keeps the meeting personal
-      try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ }
+      try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ }
       setAssignUid(null);
       return;
     }
@@ -725,9 +726,9 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       {open && (<>
         {assignUid && (
           <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--accent)", borderRadius: 6, color: "var(--t1)" }}>
-            <b>Assign this meeting to a group</b> — click the group below that should own it (and its
-            series, if recurring).{" "}
-            <a onClick={(e) => { e.preventDefault(); try { localStorage.removeItem("vexa.assignMeeting"); } catch { /* ignore */ } setAssignUid(null); }}
+            <b>Assign {assignTitle ? `“${assignTitle}”` : "this meeting"} to a group</b> — click
+            the group below that should own it (and its series, if recurring).{" "}
+            <a onClick={(e) => { e.preventDefault(); try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ } setAssignUid(null); }}
                style={{ cursor: "pointer", textDecoration: "underline" }}>Keep it personal</a>
           </div>
         )}
