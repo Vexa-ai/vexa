@@ -1,5 +1,10 @@
 # LOCAL DEVELOPMENT ONLY — our own dev loop. Never a customer deployment.
 #
+# The key lives in the secret store, never here:
+#   make -C ~/dev/vexa-secrets openrouter          # set OPENROUTER_API_KEY
+#   export OPENROUTER_API_KEY=$(sops -d ~/dev/vexa-secrets/no-prod/openrouter.enc.env \
+#                               | grep '^OPENROUTER_API_KEY=' | cut -d= -f2-)
+#
 # Copy to config.local.yaml (gitignored) and run:
 #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d llm-shim
 #

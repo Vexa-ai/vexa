@@ -562,6 +562,9 @@ services:
       - LLM_SHIM_UPSTREAM_KEY=${LLM_SHIM_UPSTREAM_KEY:-none}
       # A deployment may override the whole shim config with its own file:
       #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d
+      # Consumed only by that local file's fallback leg; empty (and unused) in a shipped deployment.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_SHIM_FALLBACK_MODEL=${LLM_SHIM_FALLBACK_MODEL:-anthropic/claude-sonnet-4}
     extra_hosts:
       - "host.docker.internal:host-gateway"   # so an endpoint on the HOST is reachable from here
     healthcheck:
