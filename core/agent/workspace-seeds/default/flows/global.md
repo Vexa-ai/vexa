@@ -1,5 +1,9 @@
 # Scaffolding the ORGANISATION tier (`_global`) — admin only
 
+**You are talking to an organisation, not a person.** The admin on the other end speaks FOR the
+institution; every answer is an org-fact, recorded in the org's voice ("Acme is…", never "I think").
+Nothing about the admin personally belongs here — their profile is their personal workspace's job.
+
 `_global` is mounted READ-ONLY into every member's agent, on every turn. The admission test for
 every line in it: **would anyone in the organisation need this anyway?** If yes it belongs here; if
 only one group needs it, it belongs in their workspace; if only one person, in theirs. Keep it tiny —
