@@ -17,10 +17,25 @@ export async function POST(req: NextRequest) {
   if (process.env.NODE_ENV !== "development" || process.env.NEXT_PUBLIC_TERMINAL_MODE !== "minutes") {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
-  let body: { wsId?: string; name?: string; purpose?: string; matters?: string };
+  let body: { wsId?: string; name?: string; purpose?: string; matters?: string;
+              files?: { path: string; b64: string }[] };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad body" }, { status: 400 }); }
   const wsId = (body.wsId || "").trim();
   if (!/^[A-Za-z0-9_-]+$/.test(wsId)) return NextResponse.json({ error: "bad wsId" }, { status: 400 });
+  // files mode: write given files (base64) into the workspace and commit — used to pre-seed a
+  // cold-start workspace with the meeting artifact page before the reader's first visit.
+  if (Array.isArray(body.files) && body.files.length) {
+    for (const f of body.files) {
+      if (!/^[A-Za-z0-9._/-]+$/.test(f.path) || f.path.includes("..")) return NextResponse.json({ error: "bad path" }, { status: 400 });
+      const dest = `/workspaces/${wsId}/${f.path}`;
+      try {
+        await run("docker", ["exec", CONTAINER, "sh", "-c",
+          `mkdir -p "$(dirname ${dest})" && echo '${f.b64}' | base64 -d > ${dest} && cd /workspaces/${wsId} && git add ${f.path} && git -c user.email=minutes@local -c user.name="Minutes seed" commit -q -m "minutes seed: ${f.path}" || true`,
+        ], { timeout: 15000, maxBuffer: 1 << 20 });
+      } catch (e) { return NextResponse.json({ error: String((e as Error).message).slice(0, 300) }, { status: 502 }); }
+    }
+    return NextResponse.json({ ok: true, wrote: body.files.map((f) => f.path) });
+  }
   const name = (body.name || wsId).trim();
   const purpose = (body.purpose || "").trim();
   const matters = (body.matters || "").trim();

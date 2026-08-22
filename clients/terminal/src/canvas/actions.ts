@@ -73,6 +73,9 @@ export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
 // Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
 // instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
+// MINUTES cold-start: the reader arrived through a meeting door — greet from the meeting, not
+// from a blank slate, and ask the one thing that shapes the workspace: their role.
+export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meeting — they're in this workspace, with the full transcript. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
 export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
