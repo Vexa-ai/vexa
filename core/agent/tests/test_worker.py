@@ -1110,15 +1110,17 @@ def test_link_skills_keeps_real_claude_skills_dir(tmp_path):
 
 
 def test_seed_claude_md_defers_copilot_steering_to_meeting_md():
-    """Guard: the workspace-seed CLAUDE.md must declare agents/meeting.md as the EXCLUSIVE source of
-    meeting-copilot steering and must not itself carry copilot behavior. CLAUDE.md is auto-loaded as
-    project memory on every turn, so copilot steering here would be a second, conflicting source."""
+    """Guard: the workspace-seed CLAUDE.md must not itself carry copilot behavior, and must name
+    agents/meeting.md as the ONLY steering source when a workspace chooses to override the
+    deployment default (the seed no longer ships agents/ — absent means defaults). CLAUDE.md is
+    auto-loaded as project memory on every turn, so copilot steering here would be a second,
+    conflicting source."""
     seed = pathlib.Path(__file__).resolve().parents[1] / "workspace-seeds" / "default" / "CLAUDE.md"
     text = seed.read_text()
     lower = text.lower()
-    # Names meeting.md as the governing source, with an exclusivity word.
+    # Names meeting.md as the governing source, with an exclusivity word ("exclusive"/"only source").
     assert "agents/meeting.md" in text
-    assert "exclusiv" in lower
+    assert "exclusiv" in lower or "only source" in lower
     # No copilot watch/ignore steering smuggled into CLAUDE.md (only the guard *mentions* the words).
     assert "surface only new entities" not in lower
     assert "real-time meeting behavior" not in lower
