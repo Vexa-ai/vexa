@@ -879,15 +879,38 @@ export function Chat({ params = {} }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
+      // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
+      // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
+      // stash it; the target session's Chat consumes it the moment it mounts.
+      if (detail?.session && detail.session !== session) {
+        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
+        return;
+      }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       void sendRef.current(prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
-  }, [layout]);
+  }, [layout, session]);
+
+  // Consume a stashed session-targeted ask once THIS chat is the target and idle.
+  useEffect(() => {
+    const key = `vexa.pendingAsk.${session}`;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(key); } catch { /* ignore */ }
+    if (!raw) return;
+    const t = setTimeout(() => {
+      try { localStorage.removeItem(key); } catch { /* ignore */ }
+      try {
+        const d = JSON.parse(raw as string) as { prompt: string; hidden?: boolean; ground?: boolean };
+        if (d.prompt) void sendRef.current(d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
+      } catch { /* ignore */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [session]);
 
   // Onboarding seeds a CACHED greeting (instant, no LLM) and arms the chat — the user's next reply carries
   // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.

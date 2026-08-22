@@ -213,7 +213,7 @@ export function MinutesShell() {
     } else {
       addChat("personal", "workspace setup");
     }
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: id, prompt:
       "[workspace-scaffold] A NEW SHARED WORKSPACE has just been created for this conversation and is mounted " +
       `read-write here${created ? ` as \`${created.workspace_id}\`` : ""} — you are seeding it. Ask ONE question at a time: ` +
       "(1) what it should be called and what will live in it; (2) who belongs — emails, or their organisation. " +
