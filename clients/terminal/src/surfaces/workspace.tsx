@@ -434,7 +434,7 @@ export function FilesList() {  // exported for the surface test
             if (e.key === "Escape") { e.stopPropagation(); setQuery(""); e.currentTarget.blur(); }
             if (e.key === "Enter" && matches[0]) layout.openPreview(docTab(matches[0].p, matches[0].slug));
           }}
-          placeholder={minutesOnly() ? "Search this room…" : "Find file…"}
+          placeholder={minutesOnly() ? "Search this group…" : "Find file…"}
           spellCheck={false}
           style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "5px 8px 5px 26px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t1)", outline: "none" }}
         />
@@ -528,7 +528,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
 
   // MINUTES: a room is SELECTED, never composed. The multi-mount set is the terminal's model —
   // in this product a meeting belongs to exactly one room, so picking one parks every other.
-  // Already-selected rooms are a no-op: there is no "no room at all" state to fall into.
+  // Already-selected rooms are a no-op: there is no "no group at all" state to fall into.
   const selectShared = async (wsId: string, mounted: boolean) => {
     if (mounted) return;
     setBusy(true); setErr(null);
@@ -696,7 +696,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     <div style={{ paddingTop: 2 }}>
       <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="folder" size={12} />{minutesOnly() ? "rooms" : "workspaces"}
+        <Icon name="folder" size={12} />{minutesOnly() ? "groups" : "workspaces"}
       </div>
       {open && (<>
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
@@ -718,8 +718,8 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 <span role="radio" aria-checked={mounted} tabIndex={0}
                   onClick={() => void selectRoom(slug, mounted)}
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectRoom(slug, mounted); } }}
-                  title={mounted ? `${display} — the room you are in` : `Open ${display}`}
-                  aria-label={`${display} — ${mounted ? "the room you are in" : "open this room"}`}
+                  title={mounted ? `${display} — the group you are in` : `Open ${display}`}
+                  aria-label={`${display} — ${mounted ? "the group you are in" : "open this group"}`}
                   style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
                     border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
                     background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
@@ -758,8 +758,8 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 <span role="radio" aria-checked={mounted} tabIndex={0}
                   onClick={() => void selectShared(wsId, mounted)}
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectShared(wsId, mounted); } }}
-                  title={mounted ? `${wsId} — the room you are in` : `Open ${wsId}`}
-                  aria-label={`${wsId} — shared room, ${mem.role}${mounted ? ", the room you are in" : ""}`}
+                  title={mounted ? `${wsId} — the group you are in` : `Open ${wsId}`}
+                  aria-label={`${wsId} — shared group, ${mem.role}${mounted ? ", the group you are in" : ""}`}
                   style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
                     border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
                     background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
@@ -774,7 +774,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
               {minutesOnly() && mem.role === "owner" && (
                 <span onClick={(e) => { e.stopPropagation(); setConfirmDelete({ slug: wsId, display: wsId }); }}
-                  title="Remove this room…" aria-label={`Remove ${wsId}`}
+                  title="Remove this group…" aria-label={`Remove ${wsId}`}
                   style={{ display: "flex", cursor: "pointer", color: "var(--t3)", padding: "0 2px" }}
                   onMouseEnter={(ev) => (ev.currentTarget.style.color = "var(--danger)")}
                   onMouseLeave={(ev) => (ev.currentTarget.style.color = "var(--t3)")}>
@@ -799,7 +799,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         )}
         {/* MINUTES — removing a room is confirmed by seeing its name, never a bare icon click. */}
         {confirmDelete !== null && minutesOnly() && (
-          <Modal title="Remove this room?" onClose={() => setConfirmDelete(null)}>
+          <Modal title="Remove this group?" onClose={() => setConfirmDelete(null)}>
             <div style={{ display: "flex", flexDirection: "column" }}>
               <p style={{ fontSize: 13, color: "var(--t2)", margin: 0, lineHeight: 1.6 }}>
                 <b style={{ color: "var(--t1)" }}>{confirmDelete.display}</b> and everything it knows will be removed. Its members stop receiving extracts. Meetings already held keep their records.
@@ -810,7 +810,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Keep it</button>
                 <button disabled={busy} onClick={() => void doDeleteRoom(confirmDelete.slug)}
                   style={{ fontSize: 13, padding: "8px 16px", background: "var(--danger)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>
-                  {busy ? "Removing…" : "Remove room"}</button>
+                  {busy ? "Removing…" : "Remove group"}</button>
               </div>
             </div>
           </Modal>
@@ -848,10 +848,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             non-destructive. The new row appears CHECKED (it joined the active set). */}
         <div onClick={() => { if (busy) return; if (minutesOnly()) setRoomWiz(true); else void doNewWorkspace(); }}
           title={minutesOnly()
-            ? "New room — name it, say who belongs, then it is created"
+            ? "New group — name it, say who belongs, then it is created"
             : "New workspace — create a blank workspace and add it to your set (nothing is replaced)"}
           style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
-          <Icon name="plus" size={12} /> {minutesOnly() ? "New room…" : "New workspace…"}
+          <Icon name="plus" size={12} /> {minutesOnly() ? "New group…" : "New workspace…"}
         </div>
         {/* SHARE dialog — mint an invite link (open/restricted · role · TTL) and copy it. */}
         {share !== null && (
@@ -1004,7 +1004,7 @@ function GitSection() {
     <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
       <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="zap" size={12} />{minutesOnly() ? "recently in this room" : "source control"}
+        <Icon name="zap" size={12} />{minutesOnly() ? "recently in this group" : "source control"}
         {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
       </div>
       {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ git unavailable — {gitError}</div>}
@@ -1259,7 +1259,7 @@ if (!meetingsOnly()) {
   // rooms. A room IS its README — the index the assistant keeps current — so the list leads.
   registerList({
     id: "files",
-    label: minutesOnly() ? "Rooms" : "Knowledge",
+    label: minutesOnly() ? "Groups" : "Knowledge",
     icon: minutesOnly() ? "folder" : "panel",
     order: minutesOnly() ? 10 : 30,
     component: FilesList,
