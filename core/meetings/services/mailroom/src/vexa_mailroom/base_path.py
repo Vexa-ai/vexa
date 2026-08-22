@@ -44,9 +44,25 @@ def _domain(addr: str) -> str:
     return addr.rsplit("@", 1)[-1].lower() if "@" in addr else ""
 
 
+def _fmt_when(iso: Optional[str]) -> str:
+    """ISO-8601 → 'Wednesday 19 August 2026, 10:00 UTC' — dates are written in full (house rule)."""
+    if not iso:
+        return "(unknown time)"
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%A %d %B %Y, %H:%M UTC")
+    except ValueError:
+        return iso
+
+
 def _artifact_body(parsed: ParsedMail, transcript_summary: str, assign_url: str) -> str:
-    when = parsed.dtstart or "(unknown time)"
-    people = ", ".join(p.get("email", "") for p in parsed.participants) or "(no roster)"
+    when = _fmt_when(parsed.dtstart)
+    people = ", ".join(
+        p.get("name") or p.get("email", "")
+        for p in parsed.participants
+        if "@dev.vexa.ai" not in (p.get("email") or "")     # the assistant is not a participant
+    ) or "(no roster)"
     return (
         f"Minutes of: {parsed.summary or '(untitled meeting)'}\n"
         f"When: {when}\n"
