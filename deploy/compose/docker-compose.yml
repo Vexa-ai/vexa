@@ -176,6 +176,9 @@ services:
       # a bad path becomes 'Model inference failed: Not logged in' inside the worker. /dev/null when
       # unset (the probe is skipped then — an ANTHROPIC_* key may be the credential path instead).
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      # The _global org tier: bound at the SAME path inside this container so the control plane's
+      # exists()-check and the worker's host-side bind agree on one path string.
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global}:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
       interval: 10s
@@ -257,6 +260,7 @@ services:
       # REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
+      - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
@@ -270,6 +274,8 @@ services:
       # 401 with its remedy instead of failing the next chat turn). /dev/null when unset, same
       # convention as the runtime's probe mount.
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      # _global org tier at its HOST path — the control plane's exists() check runs here.
+      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s

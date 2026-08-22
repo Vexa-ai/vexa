@@ -100,6 +100,11 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     try:
         g = global_mount(settings, settings.workspaces_dir)
         if g is not None:
+            # The org tier is READ-ONLY for everyone — except the named admin subjects, whose
+            # setup conversation is the ONE sanctioned writer of _global.
+            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
+            if str(subject) in admins:
+                g = {**g, "write": True}
             stack.append(g)
     except Exception:  # noqa: BLE001 — a bad _global must never break a dispatch; run without it
         logger.warning("global-system (_global) mount resolution failed — running the turn without it")

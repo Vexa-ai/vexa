@@ -76,6 +76,8 @@ spec:
               value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
             - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_REF
               value: {{ .Values.agentApi.globalSystemWorkspaceRef | default "" | quote }}
+            - name: VEXA_GLOBAL_ADMIN_SUBJECTS
+              value: {{ .Values.agentApi.globalAdminSubjects | default "" | quote }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: VEXA_DISPATCH_SIGNING_KEY

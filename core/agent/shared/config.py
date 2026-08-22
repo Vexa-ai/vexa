@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
     global_system_workspace_ref: str = ""
+    # Comma-separated user ids whose workers mount _global READ-WRITE — the admin setup
+    # conversation writes the org tier; everyone else stays ro. Empty = nobody writes.
+    global_admin_subjects: str = ""
     agent_model: str = ""
     meeting_model: str = ""
     # ── llm module dials (provider-agnostic; see core/agent/llm/README.md) ────

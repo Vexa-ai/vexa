@@ -78,6 +78,13 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_GLOBAL_ADMIN_SUBJECTS",
+      "class": "defaulted",
+      "default": "(unset — nobody writes _global)",
+      "description": "comma-separated user ids whose workers mount _global READ-WRITE — the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
       "class": "defaulted",
       "default": "(unset — mount HEAD/main)",

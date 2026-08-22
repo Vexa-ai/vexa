@@ -36,6 +36,15 @@ function InviteGate({ children }: { children: ReactNode }) {
   const tshare = params.get("tshare");
   const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
   const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
+  const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
+
+  // MINUTES `?setup=global`: stash the intent; the workbench fires the admin conversation once
+  // the chat is mounted. Re-runnable on purpose — amending the org tier is the same conversation.
+  useEffect(() => {
+    if (setup !== "global") return;
+    try { localStorage.setItem("vexa.setupGlobal", "1"); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [setup, invite, tshare]);
 
   // MINUTES `?assign=` (from the organiser's artifact email): stash the meeting uid; the groups
   // surface renders the chooser. Same clean-URL discipline as `?meeting=`.
