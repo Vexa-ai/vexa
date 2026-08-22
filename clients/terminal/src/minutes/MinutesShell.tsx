@@ -47,10 +47,10 @@ export function MinutesShell() {
     } catch { /* best-effort */ }
   }, []);
 
-  const select = useCallback(async (s: Sel) => {
+  const select = useCallback(async (s: Sel, projOverride?: Project) => {
     setSel(s); setDocBody(null); setDocNonce((n) => n + 1);
     lastSel.current[s.kind === "meeting" ? "meetings" : "projects"] = s;
-    const proj = s.kind === "project" ? projects.find((pr) => pr.id === s.id) : undefined;
+    const proj = projOverride ?? (s.kind === "project" ? projects.find((pr) => pr.id === s.id) : undefined);
     await mountSet(proj ? proj.set : ["personal"]);
     if (s.kind === "org") { setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global"); }
     else if (s.kind === "meeting") {
@@ -104,12 +104,13 @@ export function MinutesShell() {
     : sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
     : activeProj ? `[${activeProj.set.join(" · ")} · _system]` : "[_global · personal · _system]";
 
-  const addChat = (projectId: string, label: string, kick?: string) => {
+  const addChat = (projectId: string, label: string, kick?: string, projOverride?: Project) => {
     const id = `pchat-${Date.now().toString(36)}`;
-    const next = projects.map((pr) => pr.id === projectId ? { ...pr, chats: [...pr.chats, { id, label }] } : pr);
-    setProjects(next); saveProjects(next);
-    const proj = next.find((pr) => pr.id === projectId);
-    void select({ kind: "project", id: projectId, label: proj?.name ?? "Project", session: id, chatLabel: label });
+    // FUNCTIONAL update — addChat may run in the same tick as project creation, and a stale
+    // closure here silently deleted the just-created project (the "project not created" bug).
+    setProjects((prev) => { const next = prev.map((pr) => pr.id === projectId ? { ...pr, chats: [...pr.chats, { id, label }] } : pr); saveProjects(next); return next; });
+    const known = projOverride ?? projects.find((pr) => pr.id === projectId);
+    void select({ kind: "project", id: projectId, label: known?.name ?? "Project", session: id, chatLabel: label }, known);
     if (kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt: kick } })), 1200);
   };
 
@@ -136,9 +137,9 @@ export function MinutesShell() {
         onCancel={() => setComposer(false)}
         onCreate={(name, set) => {
           const id = `proj-${Date.now().toString(36)}`;
-          const next = [...projects.filter((pr) => pr.builtin !== "org"), { id, name, set, chats: [] as { id: string; label: string }[] }, ...projects.filter((pr) => pr.builtin === "org")];
-          setProjects(next); saveProjects(next); setComposer(false);
-          addChat(id, "first chat");
+          setProjects((prev) => { const next = [...prev.filter((pr) => pr.builtin !== "org"), { id, name, set, chats: [] as { id: string; label: string }[] }, ...prev.filter((pr) => pr.builtin === "org")]; saveProjects(next); return next; });
+          setComposer(false);
+          addChat(id, "first chat", undefined, { id, name, set, chats: [] });
         }} />}
     </div>
   );

@@ -549,8 +549,8 @@ function minutesEmptyGreeting(session: string): string {
   const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
   if (session === "org-setup")
     return "The organisation-tier conversation. What is decided here is written to _global and reaches every member's assistant on their next turn.";
-  if (session.startsWith("room-") || session.startsWith("chat-"))
-    return "This room's standing thread — shared with its members. Ask across everything the room's workspaces hold.";
+  if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
+    return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
   if (session.startsWith("meet-")) {
     const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
     return strip(held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
