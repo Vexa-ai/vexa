@@ -148,6 +148,9 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
 - Confirm briefly in your reply what you wrote (e.g. "Created `[[Jane Liu]]`").
+- **Pages are MDX — write them rich by default.** `[[Wikilinks]]` for every entity, `<Note>` for
+  provenance and asides, `<CardGroup>`/`<Card>`/`<Steps>`/`<Tabs>` where they aid scanning. Plain
+  unlinked prose is the fallback, never the default.
 - **Write a WEB, not files.** Every page you write links its neighbours: an entity links the
   entities it names, the meeting it came from, and the source it cites; a meeting note links every
   person, company and decision it mentions; the README links whatever it summarises. And link

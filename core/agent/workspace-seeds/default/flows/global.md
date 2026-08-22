@@ -48,6 +48,13 @@ your best draft attached where one exists. The items:
 5. **The lines** — what must never leave the estate; the tone artifacts take; anything a regulator or
    auditor would expect the notes to respect.
 
+**Write MDX, not plain prose — the terminal renders it rich.** Every named thing on the page is a
+link: the organisation is `[[OeNB]]`-style wikilinked to its entity under `kg/entities/`, every
+source is a markdown link, every glossary term links its entity or its defining source. Provenance
+asides go in `<Note>` blocks; use `<CardGroup>`/`<Card>` where a set of items scans better as
+cards. A page with no `[[wikilink]]` is a page with no web — the read-back is not clean until the
+page is interconnected.
+
 Typically 1–2 are draftable from public sources and 3–5 (the real inside domains, the house
 shorthand, the actual lines) are the residue only the admin can settle — but always test each
 against the public record before putting it in the residue.
