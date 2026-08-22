@@ -10,11 +10,12 @@ import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
   listSharedMemberships, readActiveSet, setSharedActive, deactivateWorkspace,
-  readWorkspaceFile, createSharedWorkspace, unshareWorkspace, deleteWorkspace, type Membership,
+  readWorkspaceFile, createSharedWorkspace, unshareWorkspace, deleteWorkspace, resetWorkspace, type Membership,
 } from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
 import { ProjectComposer } from "./ProjectComposer";
+import { DeleteCeremony } from "./DeleteCeremony";
 import { loadProjects, saveProjects, type Project } from "./projects";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail, isHeld } from "./Rail";
@@ -56,10 +57,12 @@ export function MinutesShell() {
     });
     if (sel.kind === "project" && sel.id === projectId) void select({ kind: "personal", id: "personal", label: "Personal" });
   };
-  // Deleting an OWNED shared workspace: confirm, un-share (owner-only server check) → the tree moves
-  // to a private slug → delete that slug. Projects that referenced it drop it from their sets.
+  // The deletion CEREMONY (typed-name confirm). Two verbs, per the ownership model:
+  //   Delete — an OWNED shared workspace: un-share → private slug → remove. Gone for every member.
+  //   Reset — a STRUCTURAL folder (personal baseline · _global): wipe to seed; the slot survives.
+  // `_system` gets neither: sessions/continuity are never a folder you reset.
+  const [ceremony, setCeremony] = useState<{ name: string; verb: "Delete" | "Reset"; detail: string; run: () => Promise<void> } | null>(null);
   const deleteOwnedWorkspace = async (workspaceId: string) => {
-    if (!window.confirm(`Delete workspace ${workspaceId}? This removes its data for every member and cannot be undone.`)) return;
     try {
       const { slug } = await unshareWorkspace(workspaceId);
       await deleteWorkspace(slug);
@@ -73,6 +76,21 @@ export function MinutesShell() {
     await listSharedMemberships().then(setMemberships).catch(() => undefined);
     if (sel.kind === "project" && !projects.find((pr) => pr.id === sel.id)) void select({ kind: "personal", id: "personal", label: "Personal" });
   };
+  const askDeleteWorkspace = (workspaceId: string) => setCeremony({
+    name: workspaceId, verb: "Delete",
+    detail: "Removes this workspace's data for every member. Irreversible — there is no archive behind this.",
+    run: () => deleteOwnedWorkspace(workspaceId),
+  });
+  const askResetWorkspace = (target: "personal" | "_global") => setCeremony({
+    name: target, verb: "Reset",
+    detail: target === "_global"
+      ? "Wipes the organisation tier back to the empty seed (git history survives). Every member's assistant sees the reset on its next turn; the setup conversation starts from the first question. Admins only."
+      : "Wipes your personal workspace back to the empty seed (git history survives). Your entities, notes and dashboard are removed; onboarding starts over.",
+    run: async () => {
+      try { await resetWorkspace(target); } catch (e) { window.alert(`Could not reset ${target}: ${e instanceof Error ? e.message : e}`); return; }
+      void select({ kind: "personal", id: "personal", label: "Personal" });
+    },
+  });
 
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
@@ -246,7 +264,7 @@ export function MinutesShell() {
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}
         onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={() => void newWorkspace()}
-        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={(id) => void deleteOwnedWorkspace(id)} />
+        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />
@@ -264,6 +282,9 @@ export function MinutesShell() {
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
       </div>
       <PagesPanel pages={pages} docPath={docPath} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} />
+      {ceremony && <DeleteCeremony name={ceremony.name} verb={ceremony.verb} detail={ceremony.detail}
+        onCancel={() => setCeremony(null)}
+        onConfirm={() => { const c = ceremony; setCeremony(null); void c.run(); }} />}
       {composer && <ProjectComposer memberships={memberships}
         onCancel={() => setComposer(false)}
         onCreate={(name, set) => {

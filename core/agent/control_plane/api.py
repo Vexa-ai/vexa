@@ -2036,6 +2036,41 @@ def create_app(
             raise HTTPException(status_code=404, detail="workspace not found")
         return {"slug": slug, "deleted": True}
 
+    @app.post("/api/workspace/reset")
+    def ws_reset(request: Request, body: dict = Body(...)):
+        """RESET a structural folder to the seed — the delete-equivalent for tiers whose SLOT must
+        survive: the caller's `personal` baseline, or `_global` (admin allowlist only). Both are
+        "just folders" (founder ruling 2026-08-22) — wipe the content, re-copy the seed, commit.
+        `_system` is deliberately NOT resettable: it is sessions/continuity, not knowledge."""
+        import shutil as _sh
+        import subprocess as _sp
+        subject = subject_of(request)
+        target = str(body.get("target") or "")
+        if target == "_global":
+            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
+            if str(subject) not in admins:
+                raise HTTPException(status_code=403, detail="only an org admin may reset _global")
+            if not settings.global_system_workspace_path:
+                raise HTTPException(status_code=404, detail="no _global configured")
+            path = Path(settings.global_system_workspace_path)
+        elif target == "personal":
+            path = Path(wsr.workspace_dir(subject))
+        else:
+            raise HTTPException(status_code=400, detail="reset targets: personal | _global (shared workspaces are deleted; _system is never touched)")
+        if not path.is_dir():
+            raise HTTPException(status_code=404, detail="workspace not found")
+        seed = resolve_seed_dir(seeds_root=os.environ.get("VEXA_WORKSPACE_SEEDS_DIR"))
+        for child in path.iterdir():
+            if child.name == ".git":
+                continue
+            _sh.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
+        _sh.copytree(seed, path, dirs_exist_ok=True)
+        if (path / ".git").is_dir():
+            _sp.run(["git", "-C", str(path), "add", "-A"], check=False, capture_output=True)
+            _sp.run(["git", "-C", str(path), "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
+                     "commit", "-m", f"reseed {target}"], check=False, capture_output=True)
+        return {"target": target, "reset": True}
+
     @app.post("/api/workspace/{workspace_id}/unshare")
     def ws_unshare(workspace_id: str, request: Request):
         """UN-SHARE a workspace (owner only) — move it back into the caller's PRIVATE store and drop every

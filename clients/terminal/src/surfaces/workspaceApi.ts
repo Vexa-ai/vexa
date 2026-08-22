@@ -40,6 +40,11 @@ export async function archiveWorkspace(slug: string, archived: boolean): Promise
   });
 }
 
+/** RESET a structural folder (personal baseline, or _global for admins) back to the seed. */
+export async function resetWorkspace(target: "personal" | "_global"): Promise<{ target: string; reset: boolean }> {
+  return getJson(`/api/workspace/reset`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });
+}
+
 /** DELETE one of your workspaces — removes the data irreversibly. */
 export async function deleteWorkspace(slug: string): Promise<{ slug: string; deleted: boolean }> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}`, { method: "DELETE" });
