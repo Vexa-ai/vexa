@@ -19,7 +19,8 @@ nobody's LinkedIn, no `self: true` person entity, no "getting to know you".
   local rules.
 - **`PURPOSE`** — ONE line: what this workspace is for. When several workspaces are mounted at once,
   this is what routes a write to the right one, so make it discriminating, not decorative.
-- **`README.md`** — its face page: purpose, what it pays attention to, who is in, where things stand.
+- **`README.md`** — its face page: purpose, what it pays attention to, who is in, where things
+  stand — each as a link to the page or entity that holds it, never a bare name.
 
 ## Finish by telling them how meetings arrive
 Put `#group:<slug>` in a calendar invite's description and that meeting — and every later occurrence

@@ -17,3 +17,8 @@ partner. Facts, not speculation.>
 
 ## Notes
 - <Commercial state, constraints, decisions taken — one fact per line, dated where it matters.>
+
+## Related
+
+<!-- the web: link every entity this one touches, and add a link BACK from each of them -->
+- [[<a neighbouring entity>]] — <one clause on the relation>

@@ -19,3 +19,8 @@ tags: [<tag>, <tag>]              # optional
 
 ## Mentioned in
 - [[<Meeting title>]]
+
+## Related
+
+<!-- the web: link every entity this one touches, and add a link BACK from each of them -->
+- [[<a neighbouring entity>]] — <one clause on the relation>

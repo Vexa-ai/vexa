@@ -148,3 +148,12 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
 - Confirm briefly in your reply what you wrote (e.g. "Created `[[Jane Liu]]`").
+- **Write a WEB, not files.** Every page you write links its neighbours: an entity links the
+  entities it names, the meeting it came from, and the source it cites; a meeting note links every
+  person, company and decision it mentions; the README links whatever it summarises. And link
+  BACKWARD too — when you create an entity, add a link TO it from the places a reader would arrive
+  from (the README, the meeting note, the related entity). A page nothing links to is invisible;
+  a name nobody can click is a dead end.
+- **Chat replies interlink like pages do.** Every entity you mention is a `[[wikilink]]`; every file
+  you name is its path in backticks (e.g. `kg/entities/person/jane-liu.md`, `README.md`) — the
+  terminal renders both clickable. A bare name the reader can't click is a dead end.

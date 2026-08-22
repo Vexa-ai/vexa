@@ -44,7 +44,9 @@ direction if unpublished). A question whose answer is public is research you ski
 5. **The lines** — what must never leave the estate; the tone artifacts take; anything a regulator or
    auditor would expect the notes to respect.
 
-Terse, factual entries. Never invent one: an unanswered item stays `(unset)` and you say so. Finish
+Terse, factual entries, densely interlinked — the README links the org entity and every cited
+source; the entity links back; the reader is one click from anything named. Never invent an
+answer: an unanswered item stays `(unset)` and you say so. Finish
 by reading the page back in one short block for a single confirm.
 
 ## Mark it done

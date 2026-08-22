@@ -19,3 +19,8 @@ tags: [<tag>]
 
 ## Open
 - <What is unresolved, and who owns resolving it.>
+
+## Related
+
+<!-- the web: link every entity this one touches, and add a link BACK from each of them -->
+- [[<a neighbouring entity>]] — <one clause on the relation>
