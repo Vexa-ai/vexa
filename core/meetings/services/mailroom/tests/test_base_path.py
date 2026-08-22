@@ -72,4 +72,4 @@ def test_rejected_invite_plans_nothing():
 def test_artifact_carries_assign_affordance():
     r = _plan("gcal-create-single.ics")
     art = next(p for p in r.sends if p.kind == "artifact")
-    assert "/assign?uid=" in art.body and SUMMARY in art.body
+    assert "?assign=" in art.body and SUMMARY in art.body

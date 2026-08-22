@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--smtp", default="localhost:1025")
     ap.add_argument("--sender", default=None, help="From: address (default: the assistant)")
     ap.add_argument("--run-log", type=Path, default=Path("run-log.jsonl"))
+    ap.add_argument("--terminal", default="http://localhost:3000",
+                    help="base URL of the running Minutes terminal — the emails' links point here")
     args = ap.parse_args(argv)
 
     host, _, port = args.smtp.partition(":")
@@ -63,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             result = plan_base_path(parsed, org_domain=args.org_domain,
                                     assistant=args.assistant,
-                                    transcript_summary=CANNED_SUMMARY)
+                                    transcript_summary=CANNED_SUMMARY,
+                                    assign_url=args.terminal + "/",
+                                    chat_url=args.terminal + "/")
             for plan in result.sends:
                 msg = EmailMessage()
                 msg["From"], msg["To"], msg["Subject"] = sender, plan.to, plan.subject
