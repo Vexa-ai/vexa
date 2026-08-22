@@ -12,7 +12,7 @@
 # A ${...} here is taken literally and surfaces as "Invalid model name" — the defaults therefore
 # live in the compose `environment:` block, which docker DOES expand.
 model_list:
-  - model_name: os.environ/LLM_SHIM_MODEL
+  - model_name: os.environ/LLM_SHIM_MODEL          # the primary: your own endpoint
     litellm_params:
       model: os.environ/LLM_SHIM_MODEL
       # custom_llm_provider pins the OpenAI CHAT-COMPLETIONS dialect. Given as a separate field

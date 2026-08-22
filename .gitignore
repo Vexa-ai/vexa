@@ -31,3 +31,6 @@ deploy/transcription/models/
 
 # Release working handoff notes are local-only (per-version); witness.json stays tracked.
 releases/*/HANDOFF.md
+
+# local shim config (may carry a hosted-gateway key)
+deploy/compose/llm-shim/config.local.yaml

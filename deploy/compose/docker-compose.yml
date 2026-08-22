@@ -554,12 +554,14 @@ services:
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
     volumes:
-      - ./llm-shim/config.yaml:/app/config.yaml:ro
+      - ${LLM_SHIM_CONFIG:-./llm-shim/config.yaml}:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       - LLM_SHIM_MODEL=${LLM_SHIM_MODEL:-local-model}
       - LLM_SHIM_UPSTREAM=${LLM_SHIM_UPSTREAM:-http://host.docker.internal:8899/v1}
       - LLM_SHIM_UPSTREAM_KEY=${LLM_SHIM_UPSTREAM_KEY:-none}
+      # A deployment may override the whole shim config with its own file:
+      #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d
     extra_hosts:
       - "host.docker.internal:host-gateway"   # so an endpoint on the HOST is reachable from here
     healthcheck:

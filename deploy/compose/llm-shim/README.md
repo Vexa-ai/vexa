@@ -68,3 +68,25 @@ anonymous pulls, which would break a fresh deployment with an opaque `denied`. I
 FastAPI pin is already correct; when running LiteLLM from source instead, `fastapi<0.116` is required: newer FastAPI removed `get_flat_dependant`, which
 LiteLLM imports — the proxy fails at startup. Both pins are ours to carry; that is the cost of this
 component, and it is the reason the product does not translate dialects itself.
+
+## Fallback — local development only
+
+`config.local.example.yaml` is **our** dev setup: our own inference box as the primary, a hosted
+gateway as a fallback so the dev stack keeps working when that box is unreachable. Copy it to
+`config.local.yaml` (gitignored — it carries a key) and point the service at it:
+
+```bash
+LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d llm-shim
+```
+
+**A customer deployment gets neither.** It points at its own endpoint, and a fallback is not a
+default we ship: it would mean that the moment their box is unreachable, meeting content goes to a
+third party — automatically, silently, at 3am. An outage that stops the product is recoverable; an
+outage that quietly exports a board meeting is not. If a particular deployment wants one, that is
+their decision to write down, not our default.
+
+### Why a server-specific field cannot leak into a fallback
+
+`extra_body` is set **per model entry**, so a thinking-mode flag rides only the entry that needs it.
+A hosted gateway neither needs nor accepts it. This is the reason such fields stay on the entry
+rather than global.
