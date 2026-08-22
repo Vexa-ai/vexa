@@ -1,44 +1,39 @@
-# Your workspace
+# (unset) — this workspace has not been set up yet
 
-This is your **Personal workspace** — your durable memory. Everything you and your agent capture
-(people, companies, meetings, notes, tasks) lives here as files, and **this README is its dashboard**:
-a living, at-a-glance view of what matters in this workspace. Your agent keeps it current — as the
-workspace fills in, so does this page.
+A **workspace** is a folder of durable memory: everything captured here — people, companies,
+meetings, decisions, notes — lives as plain files, and **this README is its dashboard**: the
+at-a-glance view the agent keeps current as a side effect of every write. It is a *view over the
+files*, never a second source of truth.
 
-> **New here?** On your first message your agent runs a short, research-driven setup. The one thing it
-> needs from you is your **name** — everything else it can research or fill in over time. Sharing a
-> LinkedIn profile (or a short intro) helps it tailor everything to you from day one; with a synced
-> calendar it can infer a lot from your schedule and just ask you to confirm.
+> **First conversation sets this up.** What kind of workspace this becomes is decided by why it
+> exists — the agent follows the matching playbook in [`flows/`](flows/README.md):
+> **personal** (one person's memory) · **shared** (a group, a project, a meeting series) ·
+> **global** (the organisation tier: what anyone in the org must know anyway).
+> The setup conversation replaces this page with the real dashboard.
 
-## You
+## Purpose
 
-_Who this workspace belongs to. Your full profile lives as the `self: true` person entity in
-`kg/entities/person/`; your agent links it here once it exists._
+`(unset)` — one discriminating line: what this workspace is for. Routes writes when several
+workspaces are mounted at once.
 
-- _(your agent fills this in)_
+## Objective
 
-## People
+`(unset)` — what winning looks like here, and by when. Meeting notes filed here are ranked against
+it (what moved it, what blocks it). "No objective — reference folder" is a valid answer.
 
-_The people in your world — colleagues, collaborators, contacts. Resolved live during meetings._
+## Where things stand
 
-- _(empty — grows as you meet people)_
+`(unset)` — the running state against the objective: open commitments, blockers, next dates.
 
-## Companies & organizations
+## What lives here
 
-- _(empty)_
+Entities under `kg/entities/<type>/`, one file each, shaped by the skeletons in
+[`kg/templates/`](kg/templates/README.md). Dashboard sections (people · companies · meetings ·
+follow-ups) appear here as the workspace fills in.
 
-## Recent meetings
+## Principles (how anything gets written here)
 
-_Meeting notes land in `kg/entities/meeting/`._
-
-- _(empty)_
-
-## Tasks & follow-ups
-
-- _(empty)_
-
----
-
-_This dashboard is maintained by your agent — the **README is the essence of the workspace**: the few
-things that matter, kept current. Ask it to "update the README" any time, or just let it keep this fresh
-as the workspace grows._
+- **Dated and attributed** — entries carry when they were learned and from what source.
+- **Never invent** — an unknown stays `(unset)` and says so; a guessed fact or link is worse than a gap.
+- **Every name is a link** — to its entity file; a missing entity is a finding, not a formatting problem.
+- **This page follows the files** — updated as a side effect of writes; if it can't be kept true, it says less.
