@@ -6,6 +6,18 @@ description: "Six rules. A meeting has one workspace, and everything else follow
 <Note>**Status:** the rules are designed here; the underlying workspace, membership and isolation
 machinery **already ships** — see [what is real today](/minutes/status).</Note>
 
+## Three words, exactly
+
+| | What it is | Meetings get in by |
+|---|---|---|
+| **Meeting** | one held event with a calendar identity — a series is one identity | inviting `vexa@` |
+| **Personal** | *your* workspace; exists because you clicked a door or organised a meeting | default — unbound is personal |
+| **Group** | people + shared memory + a name that can own meetings | `#group:name`, or assignment |
+
+Underneath, Personal and a Group are both *workspaces* — the storage unit. The product
+distinction is one line: **a group is a workspace that other people are in.** ("Room" was this
+concept's earlier name and is retired.)
+
 ## The one constraint
 
 **A meeting has exactly one workspace.**
