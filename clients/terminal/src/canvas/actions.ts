@@ -82,6 +82,22 @@ export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me
 export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
+// ORG (_global) setup: the first agent message is DETERMINISTIC given the seed, so it is CACHED —
+// rendered instantly as the empty-state greeting, no LLM turn. The admin's first reply carries the
+// grounding below (compactStoredUserText strips it on reload), so processing starts from one answer.
+export const GLOBAL_SETUP_GREETING =
+  "Welcome — this conversation sets up your organisation's shared ground: the few facts every meeting " +
+  "assistant here reads before it writes anything. First — what is the organisation called, and in one " +
+  "line, what is it?";
+export const GLOBAL_SETUP_GROUNDING = ONBOARDING_KICKOFF_MARK + [
+  "You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow",
+  "it exactly — research-first (draft answers from public sources, bring them for approval), org voice,",
+  "one question at a time, `(unset)` discipline. Your mount of /workspaces/_global is READ-WRITE — you",
+  "are its one sanctioned writer; commit each answer there. Your opener (asking the organisation's name)",
+  "was already displayed from cache — do NOT re-greet; the admin's reply to it follows. If _global",
+  "already holds answers, continue from the first unset item — never re-ask what is recorded.",
+].join("\n");
+
 export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
   "Read these workspace files before answering (use the Read tool): flows/personal.md, CLAUDE.md",
   "",

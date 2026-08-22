@@ -18,7 +18,7 @@ import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -548,7 +548,7 @@ type ChatProps = Partial<TabProps>;
 function minutesEmptyGreeting(session: string): string {
   const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
   if (session === "org-setup")
-    return "The organisation-tier conversation. What is decided here is written to _global and reaches every member's assistant on their next turn.";
+    return GLOBAL_SETUP_GREETING;
   if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
     return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
   if (session.startsWith("meet-")) {
@@ -940,6 +940,10 @@ export function Chat({ params = {} }: ChatProps) {
     if (onboardingArmedRef.current && !hasAttachments) {
       onboardingArmedRef.current = false;
       prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
+    }
+    // Org-setup first reply: the greeting was cached (no LLM turn) — attach the flow grounding here.
+    if (session === "org-setup" && turns.length === 0) {
+      prompt = GLOBAL_SETUP_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
     }
     void send(displayText, prompt, referenceSource);
     setValue("");

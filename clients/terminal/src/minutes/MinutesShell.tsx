@@ -107,17 +107,8 @@ export function MinutesShell() {
     await mountSet(proj ? proj.set : ["personal"]);
     if (s.kind === "org") {
       setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global");
-      // The admin conversation fires ITSELF while the org tier is unfinished — opening the setup
-      // chat IS the intent. A completed page never re-fires; amending is just talking again.
-      void readWorkspaceFile("README.md", { slug: "_global" }).then((c) => {
-        if (typeof c === "string" && c.includes("(unset)")) {
-          setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
-            "[global-setup] You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow it exactly, including its opening and research-first rules. " +
-            "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit each answer there. " +
-            "Be PROACTIVE: read what _global already holds and CONTINUE from the first unset item — do not re-ask what is recorded. " +
-            "One question at a time, hypotheses first where you can infer." } })), 1400);
-        }
-      }).catch(() => undefined);
+      // No warm-up turn: the setup opener is CACHED (empty-state greeting in chat.tsx) and the
+      // flow grounding rides on the admin's first reply — the first LLM turn already carries an answer.
     }
     else if (s.kind === "meeting") {
       const m = meetings.find((x) => x.id === s.id);
