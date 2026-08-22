@@ -25,12 +25,12 @@ The assistant has **one ordinary mailbox** — `vexa@example.com`. Requesting it
 service-account ticket in any estate; there is no mail-routing change, no subdomain, no connector,
 and nothing else to ask an admin for, ever.
 
-Everyone invites that same address to any meeting. **Which room a meeting belongs to is settled by
+Everyone invites that same address to any meeting. **Which group a meeting belongs to is settled by
 binding, not by address:**
 
 | Mechanism | When | Cost |
 |---|---|---|
-| **`#room:` tag** in the invite description — `#room:architecture-review` | before the meeting | typed once per meeting identity |
+| **`#group:` tag** in the invite description — `#group:architecture-review` | before the meeting | typed once per meeting identity |
 | **Organiser's click** on their artifact — *assign to a room* | after the meeting | one click, once |
 | **Neither** | — | the meeting is **personal**, and stays so |
 
@@ -49,22 +49,32 @@ The description is **organiser-authored**, so the tag carries exactly the author
 just earlier — and the room receives its artifacts immediately, with no round-trip. Three
 refusals keep it safe:
 
-- A tag binds only if the organiser is admitted to that room by its membership mode — otherwise
-  knowing a room's name would let anyone write into its record.
-- An unknown room name never creates a room. Typo → personal, with a notice.
+- A tag binds only if the organiser is admitted to that group by its membership mode — otherwise
+  knowing a group's name would let anyone write into its record.
+- An unknown group name never creates a group. Typo → personal, with a notice.
 - A tag by anyone other than the organiser does not exist: attendees cannot edit the invitation
   that is sent.
 
-### The click
+### The two paths
 
-Any unbound meeting's artifact goes to the organiser alone, written from their perspective,
-carrying one affordance: *keep this yours, or assign it to a room*. Doing nothing keeps it private
-forever. Assigning a recurring meeting binds the series; a single meeting binds itself.
+**Base path — no binding.** Invite → transcript → the meeting lands in the **organiser's personal
+workspace** → the organiser is emailed their artifact — and **every other participant is emailed
+an invitation to chat with the meeting**. Clicking it mints their account and their own personal
+workspace, with this meeting in it. Nobody was onboarded; they attended a meeting and got a door.
+This is how the product spreads inside an organisation — and it is **limited to the
+organisation's email domain**: an outside attendee receives nothing on this path.
 
-Assignment is a **re-run, never a forward**: the agent runs again in the room's workspace, once
-per participant — what a group receives was written from what the group knows, not leaked from a
-personal workspace. Fan-out honours the room's membership mode: an outside attendee receives the
-room's artifact only if the mode says anyone in the room.
+The organiser's email also carries *assign to a group*: one click binds the meeting — and its
+series, if recurring — after the fact, and the group path below runs for it.
+
+**Group path — already bound.** The meeting identity already belongs to a group, or the invite
+carried `#group:name` → transcript → the run happens in the **group's workspace**, once per
+participant → **all participants are emailed** their artifact, each also a door into the group's
+chat. Fan-out honours the group's membership mode; outside attendees receive it only if the mode
+says anyone in the meeting.
+
+A group run is a run in the group's workspace from what the group knows — an assignment after the
+fact is a **re-run there, never a forward** of the organiser's personal document.
 
 ## Personal meetings need no address of their own
 
