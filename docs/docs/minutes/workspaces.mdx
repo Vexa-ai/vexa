@@ -1,0 +1,183 @@
+---
+title: "Workspaces"
+description: "Six rules. A meeting has one workspace, and everything else follows from that."
+---
+
+<Note>**Status:** the rules are designed here; the underlying workspace, membership and isolation
+machinery **already ships** — see [what is real today](/minutes/status).</Note>
+
+## How the assistant's context is composed
+
+Every turn, the assistant works inside a stack of exactly three mounts:
+
+| Mount | Access | What it carries |
+|---|---|---|
+| **Your system space** (hidden) | private, per person | who you are — identity, sessions, settings. Present on every turn, even with everything else switched off. Never shareable. |
+| **`_global` — the organisation** | **read-only**, mounted for **everyone** | where the assistant is working: the organisation's name and domain, its glossary, its house rules. One repo; a change here reaches every member's assistant on their next turn. |
+| **The write workspace** | read-write, exactly one | the thing being actively worked: your Personal space, or the one group the turn belongs to. All writing lands here. |
+
+So context is made, not configured: the organisation tier says *where* the assistant works, the
+system tier says *who* it works for, and the write workspace says *what* it is working on now.
+
+**There is one workspace-setup flow, and it is a conversation.** The same chat-driven flow
+instantiates three ways, differing only in who runs it and which workspace it writes:
+
+| Who | Sets up | The conversation covers |
+|---|---|---|
+| **The admin, at installation** | `_global` | what the organisation is, its mail domain, the terms that mean something here, what must never leave. Read-only to everyone after; amending it is the same conversation again, admin-only. |
+| **A person, on first arrival** | their Personal space | who they are, their role — the assistant infers what it can (their email, what they said in the meeting they arrived from) and asks only what it cannot. |
+| **A member, creating a group** | the group | what the meeting series is about, what the group should pay attention to, who belongs. |
+
+One flow, not three — the assistant asks, infers, confirms, and writes the target workspace's
+seed. Nothing exists until the conversation says what the space is for.
+
+## Three words, exactly
+
+| | What it is | Meetings get in by |
+|---|---|---|
+| **Meeting** | one held event with a calendar identity — a series is one identity | inviting `vexa@` |
+| **Personal** | *your* workspace; exists because you clicked a door or organised a meeting | default — unbound is personal |
+| **Group** | people + shared memory + a name that can own meetings | `#group:name`, or assignment |
+
+Underneath, Personal and a Group are both *workspaces* — the storage unit. The product
+distinction is one line: **a group is a workspace that other people are in.** ("Room" was this
+concept's earlier name and is retired.)
+
+## The one constraint
+
+**A meeting has exactly one workspace.**
+
+You invited an address; that address is a workspace; that workspace owns the meeting. There is
+no composition step, no routing decision, and nothing for a participant to choose — because
+there is only ever one.
+
+Groups cost nothing to create: [one mailbox and a `#group:` tag](/minutes/invitation)
+means every address on it already resolves. A group is a name, a member list, and an address that
+already worked before anyone thought of it.
+
+Everything below is a consequence of that sentence.
+
+## The six rules
+
+<Steps>
+<Step title="Everyone has one personal workspace">
+Created for you, never shared. Anything not addressed to a group lands here.
+</Step>
+
+<Step title="A group is a shared workspace with a name, an address, and a member list">
+The admin creates the organisation's standing groups. Any member can create another later.
+Naming it is what creates its tag — `#group:architecture-review` — and nothing
+is provisioned to make that work.
+</Step>
+
+<Step title="A meeting belongs to whichever address was invited">
+A `#group:` tag or a later assignment → that group. Neither → the organiser alone. Nothing is
+inferred from the attendee list, the title, or the subject matter.
+</Step>
+
+<Step title="Artifacts follow membership">
+A group meeting reaches every member. A personal meeting reaches only you.
+</Step>
+
+<Step title="Anything personal can become a group">
+Name it, add emails, and from then on that series is shared. What was already yours stays yours.
+</Step>
+
+<Step title="Each group decides who belongs — one of three ways">
+**A list** you curate, **your organisation** (anyone joining from your domain), or **anyone in
+the group**. No account exists until someone clicks their first artifact.
+</Step>
+</Steps>
+
+## Who belongs — the three modes
+
+Membership is one setting per group, not a product-wide policy. Different groups want different
+answers, and the same deployment can hold all three.
+
+| Mode | Who receives artifacts | Use it for |
+|---|---|---|
+| **List** | exactly the emails you added | a small, named group; anything sensitive |
+| **Organisation** | anyone joining from your own email domain | standing internal meetings — colleagues are included automatically, outsiders never are |
+| **Open** | everyone in the group, inside or out | community calls, public office hours, anything you want to spread |
+
+**Organisation is the right default for a company.** It needs no upkeep — a colleague who joins
+the architecture review starts receiving artifacts because they were there, and a vendor sitting
+in the same call does not, because they are not one of you. Nobody maintains a list, and nobody
+is accidentally included.
+
+**List is for the groups where being explicit is the point.** A board meeting, an incident review,
+anything where "who is on this" is itself a decision.
+
+**Open is the setting for reaching beyond your organisation**, and it is deliberately per-group.
+One open community call does not make your architecture review open. Growth *inside* the
+organisation needs no such setting — Organisation mode already does it.
+
+<Note>
+**Receiving and belonging are the same thing in List and Organisation mode** — if you get the
+artifact, you can open the chat and reach that group's accumulated knowledge.
+
+**Open mode is where they separate.** Someone outside your organisation who joins one call
+receives the artifact **for that meeting**, and nothing else. Attending once does not hand an
+outsider the group's history.
+</Note>
+
+## What the rules decide for you
+
+Because the workspace is settled *before the meeting starts*, three questions that normally need
+a settings screen never get asked:
+
+| Question | Settled by |
+|---|---|
+| Who receives this? | the group's member list |
+| Where does what we learned get written? | the one workspace that owns the meeting |
+| What is the assistant allowed to see? | that workspace, and nothing else |
+
+**Inside your organisation there is no recipient-who-isn't-a-member tier.** If you receive the
+artifact you can open the chat — one rule, both meanings. The single exception is an outsider in
+an open group, who gets the meeting they attended and no history.
+
+## Personal meetings
+
+Invite the **global** `vexa@` address to your own call and it belongs to you: **you are the only
+recipient, and the artifact is written from your own perspective.** Personal work needs no group,
+no address of its own, and no setup. A one-to-one with someone outside the
+company, a conversation you want kept, a call that belongs to no team — all of it accumulates in
+your personal workspace without anyone deciding anything.
+
+If it later turns out that others should have it, [rule 5](#the-six-rules) applies: make it a
+group, add the emails, and the next meeting in that series is shared.
+
+## Two meetings' worth of scope, and no more
+
+| Surface | What the assistant has mounted |
+|---|---|
+| **Artifact** | the meeting's one workspace |
+| **Chat from an artifact** | the same one workspace |
+| **Your own assistant chat** | every workspace you belong to |
+
+Only the last one holds more than a single workspace, and it is the only one **you** open
+deliberately. A person reading their mail never meets a scope question.
+
+<Note>
+**Two groups in one meeting.** If two `#group:` tags are on the same call, the meeting
+is a single record and **each group gets its own run** — its own members, its own angle, its own
+workspace. Neither group sees the other's knowledge. Each run still mounts exactly one workspace;
+only the count of runs changes.
+</Note>
+
+## Why this stays simple
+
+A workspace model usually needs three more things: a way to compose several at once, a way to
+tell the assistant what belongs where, and a review queue for writes into shared knowledge.
+
+**A meeting-bound assistant needs none of them**, because it has one workspace. Composition,
+routing and review are real, and they live where they belong: in your own assistant chat and in
+the terminal, where a person is deliberately working across several workspaces at once.
+
+## Underneath
+
+Nothing here asks for a new substrate. Workspaces, membership, invitations restricted to an
+allowed email list, and per-tenant isolation are already built and enforced below the
+application: a worker's filesystem physically contains only the workspace it was dispatched
+with, on every backend, with no opt-out. **"The assistant can only see this meeting's
+workspace" is a property of the kernel, not a promise in a prompt.**
