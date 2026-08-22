@@ -5,19 +5,20 @@
  *  A PROJECT is private — your bundle of workspaces to chat over. Chats live in projects.
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
   listSharedMemberships, readActiveSet, setSharedActive, deactivateWorkspace,
-  readWorkspaceFile, type Membership,
+  readWorkspaceFile, createSharedWorkspace, type Membership,
 } from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
 import { ProjectComposer } from "./ProjectComposer";
 import { loadProjects, saveProjects, type Project } from "./projects";
+import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail, isHeld } from "./Rail";
-import { T } from "./tokens";
+import { T, surface } from "./tokens";
 import type { Page, Sel, View } from "./types";
 
 export function MinutesShell() {
@@ -33,6 +34,58 @@ export function MinutesShell() {
   const [docBody, setDocBody] = useState<string | null>(null);
   const [docNonce, setDocNonce] = useState(0);
   const [composer, setComposer] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("vexa.minutes.collapsed") || "{}"); } catch { return {}; }
+  });
+  const toggleCollapse = (id: string) => setCollapsed((c) => {
+    const n = { ...c, [id]: !c[id] };
+    try { localStorage.setItem("vexa.minutes.collapsed", JSON.stringify(n)); } catch { /* ignore */ }
+    return n;
+  });
+  // Deleting a chat drops it from the rail (its agent session stays on the server — the row is
+  // the user's index, not the record). Deleting a project is refused while it still holds chats.
+  const deleteChat = (projectId: string, chatId: string) => {
+    setProjects((prev) => { const next = prev.map((pr) => pr.id === projectId ? { ...pr, chats: pr.chats.filter((c) => c.id !== chatId) } : pr); saveProjects(next); return next; });
+    if (sel.session === chatId) void select({ kind: "personal", id: "personal", label: "Personal" });
+  };
+  const deleteProject = (projectId: string) => {
+    setProjects((prev) => {
+      const target = prev.find((pr) => pr.id === projectId);
+      if (!target || target.builtin || target.chats.length) return prev;   // refuse: not empty
+      const next = prev.filter((pr) => pr.id !== projectId); saveProjects(next); return next;
+    });
+    if (sel.kind === "project" && sel.id === projectId) void select({ kind: "personal", id: "personal", label: "Personal" });
+  };
+  // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
+  const [pagesW, setPagesW] = useState<number>(() => {
+    const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
+    return Number.isFinite(n) && n >= T.pagesMin && n <= T.pagesMax ? n : T.pagesDefault;
+  });
+  const dragging = useRef(false);
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      e.preventDefault();
+      const room = window.innerWidth - T.railW - 420;   // never squeeze the conversation below ~420
+      const w = Math.min(Math.min(T.pagesMax, room), Math.max(T.pagesMin, window.innerWidth - e.clientX));
+      setPagesW(w);
+    };
+    const up = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+      setPagesW((w) => { try { localStorage.setItem("vexa.minutes.pagesW", String(w)); } catch { /* ignore */ } return w; });
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, []);
+  const startDrag = () => { dragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; };
+  const nudge = (d: number) => setPagesW((w) => {
+    const n = Math.min(T.pagesMax, Math.max(T.pagesMin, w + d));
+    try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
+    return n;
+  });
 
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
@@ -52,7 +105,20 @@ export function MinutesShell() {
     lastSel.current[s.kind === "meeting" ? "meetings" : "projects"] = s;
     const proj = projOverride ?? (s.kind === "project" ? projects.find((pr) => pr.id === s.id) : undefined);
     await mountSet(proj ? proj.set : ["personal"]);
-    if (s.kind === "org") { setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global"); }
+    if (s.kind === "org") {
+      setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global");
+      // The admin conversation fires ITSELF while the org tier is unfinished — opening the setup
+      // chat IS the intent. A completed page never re-fires; amending is just talking again.
+      void readWorkspaceFile("README.md", { slug: "_global" }).then((c) => {
+        if (typeof c === "string" && c.includes("(unset)")) {
+          setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+            "[global-setup] You are the ADMIN organisation-tier conversation. Read /workspaces/_global/onboarding-global.md and follow it. " +
+            "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit each answer there. " +
+            "Be PROACTIVE: read what _global already holds and CONTINUE from the first unset item — do not re-ask what is recorded. " +
+            "One question at a time, hypotheses first where you can infer." } })), 1400);
+        }
+      }).catch(() => undefined);
+    }
     else if (s.kind === "meeting") {
       const m = meetings.find((x) => x.id === s.id);
       const native = (m as { native_id?: string } | undefined)?.native_id;
@@ -90,6 +156,30 @@ export function MinutesShell() {
     return () => { dead = true; };
   }, [docPath, docSlug, sel.id, docNonce]);
 
+  // Entity badges and wiki links in chat/pages open the document HERE — minutes mode has no tabs,
+  // so the pages panel is the one place a document can land. The chip is added to this room's page
+  // list (so you can flip back) and opened.
+  useEffect(() => {
+    const onEntity = async (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string }>).detail || {};
+      const r = await resolveDocRef(d, { path: d.docPath, slug: d.slug }).catch(() => null);
+      if (!r) return;
+      const label = (r.path.split("/").pop() ?? r.path).replace(/\.md$/, "");
+      setPages((prev) => prev.some((pg) => pg.path === r.path && pg.slug === r.slug) ? prev : [...prev, { path: r.path, slug: r.slug, label }]);
+      setDocPath(r.path); setDocSlug(r.slug); setDocNonce((n) => n + 1);
+    };
+    const onMeeting = (e: Event) => {
+      const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
+      if (!ref) return;
+      const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
+      const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
+      if (m) void select({ kind: "meeting", id: m.id, label: m.title.split(" — ")[0] });
+    };
+    window.addEventListener(OPEN_ENTITY_EVENT, onEntity);
+    window.addEventListener(OPEN_MEETING_EVENT, onMeeting);
+    return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntity); window.removeEventListener(OPEN_MEETING_EVENT, onMeeting); };
+  }, [meetings, select]);
+
   const session = useMemo(() => {
     if (sel.session) return sel.session;
     if (sel.kind === "personal") return "main";
@@ -114,24 +204,56 @@ export function MinutesShell() {
     if (kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt: kick } })), 1200);
   };
 
-  // "+ workspace" is NOT a form: it starts a chat prompted to scaffold one — the conversation
-  // is the wizard (founder ruling). The agent asks name → what it holds → who belongs, then
-  // creates and seeds the workspace.
-  const newWorkspace = () => addChat("personal", "new workspace",
-    "[workspace-scaffold] The user wants a NEW WORKSPACE — the shared folder. Run the scaffold conversation: " +
-    "ask what it should be called and what will live there (one question); infer a slug; ask who belongs " +
-    "(emails, or their organisation); then create the shared workspace with that name, write its seed README " +
-    "(purpose, what to pay attention to, who's in), and confirm with the #group tag they can use in invites. " +
-    "One question at a time; write as you learn.");
+  // "+ workspace" is NOT a form and NOT a plain chat: it opens a WORKSPACE SETUP chat whose
+  // whole job is scaffolding one. The workspace is created up front (so the agent has a real rw
+  // mount to seed), then the conversation names it, writes CLAUDE.md + PURPOSE + README, and
+  // settles membership. Founder ruling: the conversation is the wizard.
+  const newWorkspace = async () => {
+    const stamp = new Date().toISOString().slice(5, 16).replace(/[-:T]/g, "");
+    let created: { workspace_id: string } | null = null;
+    try { created = await createSharedWorkspace(`workspace-${stamp}`); } catch { /* surfaced below */ }
+    await listSharedMemberships().then(setMemberships).catch(() => undefined);
+    const id = `wsetup-${Date.now().toString(36)}`;
+    const projId = created ? `proj-ws-${created.workspace_id}` : "personal";
+    if (created) {
+      const proj: Project = { id: projId, name: "workspace setup", set: [created.workspace_id, "_global"], chats: [{ id, label: "scaffold" }] };
+      setProjects((prev) => { const next = [...prev.filter((pr) => pr.builtin !== "org"), proj, ...prev.filter((pr) => pr.builtin === "org")]; saveProjects(next); return next; });
+      void select({ kind: "project", id: projId, label: proj.name, session: id, chatLabel: "scaffold" }, proj);
+    } else {
+      addChat("personal", "workspace setup");
+    }
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+      "[workspace-scaffold] A NEW SHARED WORKSPACE has just been created for this conversation and is mounted " +
+      `read-write here${created ? ` as \`${created.workspace_id}\`` : ""} — you are seeding it. Ask ONE question at a time: ` +
+      "(1) what it should be called and what will live in it; (2) who belongs — emails, or their organisation. " +
+      "As you learn, WRITE into that workspace and commit: `CLAUDE.md` (what this folder is, its conventions — the map " +
+      "any agent mounting it reads first), `PURPOSE` (one line: what this workspace is for, so writes route here " +
+      "correctly), and `README.md` (its face page: purpose, what to pay attention to, who's in). " +
+      "Rename the workspace to the name they give. Finish by telling them the `#group:` tag to put in calendar " +
+      "invites so its meetings land here." } })), 1400);
+  };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `${T.railW}px 1fr ${T.pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: "var(--bg)" }}>
+    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}
-        onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={newWorkspace} />
+        onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={() => void newWorkspace()}
+        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
-      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0 }}>
+      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />
       </main>
+      {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
+          lights up on hover/focus, and arrow keys for anyone not dragging */}
+      <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
+        onMouseDown={startDrag}
+        onKeyDown={(e) => { if (e.key === "ArrowLeft") { e.preventDefault(); nudge(24); } if (e.key === "ArrowRight") { e.preventDefault(); nudge(-24); } }}
+        onMouseEnter={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
+        onMouseLeave={(e) => { if (!dragging.current) (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
+        onFocus={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
+        onBlur={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
+        style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
+        <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
+      </div>
       <PagesPanel pages={pages} docPath={docPath} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} />
       {composer && <ProjectComposer memberships={memberships}
         onCancel={() => setComposer(false)}

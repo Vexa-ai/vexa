@@ -153,9 +153,16 @@ export const MDX_COMPONENTS = { ...htmlComponents, Note, Warning, Card, CardGrou
 const FORBIDDEN_MDX_NODES = new Set(["mdxjsEsm", "mdxFlowExpression", "mdxTextExpression"]);
 function assertNoExecutableMdx(node: { type?: string; attributes?: unknown[]; children?: unknown[] }): void {
   if (node.type && FORBIDDEN_MDX_NODES.has(node.type)) throw new Error(`executable MDX (${node.type}) is not allowed in workspace docs`);
-  for (const attr of (node.attributes ?? []) as { type?: string; value?: { type?: string } }[]) {
-    if (attr?.type === "mdxJsxExpressionAttribute" || attr?.value?.type === "mdxJsxAttributeValueExpression")
+  for (const attr of (node.attributes ?? []) as { type?: string; value?: { type?: string; value?: string } }[]) {
+    if (attr?.type === "mdxJsxExpressionAttribute")
       throw new Error("expression-valued JSX attributes are not allowed in workspace docs");
+    if (attr?.value?.type === "mdxJsxAttributeValueExpression") {
+      // A LITERAL is data, not code: `cols={2}`, `open={true}` are the idiom agents write and
+      // carry no execution risk. Anything with an identifier, call or member access is refused.
+      const raw = String(attr.value.value ?? "").trim();
+      if (!/^(-?\d+(\.\d+)?|true|false|null|'[^'\\]*'|"[^"\\]*")$/.test(raw))
+        throw new Error("expression-valued JSX attributes are not allowed in workspace docs");
+    }
   }
   for (const child of (node.children ?? []) as { type?: string }[]) assertNoExecutableMdx(child);
 }
@@ -191,8 +198,17 @@ type CompileState =
 
 /** Renders workspace markdown as MDX with the registry above; falls back to the
  *  legacy <Markdown> renderer (with a subtle notice) when the source doesn't compile. */
+/** Strip leading YAML frontmatter — it is metadata for the agent, never body copy. */
+function stripFrontmatter(md: string): string {
+  if (!md.startsWith("---")) return md;
+  const end = md.indexOf("\n---", 3);
+  if (end === -1) return md;
+  const after = md.indexOf("\n", end + 1);
+  return after === -1 ? "" : md.slice(after + 1).replace(/^\s+/, "");
+}
+
 export function MdxDoc({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
-  const src = children ?? "";
+  const src = stripFrontmatter(children ?? "");
   const [state, setState] = useState<CompileState>({ status: "loading" });
 
   useEffect(() => {

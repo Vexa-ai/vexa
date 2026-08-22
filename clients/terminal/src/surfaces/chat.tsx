@@ -1089,7 +1089,7 @@ export function Chat({ params = {} }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
-      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: minutesOnly() ? 14 : 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
+      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
           ? minutesEmptyGreeting(session)
           : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
     </AgentWindow>

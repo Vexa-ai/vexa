@@ -2,7 +2,7 @@
 /** The context bar — the shell's one answer to "where am I talking, about what":
  *  Room › chat · flavor pill · the mount set. Shares the header row with the rail and pages head. */
 import type { Sel } from "./types";
-import { header, text } from "./tokens";
+import { header, type as ty } from "./tokens";
 
 export function ContextBar({ sel, flavor, mounts }: { sel: Sel; flavor: string; mounts: string }) {
   const room = sel.kind === "meeting" ? "Personal" : sel.kind === "org" ? "Organisation" : sel.label;
@@ -10,11 +10,11 @@ export function ContextBar({ sel, flavor, mounts }: { sel: Sel; flavor: string; 
   return (
     <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
-      <span style={{ fontWeight: 600, fontSize: 14, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        <span style={{ color: "var(--t3)", fontWeight: 500 }}>{room} › </span>{chat}
+      <span style={{ ...ty.title, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span style={{ color: "var(--t3)", fontWeight: 400 }}>{room} › </span>{chat}
       </span>
-      <span style={{ flex: "none", fontSize: 10.5, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--accent)", background: "var(--panel2)", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>{flavor}</span>
-      <span style={{ marginLeft: "auto", ...text.mono, whiteSpace: "nowrap" }}>{mounts}</span>
+      <span style={{ ...ty.pill, flex: "none", color: "var(--accent)", background: "var(--accentbg)", borderRadius: 5, padding: "2px 8px" }}>{flavor}</span>
+      <span style={{ ...ty.mono, marginLeft: "auto", whiteSpace: "nowrap" }}>{mounts}</span>
     </div>
   );
 }
