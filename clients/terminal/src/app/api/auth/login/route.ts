@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
   const opts = { httpOnly: true, secure, sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30, path: "/" };
   cookieStore.set(AUTH_COOKIE, token, opts);
-  cookieStore.set(USER_INFO_COOKIE, JSON.stringify({ email: user.email, name: user.name || user.email.split("@")[0] }), opts);
+  cookieStore.set(USER_INFO_COOKIE, JSON.stringify({ id: user.id, email: user.email, name: user.name || user.email.split("@")[0] }), opts);
 
   return NextResponse.json(
     { success: true, user: { id: user.id, email: user.email, name: user.name ?? user.email } },

@@ -365,9 +365,14 @@ export function Workbench() {
           // everything it can know — the artifact + transcript in the workspace, the reader's own
           // login email — and have it ask the ONE thing it cannot infer: their position. Once per
           // meeting door, ever; a revisit must not re-run onboarding.
-          const kicked = `vexa.doorKickoff.${native}`;
-          if (!localStorage.getItem(kicked)) {
-            localStorage.setItem(kicked, "1");
+          // Once per PERSON, not per browser: the flag lives in `.system/<uid>` server-side —
+          // a fresh profile must not re-onboard a known person (witness-plan S3).
+          const kicked = `door-kickoff:${native}`;
+          const guard = await fetch(`/api/minutes/person-state?key=${encodeURIComponent(kicked)}`, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : { set: true }))   // seam absent → fail CLOSED (no repeat)
+            .catch(() => ({ set: true }));
+          if (!guard.set) {
+            void fetch("/api/minutes/person-state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: kicked }) });
             window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
               `[minutes-door-kickoff] A reader just arrived through the door of meeting ${native}. ` +
               `Read kg/entities/meeting/${native}.md and kg/entities/meeting/${native}.transcript.md. ` +
