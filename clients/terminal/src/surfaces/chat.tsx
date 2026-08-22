@@ -553,7 +553,7 @@ type ChatProps = Partial<TabProps>;
 // meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
 function minutesEmptyGreeting(session: string): string {
   const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
-  if (session === "org-setup")
+  if (session.startsWith("org-setup"))
     return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
   if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
     return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
@@ -971,7 +971,7 @@ export function Chat({ params = {} }: ChatProps) {
       prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
     }
     // Org-setup first reply: the greeting was cached (no LLM turn) — attach the flow grounding here.
-    if (session === "org-setup" && turns.length === 0) {
+    if (session.startsWith("org-setup") && turns.length === 0) {
       prompt = GLOBAL_SETUP_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
     }
     void send(displayText, prompt, referenceSource);
@@ -1123,7 +1123,7 @@ export function Chat({ params = {} }: ChatProps) {
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
       <ChatConversation turns={turns} busy={busy || loading} empty={
-        !loading && minutesOnly() && session === "org-setup"
+        !loading && minutesOnly() && session.startsWith("org-setup")
           // The org-setup opener is ONE profound question standing in the void — centered, spare.
           ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
               <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>

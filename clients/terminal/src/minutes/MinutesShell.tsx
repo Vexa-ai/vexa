@@ -246,19 +246,24 @@ export function MinutesShell() {
   useEffect(() => { probeScaffolded(); const t = setInterval(probeScaffolded, 20000); return () => clearInterval(t); }, [probeScaffolded]);
 
   // Setup entry points — the buttons the rail shows while a tier awaits setup.
+  // Setup means a FRESH conversation (founder ruling 2026-08-22) — never reopening a stale thread.
+  // Org-setup sessions are a FAMILY (`org-setup-<ts>`): each setup click mints a new one; the cached
+  // void opener + grounding key on the prefix.
   const setupGlobal = () => {
-    // ensure the Organisation project row exists (it may have been deleted), then open its setup chat
+    const chatId = `org-setup-${Date.now().toString(36)}`;
+    const orgProj: Project = { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: chatId, label: "setup" }] };
+    let proj: Project = orgProj;
     setProjects((prev) => {
-      if (prev.some((pr) => pr.id === "org")) return prev;
-      const next = [...prev, { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: "org-setup", label: "setup" }] }];
+      const existing = prev.find((pr) => pr.id === "org");
+      proj = existing ? { ...existing, chats: [...existing.chats, { id: chatId, label: "setup" }] } : orgProj;
+      const next = existing ? prev.map((pr) => (pr.id === "org" ? proj : pr)) : [...prev, orgProj];
       saveProjects(next); return next;
     });
-    void select({ kind: "project", id: "org", label: "Organisation", session: "org-setup", chatLabel: "setup" },
-      projects.find((pr) => pr.id === "org") ?? { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: "org-setup", label: "setup" }] });
+    void select({ kind: "project", id: "org", label: "Organisation", session: chatId, chatLabel: "setup" }, proj);
   };
   const setupPersonal = () => {
-    void select({ kind: "personal", id: "personal", label: "Personal" });
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 400);
+    addChat("personal", "onboarding");
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 500);
   };
 
   const newWorkspace = async () => {
