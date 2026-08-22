@@ -6,6 +6,7 @@ from llm import LLMConfigError, completion_from_env, harness_from_env
 from llm.anthropic_api import AnthropicCompletion
 from llm.claude_code import ClaudeCodeHarness
 from llm.openai_compat import OpenAICompatCompletion
+from llm.orca import OrcaRouterCompletion
 
 
 def test_completion_defaults_to_openai_compat(monkeypatch):
@@ -16,6 +17,11 @@ def test_completion_defaults_to_openai_compat(monkeypatch):
 def test_completion_env_selects_anthropic(monkeypatch):
     monkeypatch.setenv("VEXA_LLM_PROVIDER", "anthropic")
     assert isinstance(completion_from_env(), AnthropicCompletion)
+
+
+def test_completion_env_selects_orcarouter(monkeypatch):
+    monkeypatch.setenv("VEXA_LLM_PROVIDER", "orcarouter")
+    assert isinstance(completion_from_env(), OrcaRouterCompletion)
 
 
 def test_completion_unknown_provider_fails_loud(monkeypatch):
