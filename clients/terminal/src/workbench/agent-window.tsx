@@ -86,8 +86,13 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
         return (
           <div key={t.id} style={{ marginBottom: 18 }}>
             {t.ops.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, borderLeft: "1.5px solid var(--line2)", paddingLeft: 12, margin: "0 0 10px 5px" }}>
-                {t.ops.map((op, j) => <OpRow key={j} op={op} />)}
+              // ONE line, updated in place: the CURRENT (last) op + a step count — a long tool run
+              // must not grow the transcript vertically (founder ruling 2026-08-22).
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px 5px" }}>
+                <OpRow op={t.ops[t.ops.length - 1]} />
+                {t.ops.length > 1 && (
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>· {t.ops.length} steps</span>
+                )}
               </div>
             )}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}><Markdown>{t.text}</Markdown></div>}
