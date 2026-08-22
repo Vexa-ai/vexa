@@ -7,6 +7,7 @@
 import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState } from "react";
 import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
+import { MdxDoc } from "../ui-kit/MdxDoc";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
@@ -109,7 +110,12 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
                 )}
               </div>
             )}
-            {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}><Markdown>{t.text}</Markdown></div>}
+            {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>
+              {/* Mintlify-grade rendering in the OUTPUT too: finished turns compile as MDX (Note/Card/
+                  Steps/Tabs + wikilinks, safe plain-markdown fallback); the still-streaming turn uses the
+                  light parser and upgrades on completion. */}
+              {busy && last ? <Markdown>{t.text}</Markdown> : <MdxDoc>{t.text}</MdxDoc>}
+            </div>}
             {(() => {
               // every file the turn WROTE, deduped — the output's actionable surface
               const files = [...new Set(t.ops.filter((o) => o.wrote && o.file).map((o) => o.file as string))];
