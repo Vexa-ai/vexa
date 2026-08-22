@@ -438,15 +438,18 @@ export function Workbench() {
   // PROACTIVE: it reads what _global already holds, infers from the admin's own identity, states
   // hypotheses, and asks only what it cannot know. Its worker mounts _global rw (admin subjects).
   useEffect(() => {
+    // Consume the stash ONLY when the dispatch actually fires — strict-mode double-mount runs
+    // this effect twice with a cleanup in between, and an eager consume + timer-clear eats it.
     let stashed = false;
-    try { stashed = !!localStorage.getItem("vexa.setupGlobal"); localStorage.removeItem("vexa.setupGlobal"); } catch { /* ignore */ }
+    try { stashed = !!localStorage.getItem("vexa.setupGlobal"); } catch { /* ignore */ }
     if (!stashed || !minutesOnly()) return;
-    const t = setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+    const t = setTimeout(() => { try { localStorage.removeItem("vexa.setupGlobal"); } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
       "[global-setup] You are running the ADMIN organisation-tier conversation. Read /workspaces/_global/onboarding-global.md and follow it. " +
       "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit your edits there. " +
       "Be PROACTIVE: read what _global already holds, look at my identity and this deployment for clues, and open by TELLING me " +
       "what you think this organisation is — then ask the few questions the file names, one at a time, confirm-or-correct. " +
-      "Write the answers into _global/README.md as you learn them, terse and factual." } })), 1200);
+      "Write the answers into _global/README.md as you learn them, terse and factual." } })); }, 1200);
     return () => clearTimeout(t);
   }, []);
 
