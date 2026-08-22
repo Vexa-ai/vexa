@@ -17,11 +17,14 @@ from llm.claude_cli import ClaudeCliCompletion
 from llm.claude_code import ClaudeCodeHarness
 from llm.errors import LLMConfigError
 from llm.openai_compat import OpenAICompatCompletion
+from llm.orca import OrcaRouterCompletion
 from llm.ports import CompletionPort, HarnessPort
 
 COMPLETION_PROVIDERS: dict[str, type] = {
     "openai-compat": OpenAICompatCompletion,
     "anthropic": AnthropicCompletion,
+    # Named OpenAI-compatible gateway — default host, no endpoint to type.
+    "orcarouter": OrcaRouterCompletion,
     # Subscription-credential deployments: beats ride the claude CLI (no API key needed).
     "claude-cli": ClaudeCliCompletion,
 }
