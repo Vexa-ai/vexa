@@ -225,7 +225,7 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
 });
 
 test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
-  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS bot-builder";
+  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS bot-builder";
   const injected = `FROM somevendor/unaudited:1.2 AS review-probe\n${base}`;
   const r = withEdited(LITE, base, injected, () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared Dockerfile FROM image pin sailed through");
@@ -235,8 +235,8 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
 
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
-  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final";
-  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final", inject,
+  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";
+  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final", inject,
     () => runGate("runtime-parity"));
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);
