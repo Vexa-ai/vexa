@@ -112,7 +112,7 @@ export function MinutesShell() {
       void readWorkspaceFile("README.md", { slug: "_global" }).then((c) => {
         if (typeof c === "string" && c.includes("(unset)")) {
           setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
-            "[global-setup] You are the ADMIN organisation-tier conversation. Read /workspaces/_global/onboarding-global.md and follow it. " +
+            "[global-setup] You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow it exactly, including its opening and research-first rules. " +
             "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit each answer there. " +
             "Be PROACTIVE: read what _global already holds and CONTINUE from the first unset item — do not re-ask what is recorded. " +
             "One question at a time, hypotheses first where you can infer." } })), 1400);

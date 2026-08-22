@@ -445,7 +445,7 @@ export function Workbench() {
     if (!stashed || !minutesOnly()) return;
     const t = setTimeout(() => { try { localStorage.removeItem("vexa.setupGlobal"); } catch { /* ignore */ }
       window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
-      "[global-setup] You are running the ADMIN organisation-tier conversation. Read /workspaces/_global/onboarding-global.md and follow it. " +
+      "[global-setup] You are running the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow it exactly, including its opening and research-first rules. " +
       "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit your edits there. " +
       "Be PROACTIVE: read what _global already holds, look at my identity and this deployment for clues, and open by TELLING me " +
       "what you think this organisation is — then ask the few questions the file names, one at a time, confirm-or-correct. " +
