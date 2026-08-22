@@ -15,6 +15,7 @@ import os
 from llm.anthropic_api import AnthropicCompletion
 from llm.claude_cli import ClaudeCliCompletion
 from llm.claude_code import ClaudeCodeHarness
+from llm.codex import CodexHarness
 from llm.errors import LLMConfigError
 from llm.openai_compat import OpenAICompatCompletion
 from llm.ports import CompletionPort, HarnessPort
@@ -28,6 +29,7 @@ COMPLETION_PROVIDERS: dict[str, type] = {
 
 HARNESS_RUNNERS: dict[str, type] = {
     "claude-code": ClaudeCodeHarness,
+    "codex": CodexHarness,
 }
 
 

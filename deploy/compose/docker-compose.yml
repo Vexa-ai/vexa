@@ -153,6 +153,10 @@ services:
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      - HOST_CODEX_CREDENTIALS=${HOST_CODEX_CREDENTIALS:-}
+      - VEXA_MIDTURN_INJECT=${VEXA_MIDTURN_INJECT:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
       # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
       # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
@@ -176,6 +180,7 @@ services:
       # a bad path becomes 'Model inference failed: Not logged in' inside the worker. /dev/null when
       # unset (the probe is skipped then — an ANTHROPIC_* key may be the credential path instead).
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      - ${HOST_CODEX_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-codex-credentials:ro
       # The _global org tier: bound at the SAME path inside this container so the control plane's
       # exists()-check and the worker's host-side bind agree on one path string.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global}:ro

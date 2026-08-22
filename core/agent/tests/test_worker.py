@@ -145,6 +145,36 @@ def test_message_landing_during_the_entrypoint_turn_is_consumed_not_lost():
     assert accepted[1]["nonce"] == "n2"
 
 
+def test_midturn_message_uses_the_active_harness_steering_seam():
+    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello"})})])
+
+    class SteeringHarness:
+        def __init__(self):
+            self.injected = []
+
+        def midturn_enabled(self):
+            return True
+
+        def inject_user_message(self, text):
+            self.injected.append(text)
+            return True
+
+    harness = SteeringHarness()
+
+    def active_turn(prompt):
+        s.entries.append(("6-0", {"turn": json.dumps({"prompt": "steer me", "nonce": "n2"})}))
+        yield {"type": "message-delta", "text": "working"}
+        yield {"type": "done", "reply": "done", "sessionId": "s1", "ok": True}
+
+    serve(s, out_topic="o", in_topic="i", turn=active_turn,
+          start={"entrypoint": {"inline": "hello"}}, idle_ms=10, harness=harness)
+    assert harness.injected == ["steer me"]
+    assert any(event["type"] == "turn-accepted" and event.get("injected") is True
+               and event.get("nonce") == "n2" for event in s.events())
+    assert any(event["type"] == "user-injected" and event["text"] == "steer me"
+               for event in s.events())
+
+
 # ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────
 
 from worker.worker import meeting_card_turn, parse_cards, parse_notes, serve_meeting  # noqa: E402

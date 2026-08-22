@@ -111,6 +111,14 @@ class HarnessPort(Protocol):
         """Boot-time credential sanity check — a loud warning string, or None. May no-op."""
         ...
 
+    def midturn_enabled(self) -> bool:
+        """Whether this runner accepts user input while ``run_turn`` is still active."""
+        ...
+
+    def inject_user_message(self, text: str) -> bool:
+        """Append user input to the active turn. False means leave it queued for the next turn."""
+        ...
+
 
 def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
@@ -255,10 +263,14 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     Best-effort per mount: one mount failing to commit must not abort the others."""
     if not (work / ".git").exists():
         return None
-    if not _git(work, "status", "--porcelain"):
+    # Harness continuity is private runtime plumbing, never workspace knowledge. Not every legacy
+    # auxiliary mount carries the seed's `.gitignore`, so enforce the exclusion at the commit seam
+    # too (the documented contract already promises `.claude/` never enters git history).
+    content_pathspec = (".", ":(exclude).claude")
+    if not _git(work, "status", "--porcelain", "--", *content_pathspec):
         return None
     env = _commit_env(author)
-    _git(work, "add", "-A", env=env)
+    _git(work, "add", "-A", "--", *content_pathspec, env=env)
     _git(work, "commit", "-m", (message.splitlines()[0][:72] if message else "agent turn"), env=env)
     return _git(work, "rev-parse", "HEAD", env=env)
 

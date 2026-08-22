@@ -316,3 +316,9 @@ class ClaudeCodeHarness:
 
     def preflight(self) -> Optional[str]:
         return preflight_provider_guard()
+
+    def midturn_enabled(self) -> bool:
+        return midturn_enabled()
+
+    def inject_user_message(self, text: str) -> bool:
+        return inject_user_message(text)

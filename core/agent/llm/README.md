@@ -22,9 +22,9 @@ fakes.
   api.anthropic.com, LiteLLM proxies, DeepSeek/GLM Anthropic-compatible endpoints) ·
   `claude_cli.py` (beats via the claude CLI on mounted SUBSCRIPTION credentials — no API key;
   slower per beat; for subscription-only deployments).
-- **Harnesses**: `claude_code.py` (the `claude` CLI — argv build, stream-json parsing, `.claude/`
-  continuity + skills wiring, credential preflight). Open-source runners (OpenCode, Aider, Goose)
-  slot in as new adapter files + one registry line.
+- **Harnesses**: `claude_code.py` (the `claude` CLI — stream-json + open-stdin steering) · `codex.py`
+  (Codex app-server JSON-RPC — durable threads + `turn/steer`). Both normalize into the same frozen
+  UnitEvents; Claude remains the deployment default.
 
 Raw `httpx`, no vendor SDKs — the protocols are ~10 lines each and a pinned SDK is a heavier
 supply-chain surface than the dialect itself.
@@ -38,8 +38,9 @@ supply-chain surface than the dialect itself.
 | `VEXA_LLM_API_KEY` | credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
 | `VEXA_LLM_MODEL` | deployment-default model (free string) | empty → fail-loud at completion call |
 | `VEXA_LLM_MAX_TOKENS` | Messages-API max_tokens | 4096 |
-| `VEXA_RUNNER` | harness adapter key | `claude-code` |
+| `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` | `claude-code` |
 | `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
+| `HOST_CODEX_CREDENTIALS`, `OPENAI_API_KEY` | codex adapter subscription-file / API-key auth | — |
 
 ## Rules
 
@@ -59,3 +60,27 @@ supply-chain surface than the dialect itself.
 2. One line in `registry.py`'s table.
 3. Unit test with a fake transport (`httpx.MockTransport`) or fake `exec_fn` — see
    `tests/test_llm_openai_compat.py` / `tests/test_llm_claude_code.py`.
+
+## Codex subscription authentication (compose)
+
+Codex app-server can use the host's ChatGPT subscription login without copying credentials into
+the repository or workspace:
+
+1. On the Docker host, install/run Codex and complete `codex login`. Verify
+   `~/.codex/auth.json` exists and remains owner-readable only (`0600`).
+2. In the ignored `deploy/compose/.env`, set:
+
+   ```dotenv
+   VEXA_RUNNER=codex
+   VEXA_MIDTURN_INJECT=1
+   HOST_CODEX_CREDENTIALS=/absolute/host/path/to/.codex/auth.json
+   ```
+
+3. Rebuild `agent-worker` after changing the pinned Codex version, then recreate `runtime` and
+   `agent-api`. The runtime bind-mounts only that file at `/root/.codex/auth.json:ro` in each worker.
+
+The adapter keeps rollout history under the private continuity mount's already-ignored
+`.claude/codex/sessions/`; the subscription auth file stays in `/root/.codex` and is never copied,
+staged, emitted, or returned through the workspace API. `VEXA_CODEX_MODEL` is optional; leaving it
+empty uses the subscription account's Codex default and deliberately ignores an inherited
+`claude-*` model pin.

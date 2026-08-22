@@ -1118,7 +1118,7 @@
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
-   "description": "spawned claude-in-container worker; one dispatch turn / meeting copilot",
+   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn / meeting copilot",
    "metadata": [
     {
      "path": "core/agent/worker"

@@ -5,6 +5,7 @@ import pytest
 from llm import LLMConfigError, completion_from_env, harness_from_env
 from llm.anthropic_api import AnthropicCompletion
 from llm.claude_code import ClaudeCodeHarness
+from llm.codex import CodexHarness
 from llm.openai_compat import OpenAICompatCompletion
 
 
@@ -30,11 +31,16 @@ def test_harness_defaults_to_claude_code(monkeypatch):
     assert isinstance(harness_from_env(), ClaudeCodeHarness)
 
 
+def test_harness_env_selects_codex(monkeypatch):
+    monkeypatch.setenv("VEXA_RUNNER", "codex")
+    assert isinstance(harness_from_env(), CodexHarness)
+
+
 def test_harness_unknown_runner_fails_loud(monkeypatch):
     monkeypatch.setenv("VEXA_RUNNER", "hal9000")
     with pytest.raises(LLMConfigError) as exc:
         harness_from_env()
-    assert "hal9000" in str(exc.value) and "claude-code" in str(exc.value)
+    assert "hal9000" in str(exc.value) and "claude-code" in str(exc.value) and "codex" in str(exc.value)
 
 
 def test_blank_env_values_mean_default(monkeypatch):

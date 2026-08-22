@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
-RUNNER = "claude-code"
+RUNNER = (os.environ.get("VEXA_RUNNER") or "").strip() or "claude-code"
 
 
 def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:

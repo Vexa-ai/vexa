@@ -305,6 +305,7 @@ def _extra_mount_paths(work: Path) -> list[Path]:
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
+    harness: HarnessPort | None = None,
 ) -> Iterator[dict]:
     """One governed agent turn over the mounted workspace SET: resume from the session file, DECLARE the
     active mounts to the model, drive ``run_harness_turn`` (which commits EACH changed mount, authored by
@@ -317,7 +318,7 @@ def run_turn_over_workspace(
     # `worker.worker.harness_factory` reaches this call site (the harness was one module historically).
     import worker.worker as _w
     factory = getattr(_w, "harness_factory", harness_from_env)
-    harness: HarnessPort = factory()
+    harness = harness or factory()
     chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
     if session and session_continuity:
@@ -365,7 +366,8 @@ def start_prompt(start: dict) -> str | None:
 
 # ── the harness loop (redis + the turn injected) ─────────────────────────────────────────────────
 
-def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int) -> None:
+def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
+          harness: HarnessPort | None = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -379,15 +381,13 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     in-topic message carries a ``nonce`` the ack echoes so the watchdog can match ITS delivery.
     """
     # Mid-turn injection (VEXA_MIDTURN_INJECT=1): between output events, drain the in-topic and hand
-    # arriving user messages to the RUNNING harness turn via the adapter's stdin mailbox — the reply
-    # continues in the same turn (better responsiveness than queue-until-turn-end). A message the
-    # mailbox can't take (no active stdin) is left IN the stream for the between-turns loop.
+    # arriving user messages to the RUNNING harness through its runner-neutral steering seam. Claude
+    # writes stream-json to its open stdin; Codex sends turn/steer to app-server. A message the active
+    # runner cannot take is left IN the stream for the between-turns loop.
     def _drain_inject(cursor: list) -> None:
-        try:
-            from llm import claude_code as _cc
-        except Exception:  # noqa: BLE001
-            return
-        if not _cc.midturn_enabled():
+        enabled = getattr(harness, "midturn_enabled", lambda: False)
+        inject = getattr(harness, "inject_user_message", lambda _text: False)
+        if not enabled():
             return
         try:
             resp = stream.xread({in_topic: cursor[0]}, count=8, block=None)
@@ -399,7 +399,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 text = msg.get("prompt", "")
                 if msg.get("type") == "stop" or not text:
                     return  # leave stop (and everything after) for the outer loop
-                if not _cc.inject_user_message(text):
+                if not inject(text):
                     return  # no active stdin — leave queued
                 cursor[0] = entry_id
                 # satisfy the dispatcher's warm-delivery watchdog: the injected message WAS taken
@@ -559,8 +559,18 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
                       or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
         session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
+        # One harness instance owns the whole warm worker lifetime. That makes the steering handle
+        # instance-scoped (Codex JSON-RPC process / Claude stdin) instead of a vendor-global mailbox.
+        import worker.worker as _w
+        chat_harness: HarnessPort = getattr(_w, "harness_factory", harness_from_env)()
+        harness_warning = chat_harness.preflight()
+        if harness_warning:
+            log.warning("agent-api worker: %s", harness_warning)
         serve(
             client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model, allowed_tools=chat_tools, session=session),
+            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
+                                                        allowed_tools=chat_tools, session=session,
+                                                        harness=chat_harness),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
+            harness=chat_harness,
         )

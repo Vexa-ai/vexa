@@ -213,6 +213,9 @@ class DockerBackend:
         creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
+        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS")
+        if codex_creds:
+            binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
         # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
         # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
@@ -233,6 +236,11 @@ class DockerBackend:
             "VEXA_LLM_MAX_TOKENS",
             "VEXA_MODEL_ALLOWLIST",
             "VEXA_RUNNER",
+            "VEXA_MIDTURN_INJECT",
+            "VEXA_CODEX_MODEL",
+            # codex harness API-key auth (subscription auth is the read-only bind above)
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
             # claude-code harness credentials (that adapter's concern only)
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",

@@ -2,3 +2,5 @@
 # workspace VOLUME, never in git history — a turn's commit-all must not sweep conversation content
 # into the repo (it syncs to the workspace store).
 .claude/
+.codex/
+.agents/

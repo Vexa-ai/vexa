@@ -158,6 +158,15 @@
       "description": "the claude model alias/name for chat + workspace turns"
     },
     {
+      "key": "VEXA_RUNNER",
+      "class": "defaulted",
+      "default": "claude-code",
+      "description": "agent harness stamped onto dispatched workspace turns; codex selects Codex app-server",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_MEETING_MODEL",
       "class": "defaulted",
       "default": "(subscription/provider default)",

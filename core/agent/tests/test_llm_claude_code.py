@@ -218,6 +218,24 @@ def test_run_harness_turn_propose_only_touches_no_git(tmp_path: Path):
     assert [e["type"] for e in evs] == ["done"]  # no commit event on the propose-only path
 
 
+def test_run_harness_turn_never_commits_continuity_plumbing(tmp_path: Path):
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _init_repo(repo)
+
+    def fake_exec(argv, cwd):
+        continuity = Path(cwd) / ".claude" / "codex" / "sessions" / "rollout.jsonl"
+        continuity.parent.mkdir(parents=True)
+        continuity.write_text("private transcript")
+        yield json.dumps({"type": "result", "subtype": "success",
+                          "result": "no workspace change", "session_id": "s1"})
+
+    events = list(run_harness_turn(repo, "chat", ClaudeCodeHarness(exec_fn=fake_exec)))
+    assert [event["type"] for event in events] == ["done"]
+    assert ".claude" not in subprocess.run(
+        ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True).stdout
+
+
 # ── per-mount commit + attribution (WP-A1.2 / D4) ────────────────────────────
 
 def _author_of(repo: Path) -> tuple[str, str, str, str]:
