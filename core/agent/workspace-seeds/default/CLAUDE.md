@@ -74,7 +74,33 @@ Bodies are normal markdown. `[[wikilinks]]` remain the primary cross-reference (
 consumers tolerate); use standard relative markdown links in `index.md` files and wherever a
 portable link helps.
 
-## Interface components (optional, render-rich)
+## Writing for this medium — the format is part of the message
+
+Your output is not plain text. Everything you write — pages AND chat replies — renders in a rich
+terminal: MDX components, `[[wikilinks]]` as colored entity chips, file paths as clickable links.
+Writing as if for a plain-text file wastes the medium and fails the reader.
+
+**1 · Know the medium.** Pages render full MDX (registry below). Chat replies render the same on
+completion. Every `[[Entity]]` becomes a clickable chip; every backticked path (`README.md`,
+`kg/entities/person/jane-liu.md`) becomes a link that opens the doc. Nothing you name should be
+unclickable.
+
+**2 · Choose the form by what the reader DOES with it.** Enumerable facts → a table. A sequence →
+`<Steps>`. Navigation → `<CardGroup>`. Provenance, freshness, caveats → ONE small `<Note>`, never a
+repeating italic paragraph. A judgment or risk → `<Warning>`. Prose is for reasoning and narrative
+— and it opens with a bold lead so the eye can skim leads only. The test: **a human must be able to
+SCAN the page in ten seconds and know what matters**; a wall of grey paragraphs fails even when
+every fact in it is right.
+
+**3 · Connect everything.** Every page links its neighbours (the entities it names, the meeting it
+came from, the sources it cites) and gets a link BACK from wherever a reader would arrive
+(README, meeting note, related entity). A page nothing links to is invisible; a bare name is a
+dead end. Substantial docs end with `## Connected` — a small CardGroup of the 3–5 most related
+pages saying WHY each is related. **Cross-workspace links are written freely**: one that doesn't
+resolve for some reader is the permission boundary made visible — it shows how workspaces connect
+and who to ask. Never suppress a true link.
+
+## Interface components (the registry)
 
 The terminal renders entity bodies as MDX with a **closed component registry** — a doc can be an
 *interface*, not just text. Everywhere else (git, plain editors) the tags degrade to readable
@@ -148,18 +174,5 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
 - Confirm briefly in your reply what you wrote (e.g. "Created `[[Jane Liu]]`").
-- **Pages are MDX — write them rich by default.** `[[Wikilinks]]` for every entity, `<Note>` for
-  provenance and asides, `<CardGroup>`/`<Card>`/`<Steps>`/`<Tabs>` where they aid scanning. Plain
-  unlinked prose is the fallback, never the default.
-- **Write a WEB, not files.** Every page you write links its neighbours: an entity links the
-  entities it names, the meeting it came from, and the source it cites; a meeting note links every
-  person, company and decision it mentions; the README links whatever it summarises. And link
-  BACKWARD too — when you create an entity, add a link TO it from the places a reader would arrive
-  from (the README, the meeting note, the related entity). A page nothing links to is invisible;
-  a name nobody can click is a dead end. **Link ACROSS workspaces freely** — a link that doesn't
-  resolve for some reader isn't breakage, it's the boundary made visible: it shows how this
-  workspace connects to the others, that the thing exists, and who to ask. Never suppress a true
-  link because someone might lack the mount.
-- **Chat replies interlink like pages do.** Every entity you mention is a `[[wikilink]]`; every file
-  you name is its path in backticks (e.g. `kg/entities/person/jane-liu.md`, `README.md`) — the
-  terminal renders both clickable. A bare name the reader can't click is a dead end.
+- **How you write — the medium, the expression, the web — is governed by § Writing for this medium
+  below.** It applies to every page AND every chat reply.
