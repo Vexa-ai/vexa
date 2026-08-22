@@ -1,26 +1,71 @@
 "use client";
-/** The room's pages — the context made visible. Header shares the shell's one header row;
- *  chips appear only when there is a choice. */
+/** The room's pages — the context made visible. Header shares the shell's one header row:
+ *  a BREADCRUMB of the open doc (workspace › folders › file) with a View/Edit toggle at the
+ *  right (Codex-style, founder ruling 2026-08-22) — docs are EDITABLE in place; Save writes
+ *  through the mount-authorized API and commits. Chips appear only when there is a choice. */
+import { useEffect, useState } from "react";
 import { MdxDoc } from "../ui-kit/MdxDoc";
+import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import type { Page } from "./types";
 import { header, surface, type as ty } from "./tokens";
 
-export function PagesPanel(p: { pages: Page[]; docPath: string; onOpen: (pg: Page) => void; body: string | null }) {
+export function PagesPanel(p: {
+  pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
+  body: string | null; onSaved?: () => void;
+}) {
+  const [mode, setMode] = useState<"view" | "edit">("view");
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  // a new doc (or fresh content) always lands in VIEW; edit starts from the live body
+  useEffect(() => { setMode("view"); }, [p.docPath, p.docSlug]);
+
+  const crumbs = [p.docSlug ?? "personal", ...p.docPath.split("/").filter(Boolean)];
+  const save = async () => {
+    setSaving(true);
+    try {
+      await writeWorkspaceFile(p.docPath, draft, { slug: p.docSlug });
+      setMode("view"); p.onSaved?.();
+    } catch (e) {
+      window.alert(`Could not save: ${e instanceof Error ? e.message : e}`);
+    } finally { setSaving(false); }
+  };
+
   return (
     <>
       <div style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", overflowX: "auto", borderLeft: "1px solid var(--line)" }}>
-        <span style={{ ...ty.lens, flex: "none" }}>Pages</span>
+        {/* breadcrumb — the doc's address; the file name is the strong segment */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>
+          {crumbs.map((c, i) => (
+            <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {i > 0 && <span style={{ color: "var(--t3)", opacity: 0.6 }}>›</span>}
+              <span style={{ color: i === crumbs.length - 1 ? "var(--t1)" : "var(--t3)", fontWeight: i === crumbs.length - 1 ? 600 : 400 }}>{c}</span>
+            </span>
+          ))}
+        </span>
+        <span style={{ flex: 1 }} />
         {p.pages.length > 1 && p.pages.map((pg) => (
           <button key={pg.path} onClick={() => p.onOpen(pg)}
             style={{ ...ty.chip, flex: "none", color: p.docPath === pg.path ? "var(--accent)" : "var(--t2)", background: p.docPath === pg.path ? "var(--accentbg)" : surface.raised, border: `1px solid ${p.docPath === pg.path ? "var(--accent)" : "transparent"}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
             {pg.label}
           </button>
         ))}
+        {p.body !== null && (mode === "view"
+          ? <button onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }}
+              style={{ ...ty.chip, flex: "none", color: "var(--t2)", background: surface.raised, border: "1px solid transparent", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>Edit</button>
+          : <>
+              <button onClick={() => setMode("view")}
+                style={{ ...ty.chip, flex: "none", color: "var(--t3)", background: "transparent", border: "none", padding: "3px 6px", cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => void save()} disabled={saving}
+                style={{ ...ty.chip, flex: "none", color: "#16181d", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
+            </>)}
       </div>
-      <div style={{ ...ty.body, gridRow: 2, gridColumn: 3, overflowY: "auto", padding: "18px 20px 40px", background: surface.pages, borderLeft: "1px solid var(--line)", minHeight: 0, lineHeight: 1.6, color: "var(--t1)" }}>
+      <div style={{ ...ty.body, gridRow: 2, gridColumn: 3, overflowY: "auto", padding: mode === "edit" ? 0 : "18px 20px 40px", background: surface.pages, borderLeft: "1px solid var(--line)", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: mode === "edit" ? "flex" : undefined }}>
         {p.body === null
           ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
-          : <MdxDoc>{p.body}</MdxDoc>}
+          : mode === "edit"
+            ? <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
+                style={{ flex: 1, width: "100%", minHeight: 0, resize: "none", background: "var(--bg)", border: "none", outline: "none", color: "var(--t1)", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.65, padding: "16px 18px" }} />
+            : <MdxDoc>{p.body}</MdxDoc>}
       </div>
     </>
   );

@@ -313,7 +313,7 @@ export function MinutesShell() {
         style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
       </div>
-      <PagesPanel pages={pages} docPath={docPath} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} />
+      <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
       {ceremony && <DeleteCeremony name={ceremony.name} verb={ceremony.verb} detail={ceremony.detail}
         onCancel={() => setCeremony(null)}
         onConfirm={() => { const c = ceremony; setCeremony(null); void c.run(); }} />}

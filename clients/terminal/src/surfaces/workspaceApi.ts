@@ -40,6 +40,11 @@ export async function archiveWorkspace(slug: string, archived: boolean): Promise
   });
 }
 
+/** WRITE one doc — the in-place page editor. Server enforces mount-rule authorization. */
+export async function writeWorkspaceFile(path: string, content: string, opts?: { slug?: string }): Promise<{ path: string; written: boolean }> {
+  return getJson(`/api/workspace/file`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content, slug: opts?.slug }) });
+}
+
 /** RESET a structural folder (personal baseline, or _global for admins) back to the seed. */
 export async function resetWorkspace(target: "personal" | "_global"): Promise<{ target: string; reset: boolean }> {
   return getJson(`/api/workspace/reset`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });

@@ -1500,6 +1500,46 @@ def create_app(
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
 
+    @app.put("/api/workspace/file")
+    def ws_file_write(request: Request, body: dict = Body(...)):
+        """WRITE one doc — the terminal's in-place page editor (Codex-style). Authorization mirrors the
+        MOUNT rules, not the read rules: own baseline/_system always; a shared workspace needs
+        contributor+; `_global` only the admin allowlist. Commits so history stays honest."""
+        import shutil as _sh  # noqa: F401 — parity with ws_reset's import style
+        import subprocess as _sp
+        subject = subject_of(request)
+        rel = str(body.get("path") or "").strip()
+        slug = str(body.get("slug") or "").strip() or None
+        content = body.get("content")
+        if not rel or rel.startswith("/") or ".." in rel.split("/") or not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="need a relative path and string content")
+        if slug == system_mounts.GLOBAL_SLUG:
+            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
+            if str(subject) not in admins:
+                raise HTTPException(status_code=403, detail="only an org admin may edit _global")
+            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
+                          Path(settings.global_system_workspace_path or "/nonexistent")]
+            target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
+        else:
+            if slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
+                try:
+                    membership_mod.require_role(wsr.root, slug, subject, "contributor")
+                except MembershipError:
+                    pass  # not shared — fall through; _read_target 403s anything outside the active set
+            target = _read_target(request, slug)
+        f = (target / rel).resolve()
+        if target.resolve() not in f.parents:
+            raise HTTPException(status_code=400, detail="invalid path")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content, encoding="utf-8")
+        if (target / ".git").is_dir():
+            _sp.run(["git", "-C", str(target), "add", rel], check=False, capture_output=True)
+            _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
+                     "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
+        return {"path": rel, "written": True}
+
     @app.get("/api/workspace/git")
     def ws_git(request: Request, slug: Optional[str] = None):
         """Author-attributed source-control state (branch · working changes · recent commits) of a
