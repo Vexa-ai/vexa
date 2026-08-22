@@ -14,11 +14,11 @@ panel), `app/App.tsx` (invite consent), `surfaces/tokens.tsx` (the GitHub token)
 
 ## The mount model — three tiers
 
-Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
+Every agent turn mounts an ordered set `[_global, *normal, _system]`:
 
 | Tier | Slug | Access | Always mounted | Purpose |
 |---|---|---|---|---|
-| **Global system** | `_global` | **read-only** (fs `:ro`) | yes (when configured) | Platform-owned self-awareness: a synced **Vexa branch** (code + docs) + behaviour/skills. One copy, central. |
+| **Global system** | `_global` | **read-only** (fs `:ro`) | yes | Platform-owned self-awareness: a synced **Vexa branch** (code + docs) + behaviour/skills. One copy, central. |
 | **Normal** | `<id>` / `.attached/<subject>/<slug>` | read-write | opt-in (flat, equal rank) | The user's own + shared knowledge workspaces — all the **same rank** (see below). |
 | **Private system** | `_system` | **read-write** | yes | Per-user private store — **who you're helping** (`identity.md`), chats/sessions, settings, routines, membership/attachment records. Never shared. |
 
@@ -37,8 +37,10 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
   **invisible** in the workspace lists and **non-sharable** — both are in `RESERVED_SLUGS` and
   `ensure_workspace_shareable` refuses them (✅). `_system` can be **surfaced read-only in the files
   panel via a toggle, hidden by default** (the key icon in the KNOWLEDGE header) (✅).
-- `_global` is provisioned from `GLOBAL_SYSTEM_WORKSPACE_PATH` (a host dir / synced branch); the
-  runtime gives it its own `:ro` bind. Skips gracefully (logs) when unset/absent. (✅ wired;
+- `_global` is provisioned from `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH` (a host dir / synced branch); the
+  runtime gives it its own `:ro` bind. Dispatch fails closed when unset/absent, and the worker loads
+  its `CLAUDE.md`, `PURPOSE`, and `README.md` into every turn so Personal reasoning starts with shared
+  organisation facts rather than merely having them available on disk. (✅ wired;
   auto-sync of the branch is a ⬜ follow-up.)
 - Code: `core/agent/control_plane/system_mounts.py` (`GLOBAL_SLUG`, `SYSTEM_SLUG`, `global_mount`,
   `system_mount`, `system_store_path`), the mount stack in `dispatch.py`, binds in

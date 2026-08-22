@@ -58,7 +58,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     const tok = setCookies.find((c) => c.name === "vexa-token");
     const info = setCookies.find((c) => c.name === "vexa-user-info");
     expect(tok?.value).toBe("minted-tok");
-    expect(JSON.parse(info!.value)).toEqual({ email: "test-a@b.com", name: "A" });
+    expect(JSON.parse(info!.value)).toEqual({ id: 42, email: "test-a@b.com", name: "A" });
     expect((tok?.opts as { httpOnly?: boolean })?.httpOnly).toBe(true);
   });
 

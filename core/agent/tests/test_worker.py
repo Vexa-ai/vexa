@@ -698,6 +698,26 @@ def test_mounts_preamble_declares_the_three_tiers_verbatim():
     assert "`_global`" in txt and "`_system`" in txt
 
 
+def test_global_context_is_loaded_proactively_from_the_global_mount(tmp_path):
+    """A sibling _global mount is not auto-loaded by either harness, so the engine must put its
+    authoritative entry files into every turn without waiting for the user to name the tier."""
+    from worker import worker
+    global_dir = tmp_path / "_global"
+    global_dir.mkdir()
+    (global_dir / "CLAUDE.md").write_text("Always use the organisation's shared terminology.")
+    (global_dir / "README.md").write_text("Our company is Acme Central Bank.")
+
+    txt = worker.global_context_preamble([
+        {"slug": "_global", "path": str(global_dir), "role": "global", "write": False},
+        {"slug": "personal", "path": str(tmp_path / "personal"), "role": "private", "write": True},
+    ])
+
+    assert "Organisation context (mandatory; loaded from `_global`)" in txt
+    assert "Always use the organisation's shared terminology." in txt
+    assert "Our company is Acme Central Bank." in txt
+    assert "including while working in Personal" in txt
+
+
 def test_read_only_global_mount_is_never_committed(tmp_path, monkeypatch):
     """The _global GLOBAL SYSTEM tier is READ-ONLY: even if it appears in VEXA_MOUNTS it must be EXCLUDED
     from the per-mount commit path (agents never write, thus never commit, _global)."""

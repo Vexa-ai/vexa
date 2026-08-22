@@ -145,6 +145,31 @@ def test_worker_create_spec_uses_worker_image():
     assert h._impl == "vexa-worker-foo-chat"  # cosmetic container name preserved
 
 
+def test_worker_dev_mount_is_first_on_pythonpath(monkeypatch):
+    """The dev bind must be executable, not merely present beside the baked /app packages."""
+    routes = {
+        ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),
+        ("POST", "/containers/cid123/start"): FakeResp(204),
+    }
+    monkeypatch.setenv("VEXA_AGENT_SRC_MOUNT", "/host/core/agent")
+    b, sess = _backend(routes)
+    captured = {}
+    orig = sess.request
+
+    def spy(method, url, **kw):
+        if method == "POST" and "/containers/create" in url:
+            captured.update(kw.get("json", {}))
+        return orig(method, url, **kw)
+
+    sess.request = spy
+    b.start("agent-hot-chat", Runnable(image=TARGET, command=["python", "-m", "worker"]), {})
+
+    assert "/host/core/agent:/app/src/agent_api:ro" in captured["HostConfig"]["Binds"]
+    env = dict(item.split("=", 1) for item in captured["Env"])
+    assert env["PYTHONPATH"] == "/app/src/agent_api:/app"
+    assert captured["WorkingDir"] == "/app/src/agent_api"
+
+
 def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     routes = {
         ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),

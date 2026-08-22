@@ -52,6 +52,13 @@ def _default_subject(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mandatory_global_workspace(monkeypatch, tmp_path_factory):
+    """Dispatch tests obey production's mandatory _global invariant by default."""
+    global_dir = tmp_path_factory.mktemp("global-system")
+    monkeypatch.setenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", str(global_dir))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_home(monkeypatch, tmp_path_factory):
     """Point HOME at a per-test temp dir. The claude-code harness rewires ``$HOME/.claude/projects``
     into the workspace (``_link_chat_into_workspace``) — designed for the disposable per-turn

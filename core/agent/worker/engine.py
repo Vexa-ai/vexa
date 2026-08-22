@@ -169,6 +169,54 @@ def kg_links_preamble() -> str:
     )
 
 
+_GLOBAL_CONTEXT_FILES = ("CLAUDE.md", "PURPOSE", "README.md")
+_GLOBAL_CONTEXT_MAX_CHARS = 48_000
+
+
+def global_context_preamble(mounts: list[dict]) -> str:
+    """Load the organisation tier into the turn, rather than merely telling the model it exists.
+
+    Agent harnesses auto-load instructions from the current working directory, but ``_global`` is a
+    sibling mount. Without this bridge the model consults it only when a user explicitly says
+    "global", which makes Personal onboarding ask for organisation facts already known centrally.
+    Read the small authoritative entry files on every turn so live _global edits take effect on the
+    next message. The cap bounds prompt growth while keeping the beginning of each authored file.
+    """
+    mount = next((m for m in mounts if m.get("role") == "global" or m.get("slug") == "_global"), None)
+    if not mount:
+        return ""
+    root = Path(str(mount["path"]))
+    remaining = _GLOBAL_CONTEXT_MAX_CHARS
+    sections: list[str] = []
+    for name in _GLOBAL_CONTEXT_FILES:
+        path = root / name
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not content.strip() or remaining <= 0:
+            continue
+        excerpt = content[:remaining]
+        remaining -= len(excerpt)
+        sections.append(f"### `{path}`\n\n{excerpt.rstrip()}")
+    if not sections:
+        return (
+            "## Organisation context (mandatory)\n\n"
+            f"Before reasoning, read `{root}/CLAUDE.md`, `{root}/PURPOSE`, and `{root}/README.md` "
+            "when present. Use organisation facts proactively; do not ask the user for facts already "
+            "recorded in `_global`.\n\n"
+        )
+    return (
+        "## Organisation context (mandatory; loaded from `_global`)\n\n"
+        "This is the shared organisational ground for every turn. Apply its instructions and use its "
+        "facts proactively, including while working in Personal. Before asking for a company, employer, "
+        "organisation, terminology, policy, or objective, answer from this context when it already settles "
+        "the question. Personal context identifies the person; it does not erase organisation context.\n\n"
+        + "\n\n".join(sections)
+        + "\n\n"
+    )
+
+
 def mounts_preamble(mounts: list[dict]) -> str:
     """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
     paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
@@ -334,7 +382,7 @@ def run_turn_over_workspace(
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + prompt
+    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + global_context_preamble(mounts) + prompt
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras)
     first = next(gen, None)

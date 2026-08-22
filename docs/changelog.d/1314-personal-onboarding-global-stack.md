@@ -1,0 +1,3 @@
+Personal workspace setup now always opens the personal discovery flow, and every project/agent stack represents the mandatory `_global` tier first. Agent dispatch fails closed when `_global` is not configured instead of silently running without organisation context. The worker also loads `_global`'s authoritative entry files into every turn, so Personal conversations use known company and organisation facts proactively rather than asking the user to repeat them.
+
+The compose hot loop now prepends its mounted agent source to worker `PYTHONPATH`; newly spawned workers actually execute branch edits instead of silently importing the image's baked packages.

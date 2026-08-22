@@ -1118,7 +1118,7 @@
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
-   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn / meeting copilot",
+   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn / meeting copilot; every dispatch mounts the ordered [_global, active workspaces, _system] stack, fails closed without _global, and loads its authoritative entry context into the turn",
    "metadata": [
     {
      "path": "core/agent/worker"

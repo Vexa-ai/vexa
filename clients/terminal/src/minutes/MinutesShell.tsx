@@ -16,7 +16,7 @@ import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
 import { ProjectComposer } from "./ProjectComposer";
 import { DeleteCeremony } from "./DeleteCeremony";
-import { loadProjects, saveProjects, type Project } from "./projects";
+import { loadProjects, projectMountStack, saveProjects, type Project } from "./projects";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail, isHeld } from "./Rail";
 import { clampPagesWidth } from "./pagesWidth";
@@ -219,7 +219,7 @@ export function MinutesShell() {
     : sel.kind === "org" ? "project · admin" : sel.kind === "project" ? "project" : "project · yours";
   const mounts = sel.kind === "org" ? "[_global rw · _system]"
     : sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
-    : activeProj ? `[${activeProj.set.join(" · ")} · _system]` : "[_global · personal · _system]";
+    : activeProj ? `[${projectMountStack(activeProj.set).join(" · ")}]` : "[_global · personal · _system]";
 
   const addChat = (projectId: string, label: string, kick?: string, projOverride?: Project) => {
     const id = `pchat-${Date.now().toString(36)}`;
@@ -262,7 +262,7 @@ export function MinutesShell() {
   };
   const setupPersonal = () => {
     addChat("personal", "onboarding");
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 500);
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT, { detail: { kind: "personal" } })), 500);
   };
 
   const newWorkspace = async () => {

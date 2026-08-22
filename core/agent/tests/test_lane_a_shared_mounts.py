@@ -155,8 +155,11 @@ def test_dispatch_mount_set_includes_shared_read_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     idx = _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    global_dir = tmp_path / "global"
+    global_dir.mkdir()
     settings = SimpleNamespace(
-        workspaces_dir=str(tmp_path), global_system_workspace_path="", global_system_workspace_ref="",
+        workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
+        global_system_workspace_ref="", global_admin_subjects="",
     )
 
     stack = build_mount_set(settings, "contrib1", idx.list("contrib1"))
@@ -334,8 +337,11 @@ def test_dispatch_without_index_is_private_only(tmp_path):
     from control_plane.dispatch import build_mount_set
 
     _grant(tmp_path, "wsA", owner="owner1", subject="contrib1", role="contributor")
+    global_dir = tmp_path / "global"
+    global_dir.mkdir()
     settings = SimpleNamespace(
-        workspaces_dir=str(tmp_path), global_system_workspace_path="", global_system_workspace_ref="",
+        workspaces_dir=str(tmp_path), global_system_workspace_path=str(global_dir),
+        global_system_workspace_ref="", global_admin_subjects="",
     )
 
     stack = build_mount_set(settings, "contrib1", None)   # no memberships passed → no shared mounts

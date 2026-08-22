@@ -226,6 +226,11 @@ class DockerBackend:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
+        if dev_src:
+            # The worker image normally imports its baked packages from /app. Put the whole hot
+            # agent source tree first or the bind above is decorative: `python -m worker` otherwise
+            # resolves /app/worker and silently runs stale code.
+            spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
         for key in (
             # llm-module dials (provider-agnostic): completion endpoint/credential/model + the
             # harness runner selection. Dispatch-stamped values win (`key not in spawn_env`).
@@ -260,6 +265,10 @@ class DockerBackend:
             "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
             "HostConfig": host_config,
         }
+        if dev_src:
+            # `python -m worker` prepends its cwd to sys.path ahead of PYTHONPATH. Start inside the
+            # mounted tree as well, or /app/worker still wins despite the PYTHONPATH above.
+            payload["WorkingDir"] = "/app/src/agent_api"
         if runnable.command:
             payload["Cmd"] = list(runnable.command)
 

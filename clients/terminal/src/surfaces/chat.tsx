@@ -18,7 +18,7 @@ import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -916,15 +916,19 @@ export function Chat({ params = {} }: ChatProps) {
   // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
   const onboardingArmedRef = useRef(false);
   useEffect(() => {
-    const onSeed = () => {
+    const onSeed = (event: Event) => {
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       const key = chatKey;
+      const kind = (event as CustomEvent<{ kind?: OnboardingSeedKind }>).detail?.kind ?? "contextual";
+      const greeting = onboardingGreeting(
+        kind,
+        minutesOnly(),
+        liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))),
+      );
       updateChatState(key, (s) => (
         s.turns.length
           ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
-                ? (liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))) ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
-                : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
+          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: greeting, ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
       ));
       onboardingArmedRef.current = true;
     };
