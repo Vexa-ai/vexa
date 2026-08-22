@@ -1415,6 +1415,13 @@ def create_app(
         # it can only ever resolve to THIS subject's own .system store — never another user's.
         if target == system_mounts.SYSTEM_SLUG:
             return system_mounts.system_store_path(wsr.root, subject)
+        # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
+        # so the read API mirrors that; writes still go only through the admin's worker mount.
+        if target == system_mounts.GLOBAL_SLUG:
+            g = wsr.root / system_mounts.GLOBAL_SLUG
+            if g.exists():
+                return g
+            raise HTTPException(status_code=404, detail="the organisation tier is not configured")
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))

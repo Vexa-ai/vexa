@@ -16,8 +16,9 @@ import {
   readWorkspaceFile, type Membership,
 } from "../surfaces/workspaceApi";
 import { MdxDoc } from "../ui-kit/MdxDoc";
+import { RoomOnboarding } from "../surfaces/roomOnboarding";
 
-type Sel = { kind: "personal" | "shared" | "org" | "meeting"; id: string; label: string };
+type Sel = { kind: "personal" | "shared" | "org" | "meeting"; id: string; label: string; session?: string; chatLabel?: string };
 type View = "meetings" | "rooms";
 
 const TERMINAL = new Set(["completed", "stopped", "failed"]);
@@ -56,12 +57,23 @@ export function MinutesShell() {
   const [docPath, setDocPath] = useState<string>("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   const [docBody, setDocBody] = useState<string | null>(null);
+  const [docNonce, setDocNonce] = useState(0);      // select() may re-land on identical path/slug — force the refetch
   const [pages, setPages] = useState<{ path: string; slug?: string; label: string }[]>([]);
+  const [wiz, setWiz] = useState(false);            // the conversational workspace wizard (real)
+  const [extra, setExtra] = useState<Record<string, { id: string; label: string }[]>>(() => {
+    try { return JSON.parse(localStorage.getItem("vexa.minutes.chats") || "{}"); } catch { return {}; }
+  });
+  const addChat = (roomKey: string, base: string) => {
+    const id = `${base}-c${Date.now().toString(36)}`;
+    const next = { ...extra, [roomKey]: [...(extra[roomKey] ?? []), { id, label: "new chat" }] };
+    setExtra(next); try { localStorage.setItem("vexa.minutes.chats", JSON.stringify(next)); } catch { /* ignore */ }
+    return id;
+  };
 
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
   const select = useCallback(async (s: Sel) => {
-    setSel(s); setDocBody(null);
+    setSel(s); setDocBody(null); setDocNonce((n) => n + 1);
     lastSel.current[s.kind === "meeting" ? "meetings" : "rooms"] = s;
     try {
       if (s.kind === "shared") {
@@ -77,9 +89,15 @@ export function MinutesShell() {
     else if (s.kind === "meeting") {
       const m = meetings.find((x) => x.id === s.id);
       const native = (m as { native_id?: string } | undefined)?.native_id;
-      const p = [ ...(native ? [{ path: `kg/entities/meeting/${native}.md`, label: "Minutes" }, { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" }] : []), { path: "README.md", label: "Personal page" } ];
+      const held = m ? isHeld(m) : false;
+      // Pre-meeting a room has no minutes and no transcript — offering those chips would be
+      // empty promises. Before: the personal page (the brief lives in chat). After: minutes first.
+      const p = held && native
+        ? [{ path: `kg/entities/meeting/${native}.md`, label: "Minutes" }, { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" }, { path: "README.md", label: "Personal page" }]
+        : [{ path: "README.md", label: "Personal page" }];
       setPages(p); setDocPath(p[0].path); setDocSlug(undefined);
-    } else { setPages([{ path: "README.md", label: "This room's page" }]); setDocPath("README.md"); setDocSlug(undefined); }
+    } else if (s.kind === "org") { setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global"); }
+    else { setPages([{ path: "README.md", label: "This room's page" }]); setDocPath("README.md"); setDocSlug(undefined); }
   }, [meetings]);
 
   // MODE switch: swap the whole context, restoring the view's last selection
@@ -101,9 +119,10 @@ export function MinutesShell() {
       .then((c) => { if (!dead) setDocBody(c); })
       .catch(() => { if (!dead) setDocBody(null); });
     return () => { dead = true; };
-  }, [docPath, docSlug, sel.id]);
+  }, [docPath, docSlug, sel.id, docNonce]);
 
   const session = useMemo(() => {
+    if (sel.session) return sel.session;
     if (sel.kind === "personal") return "main";
     if (sel.kind === "shared") return `room-${sel.id.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24)}`;
     if (sel.kind === "org") return "org-setup";
@@ -144,11 +163,26 @@ export function MinutesShell() {
           {past.length > 0 && <><h2 style={{ ...S.lens, marginTop: 12 }}>Past</h2>{past.map(meetRow)}</>}
           {meetings.length === 0 && <div style={{ padding: "2px 8px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>They arrive by invitation.</div>}
         </>) : (<>
+          <h2 style={S.lens}>Rooms<button title="New room" aria-label="New room" onClick={() => setWiz(true)} style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--t3)", fontSize: 15, cursor: "pointer" }}>+</button></h2>
           <div style={{ marginBottom: 10 }}>
-            <div style={S.roomhead}>Personal</div>
-            <button style={S.chatrow(sel.kind === "personal")} onClick={() => void select({ kind: "personal", id: "personal", label: "Personal" })}>
-              <span style={S.dot(sel.kind === "personal")} />main
+            <div style={S.roomhead}>Personal<button title="New chat in Personal" aria-label="New chat in Personal" onClick={() => { const id = addChat("personal", "chat"); void select({ kind: "personal", id: "personal", label: "Personal", session: id, chatLabel: "new chat" }); }} style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--t3)", fontSize: 13, cursor: "pointer" }}>+</button></div>
+            <button style={S.chatrow(sel.kind === "personal" && !sel.session)} onClick={() => void select({ kind: "personal", id: "personal", label: "Personal" })}>
+              <span style={S.dot(sel.kind === "personal" && !sel.session)} />main
             </button>
+            {(extra["personal"] ?? []).map((c) => (
+              <button key={c.id} style={S.chatrow(sel.session === c.id)} onClick={() => void select({ kind: "personal", id: "personal", label: "Personal", session: c.id, chatLabel: c.label })}>
+                <span style={S.dot(sel.session === c.id)} />{c.label}
+              </button>
+            ))}
+            {meetings.map((m) => {
+              const on = sel.kind === "meeting" && sel.id === m.id;
+              return (
+                <button key={m.id} style={S.chatrow(on)} onClick={() => void select({ kind: "meeting", id: m.id, label: m.title.split(" — ")[0] })}>
+                  <span style={S.dot(on)} /><span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.title.split(" — ")[0]}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--t3)" }}>{isHeld(m) ? "held" : "upcoming"}</span>
+                </button>
+              );
+            })}
           </div>
           {memberships.map((m) => {
             const on = sel.kind === "shared" && sel.id === m.workspace_id;
@@ -167,6 +201,12 @@ export function MinutesShell() {
               <span style={S.dot(sel.kind === "org")} />setup
             </button>
           </div>
+          <h2 style={{ ...S.lens, marginTop: 14 }}>Workspaces<button title="New workspace — a conversation scaffolds it" aria-label="New workspace" onClick={() => setWiz(true)} style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--t3)", fontSize: 15, cursor: "pointer" }}>+</button></h2>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "2px 8px", fontSize: 12, color: "var(--t2)" }}>personal<span style={{ marginLeft: "auto", fontSize: 10, color: "var(--t3)" }}>you</span></div>
+          {memberships.map((m) => (
+            <div key={"ws-" + m.workspace_id} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "2px 8px", fontSize: 12, color: "var(--t2)" }}>{m.workspace_id}<span style={{ marginLeft: "auto", fontSize: 10, color: "var(--t3)" }}>{m.role}</span></div>
+          ))}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "2px 8px", fontSize: 12, color: "var(--t2)" }}>_global<span style={{ marginLeft: "auto", fontSize: 10, color: "var(--t3)" }}>everyone · ro</span></div>
         </>)}
 
         <div style={{ marginTop: "auto", fontSize: 11.5, color: "var(--t3)", padding: 8, lineHeight: 1.55, borderTop: "1px solid var(--line2)" }}>
@@ -179,7 +219,10 @@ export function MinutesShell() {
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px", borderBottom: "1px solid var(--line2)", background: "var(--sidebar)" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
-          <span style={{ fontWeight: 600, fontSize: 14 }}>{sel.label}</span>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>
+            <span style={{ color: "var(--t3)", fontWeight: 500 }}>{sel.kind === "meeting" ? "Personal › " : sel.kind === "org" ? "Organisation › " : `${sel.label} › `}</span>
+            {sel.kind === "meeting" ? sel.label : sel.kind === "org" ? "setup" : (sel.chatLabel ?? (sel.kind === "personal" ? "main" : "group thread"))}
+          </span>
           <span style={{ fontSize: 10.5, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--accent)", background: "var(--panel2)", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>{flavor}</span>
           <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 11.5, color: "var(--t3)" }}>{mounts}</span>
         </div>
@@ -190,8 +233,8 @@ export function MinutesShell() {
 
       <aside style={{ width: 390, flex: "none", borderLeft: "1px solid var(--line2)", background: "var(--sidebar)", display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line2)", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 10.5, letterSpacing: ".09em", textTransform: "uppercase", color: "var(--t3)", fontWeight: 600, marginRight: 4 }}>This room's pages</span>
-          {pages.map((p) => (
+          <span style={{ fontSize: 10.5, letterSpacing: ".09em", textTransform: "uppercase", color: "var(--t3)", fontWeight: 600, marginRight: 4 }}>Pages · this room's workspaces</span>
+          {pages.length > 1 && pages.map((p) => (
             <button key={p.path} onClick={() => { setDocPath(p.path); setDocSlug(p.slug); }}
               style={{ font: "500 12px inherit", fontFamily: "inherit", color: docPath === p.path ? "var(--accent)" : "var(--t2)", background: "var(--panel2)", border: `1px solid ${docPath === p.path ? "var(--accent)" : "var(--line2)"}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
               {p.label}
@@ -204,6 +247,7 @@ export function MinutesShell() {
             : <MdxDoc>{docBody}</MdxDoc>}
         </div>
       </aside>
+      {wiz && <RoomOnboarding onClose={() => setWiz(false)} onCreated={() => { setWiz(false); void listSharedMemberships().then(setMemberships).catch(() => undefined); }} />}
     </div>
   );
 }

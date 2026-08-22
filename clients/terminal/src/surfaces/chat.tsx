@@ -541,6 +541,23 @@ function routineCreationPrompt(commandText: string): string {
 
 type ChatProps = Partial<TabProps>;
 
+
+// MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
+// meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
+function minutesEmptyGreeting(session: string): string {
+  const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
+  if (session === "org-setup")
+    return "The organisation-tier conversation. What is decided here is written to _global and reaches every member's assistant on their next turn.";
+  if (session.startsWith("room-"))
+    return "This room's standing thread — shared with its members. Ask across everything the room's workspaces hold.";
+  if (session.startsWith("meet-")) {
+    const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+    return strip(held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
+  }
+  const anyHeld = liveMeetingsNow().some((mm) => ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+  return strip(anyHeld ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
+}
+
 export function Chat({ params = {} }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
@@ -1071,10 +1088,8 @@ export function Chat({ params = {} }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
-      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : (minutesOnly()
-          ? (liveMeetingsNow().some((mm) => ["completed","stopped","failed"].includes(String((mm as { live_status?: string }).live_status)))
-              ? MINUTES_ONBOARDING_GREETING.replace("👋 ", "")
-              : MINUTES_PREP_GREETING.replace("👋 ", "")).replace(/\*\*/g, "")
+      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: minutesOnly() ? 14 : 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
+          ? minutesEmptyGreeting(session)
           : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
     </AgentWindow>
   );
