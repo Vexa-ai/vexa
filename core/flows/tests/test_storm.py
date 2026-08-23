@@ -140,3 +140,47 @@ def test_storm():
             _storm_once(seed)
         except AssertionError as e:
             raise AssertionError(f"[STORM_SEED={seed}] {e}") from e
+
+
+def test_engine_restart_with_durable_db_never_repeats_effects():
+    """The gap the live witness exposed (duplicate confirmation emails): the storm never
+    restarted the ENGINE. With a durable DB, a restarted engine must resume — same reactions,
+    receipts honored, zero repeated effects. (The witness runner's per-process throwaway sqlite
+    is the anti-pattern this test pins: state must outlive the process.)"""
+    import os, tempfile
+    from flows import SqliteDB, admit, tick, reclaim
+    from flows_defs.defs import register_flows
+    from flows_steps.fakes import FakeWorld, build_registry
+    from fixtures import INVITE_REFS, drain
+    from flows import FakeClock
+
+    path = tempfile.mktemp(suffix=".db")
+    try:
+        world = FakeWorld()
+        reg = build_registry(world); register_flows(reg)
+        db, clock = SqliteDB(path), FakeClock()
+        admit(db, reg, clock, source_event_id="r-1", event_type="invite.received",
+              subject_refs=INVITE_REFS)
+        for _ in range(3):
+            tick(db, reg, clock)                       # a few steps happen, then the ENGINE dies
+
+        # restart: NEW process state (fresh world/registry/clock) + the SAME database
+        world2 = FakeWorld()
+        reg2 = build_registry(world2); register_flows(reg2)
+        db2 = SqliteDB(path)
+        clock2 = FakeClock(clock.now())
+        # duplicate delivery arrives after the restart too
+        assert admit(db2, reg2, clock2, source_event_id="r-1", event_type="invite.received",
+                     subject_refs=INVITE_REFS) == 0     # dedup survives the restart
+        world2.meeting_state["m-1"] = {"completed": True, "final": True}
+        drain(db2, reg2, clock2)
+        rows = db2.execute("SELECT status FROM reaction")
+        assert [r[0] for r in rows] == ["done"]
+        # effects done before the crash are NOT repeated after it: receipts carried them over,
+        # so the restarted world performed only the remaining steps
+        pre = {(r, a) for (r, a) in world.emails}
+        post = {(r, a) for (r, a) in world2.emails}
+        assert not (pre & post), f"repeated effects across restart: {pre & post}"
+    finally:
+        try: os.unlink(path)
+        except OSError: pass
