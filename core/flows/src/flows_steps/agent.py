@@ -14,14 +14,21 @@ from .common import AGENT_API, http, scaffolded, ws_file
 def history(uid: str, session: str) -> list:
     code, hist = http("GET", f"{AGENT_API}/api/sessions/{urllib.parse.quote(session)}/history",
                       {"X-User-Id": uid})
+    if isinstance(hist, dict):
+        hist = hist.get("turns", [])          # the endpoint wraps: {"turns": [...]}
     return hist if isinstance(hist, list) else []
 
 
 def dispatch_turn(uid: str, session: str, prompt: str) -> int:
-    """Fire an agent turn; returns the history length BEFORE it (the collect baseline)."""
+    """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
+    /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
+    the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening)."""
     base = len(history(uid, session))
-    http("POST", f"{AGENT_API}/api/chat", {"X-User-Id": uid},
-         {"prompt": prompt, "session": session}, timeout=8)
+    try:
+        http("POST", f"{AGENT_API}/api/chat", {"X-User-Id": uid},
+             {"prompt": prompt, "session": session}, timeout=3)
+    except Exception:  # noqa: BLE001 — stream-open timeout: the turn IS running
+        pass
     return base
 
 
