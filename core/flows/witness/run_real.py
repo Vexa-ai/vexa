@@ -142,11 +142,19 @@ def main() -> int:
             return Wait(seconds=10)
         git = rs.workspace_git(subject)
         commits = git.get("commits", [])
-        if len(commits) > state["baseline_commits"]:
-            sha = commits[0].get("sha", "")[:9]
-            say(f"agent committed the meeting note · {sha} · '{commits[0].get('msg','')[:60]}'")
+        # match the NOTE's commit by touched path/message — never by count (the witness caught the
+        # seed commit masquerading as the note: PASS with the wrong sha in the email)
+        note_commit = next((c for c in commits
+                            if "meeting" in (c.get("msg", "").lower())
+                            or any("kg/entities/meeting/" in f for f in (c.get("files") or []))), None)
+        if note_commit:
+            sha = note_commit.get("sha", "")[:9]
+            say(f"agent committed the meeting note · {sha} · '{note_commit.get('msg','')[:60]}'")
             state["sha"] = sha
-            return Done({"commit_sha": sha, "msg": commits[0].get("msg", "")})
+            note_path = next((f for f in (note_commit.get("files") or [])
+                              if f.startswith("kg/entities/meeting/")), None)
+            state["note_path"] = note_path
+            return Done({"commit_sha": sha, "note_path": note_path or ""})
         if ctx.clock_now - state["agent_started"] > 600:
             from flows import StepError
             raise StepError("agent produced no commit in 10min", retryable=False)
@@ -155,13 +163,17 @@ def main() -> int:
 
     @reg.step
     def email_participants(ctx):
+        # UI-LESS CONSTRAINT (founder 2026-08-23): the email IS the product — the note travels
+        # IN the body, verbatim from the committed artifact. No links to any UI.
         sha = ctx.prior["process_transcript"]["commit_sha"]
+        note_path = ctx.prior["process_transcript"].get("note_path") or state.get("note_path")
+        note = (rs.workspace_file(subject, note_path) if note_path else None) \
+            or "(note content unavailable — see reply)"
+        body = f"{note}\n\n—\nRecorded by Vexa · commit {sha} · reply to this email to ask about the meeting."
         for r in [p for p in ctx.refs["participants"] if p.endswith("@bank.com")]:
-            rs.send_mail(r, f"Summary: {ctx.refs['title']}",
-                         f"Meeting note committed ({sha}).\n"
-                         f"Open it: http://localhost:3010/?meeting={state['meeting_id']}\n")
-        say("summary emails → Mailpit (inside domain only)")
-        return Done({"sha": sha})
+            rs.send_mail(r, f"Minutes: {ctx.refs['title']}", body)
+        say("summary emails → Mailpit — the NOTE ITSELF in the body (UI-less)")
+        return Done({"sha": sha, "note_path": note_path})
 
     reg.flow(name="real_witness", version=1, on=INVITE,
              steps=[confirm_by_email, await_start, dispatch_bot, await_admission,

@@ -7,7 +7,11 @@
     └─ after the meeting: processing QUEUES BEHIND workspace readiness — blocked, following the
        human up on a cadence — then the agent updates the workspace, commits the summary, emails.
 
-Three flows, chained by facts; the deferred-processing queue is one `Block` + follow-up waits."""
+Three flows, chained by facts; the deferred-processing queue is one `Block` + follow-up waits.
+
+UI-LESS CONSTRAINT (founder 2026-08-23): email is the ENTIRE product surface — every artifact
+(confirmation, onboarding question, nudge, the meeting note itself) travels IN the email body,
+verbatim from the committed file. No UI links anywhere; replying to the email is the interface."""
 from __future__ import annotations
 
 from flows import Registry
