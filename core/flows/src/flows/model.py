@@ -65,11 +65,15 @@ class StepError(Exception):
 
 @dataclass
 class StepCtx:
-    """Everything a step sees: the reaction's refs, its effect key, prior step results."""
+    """Everything a step sees: the reaction's refs, its effect key, prior step results,
+    a DURABLE scratch dict (persisted after every step — survives worker restarts), and
+    emit() to publish a new fact (sub-flow composition)."""
     reaction: Reaction
     effect_key: str
     prior: dict[str, dict]
     clock_now: float
+    scratch: dict = field(default_factory=dict)
+    emit: Any = None                      # (event_type, source_id, refs) -> int reactions created
 
     @property
     def refs(self) -> dict:

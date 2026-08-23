@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS reaction (
   blocked_deadline double precision,
   lease_until      double precision,
   reason           text,
+  scratch          text,                            -- durable per-reaction scratch (JSON): conversation bookkeeping survives worker restarts
   created_at       double precision NOT NULL,
   updated_at       double precision NOT NULL
 );
@@ -43,4 +44,17 @@ CREATE TABLE IF NOT EXISTS signal (
   reason      text,
   created_at  double precision NOT NULL,
   consumed_at double precision
+);
+
+-- ── mail threading (the integration's state): outbound registers its Message-ID → session;
+--    inbound In-Reply-To resolves to the conversation it belongs to (threaded, never sender-matched)
+CREATE TABLE IF NOT EXISTS mail_thread (
+  message_id  text PRIMARY KEY,
+  subject_uid text NOT NULL,               -- platform user id the session belongs to
+  session     text NOT NULL,               -- agent chat session (onboarding · meet-<id> · group-<slug>)
+  created_at  double precision NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mail_cursor (
+  id   integer PRIMARY KEY CHECK (id = 1),
+  uid  integer NOT NULL
 );

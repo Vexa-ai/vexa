@@ -15,14 +15,15 @@ BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
 
 
-def _row_to_reaction(row: tuple) -> Reaction:
+def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
-     nra, bdl, lease, reason) = row
-    return Reaction(rid, sid, et, loads(refs), flow, ver, step, status, attempt, nra, bdl, lease, reason)
+     nra, bdl, lease, reason, scratch) = row
+    return (Reaction(rid, sid, et, loads(refs), flow, ver, step, status, attempt, nra, bdl, lease, reason),
+            loads(scratch))
 
 
 _COLS = ("reaction_id, source_event_id, event_type, subject_refs, flow, flow_version, "
-         "step, status, attempt, next_run_at, blocked_deadline, lease_until, reason")
+         "step, status, attempt, next_run_at, blocked_deadline, lease_until, reason, scratch")
 
 
 def claim(db: DB, clock: Clock, *, lease_s: float = LEASE_S) -> Optional[Reaction]:
@@ -39,15 +40,20 @@ def claim(db: DB, clock: Clock, *, lease_s: float = LEASE_S) -> Optional[Reactio
               AND status IN ('admitted','retrying')
             RETURNING {_COLS}""",
         {"now": now, "lease": now + lease_s})
-    return _row_to_reaction(rows[0]) if rows else None
+    if not rows:
+        return None
+    r, scratch = _row_to_reaction(rows[0])
+    r._scratch = scratch  # type: ignore[attr-defined]
+    return r
 
 
 def effect_key(r: Reaction, target: str = "") -> str:
     return f"{r.reaction_id}:{r.step}" + (f":{target}" if target else "")
 
 
-def tick(db: DB, registry: Registry, clock: Clock) -> bool:
-    """One unit of work. Returns False when nothing was due (caller sleeps poll_ms)."""
+def tick(db: DB, registry: Registry, clock: Clock, *, emit=None) -> bool:
+    """One unit of work. Returns False when nothing was due (caller sleeps poll_ms).
+    ``emit`` (optional) lets steps publish facts: (event_type, source_id, refs) -> int."""
     r = claim(db, clock)
     if r is None:
         return False
@@ -72,13 +78,20 @@ def tick(db: DB, registry: Registry, clock: Clock) -> bool:
 
     receipts.reserve(db, key, r.reaction_id, r.step, clock)          # commit point A
     ctx = StepCtx(reaction=r, effect_key=key,
-                  prior=receipts.prior(db, r.reaction_id), clock_now=clock.now())
+                  prior=receipts.prior(db, r.reaction_id), clock_now=clock.now(),
+                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit)
+    def _save_scratch() -> None:
+        db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
+                   {"s": dumps(ctx.scratch), "rid": r.reaction_id})
     try:
         out = registry.steps[r.step](ctx)
+        _save_scratch()
     except StepError as e:
+        _save_scratch()
         _retry_or_fail(db, r, clock, str(e), retryable=e.retryable)
         return True
     except Exception as e:  # noqa: BLE001 — an unexpected crash is retryable but visible
+        _save_scratch()
         _retry_or_fail(db, r, clock, f"unexpected: {e!r}", retryable=True)
         return True
 
