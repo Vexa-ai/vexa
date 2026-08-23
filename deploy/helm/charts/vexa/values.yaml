@@ -459,3 +459,13 @@ podDisruptionBudgets:
   agentApi:
     enabled: false        # single-replica (shared workspace); don't block drains
     minAvailable: 1
+
+# ── Vexa Minutes flows tier (off by default; the channel publisher pins the image digest) ──
+flows:
+  enabled: false
+  image: vexaai/v012-flows:dev        # digest-pinned per release by the publisher
+  workerReplicas: 2
+  apiKey: ""
+  mail:
+    address: ""
+    appPassword: ""
