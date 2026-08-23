@@ -2,8 +2,11 @@
 /** core/flows isolation (P2): the ENGINE (src/flows) imports stdlib only at module scope —
  *  no domains, no third-party, no steps/defs. Steps/defs may import the engine, never a domain
  *  package directly (HTTP only). Mirrors the terminal's check-isolation contract. */
-const { readdirSync, readFileSync, statSync } = require("node:fs");
-const { join } = require("node:path");
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const ROOT = join(__dirname, "..");
 const STDLIB = new Set(["__future__","dataclasses","typing","json","time","uuid","sqlite3",
