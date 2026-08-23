@@ -82,6 +82,8 @@ def build(reg: Registry, db) -> None:
             body += ("\n\nOne thing before your minutes can flow: your workspace isn't set up yet — "
                      "answer the setup email that follows (it's a short conversation, not a form).")
         mid = mx.send(ctx.refs["organizer"], f"Vexa will join: {ctx.refs['title']}", body)
+        # the ack is a thread anchor too: replying to the meeting confirmation is a conversation
+        mx.register_thread(db, mid, uid, "main" if ready else "onboarding")
         return Done({"message_id": mid, "workspace_ready": ready}, provider_ref=mid)
 
     @reg.step

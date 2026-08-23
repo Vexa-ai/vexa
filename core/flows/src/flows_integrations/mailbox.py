@@ -129,7 +129,47 @@ def main() -> int:
                                                     "organizer": frm})
                             print(f"threaded reply {frm} → {session} → admitted {n}", flush=True)
                         elif frm != addr:
-                            print(f"unthreaded mail from {frm} ignored ({msg.get('Subject','')[:40]!r})", flush=True)
+                            # ANY email from a KNOWN user gets a conversation (founder 2026-08-23):
+                            # unfinished setup → the onboarding session; otherwise their MAIN agent,
+                            # which reads the workspace (meeting notes included) and can answer
+                            # anything — including questions about meetings. Unknown senders: ignored.
+                            from flows_steps.common import ADMIN_API, ADMIN_KEY, http as _http, scaffolded as _scaff
+                            code, u = _http("GET", f"{ADMIN_API}/admin/users/email/{frm}",
+                                            {"X-Admin-API-Key": ADMIN_KEY})
+                            if code == 200:
+                                suid = str(u["id"])
+                                session = "main" if _scaff(suid) else "onboarding"
+                                n = admit(db, reg, clock,
+                                          source_event_id=f"mail-{msg.get('Message-ID','').strip() or uid}",
+                                          event_type="mail.reply",
+                                          subject_refs={"uid": suid, "session": session,
+                                                        "from_addr": frm, "text": strip_quotes(body),
+                                                        "subject": msg.get("Subject", ""),
+                                                        "orig_msgid": msg.get("Message-ID", "").strip(),
+                                                        "organizer": frm})
+                                print(f"unthreaded mail from known user {frm} → {session} → admitted {n}", flush=True)
+                            else:
+                                # UNKNOWN sender (founder 2026-08-23: info@ processes and replies to
+                                # ANY email): auto-provision + onboarding conversation — the cold-
+                                # inbound funnel. Guards against reply loops/backscatter first.
+                                auto = (msg.get("Auto-Submitted", "no").lower() != "no"
+                                        or msg.get("Precedence", "").lower() in ("bulk", "list", "junk")
+                                        or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon",
+                                                                  "postmaster", "bounce")))
+                                if auto or not frm:
+                                    print(f"auto/bulk mail from {frm} ignored", flush=True)
+                                else:
+                                    from flows_steps.common import ensure_platform_user
+                                    suid = ensure_platform_user(frm)
+                                    n = admit(db, reg, clock,
+                                              source_event_id=f"mail-{msg.get('Message-ID','').strip() or uid}",
+                                              event_type="mail.reply",
+                                              subject_refs={"uid": suid, "session": "onboarding",
+                                                            "from_addr": frm, "text": strip_quotes(body),
+                                                            "subject": msg.get("Subject", ""),
+                                                            "orig_msgid": msg.get("Message-ID", "").strip(),
+                                                            "organizer": frm})
+                                    print(f"NEW sender {frm} provisioned (uid {suid}) → onboarding → admitted {n}", flush=True)
                     cursor = uid
                     db.execute("UPDATE mail_cursor SET uid = :u WHERE id = 1", {"u": cursor})
         except Exception as e:  # noqa: BLE001
