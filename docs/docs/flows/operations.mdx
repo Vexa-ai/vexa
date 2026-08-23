@@ -1,0 +1,44 @@
+---
+title: "Operating workflows"
+description: "Two small processes and a status projection: how flows run, fail, recover and get observed — plus the storm suite that guards every failure class found in live testing."
+---
+
+## What runs
+
+| Process | Role |
+|---|---|
+| `flows-worker` (× N) | the loop: claim by lease → one step → receipt → advance. Stateless; replicas cooperate via `SKIP LOCKED`. A step-duration watchdog flags any step that blocks. |
+| mailbox integration | the front door: real IMAP inbox → facts (invites, threaded replies, new senders), durable cursor — restarts resume, never re-admit |
+| `flows-api` | submit/manage flows; the reactions projection; signal verbs |
+
+All three speak SQL to one Postgres. Deliberately absent: message broker, scheduler service,
+sidecars, second state store.
+
+## Reading a reaction
+
+```
+SELECT flow, step, status, attempt, reason FROM reaction;
+```
+
+`admitted → running → done`, with `retrying` (backoff via `next_run_at`), `blocked` (waiting on a
+human — resumable by signal, escalated by deadline), `failed` (typed, with reason, operator-
+retryable as a **new attempt causally linked** — history is never mutated) and `cancelled`.
+Receipts carry each effect's provider reference: the SMTP message-id, the git commit, the bot
+workload id.
+
+## When things break
+
+- A worker dies mid-step → its lease expires, the reconciler re-queues, the resumer reads receipts
+  and never repeats a confirmed effect.
+- The same webhook is delivered three times → one reaction (dedup by constraint).
+- A whole engine restart → invisible: durable tables, durable mail cursor, a cross-restart
+  sent-hash registry so one outbox content mails exactly once.
+- A reaction references a flow version retired by a deploy → typed failure, worker survives.
+
+## The storm
+
+Every bug class ever found — including the ones found by humans in live runs — has a standing
+adversarial test: randomized crash/duplicate/lease storms with six invariants, engine-restart
+against durable state, ICS mutation fuzzing (the `VTIMEZONE` 1970 trap), hostile signals against
+wrong states, version coexistence, and the no-sleep law as a static gate. 44 tests run offline in
+seconds against the same SQL the production engine executes.

@@ -1,0 +1,65 @@
+---
+title: "Workflows"
+description: "core/flows — the reaction engine: durable product workflows as two Postgres tables and one worker loop. Facts in, receipted steps out; no scheduler, no message broker."
+---
+
+Vexa's workflows are not a framework — they are **two tables and a loop**. A fact from the outside
+world (a calendar invite, a completed meeting, an email reply) becomes exactly one **reaction** row;
+a worker claims it, runs **one step**, records a **receipt**, and advances. Everything else falls
+out of that shape.
+
+```text
+integrations (mail · webhooks · calendar)     turn the outside world into FACTS
+        ▼
+core/flows                                    which steps happen about a fact, in what
+                                              order, retried how — proven by receipts
+        ▼
+core/meetings · core/agent                    capabilities: join, transcribe, think, commit, send
+        ▼
+core/runtime                                  containers
+```
+
+Control flows down; facts flow up as rows in a domain's own outbox — the domains never know flows
+exists. Remove the flows layer and everything below still runs.
+
+## The guarantees
+
+| Invariant | Enforced by |
+|---|---|
+| One reaction per fact | `source_event_id UNIQUE` — dedup by constraint, never by memory |
+| Every effect exactly once | `effect_key` receipts — a retry asks "did I already do this?" before acting |
+| No notification before commit | the email step's input **is** the commit receipt |
+| Crash anywhere, resume exactly | leases expire, receipts tell the resumer what already happened |
+| Typed failure | `blocked / retrying / failed` are column values with reasons — never log archaeology |
+| Old runs keep old meaning | the flow **version** is stamped at admission; edits never touch in-flight work |
+
+## No scheduler — time is a column
+
+Waits, retries with backoff, escalation deadlines, "bot joins at start−2 minutes" — all are the
+`next_run_at` timestamp on the reaction row. The worker's poll (`FOR UPDATE SKIP LOCKED`) makes N
+replicas cooperate with no coordinator: Postgres is the queue, the scheduler and the lock service
+at once.
+
+## The step laws
+
+Learned live, enforced by gates and a runtime watchdog:
+
+1. **A step never sleeps** — every wait is a `Wait(seconds)` returned to the engine. One sleeping
+   step once froze an entire runner; the law is now a static check.
+2. **State outlives the process** — everything a step needs travels in the reaction's refs,
+   receipts and durable scratch. Restarts are invisible.
+3. **Replies match by thread, never by sender** — every outbound conversation mail registers its
+   `Message-ID`; inbound `In-Reply-To` routes to the right conversation.
+
+## The shipped flows
+
+| Flow | Trigger | What it does |
+|---|---|---|
+| `invite_intake` | invite arrives at the Vexa mailbox | provision the organizer · **accept the invitation in their calendar** (iMIP) · acknowledge by email · spawn onboarding if needed · bot at start−2 min · emit completion |
+| `onboard_person` | no personal workspace | a **real agent conversation over email** — one question per mail, until the agent itself accepts (`.scaffolded`) |
+| `onboard_group` | `#group:name` in the invite | same conversation for the group workspace |
+| `post_meeting` | meeting completed | **queued behind workspace readiness** with nudges — late, never lost — then the agent writes the note and the minutes arrive **verbatim in the email body** |
+| `email_chat` | any threaded reply | the standing conversation: feedback processed, workspace updated, answer mailed back |
+
+Email is the entire product surface for these flows: every artifact — confirmation, onboarding
+question, nudge, the minutes themselves — travels in the mail body. Replying is the interface.

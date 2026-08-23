@@ -37,6 +37,14 @@
         ]
       },
       {
+        "group": "Workflows",
+        "pages": [
+          "flows/overview",
+          "flows/authoring",
+          "flows/operations"
+        ]
+      },
+      {
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
