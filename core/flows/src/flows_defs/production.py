@@ -34,7 +34,10 @@ MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
 
-_SHOWCASE = Path(__file__).resolve().parents[4] / "behavior" / "prompts"
+_SHOWCASE = next((c / "behavior" / "prompts" for c in
+                  (Path("/app"), Path(__file__).resolve().parents[4])
+                  if (c / "behavior" / "prompts").is_dir()),
+                 Path(__file__).resolve().parents[4] / "behavior" / "prompts")
 
 
 def _prompt(fname: str) -> str:
