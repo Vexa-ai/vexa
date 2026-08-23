@@ -18,6 +18,10 @@ class FakeWorld:
     commits: list[str] = field(default_factory=list)
     emails: list[tuple[str, str]] = field(default_factory=list)   # (recipient, artifact)
     meeting_state: dict = field(default_factory=dict)             # meeting -> completed? final?
+    workspaces_ready: set = field(default_factory=set)
+    research: list = field(default_factory=list)
+    followups: list = field(default_factory=list)
+    admit_fn: object = None                               # wired by the rig for fact-emitting steps
     # fault injection dials
     fail_next: dict[str, int] = field(default_factory=dict)       # step -> remaining failures
     fail_after_effect: set = field(default_factory=set)           # step crashes AFTER doing the effect
@@ -99,6 +103,63 @@ def build_registry(world: FakeWorld) -> Registry:
                 world.emails.append((r, sha))
         world.crash_after("email_participants")
         return Done({"sent": inside})
+
+    @reg.step
+    def notify_organizer(ctx: StepCtx):
+        world.maybe_fault("notify_organizer", before=True)
+        if (ctx.refs["inviter"], "scheduled") not in world.emails:
+            world.emails.append((ctx.refs["inviter"], "scheduled"))
+        world.crash_after("notify_organizer")
+        return Done({})
+
+    @reg.step
+    def ensure_onboarding(ctx: StepCtx):
+        """No personal workspace → EMIT the onboarding.needed fact (sub-flow composition)."""
+        owner = ctx.refs["inviter"]
+        if owner in world.workspaces_ready:
+            return Done({"already": True})
+        n = world.admit_fn(source_event_id=f"onb-{owner}", event_type="onboarding.needed",
+                           subject_refs={"person": owner, **ctx.refs})
+        return Done({"onboarding_started": n})
+
+    @reg.step
+    def research_person(ctx: StepCtx):
+        world.maybe_fault("research_person", before=True)
+        person = ctx.refs["person"]
+        world.research.append(person)                     # name+company lookup happened
+        return Done({"guess": {"name": person.split("@")[0].title(),
+                               "company": person.split("@")[1].split(".")[0].title()}})
+
+    @reg.step
+    def ask_one_question(ctx: StepCtx):
+        g = ctx.prior["research_person"]["guess"]
+        world.emails.append((ctx.refs["person"], "onboarding-question"))
+        return Done({"asked": f"You are {g['name']} at {g['company']} — correct? What's your role?"})
+
+    @reg.step
+    def await_human_reply(ctx: StepCtx):
+        # Block until the human replies (a resume signal). The reconciler's blocked_deadline is
+        # the follow-up cadence: on escalation the OUTER loop re-asks instead of failing —
+        # modeled here as a bounded Block; follow-ups are receipts of ask_one_question re-sends.
+        return Block("awaiting human reply to the onboarding question", deadline_s=172800)
+
+    @reg.step
+    def setup_personal_workspace(ctx: StepCtx):
+        person = ctx.refs["person"]
+        world.workspaces_ready.add(person)                # .scaffolded written
+        world.emails.append((person, "workspace-ready"))
+        return Done({"workspace": f"ws-{person}"})
+
+    @reg.step
+    def require_workspace(ctx: StepCtx):
+        """THE QUEUE: processing waits for readiness; each wake sends a follow-up nudge."""
+        owner = ctx.refs["inviter"]
+        if owner in world.workspaces_ready:
+            return Done({"ready": True})
+        world.followups.append(owner)                     # "finish your setup to get your summary"
+        world.emails.append((owner, "setup-nudge"))
+        return Wait(seconds=3600)                         # re-check hourly; unbounded on purpose —
+                                                          # the summary must not be lost, only late
 
     @reg.step
     def needs_approval(ctx: StepCtx):
