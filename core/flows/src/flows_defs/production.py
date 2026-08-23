@@ -34,10 +34,17 @@ MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
 
+def _repo_root() -> Path:
+    # repo checkout: <root>/core/flows/src/flows_defs/production.py → parents[4];
+    # the image is shallower (/app/src/flows_defs/…), so parents[4] may not exist
+    p = Path(__file__).resolve()
+    return p.parents[4] if len(p.parents) > 4 else p.parents[len(p.parents) - 1]
+
+
 _SHOWCASE = next((c / "behavior" / "prompts" for c in
-                  (Path("/app"), Path(__file__).resolve().parents[4])
+                  (Path("/"), Path("/app"), _repo_root())   # image bakes /behavior; checkout has <root>/behavior
                   if (c / "behavior" / "prompts").is_dir()),
-                 Path(__file__).resolve().parents[4] / "behavior" / "prompts")
+                 _repo_root() / "behavior" / "prompts")
 
 
 def _prompt(fname: str) -> str:
