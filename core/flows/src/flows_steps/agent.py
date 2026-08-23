@@ -39,6 +39,20 @@ def collect_reply(uid: str, session: str, baseline: int):
     return None
 
 
+def collect_outbox(uid: str, session: str, sent_hash: str | None):
+    """THE FILE-OUTBOX CONTRACT — harness-agnostic reply collection (codex serves some workers
+    and its transcripts never reach the history endpoint): the agent WRITES its email reply to
+    ``mail_outbox/<session>.md``; a content change vs the last-sent hash is a new reply."""
+    import hashlib
+    content = ws_file(uid, f"mail_outbox/{session}.md")
+    if not content or not content.strip():
+        return None, sent_hash
+    h = hashlib.sha256(content.encode()).hexdigest()[:16]
+    if h == sent_hash:
+        return None, sent_hash
+    return content.strip(), h
+
+
 def workspace_init(uid: str) -> None:
     http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid})
 

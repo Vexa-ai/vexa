@@ -39,14 +39,18 @@ flows/personal.md and CLAUDE.md; run the discovery loop adapted to email: resear
 yourself, ask ONE short warm question per email, never re-ask what they answered. Record the name
 in _system/identity.md, build the `self: true` person entity, keep README.md the dashboard. When
 your acceptance test passes, write the file `.scaffolded` (content: today's date) — that releases
-their meeting minutes — and say so in your final email. Plain text only. Their address: """
+their meeting minutes — and say so in your final email. Plain text only.
+DELIVERY CONTRACT: write the email you want sent to the file mail_outbox/onboarding.md
+(overwrite fully each turn) — THAT FILE is what gets emailed, verbatim. Their address: """
 
 GROUP_KICKOFF = """[email-group-onboarding] You are setting up the GROUP workspace {group} over email
 with its organizer. Read flows/shared.md. Ask what this group is for and who belongs (ONE question
 per email); write CLAUDE.md, PURPOSE and README.md for it under kg-group/{group}/ in this
 workspace (the shared-workspace store lands later — the content is what matters), and when settled
 write the file `.scaffolded-group-{group}` (content: today's date) and say the group is ready.
-Plain text only. Organizer: """
+Plain text only. DELIVERY CONTRACT: write the email you want sent to the file
+mail_outbox/group-{group}.md (overwrite fully each turn) — THAT FILE is emailed verbatim.
+Organizer: """
 
 PROCESS_KICKOFF = """[post-meeting] The meeting (id {mid}) completed; final transcript below. Do ALL of:
 1) write the meeting note at kg/entities/meeting/{date}-{native}.md — frontmatter, then sections
@@ -128,16 +132,14 @@ def build(reg: Registry, db) -> None:
             uid, session = ctx.refs["uid"], session_of(ctx)
             if gate_of(ctx):
                 return Done({"ready": True})
-            sent = ctx.prior.get(f"open_{prefix}", {})
-            base = ctx.scratch.get("baseline", sent.get("baseline", 0))
-            reply = ag.collect_reply(uid, session, base)
-            if reply is not None and ctx.scratch.get("emailed_at_len") != len(ag.history(uid, session)):
+            reply, h = ag.collect_outbox(uid, session, ctx.scratch.get("sent_hash"))
+            if reply is not None:
                 mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
                               subject_line(ctx), reply,
                               in_reply_to=ctx.scratch.get("thread"))
                 mx.register_thread(db, mid, uid, session)
                 ctx.scratch["thread"] = ctx.scratch.get("thread") or mid
-                ctx.scratch["emailed_at_len"] = len(ag.history(uid, session))
+                ctx.scratch["sent_hash"] = h
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             elif ctx.clock_now - ctx.scratch.get("last_mail_at", ctx.clock_now) > NUDGE_EVERY_S:
                 mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
@@ -209,15 +211,21 @@ def build(reg: Registry, db) -> None:
     @reg.step
     def feedback_turn(ctx: StepCtx):
         uid, session = ctx.refs["uid"], ctx.refs["session"]
-        if "baseline" not in ctx.scratch:
-            ctx.scratch["baseline"] = ag.dispatch_turn(
+        if "dispatched" not in ctx.scratch:
+            ctx.scratch["prev_hash"] = ag.collect_outbox(uid, session, None)[1]
+            ag.dispatch_turn(
                 uid, session,
                 "[email-reply] The participant replied by email. Process it: update the workspace "
                 "where it changes facts (feedback on minutes → amend the note; onboarding answers → "
                 "continue the discovery loop and remember the .scaffolded acceptance). Then answer "
-                "them — plain text, emailed verbatim.\n\nTHEIR EMAIL:\n" + ctx.refs["text"])
+                f"them. DELIVERY CONTRACT: write your answer to the file mail_outbox/{session}.md "
+                "(overwrite fully) — that file is emailed verbatim, plain text."
+                "\n\nTHEIR EMAIL:\n" + ctx.refs["text"])
+            ctx.scratch["dispatched"] = True
             return Wait(seconds=10)
-        reply = ag.collect_reply(uid, session, ctx.scratch["baseline"])
+        reply, h = ag.collect_outbox(uid, session, ctx.scratch.get("prev_hash"))
+        if reply is not None:
+            ctx.scratch["out_hash"] = h
         if reply is None:
             if ctx.clock_now - ctx.scratch.get("t0", ctx.scratch.setdefault("t0", ctx.clock_now)) > 600:
                 raise StepError("agent silent for 10min", retryable=True)
