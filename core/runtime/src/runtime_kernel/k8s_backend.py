@@ -78,7 +78,9 @@ def _stop_grace_sec() -> int:
         return 30
 
 
-def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
+def pod_overrides(env: dict[str, str], *, container_name: str,
+                  image: Optional[str] = None,
+                  command: Optional[list[str]] = None) -> Optional[dict]:
     """The ``kubectl run --overrides`` spec for a spawned Pod, built from the SAME env. It carries two
     independent seams:
 
@@ -111,11 +113,27 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
     # strategic), so a containers entry here wipes the generated container — image, env, command —
     # and the API server rejects the Pod (`spec.containers[0].image: Required value`), killing the
-    # spawn instantly. Emit ``containers`` ONLY when volumeMounts force it (the workspace-store
-    # seam); pod-level fields (tolerations/nodeSelector) merge fine without touching the list.
+    # spawn instantly. So when volumeMounts force a containers entry, it must be the COMPLETE
+    # container: image + env (rebuilt from the same spawn env the --env flags carry) + command +
+    # the mounts. Proven live 2026-08-23: the volumeMounts-only entry that stood here was rejected
+    # by the API server on the first real agent-worker spawn on k8s (bots never mount, so the M2
+    # bot proof never exercised it). Pod-level fields (tolerations/nodeSelector) merge fine
+    # without touching the list.
     spec: dict = {}
     if volume_mounts:
-        spec["containers"] = [{"name": container_name, "volumeMounts": volume_mounts}]
+        if not image:
+            raise ValueError(
+                "pod_overrides: a containers entry (volumeMounts present) replaces the generated "
+                "container wholesale — the caller must pass the image (and command) to rebuild it")
+        container: dict = {
+            "name": container_name, "image": image,
+            "env": [{"name": k, "value": v} for k, v in env.items()
+                    if k not in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV)],
+            "volumeMounts": volume_mounts,
+        }
+        if command:
+            container["command"] = list(command)
+        spec["containers"] = [container]
     if volumes:
         spec["volumes"] = volumes
     if tolerations:
@@ -156,7 +174,8 @@ class K8sBackend:
         # latter live in the runtime's PROCESS env (the chart sets them on the runtime Deployment), not
         # in the per-workload spec.env, so overlay them here; the workload's own --env (above) is left
         # untouched — scheduling shapes the Pod, it is not container config.
-        overrides = pod_overrides({**env, **_runtime_scheduling_env()}, container_name=name)
+        overrides = pod_overrides({**env, **_runtime_scheduling_env()}, container_name=name,
+                                  image=runnable.image, command=list(runnable.command or ()))
         if overrides:
             args += ["--overrides", json.dumps(overrides)]
         if runnable.command:
