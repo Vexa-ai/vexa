@@ -45,5 +45,14 @@ for (const pkg of ["flows_steps", "flows_defs"]) {
     }
   }
 }
+// The NO-SLEEP LAW (live-witness lesson: one sleeping step froze the whole runner): step and
+// flow code may never sleep or busy-poll — every wait is a Wait. Enforced statically here.
+for (const pkg of ["flows_steps", "flows_defs"]) {
+  for (const f of pyFiles(join(ROOT, "src", pkg))) {
+    const src = readFileSync(f, "utf8");
+    if (/\btime\.sleep\s*\(/.test(src))
+      bad.push(`${f.slice(ROOT.length + 1)} → time.sleep (steps never sleep; return Wait)`);
+  }
+}
 if (bad.length) { console.error("❌ FLOWS ISOLATION VIOLATION:\n  " + bad.join("\n  ")); process.exit(1); }
 console.log("✅ flows isolation verified — engine is stdlib-pure at import; steps reach domains by HTTP only");

@@ -22,6 +22,8 @@ from flows_steps.common import db_url
 
 
 def parse_ics(ics: str) -> dict | None:
+    if "BEGIN:VEVENT" not in ics:
+        return None                       # no event block — never fall back to scanning VTIMEZONE
     ve = ics.split("BEGIN:VEVENT", 1)[-1].split("END:VEVENT", 1)[0]
     url = re.search(r"https://meet\.google\.com/[a-z-]+", ve) or \
         re.search(r"https://meet\.google\.com/[a-z-]+", ics)
@@ -48,11 +50,50 @@ def parse_ics(ics: str) -> dict | None:
             start = datetime(*t[:6], tzinfo=ZoneInfo(dt.group(1))).timestamp()
         else:
             start = time.mktime(t)
+    if start < time.time() - 86400:
+        return None                       # a start >24h in the past is a parse artifact (the 1970
+                                          # class) or a stale event — never admit it (a bot would
+                                          # dispatch IMMEDIATELY on an ancient start)
     return {"organizer": (org.group(1).strip().lower() if org else ""),
             "url": url.group(0), "start": start,
             "ics_uid": (uid.group(1).strip() if uid else f"noid-{int(start)}"),
             "title": (summ.group(1).strip() if summ else "Meeting"),
             "group": group}
+
+
+def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
+          known_uid, is_scaffolded) -> tuple[str, dict] | None:
+    """The routing DECISION, pure: returns (kind, payload) or None (ignore).
+      kind ∈ invite | thread_reply | known_user_mail | new_sender_mail
+    `known_uid(email) -> uid|None` and `is_scaffolded(uid) -> bool` are injected so the
+    routing storm can drive every branch with no services."""
+    if not frm or frm == self_addr:
+        return None
+    if ics and "BEGIN:VEVENT" in ics:
+        if "METHOD:REPLY" in ics or "METHOD:CANCEL" in ics:
+            return None               # calendar machinery (our own RSVP echoes!) — never a
+                                      # conversation, never a provisioning trigger (storm catch:
+                                      # we nearly onboarded calendar-notification@google.com)
+        ev = parse_ics(ics)
+        if ev and ev["organizer"]:
+            return ("invite", ev)
+        return None
+    auto = (headers.get("Auto-Submitted", "no").lower() != "no"
+            or headers.get("Precedence", "").lower() in ("bulk", "list", "junk")
+            or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon", "postmaster", "bounce")))
+    ref = (headers.get("In-Reply-To") or "").strip() or           (headers.get("References", "").split() or [""])[-1]
+    hit = db.execute("SELECT subject_uid, session FROM mail_thread WHERE message_id = :m",
+                     {"m": ref}) if ref else []
+    if hit:
+        suid, session = hit[0]
+        return ("thread_reply", {"uid": suid, "session": session})
+    if auto:
+        return None
+    uid = known_uid(frm)
+    if uid is not None:
+        return ("known_user_mail", {"uid": str(uid),
+                                    "session": "main" if is_scaffolded(str(uid)) else "onboarding"})
+    return ("new_sender_mail", {"session": "onboarding"})
 
 
 def strip_quotes(body: str) -> str:
@@ -106,70 +147,36 @@ def main() -> int:
                         if ct in ("text/calendar", "application/ics") or \
                                 (part.get_filename() or "").endswith(".ics"):
                             ics = part.get_payload(decode=True).decode(errors="replace")
-                    if ics and "BEGIN:VEVENT" in ics and "METHOD:REPLY" not in ics:
-                        ev = parse_ics(ics)
-                        if ev and ev["organizer"] and frm != addr:
-                            n = admit(db, reg, clock, source_event_id=f"ics-{ev['ics_uid']}",
-                                      event_type="invite.received", subject_refs=ev)
-                            print(f"ICS '{ev['title']}' {ev['organizer']} group={ev['group']} → admitted {n}", flush=True)
+                    from flows_steps.common import ADMIN_API, ADMIN_KEY, http as _http, scaffolded as _scaff
+
+                    def _known_uid(e: str):
+                        code, u = _http("GET", f"{ADMIN_API}/admin/users/email/{e}",
+                                        {"X-Admin-API-Key": ADMIN_KEY})
+                        return u.get("id") if code == 200 else None
+
+                    decision = route(db, addr, frm, dict(msg.items()), ics, _known_uid, _scaff)
+                    if decision is None:
+                        print(f"ignored mail from {frm} ({msg.get('Subject','')[:40]!r})", flush=True)
                     else:
-                        ref = (msg.get("In-Reply-To") or "").strip() or \
-                              (msg.get("References", "").split() or [""])[-1]
-                        hit = db.execute("SELECT subject_uid, session FROM mail_thread "
-                                         "WHERE message_id = :m", {"m": ref}) if ref else []
-                        if hit and frm != addr:
-                            suid, session = hit[0]
+                        kind, payload = decision
+                        if kind == "invite":
+                            n = admit(db, reg, clock, source_event_id=f"ics-{payload['ics_uid']}",
+                                      event_type="invite.received", subject_refs=payload)
+                            print(f"ICS '{payload['title']}' {payload['organizer']} group={payload['group']} → admitted {n}", flush=True)
+                        else:
+                            if kind == "new_sender_mail":
+                                from flows_steps.common import ensure_platform_user
+                                payload["uid"] = ensure_platform_user(frm)
+                                print(f"NEW sender {frm} provisioned (uid {payload['uid']})", flush=True)
                             n = admit(db, reg, clock,
                                       source_event_id=f"mail-{msg.get('Message-ID','').strip() or uid}",
                                       event_type="mail.reply",
-                                      subject_refs={"uid": suid, "session": session,
+                                      subject_refs={"uid": str(payload["uid"]), "session": payload["session"],
                                                     "from_addr": frm, "text": strip_quotes(body),
                                                     "subject": msg.get("Subject", ""),
                                                     "orig_msgid": msg.get("Message-ID", "").strip(),
                                                     "organizer": frm})
-                            print(f"threaded reply {frm} → {session} → admitted {n}", flush=True)
-                        elif frm != addr:
-                            # ANY email from a KNOWN user gets a conversation (founder 2026-08-23):
-                            # unfinished setup → the onboarding session; otherwise their MAIN agent,
-                            # which reads the workspace (meeting notes included) and can answer
-                            # anything — including questions about meetings. Unknown senders: ignored.
-                            from flows_steps.common import ADMIN_API, ADMIN_KEY, http as _http, scaffolded as _scaff
-                            code, u = _http("GET", f"{ADMIN_API}/admin/users/email/{frm}",
-                                            {"X-Admin-API-Key": ADMIN_KEY})
-                            if code == 200:
-                                suid = str(u["id"])
-                                session = "main" if _scaff(suid) else "onboarding"
-                                n = admit(db, reg, clock,
-                                          source_event_id=f"mail-{msg.get('Message-ID','').strip() or uid}",
-                                          event_type="mail.reply",
-                                          subject_refs={"uid": suid, "session": session,
-                                                        "from_addr": frm, "text": strip_quotes(body),
-                                                        "subject": msg.get("Subject", ""),
-                                                        "orig_msgid": msg.get("Message-ID", "").strip(),
-                                                        "organizer": frm})
-                                print(f"unthreaded mail from known user {frm} → {session} → admitted {n}", flush=True)
-                            else:
-                                # UNKNOWN sender (founder 2026-08-23: info@ processes and replies to
-                                # ANY email): auto-provision + onboarding conversation — the cold-
-                                # inbound funnel. Guards against reply loops/backscatter first.
-                                auto = (msg.get("Auto-Submitted", "no").lower() != "no"
-                                        or msg.get("Precedence", "").lower() in ("bulk", "list", "junk")
-                                        or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon",
-                                                                  "postmaster", "bounce")))
-                                if auto or not frm:
-                                    print(f"auto/bulk mail from {frm} ignored", flush=True)
-                                else:
-                                    from flows_steps.common import ensure_platform_user
-                                    suid = ensure_platform_user(frm)
-                                    n = admit(db, reg, clock,
-                                              source_event_id=f"mail-{msg.get('Message-ID','').strip() or uid}",
-                                              event_type="mail.reply",
-                                              subject_refs={"uid": suid, "session": "onboarding",
-                                                            "from_addr": frm, "text": strip_quotes(body),
-                                                            "subject": msg.get("Subject", ""),
-                                                            "orig_msgid": msg.get("Message-ID", "").strip(),
-                                                            "organizer": frm})
-                                    print(f"NEW sender {frm} provisioned (uid {suid}) → onboarding → admitted {n}", flush=True)
+                            print(f"{kind} {frm} → {payload['session']} → admitted {n}", flush=True)
                     cursor = uid
                     db.execute("UPDATE mail_cursor SET uid = :u WHERE id = 1", {"u": cursor})
         except Exception as e:  # noqa: BLE001
