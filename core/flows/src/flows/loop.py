@@ -80,6 +80,7 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None) -> bool:
     ctx = StepCtx(reaction=r, effect_key=key,
                   prior=receipts.prior(db, r.reaction_id), clock_now=clock.now(),
                   scratch=getattr(r, "_scratch", {}) or {}, emit=emit)
+    ctx.flow = flow                       # the governing version's definition incl. params
     def _save_scratch() -> None:
         db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
                    {"s": dumps(ctx.scratch), "rid": r.reaction_id})

@@ -66,8 +66,11 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
                 return [tuple(r) for r in res] if res.returns_rows else []
 
         def executescript(self, sql: str) -> None:
+            # strip comment lines BEFORE splitting on ';' — comments legitimately contain
+            # semicolons and a naive split feeds Postgres mid-sentence fragments
+            clean = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
             with engine.begin() as c:
-                for stmt in sql.split(";"):
+                for stmt in clean.split(";"):
                     if stmt.strip():
                         c.execute(text(stmt))
 

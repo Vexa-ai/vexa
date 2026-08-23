@@ -65,3 +65,18 @@ CREATE TABLE IF NOT EXISTS mail_outbox_sent (
   sent_at     double precision NOT NULL,
   PRIMARY KEY (subject_uid, session, hash)
 );
+
+-- ── flow_version: FLOWS ARE ROWS (submitted/activated via flows-api — live in seconds, no
+--    image rebuild). Steps stay reviewed code in the image; this composes them. In-flight
+--    reactions keep the version stamped at admission.
+CREATE TABLE IF NOT EXISTS flow_version (
+  name        text NOT NULL,
+  version     integer NOT NULL,
+  on_event    text NOT NULL,
+  steps       text NOT NULL,               -- JSON array of step NAMES (validated at submission)
+  params      text,                        -- JSON: prompts/prompt_refs, cadences, windows, policy
+  status      text NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','retired')),
+  created_by  text,
+  created_at  double precision NOT NULL,
+  PRIMARY KEY (name, version)
+);

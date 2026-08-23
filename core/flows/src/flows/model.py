@@ -74,6 +74,7 @@ class StepCtx:
     clock_now: float
     scratch: dict = field(default_factory=dict)
     emit: Any = None                      # (event_type, source_id, refs) -> int reactions created
+    flow: Any = None                      # the governing Flow (params via ctx.flow.param(key))
 
     @property
     def refs(self) -> dict:

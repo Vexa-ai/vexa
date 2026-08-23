@@ -34,6 +34,9 @@ def main() -> int:
             last_recon = time.time()
             reclaim(db, clock)
             escalate(db, clock)
+            fresh = reg.refresh_from_db(db)
+            if fresh:
+                print(f"hot-loaded {fresh} flow version(s) from the DB", flush=True)
         t0 = time.time()
         worked = tick(db, reg, clock, emit=emit)
         dt = time.time() - t0
