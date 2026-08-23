@@ -32,6 +32,37 @@ https://claude.ai/code/artifact/f8406f6f-4726-465c-8fac-c6d3c45b8566
   transcript, REAL bot admitted to a real Google Meet, REAL agent worker → real commit `56cef8e`
   in workspace 11, minutes mailed). Human-verified in Mailpit.
 
+## Live witness round 2 (2026-08-23 afternoon, pushed `ce81c333`) — REAL mailbox front door
+
+`witness/run_live.py` + `witness/mail_real.py`: the real `info@vexa.ai` mailbox (creds in
+`~/dev/vexa-secrets/business/vexa-mail.enc.env` — **the app password leaked into chat/terminal
+during vaulting: ROTATE it and re-vault**) is the product's front door. Proven live with the
+founder: real calendar invite → ICS parsed (VEVENT-only + TZID — the 1970 VTIMEZONE bug is fixed)
+→ organizer auto-provisioned → REAL confirmation email → **iMIP RSVP** (`METHOD:REPLY`,
+`PARTSTAT=ACCEPTED` over SMTP — Vexa shows "Yes" in the guest list, no Calendar API needed) →
+**onboarding is a REAL agent conversation over email** (persistent `onboarding` chat session:
+agent writes every mail, inbound replies become its turns, IT writes `.scaffolded` when its
+acceptance test passes — the same gate the terminal uses) → bot at start−2min → post-meeting
+processing queued behind `.scaffolded` with nudges → minutes verbatim in the email body.
+
+**Lessons that are now law:**
+- **A step NEVER sleeps or polls internally — every wait is a `Wait`.** The first real adapter
+  slept inside a step and froze the whole runner for minutes (mail unpolled, second meeting
+  invisible, bot dispatch would have missed). Production loop should add a step-duration watchdog.
+- **State must outlive the process.** The runner's throwaway sqlite caused duplicate
+  confirmation emails on every restart; the engine dedups perfectly against a durable DB — the
+  storm now pins this (`test_engine_restart_with_durable_db_never_repeats_effects`).
+- **Match replies by thread (`In-Reply-To`), not sender** — a sender-matched reply "answered"
+  the onboarding question from the wrong mail.
+
+**Doubles still standing** (each with its failure story attached — promotion is spec-complete):
+in-memory sqlite → Postgres · run_live.py script → `flows-worker` service · in-loop IMAP →
+separate integration process · ad-hoc steps → `flows_steps/` adapters with receipts · gateway
+polling → meeting-api outbox · regex ICS → real iCalendar parser · sender-matched replies →
+threaded · "research from email address" stub → the agent's real research · fixture transcript →
+real transcription service (no whisper in this stack) · recipients capped to the organizer →
+`_global` Inside rule + consent policy · `changeme` admin auth · amd64-emulated bot image.
+
 ## The two binding product constraints
 
 1. **UI-LESS**: email is the entire product surface. Every artifact — confirmation, onboarding
@@ -62,6 +93,7 @@ https://claude.ai/code/artifact/f8406f6f-4726-465c-8fac-c6d3c45b8566
 
 ## Open work, in order
 
+0. **Rotate the leaked app password** (see above) — one-line re-vault.
 1. **Real adapters** — promote `witness/real_steps.py` into `src/flows_steps/{meeting,agent,email}_steps.py`
    (HTTP, effect keys, receipts); wire the flows-worker as a process (compose service `flows-worker`,
    Postgres tables via `schema.sql` at boot).
