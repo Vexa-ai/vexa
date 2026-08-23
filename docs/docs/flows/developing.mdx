@@ -1,0 +1,59 @@
+---
+title: "Writing and debugging workflows"
+description: "The developer loop: compose flows as data or add reviewed steps, prove them in the offline rig and storm, run live, and debug by reading the two tables — never by log archaeology."
+---
+
+## 1 · Write
+
+Two layers, two speeds:
+
+- **Composition** (a new flow over existing capabilities) — a Python file, no deploy:
+
+  ```bash
+  python3 flows_authoring.py check  my_flow.py   # validate against the step vocabulary
+  python3 flows_authoring.py submit my_flow.py   # live in the worker within ~10 s
+  ```
+
+- **Capability** (a new step) — a function in `flows_steps/`: stateless (inputs from
+  `ctx.refs` / `ctx.prior` / `ctx.scratch`), returns `Done` / `Wait` / `Block`, and **never
+  sleeps** — the isolation gate statically rejects `time.sleep` in step code.
+
+## 2 · Prove offline
+
+The rig is the fast loop — fake world, fake clock, the **same engine and SQL** as production:
+
+```bash
+python3 -m pytest core/flows/tests -q                      # < 1 s
+STORM_ROUNDS=500 python3 -m pytest core/flows/tests/test_storm.py -q
+STORM_SEED=42 python3 -m pytest core/flows/tests/test_storm.py -q   # replay one run exactly
+```
+
+Write a scenario like the product-flow tests: `rig()` → `admit(...)` → `drain()` → assert on the
+fake world's ledgers (`world.emails`, `world.commits`). Inject faults with
+`world.fail_next["step"] = 2` and `world.fail_after_effect.add("step")` — crash-*after*-effect is
+the case that finds real bugs.
+
+## 3 · Run live
+
+Three host processes over the stack's Postgres: `flows_worker`, the mailbox integration and
+`flows-api`. Trigger with a real event (send the mail, create the invite) or admit a fact by hand.
+
+## 4 · Debug by reading the tables
+
+The state **is** the debugger:
+
+```bash
+curl -s -H "X-Flows-Admin-Key: …" "http://localhost:18200/reactions?status=failed"
+```
+
+- `reaction` — where and why: step, status, attempt, `reason`, `next_run_at` (what it's waiting
+  for), `scratch` (the step's durable bookkeeping).
+- `effect_receipt` — what actually touched the world, with provider refs: the SMTP message-id,
+  the git commit, the bot workload id. "Did the email send?" is a row, not a grep.
+- Act with **signals**, never shell surgery: `POST /reactions/{id}/retry · resume · cancel` —
+  audited, and retries honor receipts, so debugging can never double an effect.
+- The worker log matters for two lines only: `SLOW STEP` (a step is blocking) and `hot-loaded`
+  (your submission is live).
+
+Every failure leaves a typed trace; every fix is verified by an operator retry converging to
+`done`.
