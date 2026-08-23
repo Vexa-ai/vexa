@@ -321,3 +321,14 @@ def test_k8s_containers_override_without_image_fails_loud():
     import pytest
     with pytest.raises(ValueError):
         pod_overrides(_env(source="vexa-agent-workspaces"), container_name="w")
+
+
+def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
+    """{'file': ...} mounts ONE key at mountPath via subPath — the directory stays writable (codex
+    keeps sqlite state under ~/.codex; a whole-dir read-only mount killed its app-server on launch)."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+           "RUNTIME_K8S_SECRET_MOUNTS":
+               '[{"secret": "codex-auth", "mountPath": "/root/.codex/auth.json", "file": "auth.json"}]'}
+    c = pod_overrides(env, image="img:1", container_name="w")["spec"]["containers"][0]
+    assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex/auth.json",
+            "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]

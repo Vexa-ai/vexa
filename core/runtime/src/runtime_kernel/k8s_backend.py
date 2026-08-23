@@ -104,10 +104,16 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
     secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
     for i, sm in enumerate(secret_mounts or ()):
         if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
-            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath}}, got {sm!r}")
+            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
         name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
         volumes.append({"name": name, "secret": {"secretName": sm["secret"]}})
-        volume_mounts.append({"name": name, "mountPath": sm["mountPath"], "readOnly": True})
+        mount = {"name": name, "mountPath": sm["mountPath"], "readOnly": True}
+        if sm.get("file"):
+            # single-FILE mount (subPath): the surrounding directory stays writable — required by
+            # harnesses that treat their config dir as state (codex: sqlite under ~/.codex);
+            # mountPath is then the file's full path and `file` is the Secret key
+            mount["subPath"] = sm["file"]
+        volume_mounts.append(mount)
     if not volumes and not tolerations and not node_selector:
         return None
     # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
