@@ -13,3 +13,14 @@ showcase; the real voice is a private tree of the same shape, mounted at `VEXA_B
 
 Machinery (core/, clients/) knows HOW; this tree knows WHAT TO SAY. It changes at content speed —
 a git commit here or in the private tree, zero image rebuilds.
+
+## Delivery
+
+Behavior ships through **Vexa Delivery** (the enterprise BYOC conveyor): the private tree is
+published into the signed channel as a digest-pinned content artifact — peer to the image
+digests — which the customer verifies offline, admits through their own gate, and mounts as
+`VEXA_BEHAVIOR_DIR`. A prompt change reaches a regulated cluster with the same ceremony,
+receipts and break-glass audit as a code change; because behavior is pure data (no code over
+the wire), the artifact is directly inspectable by the customer's reviewers. Spec/schema for
+the artifact type belongs to the `vexa-delivery` repository (an M3+ item for its owning
+session).

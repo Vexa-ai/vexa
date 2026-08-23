@@ -103,6 +103,14 @@ content tree mounted at `VEXA_BEHAVIOR_DIR` (the `_global` pattern), never in th
 the in-repo `behavior/` keeps only published showcase defaults. Resolution: flow params →
 private mount → showcase.
 
+## Delivery of behavior (founder ruling 2026-08-23 night)
+
+The behavior domain ports to customers via **Vexa Delivery** (enterprise BYOC conveyor,
+`~/dev/vexa-delivery` — its own owning session; M0–M2 delivered, do not trample): behavior tree
+→ digest-pinned signed channel artifact → customer-verified, customer-admitted → mounted as
+`VEXA_BEHAVIOR_DIR`. Prompt changes get image-grade ceremony; pure-data artifacts stay
+reviewer-inspectable. Channel artifact spec = M3+ item in vexa-delivery, not here.
+
 ## Open work, in order
 
 0. **Rotate the leaked app password** (see above) — one-line re-vault.
