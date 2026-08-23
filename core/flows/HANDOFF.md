@@ -6,6 +6,38 @@ executor of the same steps, never the foundation. Requirements + rejected option
 architecture (dependency vs data-flow, step cycle, states, runtime, domain design):
 https://claude.ai/code/artifact/f8406f6f-4726-465c-8fac-c6d3c45b8566
 
+## BYOC demo cluster (2026-08-23 night, pushed through `cadd7f98`) — THE PRODUCT IS IN A CUSTOMER CLUSTER
+
+Throwaway LKE `vexa-byoc-demo` (id 646792, us-sea, 2× g6-standard-4) now runs the full stack
+**delivered pull-only** via the vexa-delivery conveyor (kit install → Argo CD subscription →
+Kyverno digest+signature admission → in-cluster channel registry at `172.232.174.246:30500`).
+Kubeconfig + demo signing keys + customer-values live in this session's scratchpad (`$SC/byoc/`,
+`$SC/kc-byoc.yaml`); channel = `enterprise-stable`, staging follows newest chart version.
+
+- **Upgrade path proven twice with zero kubectl**: published chart `0.12.24` (flows tier added)
+  → staging self-synced at 20:44; flows crashed (parents[4] image-depth bug, fixed as
+  `3d6fdeab` + `/behavior` showcase path); published `0.12.25` → self-synced at 20:54, all
+  Running. That IS the "upgrade path tested with no cluster manipulation (pull)" acceptance.
+- **Flows tier in-cluster**: worker ×2 (`5 flows · 17 steps`, durable Postgres db `flows`,
+  auto-created by initContainer), mailbox polling `info@vexa.ai` (cursor anchored at inbox
+  tail — no history replay), flows-api :18200 serving vocabulary + lifecycle. Laptop
+  worker/mailbox KILLED so only the cluster reacts to the inbox.
+- **Chart**: flows tier folded into the OSS chart (`deploy/helm/charts/vexa/templates/flows.yaml`
+  + `flows:` values block, off by default) as `cadd7f98` — next real tag carries it; the demo
+  chart 0.12.25 in the registry is the same content hand-packaged with the digest pin.
+- **Bot spawn proven in-cluster**: gateway 201 → pod `vexa-mtg-1-…` Running under Kyverno
+  admission (digest-pinned, demo-key-signed). Bot + agent-worker images prewarmed on both nodes.
+- **⛔ DEMO BLOCKER — model credential**: agent tier has NO usable credential. Subscription
+  OAuth hit the **weekly limit until Aug 27**; no Anthropic API key exists in vexa-secrets.
+  Founder must mint a Console API key → drop into customer-values `secrets.anthropicApiKey`
+  → re-run install.sh render + restart agent-api (pods do NOT roll on secret change — chart
+  lacks a secret-checksum annotation, noted as chart gap).
+- Kit defects found (vexa-delivery lane, not fixed here): `install.sh` unbound `VERIFIER_IMAGE`
+  when flag omitted; self-signed registry needs manual `insecure: "true"` on both Argo repo
+  secrets after every install run.
+- Staging (shared cluster) is scaled to zero and stage-locked by this session
+  (`stage-hold-baseline.json` in scratchpad is the restore map). Prod untouched.
+
 ## State (2026-08-23, all pushed through `534930e2`)
 
 - **Engine** `src/flows/` — stdlib-pure at import: admission (dedup by `source_event_id` UNIQUE),
