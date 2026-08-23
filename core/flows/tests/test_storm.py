@@ -22,7 +22,7 @@ import os
 import random
 
 from fixtures import drain, rig
-from flows import admit, cancel, claim, reclaim, retry, status, tick
+from flows import admit, cancel, claim, reclaim, resume, retry, status, tick
 
 ROUNDS = int(os.environ.get("STORM_ROUNDS", "25"))
 EVENTS = 8
@@ -70,6 +70,19 @@ def _storm_once(seed: int) -> None:
             clock.advance(rnd.choice([1, 30, 90, 600, 3600]))
         elif move < 0.42:                                 # reconciler runs at a random moment
             reclaim(db, clock)
+        elif move < 0.46:                                 # HOSTILE: malformed / unknown events
+            kind = rnd.random()
+            if kind < 0.4:
+                admit(db, reg, clock, source_event_id=f"junk-{rnd.randrange(99)}",
+                      event_type="no.such.event", subject_refs={})
+            elif kind < 0.7:
+                admit(db, reg, clock, source_event_id=f"malformed-{rnd.randrange(3)}",
+                      event_type="invite.received", subject_refs={})   # missing every ref
+            else:
+                rows = db.execute("SELECT reaction_id FROM reaction")
+                if rows:  # signal abuse: random verb at a random reaction in whatever state
+                    rid = rnd.choice(rows)[0]
+                    rnd.choice([resume, retry])(db, rid, "storm-abuser", clock)
         else:                                             # an honest worker tick
             tick(db, reg, clock)
 
@@ -82,7 +95,8 @@ def _storm_once(seed: int) -> None:
     drain(db, reg, clock, max_ticks=3000)
 
     # ── invariants ──────────────────────────────────────────────────────────
-    rows = db.execute("SELECT reaction_id, source_event_id, status, reason FROM reaction")
+    rows = db.execute("SELECT reaction_id, source_event_id, status, reason FROM reaction "
+                      "WHERE source_event_id NOT LIKE 'malformed-%'")
     assert len(rows) == EVENTS, f"I1: {len(rows)} reactions for {EVENTS} events"        # I1
 
     for rid, sid, st, reason in rows:
@@ -104,7 +118,12 @@ def _storm_once(seed: int) -> None:
         if st == "failed":
             assert retry(db, rid, actor="storm-op", clock=clock)
     drain(db, reg, clock, max_ticks=3000)
-    for rid, sid, st, _ in db.execute("SELECT reaction_id, source_event_id, status, reason FROM reaction"):
+    for rid, sid, st, why in db.execute(
+            "SELECT reaction_id, source_event_id, status, reason FROM reaction"):
+        if sid.startswith("malformed-"):
+            assert st in ("failed", "cancelled") and (st != "failed" or why), \
+                f"hostile event must end typed, got {st}"
+            continue
         if rid in cancelled:
             assert st == "cancelled"
         else:

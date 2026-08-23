@@ -58,4 +58,12 @@ class Registry:
         return self.flows[(name, version)]
 
     def match(self, event_type: str) -> list[Flow]:
-        return self.by_event.get(event_type, [])
+        """One version per flow IDENTITY: new events select the newest activated version of each
+        flow (in-flight reactions keep the version stamped at their admission). Caught by the
+        version-coexistence test: returning every registered version made v1 shadow v2 forever."""
+        latest: dict[str, Flow] = {}
+        for f in self.by_event.get(event_type, []):
+            cur = latest.get(f.name)
+            if cur is None or f.version > cur.version:
+                latest[f.name] = f
+        return list(latest.values())

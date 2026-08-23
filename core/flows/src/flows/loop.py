@@ -51,7 +51,17 @@ def tick(db: DB, registry: Registry, clock: Clock) -> bool:
     r = claim(db, clock)
     if r is None:
         return False
-    flow = registry.get(r.flow, r.flow_version)
+    # Rows can OUTLIVE their code: a redeploy may retire a flow version or rename a step while
+    # reactions reference them. That is a TYPED failure for the operator — never a KeyError that
+    # kills the worker for everyone else (caught by the hostile suite).
+    try:
+        flow = registry.get(r.flow, r.flow_version)
+    except KeyError:
+        _fail(db, r, clock, f"unknown flow {r.flow}@{r.flow_version} — retired by deploy?")
+        return True
+    if r.step not in registry.steps or r.step not in flow.steps:
+        _fail(db, r, clock, f"unknown step {r.step!r} in {r.flow}@{r.flow_version} — renamed by deploy?")
+        return True
     key = effect_key(r)
 
     prior_receipt = receipts.get(db, key)
@@ -107,6 +117,13 @@ def _advance(db: DB, r: Reaction, flow, clock: Clock) -> None:
                       next_run_at = :now, lease_until = NULL, reason = NULL, updated_at = :now
                WHERE reaction_id = :rid""",
             {"step": nxt, "now": clock.now(), "rid": r.reaction_id})
+
+
+def _fail(db: DB, r: Reaction, clock: Clock, why: str) -> None:
+    db.execute(
+        """UPDATE reaction SET status = 'failed', reason = :why,
+                  lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
+        {"why": why, "now": clock.now(), "rid": r.reaction_id})
 
 
 def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bool) -> None:
