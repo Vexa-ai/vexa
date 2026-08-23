@@ -67,17 +67,27 @@ def build(reg: Registry, db) -> None:
     # ── shared small steps ────────────────────────────────────────────────────
     @reg.step
     def ensure_user(ctx: StepCtx):
+        """Provision the platform user for the organizer (idempotent lookup-or-create).
+        Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call)
+        Result: {uid} — every later step's identity."""
         uid = ensure_platform_user(ctx.refs["organizer"])
         return Done({"uid": uid}, provider_ref=uid)
 
     @reg.step
     def rsvp_accept(ctx: StepCtx):
+        """Accept the invitation IN THE ORGANIZER'S CALENDAR — iMIP METHOD:REPLY over SMTP;
+        Google flips Vexa to "Yes" in the guest list. Reads: refs.{organizer,ics_uid,start,title}
+        Effect: one calendar reply email · Result: {message_id}."""
         mid = mx.send_rsvp_accept(ctx.refs["organizer"], ics_uid=ctx.refs["ics_uid"],
                                   start_epoch=ctx.refs["start"], title=ctx.refs["title"])
         return Done({"message_id": mid}, provider_ref=mid)
 
     @reg.step
     def ack_by_email(ctx: StepCtx):
+        """Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when
+        onboarding is pending. Registers the mail as a THREAD ANCHOR (replies become conversation).
+        Reads: refs.{organizer,url,start,title} · Prior: ensure_user · Effect: one email
+        Result: {message_id, workspace_ready}."""
         uid = ctx.prior["ensure_user"]["uid"]
         ready = scaffolded(uid)
         body = (f"Vexa accepted the invitation and joins {ctx.refs['url']} at "
@@ -92,6 +102,10 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def spawn_onboardings(ctx: StepCtx):
+        """EMIT onboarding facts when workspaces are missing: onboarding.person.needed for the
+        organizer without `.scaffolded`; onboarding.group.needed when refs.group is set and the
+        group marker is absent. Sub-flow composition: emits facts, never calls flows.
+        Prior: ensure_user · Result: {person?, group?} (reactions created)."""
         uid = ctx.prior["ensure_user"]["uid"]
         spawned = {}
         if not scaffolded(uid):
@@ -109,6 +123,8 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def emit_completed(ctx: StepCtx):
+        """EMIT meeting.completed carrying meeting identity + transcript — the fact the
+        post-meeting flows react to. Prior: dispatch_bot, run_meeting."""
         d = ctx.prior["dispatch_bot"]
         ctx.emit(COMPLETED.name, f"done-{d['meeting_id']}",
                  {**ctx.refs, "meeting_id": d["meeting_id"], "native": d["native"],
@@ -120,6 +136,9 @@ def build(reg: Registry, db) -> None:
     def _conversation(prefix: str, session_of, kickoff_of, gate_of, subject_line):
         @reg.step
         def _open(ctx: StepCtx):
+            """Open the onboarding conversation: seed the workspace, dispatch the agent kickoff
+            (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX
+            contract; the human's via threaded email. Reads: refs.uid (+person/group)."""
             uid = ctx.refs["uid"]
             ag.workspace_init(uid)
             base = ag.dispatch_turn(uid, session_of(ctx), kickoff_of(ctx))
@@ -129,6 +148,9 @@ def build(reg: Registry, db) -> None:
 
         @reg.step
         def _drive(ctx: StepCtx):
+            """Drive the conversation to the AGENT'S OWN ACCEPT: email each new outbox content
+            (send-once registry), nudge on silence (params: nudge cadence), Done when the agent
+            writes its acceptance marker (.scaffolded / group marker). Effect: emails."""
             uid, session = ctx.refs["uid"], session_of(ctx)
             if gate_of(ctx):
                 return Done({"ready": True})
@@ -173,6 +195,10 @@ def build(reg: Registry, db) -> None:
     # ── post-meeting, gated ───────────────────────────────────────────────────
     @reg.step
     def require_workspace(ctx: StepCtx):
+        """THE QUEUE GATE: minutes wait for workspace readiness — `.scaffolded` for the owner
+        (+ the group marker when refs.group). Not ready → nudge email on a cadence (params:
+        nudge_every_s) then Wait(60); unbounded on purpose: late, never lost.
+        Reads: refs.{uid,organizer,group?} · Effect: nudge emails · Result: {ready}."""
         uid = ctx.refs["uid"]
         ok = scaffolded(uid) and (not ctx.refs.get("group")
                                   or ws_file(uid, f".scaffolded-group-{ctx.refs['group']}") is not None)
@@ -187,6 +213,11 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def process_meeting(ctx: StepCtx):
+        """REAL agent turn on session meet-<id>: write the meeting note (Decided/Committed/
+        Open, wikilinked) into the workspace and commit. Completion detected by a commit touching
+        kg/entities/meeting/ (matched by PATH, never count). Params: style (rendering guidance).
+        Reads: refs.{uid,meeting_id,native,transcript} · Effect: agent worker + git commit
+        Result: {sha, note_path}."""
         uid = ctx.refs["uid"]
         if "baseline" not in ctx.scratch:
             ctx.scratch["shas"] = ag.commit_shas(uid)
@@ -206,6 +237,9 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def email_minutes(ctx: StepCtx):
+        """Send the committed note VERBATIM in the email body (UI-less law) + the feedback ask;
+        registers the thread → meet-<id> session. Cannot run before the commit: its input IS
+        process_meeting's receipt. Reads: refs.{uid,organizer,title} · Effect: one email."""
         p = ctx.prior["process_meeting"]
         note = ws_file(ctx.refs["uid"], p["note_path"]) or p["summary"]
         body = (note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
@@ -218,6 +252,10 @@ def build(reg: Registry, db) -> None:
     # ── the standing email conversation ───────────────────────────────────────
     @reg.step
     def feedback_turn(ctx: StepCtx):
+        """One conversation turn: hand the inbound email to the session's agent (workspace
+        updated where facts changed), collect the reply via the FILE-OUTBOX contract
+        (mail_outbox/<session>.md, content-hash), coalesced across sibling reactions.
+        Reads: refs.{uid,session,text} · Effect: agent worker turn · Result: {reply}."""
         uid, session = ctx.refs["uid"], ctx.refs["session"]
         if "dispatched" not in ctx.scratch:
             ctx.scratch["prev_hash"] = ag.collect_outbox(uid, session, None)[1]
@@ -246,6 +284,9 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def email_reply(ctx: StepCtx):
+        """Mail the agent's reply on the same thread; register Message-ID; record the content
+        hash in mail_outbox_sent (send-once across reactions and restarts).
+        Prior: feedback_turn · Effect: one email."""
         ft = ctx.prior["feedback_turn"]
         if not ft.get("reply"):
             return Done({"coalesced": True})                    # content already mailed by a sibling

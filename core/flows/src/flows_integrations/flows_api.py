@@ -63,7 +63,10 @@ def list_flows():
                  "params": json.loads(p or "{}"), "status": status,
                  "created_by": by, "source": "api"}
                 for n, v, e, st, p, status, by in rows]
-    return {"steps_vocabulary": sorted(vocab.steps), "flows": code_flows + db_flows}
+    return {"steps_vocabulary": [
+        {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split())}
+        for n in sorted(vocab.steps)],
+        "flows": code_flows + db_flows}
 
 
 @app.post("/flows", status_code=201, dependencies=[Depends(auth)])

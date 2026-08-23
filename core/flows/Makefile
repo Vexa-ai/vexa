@@ -24,6 +24,9 @@ gates: ## isolation (stdlib-pure engine · no-sleep law) + schema drift
 schema: ## regenerate schema.sql from flows_schema models (the SSOT)
 	$(PY) scripts/gen_schema.py
 
+vocab-docs: ## regenerate docs/flows/vocabulary.mdx from step docstrings
+	$(PY) scripts/gen_vocab_docs.py
+
 run-worker: ## the production loop (durable Postgres; VEXA_FLOWS_* env)
 	cd $(SRC) && VEXA_FLOWS_FIXTURE_TRANSCRIPT=$${VEXA_FLOWS_FIXTURE_TRANSCRIPT:-1} \
 	  nohup $(PY) -m flows_worker >/tmp/flows-worker.log 2>&1 & echo "worker → /tmp/flows-worker.log"

@@ -41,6 +41,7 @@
         "pages": [
           "flows/overview",
           "flows/authoring",
+          "flows/vocabulary",
           "flows/examples",
           "flows/developing",
           "flows/operations"

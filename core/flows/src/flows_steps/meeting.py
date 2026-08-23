@@ -21,12 +21,17 @@ FIXTURE_LINES = [
 
 
 def await_start(ctx: StepCtx):
+    """Sleep until start − 2 min — time is a column (Wait until), zero cost while parked.
+    Reads: refs.start."""
     if ctx.clock_now < ctx.refs["start"] - 120:
         return Wait(until=ctx.refs["start"] - 120)
     return Done({})
 
 
 def dispatch_bot(ctx: StepCtx):
+    """Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the
+    existing meeting). Prior: ensure_user (for the key) · Effect: bot container
+    Result: {meeting_id, native, platform}."""
     key = user_api_key(ctx.prior["ensure_user"]["uid"])
     st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key},
                     {"meeting_url": ctx.refs["url"], "bot_name": "Vexa",
