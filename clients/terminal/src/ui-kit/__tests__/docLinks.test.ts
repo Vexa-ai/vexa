@@ -57,6 +57,17 @@ describe("resolveDocRef — wikilinks", () => {
   it("returns undefined when no mounted workspace has the entity (renders the muted chip)", async () => {
     expect(await resolveDocRef({ wikilink: "Nobody" }, {})).toBeUndefined();
   });
+  it("resolves organisation entities from the mandatory _global tier even though it is not in /workspace/active", async () => {
+    trees["_global"] = ["kg/entities/company/oesterreichische-nationalbank.md"];
+    active = [{ slug: "personal" }];
+    trees["personal"] = [];
+    const r = await resolveDocRef({ wikilink: "Oesterreichische Nationalbank" }, {});
+    expect(r).toEqual({
+      path: "kg/entities/company/oesterreichische-nationalbank.md",
+      slug: "_global",
+      type: "company",
+    });
+  });
 });
 
 describe("resolveDocRef — paths", () => {
