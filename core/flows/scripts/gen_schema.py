@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sqlalchemy import create_mock_engine  # noqa: E402
-from flows.schema_models import Base  # noqa: E402
+from flows_schema import Base  # noqa: E402
 
 OUT = Path(__file__).resolve().parents[1] / "schema.sql"
 stmts: list[str] = []
