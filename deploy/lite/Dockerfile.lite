@@ -193,7 +193,7 @@ COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
 COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
-COPY core/agent/workspace-seeds /app/agent/workspace-seeds
+COPY behavior/workspaces /app/agent/workspace-seeds
 COPY core/agent/tools-seed      /app/agent/tools-seed
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json /app/agent/meetings/contracts/transcript.v1/transcript.schema.json
 COPY core/agent/contracts/workspace.v1/workspace.schema.json      /app/agent/agent/contracts/workspace.v1/workspace.schema.json

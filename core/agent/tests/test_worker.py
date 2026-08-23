@@ -518,7 +518,7 @@ def test_serve_meeting_upserts_workspace_file_from_proc_notes(tmp_path):
 
 from worker.worker import persist_envelope, load_meeting_schema, validate_envelope  # noqa: E402
 
-_SEED_DIR = pathlib.Path(__file__).resolve().parents[1] / "workspace-seeds" / "default"
+_SEED_DIR = pathlib.Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default"
 
 
 def _fold_events(events):
@@ -1166,7 +1166,7 @@ def test_seed_claude_md_defers_copilot_steering_to_meeting_md():
     deployment default (the seed no longer ships agents/ — absent means defaults). CLAUDE.md is
     auto-loaded as project memory on every turn, so copilot steering here would be a second,
     conflicting source."""
-    seed = pathlib.Path(__file__).resolve().parents[1] / "workspace-seeds" / "default" / "CLAUDE.md"
+    seed = pathlib.Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default" / "CLAUDE.md"
     text = seed.read_text()
     lower = text.lower()
     # Names meeting.md as the governing source, with an exclusivity word ("exclusive"/"only source").

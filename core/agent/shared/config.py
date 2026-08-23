@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
     meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
+    # Development-only, schema-validated JSON for post-meeting delivery to an SMTP sink such as
+    # Mailpit. Empty keeps the adapter disabled. Production delivery uses a separate EmailSink.
+    post_meeting_dev_email: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.

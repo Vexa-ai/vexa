@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/agent-post-meeting-dev-config.v1",
+  "title": "Agent post-meeting development notification configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recipient", "terminal_url", "smtp", "sender"],
+  "properties": {
+    "recipient": { "type": "string", "format": "email", "minLength": 3 },
+    "terminal_url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+    "smtp": {
+      "type": "string",
+      "pattern": "^[^:]+(?::[0-9]{1,5})?$",
+      "description": "Development SMTP host[:port], normally Mailpit"
+    },
+    "sender": { "type": "string", "format": "email", "minLength": 3 }
+  }
+}

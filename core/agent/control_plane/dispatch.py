@@ -252,6 +252,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:
         env["VEXA_MEETING_MODEL"] = settings.meeting_model
+    if settings.post_meeting_dev_email:
+        env["VEXA_POST_MEETING_DEV_EMAIL"] = settings.post_meeting_dev_email
     # llm-module dials (non-secret): completion provider + deployment-default model + the optional
     # operator model gate. The SECRETS (VEXA_LLM_API_KEY/BASE_URL) are brokered by the runtime.
     if settings.llm_provider:

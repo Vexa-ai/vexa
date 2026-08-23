@@ -207,6 +207,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_POST_MEETING_DEV_EMAIL",
+      "class": "defaulted",
+      "default": "(unset — development email delivery disabled)",
+      "description": "development-only JSON object validated by worker/post_meeting/config.v1.json: recipient, terminal_url, smtp and sender; normally targets Mailpit",
+      "targets": []
+    },
+    {
       "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
       "class": "defaulted",
       "default": "900",

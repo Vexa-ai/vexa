@@ -571,6 +571,53 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
                 work, cards, native=native, meeting_id=native, session_uid=session_uid,
                 platform=platform, date=date, title=title, model=cfg.model,
             )
+        on_doc_committed = None
+        dev_email = (os.environ.get("VEXA_POST_MEETING_DEV_EMAIL") or "").strip()
+        if dev_email:
+            # Explicit development adapter only. The structured env is schema-validated at worker
+            # boot; a future production delivery service fills the same EmailSink port rather than
+            # teaching the meeting loop SMTP or recipient policy.
+            from worker.post_meeting import (
+                DevSmtpEmailSink,
+                MeetingCompletion,
+                PostMeetingFault,
+                PostMeetingNotifier,
+                WorkspaceArtifactReader,
+                parse_dev_notification_config,
+                require_personal_recipient,
+                require_personal_workspace,
+            )
+            notification = parse_dev_notification_config(dev_email)
+            if doc_turn is None:
+                raise PostMeetingFault(
+                    source="config", kind="meeting-doc-disabled",
+                    detail="VEXA_POST_MEETING_DEV_EMAIL requires agents/meeting.md write_meeting_doc=true",
+                )
+            require_personal_workspace(
+                work,
+                store_root=Path(os.environ.get("VEXA_WORKSPACE_MOUNT_TARGET", "/workspaces")),
+                subject=os.environ["VEXA_OWNER"],
+            )
+            require_personal_recipient(
+                notification.recipient,
+                principal_email=os.environ.get("VEXA_PRINCIPAL_EMAIL", ""),
+            )
+            notifier = PostMeetingNotifier(
+                WorkspaceArtifactReader(work),
+                DevSmtpEmailSink(notification.smtp, sender=notification.sender),
+                terminal_url=notification.terminal_url,
+            )
+
+            def on_doc_committed(commit: dict) -> None:
+                receipt = notifier.notify(MeetingCompletion(
+                    subject=os.environ["VEXA_OWNER"], meeting_id=row_id, native_id=native,
+                    platform=platform, title=title, recipient=notification.recipient,
+                    commit_sha=str(commit["commit_sha"]),
+                ))
+                log.info(
+                    "post-meeting notification sent subject=%s meeting=%s commit=%s artifact=%s",
+                    os.environ["VEXA_OWNER"], row_id, receipt.commit_sha, receipt.artifact_path,
+                )
         serve_meeting(
             client, transcript_stream=transcript_stream, out_topic=out_topic,
             card_turn=lambda segs: meeting_card_turn(
@@ -592,6 +639,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             cursor_key=f"proc:meeting:{row_id}:cursor",
             on_proc_note=on_proc_note,
             on_envelope=on_envelope,
+            on_doc_committed=on_doc_committed,
             # Provenance stamped on every processed-notes entry: what pipeline/provider/model
             # produced this cleaned view — persisted verbatim into the durable view's `params`
             # (meeting.data processed views) by the meeting-api db-writer (reproducibility).
