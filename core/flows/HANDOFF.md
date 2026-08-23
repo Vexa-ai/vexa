@@ -91,6 +91,18 @@ real transcription service (no whisper in this stack) · recipients capped to th
   account-creation seam). A worker restarted after clearing a dead workload SKIPS pre-boot
   in-stream messages — resend payloads (flows receipts make this automatic; hand dispatches don't).
 
+## The behavior/machinery split (founder ruling 2026-08-23 late)
+
+**Machinery contains no prose.** Prompts, email copy, seeds, flow compositions and params are the
+BEHAVIOR DOMAIN — data, hot-editable, governed like content. First move done: the three flow
+kickoffs live in `behavior/prompts/*.md` (per-version override via flow params `{"prompts":
+{...}}`). NEXT COORDINATED MOVE (touches core/agent — the sidebar session's lane): relocate
+`core/agent/workspace-seeds/` into the behavior domain; it is the product's voice, not agent
+machinery. The behavior domain is HIGHEST-LEVEL, diverse and PROPRIETARY — it lives as a private
+content tree mounted at `VEXA_BEHAVIOR_DIR` (the `_global` pattern), never in the OSS repo;
+the in-repo `behavior/` keeps only published showcase defaults. Resolution: flow params →
+private mount → showcase.
+
 ## Open work, in order
 
 0. **Rotate the leaked app password** (see above) — one-line re-vault.

@@ -17,6 +17,7 @@ Laws (from the live witness): steps never sleep · all state in refs/receipts ·
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from flows import Done, Registry, StepCtx, StepError, Wait, EventType
 
@@ -33,34 +34,32 @@ MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
 
-ONBOARD_KICKOFF = """[email-onboarding] You are onboarding this person OVER EMAIL — every reply you
-write is sent verbatim as a plain-text email; their replies come back as your next turn. Read
-flows/personal.md and CLAUDE.md; run the discovery loop adapted to email: research what you can
-yourself, ask ONE short warm question per email, never re-ask what they answered. Record the name
-in _system/identity.md, build the `self: true` person entity, keep README.md the dashboard. When
-your acceptance test passes, write the file `.scaffolded` (content: today's date) — that releases
-their meeting minutes — and say so in your final email. Plain text only.
-DELIVERY CONTRACT: write the email you want sent to the file mail_outbox/onboarding.md
-(overwrite fully each turn) — THAT FILE is what gets emailed, verbatim. Their address: """
+_SHOWCASE = Path(__file__).resolve().parents[2] / "behavior" / "prompts"
 
-GROUP_KICKOFF = """[email-group-onboarding] You are setting up the GROUP workspace {group} over email
-with its organizer. Read flows/shared.md. Ask what this group is for and who belongs (ONE question
-per email); write CLAUDE.md, PURPOSE and README.md for it under kg-group/{group}/ in this
-workspace (the shared-workspace store lands later — the content is what matters), and when settled
-write the file `.scaffolded-group-{group}` (content: today's date) and say the group is ready.
-Plain text only. DELIVERY CONTRACT: write the email you want sent to the file
-mail_outbox/group-{group}.md (overwrite fully each turn) — THAT FILE is emailed verbatim.
-Organizer: """
 
-PROCESS_KICKOFF = """[post-meeting] The meeting (id {mid}) completed; final transcript below. Do ALL of:
-1) write the meeting note at kg/entities/meeting/{date}-{native}.md — frontmatter, then sections
-   Decided / Committed / Open, each item attributed, people as [[wikilinks]]; update the index;
-2) update README.md as the dashboard;
-3) end your reply with the note body EXACTLY as written, then a line '---', then 2-4 crisp action
-   points. Your reply's text is emailed to the participants verbatim, so no meta-commentary.
+def _prompt(fname: str) -> str:
+    """Behavior-domain prompt — machinery contains no prose, and the REAL voice is PROPRIETARY:
+    resolution is (1) flow params override, (2) the PRIVATE behavior mount
+    ($VEXA_BEHAVIOR_DIR/prompts/, deployed as a content tree like _global), (3) the in-repo
+    showcase default (published to demonstrate capability, never the product's actual voice)."""
+    import os
+    private = os.environ.get("VEXA_BEHAVIOR_DIR")
+    if private:
+        f = Path(private) / "prompts" / fname
+        if f.is_file():
+            return f.read_text()
+    return (_SHOWCASE / fname).read_text()
 
-TRANSCRIPT:
-{transcript}"""
+
+def prompt_for(ctx, fname: str, default: str) -> str:
+    over = (ctx.flow.param("prompts") or {}) if ctx.flow else {}
+    return over.get(fname, default)
+
+ONBOARD_KICKOFF = _prompt("onboard-person.md")
+
+GROUP_KICKOFF = _prompt("onboard-group.md")
+
+PROCESS_KICKOFF = _prompt("process-meeting.md")
 
 
 def build(reg: Registry, db) -> None:
@@ -183,7 +182,7 @@ def build(reg: Registry, db) -> None:
 
     _conversation("person",
                   session_of=lambda ctx: "onboarding",
-                  kickoff_of=lambda ctx: ONBOARD_KICKOFF + ctx.refs["person"],
+                  kickoff_of=lambda ctx: prompt_for(ctx, "onboard-person.md", ONBOARD_KICKOFF) + ctx.refs["person"],
                   gate_of=lambda ctx: scaffolded(ctx.refs["uid"]),
                   subject_line=lambda ctx: "Getting you set up")
     _conversation("group",
@@ -223,7 +222,7 @@ def build(reg: Registry, db) -> None:
             ctx.scratch["shas"] = ag.commit_shas(uid)
             ctx.scratch["baseline"] = ag.dispatch_turn(
                 uid, f"meet-{ctx.refs['meeting_id']}",
-                PROCESS_KICKOFF.format(mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
+                prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
                                        date=time.strftime("%Y-%m-%d"),
                                        transcript=ctx.refs["transcript"] or "(no speech captured)"))
             return Wait(seconds=12)
