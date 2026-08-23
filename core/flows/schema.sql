@@ -1,82 +1,92 @@
--- core/flows — production DDL (Postgres). Applied idempotently at boot.
--- Times are epoch seconds (double precision): one clock representation across dialects,
--- injected via the Clock port so tests advance time without sleeping.
+-- GENERATED from src/flows/schema_models.py (the SSOT) by scripts/gen_schema.py.
+-- DO NOT EDIT BY HAND — edit the models and regenerate. The engine and the sqlite
+-- test rig consume this file so they stay stdlib-pure; the drift gate keeps it honest.
 
 CREATE TABLE IF NOT EXISTS reaction (
-  reaction_id      text PRIMARY KEY,
-  source_event_id  text NOT NULL UNIQUE,          -- dedup by constraint, never by memory
-  event_type       text NOT NULL,
-  subject_refs     text NOT NULL,                 -- JSON: opaque refs (meeting, owner, workspace)
-  flow             text NOT NULL,
-  flow_version     integer NOT NULL,
-  step             text NOT NULL,
-  status           text NOT NULL CHECK (status IN
-    ('admitted','running','blocked','retrying','failed','cancelled','done')),
-  attempt          integer NOT NULL DEFAULT 0,
-  next_run_at      double precision NOT NULL,     -- time IS a column
-  blocked_deadline double precision,
-  lease_until      double precision,
-  reason           text,
-  scratch          text,                            -- durable per-reaction scratch (JSON): conversation bookkeeping survives worker restarts
-  created_at       double precision NOT NULL,
-  updated_at       double precision NOT NULL
+	reaction_id TEXT NOT NULL, 
+	source_event_id TEXT NOT NULL, 
+	event_type TEXT NOT NULL, 
+	subject_refs TEXT NOT NULL, 
+	flow TEXT NOT NULL, 
+	flow_version INTEGER NOT NULL, 
+	step TEXT NOT NULL, 
+	status TEXT NOT NULL, 
+	attempt INTEGER NOT NULL, 
+	next_run_at DOUBLE PRECISION NOT NULL, 
+	blocked_deadline DOUBLE PRECISION, 
+	lease_until DOUBLE PRECISION, 
+	reason TEXT, 
+	scratch TEXT, 
+	created_at DOUBLE PRECISION NOT NULL, 
+	updated_at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (reaction_id), 
+	CONSTRAINT reaction_status CHECK (status IN ('admitted','running','blocked','retrying','failed','cancelled','done')), 
+	UNIQUE (source_event_id)
 );
-CREATE INDEX IF NOT EXISTS reaction_due
-  ON reaction (next_run_at) WHERE status IN ('admitted','retrying');
+
+CREATE INDEX IF NOT EXISTS reaction_due ON reaction (next_run_at) WHERE status IN ('admitted','retrying');
+
+CREATE TABLE IF NOT EXISTS mail_thread (
+	message_id TEXT NOT NULL, 
+	subject_uid TEXT NOT NULL, 
+	session TEXT NOT NULL, 
+	created_at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (message_id)
+);
+
+CREATE TABLE IF NOT EXISTS mail_cursor (
+	id SERIAL NOT NULL, 
+	uid INTEGER NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT cursor_singleton CHECK (id = 1)
+);
+
+CREATE TABLE IF NOT EXISTS mail_outbox_sent (
+	subject_uid TEXT NOT NULL, 
+	session TEXT NOT NULL, 
+	hash TEXT NOT NULL, 
+	sent_at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (subject_uid, session, hash)
+);
+
+CREATE TABLE IF NOT EXISTS flow_version (
+	name TEXT NOT NULL, 
+	version INTEGER NOT NULL, 
+	on_event TEXT NOT NULL, 
+	steps TEXT NOT NULL, 
+	params TEXT, 
+	status TEXT NOT NULL, 
+	created_by TEXT, 
+	created_at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (name, version), 
+	CONSTRAINT flow_status CHECK (status IN ('draft','active','retired'))
+);
 
 CREATE TABLE IF NOT EXISTS effect_receipt (
-  effect_key   text PRIMARY KEY,                  -- "{reaction_id}:{step}:{target}"
-  reaction_id  text NOT NULL REFERENCES reaction (reaction_id),
-  step         text NOT NULL,
-  state        text NOT NULL CHECK (state IN ('reserved','confirmed','failed')),
-  provider_ref text,
-  result       text,                              -- JSON the next step consumes
-  attempted_at double precision NOT NULL,
-  confirmed_at double precision
+	effect_key TEXT NOT NULL, 
+	reaction_id TEXT NOT NULL, 
+	step TEXT NOT NULL, 
+	state TEXT NOT NULL, 
+	provider_ref TEXT, 
+	result TEXT, 
+	attempted_at DOUBLE PRECISION NOT NULL, 
+	confirmed_at DOUBLE PRECISION, 
+	PRIMARY KEY (effect_key), 
+	CONSTRAINT receipt_state CHECK (state IN ('reserved','confirmed','failed')), 
+	FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)
 );
+
 CREATE INDEX IF NOT EXISTS receipt_by_reaction ON effect_receipt (reaction_id);
 
 CREATE TABLE IF NOT EXISTS signal (
-  signal_id   text PRIMARY KEY,
-  reaction_id text NOT NULL REFERENCES reaction (reaction_id),
-  kind        text NOT NULL CHECK (kind IN ('resume','retry','cancel')),
-  actor       text NOT NULL,
-  reason      text,
-  created_at  double precision NOT NULL,
-  consumed_at double precision
-);
-
--- ── mail threading (the integration's state): outbound registers its Message-ID → session;
---    inbound In-Reply-To resolves to the conversation it belongs to (threaded, never sender-matched)
-CREATE TABLE IF NOT EXISTS mail_thread (
-  message_id  text PRIMARY KEY,
-  subject_uid text NOT NULL,               -- platform user id the session belongs to
-  session     text NOT NULL,               -- agent chat session (onboarding · meet-<id> · group-<slug>)
-  created_at  double precision NOT NULL
-);
-CREATE TABLE IF NOT EXISTS mail_cursor (
-  id   integer PRIMARY KEY CHECK (id = 1),
-  uid  integer NOT NULL
-);
-CREATE TABLE IF NOT EXISTS mail_outbox_sent (
-  subject_uid text NOT NULL,
-  session     text NOT NULL,
-  hash        text NOT NULL,               -- one outbox content → ONE email, across ALL reactions
-  sent_at     double precision NOT NULL,
-  PRIMARY KEY (subject_uid, session, hash)
-);
-
--- ── flow_version: FLOWS ARE ROWS (submitted/activated via flows-api — live in seconds, no
---    image rebuild). Steps stay reviewed code in the image; this composes them. In-flight
---    reactions keep the version stamped at admission.
-CREATE TABLE IF NOT EXISTS flow_version (
-  name        text NOT NULL,
-  version     integer NOT NULL,
-  on_event    text NOT NULL,
-  steps       text NOT NULL,               -- JSON array of step NAMES (validated at submission)
-  params      text,                        -- JSON: prompts/prompt_refs, cadences, windows, policy
-  status      text NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','retired')),
-  created_by  text,
-  created_at  double precision NOT NULL,
-  PRIMARY KEY (name, version)
+	signal_id TEXT NOT NULL, 
+	reaction_id TEXT NOT NULL, 
+	kind TEXT NOT NULL, 
+	actor TEXT NOT NULL, 
+	reason TEXT, 
+	created_at DOUBLE PRECISION NOT NULL, 
+	consumed_at DOUBLE PRECISION, 
+	PRIMARY KEY (signal_id), 
+	CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel')), 
+	FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)
 );
