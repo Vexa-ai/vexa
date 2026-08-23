@@ -273,3 +273,32 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
         assert h.id == "rt-mnt"
     finally:
         b.cleanup(h)
+
+
+# ── k8s: file-shaped credential mounts for agent workers (the codex seam) ─────
+
+_SM = '[{"secret": "codex-auth", "mountPath": "/root/.codex"}]'
+
+
+def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
+    """A dispatch env (VEXA_UNIT_ID present) + RUNTIME_K8S_SECRET_MOUNTS ⇒ the worker Pod carries the
+    Secret volume mounted read-only at the harness's credential path."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+           "RUNTIME_K8S_SECRET_MOUNTS": _SM}
+    spec = pod_overrides(env, container_name="w")["spec"]
+    assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
+    assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex", "readOnly": True} \
+        in spec["containers"][0]["volumeMounts"]
+
+
+def test_k8s_secret_mounts_never_reach_bot_pods():
+    """A meeting bot's spawn env has no VEXA_UNIT_ID — it must not carry a model credential."""
+    ov = pod_overrides({"RUNTIME_K8S_SECRET_MOUNTS": _SM}, container_name="mtg")
+    assert ov is None
+
+
+def test_k8s_secret_mounts_malformed_entry_fails_loud():
+    import pytest
+    with pytest.raises(ValueError):
+        pod_overrides({"VEXA_UNIT_ID": "u-1",
+                       "RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "x"}]'}, container_name="w")

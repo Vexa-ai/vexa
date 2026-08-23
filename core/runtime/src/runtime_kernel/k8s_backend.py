@@ -24,6 +24,11 @@ WORKLOAD_ID_LABEL = "runtime.workload_id"
 # the runtime itself is allowed to run.
 TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
 NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
+# File-shaped credentials for spawned workloads (the twin of dispatch's MODEL_AUTH_ENV_ALLOWLIST,
+# which covers env-shaped ones): some harnesses read a credential FILE (codex: ~/.codex/auth.json),
+# and a bare `kubectl run` Pod inherits no mounts. JSON array of {"secret": <name>, "mountPath": <dir>}.
+# Mounted read-only — a token refresh cannot persist, so keep the Secret fresh operator-side.
+SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, mountPath}
 
 
 def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
@@ -51,7 +56,8 @@ def _runtime_scheduling_env() -> dict[str, str]:
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
     an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
-    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV)
+            if os.environ.get(k)}
 
 
 def _kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -91,6 +97,15 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
+    # credential files go to AGENT WORKERS only (a dispatch env carries VEXA_UNIT_ID); a meeting
+    # bot never needs a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
+    for i, sm in enumerate(secret_mounts or ()):
+        if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
+            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath}}, got {sm!r}")
+        name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
+        volumes.append({"name": name, "secret": {"secretName": sm["secret"]}})
+        volume_mounts.append({"name": name, "mountPath": sm["mountPath"], "readOnly": True})
     if not volumes and not tolerations and not node_selector:
         return None
     # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
