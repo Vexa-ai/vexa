@@ -58,3 +58,10 @@ CREATE TABLE IF NOT EXISTS mail_cursor (
   id   integer PRIMARY KEY CHECK (id = 1),
   uid  integer NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mail_outbox_sent (
+  subject_uid text NOT NULL,
+  session     text NOT NULL,
+  hash        text NOT NULL,               -- one outbox content → ONE email, across ALL reactions
+  sent_at     double precision NOT NULL,
+  PRIMARY KEY (subject_uid, session, hash)
+);

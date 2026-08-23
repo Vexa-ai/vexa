@@ -133,6 +133,11 @@ def build(reg: Registry, db) -> None:
             if gate_of(ctx):
                 return Done({"ready": True})
             reply, h = ag.collect_outbox(uid, session, ctx.scratch.get("sent_hash"))
+            if reply is not None and db.execute(
+                    "SELECT 1 FROM mail_outbox_sent WHERE subject_uid=:u AND session=:s AND hash=:h",
+                    {"u": uid, "s": session, "h": h}):
+                ctx.scratch["sent_hash"] = h                    # seen globally — don't resend
+                reply = None
             if reply is not None:
                 mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
                               subject_line(ctx), reply,
@@ -140,6 +145,9 @@ def build(reg: Registry, db) -> None:
                 mx.register_thread(db, mid, uid, session)
                 ctx.scratch["thread"] = ctx.scratch.get("thread") or mid
                 ctx.scratch["sent_hash"] = h
+                db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
+                              VALUES (:u,:s,:h,:t) ON CONFLICT DO NOTHING""",
+                           {"u": uid, "s": session, "h": h, "t": ctx.clock_now})
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             elif ctx.clock_now - ctx.scratch.get("last_mail_at", ctx.clock_now) > NUDGE_EVERY_S:
                 mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
@@ -225,6 +233,10 @@ def build(reg: Registry, db) -> None:
             return Wait(seconds=10)
         reply, h = ag.collect_outbox(uid, session, ctx.scratch.get("prev_hash"))
         if reply is not None:
+            already = db.execute("SELECT 1 FROM mail_outbox_sent WHERE subject_uid=:u AND session=:s AND hash=:h",
+                                 {"u": uid, "s": session, "h": h})
+            if already:
+                return Done({"reply": "", "coalesced": True})   # another reaction already mailed this content
             ctx.scratch["out_hash"] = h
         if reply is None:
             if ctx.clock_now - ctx.scratch.get("t0", ctx.scratch.setdefault("t0", ctx.clock_now)) > 600:
@@ -234,9 +246,16 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def email_reply(ctx: StepCtx):
+        ft = ctx.prior["feedback_turn"]
+        if not ft.get("reply"):
+            return Done({"coalesced": True})                    # content already mailed by a sibling
         mid = mx.send(ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
-                      ctx.prior["feedback_turn"]["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
+                      ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
         mx.register_thread(db, mid, ctx.refs["uid"], ctx.refs["session"])
+        db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
+                      VALUES (:u,:s,:h,:t) ON CONFLICT DO NOTHING""",
+                   {"u": ctx.refs["uid"], "s": ctx.refs["session"],
+                    "h": ctx.scratch.get("out_hash", ""), "t": ctx.clock_now})
         return Done({"message_id": mid}, provider_ref=mid)
 
     s = reg.steps
