@@ -57,8 +57,48 @@ describe("actionsFor — offered action sets per status", () => {
       expect(ids(s)).toEqual(["stop"]);
     }
   });
-  it("completed/failed/stopped → Re-send", () => {
-    for (const s of ["completed", "failed", "stopped"]) expect(ids(s)).toEqual(["resend"]);
+  it("completed/failed/stopped → Re-send + Delete data", () => {
+    for (const s of ["completed", "failed", "stopped"]) expect(ids(s)).toEqual(["resend", "erase"]);
+  });
+  it("only the terminal erase carries the danger tone (the plan Delete must not)", () => {
+    expect(actionsFor(row("completed")).find((a) => a.id === "erase")!.tone).toBe("danger");
+    expect(actionsFor(row("idle")).find((a) => a.id === "delete")!.tone).toBe("muted");
+  });
+});
+
+describe("erase — a confirm gate stands in front of an irreversible delete (#116)", () => {
+  const eraseOn = (s: string) => actionsFor(row(s)).find((a) => a.id === "erase")!;
+
+  it("declining the confirm issues NO request at all", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    eraseOn("completed").run();
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepting the confirm DELETEs the row-id meeting route", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    eraseOn("completed").run();
+    const { url, init } = lastFetch();
+    expect(url).toBe(`/api/meetings/${NATIVE}`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("the prompt names recordings only when the row has one", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    actionsFor({ ...row("completed"), has_recording: true }).find((a) => a.id === "erase")!.run();
+    expect(confirmSpy.mock.calls[0][0]).toContain("transcript and recordings");
+    actionsFor({ ...row("completed"), has_recording: false }).find((a) => a.id === "erase")!.run();
+    expect(confirmSpy.mock.calls[1][0]).not.toContain("recordings");
+  });
+
+  it("the prompt states that the loss is permanent and backups will not recover it", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    eraseOn("completed").run();
+    const prompt = String(confirmSpy.mock.calls[0][0]);
+    expect(prompt).toMatch(/cannot be undone/i);
+    expect(prompt).toMatch(/backups are not a recovery path/i);
   });
 });
 

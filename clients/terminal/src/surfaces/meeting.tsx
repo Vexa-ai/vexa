@@ -278,7 +278,10 @@ const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "�
 
 type MeetingActionFailure = { actionId: string; actionLabel: string; native: string; message: string };
 type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
-type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
+// `live` colours a control acting on a RUNNING bot; `danger` colours an IRREVERSIBLE one on a
+// terminal row. Both render in --danger — the split is so a reader can tell "stop the bot" from
+// "destroy the artifacts" at the call site rather than from the colour.
+type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted" | "danger"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
 
 /** A non-ok action response as a STRUCTURED failure (status + backend detail), never a raw body. */
 async function readFailure(r: Response): Promise<ApiError> {
@@ -344,6 +347,21 @@ export function actionsFor(m: MeetingMock): RowAction[] {
   // Delete a PLANNED row — ROW-id addressed (a link-less plan has no platform/native path).
   const del = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "delete", actionLabel: "Delete", native }, fetch(`/api/meetings/${encodeURIComponent(m.id)}`, { method: "DELETE" }), onFailure);
+  // Erase a TERMINAL row's artifacts — same row-id DELETE as `del`, a different act. On a plan that
+  // route removes a row nobody has data in yet; on a completed meeting it destroys the transcript and
+  // the recording objects. Irreversible, and backups are NOT a recovery path (they expire under the
+  // operator's retention policy), so it is confirm-gated: the confirm resolves BEFORE fetch is
+  // constructed, because fetch is eager and a declined confirm must issue no request at all.
+  const erase = (onFailure?: MeetingActionFailureHandler) => {
+    const what = m.has_recording ? "transcript and recordings" : "transcript";
+    const ok = typeof window !== "undefined" && window.confirm(
+      `Permanently delete the ${what} for "${m.title}"?\n\n` +
+      "This cannot be undone, and backups are not a recovery path.",
+    );
+    if (!ok) return;
+    return runMeetingAction({ actionId: "erase", actionLabel: "Delete data", native },
+      fetch(`/api/meetings/${encodeURIComponent(m.id)}`, { method: "DELETE" }), onFailure);
+  };
   // Cancel (clear the time) on a LINK-LESS planned row — PATCH by row id (no native path exists).
   const cancelById = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "cancel", actionLabel: "Cancel", native }, fetch(`/api/meetings/${encodeURIComponent(m.id)}`, {
@@ -381,7 +399,10 @@ export function actionsFor(m: MeetingMock): RowAction[] {
     case "requested": case "joining": case "awaiting_admission": case "needs_help": case "active": case "stopping":
       return [{ id: "stop", label: "Stop", tone: "live", run: stop }];
     case "completed": case "failed": case "stopped": default:
-      return [{ id: "resend", label: "Re-send", tone: "accent", run: send }];
+      return [
+        { id: "resend", label: "Re-send", tone: "accent", run: send },
+        { id: "erase", label: "Delete data", tone: "danger", run: erase },
+      ];
   }
 }
 
@@ -418,7 +439,7 @@ function RowActions({ m, showBadge, reveal, onActionStart, onActionFailure }: { 
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 132, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,.28)", padding: 4, zIndex: 40 }}>
           {acts.map((a) => (
             <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); onActionStart?.(); void a.run(onActionFailure); }}
-              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--danger)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
+              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" || a.tone === "danger" ? "var(--danger)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
               onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
               {a.label}
             </button>
@@ -769,7 +790,7 @@ export function BotControls({ m, connected = true }: { m: MeetingMock; connected
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
       {acts.map((a) => {
-        const danger = a.tone === "live";
+        const danger = a.tone === "live" || a.tone === "danger";
         return (
           <button key={a.id} disabled={disabled}
             title={!connected ? "Live connection lost — reconnecting…" : undefined}

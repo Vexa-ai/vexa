@@ -21,6 +21,10 @@ ALWAYS-ON (the routine `gate:compose` subset):
   6b (wiring)       — the scheduler re-spawn path is present; the backoff proof LEANS on the offline
                       P3 test_join_retry.py (deterministic forcing of a transient failure on a LIVE
                       bot is slow/flaky — split documented in the README).
+  8  artifact        — a completed meeting's transcript rows, live segment hash and recording objects
+     deletion         are erased by the owner's DELETE, PROVEN in postgres·minio·redis rather than by
+                      the API's own 404 (which the tombstone alone would satisfy); a non-owner's
+                      DELETE is a 404 that touches nothing.
 
 COMPOSE_BOT=1 (opt-in; real bot lifecycle — slow + needs the ~7GB vexaai/vexa-bot:v012 image):
   3  bot spawn      — POST /bots → meeting-api spawns via runtime → a real `vexa-mtg-…` container
@@ -567,3 +571,108 @@ def test_07_webhook_delivery_outcome_reported(stack):
     assert blocked["fields"]["target_host"] == "receiver.internal"
     assert blocked["fields"]["event_type"] in ("meeting.status_change", "meeting.completed")
     print(f"\n[7/webhook] outcomes reported for meeting {meeting_id}: {sorted(outcomes)}")
+
+
+# ── 8. completed-artifact deletion (#116) ────────────────────────────────────────────────────────
+
+def test_08_completed_artifact_deletion(stack):
+    """Erasure is proven against the STORAGE, never against the API's own answer.
+
+    A `404` from the read path is satisfied by the tombstone alone, so an API-only assertion cannot
+    distinguish real erasure from a hidden-but-retained transcript. Every green below is therefore a
+    direct psql / mc / redis-cli observation of the durable state.
+    """
+    user_id = STATE["user_id"]
+    token = STATE["token_full"]
+    platform, native_id = "google_meet", f"del-{uuid.uuid4().hex[:8]}"
+    meeting_id, session_uid = _insert_meeting(stack, user_id, platform, native_id)
+
+    # --- durable transcript rows (the postgres artifact) -----------------------------------------
+    for i, line in enumerate(("confidential therapy line one", "confidential therapy line two")):
+        stack.psql(
+            "INSERT INTO transcriptions "
+            "(meeting_id, session_uid, segment_id, start_time, end_time, text, language, speaker) "
+            f"VALUES ({meeting_id}, '{session_uid}', 'seg-{i}', {i}.0, {i + 1}.0, "
+            f"'{line}', 'en', 'Patient');"
+        )
+    # --- a live segment in redis (the cache artifact) --------------------------------------------
+    stack.redis_cli("HSET", f"meeting:{meeting_id}:segments", "seg-live",
+                    json.dumps({"text": "confidential live", "start": 0, "end": 1}))
+
+    # --- a real recording object in minio (the object-store artifact) ----------------------------
+    rec_token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token)
+    chunk = _canonical_wav(b"gate-compose-deletion-chunk-pcm-payload")
+    body, ctype = _multipart(
+        {"session_uid": session_uid, "media_type": "audio", "media_format": "wav",
+         "chunk_seq": "0", "is_final": "true"},
+        file_field="file", filename="chunk0.wav", file_bytes=chunk, content_type="audio/wav",
+    )
+    code, receipt = http("POST", f"{stack.meeting_api}/internal/recordings/upload",
+                         headers={"Authorization": f"Bearer {rec_token}", "Content-Type": ctype},
+                         body=body)
+    assert code == 200, f"upload → {code} {receipt}"
+    recording_id = receipt["recording_id"]
+    prefix = f"recordings/{user_id}/{recording_id}/"
+    # Finalize so a master exists too — deletion must sweep the whole prefix, not just the chunks.
+    code, master = http("GET", f"{stack.meeting_api}/recordings/{recording_id}/master?type=audio",
+                        headers={"x-user-id": str(user_id)})
+    assert code == 200, f"finalize master → {code} {master}"
+
+    # The lifecycle must be terminal before artifacts are deletable.
+    stack.psql(f"UPDATE meetings SET status = 'completed' WHERE id = {meeting_id};")
+
+    # --- RED: every artifact is present in its own store -----------------------------------------
+    rows_before = int(stack.psql(f"SELECT count(*) FROM transcriptions WHERE meeting_id = {meeting_id};"))
+    objects_before = stack.minio_ls(prefix)
+    redis_before = stack.redis_cli("EXISTS", f"meeting:{meeting_id}:segments").strip()
+    assert rows_before == 2, f"expected 2 durable transcript rows, saw {rows_before}"
+    assert objects_before, f"expected recording objects under {prefix}, saw none"
+    assert redis_before == "1", f"expected the live segment hash to exist, EXISTS → {redis_before}"
+    code, _ = http("GET", f"{stack.gateway}/transcripts/{platform}/{native_id}",
+                   headers={"x-api-key": token})
+    assert code == 200, f"transcript should read 200 before deletion → {code}"
+
+    # --- NEGATIVE CONTROL: a different user cannot erase this meeting ----------------------------
+    other_user = _create_user(stack, max_bots=1)
+    other_token = _mint_token(stack, other_user, "bot,tx")
+    code, _ = http("DELETE", f"{stack.gateway}/meetings/{platform}/{native_id}",
+                   headers={"x-api-key": other_token})
+    assert code == 404, f"non-owner DELETE must be an indistinguishable 404 → {code}"
+    assert int(stack.psql(f"SELECT count(*) FROM transcriptions WHERE meeting_id = {meeting_id};")) == 2, \
+        "a non-owner DELETE destroyed transcript rows"
+    assert stack.minio_ls(prefix), "a non-owner DELETE destroyed recording objects"
+
+    # --- the owner's delete, through the gateway (the customer's own path) -----------------------
+    code, receipt = http("DELETE", f"{stack.gateway}/meetings/{platform}/{native_id}",
+                         headers={"x-api-key": token})
+    assert code == 200, f"owner DELETE → {code} {receipt}"
+
+    # --- GREEN: observed in the stores themselves, not through the API ---------------------------
+    rows_after = int(stack.psql(f"SELECT count(*) FROM transcriptions WHERE meeting_id = {meeting_id};"))
+    objects_after = stack.minio_ls(prefix)
+    redis_after = stack.redis_cli("EXISTS", f"meeting:{meeting_id}:segments").strip()
+    assert rows_after == 0, f"transcript rows SURVIVED deletion in postgres: {rows_after}"
+    assert objects_after == [], f"recording objects SURVIVED deletion in minio: {objects_after}"
+    assert redis_after == "0", f"live segment hash SURVIVED deletion in redis: {redis_after}"
+
+    # The terminal row is retained as lifecycle evidence, carrying the tombstone.
+    assert stack.psql(f"SELECT status FROM meetings WHERE id = {meeting_id};") == "completed"
+    assert stack.psql(
+        f"SELECT data->'artifact_deletion'->>'state' FROM meetings WHERE id = {meeting_id};"
+    ) == "completed"
+    assert stack.psql(
+        f"SELECT data ? 'recordings' FROM meetings WHERE id = {meeting_id};"
+    ) == "f", "recording metadata survived in the meeting JSONB"
+
+    code, _ = http("GET", f"{stack.gateway}/transcripts/{platform}/{native_id}",
+                   headers={"x-api-key": token})
+    assert code == 404, f"transcript still readable after deletion → {code}"
+
+    # Idempotent: the same owner-scoped call on a tombstoned meeting is a successful no-op.
+    code, _ = http("DELETE", f"{stack.gateway}/meetings/{platform}/{native_id}",
+                   headers={"x-api-key": token})
+    assert code == 200, f"repeat DELETE → {code}"
+
+    print(f"\n[8/deletion] meeting {meeting_id}: postgres rows {rows_before}→{rows_after} · "
+          f"minio {len(objects_before)}→{len(objects_after)} objects · redis hash {redis_before}→{redis_after} · "
+          f"non-owner 404 with artifacts intact · tombstone retained")
