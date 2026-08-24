@@ -85,6 +85,10 @@ class MailCursor(Base):
     __tablename__ = "mail_cursor"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The transport-native position. IMAP's is an integer UID (kept in `uid` too, so an existing
+    # deployment's row is still readable); Graph's is a delta link or an ISO timestamp, which
+    # does not fit an INTEGER. Nullable: rows written before the transport seam have only `uid`.
+    token: Mapped[str | None] = mapped_column(Text)
     __table_args__ = (CheckConstraint("id = 1", name="cursor_singleton"),)
 
 
