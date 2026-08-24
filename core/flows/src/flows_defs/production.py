@@ -126,6 +126,7 @@ def build(reg: Registry, db) -> None:
                                         {"group": g, "organizer": ctx.refs["organizer"], "uid": uid})
         return Done(spawned)
 
+    reg.step(mt.check_platform)
     reg.step(mt.await_start)
     reg.step(mt.dispatch_bot)
     reg.step(mt.run_meeting)
@@ -310,7 +311,10 @@ def build(reg: Registry, db) -> None:
 
     s = reg.steps
     reg.flow(name="invite_intake", version=1, on=INVITE,
-             steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["spawn_onboardings"],
+             # check_platform sits BEFORE rsvp_accept: an RSVP is a promise to attend, so the
+             # refusal has to land before the calendar flips Vexa to "Yes".
+             steps=[s["ensure_user"], s["check_platform"], s["rsvp_accept"], s["ack_by_email"],
+                    s["spawn_onboardings"],
                     s["await_start"], s["dispatch_bot"], s["run_meeting"], s["emit_completed"]])
     reg.flow(name="onboard_person", version=1, on=ONB_PERSON,
              steps=[s["open_person"], s["drive_person"]])
