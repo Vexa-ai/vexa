@@ -95,6 +95,34 @@ threaded · "research from email address" stub → the agent's real research · 
 real transcription service (no whisper in this stack) · recipients capped to the organizer →
 `_global` Inside rule + consent policy · `changeme` admin auth · amd64-emulated bot image.
 
+## The mail edge is transport-pluggable (2026-08-24) — Exchange/M365 capable
+
+The pilot customer is a bank on Exchange/M365; the mail edge spoke Gmail-IMAP only. It now sits
+behind one seam (`src/flows_integrations/mail_transport.py`), selected by `VEXA_MAIL_TRANSPORT`:
+`gmail` (default, unchanged) · `imap` (host/port from env — Exchange with IMAP enabled needs no
+new code) · `graph` (Microsoft Graph, client-credentials, for M365 with IMAP off). Engine, flows
+and steps are untouched; `emailx.send*` keeps its signatures. Env matrix + the four contracts a
+transport must keep: [`src/flows_integrations/README.md`](src/flows_integrations/README.md).
+
+- **Outlook ICS** is a different animal and now parsed as one (`src/flows_integrations/ics.py`):
+  RFC 5545 unfolding FIRST (Outlook folds at 75 octets — it splits Meet URLs), Windows→IANA
+  timezone mapping (CLDR world-default table, vendored), UTF-16 BOM sniffing, and an
+  unresolvable TZID degrades to floating instead of raising — **a raise there wedges the cursor
+  forever**, since the poller only advances after a message is routed.
+- **`mail_cursor` grew a nullable `token TEXT`** (Graph's position is a delta link or a
+  timestamp). No migration runner exists in this brick, so on a database created before this
+  change run once: `ALTER TABLE mail_cursor ADD COLUMN token TEXT;`. **The BYOC demo cluster's
+  `flows` database is exactly such a database** — IMAP keeps working untouched; Graph refuses to
+  start without the column rather than silently rewinding the mailbox.
+- **Rung: offline-proven only.** 82 tests green (45 pre-existing + 37 new), isolation green.
+  There is **no M365 credential in the vault**, so the Graph transport has never met a live
+  tenant: it is validated against a fake HTTP layer and against fixtures built from documented
+  Exchange output. `_synthesize_ics` (Exchange delivers meeting requests as `eventMessageRequest`
+  properties with no `.ics` part) is the least-verified piece. First live tenant closes both.
+- **Known gap, deliberately not closed:** an invite still requires a `meet.google.com` URL. A
+  bank's Outlook invite usually carries a **Teams** link, which our bot cannot join — admitting
+  one would produce a confident failure. That is a bot-platform decision, not a mail-edge one.
+
 ## The two binding product constraints
 
 1. **UI-LESS**: email is the entire product surface. Every artifact — confirmation, onboarding

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS mail_thread (
 CREATE TABLE IF NOT EXISTS mail_cursor (
 	id SERIAL NOT NULL, 
 	uid INTEGER NOT NULL, 
+	token TEXT, 
 	PRIMARY KEY (id), 
 	CONSTRAINT cursor_singleton CHECK (id = 1)
 );
