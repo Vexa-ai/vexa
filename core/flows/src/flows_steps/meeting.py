@@ -28,28 +28,92 @@ def await_start(ctx: StepCtx):
     return Done({})
 
 
+#: The platforms this lane dispatches at — the constructible set from the product's
+#: ``bot_spawn/service.py::_URL_TEMPLATES`` (google_meet, teams). Anything else joins only on a
+#: caller-vouched ``meeting_url``, and an unattended invite lane cannot vouch for a link that
+#: arrived in someone else's calendar entry. Mirrors flows_integrations.meeting_link, which is
+#: the intake half of the same rule (integrations are a separate process; no import either way).
+SUPPORTED_PLATFORMS = ("google_meet", "teams")
+
+
+def check_platform(ctx: StepCtx):
+    """THE HONEST REFUSAL. Fail TYPED before anything irreversible when the invite's platform is
+    one we cannot join, and tell the organizer which platform we saw.
+
+    Runs BEFORE rsvp_accept on purpose: accepting in the organizer's calendar is a promise to
+    show up, and a bank reading "Vexa — Yes" in the guest list of a meeting no bot will ever
+    join is worse than a plain no. One email (the existing ack idiom, not a new channel), then
+    a non-retryable StepError so the reaction lands in `failed` with the reason on the row —
+    never a bot dispatched at a platform that cannot be joined.
+
+    Reads: refs.{platform, native_meeting_id, url, organizer, title} · Effect: at most one email
+    Result: {platform}."""
+    from . import emailx as mx                   # lazy: keeps the module's import surface flat
+    if "platform" not in ctx.refs:
+        # A reaction admitted BEFORE this change carries no platform fact. Those are Meet by
+        # construction (the old intake matched nothing else), so absence is not "unknown" —
+        # refusing them here would email organizers about invites we can and did join.
+        return Done({"platform": "google_meet", "legacy_refs": True})
+    platform = ctx.refs.get("platform") or "unknown"
+    if ctx.refs.get("platform_supported", platform in SUPPORTED_PLATFORMS):
+        return Done({"platform": platform})
+    named = {"zoom": "Zoom", "jitsi": "Jitsi", "unknown": "that platform"}.get(
+        platform, platform)
+    if not ctx.scratch.get("told"):
+        mx.send(ctx.refs["organizer"], f"Vexa can't join: {ctx.refs.get('title', 'your meeting')}",
+                f"Vexa didn't accept this invitation — the meeting is on {named}, and Vexa "
+                "joins Google Meet and Microsoft Teams today.\n\n"
+                "Re-send the invitation with a Meet or Teams link and it will be picked up "
+                "automatically.")
+        ctx.scratch["told"] = True
+    raise StepError(f"unsupported meeting platform '{platform}' "
+                    f"(this lane joins {', '.join(SUPPORTED_PLATFORMS)}); organizer notified",
+                    retryable=False)
+
+
 def dispatch_bot(ctx: StepCtx):
     """Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the
-    existing meeting). Prior: ensure_user (for the key) · Effect: bot container
+    existing meeting).
+
+    The ADDRESSING KEY travels as facts from the invite — ``platform`` + ``native_meeting_id``
+    (+ ``passcode`` when the link carried one) — and is sent EXPLICITLY alongside the URL. The
+    gateway treats a supplied native_meeting_id as authoritative and only derives one from the
+    URL when it is absent (bot_spawn/router.py), so this makes intake and dispatch agree by
+    construction instead of by two parsers hoping to. The URL rides along as the join
+    passthrough, which is what makes a Teams SHORT link joinable: its id has no URL template.
+
+    Prior: ensure_user (for the key) · Effect: bot container
     Result: {meeting_id, native, platform}."""
     key = user_api_key(ctx.prior["ensure_user"]["uid"])
-    st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key},
-                    {"meeting_url": ctx.refs["url"], "bot_name": "Vexa",
-                     "transcribe_enabled": False})
+    platform = ctx.refs.get("platform") or "google_meet"
+    # A reaction admitted BEFORE this change carries no id fact. Those are Meet by construction
+    # (the old intake matched nothing else), so the old URL-tail derivation is the right — and
+    # only correct — fallback for them, and is never reached for a Teams invite.
+    native = ctx.refs.get("native_meeting_id") or (
+        ctx.refs["url"].rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        if "meet.google.com" in ctx.refs["url"] else "")
+    payload = {"meeting_url": ctx.refs["url"], "bot_name": "Vexa",
+               "transcribe_enabled": False}
+    if native:
+        payload["platform"] = platform
+        payload["native_meeting_id"] = native
+    if ctx.refs.get("passcode"):
+        payload["passcode"] = ctx.refs["passcode"]
+    st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key}, payload)
     if st == 409:
         st2, existing = http("GET", f"{GATEWAY}/bots", {"X-API-Key": key})
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
         for m in rows:
-            if m.get("native_meeting_id") == ctx.refs["url"].rsplit("/", 1)[1]:
+            if native and m.get("native_meeting_id") == native:
                 return Done({"meeting_id": m["id"], "native": m["native_meeting_id"],
-                             "platform": m.get("platform", "google_meet")},
+                             "platform": m.get("platform", platform)},
                             provider_ref=str(m["id"]))
         raise StepError(f"409 but meeting not found")
     if st not in (200, 201):
         raise StepError(f"spawn failed {st}: {str(body)[:120]}")
     return Done({"meeting_id": body["id"],
-                 "native": body.get("native_meeting_id") or ctx.refs["url"].rsplit("/", 1)[1],
-                 "platform": body.get("platform", "google_meet")},
+                 "native": body.get("native_meeting_id") or native,
+                 "platform": body.get("platform", platform)},
                 provider_ref=str(body["id"]))
 
 
