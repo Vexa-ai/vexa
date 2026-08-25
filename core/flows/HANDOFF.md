@@ -38,6 +38,38 @@ Kubeconfig + demo signing keys + customer-values live in this session's scratchp
 - Staging (shared cluster) is scaled to zero and stage-locked by this session
   (`stage-hold-baseline.json` in scratchpad is the restore map). Prod untouched.
 
+## Series fixture library + scaffold-inference harness (2026-08-25) — THE OFFLINE ITERATION LOOP
+
+`witness/series_run.py` + `tests/series/` turn the Minutes-alpha acceptance test — the
+*daily-meeting smoke* — into something we can run before spending a human meeting on it: scaffold
+a desk fresh from episode 1, ask only the load-bearing questions, then let episodes 2 and 3 land
+and judge whether the desk knows the people, projects, vocabulary and running threads.
+
+- **Fixtures are REAL recurring meetings with organizer-published notes.**
+  `nodejs-tsc` (Node.js TSC weekly, 2026-03-18/03-25/04-01 — minutes in
+  [`nodejs/TSC/meetings/`](https://github.com/nodejs/TSC/tree/main/meetings), each binding itself
+  to its own recording, with a named `## Present` roster and speaker-attributed discussion) and
+  `magdeburg-stadtrat` (Stadtrat Magdeburg plenary, 2026-01-22/02-26/03-26 — Niederschrift PDFs in
+  the city's SessionNet RIS). Both carry genuinely longitudinal threads: the AI-contributions vote
+  scheduled in episode 1 *for* episode 3; the Intel-site motion pushed non-public in episode 2 and
+  forced back open in episode 3. 252 KB total. `tests/series/fetch.py` rebuilds them from source.
+- **Auto-captions have NO speaker labels, and the fixtures keep it that way.** `speaker: null`,
+  declared in each manifest as `speakers: "none"`, and `test_series_fixtures.py` fails the build if
+  a fixture ever gains a label its source did not have. An invented speaker would be the harness
+  lying to the behavior it exists to test.
+- **The scaffolding behavior does not exist in `flows_defs/production.py` yet** — the harness
+  defines `series_episode` (`require_desk → scaffold_desk → ask_questions → process_meeting →
+  deliver_minutes`), the shape
+  [`drafts/2026-08-25-desk-scaffolding-design.md`](../../../biz/drafts/2026-08-25-desk-scaffolding-design.md)
+  calls for, with the two behavior steps as named slots. `--flows production` is the switch for
+  when it lands.
+- **Offline by construction**: no model in the harness. It probes agent-api; answering → real
+  turns through `flows_steps/agent.py`, not answering → the phase is SKIPPED and the run names it.
+  **A reachable agent-api is not a credential** — an uncredentialed tier accepts the turn and never
+  replies (that is the TIMEOUT path; it cost this harness a two-minute hang to learn).
+- `judge` renders notes-vs-artifacts side by side plus a substring presence check. **It does not
+  score**, on purpose.
+
 ## State (2026-08-23, all pushed through `534930e2`)
 
 - **Engine** `src/flows/` — stdlib-pure at import: admission (dedup by `source_event_id` UNIQUE),

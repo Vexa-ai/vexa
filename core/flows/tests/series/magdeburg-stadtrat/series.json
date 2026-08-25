@@ -1,0 +1,42 @@
+{
+  "slug": "magdeburg-stadtrat",
+  "title": "Stadtrat der Landeshauptstadt Magdeburg — Plenarsitzung",
+  "language": "de",
+  "speakers": "none",
+  "organizer": "stadtrat@magdeburg.example",
+  "harness_uid": "series-magdeburg-stadtrat",
+  "source": {
+    "org": "Landeshauptstadt Magdeburg",
+    "channel": "https://www.youtube.com/@OttostadtMagdeburg",
+    "notes_repo": "https://ratsinfo.magdeburg.de/si0040.asp",
+    "captions": "YouTube auto-captions (kind=asr, de) — no diarization, no speaker labels",
+    "fetched": "2026-08-25",
+    "tool": "tests/series/fetch.py"
+  },
+  "episodes": [
+    {
+      "n": 1, "date": "2026-01-22", "title": "028.(VIII) Sitzung des Stadtrates",
+      "transcript": "ep1.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=faCdTaUt5Eg",
+      "notes_url": "https://ratsinfo.magdeburg.de/getfile.asp?id=736261&type=do",
+      "session_page": "https://ratsinfo.magdeburg.de/si0057.asp?__ksinr=124454",
+      "source_minutes": 413, "trimmed_to_minutes": 35.0
+    },
+    {
+      "n": 2, "date": "2026-02-26", "title": "030.(VIII) Sitzung des Stadtrates",
+      "transcript": "ep2.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=0Dq9t1XDmVU",
+      "notes_url": "https://ratsinfo.magdeburg.de/getfile.asp?id=738820&type=do",
+      "session_page": "https://ratsinfo.magdeburg.de/si0057.asp?__ksinr=124457",
+      "source_minutes": 386, "trimmed_to_minutes": 35.5
+    },
+    {
+      "n": 3, "date": "2026-03-26", "title": "032.(VIII) Sitzung des Stadtrates",
+      "transcript": "ep3.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=q9f5fX7vEcU",
+      "notes_url": "https://ratsinfo.magdeburg.de/getfile.asp?id=740939&type=do",
+      "session_page": "https://ratsinfo.magdeburg.de/si0057.asp?__ksinr=124459",
+      "source_minutes": 404, "trimmed_to_minutes": 36.2
+    }
+  ]
+}
