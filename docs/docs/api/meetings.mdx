@@ -265,6 +265,10 @@ Segments stream in while the meeting runs — poll this endpoint, or subscribe o
 per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
 confirmations.
 
+The `speaker` field on these segments is also the only route to a participant list today — there is no
+participants endpoint. See [Get a meeting's participants](/how-to/meeting-participants) for how to derive
+a roster and what it leaves out.
+
 ## Manage the bot
 
 ```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
@@ -309,7 +313,15 @@ keys**: `speaker_events`, `bot_logs`, `recordings`, `status_transition`, `chat_m
 `error_details`, `last_error`, and the complete `calendar_sources` event snapshots. Compact calendar
 identity such as `calendar_connection_id`, `calendar_uid`, and `scheduled_at` remains available in a
 list row. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the detail endpoint is
-unaffected and still returns every key.
+unaffected and still returns every key that is present.
+
+<Warning>
+`speaker_events` and `participants` are **no longer written at all** — not since the 0.12 cutover
+(2026-07-18), with no replacement table ([#861](https://github.com/Vexa-ai/vexa/issues/861), open). The
+detail endpoint returns them when present, but on any recent meeting they are simply absent. Do not read
+an attendance list off `data.participants`; see
+[Get a meeting's participants](/how-to/meeting-participants).
+</Warning>
 
 The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
 to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
