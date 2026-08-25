@@ -1,4 +1,4 @@
 witness/outbox/
 
 # series harness throwaway state (reset regenerates it)
-witness/series_state/
+witness/.series_state/

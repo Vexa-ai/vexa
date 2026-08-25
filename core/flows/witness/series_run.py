@@ -62,7 +62,9 @@ from flows import (  # noqa: E402
 )
 
 SERIES_DIR = FLOWS / "tests" / "series"
-STATE_DIR = HERE / "series_state"
+# Dot-prefixed on purpose: throwaway state that `reset` regenerates, and the repo's gate:readme
+# walks every non-dot directory demanding a README — a run must not be able to block a push.
+STATE_DIR = HERE / ".series_state"
 COMPLETED = EventType("meeting.completed")
 
 

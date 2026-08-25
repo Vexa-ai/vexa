@@ -49,6 +49,6 @@ TIMEOUT path, and `--agent-timeout` is how long you are willing to wait for it.
 a substring presence check against the ground truth's `## Entities` list, and asks a human the
 question. A number here would be a claim we cannot support.
 
-State lives in `witness/series_state/<slug>/` (gitignored) and `reset` is the only way back to a
+State lives in `witness/.series_state/<slug>/` (gitignored) and `reset` is the only way back to a
 fresh desk — that is what makes "scaffold fresh from episode 1" honest rather than a figure of
 speech.
