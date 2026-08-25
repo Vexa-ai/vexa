@@ -103,6 +103,31 @@ class TranscriptStore(Protocol):
         Returns {meeting_id, ok}, {error}, or ``None`` (malformed/unknown token). The token IS the authz."""
         ...
 
+    async def get_meeting_participants(
+        self, user_id: int, platform: str, native_meeting_id: str
+    ) -> Optional[dict]:
+        """OWNER-scoped read of everything 0.12 actually PERSISTS about who was in a meeting.
+
+        Returns ``{"meeting_id": int, "invited": [{email, name?, response_status?}], "speakers": [str]}``,
+        or ``None`` when the caller owns no such meeting (the route maps ``None`` → 404 — never an
+        empty roster, which would leak "this meeting exists but is empty" across a tenant boundary).
+
+        Two sources, and they are NOT the same thing:
+
+        * ``invited`` — ``meeting.data['attendees']``, the ATTENDEE lines of the calendar invitation
+          the meeting was imported from (``calendar_sync.service._attendees``). Real people, silent
+          ones included — but only for meetings that came in through a connected calendar feed, and
+          it records who was ASKED, not who showed up.
+        * ``speakers`` — ``SELECT DISTINCT transcriptions.speaker``, first-heard first. People who
+          were heard AND whose name resolved. Not an attendance list: a participant who never spoke,
+          or whose platform tile never yielded a name, is absent by construction.
+
+        There is deliberately NO third source, because the 0.12 core captures none: the platform
+        modules observe only tiles that emit a SPEAKING signal, and no producer writes an observed
+        roster to any store (Vexa-ai/vexa#861). This port must never synthesize one from the two
+        above — inventing attendance from speech is the exact failure #861's preparation forbids."""
+        ...
+
     async def append_segment(self, meeting_id: int, segment: dict) -> None:
         """Persist one ingested transcript segment for ``meeting_id`` (keyed by its
         ``segment_id`` — stable identity, last-write-wins, exactly the collector's Redis-hash
