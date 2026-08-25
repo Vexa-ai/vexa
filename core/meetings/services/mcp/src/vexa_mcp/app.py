@@ -17,7 +17,9 @@ conformance tests drive the SHIPPED app in-process with a fake gateway — the r
 """
 from __future__ import annotations
 
+import hashlib
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -25,13 +27,188 @@ import mcp.types as mcp_types
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
+
+# --- report_issue (agent-filed tickets) -------------------------------------
+# Caps are defensive, not cosmetic: this route forwards caller-supplied text to an
+# operator webhook, so every field is bounded before it leaves the process.
+_MAX_TEXT_CHARS = 2000
+_MAX_LOGS_CHARS = 4000
+# Linode's ticket shape (POST /v4/support/tickets): summary 1-64, description 1-65,000. We store
+# the same canonical pair so the MCP tool, the future API endpoint and the docs form all land one
+# shape in the sink — the agent-facing arguments below are composed into it server-side.
+_MAX_SUMMARY_CHARS = 64
+# Whole-body ceiling. The handler caps every field, but a caller can still push megabytes at the
+# JSON parser; this refuses before parsing. NOTE this is the HANDLER's cap — the public
+# (key-less) door must ALSO carry a body cap + per-IP limit at the GATEWAY layer (see README).
+_MAX_BODY_BYTES = 64 * 1024
+_FINGERPRINT_SAMPLE_CHARS = 200
+# Default salt for the caller fingerprint. A deployment SHOULD set
+# VEXA_TICKET_FINGERPRINT_SALT so fingerprints are not comparable across deployments.
+_DEFAULT_CALLER_SALT = "vexa-mcp-report-issue"
+
+
+def _clip(value: Optional[str], limit: int) -> Optional[str]:
+    """Trim + hard-cap a caller-supplied string. Returns None for empty/blank input."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
+def _fingerprint(deployment: str, what_happened: str) -> str:
+    """Stable dedupe key: deployment + the first 200 chars of what_happened."""
+    material = f"{deployment.strip().lower()}|{what_happened.strip()[:_FINGERPRINT_SAMPLE_CHARS]}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def _summary_of(what_happened: str) -> str:
+    """The Linode-shaped `summary` (1-64 chars): the first line/clause of what happened."""
+    first_line = what_happened.strip().splitlines()[0].strip()
+    if len(first_line) <= _MAX_SUMMARY_CHARS:
+        return first_line
+    return first_line[: _MAX_SUMMARY_CHARS - 1].rstrip() + "\u2026"
+
+
+def _description_of(data: "ReportIssue") -> str:
+    """The Linode-shaped `description`: the whole story, composed from the agent's answers."""
+    parts = [f"What I tried:\n{data.what_i_tried}", f"What happened:\n{data.what_happened}"]
+    where = data.deployment + (f" {data.version}" if data.version else "")
+    parts.append(f"Deployment: {where}")
+    if data.meeting_id:
+        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.meeting_id}")
+    if data.logs:
+        parts.append(f"Logs:\n{data.logs}")
+    return "\n\n".join(parts)
+
+
+# --- ticket sink adapters ----------------------------------------------------
+# The sink is an OPERATOR surface. `raw` (the default) posts the canonical ticket payload to an
+# opaque webhook — byte-for-byte what self-hosters already get. `github` maps the same payload
+# onto GitHub's issue API so a deployment can use an issue tracker it already runs as the sink,
+# with no new infrastructure. Nothing about the payload's construction changes between the two;
+# only the wire shape of this one hop does.
+_SINK_FORMAT_RAW = "raw"
+_SINK_FORMAT_GITHUB = "github"
+_DEFAULT_SINK_LABELS = "state: incoming"
+_GITHUB_API_VERSION = "2022-11-28"
+
+
+def _sink_format() -> str:
+    """Operator-selected wire shape for the sink hop. Unknown/unset → `raw` (today's behaviour)."""
+    value = (os.getenv("VEXA_TICKET_SINK_FORMAT") or "").strip().lower()
+    return _SINK_FORMAT_GITHUB if value == _SINK_FORMAT_GITHUB else _SINK_FORMAT_RAW
+
+
+def _sink_labels() -> List[str]:
+    """Labels applied to a github-format ticket. Comma-separated; default `state: incoming`."""
+    raw = os.getenv("VEXA_TICKET_SINK_LABELS")
+    if raw is None or not raw.strip():
+        raw = _DEFAULT_SINK_LABELS
+    return [label.strip() for label in raw.split(",") if label.strip()]
+
+
+def _github_issue_body(payload: Dict[str, Any]) -> str:
+    """Render the canonical ticket payload as the markdown body of a GitHub issue.
+
+    Every field the sink would have received in `raw` appears here — nothing is dropped, because
+    the issue IS the ticket on this deployment. The meeting join key gets its own heading: it is
+    what lines the reporter's account up against our own record of the same meeting.
+    """
+    lines: List[str] = []
+    lines.append("_Filed by a calling agent through the Vexa MCP `report_issue` tool._")
+    lines.append("")
+    lines.append("### What I tried")
+    lines.append(str(payload.get("what_i_tried") or "—"))
+    lines.append("")
+    lines.append("### What happened")
+    lines.append(str(payload.get("what_happened") or "—"))
+    lines.append("")
+    lines.append("### Join key")
+    if payload.get("meeting_id"):
+        lines.append(f"- **meeting_id:** `{payload['meeting_id']}`")
+        lines.append(f"- **platform:** `{payload.get('platform') or 'unknown'}`")
+        entity = payload.get("entity")
+        if isinstance(entity, dict):
+            lines.append(f"- **resolved entity:** `{entity.get('type')}` → `{entity.get('url')}`")
+        else:
+            lines.append("- **resolved entity:** none (not owned by the calling key, or not found)")
+    else:
+        lines.append("- none supplied — this ticket is not bound to a meeting.")
+    lines.append("")
+    lines.append("### Deployment")
+    lines.append(f"- **deployment:** {payload.get('deployment')}")
+    lines.append(f"- **version:** {payload.get('version') or 'not stated'}")
+    lines.append(f"- **severity:** {payload.get('severity') if payload.get('severity') is not None else 'not stated'}")
+    lines.append("")
+    if payload.get("logs"):
+        lines.append("### Logs")
+        truncated = " (truncated server-side)" if payload.get("logs_truncated") else ""
+        lines.append(f"Pasted by the reporting agent{truncated}:")
+        lines.append("")
+        lines.append("```")
+        lines.append(str(payload["logs"]))
+        lines.append("```")
+        lines.append("")
+    lines.append("### Provenance")
+    lines.append(f"- **source:** `{payload.get('source')}` · **tool:** `{payload.get('tool')}`")
+    lines.append(f"- **reported_at:** `{payload.get('reported_at')}`")
+    lines.append(f"- **fingerprint:** `{payload.get('fingerprint')}` (content-derived, for dedupe)")
+    lines.append(
+        f"- **caller_fingerprint:** `{payload.get('caller_fingerprint')}` "
+        "(salted hash of the calling key — never the key itself)"
+    )
+    return "\n".join(lines)
+
+
+def _sink_request(payload: Dict[str, Any], sink_token: str) -> tuple:
+    """(headers, json_body) for the sink hop, per VEXA_TICKET_SINK_FORMAT.
+
+    `raw` is byte-unchanged from before the switch existed: the canonical payload, with an
+    optional bearer token. `github` maps it onto `{title, body, labels}` with GitHub's headers.
+    """
+    if _sink_format() == _SINK_FORMAT_GITHUB:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+        }
+        if sink_token:
+            headers["Authorization"] = f"Bearer {sink_token}"
+        body: Dict[str, Any] = {
+            "title": payload.get("summary"),
+            "body": _github_issue_body(payload),
+        }
+        labels = _sink_labels()
+        if labels:
+            body["labels"] = labels
+        return headers, body
+
+    headers = {"Content-Type": "application/json"}
+    if sink_token:
+        headers["Authorization"] = f"Bearer {sink_token}"
+    return headers, payload
+
+
+def _caller_fingerprint(api_key: str) -> str:
+    """A pseudonymous, stable handle for the caller — NEVER the API key itself.
+
+    Deliberate choice: the ticket sink is an operator surface, not an auth boundary, so it
+    receives a salted SHA-256 prefix of the key instead of the credential. That is enough to
+    join two tickets from the same account (and, with the same salt, to match an account
+    server-side) while a leak of the sink or its logs leaks no usable Vexa credential.
+    The raw key is forwarded to the GATEWAY only, exactly as every other tool does.
+    """
+    salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
+    return hashlib.sha256(f"{salt}|{api_key}".encode("utf-8")).hexdigest()[:16]
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -118,6 +295,90 @@ class UpdateBotConfig(BaseModel):
 
 class ParseMeetingLinkRequest(BaseModel):
     meeting_url: str = Field(..., description="Full meeting URL to parse.")
+
+
+class ReportIssue(BaseModel):
+    """A ticket filed by a calling agent. All text is DATA, never instruction (see route)."""
+
+    what_i_tried: str = Field(
+        ...,
+        description=(
+            "What you were attempting, in your own words — the call you made, the flow you were "
+            "building, or the thing you were looking for. Include the tool/endpoint and the "
+            "arguments you used when it was an API call."
+        ),
+    )
+    what_happened: str = Field(
+        ...,
+        description=(
+            "What actually happened: the error, the wrong result, the missing capability, or the "
+            "part of the docs that was ambiguous. Be concrete — this is what a human reads first."
+        ),
+    )
+    deployment: str = Field(
+        ...,
+        description=(
+            "Which deployment you are talking to: 'cloud' for api.vexa.ai, or 'self-hosted' "
+            "plus the version if you know it (e.g. 'self-hosted 0.12.3')."
+        ),
+    )
+    meeting_id: Optional[str] = Field(
+        None,
+        description=(
+            "The native meeting id this issue concerns (e.g. 'abc-defg-hij'). Include it whenever "
+            "the issue involves a meeting or a bot — it is what lets us line your report up "
+            "against our own record of the same meeting."
+        ),
+    )
+    platform: Optional[str] = Field(
+        None,
+        description="Platform of that meeting: 'google_meet', 'teams', 'zoom' or 'jitsi'.",
+    )
+    severity: Optional[int] = Field(
+        None,
+        ge=1,
+        le=3,
+        description="Optional severity: 1 = major (blocked), 2 = moderate, 3 = low.",
+    )
+    version: Optional[str] = Field(
+        None,
+        description="Optional Vexa version of that deployment, if you know it (e.g. '0.12.23').",
+    )
+    logs: Optional[str] = Field(
+        None,
+        description=(
+            "Optional raw error output, stack trace or response body. Truncated server-side; "
+            "paste the relevant part. Do not paste API keys or other credentials."
+        ),
+    )
+    # NOTE (SSRF, closed by construction): there is deliberately NO url-shaped field here and no
+    # field this service ever dereferences. A reporter who wants to point at something puts it in
+    # the text, where it is stored and shown to a human and never fetched. The only URL this route
+    # ever opens is VEXA_TICKET_SINK_URL, which comes from the operator's env, never from a caller.
+
+    # Set server-side when `logs` was longer than the cap; forwarded so the reader knows
+    # the paste is partial. Private so it never appears in the agent-facing tool schema.
+    _logs_truncated: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="after")
+    def validate_and_clip(self):
+        required = {
+            "what_i_tried": self.what_i_tried,
+            "what_happened": self.what_happened,
+            "deployment": self.deployment,
+        }
+        missing = [name for name, value in required.items() if not (value or "").strip()]
+        if missing:
+            raise ValueError(f"Empty required field(s): {', '.join(missing)}.")
+        self.what_i_tried = _clip(self.what_i_tried, _MAX_TEXT_CHARS)
+        self.what_happened = _clip(self.what_happened, _MAX_TEXT_CHARS)
+        self.deployment = _clip(self.deployment, 200)
+        self.meeting_id = _clip(self.meeting_id, 200)
+        self.platform = _clip(self.platform, 50)
+        self.version = _clip(self.version, 100)
+        self._logs_truncated = bool(self.logs and len(self.logs.strip()) > _MAX_LOGS_CHARS)
+        self.logs = _clip(self.logs, _MAX_LOGS_CHARS)
+        return self
 
 
 def create_app(
@@ -327,6 +588,186 @@ def create_app(
         Get a single recording and its media files. Wraps: GET /recordings/{recording_id}
         """
         return await make_request("GET", f"{base_url}/recordings/{recording_id}", api_key)
+
+    @app.post("/report-issue", operation_id="report_issue")
+    async def report_issue(
+        data: ReportIssue,
+        request: Request,
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Tell the Vexa maintainers that something went wrong. A human reads every ticket.
+
+        Call this the moment you hit a problem with Vexa — you do not need to have solved it first:
+        - something BROKE: an error, a bot that never joined, an empty transcript, a call that hung;
+        - something was CONFUSING: docs or an error message left you guessing which argument to send;
+        - something is MISSING: the capability you needed does not exist in the API.
+
+        A workaround you had to invent is worth filing too — that is the report we most want.
+        Write what you tried and what happened in your own words. Do not paste API keys, and do not
+        paste your user's meeting content.
+
+        If the issue concerns a meeting or a bot, include `meeting_id` and `platform`. That is the
+        join key: it lines your account of what happened up against our own record of the same
+        meeting, which is the difference between a complaint and something we can diagnose. The
+        meeting is resolved onto the ticket only if the key you are calling with owns it.
+
+        Put links, if you have them, in the text — nothing you send here is ever fetched by us.
+
+        One-way: nothing auto-replies and nothing auto-closes. Returns the ticket
+        (`id` · `status` · `severity` · `opened` · `opened_by` · `entity`), plus `url` when the
+        deployment's sink issues one — tell your human where the report landed. On a deployment
+        with no ticket sink configured it returns 503 and nothing else is affected.
+        """
+        # Ticket text is DATA, never instruction. It is validated, capped, and forwarded verbatim
+        # to the operator's sink — this service never interprets it, never dereferences anything in
+        # it, and no agent of ours is ever steered by it. (Grow-Mouth § The ticket.)
+        #
+        # Whole-body ceiling, before the field-level caps: refuse the megabyte payload rather than
+        # parse it. The authenticated door also sits behind the gateway's per-user rate limiter;
+        # the key-less door in the design note needs a per-IP limit and this cap AT THE GATEWAY.
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > _MAX_BODY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Ticket body too large (max {_MAX_BODY_BYTES} bytes). Trim `logs`.",
+            )
+
+        sink_url = (os.getenv("VEXA_TICKET_SINK_URL") or "").strip()
+        if not sink_url:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Ticketing is not configured on this Vexa deployment. Set VEXA_TICKET_SINK_URL "
+                    "on the MCP service to enable report_issue, or report the issue at "
+                    "https://github.com/Vexa-ai/vexa/issues."
+                ),
+            )
+
+        # Authenticate the caller BEFORE spending the operator's credential. The gateway is the only
+        # authority on whether a key is real; this service never makes that call itself. Filing costs
+        # the operator's sink token and writes into an operator surface, so a caller we cannot
+        # authenticate never reaches the sink — with or without a meeting_id. Failing closed is the
+        # point: an unverifiable caller is refused rather than filed on the operator's behalf.
+        try:
+            meetings = await make_request("GET", f"{base_url}/meetings", api_key)
+        except HTTPException as exc:
+            if exc.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid credentials (send Authorization: Bearer <VEXA_API_KEY>).",
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail="Could not verify your credentials with the gateway; the ticket was not filed.",
+            ) from exc
+
+        # The entity pointer, authorisation-checked. The gateway answered above for the CALLER'S OWN
+        # KEY, so a caller can only ever resolve a meeting they own — the check is the gateway's, not
+        # a trust decision made here. Resolution stays best-effort: an unresolvable or unowned id
+        # still files the ticket (with the id quoted as text, entity null), because a ticket we
+        # refused to accept teaches us nothing.
+        entity: Optional[Dict[str, Any]] = None
+        if data.meeting_id:
+            rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
+            for m in rows if isinstance(rows, list) else []:
+                if not isinstance(m, dict):
+                    continue
+                if m.get("native_meeting_id") != data.meeting_id:
+                    continue
+                if data.platform and m.get("platform") != data.platform:
+                    continue
+                entity = {
+                    "type": "meeting",
+                    "id": data.meeting_id,
+                    "platform": m.get("platform"),
+                    "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
+                }
+                break
+
+        fingerprint = _fingerprint(data.deployment, data.what_happened)
+        opened = datetime.now(timezone.utc).isoformat()
+        caller = _caller_fingerprint(api_key)
+        payload: Dict[str, Any] = {
+            "source": "vexa-mcp",
+            "tool": "report_issue",
+            "reported_at": opened,
+            "fingerprint": fingerprint,
+            # Identity HINT, not the credential — see _caller_fingerprint().
+            "caller_fingerprint": caller,
+            # Canonical ticket pair (Linode-shaped), composed from the agent's answers so every
+            # ticket surface lands ONE shape in the sink.
+            "summary": _summary_of(data.what_happened),
+            "description": _description_of(data),
+            # The agent's own words, kept discrete for the reader and for later labelling.
+            "what_i_tried": data.what_i_tried,
+            "what_happened": data.what_happened,
+            "deployment": data.deployment,
+            "version": data.version,
+            "severity": data.severity,
+            "meeting_id": data.meeting_id,
+            "platform": data.platform,
+            "entity": entity,
+            "logs": data.logs,
+            "logs_truncated": data._logs_truncated,
+        }
+
+        sink_token = (os.getenv("VEXA_TICKET_SINK_TOKEN") or "").strip()
+        headers, sink_payload = _sink_request(payload, sink_token)
+
+        # Same injectable transport as the gateway hop (tests inject MockTransport). Note the
+        # caller's API key is NOT sent on this hop — only its salted fingerprint, in the body.
+        # The URL is the OPERATOR'S env value; no caller-supplied string is ever fetched.
+        sink_body: Any = None
+        try:
+            async with httpx.AsyncClient(timeout=10, transport=transport) as client:
+                response = await client.post(sink_url, headers=headers, json=sink_payload)
+                response.raise_for_status()
+                if response.content:
+                    try:
+                        sink_body = response.json()
+                    except Exception:
+                        sink_body = None
+        except httpx.HTTPStatusError as http_err:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ticket sink rejected the report (status {http_err.response.status_code}).",
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Ticket sink timed out")
+        except httpx.RequestError as req_err:
+            raise HTTPException(status_code=503, detail=f"Ticket sink unreachable: {req_err}")
+
+        # Ticket object, mirroring Linode's response (id · status · severity · opened · updated ·
+        # opened_by · entity). This service holds no store, so the id is the sink's when the sink
+        # returns one, and the content fingerprint otherwise.
+        ticket_id = None
+        ticket_url = None
+        if isinstance(sink_body, dict):
+            # `number` + `html_url` are GitHub's; `id`/`ticket_id`/`url` cover a raw webhook that
+            # issues its own. Whatever the sink named the ticket, the calling agent gets it back so
+            # it can tell its human WHERE the report went.
+            if _sink_format() == _SINK_FORMAT_GITHUB:
+                # GitHub carries both: `id` is the global db row, `number` is what a human quotes.
+                ticket_id = sink_body.get("number") or sink_body.get("id")
+            else:
+                ticket_id = sink_body.get("id") or sink_body.get("ticket_id")
+            ticket_url = sink_body.get("html_url") or sink_body.get("url")
+        ack: Dict[str, Any] = {
+            "id": ticket_id if ticket_id is not None else fingerprint,
+            "status": "new",
+            "severity": data.severity,
+            "opened": opened,
+            "updated": opened,
+            "opened_by": caller,
+            "entity": entity,
+            "fingerprint": fingerprint,
+            "message": "Thanks — a human reads this. Quote the ticket id if you follow up.",
+        }
+        if ticket_url:
+            ack["url"] = ticket_url
+        return ack
 
     # ---------------------------
     # MCP mount + prompts
