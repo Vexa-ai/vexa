@@ -108,6 +108,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/meetings"): TX,
     ("POST", "/meetings"): TX,
     ("GET", "/meetings/{meeting_id}"): TX,
+    # Record-keyed transcript read — the same downstream read as GET /transcripts/by-id/{id},
+    # so it carries the same scope. A transcript read, never a bot power.
+    ("GET", "/meetings/{meeting_id}/transcript"): TX,
     ("PATCH", "/meetings/{meeting_id}"): TX,
     ("DELETE", "/meetings/{meeting_id}"): TX,
     ("PATCH", "/meetings/{platform}/{native_meeting_id}"): TX,
