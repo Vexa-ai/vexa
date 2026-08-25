@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,6 +58,68 @@ function validMap() {
 
 test("accepts the exact candidate set", () => {
   assert.equal(validateCandidateMap(validMap(), "v0.12.18").release, "v0.12.18");
+});
+
+test("v0.12.23 bootstrap packet freezes build identity without claiming validation", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.23/candidate-images.bootstrap.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "a993d466d3aa083dafde3e882375b70d1e1c95120af5f2dc542c856c8e80039f",
+  );
+  const map = JSON.parse(raw);
+  assert.equal(map.packet_state, "bootstrap");
+  assert.equal(map.release, "v0.12.23");
+  assert.equal(map.stable_tag, "v0.12.23");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.10");
+  assert.equal(map.validation_source, undefined);
+  assert.equal(map.validation_run, undefined);
+  assert.equal(Object.keys(map.images).length, 10);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    19,
+  );
+});
+
+test("v0.12.23 canonical packet freezes the rc.21 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.23/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.23");
+  assert.equal(map.candidate_tag, "v0.12.23-rc.21");
+  assert.equal(map.build_source, "2dec308224155586f24906a7a4d6241ff18392cb");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/32185449851",
+  );
+  assert.equal(
+    map.validation_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/32188980106",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:2bd879c61cb24f3e20d698ded475f565ebfb4f07f2bf842d1ebf0299e9814314",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-lite"].digest,
+    "sha256:bb382b2031c4040c3121c421580d3af7d9c6a94581079d30b01d2622586df524",
+  );
+  assert.equal(Object.keys(map.images).length, 10);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    19,
+  );
 });
 
 test("refuses a missing image", () => {
@@ -198,6 +261,11 @@ test("release-images consumes the planner's dynamic matrix instead of a literal 
     workflow,
     /node release\/dockerhub-tag-audit\.mjs[\s\S]*--target "\$VERSION"/,
   );
+  assert.match(
+    workflow,
+    /RELEASE="v\$\{VERSION#v\}"[\s\S]*RELEASE="\$\{RELEASE%%-\*\}"[\s\S]*--arg release "\$RELEASE"/,
+  );
+  assert.doesNotMatch(workflow, /--arg release "v0\.12\.18"/);
   assert.doesNotMatch(
     workflow.match(/outputs:[\s\S]*?steps:\n/)?.[0] ?? "",
     /changed_images/,

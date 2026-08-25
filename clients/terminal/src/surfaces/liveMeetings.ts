@@ -129,6 +129,9 @@ function formatTranscriptTime(start?: number | null): string {
 const LIVE_STATUSES = new Set(["active", "joining", "requested", "awaiting_admission", "needs_help", "stopping"]);
 
 let meetings: MeetingMock[] = [];
+let loaded = false;        // a snapshot has come back at least once — an id absent from the list is then
+                           // genuinely unknown (not merely not-fetched-yet), which is what lets a meeting
+                           // route render a not-found state instead of a forever-"Connecting…" shell.
 let wsConnected = false;   // the live meeting.status stream's connection state — part of the store's external state
 const subs = new Set<() => void>();
 let started = false;
@@ -213,12 +216,15 @@ async function snapshot() {
     const key = (m: MeetingMock[]) => m.map((x) =>
       `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
-    if (key(next) !== key(meetings)) {
+    const wasLoaded = loaded;
+    loaded = true;
+    if (!wasLoaded || key(next) !== key(meetings)) {
       meetings = next;
       subs.forEach((f) => f());
     }
   } catch {
-    /* offline — keep last known */
+    /* offline — keep last known, and stay UNLOADED: an unreachable list must not make every meeting
+       look deleted. The view keeps resolving until a snapshot actually answers. */
   }
 }
 
@@ -329,6 +335,18 @@ export function useLiveMeetingsConnection(): boolean {
   return useSyncExternalStore(
     (cb) => { subs.add(cb); return () => subs.delete(cb); },
     () => wsConnected,
+    () => false,
+  );
+}
+
+/** Subscribe a component to whether the meetings list has ANSWERED at least once. `false` means "still
+ *  resolving"; `true` means the list is authoritative, so an id missing from it does not exist for this
+ *  user (deleted, never existed, or owned by someone else and not shared). */
+export function useLiveMeetingsLoaded(): boolean {
+  ensureStarted();
+  return useSyncExternalStore(
+    (cb) => { subs.add(cb); return () => subs.delete(cb); },
+    () => loaded,
     () => false,
   );
 }

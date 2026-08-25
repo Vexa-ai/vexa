@@ -82,6 +82,44 @@ export function applyTranscriptTick<T extends TranscriptSegment>(
 }
 
 /**
+ * Withdraw segments by id, in both lanes.
+ *
+ * The producer retracts an id when the row behind it is gone — a draft superseded
+ * under a new id, or a confirmed row a later ownership check refused. A pending
+ * snapshot can only ever withdraw drafts, so the id-addressed retraction is the
+ * only thing that clears a confirmed row without a reload.
+ *
+ * Returns the recomputed sorted transcript array, or `null` if no id matched
+ * (callers can skip a state update in that case).
+ */
+export function retractSegments<T extends TranscriptSegment>(
+  state: TranscriptState<T>,
+  segmentIds: string[],
+): T[] | null {
+  if (!segmentIds || segmentIds.length === 0) return null;
+  const ids = new Set(segmentIds);
+  let changed = false;
+
+  for (const [key, seg] of state.confirmed) {
+    if (!ids.has(key) && !ids.has(segKey(seg))) continue;
+    state.confirmed.delete(key);
+    changed = true;
+  }
+
+  for (const [speaker, segs] of state.pendingBySpeaker) {
+    const kept = segs.filter(s => !ids.has(segKey(s)));
+    if (kept.length === segs.length) continue;
+    if (kept.length > 0) state.pendingBySpeaker.set(speaker, kept);
+    else state.pendingBySpeaker.delete(speaker);
+    changed = true;
+  }
+
+  if (!changed) return null;
+
+  return recomputeTranscripts(state);
+}
+
+/**
  * Recompute the merged transcript array from confirmed + pending maps.
  *
  * Confirmed segments are always included. Pending segments are included only

@@ -191,6 +191,56 @@ def test_meeting_active_unique_partial_index(engine):
         s.commit()   # no collision — all prior rows are terminal
 
 
+def test_meeting_active_unique_index_blocked_fails_closed(engine):
+    """#1186 — real Postgres: duplicate active rows block the backstop index → ensure_schema RAISES.
+
+    Reproduces the production shape exactly (verified 2026-08-17: the index had NEVER existed,
+    blocked by 4 stale duplicate rows, re-attempted and re-swallowed on every restart while the
+    WARNING log-rotated away inside a day):
+
+      1. drop `uq_meeting_active_user_platform_native` (the state prod was actually in);
+      2. plant two active rows for the same (user, platform, native id) — legal without the index;
+      3. re-converge → SchemaInvariantError naming the index, the table, the underlying Postgres
+         error, and the remediation. BEFORE this fix: one WARNING, convergence "succeeds",
+         admin-api boots green with a decorative backstop.
+      4. resolve the duplicate → convergence succeeds and the index is present and unique.
+    """
+    from admin_api.schema.errors import SchemaInvariantError
+    from admin_api.schema.sync import ensure_schema_sync
+
+    idx_name = "uq_meeting_active_user_platform_native"
+    key = dict(user_id=99, platform="google_meet", platform_specific_id="blk-ced-idx")
+
+    with engine.begin() as c:
+        c.execute(text(f"DROP INDEX IF EXISTS {idx_name}"))
+    assert idx_name not in {i["name"] for i in inspect(engine).get_indexes("meetings")}
+
+    with Session(engine) as s:                       # legal only while the index is absent
+        s.add(Meeting(status="active", **key))
+        s.add(Meeting(status="active", **key))
+        s.commit()
+
+    with pytest.raises(SchemaInvariantError) as ei:
+        ensure_schema_sync(engine, Base)
+    msg = str(ei.value)
+    assert idx_name in msg, "message must name the index"
+    assert "meetings" in msg, "message must name the table"
+    assert "duplicate" in msg.lower(), "message must carry the blocking cause"
+    assert "restart" in msg and "issues/1186" in msg, "message must state the remediation"
+
+    # Still absent — the failure was not silently converged away.
+    assert idx_name not in {i["name"] for i in inspect(engine).get_indexes("meetings")}
+
+    # Operator resolves the duplicate → convergence completes and the invariant exists.
+    with Session(engine) as s:
+        dup = s.query(Meeting).filter_by(status="active", **key).order_by(Meeting.id.desc()).first()
+        dup.status = "failed"
+        s.commit()
+    ensure_schema_sync(engine, Base)
+    built = {i["name"]: i for i in inspect(engine).get_indexes("meetings")}
+    assert idx_name in built and built[idx_name]["unique"] is True
+
+
 def test_backfill_grandfathers_empty_token_scopes(engine):
     """MIGRATION-0004 (issue #578) — a 0.10-era token row with scopes='{}' (what the additive
     ADD COLUMN leaves behind on upgrade) is grandfathered to the full valid-scope set by

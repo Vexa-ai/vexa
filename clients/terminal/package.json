@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@next/env": "15.5.19",
     "@mdx-js/mdx": "^3.1.1",
     "acorn": "^8.17.0",
     "acorn-walk": "^8.3.5",
