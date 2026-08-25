@@ -951,10 +951,12 @@ def test_continuous_untracked_past_window_escalates_once_with_evidence():
     assert repo._meetings[m["id"]]["status"] == "failed"
 
 
-def test_stopping_untracked_past_window_escalates_too():
+def test_stopping_untracked_past_window_escalates_on_stop_grace():
     """The `stopping` zombie (user pressed Stop, then the runtime restarted on the process backend):
-    the teardown stays unconfirmable (404) forever — past the window it converges to `failed`
-    instead of retrying the dead DELETE every sweep for eternity."""
+    the teardown stays unconfirmable (404) forever. A stop was EXPLICITLY requested, so it converges
+    on the SHORT stop_grace — NOT the long untracked window — instead of sitting stuck for 10 min (or,
+    across a redeploy burst that keeps resetting the in-process window, ~forever). The restart-mid-
+    leave stuck-meeting fix."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="stopping")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-gone"
@@ -963,10 +965,12 @@ def test_stopping_untracked_past_window_escalates_too():
     client = TestClient(create_app(meeting_repo=repo))
     tracker: dict = {}
 
-    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    # untracked_grace stays LONG (a live *active* bot keeps its full patience); a `stopping` row
+    # converges on stop_grace regardless — proving it's the short window driving the escalation.
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=600.0, stop_grace=0.0) == 0
     assert repo._meetings[m["id"]]["status"] == "stopping"  # window opened
 
-    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 1
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=600.0, stop_grace=0.0) == 1
     assert repo._meetings[m["id"]]["status"] == "failed"
     assert runtime.deleted == []
 
@@ -1595,25 +1599,54 @@ def test_active_grace_boundary_is_exactly_the_configured_window():
 
 def test_pre_active_grace_floor_outlives_the_lobby_budget_we_issue():
     """F4 — the control plane's patience can never be shorter than the deadline it issues. A lobby
-    bot holds a 600s budget, so a pre-active row is not even LISTED before the pre-active floor
-    (660s) elapses — belt to the liveness gate's braces, for the case where the probe is
+    bot holds a 900s budget (#1208), so a pre-active row is not even LISTED before the pre-active
+    floor (960s) elapses — belt to the liveness gate's braces, for the case where the probe is
     inconclusive."""
-    for age, expect in ((301, 0), (661, 1)):
+    for age, expect in ((301, 0), (961, 1)):
         repo = InMemoryMeetingRepo()
         m = _seed(repo, status="awaiting_admission")
         _set_updated_age(repo, m["id"], age)
         client = TestClient(create_app(meeting_repo=repo))
-        n = _run_general_sweep(client, repo, preactive_grace=660.0)
+        n = _run_general_sweep(client, repo, preactive_grace=960.0)
         assert n == expect, f"age={age}s → {n} (expected {expect})"
 
 
-def test_default_pre_active_grace_is_derived_from_the_issued_lobby_budget():
-    """The floor is DERIVED, not a second magic number: it is the very ``waitingRoomTimeout`` the
-    spawn hands the bot, plus headroom. If someone shortens the budget the floor follows; if
-    someone lengthens it, this anchor fails loudly rather than re-opening #862."""
-    from meeting_api.bot_spawn.service import LOBBY_BUDGET_MS
+def test_a_bot_inside_its_fifteen_minute_lobby_budget_is_never_reaped(monkeypatch):
+    """#1208 — the no-early-reap alignment, stated as the failure it prevents. A bot dispatched two
+    minutes early and still knocking at 14 minutes is INSIDE the budget we handed it; the sweep that
+    used to reap at 660s must not list it."""
+    monkeypatch.delenv("VEXA_LOBBY_BUDGET_S", raising=False)
     from meeting_api.lifecycle.reconcile import default_preactive_grace
 
-    assert LOBBY_BUDGET_MS == 600_000
-    assert default_preactive_grace() == 660.0
-    assert default_preactive_grace() > LOBBY_BUDGET_MS / 1000.0
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="awaiting_admission")
+    _set_updated_age(repo, m["id"], 14 * 60)  # 840s — past the OLD 660s floor, inside the new one
+    client = TestClient(create_app(meeting_repo=repo))
+    assert _run_general_sweep(client, repo, preactive_grace=default_preactive_grace()) == 0
+
+
+def test_default_pre_active_grace_is_derived_from_the_issued_lobby_budget(monkeypatch):
+    """The floor is DERIVED, not a second magic number: it is the very ``waitingRoomTimeout`` the
+    spawn hands the bot, plus headroom. If someone shortens the budget the floor follows; if
+    someone lengthens it, the floor follows too — which is what keeps #862 shut while #1208 raises
+    the budget to 15 minutes."""
+    monkeypatch.delenv("VEXA_LOBBY_BUDGET_S", raising=False)
+    from meeting_api.bot_spawn.service import DEFAULT_LOBBY_BUDGET_S, LOBBY_BUDGET_MS, lobby_budget_ms
+    from meeting_api.lifecycle.reconcile import default_preactive_grace
+
+    assert DEFAULT_LOBBY_BUDGET_S == 900
+    assert LOBBY_BUDGET_MS == 900_000
+    assert lobby_budget_ms() == 900_000
+    assert default_preactive_grace() == 960.0
+    assert default_preactive_grace() > lobby_budget_ms() / 1000.0
+
+
+def test_pre_active_grace_follows_the_lobby_budget_env_override(monkeypatch):
+    """The derivation is read at CALL time, so an operator who lengthens the budget on a deploy does
+    not silently keep the old (shorter) reap floor — the exact drift #862 was about."""
+    from meeting_api.lifecycle.reconcile import default_preactive_grace
+
+    monkeypatch.setenv("VEXA_LOBBY_BUDGET_S", "1800")
+    assert default_preactive_grace() == 1860.0
+    monkeypatch.setenv("VEXA_LOBBY_BUDGET_S", "300")
+    assert default_preactive_grace() == 360.0

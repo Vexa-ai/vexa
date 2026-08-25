@@ -27,7 +27,7 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time"):
+    for k in ("speaker", "speaker_key", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
@@ -115,10 +115,14 @@ class InMemoryTranscriptStore:
         matches.sort(key=lambda kv: (kv[1].get("created_at") or "", kv[0]), reverse=True)
         return matches[0][0]
 
-    async def _transcript_doc(self, mid) -> dict:
+    async def _transcript_doc(self, mid, *, viewer_is_owner: bool) -> dict:
         """Build the api.v1 ``TranscriptionResponse`` for row ``mid`` — shared by ``get_transcript``
         (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
-        by-id read returns exactly that row's segments/notes."""
+        by-id read returns exactly that row's segments/notes. Mirrors the real store's viewer-aware
+        response projection, ``viewer_is_owner`` included — the fake and the real store must agree on
+        what a share recipient receives, since most of the suite drives the fake."""
+        from .projection import project_response_data
+
         m = self._meetings[mid]
         by_id = dict(m["segments"])
         # Redis-wired (prod-topology) mode: merge the LIVE in-flight hash over the durable rows,
@@ -144,7 +148,7 @@ class InMemoryTranscriptStore:
             "end_time": m["end_time"],
             "recordings": m["data"].get("recordings", []),
             "notes": m["data"].get("notes"),
-            "data": m["data"],
+            "data": project_response_data(m["data"], viewer_is_owner=viewer_is_owner),
             "segments": [_segment_to_api(s) for s in segments],
         }
 
@@ -152,7 +156,12 @@ class InMemoryTranscriptStore:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:
             return None
-        return await self._transcript_doc(mid)
+        deletion = (self._meetings[mid].get("data") or {}).get("artifact_deletion") or {}
+        if deletion and deletion.get("state", "completed") == "completed":
+            return None
+        # ``_find`` matches on ``m["user_id"] == user_id`` (mirroring the real store's SQL), so a row
+        # reached by the native-keyed path is always the caller's own.
+        return await self._transcript_doc(mid, viewer_is_owner=True)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript authorized by owner OR transcript-viewer OR bound-workspace member (mirrors
@@ -165,12 +174,17 @@ class InMemoryTranscriptStore:
         if m is None:
             return None
         data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        deletion = data.get("artifact_deletion") or {}
+        if deletion and deletion.get("state", "completed") == "completed":
+            return None
+        is_owner = m.get("user_id") == user_id
         authorized = (
-            m.get("user_id") == user_id
+            is_owner
             or user_id in (data.get("transcript_viewers") or [])
             or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
         )
-        return await self._transcript_doc(mid) if authorized else None
+        # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
+        return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -206,6 +220,9 @@ class InMemoryTranscriptStore:
             has_more = False
 
         def _row(mid, m):
+            # One ownership decision per row, feeding both `shared` and the projection's viewer tier
+            # (mirrors the real store's `_row`).
+            is_owner = m["user_id"] == user_id
             row = {
                 "id": mid,
                 "user_id": m["user_id"],
@@ -219,12 +236,14 @@ class InMemoryTranscriptStore:
                 # api.v1 MeetingResponse declares these at top level; the values live in `data`.
                 "completion_reason": (m.get("data") or {}).get("completion_reason") if isinstance(m.get("data"), dict) else None,
                 "failure_stage": (m.get("data") or {}).get("failure_stage") if isinstance(m.get("data"), dict) else None,
-                "shared": m["user_id"] != user_id,
+                "shared": not is_owner,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
                 # #584 list_view / #803 slim: both drop the heavy detail keys and keep the light
                 # metadata. Only a caller that genuinely renders full `data` leaves both off.
-                "data": project_list_data(m["data"]) if (list_view or slim) else m["data"],
+                # The response omissions are viewer-aware — the owner keeps their own webhook config.
+                "data": project_list_data(m["data"], viewer_is_owner=is_owner) if (list_view or slim)
+                else m["data"],
             }
             return row
 
@@ -375,7 +394,10 @@ class InMemoryTranscriptStore:
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
-                                     workspace_source=None, attendees=None):
+                                     calendar_source=None,
+                                     workspace_source=None, attendees=None,
+                                     auto_join_last_attempt=None,
+                                     auto_join_error=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         data: dict = {"auto_join": bool(auto_join)}
@@ -391,14 +413,39 @@ class InMemoryTranscriptStore:
                 data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if calendar_source:
+            data["calendar_sources"] = [dict(calendar_source)]
+            data["calendar_connection_id"] = calendar_source["id"]
+            data["calendar_name"] = calendar_source.get("name") or "Calendar"
+            data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
+        if auto_join_last_attempt:
+            data["auto_join_last_attempt"] = auto_join_last_attempt
+        if auto_join_error:
+            data["auto_join_error"] = auto_join_error
         mid = self.seed_meeting(
             user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
             status="scheduled" if scheduled_at else "idle",
             start_time=None, data=data, constructed_meeting_url=meeting_url,
         )
         return self._planned_row(mid)
+
+    async def attach_calendar_source(self, user_id, meeting_id, *, calendar_uid,
+                                     calendar_sources=None):
+        """Identity-only stamp on a row in ANY status — mirrors the adapter (live-row adoption)."""
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        data = m["data"]
+        if calendar_uid:
+            data["calendar_uid"] = calendar_uid
+        if calendar_sources:
+            data["calendar_sources"] = [dict(s) for s in calendar_sources]
+            primary = calendar_sources[0]
+            data["calendar_connection_id"] = primary.get("id")
+            data["calendar_name"] = primary.get("name") or "Calendar"
+        return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):
         m = self._meetings.get(meeting_id)
@@ -452,11 +499,29 @@ class InMemoryTranscriptStore:
                 data.pop("attendees", None)
         if "auto_join" in updates:
             data["auto_join"] = bool(updates["auto_join"])
+        if "auto_join_user_set" in updates:
+            if updates["auto_join_user_set"]:
+                data["auto_join_user_set"] = True
+            else:
+                data.pop("auto_join_user_set", None)
         if "calendar_uid" in updates:
             if updates["calendar_uid"]:
                 data["calendar_uid"] = updates["calendar_uid"]
             else:
                 data.pop("calendar_uid", None)
+        if "calendar_sources" in updates:
+            if updates["calendar_sources"]:
+                data["calendar_sources"] = updates["calendar_sources"]
+            else:
+                data.pop("calendar_sources", None)
+        for key in ("calendar_connection_id", "calendar_name"):
+            if key in updates:
+                if updates[key]:
+                    data[key] = updates[key]
+                else:
+                    data.pop(key, None)
+        if "calendar_managed" in updates:
+            data["calendar_managed"] = bool(updates["calendar_managed"])
         return self._planned_row(meeting_id)
 
     async def delete_planned_meeting(self, user_id, meeting_id):
@@ -466,6 +531,58 @@ class InMemoryTranscriptStore:
         if m["status"] not in ("idle", "scheduled"):
             return False
         del self._meetings[meeting_id]
+        return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("completed", "failed"):
+            return {"error": "conflict"}
+        data = dict(m.get("data") or {})
+        prior = data.get("artifact_deletion") or {}
+        already_deleted = bool(prior and prior.get("state", "completed") == "completed")
+        if not already_deleted:
+            data["artifact_deletion"] = {
+                "state": "pending",
+                "requested_at": prior.get("requested_at")
+                or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            m["data"] = data
+        return {
+            "meeting_id": meeting_id,
+            "recordings": list(data.get("recordings") or []),
+            "already_deleted": already_deleted,
+        }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("completed", "failed"):
+            return False
+        m["segments"] = {}
+        data = dict(m.get("data") or {})
+        for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+            data.pop(key, None)
+        data["artifact_deletion"] = {
+            "state": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "scope": "primary_transcript_and_recording_storage",
+            "backup_residuals": "expire_under_deployment_retention_policy",
+        }
+        m["data"] = data
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
     def _row_or_placeholder(self, meeting_id) -> dict:

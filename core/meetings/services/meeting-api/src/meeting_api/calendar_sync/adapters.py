@@ -84,7 +84,54 @@ def _not_a_feed(head_bytes: bytes) -> Optional[str]:
     return None
 
 
-async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str], Optional[str]]:
+def build_ics_client(*, timeout_s: float = 15.0):
+    """A pinned httpx client for ICS fetches — the ONE place the transport is configured.
+
+    A sweep that reuses a single client across a tick's feeds keeps connection pooling and TLS
+    handshakes amortized; ``fetch_ics`` builds a per-call one when no client is passed.
+    """
+    import httpx
+
+    from ..webhooks.ssrf import build_pinned_transport
+
+    return httpx.AsyncClient(
+        timeout=timeout_s, transport=build_pinned_transport(), follow_redirects=False,
+    )
+
+
+async def _read_streamed(resp, cap: int) -> tuple[Optional[str], Optional[str]]:
+    """Consume an open streaming response under the byte budget → ``(feed_text, None)`` or
+    ``(None, human_reason)``. Split out so the borrowed-client and owned-client paths run the
+    IDENTICAL budget and sniff — a second copy is how the two drift."""
+    if resp.status_code in (301, 302, 303, 307, 308):
+        return None, "the URL redirects — paste the final feed URL (Google: the 'Secret address in iCal format')"
+    if resp.status_code != 200:
+        return None, f"the URL answered HTTP {resp.status_code}"
+    body = bytearray()
+    sniffed = False
+    async for chunk in resp.aiter_bytes():
+        body.extend(chunk)
+        if not sniffed and len(body) >= _SNIFF_AFTER_BYTES:
+            sniffed = True
+            reason = _not_a_feed(bytes(body[:_SNIFF_AFTER_BYTES]))
+            if reason is not None:
+                return None, reason
+        if len(body) > cap:
+            return None, (f"the feed is too large (over {_human_bytes(cap)}) — an "
+                          f"operator can raise CALENDAR_MAX_ICS_BYTES")
+    if not sniffed:  # the whole feed is shorter than the sniff window
+        reason = _not_a_feed(bytes(body))
+        if reason is not None:
+            return None, reason
+    encoding = resp.charset_encoding or "utf-8"
+    try:
+        return bytes(body).decode(encoding, errors="replace"), None
+    except LookupError:  # a charset the feed declared but Python cannot name
+        return bytes(body).decode("utf-8", errors="replace"), None
+
+
+async def fetch_ics(url: str, *, timeout_s: float = 15.0,
+                    client=None) -> tuple[Optional[str], Optional[str]]:
     """GET the ICS feed over the SSRF-pinned transport → ``(feed_text, None)`` on success or
     ``(None, human_reason)`` on any failure. The reason is USER-FACING (it becomes the feed's
     ``last_error`` and is shown in the terminal's calendar panel), so it names the actual
@@ -97,42 +144,19 @@ async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str]
     A ``Content-Length`` pre-check would add nothing on top of that — the per-chunk budget already
     stops the download, and under ``Content-Encoding`` the declared length is not the decompressed
     size the cap is measured against anyway.
+
+    ``client`` (optional) is a caller-owned pinned client — pass one to share a connection pool
+    across a sweep; the caller owns its lifetime. It streams under the same budget: abandoning an
+    oversize transfer matters MORE on a shared client, which outlives the single fetch.
     """
-    import httpx
-
-    from ..webhooks.ssrf import build_pinned_transport
-
     cap = max_ics_bytes()
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout_s, transport=build_pinned_transport(), follow_redirects=False,
-        ) as client:
+        if client is not None:
             async with client.stream("GET", url) as resp:
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    return None, "the URL redirects — paste the final feed URL (Google: the 'Secret address in iCal format')"
-                if resp.status_code != 200:
-                    return None, f"the URL answered HTTP {resp.status_code}"
-                body = bytearray()
-                sniffed = False
-                async for chunk in resp.aiter_bytes():
-                    body.extend(chunk)
-                    if not sniffed and len(body) >= _SNIFF_AFTER_BYTES:
-                        sniffed = True
-                        reason = _not_a_feed(bytes(body[:_SNIFF_AFTER_BYTES]))
-                        if reason is not None:
-                            return None, reason
-                    if len(body) > cap:
-                        return None, (f"the feed is too large (over {_human_bytes(cap)}) — an "
-                                      f"operator can raise CALENDAR_MAX_ICS_BYTES")
-                if not sniffed:  # the whole feed is shorter than the sniff window
-                    reason = _not_a_feed(bytes(body))
-                    if reason is not None:
-                        return None, reason
-                encoding = resp.charset_encoding or "utf-8"
-                try:
-                    return bytes(body).decode(encoding, errors="replace"), None
-                except LookupError:  # a charset the feed declared but Python cannot name
-                    return bytes(body).decode("utf-8", errors="replace"), None
+                return await _read_streamed(resp, cap)
+        async with build_ics_client(timeout_s=timeout_s) as owned:
+            async with owned.stream("GET", url) as resp:
+                return await _read_streamed(resp, cap)
     except Exception:
         return None, "couldn't reach the URL (unreachable, timed out, or a blocked/internal address)"
 

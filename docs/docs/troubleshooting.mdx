@@ -51,8 +51,8 @@ meeting's row in the Terminal — auto-join failures are stamped **onto the meet
 
 - **No meeting link** — a plan without a Meet/Zoom/Teams link has nothing to join. Attach the link
   in the meeting's prep view.
-- **Auto-join is off** — the per-meeting toggle (prep view), or for imported meetings the global
-  switch in the calendar popover.
+- **Auto-join is off** — the per-meeting toggle, or the source calendar's Auto-join switch
+  (dashboard Calendar page on hosted; `PATCH /user/calendars/{calendar_id}` anywhere).
 - **Concurrency cap** — you were already running `max_concurrent_bots` bots at start time. The row
   shows the cap error and retries after a backoff (default 5 min).
 - **The start time is long past** — a meeting more than the grace window (default 10 min) past its
@@ -63,9 +63,12 @@ meeting's row in the Terminal — auto-join failures are stamped **onto the meet
 
 ## Calendar isn't syncing
 
-**Start with the panel's status line** — the calendar panel shows the last sync's outcome and
-every failure names itself (`⚠ Last sync failed: …`). **Sync now** re-runs it on demand, and the
-API mirrors both: `GET /user/calendar/sync` (last status), `POST /user/calendar/sync` (run now).
+**Start with the connection's status line** — on hosted Vexa that is the Calendar page of the
+dashboard at [dashboard.vexa.ai](https://dashboard.vexa.ai), which shows each feed's last
+sync outcome, and every failure names itself (`⚠ Last sync failed: …`). **Sync now** re-runs that
+connection. Self-hosted deployments do not ship that dashboard, and the API carries the same two
+facts either way: `GET /user/calendars/{calendar_id}/sync` (last status),
+`POST /user/calendars/{calendar_id}/sync` (run now).
 The full message-by-message reference is in
 [Calendar sync → Reading the sync status](/how-to/calendar-sync#reading-the-sync-status). The
 usual causes:
@@ -73,14 +76,14 @@ usual causes:
 - **Wrong URL kind** — you need the **secret ICS address** (Google: *Secret address in iCal
   format*, `…/private-…/basic.ics`; Outlook: the published **ICS** link). The **public** iCal
   address of a private calendar answers `HTTP 401`/`404`; a calendar *page* URL (embed/share) is
-  rejected at save. Reads via `GET /user/calendar` show the connected feed masked.
+  rejected at save. Reads via `GET /user/calendars` show every connected feed masked.
 - **The secret-address field is missing** (Google Workspace) — a restrictive Workspace sharing
   policy hides it. An admin unlocks it: **admin.google.com → Apps → Google Workspace → Calendar →
   Sharing settings → External sharing options for primary calendars → "Share all information…"**.
   Details in [Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address).
-- **The event has no meeting link** — only events with a recognizable Meet/Zoom/Teams link import;
-  everything else is skipped by design. A healthy feed with none of those reads
-  `✓ Synced — no meetings with joinable links found`.
+- **The event has no meeting link** — it still imports as an unarmed planned meeting with
+  `platform: "unknown"`; Vexa cannot auto-join until the feed contains a recognizable
+  Meet/Zoom/Teams link.
 - **Self-host wiring** — confirm `ADMIN_API_URL` and `INTERNAL_API_SECRET` are set for
   meeting-api; without them the sync loop is disabled (and `POST /user/calendar/sync` answers
   `503`).
@@ -135,7 +138,7 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
 Terminal error surfaces speak user vocabulary ("Couldn't reach the Vexa server — check that the
 stack is running.", "Your API key was rejected — sign in again.", or the backend's own reason when
 it sent one). The full technical string — proxied URL, HTTP status, backend exception detail, e.g.
-`/api/vexa/user/calendar → 502: upstream unreachable: ConnectError` — is never lost: it is written
+`/api/vexa/user/calendars → 502: upstream unreachable: ConnectError` — is never lost: it is written
 verbatim to the **browser console** (`api failure …` / `meeting action failed …` warnings) on every
 presented error. Support and self-hosters debug from the console line; the on-screen headline tells
 the user which layer to suspect.
@@ -242,5 +245,8 @@ unchanged. Note that `scheduler-tick` is not a production loop and is no longer 
 
 ## Still stuck?
 
-Open an issue or ask on the [GitHub repo](https://github.com/Vexa-ai/vexa). Include the failing request,
-the response (status + `detail`), and the relevant `docker logs`.
+If nothing above matches, that is itself worth telling us — it means the failure has no published cause yet.
+[Support](/support) is where to send it, and says what to include: the meeting id and platform (the
+join key between your account of the failure and our record of the same meeting), your deployment
+shape and version, the failing request, the response (status + `detail`), and the relevant
+`docker logs`.

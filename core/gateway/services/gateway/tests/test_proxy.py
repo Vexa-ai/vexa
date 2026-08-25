@@ -7,6 +7,7 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -87,6 +88,18 @@ def test_authed_request_passes_body_and_status_verbatim():
     r = client.post("/bots", headers=AUTH, json={"platform": "google_meet", "native_meeting_id": "abc"})
     assert r.status_code == 201
     assert r.json() == {"id": 99, "platform": "google_meet"}
+
+
+def test_recording_delete_is_forwarded_to_meeting_api():
+    downstream = FakeDownstream(
+        status_code=200, body={"status": "deleted", "recording_id": 42}
+    )
+    client, _ = _client(downstream=downstream)
+    response = client.delete("/recordings/42", headers=AUTH)
+    assert response.status_code == 200
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://meeting-api/recordings/42"
+    assert downstream.last["headers"]["x-user-id"] == "7"
 
 
 def test_range_response_preserves_content_range_headers():
@@ -294,6 +307,67 @@ def test_user_calendar_sync_routes_forward_to_meeting_api():
     assert r.status_code == 200
     assert downstream.last["method"] == "POST"
     assert downstream.last["url"] == "http://meeting-api/user/calendar/sync"
+
+
+def test_plural_calendar_routes_forward_to_owning_services():
+    client, downstream = _client()
+    client.get("/user/calendars", headers=AUTH)
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.post("/user/calendars", headers=AUTH,
+                json={"name": "Work", "ics_url": "https://cal.example/work.ics"})
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://admin-api/user/calendars"
+
+    client.patch("/user/calendars/work-1", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
+
+    client.post("/user/calendars/work-1/sync", headers=AUTH)
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/work-1/sync"
+
+    client.delete("/user/calendars/work-1", headers=AUTH)
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://admin-api/user/calendars/work-1"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
+def test_calendar_id_is_re_encoded_into_one_downstream_segment():
+    """Starlette hands the handler a DECODED param, so a raw interpolation would let the caller
+    graft a query string onto the downstream hop: `x%3Fdebug%3D1` must stay one literal segment."""
+    client, downstream = _client()
+    client.patch("/user/calendars/x%3Fdebug%3D1", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["url"] == "http://admin-api/user/calendars/x%3Fdebug%3D1"
+
+    client.post("/user/calendars/x%23frag/sync", headers=AUTH)
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/x%23frag/sync"
+
+
+def test_calendar_id_dot_segments_cannot_walk_up_the_downstream_path():
+    """`%2E%2E` decodes to `..`, which httpx resolves against the base path — un-encoded it turns
+    PATCH /user/calendars/{id} into a PATCH on admin-api's whole /user record."""
+    client, downstream = _client()
+    client.patch("/user/calendars/%2E%2E", headers=AUTH, json={"auto_join": False})
+    assert downstream.last["url"] == "http://admin-api/user/calendars/%2E%2E"
+    assert httpx.URL(downstream.last["url"]).path == "/user/calendars/.."
+
+    client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
+    assert downstream.last["url"] == "http://meeting-api/user/calendars/%2E%2E/sync"
+
+
+def test_calendar_id_with_control_character_is_4xx_not_500():
+    """httpx raises InvalidURL (not a RequestError) for a NUL/CRLF id, so it would escape the
+    502/504 mapping as a gateway 500 — the caller's bad path param is refused at the edge."""
+    client, downstream = _client()
+    r = client.delete("/user/calendars/%00", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
+
+    r = client.post("/user/calendars/a%0D%0Ab/sync", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
 
 
 def test_user_calendar_requires_api_key():

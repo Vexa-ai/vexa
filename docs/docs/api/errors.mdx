@@ -39,9 +39,10 @@ failures (`422`).
 - `404` reading a transcript for a meeting that was never started.
 - `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
   on an unrecognizable `meeting_url`.
-- `PATCH`/`DELETE /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting
-  is only editable while it's still planned); `409` on `PATCH` when the new link collides with
-  another active meeting.
+- `PATCH /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting is only
+  editable while it's still planned); `409` when the new link collides with another active meeting.
+- `DELETE /meetings/{id}` deletes a plan before spawn or deletes transcript/recording artifacts after
+  the lifecycle is terminal; it returns `409` while the meeting is in flight.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
   fine — the spawn claims it); `429` past your concurrency limit.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
@@ -68,9 +69,10 @@ Two layers gate the gateway, in order:
 1. **Per-IP edge throttle (pre-auth).** An optional fastapi-guard edge layer caps requests per client IP
    *before* the API key is validated — so an IP flooding invalid keys, or rotating many keys from one IP
    to defeat the per-user limiter, is answered with `429` at the edge and never reaches admin-api. An IP
-   that keeps offending past a threshold is **auto-banned for a window**. Self-hosted default: **OFF**
-   (`GUARD_ENABLED=false`); set `GUARD_ENABLED=true` + `GUARD_RATE_LIMIT_RPM` to turn it on. Hosted runs
-   it on. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+   that keeps offending past a threshold is **auto-banned for a window**. **On by default everywhere** —
+   code, compose and Helm — so you opt out, not in: `GUARD_ENABLED=false` (or `gateway.guard.enabled=false`)
+   removes the layer, `GUARD_RATE_LIMIT_RPM=0` keeps it installed but stops rate limiting.
+   See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
 2. **Per-user limiter (post-auth).** A token-bucket limiter keyed by user id fires *after* the key is
    resolved — it catches one token driving too much traffic across many IPs. Self-hosted: **ON** by
    default (`GATEWAY_RATE_LIMIT_RPS` / `GATEWAY_RATE_LIMIT_BURST`, see [Configuration](/configuration)).

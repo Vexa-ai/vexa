@@ -189,7 +189,8 @@ stack still boots.
 |---|---|---|
 | `DEFAULT_BOT_NAME` | — | Bot participant name used when the caller omits `bot_name` in `POST /bots`. Falls back to `VexaBot-{random}` if unset. |
 | `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
-| `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
+| `AUTO_JOIN_LEAD_S` | `120` | The bot is sent this many seconds *before* the scheduled time, so it is already standing in the lobby when the meeting starts. |
+| `VEXA_LOBBY_BUDGET_S` | `900` | How long a spawned bot waits for admission before giving up (`automatic_leave.waitingRoomTimeout`). The reconciler's pre-active grace derives from this, so raising it never leaves a waiting bot reaped early. |
 | `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
 | `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
 | `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |
@@ -246,12 +247,13 @@ driving too much traffic. On for self-hosted by default.
 An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
 — so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is
 answered with `429` at the edge and never reaches admin-api. An IP that keeps offending past a threshold
-is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. Hosted runs this
-on; self-hosted defaults OFF. The code default is `GUARD_ENABLED=true`; the deploy surfaces set
-`GUARD_ENABLED=false` for self-hosted, so you opt in by overriding it.
+is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. It is **on by default
+everywhere**: the code default is `GUARD_ENABLED=true`, compose interpolates
+`GUARD_ENABLED=${GUARD_ENABLED:-true}` and ships the opt-out line commented, and the Helm chart sets
+`gateway.guard.enabled: true`. You opt OUT, not in.
 
 <Note>
-`GUARD_ENABLED=false` is the kill switch — flip it to `true` to turn the whole edge layer on. When
+`GUARD_ENABLED=false` is the kill switch — set it to turn the whole edge layer off. When
 behind a reverse proxy you must also set `GUARD_TRUSTED_PROXIES`, or every request keys to the proxy
 IP → one global bucket shared by all clients (one abuser throttles everyone). See
 [Deployment → Publishing behind a reverse proxy](/deployment#publishing-behind-a-reverse-proxy).
@@ -259,7 +261,7 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GUARD_ENABLED` | `true` (code) / `false` (self-hosted deploy) | Kill switch for the entire edge layer. |
+| `GUARD_ENABLED` | `true` (code, compose and Helm) | Kill switch for the entire edge layer. |
 | `GUARD_ENABLE_REDIS` | `true` | Share rate/ban state across processes via the existing `REDIS_URL` (`false` → in-memory only, per-process). |
 | `GUARD_RATE_LIMIT_RPM` | `600` | Per-IP request cap per minute; `0` disables rate limiting. |
 | `GUARD_RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds. |
