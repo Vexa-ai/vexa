@@ -9,7 +9,10 @@ import {
   googleAuthJoinCtaSelectors,
   googleSignedOutLobbyProbeSelectors,
   googleLobbyIconGlyphSelectors,
-  googleLobbyCtaMaxLabelChars
+  googleLobbyCtaMaxLabelChars,
+  googleStartupErrorScreenSelectors,
+  googleStartupErrorHeadingSelectors,
+  googleMeetingNotFoundStartupCodes
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
@@ -50,10 +53,150 @@ export function resolveUiInteractionMode(botConfig: BotConfig): "humanized" | "s
   return botConfig.platform === "google_meet" ? "humanized" : "synthetic";
 }
 
+/**
+ * ── The meeting-does-not-exist screen (#1325) ───────────────────────────────
+ *
+ * A dead / revoked / mistyped Meet code does not produce a lobby. Meet's
+ * call-setup RPC returns 404 ("Requested meeting space does not exist") and the
+ * SPA renders an error screen with NO join CTA and NO name input, stamping the
+ * failure code on the screen container as `data-startup-code` (217 for this
+ * class — the same 217 the bot's console prints from Google's own gRPC body).
+ *
+ * Before this existed the bot could not see that screen at all. It entered the
+ * CTA hunt, burned the full 60s budget, and — because the error screen counts
+ * itself down and navigates back to the Meet home page at ~60s — often ended up
+ * filling the home page's "Enter a code or link" box before giving up as a
+ * generic `join_failure`, which the retry classifier then treats as TRANSIENT
+ * and re-spawns against a code that can never exist.
+ *
+ * The existing `googleRejectionIndicators` copy could never have caught it: that
+ * classifier runs inside admission polling, which only begins AFTER a join CTA is
+ * clicked, and none of its eight meeting-not-found strings appear on the real
+ * page anyway (fixtures/gmeet-404-meeting-not-found.html).
+ */
+
+/** What the startup-error screen scan found. `code` is null when no such screen
+ *  is present — which is the ordinary case on every lobby. */
+export interface MeetStartupError { code: string | null; heading: string; body: string }
+export interface MeetStartupErrorOptions { screenSelector: string; headingSelector: string }
+
+/**
+ * Locale-agnostic scan for Meet's startup-error screen.
+ *
+ * RUNS IN BROWSER CONTEXT (page.evaluate serializes this function's source), so
+ * — like findLobbyPrimaryCta — it closes over nothing, reads only its argument
+ * and `document`, and uses plain CSS. That also makes it directly executable
+ * against a jsdom document, which is how meeting-not-found.test.ts pins it
+ * against the REAL captured page rather than a mock.
+ *
+ * The discriminator is the `data-startup-code` attribute, never a word of copy.
+ * An empty attribute value is NOT an error screen — the code must be present and
+ * non-empty for the screen to be claimed.
+ */
+export function findMeetStartupError(opts: MeetStartupErrorOptions): MeetStartupError {
+  const screen = document.querySelector(opts.screenSelector);
+  if (screen === null) return { code: null, heading: "", body: "" };
+  const raw = screen.getAttribute("data-startup-code");
+  const code = raw === null ? "" : raw.trim();
+  if (code.length === 0) return { code: null, heading: "", body: "" };
+  const headEl = screen.querySelector(opts.headingSelector);
+  const heading = headEl === null ? "" : (headEl.textContent || "").replace(/\s+/g, " ").trim();
+  const body = (screen.textContent || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  return { code: code, heading: heading, body: body };
+}
+
+/** No error screen. The one value this module returns whenever it has not
+ *  POSITIVELY recognized a startup-error screen. */
+const NO_STARTUP_ERROR: MeetStartupError = { code: null, heading: "", body: "" };
+
+/**
+ * Run findMeetStartupError in the page.
+ *
+ * FAIL-OPEN BY CONSTRUCTION. This guard terminates a join, so it must only ever
+ * act on a result it positively recognizes: anything else — an evaluate that
+ * threw (navigation mid-flight, closed page), a non-object, a missing or
+ * non-string `code` — resolves to "no error screen" and the join proceeds. The
+ * cost of a false negative is the pre-existing 60s timeout; the cost of a false
+ * positive is refusing a meeting that was joinable.
+ */
+export async function readMeetStartupError(page: Page): Promise<MeetStartupError> {
+  const opts: MeetStartupErrorOptions = {
+    screenSelector: googleStartupErrorScreenSelectors.join(", "),
+    headingSelector: googleStartupErrorHeadingSelectors.join(", "),
+  };
+  let r: any;
+  try {
+    r = await page.evaluate(findMeetStartupError, opts);
+  } catch {
+    return NO_STARTUP_ERROR;
+  }
+  if (r === null || typeof r !== "object") return NO_STARTUP_ERROR;
+  if (typeof r.code !== "string" || r.code.length === 0) return NO_STARTUP_ERROR;
+  return {
+    code: r.code,
+    heading: typeof r.heading === "string" ? r.heading : "",
+    body: typeof r.body === "string" ? r.body : "",
+  };
+}
+
+/**
+ * Typed error for a startup-error screen. `meeting_not_found` ONLY for codes we
+ * have captured AND corroborated in production (googleMeetingNotFoundStartupCodes);
+ * every other code still terminates the join fast — the screen carries no CTA, so
+ * waiting is provably pointless — but is reported as a plain `join_failure`,
+ * because naming a class we have not evidenced is how the copy list above got
+ * written.
+ */
+export function startupErrorToAdmissionError(e: MeetStartupError, url: string): AdmissionError {
+  const code = e.code === null ? "?" : e.code;
+  const said = e.heading.length > 0 ? ` — Meet says: "${e.heading}"` : "";
+  if (e.code !== null && googleMeetingNotFoundStartupCodes.indexOf(e.code) >= 0) {
+    return new AdmissionError(
+      "meeting_not_found",
+      `Google Meet has no such meeting space (startup code ${code})${said}. ` +
+        `The link is dead, revoked or mistyped — there is no lobby to join and a retry cannot help. url=${url}`,
+    );
+  }
+  return new AdmissionError(
+    "join_failure",
+    `Google Meet rendered a startup-error screen (startup code ${code})${said}, which carries no join control. url=${url}`,
+  );
+}
+
+/**
+ * THROW if the page is a Meet startup-error screen. Called (a) once immediately
+ * after navigation, before any CTA or name-input hunting begins — the "pre-CTA"
+ * position that is the whole point of #1325 — and (b) on the poll cadence inside
+ * the selector waits, so a screen that arrives late is still caught in seconds
+ * rather than at the end of a 60s or 120s budget.
+ *
+ * It runs AHEAD of the ordered selector list inside those waits, deliberately.
+ * On the captured error screen the list's broad locale-agnostic backstop
+ * (`button[jsname]:not([aria-label]):has(span)`) matches "Return to home screen"
+ * — the FIRST such button on the page — so a list-first order does not merely
+ * waste the budget, it clicks a control that navigates away from the meeting.
+ * The guard is cheap (one querySelector) and returns immediately on any page
+ * without a startup-error screen, which is every lobby.
+ */
+export async function guardMeetStartupError(page: Page): Promise<void> {
+  const err = await readMeetStartupError(page);
+  if (err.code === null) return;
+  let url = "?";
+  try { url = page.url(); } catch { /* best-effort */ }
+  try {
+    await page.screenshot({ path: "/app/storage/screenshots/bot-checkpoint-startup-error.png", fullPage: true });
+  } catch { /* best-effort */ }
+  log(`📸 Screenshot: Meet startup-error screen (data-startup-code=${err.code}) — "${err.heading}"`);
+  throw startupErrorToAdmissionError(err, url);
+}
+
 /** Poll cadence for the ordered selector resolvers. */
 const SELECTOR_POLL_MS = 300;
 /** The structural CTA scan runs every Nth poll — it is a full-document walk. */
 const CTA_SCAN_EVERY_POLLS = 5;
+/** The startup-error probe (#1325) runs every Nth poll. Cheap (one querySelector),
+ *  but there is no reason to run it 3× a second. */
+const STARTUP_ERROR_EVERY_POLLS = 4;
 /** The scan only starts once the lobby SPA has had time to finish rendering:
  *  a half-built lobby can momentarily expose exactly one text button that is
  *  not the CTA, and the scan's whole safety argument is uniqueness. */
@@ -221,12 +364,18 @@ export async function waitForAnySelector(
   label: string
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
+  let polls = 0;
   do {
+    // #1325 FIRST, not last: on the real error screen the list's broad structural
+    // backstop matches "Return to home screen", so a list-first order would click
+    // the wrong control and navigate off the meeting.
+    if (polls % STARTUP_ERROR_EVERY_POLLS === 0) await guardMeetStartupError(page);
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
       return hit;
     }
+    polls++;
     await page.waitForTimeout(SELECTOR_POLL_MS);
   } while (Date.now() - started < timeoutMs);
 
@@ -265,6 +414,12 @@ export async function waitForLobbyCta(
   // no text-labelled button", never "the scan never got to look".
   let lastLabels: string[] | null = null;
   do {
+    // #1325 FIRST, not last — see waitForAnySelector. The error screen's
+    // "Return to home screen" button satisfies the list's broad structural
+    // backstop (`button[jsname]:not([aria-label]):has(span)`) and sits ahead of
+    // "Submit feedback" in DOM order, so on a dead meeting code a list-first
+    // order resolves it AS THE JOIN CTA and clicks it.
+    if (polls % STARTUP_ERROR_EVERY_POLLS === 0) await guardMeetStartupError(page);
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
@@ -331,6 +486,13 @@ export async function joinGoogleMeeting(
 
   // Brief wait for page elements to settle (networkidle already ensures page loaded)
   await page.waitForTimeout(1000);
+
+  // PRE-CTA (#1325): if Meet answered "no such meeting space", say so NOW. This
+  // runs before the humanized input layer, before the name input and before any
+  // CTA hunting — on a dead code the old path burned 60s looking for a button
+  // that a 404 screen never renders, then reported a generic join_failure the
+  // control plane retried.
+  await guardMeetStartupError(page);
 
   // Record the resolved UI locale on the SUCCESS path too (#856): the locale used
   // to be invisible until a failure. observedPageContext reads navigator.language

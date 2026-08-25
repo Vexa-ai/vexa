@@ -29,6 +29,8 @@ export type CompletionReason =
   | 'awaiting_admission_rejected'
   | 'join_failure'
   | 'auth_session_missing'
+  /** the platform answered that the meeting SPACE does not exist (#1325) */
+  | 'meeting_not_found'
   | 'validation_error'
   | 'max_bot_time_exceeded';
 

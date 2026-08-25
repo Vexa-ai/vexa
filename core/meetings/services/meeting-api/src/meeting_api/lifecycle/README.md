@@ -52,7 +52,8 @@ webhook body `{old_status, new_status, reason, transition_source ∈ user_stop|b
 
 ## P3d taxonomy
 TRANSIENT → retry: `awaiting_admission_timeout`, `join_failure`. PERMANENT → no retry → failed:
-`awaiting_admission_rejected`, `evicted`, `validation_error`, `max_bot_time_exceeded`, user `stopped`
+`awaiting_admission_rejected`, `evicted`, `validation_error`, `max_bot_time_exceeded`,
+`auth_session_missing`, `meeting_not_found` (the meeting space does not exist — #1325), user `stopped`
 (+ `left_alone`/`startup_alone`, which are normal outcomes). Unknown/None → PERMANENT (fail-safe).
 
 ## Evals

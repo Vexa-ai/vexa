@@ -101,7 +101,16 @@ export const googleRejectionIndicators: string[] = [
   'text=Ask to join again',
   'button:has-text("Ask to join again")',
 
-  // Meeting not found or access denied patterns
+  // Meeting not found or access denied patterns.
+  //
+  // ⚠️ 2026-08-25 (#1325): the eight strings below were written from imagination
+  // and NONE of them appear on the page Google actually serves for a dead meeting
+  // code — that page says "Check your meeting code" (see
+  // fixtures/gmeet-404-meeting-not-found.html, the first REAL captured Meet DOM in
+  // this repo). They are kept because they may still match OTHER Meet error
+  // screens we have not captured, but they must not be relied on for the
+  // meeting-does-not-exist class: that class is detected STRUCTURALLY, ahead of
+  // the join CTA, via googleStartupErrorScreenSelector below.
   'text="Meeting not found"',
   'text="Can\'t join the meeting"',
   'text="Unable to join"',
@@ -474,6 +483,52 @@ export const googlePeopleButtonSelectors: string[] = [
   'button[data-tooltip*="Participants"]'
 ];
 
+// ── Meet startup-error screen (#1325) ───────────────────────────────────────
+//
+// When the call-setup RPC fails, Meet does NOT render a lobby: it renders an
+// error screen with no join CTA and no name input, and it stamps the failure
+// code onto that screen's container as `data-startup-code`. A dead / revoked /
+// mistyped meeting code produces `data-startup-code="217"`, which is the very
+// same `startupCode: 217` the bot's own console prints alongside Google's gRPC
+// body `statusCode = 404 … "Requested meeting space does not exist."` (prod pods
+// vexa-mtg-26920 / 26921, 2026-08-25).
+//
+// This attribute is the discriminator BECAUSE it is not words: it survives every
+// locale and every copy revision, which the copy list above demonstrably did not.
+// Captured, not imagined — fixtures/gmeet-404-meeting-not-found.html.
+//
+// Consumed in BROWSER CONTEXT by findMeetStartupError (join.ts), so these are
+// plain CSS and are declared in browserContextSelectorArrays below.
+export const googleStartupErrorScreenSelectors: string[] = [
+  '[data-startup-code]'
+];
+
+// The error screen's heading element, whose text is the localized reason
+// ("Check your meeting code" in en). Read for the diagnostic message only —
+// never as the discriminator.
+export const googleStartupErrorHeadingSelectors: string[] = [
+  '[jsname="r4nke"]',
+  'h1'
+];
+
+// Startup codes that mean THE MEETING SPACE DOES NOT EXIST, mapped to the typed
+// `meeting_not_found` admission outcome (permanent: a re-spawn cannot succeed).
+// 217 is the only value we have captured AND corroborated against a production
+// gRPC body; a startup-error screen carrying any OTHER code still terminates the
+// join fast (the screen has no CTA — waiting is pointless) but is reported as a
+// plain join_failure with the code in the message, because we have not earned
+// the right to name it.
+export const googleMeetingNotFoundStartupCodes: string[] = [
+  '217'
+];
+
+// The en-US copy this screen renders, kept for the human-readable diagnostic and
+// as a corroborating (never sole) signal. Verbatim from the capture.
+export const googleMeetingNotFoundCopy: string[] = [
+  'Check your meeting code',
+  'Requested meeting space does not exist'
+];
+
 // EXECUTION-CONTEXT DECLARATION — consumed by src/shared/selector-validity.test.ts.
 // Arrays named here ship into page.evaluate and run through
 // document.querySelector, so the gate additionally CSS-parses them: a
@@ -484,5 +539,7 @@ export const googlePeopleButtonSelectors: string[] = [
 export const browserContextSelectorArrays: string[] = [
   'googleLeaveButtonMatchers',
   'googleLobbyIconGlyphSelectors',
+  'googleStartupErrorScreenSelectors',
+  'googleStartupErrorHeadingSelectors',
 ];
 

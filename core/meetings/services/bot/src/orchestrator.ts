@@ -93,6 +93,7 @@ const OUTCOME_FAIL: Record<Exclude<JoinOutcome, 'admitted'>, CompletionReason> =
   timeout: 'awaiting_admission_timeout',
   blocked: 'join_failure',
   auth_missing: 'auth_session_missing',
+  meeting_not_found: 'meeting_not_found',
   error: 'join_failure',
 };
 

@@ -137,7 +137,8 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
-// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
+// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing /
+// meeting_not_found).
 // It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
 // JoinOutcome so a host DENIAL is recorded as a permanent `rejected` — and a signed-out profile
 // (AuthSessionError, an AdmissionError subclass) as the permanent `auth_session_missing` — never
@@ -145,6 +146,11 @@ export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissi
 export { AdmissionError } from "./shared/admission";
 export type { AdmissionOutcome } from "./shared/admission";
 export { AuthSessionError } from "./googlemeet/join";
+// #1325: Meet answers a dead meeting code with a startup-error screen that has no join CTA — detected
+// PRE-CTA and thrown as the PERMANENT `meeting_not_found`, so the control plane stops re-spawning
+// bots against a code that cannot exist.
+export { findMeetStartupError, readMeetStartupError, guardMeetStartupError, startupErrorToAdmissionError } from "./googlemeet/join";
+export type { MeetStartupError, MeetStartupErrorOptions } from "./googlemeet/join";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 // The Teams anonymous-join origin guard. A meetup-join redirected to the Microsoft sign-in host
 // terminates the join THERE with `TeamsJoinRedirectError` — deliberately not an AdmissionError, so

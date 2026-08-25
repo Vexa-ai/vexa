@@ -45,6 +45,7 @@ class CompletionReason(str, Enum):
     AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"
     JOIN_FAILURE = "join_failure"
     AUTH_SESSION_MISSING = "auth_session_missing"
+    MEETING_NOT_FOUND = "meeting_not_found"
     VALIDATION_ERROR = "validation_error"
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"
 
