@@ -124,6 +124,40 @@ It does **not** claim immediate erasure from database snapshots, object-store ve
 other backups; those residuals expire under the operator's deployment retention policy.
 </Warning>
 
+### Set the planned status by native key
+
+`PUT /meetings/{platform}/{native_meeting_id}/intent` writes only the two **user-owned** statuses —
+this is the route a dropdown drives, where `PATCH` is the route a form drives.
+
+```bash PUT /meetings/{platform}/{native_meeting_id}/intent
+curl -X PUT "$API_BASE/meetings/google_meet/abc-defg-hij/intent" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"intent":"scheduled","at":"2026-07-10T15:00:00Z"}'
+```
+
+| Field | Rule |
+|---|---|
+| `intent` | `idle` or `scheduled` only. Any FSM-owned status (`requested`, `active`, `completed`, …) is refused with `422`. |
+| `at` | ISO-8601 string. **Required** when `intent` is `scheduled`; ignored for `idle`. |
+
+Returns `200` with `{meeting_id, status, scheduled_at}`. `404` for a record you don't own. The write
+is idempotent — setting the status it already holds changes nothing and emits no WebSocket frame.
+
+### Bind a meeting to a shared workspace
+
+`POST /meetings/{platform}/{native_meeting_id}/workspace` sets the meeting's `workspace_id`. Members
+of that workspace can then subscribe to the meeting's live transcript feed. Many meetings may point
+at one workspace.
+
+```bash POST /meetings/{platform}/{native_meeting_id}/workspace
+curl -X POST "$API_BASE/meetings/google_meet/abc-defg-hij/workspace" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"workspace_id":"ws-acme"}'
+```
+
+Returns `200` with `{"workspace_id": "ws-acme"}`. `422` when `workspace_id` is missing or empty;
+`404` for a record you don't own. `POST /meetings` accepts the same binding at creation time.
+
 ## api.v1 native-id support (per route)
 
 `api.v1` is sealed as a **file hash** (`contracts.seal.json`), which pins the schema document, not
@@ -173,6 +207,19 @@ snapshot under `data.calendar_sources[].event`. Moves, cancellations, attendee c
 provider metadata follow the feed only while the meeting remains planned; calendar sync never
 rewrites a meeting after the bot lifecycle claims it.
 
+<Note>
+The endpoints below are the **singular** compatibility routes, which address one feed. An account can
+hold up to ten named connections, each with its own `auto_join` and `bot_name`, through
+`/user/calendars` — the full contract is the [Calendar API](/api/calendar). New integrations should
+use that.
+</Note>
+
+```bash PUT /user/calendar
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true}'
+```
+
 See the [Calendar API reference](/api/calendar) for connection CRUD, per-connection sync endpoints,
 request/response schemas, compatibility endpoints, error statuses, and metadata persistence. See
 [Calendar sync](/how-to/calendar-sync) for Google Calendar and Outlook setup.
@@ -201,7 +248,8 @@ curl -X POST "$API_BASE/bots" \
 
 If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
-already active on that link; `429` past your concurrency limit.
+already active on that link; `429` past your concurrency limit — see the
+[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the
@@ -265,6 +313,17 @@ Segments stream in while the meeting runs — poll this endpoint, or subscribe o
 per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
 confirmations.
 
+The same response is reachable **by record id**, which is what you have after planning a meeting that
+has no link yet:
+
+```bash GET /transcripts/by-id/{meeting_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/transcripts/by-id/12345"
+```
+
+Both forms return the meeting record alongside its `segments` — `id`, `platform`,
+`native_meeting_id`, `status`, `start_time`, `end_time`, `constructed_meeting_url`, `notes`,
+`recordings`, and the full `data` detail. `404` for an unknown record or one you don't own.
+
 ## Manage the bot
 
 ```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
@@ -276,6 +335,8 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
 ```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
+
+Stop answers `200` with `{"status":"stopping","meeting_id":…,"also_stopped":[],"cancelled":[]}`.
 
 ```bash Running bots — GET /bots/status
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
