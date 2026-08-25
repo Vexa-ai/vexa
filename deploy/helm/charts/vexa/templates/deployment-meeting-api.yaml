@@ -31,7 +31,7 @@ spec:
         - name: meeting-api
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag }}"
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.meetingApi.image "useGlobalTag" true) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           lifecycle:
             preStop:

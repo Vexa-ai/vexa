@@ -37,7 +37,7 @@ spec:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
           # NB: deliberately NOT prefixed by global.imageTag — the dashboard is a deprecated
           # external image on its own pinned tag, not part of the release image set.
-          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.dashboard.image "useGlobalTag" false) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

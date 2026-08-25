@@ -37,7 +37,7 @@ spec:
       {{- end }}
       containers:
         - name: pgbouncer
-          image: "{{ .Values.pgbouncer.image }}"
+          image: {{ include "vexa.scalarImageRef" (dict "legacy" .Values.pgbouncer.image "repository" .Values.pgbouncer.imageRepository "digest" .Values.pgbouncer.imageDigest) | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: DB_HOST

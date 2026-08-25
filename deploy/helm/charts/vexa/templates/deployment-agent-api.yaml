@@ -41,7 +41,7 @@ spec:
         - name: agent-api
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag }}"
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.agentApi.image "useGlobalTag" true) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
