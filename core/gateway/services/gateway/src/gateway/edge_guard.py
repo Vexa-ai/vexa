@@ -33,18 +33,22 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import time
-from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from guard import SecurityConfig, SecurityMiddleware, ip_ban_manager
+# fastapi-guard 7.7.0 re-exports the guard-core primitives this module drives the WS path
+# through (ASK 1, landed): check_rate_limit_by_ip / is_ip_allowed / ip_ban_manager all
+# live at ``guard``'s top level now, alongside SecurityConfig / SecurityMiddleware. The one
+# still-straight-from-guard_core import is extract_client_ip (ASK 3 - an official WS
+# GuardRequest adapter / extract_client_ip re-export - remains open).
+from guard import (
+    SecurityConfig,
+    SecurityMiddleware,
+    check_rate_limit_by_ip,
+    ip_ban_manager,
+    is_ip_allowed,
+)
 
-# is_ip_allowed / extract_client_ip are not exported at guard's top level yet (ask filed
-# upstream - see the WS guard hook section below); import straight from guard_core. The
-# pinned guard-core (3.4.0, uv.lock) has ``is_ip_allowed`` (plain bool) rather than the
-# newer ``check_ip_access`` (returns a reasoned ``IpAccessResult``) some later guard-core
-# versions add - same whitelist/blacklist/cloud-provider semantics, just a plainer return.
-from guard_core.utils import extract_client_ip, is_ip_allowed
+from guard_core.utils import extract_client_ip
 
 from .config_preflight import ConfigError
 from .ratelimit import env_truthy
@@ -231,6 +235,17 @@ def build_guard_config() -> SecurityConfig:
             "GUARD_RATE_LIMIT_WINDOW", _GUARD_RATE_LIMIT_WINDOW_DEFAULT
         ),
         enable_ip_banning=True,
+        # enable_rate_limit_auto_ban feeds rate-limit violations into guard's auto-ban
+        # engine (per-process "rate_limit" counter, ban reason "rate_limit_exceeded",
+        # requires enable_ip_banning). ONE knob governs BOTH paths: the HTTP pipeline's
+        # RateLimitCheck AND the WS connect primitive (check_rate_limit_by_ip) read it,
+        # which is the point of the consolidation - the hand-rolled WS auto-ban this
+        # replaces had no HTTP counterpart. Default ON to preserve the WS auto-ban the
+        # hand-rolled guard shipped with; the HTTP path newly gains the same protection
+        # (the documented expansion). Default off in guard-core itself; flip
+        # GUARD_AUTO_BAN_RATE_LIMIT=false to disable both. See audit 5.5: without this,
+        # auto_ban_threshold / auto_ban_duration were dead config on the rate-limit path.
+        enable_rate_limit_auto_ban=_env_bool("GUARD_AUTO_BAN_RATE_LIMIT", True),
         auto_ban_threshold=_env_int(
             "GUARD_AUTO_BAN_THRESHOLD", _GUARD_AUTO_BAN_THRESHOLD_DEFAULT
         ),
@@ -240,7 +255,9 @@ def build_guard_config() -> SecurityConfig:
         whitelist=_validate_ip_or_cidr_csv("GUARD_IP_WHITELIST") or None,
         blacklist=_validate_ip_or_cidr_csv("GUARD_IP_BLACKLIST"),
         blocked_countries=_guard_csv("GUARD_BLOCKED_COUNTRIES"),
-        block_cloud_providers=_validate_block_cloud_providers("GUARD_BLOCK_CLOUD_PROVIDERS"),
+        block_cloud_providers=_validate_block_cloud_providers(
+            "GUARD_BLOCK_CLOUD_PROVIDERS"
+        ),
         trusted_proxies=_validate_ip_or_cidr_csv("GUARD_TRUSTED_PROXIES"),
         trust_x_forwarded_proto=_env_bool("GUARD_TRUST_X_FORWARDED_PROTO", False),
         enable_penetration_detection=False,
@@ -273,24 +290,31 @@ def apply_guard(app: FastAPI, config: SecurityConfig | None = None) -> None:
 
 # ── WS guard hook ─────────────────────────────────────────────────────────────
 # HTTP ``SecurityMiddleware`` does NOT intercept the ``/ws`` multiplex (Starlette
-# middleware is HTTP-only). When ``GUARD_WS_ENABLED=true`` (default false — opt-in,
+# middleware is HTTP-only). When ``GUARD_WS_ENABLED=true`` (default false, opt-in,
 # since WS guard is beyond the drafted floor), ``run_multiplex`` resolves the
 # client IP and calls :func:`ws_guard_check` to deny over-limit/banned IPs at connect.
 #
-# Phase 1 (this section) replaced the pieces guard's library already covers: IP-list /
-# cloud-provider matching (``is_ip_allowed``), the ban store (``ip_ban_manager`` -
-# process-wide and Redis-shared with the HTTP middleware when ``GUARD_ENABLE_REDIS`` is
-# on), and client-IP resolution (``extract_client_ip`` via the minimal
-# ``_WsGuardRequest`` adapter below). What is LEFT hand-rolled is the rate limit itself:
-# SecurityMiddleware exposes no reusable programmatic rate-limit primitive (its
-# ``dispatch`` is bound to an HTTP ``Request`` and the internal rate-limit check needs a
-# full ``GuardRequest`` + pipeline). So the rate-limit half is a MINIMAL standalone
-# limiter:
+# Fully library-backed (phase 2, guard-core 3.13.0 / fastapi-guard 7.7.0): ban store
+# (``ip_ban_manager``), IP-list/cloud access (``is_ip_allowed``), client-IP resolution
+# (``extract_client_ip``), AND the rate-limit + auto-ban engine
+# (``check_rate_limit_by_ip``). Nothing hand-rolled remains. The rate-limit primitive
+# is the one phase 1 could not swap (guard's ``SecurityMiddleware.dispatch`` is bound to
+# an HTTP ``Request``); guard-core 3.13.0 exposed it as a top-level primitive (A2b: it
+# honors the same ``enable_rate_limit_auto_ban`` / ``enable_ip_banning`` knob pair the
+# HTTP pipeline uses, with a per-process violation counter and reason
+# "rate_limit_exceeded"), so the entire hand-rolled sliding window + ``_ban_counts``
+# block could be deleted.
 #
-#   ponytail: standalone WS rate limiter - in-process buckets, NOT
-#   SecurityMiddleware's own rate-limit counters (the ban store is shared via
-#   ip_ban_manager, but the sliding-window bucket is not). Promote to fastapi-guard's
-#   native WS support if/when upstream adds a reusable rate-limit primitive (ASK 2).
+# BEHAVIOR DRIFT vs the hand-rolled block this replaces (documented, accepted): the old
+# code reset its in-process violation counter to 0 the moment it set a ban, so an
+# offender whose ban expired started a fresh threshold cycle. The library's counter
+# does NOT reset (it short-circuits further counts while the IP is banned, then resumes
+# from its old value post-expiry), so a repeat offender re-bans on the FIRST over-limit
+# after expiry instead of needing a full threshold again. Stricter on recidivism; this
+# is guard-core's chosen semantics and is not tuned here. The rate WINDOW itself is
+# still in-process (the primitive's ``redis_handler`` arg is left at its default None
+# to preserve the hand-rolled behavior); wiring it is a one-line future enhancement -
+# the primitive already fails open to in-memory on a redis outage, so it is safe to add.
 
 _WS_GUARD: Optional["_WsGuard"] = None
 
@@ -305,8 +329,8 @@ class _WsGuardRequest:
     adapter needs. Mirrors fastapi-guard's own HTTP adapter, ``StarletteGuardRequest``
     (``guard/adapters.py``), which implements the whole protocol because the HTTP
     pipeline needs all of it; this one doesn't, so it doesn't. An official WS
-    ``GuardRequest`` adapter is a filed upstream ask - if/when it ships, this class (and
-    the ``cast`` at its one call site) goes away too.
+    ``GuardRequest`` adapter is a filed upstream ask (ASK 3) - if/when it ships, this
+    class (and the ``cast`` at its one call site) goes away too.
     """
 
     __slots__ = ("_ws",)
@@ -328,97 +352,65 @@ class _WsGuardRequest:
 
 
 class _WsGuard:
-    """Per-IP guard for the ``/ws`` connect path: library-backed IP-list/ban decisions
-    (SWAP A/B), in-process sliding-window rate limit (still hand-rolled, see the module
-    comment above).
-
-    Mirrors the HTTP layer's knobs (rate limit, auto-ban threshold/duration,
-    blacklist, whitelist) from the SAME :class:`SecurityConfig` the HTTP middleware
-    uses, so one env surface governs both.
+    """Per-IP guard for the ``/ws`` connect path, fully delegated to guard's library
+    primitives (phase 2): ban store, IP-list/cloud access, and the rate-limit +
+    auto-ban engine. Mirrors the HTTP layer's knobs from the SAME
+    :class:`SecurityConfig` the HTTP middleware uses, so one env surface governs both.
     """
 
-    __slots__ = ("_config", "_rl", "_ban_counts")
+    __slots__ = ("_config",)
 
     def __init__(self, config: SecurityConfig) -> None:
         self._config = config
-        # ip -> sliding-window timestamps (monotonic) - the still-hand-rolled half.
-        self._rl: defaultdict[str, deque[float]] = defaultdict(deque)
-        # ip -> count of rate-limit violations toward auto-ban. Stays in-process (it
-        # feeds the threshold, part of the rate-limit half phase 2 replaces); only the
-        # ban STORE itself moved to ip_ban_manager (SWAP B) below.
-        self._ban_counts: defaultdict[str, int] = defaultdict(int)
 
     async def check(self, client_ip: str) -> bool:
-        """Return True if the IP may connect, False if over-limit or banned."""
+        """Return True if the IP may connect, False if banned, blocked, or over-limit."""
         cfg = self._config
 
         # Ban check first, unconditional - mirrors guard-core's IpSecurityCheck order
         # (its ban lookup runs before the whitelist/blacklist decision), so an actively
-        # banned IP stays blocked even if it is also whitelisted. SWAP B: the ban STORE
-        # is now ip_ban_manager (guard_core.handlers.ipban_handler) - process-wide and
+        # banned IP stays blocked even if it is also whitelisted. The ban STORE is
+        # ip_ban_manager (guard_core.handlers.ipban_handler) - process-wide and
         # Redis-shared with the HTTP middleware when GUARD_ENABLE_REDIS is on, closing
         # the multi-replica gap the old in-process ``_bans`` dict had (helm defaults the
         # gateway to replicaCount 2).
         if await ip_ban_manager.is_ip_banned(client_ip):
             return False
 
-        # IP access (whitelist/blacklist/cloud-provider) via the library (SWAP A),
-        # replacing the hand-copied ``_ip_matches``. is_ip_allowed parses each entry
-        # strictly and only ever fails CLOSED (blocks) on a malformed one, unlike the
-        # old ``_ip_matches``, which deliberately skipped a malformed entry (fail-open).
-        # That fail-open rationale is now obsolete: ``_validate_ip_or_cidr_csv``
-        # (env-validation, merged ahead of this swap) guarantees every whitelist /
-        # blacklist / trusted-proxy entry is a valid IP or CIDR before it ever reaches
-        # ``SecurityConfig``, so a malformed entry can no longer get here at all - the
-        # boot refuses first.
+        # IP access (whitelist/blacklist/cloud-provider) via the library, replacing the
+        # hand-copied ``_ip_matches``. is_ip_allowed parses each entry strictly and only
+        # ever fails CLOSED (blocks) on a malformed one, unlike the old ``_ip_matches``,
+        # which deliberately skipped a malformed entry (fail-open). That fail-open
+        # rationale is now obsolete: ``_validate_ip_or_cidr_csv`` (env-validation,
+        # merged ahead of this swap) guarantees every whitelist / blacklist /
+        # trusted-proxy entry is a valid IP or CIDR before it reaches ``SecurityConfig``,
+        # so a malformed entry can no longer get here at all - the boot refuses first.
         #
         # CAUTION (audit 5.4, deliberate): a non-empty whitelist is EXCLUSIVE here - an
         # IP not on it is blocked outright, the blacklist is never consulted - matching
         # guard-core's HTTP semantics exactly. The old hand-rolled check only used the
         # whitelist as a bypass fast path: a listed IP passed immediately, but an
         # UNLISTED IP just fell through to the (often empty) blacklist and was allowed.
-        # See ``test_whitelist_exclusive_blocks_unlisted_ip`` for the pinned new
-        # behavior.
+        # See ``test_whitelist_exclusive_blocks_unlisted_ip`` for the pinned behavior.
         if not await is_ip_allowed(client_ip, cfg):
             return False
-        # allowed + a non-empty whitelist means the IP matched it (is_ip_allowed never
-        # falls through to the blacklist once a whitelist is set) - mirrors guard-core's
-        # own is_whitelisted computation (core/checks/implementations/ip_security.py).
-        is_whitelisted = bool(cfg.whitelist)
-        if is_whitelisted:
-            # A whitelisted IP also skips rate limiting, mirroring guard-core's
-            # RateLimitCheck (``if request.state.is_whitelisted: return None``).
+
+        # A whitelisted IP skips rate limiting, mirroring guard-core's RateLimitCheck
+        # (``if request.state.is_whitelisted: return None``).
+        if bool(cfg.whitelist):
             return True
 
-        # Per-IP sliding-window rate limit - still hand-rolled (ASK 2: no reusable
-        # library primitive yet for this half).
+        # Per-IP rate limit + auto-ban via the library primitive (phase 2; was a
+        # hand-rolled sliding window + ``_ban_counts`` dict). endpoint_path="ws" gives
+        # the WS connect path an ISOLATED budget from the HTTP pipeline's global
+        # rate-limit bucket: the default "" collapses to the same Redis key the HTTP
+        # path uses, so HTTP requests and WS connects would drain each other's budget.
+        # Every call records a hit (so a "just check" still consumes a slot); False means
+        # over-limit. With enable_rate_limit_auto_ban + enable_ip_banning both on, an
+        # over-limit feeds the same auto-ban engine the HTTP pipeline uses (per-process
+        # counter, ban reason "rate_limit_exceeded") - one knob governs both paths.
         if cfg.enable_rate_limiting:
-            now = time.monotonic()
-            window = float(cfg.rate_limit_window)
-            limit = int(cfg.rate_limit)
-            bucket = self._rl[client_ip]
-            cutoff = now - window
-            while bucket and bucket[0] <= cutoff:
-                bucket.popleft()
-            if len(bucket) >= limit:
-                # Over limit → count toward auto-ban; ban when the threshold is reached.
-                # Auto-ban only fires when IP banning is enabled (the config knob is
-                # otherwise ignored, which would let banning slip in via the back door).
-                if cfg.enable_ip_banning:
-                    self._ban_counts[client_ip] += 1
-                    if self._ban_counts[client_ip] >= int(cfg.auto_ban_threshold):
-                        # SWAP B: ban CREATION moves to ip_ban_manager too. Reset-on-set:
-                        # after the ban window expires the offender starts a fresh cycle
-                        # (clean "auto-ban for a window, then fresh budget" semantics) -
-                        # without this, ban_counts sits at the threshold and the first
-                        # over-limit post-expiry immediately re-bans for a full duration.
-                        await ip_ban_manager.ban_ip(
-                            client_ip, int(cfg.auto_ban_duration)
-                        )
-                        self._ban_counts[client_ip] = 0
-                        bucket.clear()
-                return False
-            bucket.append(now)
+            return await check_rate_limit_by_ip(client_ip, cfg, endpoint_path="ws")
         return True
 
 

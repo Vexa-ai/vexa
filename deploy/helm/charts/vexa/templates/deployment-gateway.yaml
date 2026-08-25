@@ -69,6 +69,8 @@ spec:
               value: {{ .Values.gateway.guard.rateLimitRpm | quote }}
             - name: GUARD_RATE_LIMIT_WINDOW
               value: {{ .Values.gateway.guard.rateLimitWindow | quote }}
+            - name: GUARD_AUTO_BAN_RATE_LIMIT
+              value: {{ .Values.gateway.guard.autoBanRateLimit | quote }}
             - name: GUARD_AUTO_BAN_THRESHOLD
               value: {{ .Values.gateway.guard.autoBanThreshold | quote }}
             - name: GUARD_AUTO_BAN_DURATION

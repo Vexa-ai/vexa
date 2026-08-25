@@ -29,7 +29,6 @@ from starlette.datastructures import Headers
 from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
-from gateway import edge_guard as _edge_guard
 from gateway.app import run_multiplex
 from gateway.config_preflight import ConfigError
 from gateway.edge_guard import (
@@ -42,21 +41,37 @@ from gateway.ratelimit import PerUserRateLimiter
 
 
 @pytest.fixture(autouse=True)
-async def _reset_ip_ban_manager() -> AsyncIterator[None]:
-    """SWAP B (``edge_guard._WsGuard.check``) routes bans through guard's process-wide
-    ``ip_ban_manager`` singleton (``IPBanManager.__new__`` caches the instance - see
-    ``guard_core.handlers.ipban_handler``), shared with the HTTP ``SecurityMiddleware``
-    pipeline too. Its own ``reset()`` clears state in place, which works no matter which
-    import path a caller holds a reference through (unlike swapping in a brand-new
-    instance, which only the reference that gets reassigned would ever observe - see
-    ``guard_core``'s own ``IPBanManager._instance = None`` test idiom, which doesn't fit
-    here for exactly that reason). Forcing ``redis_handler = None`` keeps every test
-    in-memory / hermetic (conftest.py already sets ``GUARD_ENABLE_REDIS=false`` for the
-    whole suite, so this is belt-and-braces)."""
+async def _reset_guard_process_state() -> AsyncIterator[None]:
+    """Reset guard-core's process-global WS state between tests.
+
+    Phase 2 moved the WS rate limit / auto-ban onto guard-core library primitives, which
+    keep their own module-level stores (NOT the per-instance ``_WsGuard`` dict the old
+    hand-rolled code used, which ``reset_ws_guard`` rebuilt fresh each test). Three
+    singletons survive across tests otherwise:
+
+    * ``ip_ban_manager`` (``guard_core.handlers.ipban_handler``) - the ban store the WS
+      check and HTTP pipeline share. Its own ``reset()`` clears state in place, which
+      works no matter which import path a caller holds a reference through (unlike
+      swapping in a brand-new instance). Forcing ``redis_handler = None`` keeps every test
+      in-memory / hermetic (conftest.py sets ``GUARD_ENABLE_REDIS=false`` for the suite).
+    * ``_by_ip_request_timestamps`` and ``_by_ip_autoban_counts``
+      (``guard_core.handlers.ratelimit_handler``) - the ``check_rate_limit_by_ip``
+      primitive's in-memory sliding window and per-IP violation counter. Clearing them in
+      place is the same idiom ``ip_ban_manager.reset()`` uses; without it, a 127.0.0.1
+      bucket one test populated leaks into the next (the suite failed on
+      ``test_untrusted_peer_xff_does_not_rotate_ws_budget`` because an earlier test left
+      peer-IP hits there).
+    """
+    from guard_core.handlers import ratelimit_handler as _rl_handler
+
     ip_ban_manager.redis_handler = None
     await ip_ban_manager.reset()
+    _rl_handler._by_ip_request_timestamps.clear()
+    _rl_handler._by_ip_autoban_counts.clear()
     yield
     await ip_ban_manager.reset()
+    _rl_handler._by_ip_request_timestamps.clear()
+    _rl_handler._by_ip_autoban_counts.clear()
 
 
 def _guard_middleware(app: FastAPI) -> Any:
@@ -181,13 +196,17 @@ class TestGuardEnvValidation:
         """A name that is not case-insensitively AWS/GCP/Azure raises, naming the var, the
         entry, and the exact accepted spellings - the natural 'aws,digitalocean' typo case."""
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
-        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+        with pytest.raises(
+            ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS"
+        ) as exc_info:
             build_guard_config()
         message = str(exc_info.value)
         assert "digitalocean" in message
         assert "AWS, GCP, Azure" in message
 
-    def test_cloud_provider_mixed_case_and_region_carveout_construct(self, monkeypatch) -> None:
+    def test_cloud_provider_mixed_case_and_region_carveout_construct(
+        self, monkeypatch
+    ) -> None:
         """Lowercase/mixed-case provider names normalize to guard-core's canonical spelling
         (aws -> AWS); the ':!region' carve-out suffix survives untouched."""
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,GCP,Azure:!us-east-1")
@@ -199,7 +218,9 @@ class TestGuardEnvValidation:
         real region strings are lowercase, so an uppercase region would silently never match.
         Vexa rejects it at boot instead, naming the casing rule."""
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!US-EAST-1")
-        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+        with pytest.raises(
+            ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS"
+        ) as exc_info:
             build_guard_config()
         message = str(exc_info.value)
         assert "US-EAST-1" in message
@@ -221,7 +242,9 @@ class TestGuardEnvValidation:
     def test_empty_region_carveout_raises_clear_error(self, monkeypatch) -> None:
         """A ':!' suffix with nothing after it is not a valid carve-out."""
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!")
-        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+        with pytest.raises(
+            ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS"
+        ) as exc_info:
             build_guard_config()
         assert "empty region" in str(exc_info.value)
 
@@ -238,7 +261,9 @@ class TestGuardEnvValidation:
             build_guard_config()
         assert "10.0.0.0/99" in str(exc_info.value)
 
-    def test_invalid_trusted_proxies_entry_raises_clear_error(self, monkeypatch) -> None:
+    def test_invalid_trusted_proxies_entry_raises_clear_error(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "999.999.999.999")
         with pytest.raises(ConfigError, match="GUARD_TRUSTED_PROXIES"):
             build_guard_config()
@@ -487,36 +512,47 @@ class TestWsGuard:
         assert not ws.sent
 
     @pytest.mark.asyncio
-    async def test_auto_ban_persists_past_window_and_resets_on_set(
+    async def test_auto_ban_persists_past_window_rebans_without_reset(
         self, monkeypatch
     ) -> None:
-        """A2 + P1: an auto-ban PERSISTS past the rate-window reset, and the reset-on-set
-        rule means a fresh threshold (not a single over-limit) is required to re-ban
-        after the ban window expires.
+        """Phase 2 library semantics (guard-core 3.13.0 ``check_rate_limit_by_ip``).
 
-        Uses a fake clock so both the in-memory rate-limit bucket's monotonic time AND
-        ip_ban_manager's (SWAP B) wall-clock expiry are controllable. ``_edge_guard.time``
-        IS the stdlib ``time`` module (``import time`` caches the same object in
-        ``sys.modules`` everywhere), so patching ``.monotonic``/``.time`` on it here also
-        redirects ``guard_core.handlers.ipban_handler``'s own ``import time`` - it reads
-        ``time.time()`` by attribute lookup on every call, not a frozen reference, so the
-        patched module attribute is what it sees too. ``enable_ip_banning=True`` +
-        ``auto_ban_threshold=2`` so two over-limit events set the ban (the path the
-        hard-coded ``_enforcing_config`` left untested).
+        An auto-ban PERSISTS past the rate-window reset (still within the ban duration):
+        the ban STORE (``ip_ban_manager``) is what gates the connect, not the rate window,
+        so a banned IP stays denied even when its rate bucket has drained.
+
+        The violation counter the library keeps does NOT reset when it sets a ban (unlike
+        the old hand-rolled ``_ban_counts`` dict, which zeroed on ban-set). It only stops
+        counting while the IP is banned (the WS check short-circuits at ``is_ip_banned``
+        before the primitive is ever called), then resumes from its old value. So after a
+        ban EXPIRES the offender gets a fresh rate WINDOW (no hits recorded during the
+        ban), but the first over-limit once that window exhausts RE-BANS immediately,
+        rather than needing a full threshold again. Stricter on recidivism; this is
+        guard-core's chosen semantics, not tuned here.
+
+        A fake clock drives both the rate window (the primitive reads ``time.time()``)
+        and the ban-expiry check (``ip_ban_manager.is_ip_banned`` reads ``time.time()``).
+        Both go through the shared stdlib ``time`` module, so patching ``time.time`` on it
+        redirects both. ``enable_rate_limit_auto_ban=True`` + ``enable_ip_banning=True`` +
+        ``auto_ban_threshold=2`` so two over-limit events set the ban (the knob pair the
+        library primitive requires; the old hand-roll auto-banned on ``enable_ip_banning``
+        alone, with no separate knob).
         """
+        import time as _time
+
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         cfg = _enforcing_config(
             rate_limit=2,
             rate_limit_window=60,
             enable_ip_banning=True,
+            enable_rate_limit_auto_ban=True,
             auto_ban_threshold=2,
             auto_ban_duration=3600,
             trusted_proxies=["127.0.0.1"],
         )
         reset_ws_guard(cfg)
         clock = {"t": 0.0}
-        monkeypatch.setattr(_edge_guard.time, "monotonic", lambda: clock["t"])
-        monkeypatch.setattr(_edge_guard.time, "time", lambda: clock["t"])
+        monkeypatch.setattr(_time, "time", lambda: clock["t"])
 
         auth = FakeAuthorizer(valid_key=VALID_KEY)
         redis = FakeRedis()
@@ -526,43 +562,45 @@ class TestWsGuard:
             ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # 3rd: over limit → ban_counts=1 (< threshold 2) → denied pre-accept (rate, no ban yet).
+        # 3rd: over limit -> violation count 1 (< threshold 2) -> denied pre-accept, no ban.
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
         assert ws.accepted is False  # pre-accept rejection
-        # 4th: over limit again → ban_counts=2 (>= threshold) → ban SET + reset.
+        # 4th: over limit again -> count 2 (>= threshold) -> BAN set.
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
         assert ws.accepted is False
 
-        # A2: advance PAST the rate window (61s) but within the ban (3600s) → still banned.
+        # Ban PERSISTS past the rate window (61s) but within the ban (3600s) -> still banned.
+        # The check short-circuits at is_ip_banned; the primitive (and its counter) is idle.
         clock["t"] = 61.0
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
-        assert ws.accepted is False  # ban persists — still denied pre-accept
+        assert ws.accepted is False  # ban persists - still denied pre-accept
 
-        # P1: advance PAST the ban (3601s) → ban expired, fresh budget. A single over-limit
-        # must NOT re-ban (reset-on-set cleared ban_counts at ban-set).
+        # Past the ban (3601s) -> ban expired, fresh rate WINDOW (no hits recorded during
+        # the ban, so the deque is empty). Two connects pass.
         clock["t"] = 3601.0
         for _ in range(2):
             ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # One over-limit → denied pre-accept (rate) but NOT banned (ban_counts=1 < 2).
+        # First over-limit after expiry -> count resumes at 3 (>= threshold 2) -> RE-BAN
+        # immediately. The old reset-on-set would have left the count at 0 and needed two
+        # over-limits; the library does not reset, so one suffices.
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
         assert ws.accepted is False
-        # Advance past the rate window: the next connect PASSES → not re-banned. If
-        # reset-on-set had failed (ban_counts left at the threshold), this over-limit
-        # would have re-banned and this connect would be ip_blocked instead.
+        # Still inside the new ban window (3662s < 3601+3600) -> still banned, denied.
         clock["t"] = 3662.0
-        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
-        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        assert ws.close_code == 4401
+        assert ws.accepted is False
 
     @pytest.mark.asyncio
     async def test_untrusted_peer_xff_does_not_rotate_ws_budget(
@@ -747,7 +785,9 @@ class TestBothLayers:
 
 
 class TestBannedButWhitelisted:
-    async def test_ban_check_precedes_whitelist_bypass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_ban_check_precedes_whitelist_bypass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A banned IP that is ALSO whitelisted stays blocked on the WS path.
 
         Pins the deliberate ordering change of the library consolidation: the ban check runs
