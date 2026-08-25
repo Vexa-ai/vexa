@@ -815,6 +815,20 @@ export async function startCaptureBridge(
               silenceMs: mainAudioSilenceMs,
             })) {
               w.__vexaTeamsMainAudioDead = true;
+              // SAY IT. The counters showed a healthy-looking bot for the whole of 26040 while it
+              // captured nothing; the only trace was a number nobody was reading. A capture that
+              // has proved dead is a typed observation, so it lands in the tape beside the silence
+              // it is describing and a replay can find it without a human noticing first.
+              w.logBot?.('[mixed] MAIN-AUDIO ABSENT — the picked mix produced no sound; falling back to every track');
+              w.__vexaObservation?.('mixed', {
+                type: 'main-audio-absent',
+                platform: isTeams ? 'teams' : 'mixed',
+                capturedMs: w.__vexaMixCaptureStartedMs ? Date.now() - w.__vexaMixCaptureStartedMs : 0,
+                energeticMs: w.__vexaMixEnergeticMs || 0,
+                framesSeen: w.__vexaMixFrames || 0,
+                silenceMs: mainAudioSilenceMs,
+                tMs: Date.now(),
+              }, Date.now());
             }
             const sel = select(streams, {
               firstMissMs: w.__vexaTeamsNoMainSince ?? null,
@@ -866,9 +880,9 @@ export async function startCaptureBridge(
           // Meter the mix as it is captured: the silence verdict above needs to know whether the
           // stream we PICKED ever carried sound, and this callback is the only place that sees it.
           const meterAndForward = (pcm: Float32Array): void => {
-            if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
-              w.__vexaMixCaptureStartedMs = Date.now();
-            }
+            // Frames seen at all — the difference between a mix that is QUIET and one that is not
+            // there. Both end in the same fallback, but a fixture should not have to infer which.
+            w.__vexaMixFrames = (w.__vexaMixFrames || 0) + 1;
             let sum = 0;
             for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
             if (pcm.length && Math.sqrt(sum / pcm.length) >= mainAudioEnergyRms) {
@@ -877,7 +891,24 @@ export async function startCaptureBridge(
             w.__vexaPerSpeakerAudioData(0, Array.from(pcm));
           };
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
-            .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
+            .then((cap: any) => {
+              w.__vexaMixedCapture = cap;
+              // THE CLOCK STARTS WHEN CAPTURE STARTS, NOT WHEN AUDIO ARRIVES.
+              //
+              // The silence guard must not depend on the very thing it exists to detect the absence
+              // of. Started here, elapsed time is measured against capture being ALIVE, so a picked
+              // track that delivers NOTHING still arms the capture-all fallback: a mix that carries
+              // no frames at all and a mix that carries silent frames reach the same verdict.
+              //
+              // Anchoring the clock in the PCM callback instead would make absence-of-frames
+              // invisible — no callback, no start time, and every rescan reading "nothing captured
+              // yet, so not evidence of silence" while the meeting produces no transcript at all.
+              // Silence-with-frames is unaffected either way: it sets energeticMs > 0 and exits early.
+              if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
+                w.__vexaMixCaptureStartedMs = Date.now();
+              }
+              return cap?.start?.();
+            })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
               w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');

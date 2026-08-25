@@ -317,6 +317,13 @@
    "targets": []
   },
   {
+   "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
+   "class": "defaulted",
+   "default": "0",
+   "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
+   "targets": []
+  },
+  {
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
@@ -375,8 +382,15 @@
   {
    "key": "RECONCILE_PREACTIVE_GRACE_S",
    "class": "defaulted",
-   "default": "660",
-   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — derived from the lobby budget the spawn issues (waitingRoomTimeout 600s) plus headroom, so the control plane is never less patient than the deadline it handed the bot (#862)",
+   "default": "960 (VEXA_LOBBY_BUDGET_S + 60)",
+   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — DERIVED from the lobby budget the spawn issues (VEXA_LOBBY_BUDGET_S, default 900s) plus 60s of headroom, so the control plane is never less patient than the deadline it handed the bot (#862, #1208)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_LOBBY_BUDGET_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "lobby budget (s) issued to every spawned bot as automatic_leave.waitingRoomTimeout — how long it may wait for admission before reporting awaiting_admission_timeout. 15 min so an auto-joined bot outwaits a late host (#1208); the reconcile pre-active grace derives from it, so raising it never leaves a waiter reaped by a shorter watchdog. An explicit automatic_leave.max_wait_for_admission on POST /bots still wins.",
    "targets": []
   },
   {
@@ -506,8 +520,8 @@
   {
    "key": "AUTO_JOIN_LEAD_S",
    "class": "defaulted",
-   "default": "60",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at",
+   "default": "120",
+   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
    "targets": []
   },
   {

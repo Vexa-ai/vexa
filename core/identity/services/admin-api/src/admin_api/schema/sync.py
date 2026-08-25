@@ -18,7 +18,11 @@ import logging
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
+from .errors import SchemaInvariantError
+
 logger = logging.getLogger("admin_api.schema.sync")
+
+__all__ = ["SchemaInvariantError", "ensure_schema", "ensure_schema_sync"]
 
 # SQLAlchemy type name → Postgres column type (for additive ALTER TABLE).
 _TYPE_MAP = {
@@ -87,8 +91,28 @@ def _sync_columns(conn: Connection, base):
 
 
 def _sync_indexes(conn: Connection, base):
+    """Additive index convergence — tolerant for non-unique, FAIL CLOSED for unique (#1186).
+
+    A non-unique index is a performance hint: losing one degrades latency, nothing else, so a
+    failed CREATE stays tolerated at DEBUG. A UNIQUE index is an *invariant the application code
+    relies on* — ``uq_meeting_active_user_platform_native`` is the documented DB backstop for the
+    one-bot-per-room spawn guard (meeting-api ``bot_spawn/adapters.py``). Logging that one and
+    continuing produced exactly the failure #1186 records: the index never existed in production
+    because 4 stale duplicate rows blocked it, every restart re-attempted and re-swallowed it, and
+    the WARNING log-rotated away inside a day while the service reported itself healthy.
+
+    So a unique-index failure now raises ``SchemaInvariantError``, which aborts ``ensure_schema``
+    and therefore the admin-api startup hook — the process never binds, /health never answers, the
+    startup/readiness probes never pass. That is intentional: a database whose duplicate rows block
+    a load-bearing unique index MUST NOT be served by a process that assumes the index exists. The
+    operator's next step is in the message.
+
+    Failures are collected across all tables before raising, so one restart surfaces every blocking
+    index rather than one per fix-and-retry cycle.
+    """
     inspector = inspect(conn)
     existing_tables = set(inspector.get_table_names())
+    unique_failures: list[tuple[str, str, str]] = []   # (table, index, underlying error)
     for table in base.metadata.sorted_tables:
         if table.name not in existing_tables:
             continue
@@ -98,17 +122,41 @@ def _sync_indexes(conn: Connection, base):
                 continue
             # Per-index SAVEPOINT: a failed CREATE INDEX (e.g. a UNIQUE index on a table that still
             # holds rows violating it) must NOT poison the surrounding convergence transaction —
-            # without the nested begin, the aborted txn would roll back the whole ensure_schema pass.
+            # without the nested begin, the aborted txn would roll back the whole ensure_schema pass
+            # before we can report WHICH index failed and why.
             try:
                 with conn.begin_nested():
                     index.create(conn)
             except Exception as e:
-                # Most often a benign race (index already present under a different detection path) —
-                # but a UNIQUE index failing on duplicate data is a real, actionable miss, so surface
-                # it at WARNING rather than swallowing it at debug. The savepoint rolled back, so the
-                # rest of the convergence still applies.
-                level = logging.WARNING if getattr(index, "unique", False) else logging.DEBUG
-                logger.log(level, "index %s not created: %s", index.name, e)
+                if getattr(index, "unique", False):
+                    logger.error(
+                        "schema-sync: UNIQUE index %s on %s NOT created: %s",
+                        index.name, table.name, e,
+                    )
+                    unique_failures.append((table.name, str(index.name), str(e)))
+                    continue
+                # Non-unique: most often a benign race (index already present under a different
+                # detection path). The savepoint rolled back; the rest of the convergence applies.
+                logger.debug("index %s not created: %s", index.name, e)
+    if unique_failures:
+        raise SchemaInvariantError(_unique_index_failure_message(unique_failures))
+
+
+def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
+    """Operator-facing text: which index, on what table, the underlying error, what to do next."""
+    lines = [
+        "schema-sync FAILED CLOSED: {n} UNIQUE index(es) could not be created, and admin-api "
+        "will not start without them — application code treats these as invariants, not as "
+        "performance hints.".format(n=len(failures)),
+    ]
+    for table, index, err in failures:
+        lines.append(f"  - UNIQUE index {index} on table {table}: {err}")
+    lines.append(
+        "Remediation: duplicate rows block this unique index; resolve them (find the rows that "
+        "collide on the index's key columns and delete or terminate the extras), then restart. "
+        "See https://github.com/Vexa-ai/vexa/issues/1186"
+    )
+    return "\n".join(lines)
 
 
 # MIGRATION-0004-backfill-token-scopes — grandfather pre-scope (0.10-era) API tokens.

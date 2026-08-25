@@ -1,0 +1,35 @@
+{
+ "tape": "m30-final",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "8d7f624c",
+ "duration_s": 430.5,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "1266": {
+   "name": "P1",
+   "instants": 91,
+   "purity": 1.0,
+   "owner_share": 0.91
+  }
+ },
+ "untruthed": {
+  "201": "no truth: \"P1\" is 0.09 concentrated on this track (< 0.7)"
+ },
+ "ambiguous_hint_instants": 27,
+ "roster_first_seen_s": {},
+ "roster_coverage": [],
+ "judge": null,
+ "counts": {
+  "csrc": 153,
+  "hints": 189,
+  "roster": 0,
+  "ticks": 1236
+ }
+}

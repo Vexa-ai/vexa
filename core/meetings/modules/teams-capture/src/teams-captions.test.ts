@@ -251,6 +251,16 @@ check('text candidates lead with [data-tid="closed-caption-text"]',
   h.destroy();
 }
 
+// ── 5b. A human name containing the bot name is not the bot ─────────────────
+{
+  const rows = [captionRow('Vexa Petrova', 'a real human keeps her caption attribution')];
+  const h = harness(e('body', {}, [hostWrapper(rows)]), { selfName: 'Vexa' });
+  h.tick(1000); h.tick(1000);
+  check('caption self filtering is exact and preserves Vexa Petrova',
+    h.captions.length === 1 && h.captions[0]?.speaker === 'Vexa Petrova', JSON.stringify(h.captions));
+  h.destroy();
+}
+
 // ── 6. destroy() flushes an entry still refining, marked stable:false ────────
 {
   const rows = [captionRow('Tariq B', 'mid sentence when the meeting end')];

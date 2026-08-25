@@ -1,0 +1,35 @@
+{
+ "tape": "m36",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "453d37c1",
+ "duration_s": 285.1,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "201": {
+   "name": "P1",
+   "instants": 54,
+   "purity": 1.0,
+   "owner_share": 1.0
+  }
+ },
+ "untruthed": {},
+ "ambiguous_hint_instants": 0,
+ "roster_first_seen_s": {
+  "P1": 0.0
+ },
+ "roster_coverage": [],
+ "judge": null,
+ "counts": {
+  "csrc": 56,
+  "hints": 88,
+  "roster": 3,
+  "ticks": 289
+ }
+}

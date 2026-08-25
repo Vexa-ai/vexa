@@ -231,8 +231,8 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time",
-              "created_at", "updated_at"):
+    for k in ("speaker", "speaker_key", "completed", "segment_id", "source",
+              "absolute_start_time", "absolute_end_time", "created_at", "updated_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
@@ -344,12 +344,25 @@ class SqlAlchemyTranscriptStore:
 
     async def _merge_live_segments(
         self, pg: "tuple[dict, dict, list]", since: Optional[datetime] = None,
-        next_since: Optional[datetime] = None,
+        next_since: Optional[datetime] = None, *, viewer_is_owner: bool,
     ) -> dict:
         """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
         assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
         is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
-        hold a snapshot/transaction open (the #508 fix). Response is byte-identical to the old build."""
+        hold a snapshot/transaction open (the #508 fix).
+
+        This is a RESPONSE edge, so ``data`` goes through ``project_response_data``: calendar sources
+        reduced to their identity + policy keys (the raw ICS event snapshot is sweep state, not anyone's
+        transcript), credential material dropped for everyone, and the owner's private configuration
+        dropped for everyone but the owner — this read authorizes a transcript-share recipient and a
+        bound-workspace member too, not only the owner.
+
+        ``viewer_is_owner`` is REQUIRED (no default) because both callers already know it: the
+        native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
+        evaluates an explicit owner branch inside its authorization check. Passing the decision down
+        beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
+        from .projection import project_response_data
+
         snap, seg_by_id, order = pg
         data = snap["data"]
         # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
@@ -387,7 +400,7 @@ class SqlAlchemyTranscriptStore:
             "end_time": _iso_utc(snap["end_time"]),
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
-            "data": data,
+            "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
             # The watermark for the caller's NEXT poll. Always present, so a follower bootstraps from
             # a full read and goes incremental from the second request onwards.
@@ -418,14 +431,28 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             pg = await self._transcript_pg_part(db, meeting, effective_since)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._cursor_response(pg, since, effective_since, watermark, stale)
+        # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
+        # path is by construction the caller's own — the native-keyed read has no share branch.
+        return await self._cursor_response(
+            pg, since, effective_since, watermark, stale, viewer_is_owner=True,
+        )
 
-    async def _cursor_response(self, pg, since, effective_since, watermark, stale) -> dict:
+    async def _cursor_response(self, pg, since, effective_since, watermark, stale, *,
+                               viewer_is_owner: bool) -> dict:
         """Assemble the response for a (possibly incremental) read. NO database session is open here
-        — both awaits are Redis, which is the whole point of the #508 two-phase split."""
-        doc = await self._merge_live_segments(pg, effective_since, watermark)
+        — both awaits are Redis, which is the whole point of the #508 two-phase split.
+
+        ``viewer_is_owner`` is REQUIRED and passed straight through: this helper only shapes the
+        cursor fields, it never re-decides who may see which tier of the meeting blob."""
+        doc = await self._merge_live_segments(
+            pg, effective_since, watermark, viewer_is_owner=viewer_is_owner,
+        )
         if since is not None:
             doc["retracted_segment_ids"] = await self.retractions_since(pg[0]["id"], effective_since)
             doc["resynced"] = stale
@@ -453,8 +480,12 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
+            is_owner = meeting.user_id == user_id                                   # (a) owner
             authorized = (
-                meeting.user_id == user_id                                          # (a) owner
+                is_owner
                 or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
                 or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)  # (b) bound ws member
             )
@@ -462,7 +493,11 @@ class SqlAlchemyTranscriptStore:
                 return None
             pg = await self._transcript_pg_part(db, meeting, effective_since)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        return await self._cursor_response(pg, since, effective_since, watermark, stale)
+        # The response projection reuses branch (a) above — the SAME decision that authorized this
+        # read decides which tier of the blob it may carry, so the two can never disagree.
+        return await self._cursor_response(
+            pg, since, effective_since, watermark, stale, viewer_is_owner=is_owner,
+        )
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -548,6 +583,10 @@ class SqlAlchemyTranscriptStore:
                 has_more = False
 
             def _row(m):
+                # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
+                # response projection's viewer tier both read it, so a row can never claim to be the
+                # caller's while being projected as a stranger's, or the reverse.
+                is_owner = m.user_id == user_id
                 row = {
                     "id": m.id,
                     "user_id": m.user_id,
@@ -563,7 +602,7 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
-                    "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
+                    "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),
                     # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
@@ -574,8 +613,13 @@ class SqlAlchemyTranscriptStore:
                     # materialized every byte of `data` — 180 MB for one production account, 144 MB of
                     # it `bot_logs` that no endpoint renders. Four concurrent polls demanded ~740 MB
                     # transiently and OOM-killed the pod. Only callers that genuinely need full `data`
-                    # (the detail view, calendar sync, reconciliation) leave both flags off.
-                    "data": project_list_data(m.data) if (list_view or slim)
+                    # (the detail view, calendar sync, reconciliation) leave both flags off — and
+                    # those callers project at their own response edge (app.py) or are internal.
+                    #
+                    # #1243 follow-up: the projection is VIEWER-AWARE. The owner keeps their own
+                    # webhook config here, which is where a 0.10 client reads it back
+                    # (`test_10_user_webhook_config_flow`); a share/workspace reader does not.
+                    "data": project_list_data(m.data, viewer_is_owner=is_owner) if (list_view or slim)
                     else (m.data if isinstance(m.data, dict) else {}),
                 }
                 return row
@@ -1003,10 +1047,18 @@ class SqlAlchemyTranscriptStore:
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
                                      workspace_id=None, auto_join=True, calendar_uid=None,
-                                     workspace_source=None, attendees=None) -> dict:
+                                     calendar_source=None,
+                                     workspace_source=None, attendees=None,
+                                     auto_join_last_attempt=None,
+                                     auto_join_error=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
-        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate)."""
+        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
+
+        ``auto_join_last_attempt``/``auto_join_error`` seed the row with a backoff already earned
+        elsewhere — calendar sync passes them when this row replaces a terminal one the auto-join
+        sweep already dispatched for, so the replacement is not due the instant it exists. Written
+        in the INSERT, not patched after, so no sweep tick can see the row without them."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.exc import IntegrityError
 
@@ -1025,8 +1077,17 @@ class SqlAlchemyTranscriptStore:
                 data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if calendar_source:
+            data["calendar_sources"] = [dict(calendar_source)]
+            data["calendar_connection_id"] = calendar_source["id"]
+            data["calendar_name"] = calendar_source.get("name") or "Calendar"
+            data["calendar_managed"] = True
         if attendees:
             data["attendees"] = attendees
+        if auto_join_last_attempt:
+            data["auto_join_last_attempt"] = auto_join_last_attempt
+        if auto_join_error:
+            data["auto_join_error"] = auto_join_error
         status = "scheduled" if scheduled_at else "idle"
 
         async with self._session_factory() as db:
@@ -1056,6 +1117,44 @@ class SqlAlchemyTranscriptStore:
                 return {"error": "duplicate"}
             await db.refresh(m)
             return self._planned_row(m)
+
+    async def attach_calendar_source(self, user_id, meeting_id, *, calendar_uid,
+                                     calendar_sources=None) -> "Optional[dict]":
+        """Stamp calendar IDENTITY onto a row in ANY status (the live-row adoption path).
+
+        Deliberately narrower than ``update_planned_meeting``, which refuses an FSM-owned row: an
+        imported event whose meeting is already live must attach to THAT row rather than create a
+        sibling the auto-join sweep would send a second bot for. Identity keys only — status,
+        ``auto_join``, ``auto_join_user_set``, ``calendar_managed`` and ``scheduled_at`` are never
+        written here, so adopting a live row can never re-arm or re-dispatch it."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if calendar_uid:
+                data["calendar_uid"] = calendar_uid
+            if calendar_sources:
+                data["calendar_sources"] = [dict(s) for s in calendar_sources]
+                primary = calendar_sources[0]
+                data["calendar_connection_id"] = primary.get("id")
+                data["calendar_name"] = primary.get("name") or "Calendar"
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates) -> "Optional[dict]":
         """ROW-id-addressed PATCH of a planned row (intent status only). ``updates`` carries only
@@ -1133,11 +1232,31 @@ class SqlAlchemyTranscriptStore:
                     data.pop("attendees", None)
             if "auto_join" in updates:
                 data["auto_join"] = bool(updates["auto_join"])
+            # The USER's own auto-join choice, marked so calendar sync stops deriving the flag
+            # from the connected calendars' policy for this row.
+            if "auto_join_user_set" in updates:
+                if updates["auto_join_user_set"]:
+                    data["auto_join_user_set"] = True
+                else:
+                    data.pop("auto_join_user_set", None)
             if "calendar_uid" in updates:
                 if updates["calendar_uid"]:
                     data["calendar_uid"] = updates["calendar_uid"]
                 else:
                     data.pop("calendar_uid", None)
+            if "calendar_sources" in updates:
+                if updates["calendar_sources"]:
+                    data["calendar_sources"] = updates["calendar_sources"]
+                else:
+                    data.pop("calendar_sources", None)
+            for key in ("calendar_connection_id", "calendar_name"):
+                if key in updates:
+                    if updates[key]:
+                        data[key] = updates[key]
+                    else:
+                        data.pop(key, None)
+            if "calendar_managed" in updates:
+                data["calendar_managed"] = bool(updates["calendar_managed"])
 
             meeting.data = data
             flag_modified(meeting, "data")
@@ -1166,6 +1285,85 @@ class SqlAlchemyTranscriptStore:
             await db.delete(meeting)
             await db.commit()
             return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return {"error": "conflict"}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("artifact_deletion") or {}
+            already_deleted = bool(
+                prior and prior.get("state", "completed") == "completed"
+            )
+            if not already_deleted:
+                data["artifact_deletion"] = {
+                    "state": "pending",
+                    "requested_at": prior.get("requested_at")
+                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scope": "primary_transcript_and_recording_storage",
+                    "backup_residuals": "expire_under_deployment_retention_policy",
+                }
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {
+                "meeting_id": meeting.id,
+                "recordings": list(data.get("recordings") or []),
+                "already_deleted": already_deleted,
+            }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import delete, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return False
+            await db.execute(delete(Transcription).where(Transcription.meeting_id == meeting_id))
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+                data.pop(key, None)
+            data["artifact_deletion"] = {
+                "state": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+
+        # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
+        # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
+        return True
 
 
 class RedisStreamBus:
