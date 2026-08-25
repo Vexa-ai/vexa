@@ -43,6 +43,10 @@ CASES = [
 
     ("GET", "/meetings", "/meetings"),
     ("POST", "/meetings", "/meetings"),
+    # Literal path, so the concrete URL IS the template. It must also stay registered above
+    # `/meetings/{meeting_id}` in app.py — that route types its segment `int`, and a literal
+    # declared after it is shadowed into a 422 (#1292).
+    ("GET", "/meetings/completion-summary", "/meetings/completion-summary"),
     ("GET", "/meetings/42", "/meetings/{meeting_id}"),
     ("PATCH", "/meetings/42", "/meetings/{meeting_id}"),
     ("DELETE", "/meetings/42", "/meetings/{meeting_id}"),

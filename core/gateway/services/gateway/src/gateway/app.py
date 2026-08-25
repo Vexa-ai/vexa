@@ -107,6 +107,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     # --- the meeting record plane ---
     ("GET", "/meetings"): TX,
     ("POST", "/meetings"): TX,
+    # Read-only aggregate over the caller's own meetings (#1292) — same plane, same `tx` scope as
+    # the rows it counts. It exposes nothing a caller could not already compute by paging /meetings.
+    ("GET", "/meetings/completion-summary"): TX,
     ("GET", "/meetings/{meeting_id}"): TX,
     ("PATCH", "/meetings/{meeting_id}"): TX,
     ("DELETE", "/meetings/{meeting_id}"): TX,
@@ -610,6 +613,13 @@ def create_app(
     @app.post("/meetings", status_code=201)
     async def create_planned_meeting(request: Request):
         return await _forward("POST", _meeting("/meetings"), request)
+
+    # How the caller's meetings are ENDING — per-status and per-completion-reason counts (#1292).
+    # Declared ABOVE `/meetings/{meeting_id}`, whose segment is typed `int`: registered after it, this
+    # literal path is shadowed and answers 422. Query string rides along via `_forward`.
+    @app.get("/meetings/completion-summary")
+    async def meetings_completion_summary(request: Request):
+        return await _forward("GET", _meeting("/meetings/completion-summary"), request)
 
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")

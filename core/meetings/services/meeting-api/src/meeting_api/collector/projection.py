@@ -41,6 +41,7 @@ two tiers of response omissions, and the default page size that bounds an otherw
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 # Heavy per-meeting ``data`` keys the list NEVER renders — dropped from list rows. Everything else
@@ -137,6 +138,101 @@ SENSITIVE_KEY_SUFFIXES = (
 # meetings (get-by-id filter, /bots/status, calendar sync) do NOT take the list-view path and are
 # never capped.
 DEFAULT_LIST_LIMIT = 50
+
+
+# --- completion summary (#1292) -------------------------------------------------------------
+# The per-meeting ``completion_reason`` has shipped since v0.12.16; what was missing is the tally
+# ACROSS an account. These two constants and the builder below are shared by the SQL adapter and the
+# in-memory fake, so the two can never disagree about what a bucket means.
+
+# The statuses that have FINISHED. Only these carry a ``completion_reason``, so only these are
+# counted in the reason breakdown — an in-flight run has no reason YET, which is not the same as
+# having none, and bucketing it would invent one.
+TERMINAL_STATUSES = ("completed", "failed")
+
+# Where a terminal meeting that recorded NO reason is counted. It is named, never dropped and never
+# folded into a real reason: a reader must be able to tell "we do not know how this ended" from "it
+# ended this way". Silently omitting these would make the buckets sum to less than the terminal
+# count — a quiet shortfall a caller would then mis-attribute.
+UNRECORDED_REASON = "unrecorded"
+
+
+def parse_window_bound(value: Optional[str]) -> "Optional[datetime]":
+    """An ISO-8601 window bound → a NAIVE UTC ``datetime``, or ``None`` if absent/unparseable.
+
+    Shared by the SQL adapter and the in-memory fake for the same reason the constants above are: a
+    window that means one thing in tests and another in production is worse than no window.
+
+    The meeting time columns are naive-but-UTC (the DB session is UTC), so an AWARE bound is
+    converted to UTC and stripped rather than compared across a tz boundary — comparing aware to
+    naive raises in Python and mis-plans in SQL.
+
+    An unparseable bound degrades to ``None`` (unbounded) rather than raising. This is a read-only
+    summary; a caller who fat-fingers a date gets their whole history with the window echoed as
+    ``null``, which tells them the bound was ignored, instead of a 500 that tells them nothing.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def format_window_bound(dt: "Optional[datetime]") -> Optional[str]:
+    """A parsed window bound → ``…Z`` ISO-8601, or ``None``.
+
+    The response echoes the bound the server ACTUALLY applied, not the string the caller sent. That
+    is what makes :func:`parse_window_bound`'s degrade-to-unbounded safe: a rejected bound comes back
+    as ``null``, so a caller comparing what they asked for against what they got can see it was
+    dropped instead of trusting a window that was never enforced.
+    """
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.isoformat().replace("+00:00", "Z")
+
+
+def build_completion_summary(
+    status_counts: Dict[str, int],
+    reason_counts: Dict[Optional[str], int],
+    *,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Assemble the ``GET /meetings/completion-summary`` body from two GROUP BY tallies.
+
+    Pure and non-mutating. The adapter runs the SQL and the fake counts a list, then both hand their
+    raw tallies here, so the response SHAPE is defined exactly once.
+
+    **This publishes no rate, ratio or percentage, and neither should any caller.** The ten sealed
+    ``CompletionReason`` values are not commensurable — a bot the user stopped, a meeting nobody
+    attended, and a bot that could not join are all "not completed" and mean entirely different
+    things; only ``join_failure`` and ``auth_session_missing`` are our software breaking. A single
+    ratio over the ten invites the wrong denominator, and that specific mistake has been made
+    repeatedly against this project's own numbers. Counts are given; a caller who needs a ratio picks
+    their own numerator and defends it.
+
+    ``None`` in ``reason_counts`` (SQL NULL, or a missing JSONB key) folds into
+    :data:`UNRECORDED_REASON`. Reasons are otherwise passed through EXACTLY as recorded, including
+    values outside the sealed enum — ``bot_spawn/adapters.py`` writes ``start_failed``, which is in
+    neither ``lifecycle.v1`` nor ``api.v1``. Normalising that away here would manufacture conformance
+    at the read edge and hide the writer's defect from the one surface able to reveal it.
+    """
+    by_status = {str(k): int(v) for k, v in status_counts.items() if k}
+    by_reason: Dict[str, int] = {}
+    for raw, n in reason_counts.items():
+        key = str(raw) if raw else UNRECORDED_REASON
+        by_reason[key] = by_reason.get(key, 0) + int(n)
+    return {
+        "window": {"since": since, "until": until},
+        "total": sum(by_status.values()),
+        "by_status": dict(sorted(by_status.items())),
+        # Descending by count, ties alphabetical: the bucket a caller needs to see is nearly always
+        # the biggest one, and a stable order keeps the response diffable between calls.
+        "by_completion_reason": dict(sorted(by_reason.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
 
 
 def project_calendar_sources(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
