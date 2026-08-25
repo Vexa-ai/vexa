@@ -13,6 +13,18 @@ RECENT ACTIVITY feed (email-attributed, clickable files), the "new updates" nav 
 auto-pin on shared connect, and the Share/invite dialog (single-rank). The end-to-end model is in
 **[`docs/docs/core/workspaces.mdx`](../../../../docs/docs/core/workspaces.mdx)**.
 
+**Calendars are plural** (`calendarConnections.tsx`, the plural `/user/calendars` API — see
+[`docs/docs/api/calendar.mdx`](../../../../docs/docs/api/calendar.mdx)). An account holds up to ten
+named ICS connections, each with its own `enabled` flag, auto-join policy and bot name. There is ONE
+manager — Settings → Calendar (list · add · rename · replace feed · pause · disconnect · sync-one);
+the Meetings rail popover (`meeting.tsx`) and the first-run card (`meetingsOnboarding.tsx`) are the
+point-of-need skins over the same API and defer everything else to Settings. Three invariants the
+tests pin: the feed address is **write-only** (the API returns `ics_url_set` + a recognition mask, and
+no input is ever prefilled from the server), the ten-connection cap is stated in the UI rather than
+arriving as a surprise 409, and a write that changes what gets joined (`auto_join` · `bot_name` ·
+`enabled` · a replaced `ics_url`) is followed by the per-calendar sync that reconciles
+already-imported meetings — a rename is not, because it changes nothing downstream.
+
 **Error presentation is part of the surface contract** — surfaces render `presentError(e)`
 (`apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
 server…", the backend's own prose reason verbatim when it sent one), while the untranslated

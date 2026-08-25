@@ -773,6 +773,13 @@ export async function startCaptureBridge(
   await page.exposeFunction('__vexaRemoteAudioReady', (): void => activity?.ready()).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
+  // #1192: how many remote streams the mix is CURRENTLY connected to and receiving from. Frame
+  // arrival alone cannot separate an emptied room and a dead capture chain; this is the bit that
+  // separates them, and it exists only on the page. Optional by design — the gmeet lane never
+  // calls it, so its aloneness behaviour is unchanged.
+  await page.exposeFunction('__vexaStreamPresence', (count: number): void => activity?.observeStreamPresence?.(count)).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
@@ -793,7 +800,28 @@ export async function startCaptureBridge(
       // bot is ALSO handed a redundant track (e.g. a dominant-speaker copy) whose audio is already inside
       // that mix; combining both double-feeds every word to the transcriber → repeated words. So on Teams
       // mix ONLY the mainAudio track. Jitsi keeps combining all tracks (its topology isn't witnessed).
+      // #1192 — report how many connected remote streams are LIVE and carrying data, every rescan.
+      // `__vexaMixSeen` cannot answer this: it is a monotonic id ledger (dedupe for the connect
+      // loop), so it counts streams EVER connected — crossing that number would leave a bot that
+      // once saw a participant unable to resolve left_alone for the rest of the meeting. This walks
+      // the connected stream objects instead and counts the ones whose audio track is `live` and
+      // not `muted` (a remote track mutes when packets stop arriving). Node-side the count is
+      // sticky over a staleness window, so the DTX gap between talk spurts cannot read as an
+      // empty room.
+      const reportStreamPresence = (): void => {
+        let live = 0;
+        for (const s of (w.__vexaMixStreamRefs || []) as Array<any>) {
+          try {
+            const tracks = s?.getAudioTracks ? s.getAudioTracks() : [];
+            for (const t of tracks) {
+              if (t && t.readyState === 'live' && t.muted !== true) { live++; break; }
+            }
+          } catch { /* a stream may have been torn down mid-walk */ }
+        }
+        try { w.__vexaStreamPresence?.(live); } catch { /* presence must never break capture */ }
+      };
       const setupMix = (): void => {
+        reportStreamPresence();
         let streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>;
         if (isTeams && streams.length) {
           // selectTeamsMixStreams (bundled via VexaBrowserUtils) prefers the server mix and FAILS OPEN
@@ -815,6 +843,20 @@ export async function startCaptureBridge(
               silenceMs: mainAudioSilenceMs,
             })) {
               w.__vexaTeamsMainAudioDead = true;
+              // SAY IT. The counters showed a healthy-looking bot for the whole of 26040 while it
+              // captured nothing; the only trace was a number nobody was reading. A capture that
+              // has proved dead is a typed observation, so it lands in the tape beside the silence
+              // it is describing and a replay can find it without a human noticing first.
+              w.logBot?.('[mixed] MAIN-AUDIO ABSENT — the picked mix produced no sound; falling back to every track');
+              w.__vexaObservation?.('mixed', {
+                type: 'main-audio-absent',
+                platform: isTeams ? 'teams' : 'mixed',
+                capturedMs: w.__vexaMixCaptureStartedMs ? Date.now() - w.__vexaMixCaptureStartedMs : 0,
+                energeticMs: w.__vexaMixEnergeticMs || 0,
+                framesSeen: w.__vexaMixFrames || 0,
+                silenceMs: mainAudioSilenceMs,
+                tMs: Date.now(),
+              }, Date.now());
             }
             const sel = select(streams, {
               firstMissMs: w.__vexaTeamsNoMainSince ?? null,
@@ -857,6 +899,7 @@ export async function startCaptureBridge(
           try {
             w.__vexaMixCtx.createMediaStreamSource(s).connect(w.__vexaMixDest);
             w.__vexaMixSeen.add(s.id);
+            (w.__vexaMixStreamRefs = w.__vexaMixStreamRefs || []).push(s);
             w.logBot?.('[mixed] connected remote stream ' + w.__vexaMixSeen.size);
             reportTopology();
           } catch { /* a stream may not be connectable yet */ }
@@ -866,9 +909,9 @@ export async function startCaptureBridge(
           // Meter the mix as it is captured: the silence verdict above needs to know whether the
           // stream we PICKED ever carried sound, and this callback is the only place that sees it.
           const meterAndForward = (pcm: Float32Array): void => {
-            if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
-              w.__vexaMixCaptureStartedMs = Date.now();
-            }
+            // Frames seen at all — the difference between a mix that is QUIET and one that is not
+            // there. Both end in the same fallback, but a fixture should not have to infer which.
+            w.__vexaMixFrames = (w.__vexaMixFrames || 0) + 1;
             let sum = 0;
             for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
             if (pcm.length && Math.sqrt(sum / pcm.length) >= mainAudioEnergyRms) {
@@ -877,7 +920,24 @@ export async function startCaptureBridge(
             w.__vexaPerSpeakerAudioData(0, Array.from(pcm));
           };
           Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
-            .then((cap: any) => { w.__vexaMixedCapture = cap; return cap?.start?.(); })
+            .then((cap: any) => {
+              w.__vexaMixedCapture = cap;
+              // THE CLOCK STARTS WHEN CAPTURE STARTS, NOT WHEN AUDIO ARRIVES.
+              //
+              // The silence guard must not depend on the very thing it exists to detect the absence
+              // of. Started here, elapsed time is measured against capture being ALIVE, so a picked
+              // track that delivers NOTHING still arms the capture-all fallback: a mix that carries
+              // no frames at all and a mix that carries silent frames reach the same verdict.
+              //
+              // Anchoring the clock in the PCM callback instead would make absence-of-frames
+              // invisible — no callback, no start time, and every rescan reading "nothing captured
+              // yet, so not evidence of silence" while the meeting produces no transcript at all.
+              // Silence-with-frames is unaffected either way: it sets energeticMs > 0 and exits early.
+              if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
+                w.__vexaMixCaptureStartedMs = Date.now();
+              }
+              return cap?.start?.();
+            })
             .then(async () => {
               await w.__vexaRemoteAudioReady?.();
               w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');
@@ -1093,6 +1153,29 @@ export async function startCaptureBridge(
       try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* best-effort */ }
     }).catch(() => { /* page already gone */ });
   };
+}
+
+/**
+ * The one cheap repair the deaf-capture guard may attempt (#1192): drop the mixed-lane capture so
+ * the rescan already running every 2s re-creates it over the SAME mix. Nothing is torn down that
+ * the rescan does not rebuild — the AudioContext, the destination and the connected sources all
+ * stay — and a successful restart calls `__vexaRemoteAudioReady` again, which re-arms the silence
+ * window from the moment the bot could hear again.
+ *
+ * Best-effort and side-effect-free where it does not apply: the gmeet lane has no rescan, and a
+ * closing page just rejects the evaluate. Returns whether a restart was actually requested.
+ */
+export async function restartMixedCapture(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const w = (globalThis as any) as Record<string, any>;
+    if (!w.__vexaMixRescan) return false;   // not the mixed lane (or the bridge is already torn down)
+    try {
+      if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop();
+    } catch { /* best-effort: the guard re-runs if this did not take */ }
+    w.__vexaMixedCapture = null;            // the rescan re-creates it (and re-signals ready)
+    w.logBot?.('[mixed] capture restart requested (deaf-capture guard)');
+    return true;
+  }).catch(() => false);
 }
 
 /**

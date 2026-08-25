@@ -1,0 +1,48 @@
+{
+ "tape": "26132",
+ "platform": "teams",
+ "source": "local-harvest",
+ "image_version": "v0.12.23-rc.6",
+ "duration_s": 3462.7,
+ "lane": "teams-csrc",
+ "method": "hint x csrc exclusive correlation (whole-meeting, bijective)",
+ "thresholds": {
+  "purity": 0.8,
+  "owner_share": 0.7,
+  "min_instants": 5
+ },
+ "tracks": {
+  "201": {
+   "name": "P1",
+   "instants": 871,
+   "purity": 0.8347,
+   "owner_share": 0.8159
+  },
+  "414": {
+   "name": "P2",
+   "instants": 1207,
+   "purity": 0.8641,
+   "owner_share": 0.8787
+  }
+ },
+ "untruthed": {},
+ "ambiguous_hint_instants": 780,
+ "roster_first_seen_s": {
+  "P2": 0.0,
+  "P1": 0.0
+ },
+ "roster_coverage": [
+  [
+   0.0,
+   2,
+   2
+  ]
+ ],
+ "judge": null,
+ "counts": {
+  "csrc": 1073,
+  "hints": 3373,
+  "roster": 7,
+  "ticks": 11913
+ }
+}

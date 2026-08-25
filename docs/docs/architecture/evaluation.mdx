@@ -1,0 +1,215 @@
+---
+title: "Architecture review"
+description: "What an architecture review asks — where audio goes, what running it costs, how it fails, what is and isn't proven, and what you own — answered from the tree."
+---
+
+This page is for the person who has to sign off on depending on Vexa. Every claim below points at
+a file, a contract, or a stated gap. Where something is not shipped, or shipped but unproven, it
+says so — those lines are the point of the page, not an aside.
+
+The map of the codebase itself — module tree, the sealed contract registry, the eval levels — is
+the next page: [Modules & Seams](/architecture/modules). Read that one if you are going to write
+code against this. Read this one if you are going to *depend* on it.
+
+## 1. What runs where
+
+Five core domains behind one front door. The **gateway** is the only world-facing process: it
+resolves `x-api-key` fail-closed, enforces per-route scopes, and proxies the REST surface plus a
+`/ws` multiplex. Everything else binds loopback or the internal network.
+
+- **core/meetings** — joins the call, captures audio, emits a speaker-attributed `transcript.v1`.
+- **core/gateway** — the edge; the one authenticated boundary.
+- **core/runtime** — the kernel that spawns and supervises isolated workloads (one browser
+  container per meeting, one agent container per dispatch).
+- **core/identity** — authN/authZ and accounts, default-deny.
+- **core/agent** — the knowledge layer: transcripts into a git Markdown workspace via sandboxed
+  agents. **Self-hosted only.** The hosted service runs meetings and transcription; it does not
+  run the agent plane.
+
+Three deployment shapes ship, and they are the same bricks composed differently — see
+[§3](#3-what-running-it-costs).
+
+## 2. Where the audio goes
+
+This is usually the first question, so here is the whole path with nothing elided:
+
+| Hop | How |
+|---|---|
+| Bot container captures PCM, converts to WAV | in-process, one browser container per meeting |
+| Bot → transcription service | HTTP POST multipart to `{TRANSCRIPTION_SERVICE_URL}/v1/audio/transcriptions`, OpenAI-compatible, bearer token |
+| Bot → segment stream | redis `XADD` (`transcript.v1`) |
+| `collector` → Postgres | consumer group `collector_group`; rows in `meetings`, `transcriptions`, `meeting_sessions` |
+| `collector` → per-meeting redis stream | single writer |
+| Gateway `/ws` → your clients | WebSocket (`ws.v1`) |
+| Recordings | bot chunks → meeting-api stitches → S3/MinIO |
+
+**At rest:** Postgres holds users, tokens, meetings, transcripts. S3/MinIO holds recordings, agent
+workspaces, and authenticated-bot browser profiles. Redis holds the streams and the bot command bus.
+
+### The egress answer, precisely
+
+The repository models its own egress as machine-checkable architecture. In
+[`architecture.calm.json`](https://github.com/Vexa-ai/vexa/tree/main/architecture.calm.json) every
+node sits inside the tenant boundary except the transcription service, and exactly **one** edge
+crosses out — `bot → transcription`, carrying audio. A CI gate (`pnpm gate:dataflow`, `gate:calm`)
+fails the build if that changes. The rendered view is
+[`docs/views/egress.mmd`](https://github.com/Vexa-ai/vexa/tree/main/docs/views/egress.mmd).
+
+So the honest statement is conditional, and the condition is yours to set:
+
+- **Point `TRANSCRIPTION_SERVICE_URL` at your own STT** — the bundled GPU unit under
+  `deploy/transcription`, or any OpenAI-compatible endpoint — and audio never leaves your
+  perimeter. This is the air-gapped posture [Security & compliance](/security-compliance)
+  describes.
+- **Leave it unset and follow the quickstart** and you are using hosted STT: the variable ships
+  empty in `deploy/compose/.env.example`, and the quickstart hands you a hosted token to get
+  going. That is a fine way to evaluate and the wrong way to run a sovereignty requirement.
+  **Self-hosting the control plane does not by itself make the deployment zero-egress.**
+
+Two further egress paths that the CALM model does **not** currently cover, and you should plan for
+directly: **LLM inference** for the agent plane (you supply the endpoint — an external provider or
+your own), and **webhook delivery** to whatever subscriber URL you configure. Neither is hidden;
+neither is modelled by the gate yet.
+
+## 3. What running it costs
+
+Three shapes, all in-tree, none requiring a GPU for the control plane:
+
+| Shape | What you actually run | Stateful |
+|---|---|---|
+| **Lite** | 1 app container (supervisord tree inside) + 2 sidecars | Postgres, MinIO |
+| **Compose** | 11 services by default (13 declared, 2 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, MinIO, 4 named volumes |
+| **Kubernetes** | 6 Deployments, a Postgres StatefulSet, Valkey + MinIO, an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
+
+**GPU** is needed only if you self-host STT, and then only for that one unit
+(`deploy/transcription`, which ships a CPU variant too).
+
+Helm's shipped resource requests, which is the number a capacity plan wants:
+
+| Service | Replicas | Requests | Limits |
+|---|---:|---|---|
+| gateway | 2 | 100m / 256Mi | 500m / 512Mi |
+| admin-api | 2 | 100m / 256Mi | 500m / 512Mi |
+| meeting-api | 2 | 200m / 512Mi | 1000m / 1Gi |
+| terminal | 2 | 100m / 256Mi | 1000m / 1Gi |
+| runtime | 1 | 50m / 256Mi | 500m / 768Mi |
+| agent-api | 1 | 100m / 256Mi | 1000m / 1Gi |
+
+That sums to **1.15 vCPU and 3 GiB requested** for the control plane before a single meeting runs.
+Meetings and agent dispatches are ephemeral Pods on top.
+
+**Is it working?** `make probe` runs a full-journey smoke — spawn → schedule → boot → join →
+transcribe → live-view → stop, plus a log sweep — with a per-stage Expected/Actual/Verdict. It
+runs against all three surfaces (`make probe`, `make probe SURFACE=lite`,
+`make probe SURFACE=helm`). Every long-running service answers `GET /health`; compose gates
+bring-up on `service_healthy` rather than sleeping.
+
+**Upgrades** are a tag bump and a re-run — `IMAGE_TAG` for Lite and compose,
+`--set global.imageTag=…` for Helm. Schema migrations converge in-process on service start; there
+is no separate migration step.
+
+### What operability does not include yet
+
+Say this part out loud, because an architecture review will find it anyway:
+
+- **No backup, restore, or DR procedure is documented.** Postgres and S3/MinIO are yours to back
+  up by your own standard. Nothing in the tree does it for you.
+- **No automated upgrade path** — no operator, no version-check service. Upgrades are the manual
+  step above.
+- **No published hardware minimum for Lite or Kubernetes.** The one hardware figure in the docs
+  (8 vCPU / 16 GB) is stated for the full stack, and the README and quickstart disagree about
+  whether it applies to running published images or only to building from source. Size from the
+  table above, not from that line.
+
+## 4. How it fails
+
+Failure reasons are not prose. They are a **sealed contract** —
+[`lifecycle.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/contracts/lifecycle.v1/lifecycle.schema.json),
+one of the 16 frozen in `contracts.seal.json`, with a sha256 that CI refuses to let drift, and
+golden fixtures beside it.
+
+`BotStatus`: `joining · awaiting_admission · active · needs_help · completed · failed`.
+
+`CompletionReason` — the schema's own word for it is *operator-facing*: `stopped · left_alone ·
+startup_alone · evicted · awaiting_admission_timeout · awaiting_admission_rejected · join_failure ·
+auth_session_missing · validation_error · max_bot_time_exceeded`.
+
+`FailureStage`: `requested · joining · awaiting_admission · active` — which is what separates a
+broken node from a refused join. Events also carry `exit_code`, a `bot_logs` ring buffer, an
+`error_details` object, and a cgroup resource snapshot.
+
+The schema is deliberately liberal (`additionalProperties: true`), so producers can add detail
+(`infra_fault: control_plane_unreachable`, for one) without a reseal.
+
+<Note>
+The enum is fully public and machine-readable in the tree; what does not exist yet is a reference
+page in these docs that enumerates it end to end. [Troubleshooting](/troubleshooting) is
+symptom-shaped and covers the common cases; for the complete set, read the sealed schema linked
+above. Treat that as a documentation gap, not a visibility one.
+</Note>
+
+## 5. Security posture — and what is not claimed
+
+What is real and checkable:
+
+- **One authenticated front door.** Services bind loopback; the gateway resolves identity
+  server-side, fail-closed, with per-route scopes and default-deny ownership checks.
+- **A pre-auth edge guard on by default** on compose and Helm — per-IP throttle (600 req/min),
+  auto-ban, allow/deny lists — with an explicit kill switch (`GUARD_ENABLED`,
+  `gateway.guard.enabled`).
+- **Agents are untrusted by design:** ephemeral isolated container, no egress except brokered
+  tools, propose-only on untrusted input, irreversible effects gated.
+- **Procurement artifacts resolve**, and they are files, not assertions:
+  [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/tree/main/architecture.calm.json) (FINOS
+  CALM), [`SECURITY.md`](https://github.com/Vexa-ai/vexa/tree/main/SECURITY.md),
+  [`security-insights.yml`](https://github.com/Vexa-ai/vexa/tree/main/security-insights.yml) (OpenSSF),
+  [`license-exceptions.json`](https://github.com/Vexa-ai/vexa/tree/main/license-exceptions.json) and
+  [`THIRD_PARTY_LICENSES.md`](https://github.com/Vexa-ai/vexa/tree/main/THIRD_PARTY_LICENSES.md), and
+  the CI gates at [`scripts/gates.mjs`](https://github.com/Vexa-ai/vexa/tree/main/scripts/gates.mjs).
+
+What is **not** claimed, stated plainly so no one has to discover it in a questionnaire:
+
+- **No third-party certification.** No SOC 2, no ISO 27001, no HIPAA BAA, no published penetration
+  test, no external auditor. The posture here is self-attestation plus machine-checkable artifacts
+  you can run yourself. If your process requires a certificate, this does not have one.
+- **Encryption at rest is planned, not shipped** — for workspaces, transcripts, and stored tokens.
+  Today you bring your own disk or volume encryption.
+- **Mid-call bot control endpoints are not wired** in the open-core stack.
+
+Full detail: [Security & compliance](/security-compliance).
+
+## 6. What you own, and how you leave
+
+- **Apache-2.0**, verbatim, no addenda, no dual licence, no enterprise edition, no feature gates.
+  Nothing in the tree is withheld from the licence.
+- **No CLA and no copyright assignment.** Contributions come in under Apache-2.0 with a DCO
+  sign-off; an individual CLA is not required. No assignment means no unilateral relicensing lever
+  over what you have already received.
+- **Fork rights are the exit plan.** There is no licence restriction on reselling or embedding it
+  in a service you sell.
+- **The data leaves with you.** Transcripts and derived knowledge are Markdown in a git repository
+  you hold; recordings are objects in your bucket; everything else is rows in your Postgres.
+  Leaving does not orphan the data.
+
+One boundary that is not about this repository: agent workers can drive a vendor's CLI, and *that
+vendor's* terms govern how their credentials may be used. See
+[Model credentials & licensing](/model-credentials-licensing). Model weights carry their own
+licences, listed in the tree.
+
+## 7. Known gaps, in one place
+
+| Area | State |
+|---|---|
+| Encryption at rest | planned, not shipped |
+| Backup / restore / DR | not documented; operator-owned |
+| Automated upgrades | none; manual tag bump |
+| Third-party certification | none claimed |
+| Failure-taxonomy reference page | contract is public and sealed; no docs page enumerates it |
+| Mid-call bot control | not wired in the open-core stack |
+| `TRANSCRIPTION_MODEL` on Helm | not values-plumbed; inject via `extraEnv` (compose and Lite plumb it) |
+| Jitsi transcripts | built and offline-proven, live-room acceptance open ([#570](https://github.com/Vexa-ai/vexa/issues/570), [#883](https://github.com/Vexa-ai/vexa/issues/883)) — Meet, Teams and Zoom are production |
+| LLM + webhook egress | real, operator-configured, not yet covered by the egress gate |
+
+Capability-by-capability status, kept against the tree:
+[Status](/roadmap/status#capability-truth-table). Where Vexa sits against the alternatives:
+[Comparison](/comparison).
