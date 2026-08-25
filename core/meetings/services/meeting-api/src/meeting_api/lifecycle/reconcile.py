@@ -349,11 +349,18 @@ async def reconcile_stale_nonterminal_sweep(
             runtime, bot_container_id, meeting_id=meeting_id, log=log
         )
         if verdict != "confirmed":
+            # A `stopping` row = a stop was EXPLICITLY requested; the bot is meant to be leaving. Once
+            # its workload is untracked (the runtime has nothing left to tear down), converge it on the
+            # SHORT stop_grace, not the long untracked window. This is the restart-mid-leave case: on the
+            # process backend the bot dies WITH the runtime, so without this a `stopping` row sits
+            # untracked for the full untracked_grace (10 min default) — and the in-process window resets
+            # on every restart, so a redeploy burst can keep it stuck ~indefinitely (the observed bug).
+            esc_grace = stop_grace if status == "stopping" else untracked_grace
             if verdict == "untracked" and _untracked_window_elapsed(
-                tracker, meeting_id, seen_untracked, grace=untracked_grace, now=now
+                tracker, meeting_id, seen_untracked, grace=esc_grace, now=now
             ) and await _escalate_untracked_zombie(
                 meeting_id, status, session_uid, bot_container_id, post_lifecycle,
-                tracker, grace=untracked_grace, log=log, stop_requested=stop_requested,
+                tracker, grace=esc_grace, log=log, stop_requested=stop_requested,
             ):
                 reconciled += 1
             continue
