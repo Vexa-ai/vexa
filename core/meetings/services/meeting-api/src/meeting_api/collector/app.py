@@ -102,6 +102,7 @@ def build_router(
     log_event: Callable[..., dict] = _default_log_event,
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
+    artifact_object_deleter: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -506,14 +507,47 @@ def build_router(
         # PATCH has no share or workspace branch. The echo is the owner reading their own row back.
         return {**row, "data": project_response_data(row.get("data"), viewer_is_owner=True)}
 
-    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
+    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> dict:
         result = await store.delete_planned_meeting(user_id, meeting_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
         if result is False:
-            raise HTTPException(
-                status_code=409, detail="Meeting is no longer planned (bot lifecycle owns it)"
+            plan = await store.prepare_completed_artifact_deletion(user_id, meeting_id)
+            if plan is None:
+                raise HTTPException(status_code=404, detail="Meeting not found")
+            if plan.get("error") == "conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting artifacts can only be deleted after the lifecycle is terminal",
+                )
+
+            recordings = list(plan.get("recordings") or [])
+            if recordings and artifact_object_deleter is None:
+                raise HTTPException(status_code=503, detail="Artifact storage deletion unavailable")
+            deleted_objects = 0
+            for recording in recordings:
+                # Storage FIRST. Any exception deliberately aborts before DB paths/transcripts are
+                # scrubbed, so the same owner-scoped request can retry with the original keys.
+                deleted_objects += len(await artifact_object_deleter(recording))
+
+            finalized = await store.finalize_completed_artifact_deletion(user_id, meeting_id)
+            if finalized is None:
+                raise HTTPException(status_code=404, detail="Meeting not found")
+            if finalized is False:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting artifacts can only be deleted after the lifecycle is terminal",
+                )
+            log_event(
+                "meeting_artifacts_deleted", audience="user", span="meetings.artifacts.delete",
+                user_id=user_id, meeting_id=str(meeting_id),
+                fields={"recordings": len(recordings), "objects": deleted_objects,
+                        "already_deleted": bool(plan.get("already_deleted"))},
             )
+            return {
+                "kind": "artifacts", "objects_deleted": deleted_objects,
+                "already_deleted": bool(plan.get("already_deleted")),
+            }
         log_event(
             "meeting_plan_deleted", audience="user", span="meetings.plan.delete",
             user_id=user_id, meeting_id=str(meeting_id), fields={},
@@ -522,6 +556,7 @@ def build_router(
             redis, user_id=user_id, meeting_id=meeting_id, native_id=None,
             status="deleted", when=None, log_event=log_event,
         )
+        return {"kind": "plan"}
 
     @router.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(
@@ -588,11 +623,18 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        await _apply_meeting_delete(user_id, meeting_id)
-        return JSONResponse(content={
+        receipt = await _apply_meeting_delete(user_id, meeting_id)
+        body = {
             "status": "deleted", "id": meeting_id,
             "platform": platform, "native_meeting_id": native_meeting_id,
-        })
+        }
+        if receipt["kind"] == "artifacts":
+            body.update({
+                "deleted": "completed_meeting_artifacts",
+                "objects_deleted": receipt["objects_deleted"],
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            })
+        return JSONResponse(content=body)
 
     # --- GET /bots/{platform}/{native_meeting_id}/chat (#579 C3, sealed api.v1 ChatMessagesResponse).
     # Thin HONEST restore: the route + owner boundary are real (unowned/unknown native → 404), but
