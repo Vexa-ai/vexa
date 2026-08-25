@@ -118,6 +118,9 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("PUT", "/meetings/{platform}/{native_meeting_id}/intent"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
+    # A participants read is meeting DATA, not bot control — same plane as the transcript it is
+    # derived from, so a key that may read the transcript may read who was heard in it.
+    ("GET", "/meetings/{platform}/{native_meeting_id}/participants"): TX,
     # --- transcripts ---
     ("GET", "/transcripts/by-id/{meeting_id}"): TX,
     ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
@@ -648,6 +651,14 @@ def create_app(
     @app.post("/meetings/{platform}/{native_meeting_id}/workspace")
     async def bind_meeting_workspace(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/workspace"), request)
+
+    # Who was in this meeting, as far as the core actually knows — invitation attendees + heard
+    # speakers, each row labelled with its source (Vexa-ai/vexa#451). Owner-scoped downstream.
+    @app.get("/meetings/{platform}/{native_meeting_id}/participants")
+    async def get_meeting_participants(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "GET", _meeting(f"/meetings/{platform}/{native_meeting_id}/participants"), request
+        )
 
     @app.put("/meetings/{platform}/{native_meeting_id}/intent")
     async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
