@@ -218,6 +218,29 @@ class TranscriptStore(Protocol):
         FSM-owned (→ 409). An FSM row is never deletable from here."""
         ...
 
+    async def prepare_completed_artifact_deletion(
+        self, user_id: int, meeting_id: int
+    ) -> Optional[dict]:
+        """OWNER-scoped snapshot for a completed/failed meeting's artifact erasure.
+
+        Returns ``None`` for unknown/unowned, ``{"error": "conflict"}`` while the FSM is active,
+        or a retryable snapshot containing the persisted recording metadata. It records a
+        ``pending`` tombstone under the row lock so ``continue_meeting`` cannot reopen the row, but
+        retains every artifact and path; storage failures therefore remain addressable/retryable.
+        """
+        ...
+
+    async def finalize_completed_artifact_deletion(
+        self, user_id: int, meeting_id: int
+    ) -> Optional[bool]:
+        """After object deletion succeeds, erase transcript rows and recording metadata atomically.
+
+        The terminal meeting/lifecycle row is retained with an artifact-deletion tombstone. Returns
+        ``None`` for unknown/unowned and ``False`` if the meeting is no longer terminal. Repeated
+        calls on the tombstone are successful no-ops.
+        """
+        ...
+
 
 @runtime_checkable
 class PubSub(Protocol):
