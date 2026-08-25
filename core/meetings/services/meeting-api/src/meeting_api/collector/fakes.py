@@ -265,6 +265,31 @@ class InMemoryTranscriptStore:
                 return m_id  # (c) redeemed an independent transcript-share link
         return None
 
+    async def get_meeting_participants(self, user_id, platform, native_meeting_id):
+        """Mirror of ``SqlAlchemyTranscriptStore.get_meeting_participants``: the owned row's
+        ``data['attendees']`` verbatim, plus DISTINCT non-empty segment speakers ordered by first
+        utterance. Reads the DURABLE segment dict only — never the live redis hash — because the
+        real adapter reads Postgres rows only; a fake that saw more than the adapter would make a
+        test pass that production fails."""
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        m = self._meetings[mid]
+        first_at: dict[str, float] = {}
+        for seg in m["segments"].values():
+            name = seg.get("speaker")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            start = seg.get("start", seg.get("start_time", 0.0)) or 0.0
+            if name not in first_at or start < first_at[name]:
+                first_at[name] = start
+        attendees = (m.get("data") or {}).get("attendees")
+        return {
+            "meeting_id": mid,
+            "invited": attendees if isinstance(attendees, list) else [],
+            "speakers": sorted(first_at, key=lambda n: (first_at[n], n)),
+        }
+
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id):
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:

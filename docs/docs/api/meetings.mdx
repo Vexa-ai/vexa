@@ -333,6 +333,51 @@ The same segments arrive **live** (`completed: false`, a pending draft) and then
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
 runs.
 
+## Meeting participants
+
+```bash GET /meetings/{platform}/{native_meeting_id}/participants
+curl "$API_BASE/meetings/google_meet/abc-defg-hij/participants" -H "X-API-Key: $API_KEY"
+```
+
+```json
+{
+  "meeting_id": 12345,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "participants": [
+    {"name": "Alice Example", "email": "alice@example.com", "source": "invite", "response_status": "accepted"},
+    {"name": "Bob Silent",   "email": "bob@example.com",   "source": "invite", "response_status": "accepted"},
+    {"name": "Alice Example", "email": null, "source": "speaker"}
+  ],
+  "sources": ["invite", "speaker"],
+  "observed_roster": "not_recorded"
+}
+```
+
+Every row says where it came from, because the two sources answer different questions:
+
+| `source` | What it is | What it misses |
+|---|---|---|
+| `invite` | The calendar invitation's attendee list, from the feed you connected under [Calendar sync](#calendar-sync). Carries `email` and, when the feed supplied one, `response_status`. | Only exists for meetings imported from a calendar. Lists who was **asked** — an invitee who never showed up still appears. |
+| `speaker` | Distinct speaker names heard in the transcript, ordered by first utterance. | Only people who **spoke and were named**. A silent participant is absent; so is a speaker the binder could not name (see [Speaker-attributed transcripts](#speaker-attributed-transcripts)). |
+
+`404` for a meeting you don't own — not an empty list. `sources` names only the sources that
+actually contributed, so `[]` means neither did.
+
+<Note>
+**`observed_roster` is always `"not_recorded"` today, and that is the important field.** Nothing in
+the current core records who was *present* in a meeting: the bot's platform modules watch only tiles
+that emit a speaking signal, so a participant who joins and never speaks leaves no trace anywhere
+(tracked as [#861](https://github.com/Vexa-ai/vexa/issues/861)). So an empty `participants` means
+**attendance was never captured** — it can never mean "nobody attended", and your client should not
+render it that way. Today the only route to a complete list including silent people is the `invite`
+source, i.e. connecting the calendar the meeting came from.
+
+**No identity resolution is performed.** Someone both invited and heard appears **twice**, once per
+source, as Alice does above. Matching a voice label to an invitee is a guess, and the wrong guess
+silently merges two people — so the API hands you both layers, labelled, and leaves the join to you.
+</Note>
+
 ## Recordings
 
 The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,

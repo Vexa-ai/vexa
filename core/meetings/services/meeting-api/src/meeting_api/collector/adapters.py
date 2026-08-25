@@ -610,6 +610,46 @@ class SqlAlchemyTranscriptStore:
                     return mtg.id  # (c) redeemed an INDEPENDENT transcript-share link for this meeting
             return None
 
+    async def get_meeting_participants(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+        """OWNER-scoped (``ports.TranscriptStore.get_meeting_participants``). ONE session, two reads:
+        the newest owned row's ``data['attendees']`` (the calendar invitation's ATTENDEE lines), and
+        DISTINCT ``transcriptions.speaker`` for that row ordered by FIRST utterance.
+
+        The speaker read is a grouped aggregate, NOT a segment fetch: a long meeting has thousands of
+        rows and this endpoint wants at most a few dozen names, so ``GROUP BY speaker`` keeps the
+        response bounded by the cast rather than by the transcript's length (the #584 lesson — never
+        let a per-meeting response grow with the meeting)."""
+        from sqlalchemy import func, select
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                ).order_by(Meeting.created_at.desc()).limit(1)
+            )).scalars().first()
+            if meeting is None:
+                return None  # → 404. NOT an empty roster: the caller owns no such meeting.
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            rows = (await db.execute(
+                select(Transcription.speaker, func.min(Transcription.start_time).label("first_at"))
+                .where(
+                    Transcription.meeting_id == meeting.id,
+                    Transcription.speaker.isnot(None),
+                )
+                .group_by(Transcription.speaker)
+                .order_by(func.min(Transcription.start_time))
+            )).all()
+            attendees = data.get("attendees")
+            return {
+                "meeting_id": meeting.id,
+                "invited": attendees if isinstance(attendees, list) else [],
+                "speakers": [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()],
+            }
+
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
         """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
         subscribe to the live transcript feed (authorize_subscribe branch b). Many meetings → one workspace
