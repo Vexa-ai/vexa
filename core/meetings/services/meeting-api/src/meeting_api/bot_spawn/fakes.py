@@ -222,8 +222,15 @@ class InMemoryMeetingRepo:
 
     async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         row = self._meetings[meeting_id]
-        if row["data"].get("stop_requested"):
+        data = row.get("data") or {}
+        if data.get("stop_requested"):
             raise MeetingStopped(_stopped_reopen_detail(meeting_id))
+        deletion_pending = data.get("artifact_deletion") or any(
+            r.get("deletion_pending") for r in (data.get("recordings") or [])
+            if isinstance(r, dict)
+        )
+        if row.get("status") not in ("completed", "failed") or deletion_pending:
+            raise DuplicateMeeting("Terminal meeting is no longer reusable")
         row["status"] = "requested"
         row["end_time"] = None
         row["bot_container_id"] = None
