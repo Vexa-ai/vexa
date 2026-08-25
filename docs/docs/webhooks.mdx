@@ -1,7 +1,38 @@
 ---
 title: "Webhooks"
-description: "User webhook delivery in 0.12.x — delivery is proven in production; the delivery-history surface is not."
+description: "Configure a signed webhook destination and choose the events — delivery is proven in production; the delivery-history surface is not."
 ---
+
+Vexa posts signed JSON to a URL you own when a meeting's state changes. Configuration is
+self-serve over the API, and every delivery attempt is recorded in a history you can read back.
+
+## Configure
+
+```bash PUT /user/webhook
+curl -X PUT "$API_BASE/user/webhook" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"webhook_url":"https://example.com/hooks/vexa",
+       "webhook_secret":"<shared secret>",
+       "webhook_events":{"meeting.completed":true,"meeting.status_change":false}}'
+```
+
+<ParamField body="webhook_url" type="string" required>Destination URL. Pass `""` to clear it — `null` is rejected with `422`.</ParamField>
+<ParamField body="webhook_secret" type="string">Shared secret used to sign each payload. Omit to leave the stored secret unchanged.</ParamField>
+<ParamField body="webhook_events" type="object">A map of event name to boolean, e.g. `{"meeting.completed": true}`. An array is rejected with `422`. Omit to leave the stored selection unchanged; when no selection is stored, the default events fire.</ParamField>
+
+```bash GET /user/webhook
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
+```
+
+```json Response
+{ "webhook_url": "https://example.com/hooks/vexa",
+  "webhook_secret_set": true,
+  "webhook_secret": "********f3a9",
+  "webhook_events": { "meeting.completed": true, "meeting.status_change": false } }
+```
+
+The secret is masked to its last four characters on read-back — enough to recognize which secret is
+set, never enough to use it.
 
 <Warning>
 **Delivery works; the delivery *history* does not.** A production walk on 2026-07-19 (v0.12.15)
@@ -13,11 +44,69 @@ reads a store those deliveries were never written to and so shows none of them
 the exact inversion of [#815](https://github.com/Vexa-ai/vexa/issues/815), where they failed silently.
 </Warning>
 
-## What exists in code
+<Warning>
+`PUT /user/webhook` currently answers with the **whole user record**, including
+`max_concurrent_bots` and the account's Stripe customer, subscription and period fields — not the
+webhook shape `GET` returns. It is your own record, not another tenant's, but do not build against
+those fields: they are leaving this response.
+Tracked as [#1241](https://github.com/Vexa-ai/vexa/issues/1241).
+</Warning>
 
-- Self-serve configuration (`PUT /user/webhook`): URL, secret, and event selection, with the
-  secret masked on read-back.
-- The `webhook.v1` delivery module: HMAC-signed payloads with a retry queue.
+## Events
+
+| Event | Fires when |
+|---|---|
+| `meeting.status_change` | every advance of the bot lifecycle state machine |
+| `meeting.started` | the bot reaches `active` |
+| `meeting.completed` | the meeting completes — carries the post-meeting envelope, including [service provenance](/api/meetings#completion-service-provenance) |
+| `bot.failed` | the bot reaches terminal failure |
+
+The typed events are additive: `meeting.status_change` still fires for the same transition.
+
+## Signature
+
+Each delivery carries `Content-Type: application/json` and, when a secret is set:
+
+| Header | Value |
+|---|---|
+| `X-Webhook-Signature` | `sha256=<hmac_sha256(secret, "<timestamp>." + body)>` |
+| `X-Webhook-Timestamp` | unix seconds, the value signed with the body |
+| `Authorization` | `Bearer <secret>` — legacy back-compatibility |
+
+Verify by recomputing the HMAC over `"<X-Webhook-Timestamp>." + raw_body` and comparing in constant
+time. Reject timestamps outside your replay window.
+
+## Delivery history
+
+```bash GET /user/webhook/deliveries
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook/deliveries?limit=50"
+```
+
+```json Response
+{ "deliveries": [
+    { "event_type": "meeting.completed",
+      "event_id": "evt_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+      "target_host": "example.com",
+      "outcome": "delivered",
+      "status_code": 200,
+      "attempt": 0,
+      "created_at": "2026-08-18T17:54:03.871648Z",
+      "meeting_id": 12345 } ] }
+```
+
+Newest first. `limit` defaults to 100 and accepts 1–500; the ledger keeps the most recent 100
+attempts per account, so it is a recent window rather than a permanent audit log.
+
+`outcome` is one of `delivered` · `queued` · `suppressed` · `blocked` · `failed`. `status_code` is
+what your endpoint answered, when it answered. A row carries the **host only** — never the
+configured URL, never the secret.
+
+<Warning>
+That is the contract. Today the store behind it is not the one real deliveries are written to
+([#841](https://github.com/Vexa-ai/vexa/issues/841), open), so this endpoint can answer with an
+empty `deliveries` array for an account whose webhooks are in fact arriving. **Do not read an empty
+history as "nothing was delivered."**
+</Warning>
 
 ## What is proven, and what is not
 
