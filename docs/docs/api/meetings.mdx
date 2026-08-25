@@ -29,9 +29,15 @@ Pass one of these as `platform`:
 | Google Meet | `google_meet` |
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
-| Jitsi Meet | `jitsi` |
+| Jitsi Meet | `jitsi` * |
 
 The bot joins like any participant — no plugins, no host configuration.
+
+\* **Jitsi is join + capture offline-proven; live validation is pending.** Meet, Zoom and Teams are
+production. On Jitsi the bot joins and records audio, but transcripts are not yet proven live —
+[#883](https://github.com/Vexa-ai/vexa/issues/883) reports a witness run on self-hosted
+docker-jitsi-meet where the speaker binder matched **0 of 122** frames and the meeting completed
+with 0 transcript segments. Track [#570](https://github.com/Vexa-ai/vexa/issues/570).
 
 For `jitsi`, the full `meeting_url` is **required** (like Zoom): a Jitsi room name is scoped
 to a deployment — `MyRoom` exists on meet.jit.si *and* on every self-hosted instance — so only
@@ -79,7 +85,7 @@ curl -X POST "$API_BASE/meetings" \
 Returns `201` with the meeting record. `409` when a non-terminal meeting already exists for the
 same link.
 
-### Edit or delete a plan
+### Edit a plan or delete meeting artifacts
 
 Planned meetings are addressed **by record id** (a plan without a link has no platform/native
 path). Send only the fields you're changing; `null` clears a field (`scheduled_at: null` flips the
@@ -95,13 +101,28 @@ curl -X PATCH "$API_BASE/meetings/12345" \
 curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
 ```
 
-Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
+`PATCH` is plan-only. `DELETE` has two deliberately distinct meanings:
+
+- For an `idle`/`scheduled` plan, it deletes the plan row.
+- For a `completed`/`failed` meeting, it deletes durable transcript rows, transcript-derived
+  notes/shares, recording objects from primary object storage, and recording metadata. The terminal
+  meeting row remains as lifecycle evidence, but transcript reads return `404`.
+
+Both answer an owner-indistinguishable `404` for an unknown or unowned record. An in-flight meeting
+(`requested` through `stopping`) answers `409`; use `DELETE /bots/{platform}/{native_meeting_id}` to
+stop a bot, then delete artifacts after the meeting becomes terminal.
 
 The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
 /meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
-newest owned row and applies the same rules (`404` unknown/unowned, `409` once FSM-owned). Use it
+newest owned row and applies the same rules (`404` unknown/unowned, `409` while in flight). Use it
 when you address meetings by their join-link identity rather than the record id; `DELETE` answers
 `200` on this path (the by-record-id `DELETE` answers `204`).
+
+<Warning>
+Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage.
+It does **not** claim immediate erasure from database snapshots, object-store version history, or
+other backups; those residuals expire under the operator's deployment retention policy.
+</Warning>
 
 ## api.v1 native-id support (per route)
 
@@ -169,8 +190,8 @@ low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the windo
 guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
 the 0.12 API.)</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
-<ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
-<ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an audio/video recording. Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
+<ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. "Settings" there means [`PUT /user/transcription`](/api/settings#transcription-backend). Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
+<ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an **audio** recording (see [Recordings](/how-to/recordings) — there is no video recording path). Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
 
 ```bash POST /bots
 curl -X POST "$API_BASE/bots" \
@@ -183,9 +204,12 @@ to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` 
 already active on that link; `429` past your concurrency limit.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
-`503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Capture-only:
-`{"transcribe_enabled": false}` (or `TRANSCRIBE_ENABLED=false` for the deployment). See
-[Configuration](/configuration#transcription-stt) and [Troubleshooting](/troubleshooting#bot-joins-but-theres-no-transcript).
+`503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the
+backend for your account over the API — [`PUT /user/transcription`](/api/settings#transcription-backend),
+which overrides the deployment default without a restart — or set those env vars for the whole
+deployment ([Configuration](/configuration#transcription-stt)). Capture-only:
+`{"transcribe_enabled": false}` (or `TRANSCRIBE_ENABLED=false` for the deployment). Configured and
+still failing? See [Troubleshooting](/troubleshooting#bot-joins-but-theres-no-transcript).
 
 ### Completion service provenance
 
@@ -296,8 +320,12 @@ them consume a history page.
 
 ## Speaker-attributed transcripts
 
-Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
-until it binds) — with **word-level timestamps** (`words[]`) and a `confidence`. Speaker attribution is
+Each segment carries **word-level timestamps** (`words[]`) and a `confidence`, and most segments are
+**diarized** — attributed to a bound speaker display name. **Attribution is not guaranteed:** when the
+binder cannot resolve a turn it publishes the segment with an **empty speaker** rather than guessing, so
+your client must handle unattributed segments. Under heavy crosstalk roughly **4–7% of rows publish
+unnamed** ([v0.12.22 release notes](https://github.com/Vexa-ai/vexa/releases/tag/v0.12.22)).
+Speaker attribution is
 text-level (who said what), via speaker binding / clustering / captions — *not* separate audio tracks.
 Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
 
@@ -318,6 +346,17 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
 ```bash Recording detail — GET /recordings/{recording_id}
 curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
 ```
+
+```bash Delete one recording — DELETE /recordings/{recording_id}
+curl -X DELETE -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+After the meeting is terminal, recording deletion is owner-scoped (`404` for unknown and unowned
+ids; `409` while the meeting is in flight) and removes all discovered
+chunks/masters from configured primary object storage before removing the recording metadata. If
+storage deletion fails, metadata is retained so the same request can be retried safely. This route
+does not delete the meeting transcript; use `DELETE /meetings/{meeting_id}` after completion to erase
+the meeting's transcript and all of its recordings together.
 
 ```bash Master metadata (finalize-on-read) — GET /recordings/{recording_id}/master?type=audio
 curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"

@@ -95,8 +95,9 @@ The eleventh active connection returns **409 Conflict**. Invalid names, bot name
 return **422 Unprocessable Entity**.
 
 Creating the connection does not itself wait for provider publication. Call the connection's
-[Sync now](#sync-now) endpoint immediately when you want a fresh result; the hosted Dashboard does
-this automatically after Connect.
+[Sync now](#sync-now) endpoint immediately when you want a fresh result. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you right after Connect; a
+self-hosted deployment, or any client driving this API directly, has to make that call itself.
 
 ## Update one calendar
 
@@ -118,8 +119,9 @@ Supply any subset of:
 
 Returns the updated masked connection with **200 OK**. An unknown or deleted ID returns
 **404 Not Found**. A PATCH does not run synchronization automatically; call Sync now after changing
-fields that must be reconciled onto existing planned meetings. The hosted Dashboard does this after
-changing auto-join or bot name.
+fields that must be reconciled onto existing planned meetings. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you after a change to auto-join or bot
+name; drive this API directly and the call is yours to make.
 
 ## Disconnect one calendar
 

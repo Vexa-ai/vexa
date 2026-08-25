@@ -206,4 +206,8 @@ def build_fake_downstream() -> FastAPI:
     async def get_recording(recording_id: int):
         return {"id": recording_id, "media_files": []}
 
+    @app.delete("/recordings/{recording_id}")
+    async def delete_recording(recording_id: int):
+        return {"status": "deleted", "recording_id": recording_id}
+
     return app

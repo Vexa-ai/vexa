@@ -68,10 +68,12 @@ is refused with `422` — never silently dropped.
 |---|---|
 | `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
 | `tx` | the transcript and meeting-record plane — `/meetings*`, `/transcripts/*` |
-| `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call `/auth/me` and nothing else |
+| `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else |
 
 `/recordings*`, `/user/webhook*`, `/user/models`, `/user/transcription`, `/agent/*` and `/mcp` accept
-either `bot` or `tx`. Most keys want both: `{"scopes":["bot","tx"]}`.
+either `bot` or `tx`. Most keys want both: `{"scopes":["bot","tx"]}`. The three `/user/*` routes in
+that list are the [Settings API](/api/settings) — model credentials, transcription backend, and
+webhook delivery, stored per key owner.
 
 Every route requires a scope. A key that holds none of the scopes a route accepts gets `403`,
 whichever route it is.

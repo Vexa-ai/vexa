@@ -1,6 +1,26 @@
 ---
 title: "Quickstart"
-description: "From zero to your first transcript and your first agent — in about five minutes."
+description: "From zero to your first transcript and your first agent — hosted in one API call, or self-hosted in about five minutes."
+---
+
+## Just want a bot in a meeting?
+
+Use the hosted service — no install. Sign in at [vexa.ai/signin](https://vexa.ai/signin) with a
+Google account, copy your API key from [your account page](https://vexa.ai/account), and send a bot:
+
+```bash
+curl -X POST "https://api.cloud.vexa.ai/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+```
+
+`native_meeting_id` is the id inside the join URL — `abc-defg-hij` in
+`https://meet.google.com/abc-defg-hij`. New accounts get **$5 of free bot credit and no credit card
+is required** — about 16 hours of bot time at $0.30/hr ([pricing](https://vexa.ai/pricing)). More
+calls: [Send a bot](/how-to/send-a-bot).
+
+The rest of this page self-hosts the whole stack, which is how you get the agent plane as well.
+
 ---
 
 This walkthrough takes you from a clean machine to **two first wins**: a bot capturing a live
