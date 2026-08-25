@@ -49,7 +49,7 @@ spec:
       {{- end }}
       containers:
         - name: postgres
-          image: "{{ .Values.postgres.image }}"
+          image: {{ include "vexa.scalarImageRef" (dict "legacy" .Values.postgres.image "repository" .Values.postgres.imageRepository "digest" .Values.postgres.imageDigest) | quote }}
           imagePullPolicy: IfNotPresent
           # idle_in_transaction_session_timeout=60s auto-kills orphaned
           # transactions (defense-in-depth against DB session leaks in meeting-api).

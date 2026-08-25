@@ -34,7 +34,7 @@ spec:
         - name: runtime
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
+          image: {{ include "vexa.imageRef" (dict "root" . "image" .Values.runtime.image "useGlobalTag" true) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
