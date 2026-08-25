@@ -188,7 +188,7 @@ class InMemoryTranscriptStore:
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from .projection import DEFAULT_LIST_LIMIT, project_list_data
+        from .projection import DEFAULT_LIST_LIMIT, list_order_key, project_list_data
         mws = member_workspaces or set()
 
         def accessible(m):
@@ -205,8 +205,15 @@ class InMemoryTranscriptStore:
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
         ]
-        # newest first (by created_at desc, then id desc as a stable tiebreak)
-        rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
+        if list_view:
+            # #1222: the USER-FACING list orders by (non-terminal pin, event time) — the meeting
+            # happening now leads, never buried at its calendar-import created_at. Mirrors the real
+            # store's SQL ordering via the shared projection helper; id desc as a stable tiebreak.
+            rows.sort(key=lambda kv: (*list_order_key({**kv[1], "id": kv[0]}), kv[0]), reverse=True)
+        else:
+            # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
+            # newest first (by created_at desc, then id desc as a stable tiebreak).
+            rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
         if offset:
             rows = rows[offset:]
         if list_view:
