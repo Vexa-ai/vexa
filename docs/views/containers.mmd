@@ -42,6 +42,7 @@ flowchart LR
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
+  meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority
   meeting_api -->|"HTTP(S)"| system_webhook
   agent_api -->|"HTTPS"| runtime

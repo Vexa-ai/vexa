@@ -106,9 +106,28 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
       actionLabel: "Stop",
       native: NATIVE,
       message: "Couldn't reach the Vexa server — check that the stack is running.",
+      // A transport failure is not the service authority refusing — no denial panel.
+      denial: null,
     });
     // Operator channel: the raw plumbing stays on the console (P18).
     expect(warn).toHaveBeenCalledWith("meeting action failed", expect.objectContaining({ actionId: "stop", message: "Failed to fetch" }));
+  });
+
+  it("a 403 service_not_allowed on Send now yields the DENIAL, never 'your key doesn't have access' (Vexa-ai/vexa-platform#291)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onFailure = vi.fn();
+    fetchMock.mockResolvedValueOnce({
+      ok: false, status: 403, statusText: "Forbidden", url: "/api/bots",
+      json: async () => ({ detail: { code: "service_not_allowed", reason: "insufficient_balance", decision_id: "d-1" } }),
+    } as unknown as Response);
+
+    await actionsFor(row("idle")).find((a) => a.id === "send")!.run(onFailure);
+
+    const failure = onFailure.mock.calls[0][0];
+    expect(failure.denial).toMatchObject({ kind: "paywall", title: "Out of credit" });
+    expect(failure.message).toContain("Out of credit");
+    expect(failure.message).not.toMatch(/doesn't have access/i);
+    warn.mockRestore();
   });
 
   it("a 404 on Stop yields the HUMAN no-longer-active message + a reconciling re-snapshot — never the raw JSON body (issue #674)", async () => {

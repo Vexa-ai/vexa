@@ -96,8 +96,9 @@ The eleventh active connection returns **409 Conflict**. Invalid names, bot name
 return **422 Unprocessable Entity**.
 
 Creating the connection does not itself wait for provider publication. Call the connection's
-[Sync now](#sync-now) endpoint immediately when you want a fresh result; the hosted Dashboard does
-this automatically after Connect.
+[Sync now](#sync-now) endpoint immediately when you want a fresh result. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you right after Connect; a
+self-hosted deployment, or any client driving this API directly, has to make that call itself.
 
 ## Update one calendar
 
@@ -119,8 +120,9 @@ Supply any subset of:
 
 Returns the updated masked connection with **200 OK**. An unknown or deleted ID returns
 **404 Not Found**. A PATCH does not run synchronization automatically; call Sync now after changing
-fields that must be reconciled onto existing planned meetings. The hosted Dashboard does this after
-changing auto-join or bot name.
+fields that must be reconciled onto existing planned meetings. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you after a change to auto-join or bot
+name; drive this API directly and the call is yours to make.
 
 ## Disconnect one calendar
 
@@ -183,9 +185,9 @@ Returns the latest stamp with **200 OK**, or `{}` when this connection has no re
 The stamp is operational state in Redis; the calendar connection and imported meetings are durable
 in Postgres.
 
-Background cadence is controlled by `CALENDAR_SYNC_INTERVAL_S`, default 300 seconds — the value the
-hosted service runs today. Provider publication delay is additional. See
-[Calendar sync](/how-to/calendar-sync).
+Background cadence is controlled by `CALENDAR_SYNC_INTERVAL_S` (self-hosted default: 300 seconds;
+current hosted rollout: 60 seconds). Provider publication delay is additional. See
+[How often Vexa checks the feed](/how-to/calendar-sync#how-often-vexa-checks-the-feed).
 
 ## Compatibility: singular calendar endpoints
 
@@ -210,9 +212,7 @@ Teams link appears.
 
 The normalized fields include `data.title`, `data.scheduled_at`, `data.attendees`, the parsed
 platform/native ID, and the constructed meeting URL. Multi-calendar provenance is under
-`data.calendar_sources`.
-
-**List rows** (`GET /meetings`, `GET /bots`) project each source to four keys:
+`data.calendar_sources`; API responses return the projected shape:
 
 ```json
 {
@@ -229,14 +229,12 @@ platform/native ID, and the constructed meeting URL. Multi-calendar provenance i
 }
 ```
 
-**Detail reads** (`GET /meetings/{meeting_id}`, `GET /transcripts/by-id/{meeting_id}`) return two
-more keys per source: `uid`, the provider's event UID, and `event`, the stored ICS snapshot —
-`resolved_start` plus the `calendar` and `component` property maps, which include the event's
-`SUMMARY` and `DESCRIPTION`. Treat a meeting detail response as carrying calendar content, and
-scope who may read it accordingly.
-
-The configured secret feed URL is redacted everywhere and never appears as provenance.
-See [Calendar sync](/how-to/calendar-sync) for the setup walkthrough.
+Every response edge projects `calendar_sources` to exactly these four keys. The full ICS event
+snapshot (properties, parameters, recurrence context) is internal reconciliation state the sync
+keeps per source; it never rides an API response, so calendar payloads such as event descriptions
+and attendee addresses are not exposed to transcript viewers or workspace members. The configured
+secret feed URL is likewise redacted everywhere and never appears as provenance.
+See [What Vexa stores](/how-to/calendar-sync#what-vexa-stores) for the complete persistence model.
 
 ## Error summary
 

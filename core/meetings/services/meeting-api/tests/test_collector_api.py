@@ -89,6 +89,23 @@ def test_get_meetings_filters():
     assert len(r2.json()["meetings"]) == 1
 
 
+def test_get_meetings_can_exclude_planned_rows_before_pagination():
+    store, _ = _seeded()
+    store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="future",
+                       status="scheduled", created_at="2026-08-14T22:00:00Z")
+    store.seed_meeting(user_id=USER, platform="unknown", native_meeting_id="",
+                       status="idle", created_at="2026-08-14T21:00:00Z")
+    client = TestClient(create_app(store, redis=None))
+
+    response = client.get(
+        "/meetings", headers=GATEWAY_HEADERS,
+        params={"exclude_planned": "true", "limit": 1},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [meeting["status"] for meeting in response.json()["meetings"]] == ["active"]
+
+
 def test_get_meetings_empty_for_other_user_conforms():
     store, _ = _seeded()
     client = TestClient(create_app(store, redis=None))

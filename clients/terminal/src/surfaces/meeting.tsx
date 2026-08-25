@@ -3,7 +3,7 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
@@ -11,14 +11,16 @@ import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
-import { ApiError, presentError } from "./apiClient";
-import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
+import { ApiError, presentError, readApiFailure } from "./apiClient";
+import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
+import { ServiceDenialPanel } from "./ServiceDenialPanel";
+import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
-import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
+import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
@@ -276,20 +278,18 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
 };
 const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
 
-type MeetingActionFailure = { actionId: string; actionLabel: string; native: string; message: string };
+type MeetingActionFailure = {
+  actionId: string; actionLabel: string; native: string; message: string;
+  /** Set when the service authority REFUSED (403 service_not_allowed / 503 authority-unavailable).
+   *  The row renders the panel instead of the one-line message, and does not auto-clear it. */
+  denial?: ServiceDenialPresentation | null;
+};
 type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
 type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
 
-/** A non-ok action response as a STRUCTURED failure (status + backend detail), never a raw body. */
-async function readFailure(r: Response): Promise<ApiError> {
-  let detail = "";
-  try {
-    const b = (await r.json()) as { detail?: unknown; error?: unknown };
-    const d = b?.detail ?? b?.error;
-    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
-  } catch { /* body wasn't JSON — the status alone is the signal */ }
-  return new ApiError(r.status, detail, r.url);
-}
+/** A non-ok action response as a STRUCTURED failure (status + backend detail + the intact body),
+ *  never a raw string. Shared with `getJson`'s error path so both edges produce the same object. */
+const readFailure = (r: Response): Promise<ApiError> => readApiFailure(r);
 
 /** User-truth message for a failed bot/row action (issue #674): a `404` means the backend no
  *  longer has this meeting — the list re-snapshot (runMeetingAction's `finally`) reconciles the
@@ -300,6 +300,10 @@ export function presentMeetingActionFailure(error: unknown): string {
     if (error.status === 404) return "This meeting is no longer active — refreshing the list.";
     if (error.status === 409) return "That meeting already has a bot.";
   }
+  // A service-authority refusal (paywall / cap / billing outage) says WHY in its own words —
+  // "Your key doesn't have access to this." is a lie about a bot the account simply cannot afford.
+  const denial = serviceDenialFromError(error);
+  if (denial) return `${denial.title} — ${denial.body}`;
   return presentError(error).headline;
 }
 
@@ -310,7 +314,7 @@ async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, r
   } catch (error) {
     // Operator channel keeps the full plumbing (P18); the UI channel gets the presented truth.
     console.warn("meeting action failed", { ...action, message: String(error instanceof Error ? error.message : error) });
-    onFailure?.({ ...action, message: presentMeetingActionFailure(error) });
+    onFailure?.({ ...action, message: presentMeetingActionFailure(error), denial: serviceDenialFromError(error) });
   } finally {
     refreshMeetings();
   }
@@ -456,6 +460,9 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const isIntent = INTENT_STATUSES.has(m.live_status ?? "");
   useEffect(() => {
     if (!actionFailure) return;
+    // A service denial is a thing the user must ACT on (add funds, finish setup, raise the cap) —
+    // it must not evaporate on a 6s timer the way a transient "already has a bot" should.
+    if (actionFailure.denial) return;
     const t = window.setTimeout(() => setActionFailure(null), 6000);
     return () => window.clearTimeout(t);
   }, [actionFailure]);
@@ -474,7 +481,11 @@ function MeetingRow({ m }: { m: MeetingMock }) {
           ⚠ Auto-join failed: {m.auto_join_error}
         </div>
       )}
-      {actionFailure && (
+      {actionFailure?.denial ? (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ServiceDenialPanel presentation={actionFailure.denial} />
+        </div>
+      ) : actionFailure && (
         <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.35 }}>
           {actionFailure.actionLabel} failed: {actionFailure.message}
         </div>
@@ -523,50 +534,87 @@ function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) 
   );
 }
 
-// ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
-//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming.
+// ── Calendar sync — the QUICK view over the user's calendar CONNECTIONS (#1150 plural API).
+//    Per-calendar auto-join + Sync now live here because they are the two things you reach for
+//    mid-day; adding, renaming, replacing a feed and disconnecting live in Settings → Calendar
+//    (one manager, not two — the design-spec's "same list twice" anti-pattern). The feed address
+//    is write-only: it is typed once here for the FIRST calendar and never rendered back.
 //    Two skins over ONE popover: `icon` (the quiet header icon, always there) and `row` (a
-//    discoverable "Connect your calendar" row that hides itself once a feed is connected). ──
+//    discoverable "Connect your calendar" row that hides itself once a calendar exists). ──
 function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) {
+  const layout = useService(LayoutServiceId);
   const [open, setOpen] = useState(false);
-  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
+  const [cals, setCals] = useState<CalendarConnection[] | null>(null);
+  const [stamps, setStamps] = useState<Record<string, CalendarSyncStamp>>({});
   const [url, setUrl] = useState("");
+  const [name, setName] = useState("My calendar");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [stamp, setStamp] = useState<CalendarSyncStamp | null>(null);
-  const [syncing, setSyncing] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const syncNow = async () => {
-    setSyncing(true); setErr(null);
-    try { setStamp(await syncCalendarNow()); refreshMeetings(); }
+
+  const load = useCallback(async (withStamps: boolean) => {
+    try {
+      const list = await listCalendars();
+      setCals(list);
+      if (!withStamps) return;
+      const pairs = await Promise.all(list.map(async (c) => {
+        try { return [c.id, await getCalendarSyncStatus(c.id)] as const; }
+        catch { return [c.id, {} as CalendarSyncStamp] as const; }
+      }));
+      setStamps(Object.fromEntries(pairs));
+    } catch { setCals(null); }
+  }, []);
+
+  const syncOne = async (id: string) => {
+    setSyncing(id); setErr(null);
+    try { const st = await syncCalendar(id); setStamps((s) => ({ ...s, [id]: st })); refreshMeetings(); }
     catch (e) { setErr(presentError(e).headline); }
-    finally { setSyncing(false); }
+    finally { setSyncing(null); }
   };
-  // the row skin needs the connected-state up front (it hides once connected)
+
+  // the row skin needs the connected-state up front (it hides once a calendar exists)
   useEffect(() => {
     if (variant !== "row") return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-  }, [variant]);
+    void load(false);
+  }, [variant, load]);
   useEffect(() => {
     if (!open) return;
-    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
-    void getCalendarSyncStatus().then(setStamp).catch(() => {});
+    void load(true);
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
+  }, [open, load]);
+
+  const setAutoJoin = async (cal: CalendarConnection, autoJoin: boolean) => {
     setBusy(true); setErr(null);
     try {
-      setCfg(await setCalendarConfig(body));
-      setUrl(""); refreshMeetings();
-      if (body.ics_url) await syncNow();              // paste → an ANSWER, not a silent wait
-      if (body.ics_url === null) setStamp(null);
+      await updateCalendar(cal.id, { auto_join: autoJoin });
+      await load(false);
+      await syncOne(cal.id);   // PATCH does not reconcile already-imported meetings; the sync does
     }
     catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
-  if (variant === "row" && cfg?.ics_url_set) return null;   // connected → manage via the header icon
+
+  const connectFirst = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await createCalendar({ name: name.trim() || "My calendar", ics_url: u, auto_join: true });
+      setUrl(""); refreshMeetings();
+      await load(false);
+      await syncOne(created.id);            // paste → an ANSWER, not a silent wait
+    }
+    catch (e) { setErr(presentError(e).headline); }
+    finally { setBusy(false); }
+  };
+
+  const connected = (cals?.length ?? 0) > 0;
+  const openSettings = () => { setOpen(false); layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} }); };
+
+  if (variant === "row" && connected) return null;   // has one → manage via the header icon / Settings
   return (
     <div ref={ref} style={{ position: "relative", flex: variant === "row" ? "initial" : "none" }}>
       {variant === "row" ? (
@@ -576,35 +624,40 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
           <Icon name="cal" size={12} /> Connect your calendar
         </button>
       ) : (
-        <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
-          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+        <button onClick={() => setOpen((v) => !v)} title="Calendars — import upcoming meetings from your calendars"
+          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: connected ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
           <Icon name="cal" size={13} />
         </button>
       )}
       {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Calendar sync</div>
-          {cfg?.ics_url_set ? (
+        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 300, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+            {connected ? `calendars · ${cals?.length ?? 0} of ${MAX_CALENDARS}` : "calendar sync"}
+          </div>
+          {connected ? (
             <>
-              <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
-                Connected: <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{cfg.ics_url_masked}</span>
-              </div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
-                <input type="checkbox" checked={cfg.auto_join} disabled={busy}
-                  onChange={(e) => void save({ auto_join: e.target.checked })} />
-                Auto-join imported meetings
-              </label>
-              <CalendarSyncStatusLine stamp={stamp} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <button disabled={busy || syncing} onClick={() => void syncNow()}
-                  style={{ flex: 1, fontSize: 12, padding: "4px 10px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
-                  {syncing ? "Syncing…" : "Sync now"}
-                </button>
-                <button disabled={busy || syncing} onClick={() => void save({ ics_url: null })}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 6, cursor: "pointer" }}>
-                  Disconnect
-                </button>
-              </div>
+              {cals?.map((c) => (
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 5, borderBottom: "1px dashed var(--line)", paddingBottom: 7 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ flex: 1, fontSize: 12, color: c.enabled ? "var(--t1)" : "var(--t3)", fontWeight: 600 }}>{c.name}</span>
+                    {!c.enabled && <span style={{ fontSize: 10.5, color: "var(--t3)" }}>paused</span>}
+                    <button disabled={busy || syncing !== null} onClick={() => void syncOne(c.id)}
+                      style={{ fontSize: 11.5, padding: "3px 8px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
+                      {syncing === c.id ? "Syncing…" : "Sync"}
+                    </button>
+                  </div>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+                    <input type="checkbox" checked={c.auto_join} disabled={busy || syncing !== null}
+                      onChange={(e) => void setAutoJoin(c, e.target.checked)} />
+                    Auto-join meetings from this calendar
+                  </label>
+                  <CalendarSyncStatusLine stamp={stamps[c.id] ?? null} />
+                </div>
+              ))}
+              <button onClick={openSettings}
+                style={{ fontSize: 11.5, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, cursor: "pointer" }}>
+                Add, rename or disconnect in Settings → Calendar
+              </button>
             </>
           ) : (
             <>
@@ -612,12 +665,16 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                 Paste your calendar&apos;s <b>secret ICS address</b> (Google Calendar → Settings → &quot;Secret address in iCal format&quot;).
                 Upcoming meetings with a Meet/Zoom/Teams link appear under Upcoming and auto-join at start.
               </div>
-              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
-                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void save({ ics_url: url.trim() }); }}
+              <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
+                aria-label="Calendar name" placeholder="Calendar name"
                 style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
-              <button disabled={busy || !url.trim()} onClick={() => void save({ ics_url: url.trim() })}
+              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
+                type="password" autoComplete="off" aria-label="Secret ICS address"
+                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void connectFirst(); }}
+                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+              <button disabled={busy || !url.trim()} onClick={() => void connectFirst()}
                 style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
-                {busy || syncing ? "Connecting…" : "Connect"}
+                {busy || syncing !== null ? "Connecting…" : "Connect"}
               </button>
               <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
                 Tip: the <i>public</i> address only carries events you made public — use the <b>secret</b> one for your full calendar.
@@ -649,13 +706,15 @@ function MeetingsList() {
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
     const parsed = parseMeetingInput(u, await getJitsiHosts());
-    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setTimeout(() => setSent(null), 5000); return; }
-    setSent("sending"); setErrMsg(null);
+    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); setTimeout(() => setSent(null), 5000); return; }
+    setSent("sending"); setErrMsg(null); setDenial(null);
+    let refused = false;
     try {
       // POST /bots through the authed gateway proxy (X-API-Key injected server-side from the cookie token).
       const r = await fetch("/api/bots", {
@@ -671,15 +730,21 @@ function MeetingsList() {
       } else {
         // Surface the REAL reason, not a generic "bad link" (the cap/dup/auth cases are common).
         setSent("err");
-        setErrMsg(
-          r.status === 429 ? "You're at your meeting limit — stop one first."
-            : r.status === 409 ? "That meeting already has a bot."
-              : r.status === 401 ? "Not signed in — sign in and retry."
-                : presentError(await readFailure(r)).headline,
-        );
+        if (r.status === 429) { setErrMsg("You're at your meeting limit — stop one first."); }
+        else if (r.status === 409) { setErrMsg("That meeting already has a bot."); }
+        else if (r.status === 401) { setErrMsg("Not signed in — sign in and retry."); }
+        else {
+          // 403 service_not_allowed / 503 service_authority_unavailable are the service authority
+          // refusing, not an access fault: they get their own words and their own fix.
+          const state = resolveJoinError(await readFailure(r));
+          if (state.kind === "denial") { setDenial(state.presentation); setErrMsg(null); refused = true; }
+          else setErrMsg(state.headline);
+        }
       }
     } catch { setSent("err"); setErrMsg("Couldn't reach the server."); }
-    setTimeout(() => setSent(null), 5000);
+    // The transient flash clears itself; a denial panel is sticky until the next attempt — a
+    // paywall the user has to act on must not vanish on a 5s timer.
+    if (!refused) setTimeout(() => setSent(null), 5000);
   };
   return (
     <div style={{ padding: "8px" }}>
@@ -697,7 +762,9 @@ function MeetingsList() {
           </button>
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
-        {sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
+        {denial
+          ? <ServiceDenialPanel presentation={denial} onRetry={() => void addBot()} />
+          : sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
         <div style={{ marginTop: 8 }}>
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />
@@ -801,8 +868,45 @@ export function meetingHeaderState(m: MeetingMock | undefined, connected: boolea
   return connected ? "live" : "reconnecting";
 }
 
+/** Whether a requested meeting id has RESOLVED, is still resolving, or does not exist for this user.
+ *  `listLoaded` is the meetings list having answered at least once — without it an id that simply hasn't
+ *  been fetched yet is indistinguishable from one that doesn't exist, and an addressable URL
+ *  (`/meetings/<id>`) would show a permanent "Connecting…" for a deleted or foreign meeting.
+ *  Exported for the routing test. */
+export type MeetingResolution = "resolving" | "resolved" | "not-found";
+export function meetingResolution(m: MeetingMock | undefined, listLoaded: boolean): MeetingResolution {
+  if (m) return "resolved";
+  return listLoaded ? "not-found" : "resolving";
+}
+
+/** The clean terminal state for an id that isn't ours (deleted, mistyped, someone else's un-shared
+ *  meeting). A dead reference is a normal outcome of a shareable URL, so it reads as an answer — not an
+ *  error, not a spinner that never ends. Pure (no services) so it renders in a test as-is. */
+export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string; onOpenToday?: () => void }) {
+  return (
+    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Meeting not found</div>
+        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          {meetingId
+            ? <>Nothing here matches <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. It may have been deleted, or it belongs to someone who hasn&apos;t shared it with you.</>
+            : <>This link doesn&apos;t carry a meeting. Open one from your day.</>}
+        </div>
+        {onOpenToday && (
+          <button onClick={onOpenToday}
+            style={{ marginTop: 16, fontSize: 12.5, padding: "5px 12px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 7, cursor: "pointer" }}>
+            Open today
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
+  const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
+  const listLoaded = useLiveMeetingsLoaded();
   const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
@@ -811,6 +915,18 @@ function MeetingTab({ params }: TabProps) {
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
   const header = meetingHeaderState(m, connected);
+
+  // An unknown id — a stale/foreign/mistyped meeting URL — is a clean dead end, never a crash and never
+  // an endless "Connecting…". Only once the list has actually answered (P0: an offline list keeps
+  // resolving, so a network blip can't make a live meeting look deleted).
+  if (meetingResolution(m, listLoaded) === "not-found") {
+    return (
+      <MeetingNotFound
+        meetingId={requestedMeetingId}
+        onOpenToday={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
+      />
+    );
+  }
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
