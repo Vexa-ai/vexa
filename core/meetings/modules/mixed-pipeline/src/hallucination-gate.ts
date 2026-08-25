@@ -75,6 +75,31 @@ function repetitionLoop(text: string): boolean {
   return false;
 }
 
+/**
+ * A growing Whisper window may begin with a genuine repeated acknowledgement and then continue
+ * with minutes of real speech. The legacy repetition rule intentionally spots a loop at the
+ * beginning, but condemning the WHOLE growing window for that prefix creates a transcript gap.
+ * Teams' GMeet-compatible window therefore suppresses repetition only when the repeated prefix
+ * accounts for at least 80% of the complete result. Exact media-artifact phrases and patterns
+ * remain fail-closed through `hallucinationRule`.
+ */
+export function teamsWindowHallucinationRule(text: string): HallucinationRule | null {
+  const rule = hallucinationRule(text);
+  if (rule !== 'repetition') return rule;
+
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  for (let len = 3; len <= 6; len++) {
+    const phrase = words.slice(0, len).join(' ').toLowerCase();
+    let count = 0;
+    for (let i = 0; i <= words.length - len; i += len) {
+      if (words.slice(i, i + len).join(' ').toLowerCase() !== phrase) break;
+      count++;
+    }
+    if (count >= 3 && (count * len) / words.length >= 0.8) return 'repetition';
+  }
+  return null;
+}
+
 /** Which rule condemns this text, or null to publish it. Deliberately NOT included: the gmeet
  *  filter's "single word under 10 chars" rule — on the m24 tape that eats "Yeah.", "Yep.",
  *  "Right." and the rest of a real meeting's backchannel. */

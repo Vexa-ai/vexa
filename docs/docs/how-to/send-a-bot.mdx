@@ -1,10 +1,54 @@
 ---
 title: "Send a bot and get a transcript"
-description: "Capture a Google Meet, Zoom, Teams, or Jitsi call in real time."
+description: "Send a bot to a Google Meet, Zoom, Teams, or Jitsi call and get a real-time transcript — hosted in one API call, or self-hosted under Apache-2.0."
 ---
 
 A Vexa bot joins a call like any participant and streams back a **speaker-attributed** transcript. No
 plugin, no host configuration.
+
+## Get an API key
+
+There are two ways to run Vexa. Both speak the same API; only the base URL differs.
+
+### Hosted
+
+1. Sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google account.
+2. Copy your API key from [your account page](https://vexa.ai/account).
+3. Send a bot:
+
+```bash
+curl -X POST "https://api.cloud.vexa.ai/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+```
+
+`native_meeting_id` is the id inside the join URL — `abc-defg-hij` in
+`https://meet.google.com/abc-defg-hij`.
+
+New accounts get **$5 of free bot credit and no credit card is required** — about 16 hours of bot
+time at $0.30/hr ([pricing](https://vexa.ai/pricing)).
+
+### Self-hosted
+
+Vexa is Apache-2.0 and runs entirely inside your own perimeter. `make all` pulls the published
+images and prints an API key when the stack is up:
+
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all
+```
+
+Full walkthrough: [Quickstart](/quickstart). Base URLs, scopes, and key rotation:
+[Authentication](/authentication).
+
+### Set your base URL
+
+The rest of this page uses `$API_BASE` and `$API_KEY`:
+
+| Deployment | `API_BASE` |
+|---|---|
+| Hosted | `https://api.cloud.vexa.ai` |
+| Self-hosted (`make all` / compose) | `http://localhost:18056` |
 
 ## 1. Send the bot
 
@@ -49,6 +93,9 @@ The only thing that changes between platforms is the `platform` value.
     settles both the host and the passcode on its own.
   </Tab>
   <Tab title="Jitsi Meet">
+    Jitsi is **join + capture offline-proven; live validation pending** — Meet, Zoom and Teams are
+    production. See [#883](https://github.com/Vexa-ai/vexa/issues/883).
+
     ```bash
     # the room name is the id; meeting_url is REQUIRED — a room name is scoped to a
     # deployment (meet.jit.si or your self-hosted instance), so the URL says which one
@@ -106,7 +153,7 @@ curl -X POST "$API_BASE/bots" \
 
 Or set `TRANSCRIBE_ENABLED=false` in the deployment env so every spawn defaults to capture-only.
 Recording is separate: pass `recording_enabled` / `RECORDING_ENABLED` if you also need persisted
-audio. See [Configuration](/configuration#transcription-stt).
+audio — audio only; there is no video recording path. See [Configuration](/configuration#transcription-stt).
 
 On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
 lobby enabled behaves the same way.

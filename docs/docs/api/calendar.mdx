@@ -1,0 +1,238 @@
+---
+title: "Calendar API"
+description: "Connect and manage multiple ICS calendars, run synchronization, and inspect the calendar metadata persisted on planned meetings."
+---
+
+The Calendar API manages named ICS connections and imports upcoming events into the ordinary
+[`meetings`](/api/meetings) lifecycle. Each connection has its own auto-join policy and bot name.
+
+All requests use the same API-key authentication as the rest of Vexa:
+
+```bash
+-H "X-API-Key: $API_KEY"
+```
+
+The ICS address is a credential. Write it only in a connection request; Vexa never returns it in
+full. See [Calendar sync](/how-to/calendar-sync) for Google Calendar and Outlook setup.
+
+## Calendar connection
+
+```json
+{
+  "id": "f52a1067-6f0d-43c5-9641-54da51d3610f",
+  "name": "Work",
+  "ics_url_set": true,
+  "ics_url_masked": "calendar.google.com/….ics",
+  "auto_join": true,
+  "bot_name": "Work Notes",
+  "enabled": true
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable opaque connection ID. Use it in update, delete, and sync paths. |
+| `name` | string | User-visible calendar name, 1–100 characters. |
+| `ics_url_set` | boolean | Whether this connection has a secret feed address. |
+| `ics_url_masked` | string or null | Host plus a short suffix for recognition; never the credential. |
+| `auto_join` | boolean | Whether meetings imported from this source arm unattended join. |
+| `bot_name` | string | Bot display name for this calendar, 1–100 characters. |
+| `enabled` | boolean | Whether background discovery includes this connection. |
+
+## List calendars
+
+```bash GET /user/calendars
+curl "$API_BASE/user/calendars" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "calendars": [
+    {
+      "id": "f52a1067-6f0d-43c5-9641-54da51d3610f",
+      "name": "Work",
+      "ics_url_set": true,
+      "ics_url_masked": "calendar.google.com/….ics",
+      "auto_join": true,
+      "bot_name": "Work Notes",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Deleted connections are omitted. An account can have up to ten active connections.
+
+## Connect a calendar
+
+```bash POST /user/calendars
+curl -X POST "$API_BASE/user/calendars" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name": "Work",
+    "ics_url": "https://calendar.google.com/calendar/ical/…/private-…/basic.ics",
+    "auto_join": true,
+    "bot_name": "Work Notes"
+  }'
+```
+
+Returns the masked Calendar connection with **201 Created**.
+
+<ParamField body="name" type="string" required>
+  Display name for this connection. Leading/trailing whitespace is removed; maximum 100 characters.
+</ParamField>
+<ParamField body="ics_url" type="string" required>
+  Secret HTTP(S) ICS address. Maximum 2,048 characters. Embed-page URLs are rejected with setup guidance.
+</ParamField>
+<ParamField body="auto_join" type="boolean" default="true">
+  Arm meetings imported from this source for unattended join.
+</ParamField>
+<ParamField body="bot_name" type="string" default="Vexa">
+  Bot display name for this calendar. When omitted, Vexa uses the legacy user-wide fallback and then `Vexa`.
+</ParamField>
+
+The eleventh active connection returns **409 Conflict**. Invalid names, bot names, or feed URLs
+return **422 Unprocessable Entity**.
+
+Creating the connection does not itself wait for provider publication. Call the connection's
+[Sync now](#sync-now) endpoint immediately when you want a fresh result. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you right after Connect; a
+self-hosted deployment, or any client driving this API directly, has to make that call itself.
+
+## Update one calendar
+
+```bash PATCH /user/calendars/{calendar_id}
+curl -X PATCH "$API_BASE/user/calendars/$CALENDAR_ID" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"Customer calls","auto_join":true,"bot_name":"Customer Notes"}'
+```
+
+Supply any subset of:
+
+| Field | Effect |
+|---|---|
+| `name` | Rename only this connection. |
+| `ics_url` | Replace its secret feed address. |
+| `auto_join` | Change this source's policy. The next sync recomputes planned-meeting auto-join. |
+| `bot_name` | Change this source's bot display name. The next sync copies it into planned-meeting provenance. |
+| `enabled` | Include/exclude the feed from background discovery without deleting its stored configuration. |
+
+Returns the updated masked connection with **200 OK**. An unknown or deleted ID returns
+**404 Not Found**. A PATCH does not run synchronization automatically; call Sync now after changing
+fields that must be reconciled onto existing planned meetings. The hosted dashboard
+([dashboard.vexa.ai](https://dashboard.vexa.ai)) calls it for you after a change to auto-join or bot
+name; drive this API directly and the call is yours to make.
+
+## Disconnect one calendar
+
+```bash DELETE /user/calendars/{calendar_id}
+curl -X DELETE "$API_BASE/user/calendars/$CALENDAR_ID" \
+  -H "X-API-Key: $API_KEY"
+```
+
+Returns **204 No Content**. Vexa immediately removes the stored secret and retains a secret-free
+deletion marker long enough for synchronization to remove this source from planned meetings.
+Meetings also referenced by another calendar remain. A calendar-owned planned meeting with no
+remaining source is removed; an adopted manual plan remains. Live and terminal meetings are never
+rewritten by calendar cleanup.
+
+An unknown or already deleted ID returns **404 Not Found**.
+
+## Synchronization
+
+### Sync now
+
+```bash POST /user/calendars/{calendar_id}/sync
+curl -X POST "$API_BASE/user/calendars/$CALENDAR_ID/sync" \
+  -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "calendar_id": "f52a1067-6f0d-43c5-9641-54da51d3610f",
+  "calendar_name": "Work",
+  "last_sync": "2026-08-14T15:30:00+00:00",
+  "last_error": null,
+  "counts": {"created": 3, "updated": 1, "cancelled": 0}
+}
+```
+
+A feed fetch or parse problem is a successful HTTP response with a non-null `last_error`; the
+connection exists and the sync attempt was recorded. An unknown, disabled, or deleted connection
+returns **404 Not Found** because it is not available to the sync discovery edge. A deployment with
+calendar sync unwired returns **503 Service Unavailable**.
+
+### Read the last sync result
+
+```bash GET /user/calendars/{calendar_id}/sync
+curl "$API_BASE/user/calendars/$CALENDAR_ID/sync" \
+  -H "X-API-Key: $API_KEY"
+```
+
+Returns the latest stamp with **200 OK**, or `{}` when this connection has no retained sync stamp.
+The stamp is operational state in Redis; the calendar connection and imported meetings are durable
+in Postgres.
+
+Background cadence is controlled by `CALENDAR_SYNC_INTERVAL_S` (self-hosted default: 300 seconds;
+current hosted rollout: 60 seconds). Provider publication delay is additional. See
+[How often Vexa checks the feed](/how-to/calendar-sync#how-often-vexa-checks-the-feed).
+
+## Compatibility: singular calendar endpoints
+
+These endpoints remain for existing single-calendar clients. New integrations should use the
+plural API above.
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /user/calendar` | Returns the first active connection's masked URL and auto-join state; `bot_name` is the legacy user-wide fallback. |
+| `PUT /user/calendar` | Creates or updates the first active connection. `ics_url: null` disconnects it. `bot_name` also updates the legacy user-wide fallback. |
+| `GET /user/calendar/sync` | Returns the aggregate last-sync stamp across active connections, or `{}` before a sync. |
+| `POST /user/calendar/sync` | Synchronizes all active connections and returns aggregate counts plus a `calendars` array of per-connection stamps. |
+
+`POST /user/calendar/sync` returns **404 Not Found** when no active feed is connected and **503
+Service Unavailable** when sync is not wired.
+
+## Imported meeting metadata
+
+Every imported event becomes an ordinary planned meeting. Link-less events are also imported with
+`platform: "unknown"`; they remain visible but cannot auto-join until a recognizable Meet, Zoom, or
+Teams link appears.
+
+The normalized fields include `data.title`, `data.scheduled_at`, `data.attendees`, the parsed
+platform/native ID, and the constructed meeting URL. Multi-calendar provenance is under
+`data.calendar_sources`; API responses return the projected shape:
+
+```json
+{
+  "data": {
+    "calendar_sources": [
+      {
+        "id": "f52a1067-6f0d-43c5-9641-54da51d3610f",
+        "name": "Work",
+        "auto_join": true,
+        "bot_name": "Work Notes"
+      }
+    ]
+  }
+}
+```
+
+Every response edge projects `calendar_sources` to exactly these four keys. The full ICS event
+snapshot (properties, parameters, recurrence context) is internal reconciliation state the sync
+keeps per source; it never rides an API response, so calendar payloads such as event descriptions
+and attendee addresses are not exposed to transcript viewers or workspace members. The configured
+secret feed URL is likewise redacted everywhere and never appears as provenance.
+See [What Vexa stores](/how-to/calendar-sync#what-vexa-stores) for the complete persistence model.
+
+## Error summary
+
+| Status | Operations | Meaning |
+|---|---|---|
+| `200` | list, update, sync state/run, singular get/put | Request completed. A sync failure is represented by `last_error`. |
+| `201` | create | Calendar connection created. |
+| `204` | delete | Calendar disconnected; response has no body. |
+| `401` / `403` | all | API key missing, invalid, or not authorized for the route. |
+| `404` | update, delete, or POST sync | Calendar unavailable, deleted, disabled for sync, or no singular feed connected. |
+| `409` | create | Ten active connections already exist. |
+| `422` | create/update/singular put | Invalid name, bot name, or ICS URL. |
+| `503` | sync endpoints | Calendar sync is not wired in this deployment. |

@@ -25,12 +25,13 @@ from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
-from .env_flags import env_flag
+from .env_flags import InvalidFlagValue, resolve_spawn_flag
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
     MaxBotsExceeded,
     MeetingRepo,
+    MeetingStopped,
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
@@ -83,44 +84,27 @@ PASSCODE_ALIASES = (
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
-    """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
-    (default ``true``), so a dashboard bot records by default. The request value is type-validated —
-    a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
-    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``).
+    """Recording default for POST /bots: the HTTP skin over the shared ``resolve_spawn_flag`` —
+    an explicit request value wins, else the ``RECORDING_ENABLED`` env (default ``true``), so a
+    dashboard bot records by default. An unparseable value is a 422, never a silent ``bool()``
+    coercion (which would turn the string ``"false"`` into ``True``).
 
-    The env is read through ``env_flag``, so a set-but-empty ``RECORDING_ENABLED=`` keeps the
-    default instead of resolving False (see env_flags — the v0.12.5 witness bug)."""
-    if value is None:
-        return env_flag("RECORDING_ENABLED", True)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("true", "1", "yes", "on"):
-            return True
-        if v in ("false", "0", "no", "off", ""):
-            return False
-    raise HTTPException(status_code=422, detail="recording_enabled must be a boolean")
+    The resolution itself lives in ``env_flags`` so the auto-join sweep resolves IDENTICALLY
+    (#1216): calendar-joined bots record exactly like manual ones."""
+    try:
+        return resolve_spawn_flag("RECORDING_ENABLED", value, default=True,
+                                  field="recording_enabled")
+    except InvalidFlagValue as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
-    """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
-    (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
-    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable.
-
-    The env is read through ``env_flag``: a set-but-empty ``TRANSCRIBE_ENABLED=`` kept the default
-    OFF and shipped capture-only bots to every Lite self-host (the v0.12.5 witness bug)."""
-    if value is None:
-        return env_flag("TRANSCRIBE_ENABLED", True)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("true", "1", "yes", "on"):
-            return True
-        if v in ("false", "0", "no", "off", ""):
-            return False
-    raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
+    """Transcription default for POST /bots — same shared resolver, same 422 skin (CC3)."""
+    try:
+        return resolve_spawn_flag("TRANSCRIBE_ENABLED", value, default=True,
+                                  field="transcribe_enabled")
+    except InvalidFlagValue as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _resolve_automatic_leave(value: Optional[object]) -> dict:
@@ -129,8 +113,10 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
     Admission keeps its deployment default. The active-phase silence timeout is omitted when the
     caller does not set it, allowing the bot module's configurable ten-minute default to apply.
     """
+    from .service import lobby_budget_ms
+
     if value is None:
-        return {"waitingRoomTimeout": 600_000}
+        return {"waitingRoomTimeout": lobby_budget_ms()}
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="automatic_leave must be an object")
 
@@ -152,7 +138,7 @@ def _resolve_automatic_leave(value: Optional[object]) -> dict:
             raise HTTPException(status_code=422, detail=f"automatic_leave.{primary} must be a positive integer")
         return raw
 
-    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or 600_000
+    waiting_room = timeout("max_wait_for_admission", "waiting_room_timeout") or lobby_budget_ms()
     resolved = {"waitingRoomTimeout": waiting_room}
     no_one_joined = timeout("no_one_joined_timeout")
     everyone_left = timeout("max_time_left_alone", "everyone_left_timeout")
@@ -504,6 +490,11 @@ def build_router(
                     "reason": "service_authority_unavailable",
                 },
             )
+        except MeetingStopped as e:
+            # The user's stop wins over this spawn — either it raced the workload creation, or the
+            # request asked to CONTINUE a stopped meeting. 409 (conflicting state), not 5xx: nothing
+            # is broken, and the detail names the request that works.
+            raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

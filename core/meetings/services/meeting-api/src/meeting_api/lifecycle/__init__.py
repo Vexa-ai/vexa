@@ -20,6 +20,9 @@ rejects illegal transitions.
   ``meeting.status_change`` webhook body.
 * ``build_status_change_envelope`` (P3a) — wrap a ``StatusChange`` as a sealed ``webhook.v1``
   ``Envelope`` (event_type ``meeting.status_change``).
+* ``Disposition`` / ``disposition`` / ``may_dispatch_again`` — what a TERMINAL row leaves owed to
+  its calendar occurrence (served · user-stopped · retry). The one table deciding whether a bot may
+  go back into a meeting it has already been in; ``calendar_sync`` asks it before recreating a row.
 """
 from .machine import (
     BotStatus,
@@ -33,6 +36,11 @@ from .machine import (
     StatusChange,
     TransitionSource,
     can_transition,
+)
+from .occurrence import (
+    Disposition,
+    disposition,
+    may_dispatch_again,
 )
 from .retry import (
     JoinRetryController,
@@ -79,4 +87,7 @@ __all__ = [
     "request_stop",
     "stop_event_for",
     "can_transition",
+    "Disposition",
+    "disposition",
+    "may_dispatch_again",
 ]

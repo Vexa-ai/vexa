@@ -1,6 +1,26 @@
 ---
 title: "Quickstart"
-description: "From zero to your first transcript and your first agent — in about five minutes."
+description: "From zero to your first transcript and your first agent — hosted in one API call, or self-hosted in about five minutes."
+---
+
+## Just want a bot in a meeting?
+
+Use the hosted service — no install. Sign in at [vexa.ai/signin](https://vexa.ai/signin) with a
+Google account, copy your API key from [your account page](https://vexa.ai/account), and send a bot:
+
+```bash
+curl -X POST "https://api.cloud.vexa.ai/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+```
+
+`native_meeting_id` is the id inside the join URL — `abc-defg-hij` in
+`https://meet.google.com/abc-defg-hij`. New accounts get **$5 of free bot credit and no credit card
+is required** — about 16 hours of bot time at $0.30/hr ([pricing](https://vexa.ai/pricing)). More
+calls: [Send a bot](/how-to/send-a-bot).
+
+The rest of this page self-hosts the whole stack, which is how you get the agent plane as well.
+
 ---
 
 This walkthrough takes you from a clean machine to **two first wins**: a bot capturing a live
@@ -110,19 +130,20 @@ frames mark anything the agent recorded. See the [Agent API](/api/agent).
 
 Stop pasting links: give Vexa your calendar's **secret ICS address** (Google Calendar → Settings →
 your calendar → *Integrate calendar* → **Secret address in iCal format**, the `…/private-…/basic.ics`
-one — *not* the public address above it) and every upcoming meeting with a Meet/Zoom/Teams link
-imports on its own — and the bot **auto-joins at start time**. Connecting syncs immediately and
-tells you what it imported; on a Google **Workspace** domain the secret-address field may need a
-one-time admin unlock ([how](/how-to/calendar-sync#1-find-your-secret-ics-address)).
+one — *not* the public address above it). Every upcoming event imports; Meet/Zoom/Teams events are
+armed for auto-join and link-less events remain visible until you add a link. On a Google
+**Workspace** domain the secret-address field may need a one-time admin unlock
+([how](/how-to/calendar-sync#1-find-your-secret-ics-address)).
 
 ```bash
-curl -X PUT "$API_BASE/user/calendar" \
+curl -X POST "$API_BASE/user/calendars" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics"}'
+  -d '{"name":"Work","ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true,"bot_name":"Work Notes"}'
 ```
 
-Your meetings appear under **Upcoming** in the Terminal within a sync cycle. Full walkthrough
-(Outlook too, what imports, per-meeting opt-out): [Calendar sync](/how-to/calendar-sync).
+Run `POST /user/calendars/{calendar_id}/sync` for an immediate result, or wait for the background
+cycle. Full walkthrough: [Calendar sync](/how-to/calendar-sync). Complete endpoint reference:
+[Calendar API](/api/calendar).
 
 ## Next steps
 

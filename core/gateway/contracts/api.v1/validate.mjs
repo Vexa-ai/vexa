@@ -33,6 +33,7 @@ const CORE = [
   ["/bots/{platform}/{native_meeting_id}/speak", "post"],
   ["/transcripts/{platform}/{native_meeting_id}", "get"],
   ["/recordings", "get"], ["/recordings/{recording_id}", "get"],
+  ["/recordings/{recording_id}", "delete"],
   ["/meetings", "get"],
 ];
 for (const [p, m] of CORE) check(`${m.toUpperCase()} ${p}`, !!oas.paths?.[p]?.[m]);

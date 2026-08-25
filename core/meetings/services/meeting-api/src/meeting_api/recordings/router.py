@@ -19,6 +19,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import JSONResponse, Response
 
 from .ports import RecordingRepo, Storage
+from .deletion import MeetingNotTerminal, delete_owned_recording
 from .service import (
     SIGNAL_MEDIA_TYPE,
     InvalidSignalTape,
@@ -231,6 +232,31 @@ def build_router(
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
         return JSONResponse(content=rec)
+
+    @router.delete("/recordings/{recording_id}")
+    async def delete_recording(
+        recording_id: int,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        """Delete one owned recording's primary-storage objects and JSONB metadata.
+
+        Unknown and unowned ids both return 404. Storage is deleted first so a backend failure
+        leaves the metadata/path available for a retry rather than orphaning an undiscoverable
+        object. Backup expiry remains a deployment retention concern, not a claim of this route.
+        """
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            receipt = await delete_owned_recording(
+                repo, storage, user_id=user_id, recording_id=recording_id
+            )
+        except MeetingNotTerminal:
+            raise HTTPException(
+                status_code=409,
+                detail="Recording can only be deleted after the meeting lifecycle is terminal",
+            )
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return JSONResponse(content=receipt)
 
     @router.get("/recordings/{recording_id}/master")
     async def get_recording_master(

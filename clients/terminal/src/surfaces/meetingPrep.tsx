@@ -18,7 +18,9 @@ import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
-import { presentError } from "./apiClient";
+import { presentError, readApiFailure } from "./apiClient";
+import { resolveJoinError, type ServiceDenialPresentation } from "./serviceDenial";
+import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { createPlannedMeeting, updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
 import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
 import { findBriefNote, isExampleNote } from "./briefNote";
@@ -200,6 +202,8 @@ function MeetingPrepTab({ params }: TabProps) {
   const [seededFor, setSeededFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // A refused Join renders as its own in-flow panel, not as the generic one-line error.
+  const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
   const [shares, setShares] = useState<Membership[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);       // ⋯ row: link edit / unbind / delete
@@ -235,16 +239,23 @@ function MeetingPrepTab({ params }: TabProps) {
 
   const sendNow = async () => {
     if (!m?.native_id) return;
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setDenial(null);
     try {
       const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
       const r = await fetch("/api/bots", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ platform: platformSlug, native_meeting_id: m.native_id, ...(m.meeting_url ? { meeting_url: m.meeting_url } : {}), bot_name: defaultBotName() }),
       });
-      if (!r.ok) throw new Error((await r.text().catch(() => "")).slice(0, 180) || `${r.status}`);
+      // The body used to be read as raw TEXT and rethrown as a bare Error, so a denial payload
+      // reached the presenter JSON-shaped and came out as "Something went wrong". Read it as the
+      // typed ApiError instead, so 403 service_not_allowed can be told from a permissions fault.
+      if (!r.ok) throw await readApiFailure(r, "/api/bots");
       refreshMeetings();
-    } catch (e) { setErr(presentError(e).headline); }
+    } catch (e) {
+      const state = resolveJoinError(e);
+      if (state.kind === "denial") setDenial(state.presentation);
+      else setErr(state.headline);
+    }
     finally { setBusy(false); }
   };
 
@@ -567,6 +578,7 @@ function MeetingPrepTab({ params }: TabProps) {
           </div>
         )}
 
+        {denial && <ServiceDenialPanel presentation={denial} onRetry={() => void sendNow()} />}
         {err && <div role="alert" style={{ marginTop: 12, fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
       </div>
     </div>
