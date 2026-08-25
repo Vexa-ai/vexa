@@ -1,0 +1,39 @@
+{
+  "slug": "nodejs-tsc",
+  "title": "Node.js Technical Steering Committee — weekly meeting",
+  "language": "en",
+  "speakers": "none",
+  "organizer": "tsc@nodejs.example",
+  "harness_uid": "series-nodejs-tsc",
+  "source": {
+    "org": "OpenJS Foundation / Node.js project",
+    "channel": "https://www.youtube.com/@nodejs-foundation",
+    "notes_repo": "https://github.com/nodejs/TSC/tree/main/meetings",
+    "captions": "YouTube auto-captions (kind=asr, a.en) — no diarization, no speaker labels",
+    "fetched": "2026-08-25",
+    "tool": "tests/series/fetch.py"
+  },
+  "episodes": [
+    {
+      "n": 1, "date": "2026-03-18", "title": "Node.js TSC meeting 2026-03-18",
+      "transcript": "ep1.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=FUHLCNaeVu4",
+      "notes_url": "https://github.com/nodejs/TSC/blob/main/meetings/2026-03-18.md",
+      "source_minutes": 24.9, "trimmed_to_minutes": null
+    },
+    {
+      "n": 2, "date": "2026-03-25", "title": "Node.js TSC meeting 2026-03-25",
+      "transcript": "ep2.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=teyBqlrCaso",
+      "notes_url": "https://github.com/nodejs/TSC/blob/main/meetings/2026-03-25.md",
+      "source_minutes": 49.9, "trimmed_to_minutes": 40.5
+    },
+    {
+      "n": 3, "date": "2026-04-01", "title": "Node.js TSC meeting 2026-04-01",
+      "transcript": "ep3.jsonl",
+      "video_url": "https://www.youtube.com/watch?v=Jzw4D2MqAXY",
+      "notes_url": "https://github.com/nodejs/TSC/blob/main/meetings/2026-04-01.md",
+      "source_minutes": 54.9, "trimmed_to_minutes": 40.0
+    }
+  ]
+}
