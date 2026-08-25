@@ -71,6 +71,7 @@ CASES = [
     ("GET", "/recordings/5/media/9/raw", "/recordings/{recording_id}/media/{media_file_id}/raw"),
     ("GET", "/recordings/5/media/9/download",
      "/recordings/{recording_id}/media/{media_file_id}/download"),
+    ("DELETE", "/recordings/5", "/recordings/{recording_id}"),
 
     ("GET", "/user/calendar", "/user/calendar"),
     ("PUT", "/user/calendar", "/user/calendar"),

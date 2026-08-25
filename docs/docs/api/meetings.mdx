@@ -161,7 +161,7 @@ curl -X POST "$API_BASE/meetings" \
 Returns `201` with the meeting record. `409` when a non-terminal meeting already exists for the
 same link.
 
-### Edit or delete a plan
+### Edit a plan or delete meeting artifacts
 
 Planned meetings are addressed **by record id** (a plan without a link has no platform/native
 path). Send only the fields you're changing; `null` clears a field (`scheduled_at: null` flips the
@@ -177,13 +177,28 @@ curl -X PATCH "$API_BASE/meetings/12345" \
 curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
 ```
 
-Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
+`PATCH` is plan-only. `DELETE` has two deliberately distinct meanings:
+
+- For an `idle`/`scheduled` plan, it deletes the plan row.
+- For a `completed`/`failed` meeting, it deletes durable transcript rows, transcript-derived
+  notes/shares, recording objects from primary object storage, and recording metadata. The terminal
+  meeting row remains as lifecycle evidence, but transcript reads return `404`.
+
+Both answer an owner-indistinguishable `404` for an unknown or unowned record. An in-flight meeting
+(`requested` through `stopping`) answers `409`; use `DELETE /bots/{platform}/{native_meeting_id}` to
+stop a bot, then delete artifacts after the meeting becomes terminal.
 
 The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
 /meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
-newest owned row and applies the same rules (`404` unknown/unowned, `409` once FSM-owned). Use it
+newest owned row and applies the same rules (`404` unknown/unowned, `409` while in flight). Use it
 when you address meetings by their join-link identity rather than the record id; `DELETE` answers
 `200` on this path (the by-record-id `DELETE` answers `204`).
+
+<Warning>
+Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage.
+It does **not** claim immediate erasure from database snapshots, object-store version history, or
+other backups; those residuals expire under the operator's deployment retention policy.
+</Warning>
 
 ## api.v1 native-id support (per route)
 
@@ -407,6 +422,17 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
 ```bash Recording detail — GET /recordings/{recording_id}
 curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
 ```
+
+```bash Delete one recording — DELETE /recordings/{recording_id}
+curl -X DELETE -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+After the meeting is terminal, recording deletion is owner-scoped (`404` for unknown and unowned
+ids; `409` while the meeting is in flight) and removes all discovered
+chunks/masters from configured primary object storage before removing the recording metadata. If
+storage deletion fails, metadata is retained so the same request can be retried safely. This route
+does not delete the meeting transcript; use `DELETE /meetings/{meeting_id}` after completion to erase
+the meeting's transcript and all of its recordings together.
 
 ```bash Master metadata (finalize-on-read) — GET /recordings/{recording_id}/master?type=audio
 curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
