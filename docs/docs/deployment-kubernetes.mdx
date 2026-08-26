@@ -146,10 +146,14 @@ install. Agent-worker Pods are smaller than a bot and are over-provisioned by th
 is the intended trade — they are small and few.
 
 <Note>
-**`/dev/shm` on Kubernetes.** Chromium wants a real shared-memory mount; the Docker backend gives a
-spawned bot `2g` by default (`DOCKER_SHM_SIZE`), and Teams calls are the workload that needs it. The
-k8s backend has **no equivalent knob in `v0.12.23`** — a spawned Pod takes the kubelet's default
-`/dev/shm`, which is one more reason not to trim the memory ceiling above.
+**`/dev/shm` — 2 Gi, and on Kubernetes there is no knob for it.** The bot runs Chromium **without**
+`--disable-dev-shm-usage`, so it needs a real shared-memory mount, and Teams is the workload that
+actually consumes it. The Docker backend sizes it at **`2g`** by default (`DOCKER_SHM_SIZE`); on
+Kubernetes the equivalent is **`2Gi`**, but the k8s backend exposes **no setting for it in
+`v0.12.23`** — the only spawn-time knobs it reads are `RUNTIME_K8S_TOLERATIONS` and
+`RUNTIME_K8S_NODE_SELECTOR`. A spawned Pod therefore takes the kubelet's default `/dev/shm`, which on
+most distributions is far below 2 Gi. Two consequences: do not trim the memory ceiling above, and if
+Teams calls crash the browser on your cluster, an undersized `/dev/shm` is the first thing to check.
 </Note>
 
 ### Autoscaling and bot bursts — the fresh-node reachability gate
