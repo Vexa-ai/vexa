@@ -118,7 +118,17 @@ gateway:
   # ON by default with generous limits (600 req/min per IP); set enabled: false to opt out.
   guard:
     enabled: true
-    wsEnabled: false          # optional /ws connect guard (ban store shared with HTTP; rate window per-process; opt-in)
+    # wsEnabled runs fastapi-guard's own guard_websocket directly on /ws connect. It requires
+    # enabled: true above - the gateway refuses to boot otherwise, since guard_websocket resolves
+    # its config from the HTTP guard's registered middleware. Same ban store, IP lists and
+    # per-IP rate limit (its own budget) as the HTTP layer; ban store and rate window are both
+    # Redis-shared with it when enableRedis is true, per-worker otherwise. Auto-ban violation
+    # counts are kept per path, so HTTP and WS over-limit events do not add up toward one
+    # threshold, though the resulting ban is shared. BREAKING on upgrade: a deploy that
+    # previously ran enabled: false with wsEnabled: true (a working WS-only setup under the
+    # old hand-rolled guard) now refuses to boot with a ConfigError naming both vars - set
+    # enabled: true (or turn wsEnabled off) before upgrading.
+    wsEnabled: false
     enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
     rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
     rateLimitWindow: 60

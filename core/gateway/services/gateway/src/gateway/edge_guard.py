@@ -2,7 +2,13 @@
 
 Wires guard's ``SecurityMiddleware`` as a layer complementary to the gateway's
 existing per-user rate limiter (``ratelimit.py``): per-IP rate limiting, auto-IP-ban,
-and optional IP/geo/cloud blocking (all env-driven, default off).
+and optional IP/geo/cloud blocking (all env-driven, default off). This module owns
+the ONE ``SecurityConfig`` and installs the ONE ``SecurityMiddleware`` both the HTTP
+and the ``/ws`` path share: fastapi-guard's own ``guard_websocket`` (called directly
+from ``run_multiplex`` in ``app.py``, not through this module) resolves that same
+config at ``/ws`` connect time via its ``_find_security_config`` lookup on the
+registered middleware. No Vexa-authored guard orchestration remains for either
+path; this module's job ends at building the config and installing the middleware.
 
 Two things are intentionally disabled here and handled by Vexa's own middleware
 instead (or, on the 0.12 carve, NOT yet shipped — the rulings stay so a future
@@ -33,29 +39,19 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING
 
-# fastapi-guard 7.7.0 re-exports the guard-core primitives this module drives the WS path
-# through (ASK 1, landed): check_rate_limit_by_ip / is_ip_allowed / ip_ban_manager all
-# live at ``guard``'s top level now, alongside SecurityConfig / SecurityMiddleware. The one
-# still-straight-from-guard_core import is extract_client_ip (ASK 3 - an official WS
-# GuardRequest adapter / extract_client_ip re-export - remains open).
-from guard import (
-    SecurityConfig,
-    SecurityMiddleware,
-    check_rate_limit_by_ip,
-    ip_ban_manager,
-    is_ip_allowed,
-)
-
-from guard_core.utils import UNKNOWN_CLIENT_IDENTITY, extract_client_ip
+# fastapi-guard 7.8.0: guard_websocket (the /ws connect check, called from run_multiplex in
+# app.py, not from this module) is the last piece of the WS path that now lives entirely in
+# the library. This module only needs the two symbols that build + install the HTTP
+# middleware; SecurityConfig / SecurityMiddleware are re-exported at guard's top level.
+from guard import SecurityConfig, SecurityMiddleware
 
 from .config_preflight import ConfigError
 from .ratelimit import env_truthy
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI, WebSocket
-    from guard_core.protocols.request_protocol import GuardRequest
+    from fastapi import FastAPI
 
 _GUARD_REDIS_PREFIX_DEFAULT = "vexa:guard:"
 _GUARD_RATE_LIMIT_RPM_DEFAULT = 600
@@ -275,186 +271,32 @@ def apply_guard(app: FastAPI, config: SecurityConfig | None = None) -> None:
     No-op when ``GUARD_ENABLED=false`` (operator kill switch). When ``config`` is
     omitted it is built from env via :func:`build_guard_config`.
 
+    Refuses to boot with :class:`ConfigError` when ``GUARD_WS_ENABLED=true`` but
+    ``GUARD_ENABLED=false``: fastapi-guard's ``guard_websocket`` (the ``/ws`` connect
+    check ``run_multiplex`` calls, see ``app.py``) resolves its ``SecurityConfig`` by
+    looking up the ``SecurityMiddleware`` THIS function registers, so turning the HTTP
+    guard off leaves the WS guard with no config to read. The env kill switch now turns
+    both off together; WS-only guarding is no longer a valid configuration.
+
     Complementary to the per-user ``rate_limiter``: that limiter is keyed by API
     token, guard's by client IP, with auto-banning of repeat offenders. The two
     gate different abuse shapes — many-tokens-from-one-IP (caught by per-IP +
     auto-ban) vs. one-token-across-many-IPs (caught by per-key) — and coexist; the
     per-key limiter is not replaced.
     """
-    if not _env_bool("GUARD_ENABLED", True):
+    guard_enabled = _env_bool("GUARD_ENABLED", True)
+    ws_enabled = _env_bool("GUARD_WS_ENABLED", False)
+    if ws_enabled and not guard_enabled:
+        raise ConfigError(
+            "GUARD_WS_ENABLED=true requires GUARD_ENABLED=true (it is currently false). "
+            "fastapi-guard's guard_websocket, the /ws connect check, resolves its "
+            "SecurityConfig from the SecurityMiddleware that GUARD_ENABLED registers, so "
+            "the WS guard has no config to read once the HTTP guard is off. Set "
+            "GUARD_ENABLED=true (or leave it unset, since true is the default) or set "
+            "GUARD_WS_ENABLED=false, and restart."
+        )
+    if not guard_enabled:
         return
     if config is None:
         config = build_guard_config()
     app.add_middleware(SecurityMiddleware, config=config)
-
-
-# ── WS guard hook ─────────────────────────────────────────────────────────────
-# HTTP ``SecurityMiddleware`` does NOT intercept the ``/ws`` multiplex (Starlette
-# middleware is HTTP-only). When ``GUARD_WS_ENABLED=true`` (default false, opt-in,
-# since WS guard is beyond the drafted floor), ``run_multiplex`` resolves the
-# client IP and calls :func:`ws_guard_check` to deny over-limit/banned IPs at connect.
-#
-# Fully library-backed (phase 2, guard-core 3.13.0 / fastapi-guard 7.7.0): ban store
-# (``ip_ban_manager``), IP-list/cloud access (``is_ip_allowed``), client-IP resolution
-# (``extract_client_ip``), AND the rate-limit + auto-ban engine
-# (``check_rate_limit_by_ip``). Nothing hand-rolled remains. The rate-limit primitive
-# is the one phase 1 could not swap (guard's ``SecurityMiddleware.dispatch`` is bound to
-# an HTTP ``Request``); guard-core 3.13.0 exposed it as a top-level primitive (A2b: it
-# honors the same ``enable_rate_limit_auto_ban`` / ``enable_ip_banning`` knob pair the
-# HTTP pipeline uses, with a per-process violation counter and reason
-# "rate_limit_exceeded"), so the entire hand-rolled sliding window + ``_ban_counts``
-# block could be deleted.
-#
-# BEHAVIOR DRIFT vs the hand-rolled block this replaces (documented, accepted): the old
-# code reset its in-process violation counter to 0 the moment it set a ban, so an
-# offender whose ban expired started a fresh threshold cycle. The library's counter
-# does NOT reset (it short-circuits further counts while the IP is banned, then resumes
-# from its old value post-expiry), so a repeat offender re-bans on the FIRST over-limit
-# after expiry instead of needing a full threshold again. Stricter on recidivism; this
-# is guard-core's chosen semantics and is not tuned here. The rate WINDOW itself is
-# still in-process (the primitive's ``redis_handler`` arg is left at its default None
-# to preserve the hand-rolled behavior); wiring it is a one-line future enhancement -
-# the primitive already fails open to in-memory on a redis outage, so it is safe to add.
-
-_WS_GUARD: Optional["_WsGuard"] = None
-
-
-class _WsGuardRequest:
-    """Minimal WebSocket -> ``GuardRequest`` adapter, for :func:`resolve_ws_client_ip`.
-
-    Starlette's ``WebSocket`` shares the ``HTTPConnection`` base with ``Request``
-    (``.client`` / ``.headers`` / ``.state`` all present), so this exposes ONLY the
-    three members ``guard_core.utils.extract_client_ip`` actually reads - not the full
-    ``GuardRequest`` protocol (``url_path``, ``method``, ``body``, ...) a general-purpose
-    adapter needs. Mirrors fastapi-guard's own HTTP adapter, ``StarletteGuardRequest``
-    (``guard/adapters.py``), which implements the whole protocol because the HTTP
-    pipeline needs all of it; this one doesn't, so it doesn't. An official WS
-    ``GuardRequest`` adapter is a filed upstream ask (ASK 3) - if/when it ships, this
-    class (and the ``cast`` at its one call site) goes away too.
-    """
-
-    __slots__ = ("_ws",)
-
-    def __init__(self, ws: WebSocket) -> None:
-        self._ws = ws
-
-    @property
-    def client_host(self) -> str | None:
-        return self._ws.client.host if self._ws.client else None
-
-    @property
-    def headers(self) -> Any:
-        return self._ws.headers
-
-    @property
-    def state(self) -> Any:
-        return self._ws.state
-
-
-class _WsGuard:
-    """Per-IP guard for the ``/ws`` connect path, fully delegated to guard's library
-    primitives (phase 2): ban store, IP-list/cloud access, and the rate-limit +
-    auto-ban engine. Mirrors the HTTP layer's knobs from the SAME
-    :class:`SecurityConfig` the HTTP middleware uses, so one env surface governs both.
-    """
-
-    __slots__ = ("_config",)
-
-    def __init__(self, config: SecurityConfig) -> None:
-        self._config = config
-
-    async def check(self, client_ip: str) -> bool:
-        """Return True if the IP may connect, False if banned, blocked, or over-limit."""
-        cfg = self._config
-
-        # Ban check first, unconditional - mirrors guard-core's IpSecurityCheck order
-        # (its ban lookup runs before the whitelist/blacklist decision), so an actively
-        # banned IP stays blocked even if it is also whitelisted. The ban STORE is
-        # ip_ban_manager (guard_core.handlers.ipban_handler) - process-wide and
-        # Redis-shared with the HTTP middleware when GUARD_ENABLE_REDIS is on, closing
-        # the multi-replica gap the old in-process ``_bans`` dict had (helm defaults the
-        # gateway to replicaCount 2).
-        if await ip_ban_manager.is_ip_banned(client_ip):
-            return False
-
-        # IP access (whitelist/blacklist/cloud-provider) via the library, replacing the
-        # hand-copied ``_ip_matches``. is_ip_allowed parses each entry strictly and only
-        # ever fails CLOSED (blocks) on a malformed one, unlike the old ``_ip_matches``,
-        # which deliberately skipped a malformed entry (fail-open). That fail-open
-        # rationale is now obsolete: ``_validate_ip_or_cidr_csv`` (env-validation,
-        # merged ahead of this swap) guarantees every whitelist / blacklist /
-        # trusted-proxy entry is a valid IP or CIDR before it reaches ``SecurityConfig``,
-        # so a malformed entry can no longer get here at all - the boot refuses first.
-        #
-        # CAUTION (audit 5.4, deliberate): a non-empty whitelist is EXCLUSIVE here - an
-        # IP not on it is blocked outright, the blacklist is never consulted - matching
-        # guard-core's HTTP semantics exactly. The old hand-rolled check only used the
-        # whitelist as a bypass fast path: a listed IP passed immediately, but an
-        # UNLISTED IP just fell through to the (often empty) blacklist and was allowed.
-        # See ``test_whitelist_exclusive_blocks_unlisted_ip`` for the pinned behavior.
-        if not await is_ip_allowed(client_ip, cfg):
-            return False
-
-        # A whitelisted IP skips rate limiting, mirroring guard-core's RateLimitCheck
-        # (``if request.state.is_whitelisted: return None``).
-        if bool(cfg.whitelist):
-            return True
-
-        # Per-IP rate limit + auto-ban via the library primitive (phase 2; was a
-        # hand-rolled sliding window + ``_ban_counts`` dict). endpoint_path="ws" gives
-        # the WS connect path an ISOLATED budget from the HTTP pipeline's global
-        # rate-limit bucket: the default "" collapses to the same Redis key the HTTP
-        # path uses, so HTTP requests and WS connects would drain each other's budget.
-        # Every call records a hit (so a "just check" still consumes a slot); False means
-        # over-limit. With enable_rate_limit_auto_ban + enable_ip_banning both on, an
-        # over-limit feeds the same auto-ban engine the HTTP pipeline uses (per-process
-        # counter, ban reason "rate_limit_exceeded") - one knob governs both paths.
-        # No resolvable peer address (Unix-socket or a peer-less ASGI server): the
-        # ban and IP-list checks above already ran against the "unknown" identity, the
-        # way guard-core's HTTP pipeline does under fail_secure=False. The rate-limit
-        # primitive raises ValueError on a non-IP, so skip it here (no budget to key)
-        # instead of turning the connect into a 500 - same shape as fastapi-guard's
-        # guard_websocket dependency.
-        if client_ip == UNKNOWN_CLIENT_IDENTITY:
-            return True
-        if cfg.enable_rate_limiting:
-            return await check_rate_limit_by_ip(client_ip, cfg, endpoint_path="ws")
-        return True
-
-
-def reset_ws_guard(config: SecurityConfig | None = None) -> None:
-    """Rebuild the WS guard singleton (tests call this to isolate behavior)."""
-    global _WS_GUARD
-    _WS_GUARD = _WsGuard(config or build_guard_config())
-
-
-async def ws_guard_check(ws: WebSocket) -> bool:
-    """Resolve the client IP from ``ws`` (using the singleton's trusted-proxies/XFF config)
-    and check it against the WS guard. Returns True if the connect may proceed.
-
-    This is the composed entry point ``run_multiplex`` calls — it uses the SAME config for
-    IP resolution and the check so the two never disagree. Tests isolate behavior via
-    :func:`reset_ws_guard` (which swaps the singleton + its config together).
-    """
-    global _WS_GUARD
-    if _WS_GUARD is None:
-        _WS_GUARD = _WsGuard(build_guard_config())
-    client_ip = await resolve_ws_client_ip(ws, _WS_GUARD._config)
-    return await _WS_GUARD.check(client_ip)
-
-
-async def resolve_ws_client_ip(ws: WebSocket, config: SecurityConfig) -> str:
-    """Resolve the client IP from a WebSocket via guard_core's own ``extract_client_ip``
-    (SWAP C) - the SAME function the HTTP path uses, wrapped through the minimal
-    ``_WsGuardRequest`` adapter above, so WS and HTTP can never disagree on trusted-proxy
-    / X-Forwarded-For handling. Replaces the hand-copied peer-trust + XFF-depth walk that
-    used to live here (deleted; see git history for the old logic).
-
-    When the TCP peer is NOT a trusted proxy, the XFF header is ignored and the peer IP
-    is used - so a spoofed XFF from an untrusted source does NOT rotate the
-    rate-limit/ban budget (the A4 spoofed-XFF sub-case). When the peer IS a trusted
-    proxy, the client IP is taken from the ``X-Forwarded-For`` chain at
-    ``config.trusted_proxy_depth`` entries back from the RIGHTMOST one - both behaviors
-    now live in ``extract_client_ip`` itself.
-    """
-    return await extract_client_ip(cast("GuardRequest", _WsGuardRequest(ws)), config)

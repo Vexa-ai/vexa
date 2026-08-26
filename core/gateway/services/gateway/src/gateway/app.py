@@ -970,24 +970,43 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     """
     # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
     # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
-    # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
-    # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
-    # (false) leaves the WS path unchanged so the conformance harness observes zero change.
+    # When the toggle is on, fastapi-guard's own guard_websocket runs the same checks as
+    # the HTTP layer, against the SAME SecurityConfig apply_guard installed (ban store, IP
+    # lists, a per-IP rate limit isolated under endpoint_path="ws", auto-ban via the same
+    # knob pair), and denies a banned/blocked/over-limit IP at connect. Called directly
+    # here, not through FastAPI's Depends, so the route in create_app stays pure and the
+    # check stays where the tests drive it. Opt-in: the default (false) leaves the WS path
+    # unchanged so the conformance harness observes zero change. edge_guard.py carries no
+    # WS-specific glue any more; it only builds the shared config and installs the
+    # middleware guard_websocket looks up.
     #
-    # PRE-ACCEPT: the full guard check (whitelist/blacklist/ban/rate-limit) runs BEFORE
-    # ``ws.accept()`` so a banned IP never gets a WebSocket upgrade. On denial, close with
-    # 4401 BEFORE accept — Starlette forwards the pre-accept ``websocket.close`` unchanged
-    # (its state machine accepts ``websocket.close`` while CONNECTING); uvicorn (0.51 here)
-    # turns that into an HTTP 403 to the upgrade request (no upgrade, no frames). A data
-    # frame (send_text) cannot be sent before accept, so the rejection is the close alone —
-    # the client sees the 403, not an ip_blocked JSON frame.
+    # PRE-ACCEPT: guard_websocket runs before ws.accept(), so a denied IP never gets a
+    # WebSocket upgrade. On denial it raises starlette's WebSocketException; closing with
+    # its code and reason before accept turns the rejection into an HTTP 403 to the
+    # upgrade request (Starlette forwards a pre-accept websocket.close unchanged, and
+    # uvicorn maps that to 403 - no upgrade, no frames). A data frame cannot be sent
+    # before accept, so the client sees the 403 alone, never a JSON error frame. Nothing
+    # else is caught here: a RuntimeError from guard_websocket (no SecurityMiddleware
+    # registered) is left loud, and apply_guard's own preflight check refuses to boot
+    # with GUARD_WS_ENABLED=true and GUARD_ENABLED=false, so that combination cannot
+    # reach production.
     from .ratelimit import env_truthy
 
     if env_truthy(os.getenv("GUARD_WS_ENABLED")):
-        from .edge_guard import ws_guard_check
+        from guard.websocket import guard_websocket
+        from starlette.exceptions import WebSocketException
 
-        if not await ws_guard_check(ws):
-            await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
+        try:
+            await guard_websocket(ws)
+        except WebSocketException as exc:
+            log_event(
+                "ws_connect_rejected",
+                audience="system",
+                level="warning",
+                span="ws",
+                fields={"code": exc.code, "reason": exc.reason},
+            )
+            await ws.close(code=exc.code, reason=exc.reason)  # pre-accept reject -> HTTP 403
             return
 
     await ws.accept()
