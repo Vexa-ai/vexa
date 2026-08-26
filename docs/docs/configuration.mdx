@@ -266,11 +266,11 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 | `GUARD_RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds. |
 | `GUARD_AUTO_BAN_THRESHOLD` | `10` | Over-limit events from one IP before it is auto-banned. |
 | `GUARD_AUTO_BAN_DURATION` | `3600` | Auto-ban window in seconds; after expiry the offender gets a fresh budget. |
-| `GUARD_IP_WHITELIST` | — | CSV of IPs that bypass every guard check. |
-| `GUARD_IP_BLACKLIST` | — | CSV of IPs rejected on the first request (`403`). |
+| `GUARD_IP_WHITELIST` | — | CSV of IPs or CIDR ranges that bypass every guard check (e.g. `10.0.0.0/8`). Validated at boot: an invalid entry refuses to start with an error naming the var and the entry. |
+| `GUARD_IP_BLACKLIST` | — | CSV of IPs or CIDR ranges rejected on the first request (`403`), e.g. `203.0.113.5,198.51.100.0/24`. Validated at boot like the whitelist. |
 | `GUARD_BLOCKED_COUNTRIES` | — | CSV of ISO country codes to block (geo, opt-in). |
-| `GUARD_BLOCK_CLOUD_PROVIDERS` | — | CSV of cloud providers to block (e.g. `aws,gcp`), opt-in. |
-| `GUARD_TRUSTED_PROXIES` | — | CSV of trusted proxy IPs whose `X-Forwarded-For` is honored for client-IP resolution. **Set this when behind a reverse proxy.** |
+| `GUARD_BLOCK_CLOUD_PROVIDERS` | — | CSV of cloud providers to block by IP range, opt-in. Accepted values: `AWS`, `GCP`, `Azure` (case-insensitive, normalized at boot); any other name refuses to start with an error listing the accepted spellings. |
+| `GUARD_TRUSTED_PROXIES` | — | CSV of trusted proxy IPs or CIDR ranges whose `X-Forwarded-For` is honored for client-IP resolution (e.g. `172.16.0.0/12`). Validated at boot. **Set this when behind a reverse proxy.** |
 | `GUARD_TRUST_X_FORWARDED_PROTO` | `false` | Trust `X-Forwarded-Proto` for scheme enforcement. |
 | `GUARD_REDIS_PREFIX` | `vexa:guard:` | Redis key namespace (avoids colliding with Vexa's own keys). |
 | `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
