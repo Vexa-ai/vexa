@@ -90,6 +90,7 @@
           "api/meetings",
           "api/calendar",
           "api/settings",
+          "webhooks",
           "api/agent",
           "api/errors"
         ]
