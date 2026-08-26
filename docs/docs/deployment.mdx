@@ -90,6 +90,11 @@ docker compose -f docker-compose.cpu.yml up -d
 curl http://localhost:8083/health   # waits on the model load
 ```
 
+**CPU concurrency:** the worker's admission cap (`MAX_ACTIVE_REQUESTS`) defaults to `20` only when
+`DEVICE=cuda` (sized on an RTX 4090); on any other device (`cpu`, `auto`, `mps`) it defaults to `2`,
+because 20 CPU jobs sharing the cores never finish and the worker deadlocks while still reporting
+healthy. Set `MAX_ACTIVE_REQUESTS` explicitly if your hardware differs; an explicit value always wins.
+
 Then point the main stack at it in `deploy/compose/.env`:
 
 ```bash
