@@ -145,10 +145,11 @@ the manual steps above still have to be run against the database yourself.
 Every bot and agent is spawned as its own bare Pod, and a spawned Pod declares **no resource
 requests or limits of its own**. In a quota-controlled namespace this means the namespace's
 `LimitRange` defaults are what the bot actually gets — and browser-based bots need real headroom.
-Either run Vexa in a namespace with no `LimitRange`, or set its `default` **and** `defaultRequest`
-to **`cpu: "2"`, `memory: 4096Mi`**. `4096Mi` is a floor, not a suggestion — around 2 GB the bot is
-OOM-killed on Teams meetings. Too small a default shows up as a bot that dies mid-join, not as a
-scheduling error. See
+Either run Vexa in a namespace with no `LimitRange`, or give that namespace the defaults Vexa's own
+production runs: `default` `{cpu: 1500m, memory: 2560Mi}`, `defaultRequest`
+`{cpu: 1000m, memory: 1100Mi}`. The `2560Mi` limit is a hard ceiling, not a suggestion — a Teams
+call spikes past 2 Gi. Too small a default shows up as a bot that dies mid-join, not as a scheduling
+error. See
 [Kubernetes (Helm)](/deployment-kubernetes#namespace-limitrange-defaults).
 
 ### Parity with the 0.10.x line
