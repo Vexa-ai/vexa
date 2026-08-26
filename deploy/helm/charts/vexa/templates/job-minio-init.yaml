@@ -28,7 +28,10 @@ spec:
       {{- end }}
       containers:
         - name: minio-init
-          image: minio/mc:latest
+          {{- /* #1006 — a configurable identity (minio.mc.reference / .digest / .image.*), not a
+          hardcoded mutable public tag. This hook is what made mirror-only installs fail LAST: the
+          whole control plane came up, then the bucket-init Job reached for Docker Hub. */}}
+          image: {{ include "vexa.minioClientImage" . | quote }}
           imagePullPolicy: IfNotPresent
           # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
           # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.

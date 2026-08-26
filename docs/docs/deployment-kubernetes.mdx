@@ -382,9 +382,82 @@ binds into each worker Pod as a PVC, scoped per-mount). The Compose stack is the
 most production mileage today; the chart is the right starting point for a cluster
 evaluation — track the [status page](/roadmap/status).
 
-## Air-gapped clusters
+## Air-gapped clusters and private registry mirrors
 
-Everything the chart deploys pulls from images you build and host in your own registry; pair it
-with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) and
-your own LLM endpoint ([Configuration](/configuration)) for a zero-egress posture. See
+Everything the chart deploys can pull from a registry you host; pair it with the
+[self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) and your own LLM
+endpoint ([Configuration](/configuration)) for a zero-egress posture. See
 [Security & compliance](/security-compliance).
+
+### One rule for every image reference
+
+| # | Value | Result |
+|---|---|---|
+| 1 | an explicit **full reference** (`runtime.browserImage`, `minio.mc.reference`, …) | used **verbatim** |
+| 2 | a **digest** (`runtime.browserImageDigest`, `minio.mc.digest`, …) | `<repository>@<digest>` |
+| 3 | `repository` + `tag` | `<repository>:<tag>` |
+
+**An explicit full reference wins; `global.imageTag` never rewrites it.** The global tag only
+supplies the tag on leg 3, for images that have no explicit identity of their own.
+
+The chart **fails closed** — `helm template` errors and nothing renders — if an image's identity is
+ambiguous (a full reference *and* a digest on the same image) or malformed (a digest that is not
+exactly `sha256:` + 64 lowercase hex). A typo'd digest is refused rather than quietly resolving to a
+mutable tag.
+
+### What your mirror has to hold
+
+Three of these are invisible to `kubectl get deploy -o yaml`, which is exactly why a mirror-only
+install could get most of the way up and then fail:
+
+| Image | Why it is pulled | Where you point it |
+|---|---|---|
+| gateway · admin-api · meeting-api · runtime · agent-api · terminal | long-running Deployments | `<component>.image.repository` (+ `global.imageTag`) |
+| Postgres · Valkey/Redis · MinIO · PgBouncer (if enabled) | bundled infrastructure | `postgres.image` · `redis.image` · `minio.image` · `pgbouncer.image` |
+| MinIO client (`mc`) | **post-install hook Job** that creates the bucket — not a Deployment, easy to miss when inventorying, and the install fails without it | `minio.mc.reference` / `.digest` / `.image.repository` + `.image.tag` |
+| DB migrations | opt-in hook Job (`migrations.enabled`) | `migrations.image.repository` (falls back to `meetingApi.image.*`) |
+| **meeting bot (~3.6 GB)** · **agent** · **agent-worker** | **spawned by the runtime at meeting time** — not containers in any rendered manifest. The chart passes them as `BROWSER_IMAGE` / `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` env and the runtime creates those Pods later | `runtime.browserImage` · `runtime.agentImage` · `runtime.agentWorkerImage` (or the matching `…Digest` / `…Repository` + `…Tag`) |
+
+The three spawned images fail **late**: the control plane goes green and the first meeting dies with
+`ImagePullBackOff` on a Pod nobody was watching. Mirror them at install time.
+
+```yaml
+global:
+  imageTag: v0.12.19
+  imagePullSecrets: [{ name: internal-registry-pull }]
+runtime:
+  image: { repository: registry.example.internal/vexa/v012-runtime }
+  browserImage: "registry.example.internal/vexa/vexa-bot@sha256:<64 hex>"
+  agentImage:   "registry.example.internal/vexa/v012-agent-api:v0.12.19"
+  agentWorkerImageRepository: registry.example.internal/vexa/v012-agent-worker
+  agentWorkerImageDigest: "sha256:<64 hex>"
+minio:
+  image: { repository: registry.example.internal/mirror/minio, tag: latest }
+  mc:    { digest: "sha256:<64 hex>", image: { repository: registry.example.internal/mirror/mc } }
+```
+
+Prove it before you install — the render tells you everything, no cluster needed:
+
+```bash
+helm template vexa deploy/helm/charts/vexa -n vexa -f my-values.yaml \
+  | grep -E '^\s+image:|_IMAGE$' -A1
+```
+
+Anything in that output that is not your registry is something your cluster will try to pull from
+the internet.
+
+### Upgrading from v0.12.18 or earlier
+
+Behaviour changed in one direction only: **explicit references are now honoured where they were
+previously discarded.**
+
+- If you set `runtime.agentImage` or `runtime.agentWorkerImage` *and* `global.imageTag`, the
+  explicit reference used to be silently overwritten by the global tag. It is now used. If you were
+  relying on the global tag to win, clear the explicit value (`--set runtime.agentImage=`) and set
+  `runtime.agentImageRepository` instead.
+- The `minio-init` Job no longer hardcodes `minio/mc:latest`. The default is the pinned
+  `minio/mc:RELEASE.2025-08-13T08-35-41Z` — the same bytes `latest` resolved to at pin time — so an
+  unconfigured install pulls the same image it did before, now by an explicit name.
+- With stock values the rendered manifests are byte-identical to v0.12.18 **except** that one line:
+  every other image reference is unchanged. Nothing moves unless you had set one of the two values
+  that were being ignored.

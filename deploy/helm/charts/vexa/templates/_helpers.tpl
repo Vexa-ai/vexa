@@ -96,34 +96,113 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
-this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
-{{- define "vexa.botImage" -}}
-{{- if .Values.runtime.browserImage -}}
-{{- .Values.runtime.browserImage -}}
-{{- else if .Values.global.imageTag -}}
-{{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
+{{/*
+vexa.imageRef — the ONE image-reference rule (#1006).
+
+Call:
+  include "vexa.imageRef" (dict "field"      "<values path, quoted back in errors>"
+                                "reference"  <explicit full reference, or "">
+                                "digest"     <"sha256:<64 hex>", or "">
+                                "repository" <repository>
+                                "tag"        <tag>)
+
+Precedence — three legs, checked in this order, and nothing else participates:
+
+  1. `reference` non-empty  → emitted VERBATIM. An operator who names a full reference gets
+     exactly that reference; a global tag NEVER rewrites it. This is the leg mirror-only
+     clusters depend on: before #1006 two of the three spawned-workload references silently
+     ignored it and rendered a Docker Hub reference, so a cluster with no public egress could
+     not run the product no matter what it configured.
+  2. `digest` non-empty     → "<repository>@<digest>".
+  3. otherwise              → "<repository>:<tag>" — the legacy path, unchanged. The CALLER
+     decides whether global.imageTag supplies that tag.
+
+Fails CLOSED — `helm template` errors and nothing renders — on an ambiguous or malformed
+identity, instead of silently ranking one input over another:
+
+  - `reference` AND `digest` both set: two identities declared, no defensible winner;
+  - a `digest` that is not exactly sha256:<64 lowercase hex> (truncated, uppercase, non-sha256);
+  - a `reference` containing whitespace;
+  - an empty repository on leg 2 or 3, or an empty tag on leg 3.
+
+Silence here would mean an operator who typoed a digest deploys a mutable tag believing they
+pinned bytes. See docs/docs/deployment-kubernetes.mdx § Running from a private registry mirror.
+*/}}
+{{- define "vexa.imageRef" -}}
+{{- $field := .field -}}
+{{- $ref := .reference | default "" | toString | trim -}}
+{{- $digest := .digest | default "" | toString | trim -}}
+{{- $repo := .repository | default "" | toString | trim -}}
+{{- $tag := .tag | default "" | toString | trim -}}
+{{- if and $ref $digest -}}
+{{- fail (printf "INVALID image identity for %s: an explicit full reference (%q) and a digest (%q) are both set. Declare exactly one — the chart refuses to guess which bytes you meant." $field $ref $digest) -}}
+{{- end -}}
+{{- if $ref -}}
+{{- if regexMatch "[[:space:]]" $ref -}}
+{{- fail (printf "INVALID image reference for %s: %q contains whitespace." $field $ref) -}}
+{{- end -}}
+{{- $ref -}}
+{{- else if $digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "INVALID image digest for %s: %q. Expected exactly sha256:<64 lowercase hex> — a truncated, uppercase or non-sha256 digest is refused rather than silently falling back to a mutable tag." $field $digest) -}}
+{{- end -}}
+{{- if not $repo -}}
+{{- fail (printf "INVALID image identity for %s: a digest is set but the repository is empty." $field) -}}
+{{- end -}}
+{{- printf "%s@%s" $repo $digest -}}
 {{- else -}}
-vexaai/vexa-bot:v012
+{{- if not $repo -}}
+{{- fail (printf "INVALID image identity for %s: no reference, no digest, and an empty repository." $field) -}}
+{{- end -}}
+{{- if not $tag -}}
+{{- fail (printf "INVALID image identity for %s: no reference, no digest, and an empty tag for repository %q." $field $repo) -}}
+{{- end -}}
+{{- printf "%s:%s" $repo $tag -}}
 {{- end -}}
 {{- end -}}
 
-{{/* The agent-api image ref (AGENT_IMAGE the runtime spawns workers from). global.imageTag wins. */}}
-{{- define "vexa.agentImage" -}}
-{{- if .Values.global.imageTag -}}
-{{- printf "%s:%s" .Values.agentApi.image.repository .Values.global.imageTag -}}
-{{- else -}}
-{{- .Values.runtime.agentImage | default (printf "%s:%s" .Values.agentApi.image.repository .Values.agentApi.image.tag) -}}
+{{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built
+by this chart. Identity per vexa.imageRef; global.imageTag only ever supplies the tag leg. */}}
+{{- define "vexa.botImage" -}}
+{{- include "vexa.imageRef" (dict
+      "field" "runtime.browserImage"
+      "reference" .Values.runtime.browserImage
+      "digest" .Values.runtime.browserImageDigest
+      "repository" .Values.runtime.browserImageRepository
+      "tag" (.Values.global.imageTag | default .Values.runtime.browserImageTag)) -}}
 {{- end -}}
+
+{{/* The agent-api image ref (AGENT_IMAGE the runtime spawns workers from). Its composed leg falls
+back to the agent-api Deployment's own repository/tag, so mirroring `agentApi.image` keeps carrying
+the spawned copy with it. */}}
+{{- define "vexa.agentImage" -}}
+{{- include "vexa.imageRef" (dict
+      "field" "runtime.agentImage"
+      "reference" .Values.runtime.agentImage
+      "digest" .Values.runtime.agentImageDigest
+      "repository" (.Values.runtime.agentImageRepository | default .Values.agentApi.image.repository)
+      "tag" (.Values.global.imageTag | default .Values.runtime.agentImageTag | default .Values.agentApi.image.tag)) -}}
 {{- end -}}
 
 {{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
 {{- define "vexa.agentWorkerImage" -}}
-{{- if .Values.global.imageTag -}}
-{{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
-{{- else -}}
-{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
+{{- include "vexa.imageRef" (dict
+      "field" "runtime.agentWorkerImage"
+      "reference" .Values.runtime.agentWorkerImage
+      "digest" .Values.runtime.agentWorkerImageDigest
+      "repository" .Values.runtime.agentWorkerImageRepository
+      "tag" (.Values.global.imageTag | default .Values.runtime.agentWorkerImageTag)) -}}
 {{- end -}}
+
+{{/* The MinIO client image the post-install bucket-init Job runs. Same one rule, deliberately NOT
+wired to global.imageTag: it is a third-party image, not part of the Vexa release set. */}}
+{{- define "vexa.minioClientImage" -}}
+{{- include "vexa.imageRef" (dict
+      "field" "minio.mc"
+      "reference" .Values.minio.mc.reference
+      "digest" .Values.minio.mc.digest
+      "repository" .Values.minio.mc.image.repository
+      "tag" .Values.minio.mc.image.tag) -}}
 {{- end -}}
 
 {{- define "vexa.postgresCredentialsSecretName" -}}

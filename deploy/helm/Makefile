@@ -24,6 +24,12 @@ template:
 test:
 	bash tests/test_helm_lint.sh
 	bash tests/test_template.sh
+	bash tests/test_mirror_only.sh
+
+## mirror-test — just the mirror-only render invariant (#1006): nothing the chart can cause a
+## cluster to pull may fall back to a public registry — hooks and runtime-spawned Pods included.
+mirror-test:
+	bash tests/test_mirror_only.sh
 
 ## build — build the 5 control-plane images (:dev) via the compose build
 build:
@@ -53,4 +59,4 @@ down:
 	-sudo KUBECONFIG=$(KUBECONFIG) helm uninstall $(RELEASE) -n $(NAMESPACE)
 	-sudo KUBECONFIG=$(KUBECONFIG) kubectl delete namespace $(NAMESPACE) --wait=false
 
-.PHONY: lint template test build k3s-import install status smoke down
+.PHONY: lint template test mirror-test build k3s-import install status smoke down
