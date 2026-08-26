@@ -2,18 +2,37 @@
 PodDisruptionBudget templates.
 
 Rendered once per service block under .Values.podDisruptionBudgets
-when that block has `enabled: true`. Disabled by default on all
-services so `helm install` on a single-replica / single-node cluster
-doesn't block `kubectl drain` during development.
+when that block has `enabled: true`. The four stateless services
+(gateway, adminApi, meetingApi, terminal) ship ENABLED, paired with
+replicaCount 2; runtime and agentApi ship disabled. State-bearing
+infra has no PDB block at all.
 
-On multi-node production clusters, flip `enabled: true` per service
-and raise `replicaCount` + `minAvailable` together — a PDB with
-minAvailable: 1 on a replicaCount: 1 deployment WILL block node
-drains indefinitely, which is typically the opposite of what you
-want.
+THE ONE-REPLICA RULE. `minAvailable: 1` on a component with one
+replica sets disruptionsAllowed to 0: voluntary eviction becomes
+impossible, `kubectl drain` hangs forever, and a cluster operator
+cannot cordon a node — with no availability bought in exchange, since
+the single pod has no peer to fail over to. Any operator who reduces a
+component to one replica (quota-constrained clusters routinely do)
+walks into this by following the chart's own defaults.
+
+So the budget is REPLICA-AWARE: below two replicas this template
+emits `maxUnavailable: 1` regardless of what the block configures.
+That is the only budget expression that is not a deadlock at one
+replica, and it degrades honestly — it protects nothing, because at
+one replica there is nothing to protect.
+
+Reported against the shipped defaults on a quota-constrained cluster
+(#1100). Distinct from #990 (a PDB rendered for a DISABLED component,
+selecting zero pods). That one is about orphaned budgets; this one is about a
+budget on a workload that does exist and has exactly one replica.
 */}}
 {{- range $name, $cfg := .Values.podDisruptionBudgets }}
 {{- if $cfg.enabled }}
+{{/* The PDB map keys ARE the component value keys, so the component's own
+     replicaCount resolves by lookup. Missing/unset ⇒ assume 1 (fail safe:
+     a budget we cannot prove has peers must not be able to block a drain). */}}
+{{- $component := default dict (index $.Values $name) }}
+{{- $replicas := int (default 1 $component.replicaCount) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -23,12 +42,18 @@ metadata:
     {{- include "vexa.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $name | kebabcase }}
 spec:
-  {{- if hasKey $cfg "minAvailable" }}
+  {{- if lt $replicas 2 }}
+  # {{ $name }}.replicaCount = {{ $replicas }}. A minAvailable budget here would set
+  # disruptionsAllowed=0 and hang every `kubectl drain` of this node; maxUnavailable: 1
+  # is the only non-blocking expression at one replica. Raise replicaCount to 2+ to get
+  # the configured budget back.
+  maxUnavailable: 1
+  {{- else if hasKey $cfg "minAvailable" }}
   minAvailable: {{ $cfg.minAvailable }}
   {{- else if hasKey $cfg "maxUnavailable" }}
   maxUnavailable: {{ $cfg.maxUnavailable }}
   {{- else }}
-  minAvailable: 1
+  maxUnavailable: 1
   {{- end }}
   selector:
     matchLabels:

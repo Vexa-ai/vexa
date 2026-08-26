@@ -119,6 +119,24 @@ spec:
               value: {{ .Values.runtime.tolerations | default .Values.global.tolerations | toJson | quote }}
             - name: RUNTIME_K8S_NODE_SELECTOR
               value: {{ .Values.runtime.nodeSelector | default .Values.global.nodeSelector | toJson | quote }}
+            {{- /* Security context for SPAWNED Pods. Same reason as the scheduling knobs above: a bare
+                 `kubectl run` bot/agent Pod inherits nothing from this Deployment, so it carries no
+                 securityContext at all and a namespace enforcing a restricted admission policy
+                 rejects it with no knob the operator can reach. Emitted ONLY when configured — the
+                 default (`{}`) renders NOTHING here, not even this comment, so the runtime
+                 Deployment and every spawned Pod stay byte-identical to today's and the images
+                 (which have no Dockerfile `USER`, and therefore run as root) keep starting. See
+                 runtime.workloadSecurityContext in values.yaml before setting these. */ -}}
+            {{- with .Values.runtime.workloadSecurityContext }}
+            {{- with .pod }}
+            - name: RUNTIME_K8S_POD_SECURITY_CONTEXT
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .container }}
+            - name: RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}

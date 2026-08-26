@@ -33,8 +33,25 @@ global:
   #       whenUnsatisfiable: ScheduleAnyway
   topologySpreadConstraints: []
   podSecurityContext: {}
-  # Hardened defaults: block privilege escalation, drop all caps. Images run non-root via their
-  # Dockerfile USER. Override per-component only if a workload genuinely needs a cap back.
+  # Hardened defaults: block privilege escalation, drop all capabilities. Override per-component
+  # only if a workload genuinely needs a cap back.
+  #
+  # NON-ROOT IS NOT ASSERTED HERE, and the note that used to claim it was wrong. It said the images
+  # "run non-root via their Dockerfile USER"; no Dockerfile in this repository contains a `USER`
+  # directive — 0 of the 15 tracked Dockerfiles, verifiable with
+  # `git grep -n '^\s*USER ' -- '*Dockerfile*'`. Every image therefore starts as whatever UID its
+  # base image runs as, which is root for all of them.
+  #
+  # So `runAsNonRoot` / `runAsUser` are deliberately absent rather than set to a hardened-looking
+  # value: asserting non-root would be an unverified claim, and on a cluster that enforces it the
+  # container would fail to start (CreateContainerConfigError). Whether these images tolerate an
+  # arbitrary non-root UID at all is untested — tracked at
+  # https://github.com/Vexa-ai/vexa/issues/1102 (the inaccurate comment this replaces: #1101).
+  #
+  # On a cluster that assigns a UID by policy (OpenShift `restricted-v2` allocates one from the
+  # namespace range) the assigned UID wins over the image default regardless of this block, and the
+  # control-plane images have been observed starting that way. The spawned bot / agent-worker Pods
+  # have NOT — see runtime.workloadSecurityContext below.
   securityContext:
     allowPrivilegeEscalation: false
     capabilities:
@@ -261,6 +278,36 @@ runtime:
   # RUNTIME_K8S_NODE_SELECTOR (JSON) and stamped onto every spawned Pod's spec.
   # tolerations: []            # override global.tolerations for spawned Pods (list of toleration objects)
   # nodeSelector: {}           # override global.nodeSelector for spawned Pods (node-label map)
+  #
+  # Security context for the Pods the runtime SPAWNS (backend=k8s) — NOT global.securityContext
+  # above, which applies to the chart's own Deployments. A spawned bot / agent-worker Pod is a bare
+  # `kubectl run` Pod, so it inherits nothing from the runtime Deployment: today it carries NO
+  # securityContext at all — no runAsNonRoot, no dropped capabilities, no seccompProfile. On a
+  # namespace enforcing a restricted admission policy (OpenShift `restricted-v2`, or the upstream
+  # Pod Security "restricted" profile) that is the likeliest rejection, and the operator currently
+  # has no knob to fix it.
+  #
+  # BOTH DEFAULT TO EMPTY, and empty means the field is omitted entirely — an install that leaves
+  # these alone produces exactly the Pod spec it produced before this seam existed. That default is
+  # deliberate and is NOT an oversight to be "hardened" later without testing: this repository's
+  # images carry no `USER` directive, so they run as root, and defaulting `runAsNonRoot: true` here
+  # would stop every existing operator's bots from starting. Whether the bot and agent-worker images
+  # can run as an arbitrary non-root UID is UNTESTED — read
+  # https://github.com/Vexa-ai/vexa/issues/1102 before setting runAsUser/runAsNonRoot.
+  #
+  # `pod` is a PodSecurityContext, `container` a container SecurityContext; both are passed through
+  # verbatim as JSON, so any field either object supports works without a chart change. Example for
+  # a restricted-profile namespace, once you have confirmed the images tolerate it:
+  #   workloadSecurityContext:
+  #     pod:
+  #       runAsNonRoot: true
+  #       seccompProfile: { type: RuntimeDefault }
+  #     container:
+  #       allowPrivilegeEscalation: false
+  #       capabilities: { drop: ["ALL"] }
+  workloadSecurityContext:
+    pod: {}
+    container: {}
   extraEnv: []
 
 # Agent control plane — /invocations dispatch + /api/chat SSE (compose: agent-api → :8100).
@@ -445,22 +492,37 @@ ingress:
 # ---------- PodDisruptionBudgets (optional) ----------
 # Stateless services default on (paired with replicaCount 2). Keys are the component value keys;
 # kebabcase maps to the component label (e.g. agentApi → agent-api). State-bearing infra stays off.
+#
+# The budgets are expressed as `maxUnavailable`, NOT `minAvailable`. Both keep at least one pod
+# serving at replicaCount 2, but they behave completely differently when a component is reduced to
+# ONE replica — which quota-constrained clusters routinely do:
+#
+#   minAvailable: 1  at replicaCount 1 → disruptionsAllowed 0 → `kubectl drain` HANGS FOREVER.
+#   maxUnavailable: 1 at replicaCount 1 → disruptionsAllowed 1 → the node drains.
+#
+# Reported against the shipped defaults on a quota-constrained cluster (#1100).
+# templates/pdb.yaml enforces this independently: below two replicas it emits `maxUnavailable: 1`
+# whatever a block configures, so an operator who carries a minAvailable override forward from an
+# older values file cannot deadlock their own drains either.
+#
+# At three or more replicas `maxUnavailable: 1` is STRICTER than `minAvailable: 1` (one eviction at
+# a time rather than N-1). That is the intended trade: a rolling drain, not a simultaneous one.
 podDisruptionBudgets:
   gateway:
     enabled: true
-    minAvailable: 1
+    maxUnavailable: 1
   adminApi:
     enabled: true
-    minAvailable: 1
+    maxUnavailable: 1
   meetingApi:
     enabled: true
-    minAvailable: 1
+    maxUnavailable: 1
   terminal:
     enabled: true
-    minAvailable: 1
+    maxUnavailable: 1
   runtime:
     enabled: false        # default replicaCount 1; only enable with backend=k8s + replicas>1
-    minAvailable: 1
+    maxUnavailable: 1
   agentApi:
     enabled: false        # single-replica (shared workspace); don't block drains
-    minAvailable: 1
+    maxUnavailable: 1

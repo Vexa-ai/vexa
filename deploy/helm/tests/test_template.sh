@@ -203,4 +203,56 @@ else
   echo "  FAIL: migrations Job ignored global.imageTag — schema/code skew risk (#900): $MIG_IMG"; fail=1
 fi
 
+# #1100 — a component at replicaCount 1 must NOT get a drain-blocking budget. `minAvailable: 1`
+# on one replica sets disruptionsAllowed=0: `kubectl drain` hangs forever and the operator cannot
+# cordon the node, while protecting nothing. The template is replica-aware, so this holds even when
+# the values explicitly ask for minAvailable — which is the shape an operator carries forward from
+# an older values file. Asserted against the SHIPPED defaults, not values-test.yaml — values-test
+# disables five of the six PDB blocks, so it cannot see the defect an operator actually meets.
+PDB1="$(helm template vexa "$CHART" -n vexa \
+  --set gateway.replicaCount=1 --set adminApi.replicaCount=1 \
+  --set meetingApi.replicaCount=1 --set terminal.replicaCount=1 \
+  --set podDisruptionBudgets.gateway.minAvailable=1 \
+  --show-only templates/pdb.yaml)"
+if grep -qE '^\s+minAvailable:' <<< "$PDB1"; then
+  echo "  FAIL: a PDB renders minAvailable at replicaCount 1 — that deadlocks kubectl drain (#1100)"; fail=1
+else
+  echo "  OK: no minAvailable budget at replicaCount 1 (drains stay possible, #1100)"
+fi
+pdb1_max="$(grep -cE '^\s+maxUnavailable: 1' <<< "$PDB1" || true)"
+if [ "$pdb1_max" -ge 4 ]; then
+  echo "  OK: every enabled PDB degrades to maxUnavailable: 1 at one replica ($pdb1_max)"
+else
+  echo "  FAIL: want >=4 maxUnavailable budgets at replicaCount 1, got $pdb1_max"; fail=1
+fi
+# At two replicas an EXPLICIT minAvailable is the operator's call and must be honoured — the guard
+# is scoped to the deadlock case, not a blanket override.
+PDB2="$(helm template vexa "$CHART" -n vexa \
+  --set gateway.replicaCount=2 --set podDisruptionBudgets.gateway.minAvailable=1 \
+  --show-only templates/pdb.yaml)"
+if grep -qE '^\s+minAvailable: 1' <<< "$PDB2"; then
+  echo "  OK: explicit minAvailable honoured at replicaCount 2 (guard is deadlock-scoped, #1100)"
+else
+  echo "  FAIL: explicit minAvailable dropped at replicaCount 2 — the guard is over-reaching"; fail=1
+fi
+
+# #1102 — spawned-workload security context. DEFAULT ABSENT is the load-bearing property: the images
+# carry no Dockerfile USER and run as root, so a defaulted runAsNonRoot would stop every existing
+# operator's bots. Red->green control direction: nothing when unset, both env vars once set.
+if grep -q 'RUNTIME_K8S_POD_SECURITY_CONTEXT\|RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT' <<< "$RENDER"; then
+  echo "  FAIL: spawned-workload securityContext env rendered with empty default (must render nothing)"; fail=1
+else
+  echo "  OK: no spawned-workload securityContext env when unset (default absent, #1102)"
+fi
+RENDER_SC="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'runtime.workloadSecurityContext.pod={"runAsNonRoot":true}' \
+  --set-json 'runtime.workloadSecurityContext.container={"allowPrivilegeEscalation":false}' \
+  --show-only templates/deployment-runtime.yaml)"
+if grep -q 'RUNTIME_K8S_POD_SECURITY_CONTEXT' <<< "$RENDER_SC" \
+   && grep -q 'RUNTIME_K8S_CONTAINER_SECURITY_CONTEXT' <<< "$RENDER_SC"; then
+  echo "  OK: runtime carries both spawned-workload securityContext env vars when set (#1102)"
+else
+  echo "  FAIL: spawned-workload securityContext values did not reach the runtime env (#1102)"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
