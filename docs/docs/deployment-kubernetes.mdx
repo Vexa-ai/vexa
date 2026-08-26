@@ -129,7 +129,7 @@ spec:
     defaultRequest: {cpu: 1000m, memory: 1100Mi}
 ```
 
-**Sizing basis, measured, not guessed:** a live bot runs ~1.0–1.3 Gi steady state, which is what the
+**Sizing basis:** a live bot runs ~1.0–1.3 Gi steady state, which is what the
 request is sized to; a Teams call spikes past 2 Gi, which is what the 2560Mi limit is sized to (an
 OOM at ~2 Gi is why that ceiling exists). These values have run production since April 2026.
 

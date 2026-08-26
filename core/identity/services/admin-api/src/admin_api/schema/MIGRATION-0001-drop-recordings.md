@@ -3,15 +3,11 @@
 **Status:** applied in the v0.12 schema definition (`schema/models.py`) — a schema-model decision
 + eval, per Group-1 scope.
 
-The **drop itself** has still not been executed against any live/prod DB, and does not need to be:
-the v0.12 schema simply never creates these tables, and `ensure_schema` never drops. On a DB
-upgraded in place from 0.10 the legacy `recordings` / `media_files` tables are left standing and
-unused — see "If ever applied to a real DB" below.
-
-> **Note (2026-08-26):** the surrounding v0.12 schema convergence **has** run against a live
-> production database — Vexa Cloud upgraded its own production 0.10 → 0.12 over the full live DB in
-> July 2026. Do not read this file's status line as "the 0.10 → 0.12 upgrade is untried in
-> production"; only the legacy-table DROP is untried, deliberately.
+Schema convergence: validated against a full production migration (July 2026). The legacy-table
+DROP has not been run in production, and does not need to be: the v0.12 schema never creates these
+tables, and `ensure_schema` never drops. On a DB upgraded in place from 0.10 the legacy
+`recordings` / `media_files` tables are left standing and unused — see "If ever applied to a real
+DB" below.
 
 ## Verdict: the `recordings` table is DEAD
 

@@ -66,7 +66,7 @@ Upgrade **0.10.x → the latest 0.12.x release** in one step. There is no staged
 is needed: schema convergence is **state-based, not sequential** (see below), so stopping on an
 older 0.12.x buys nothing and costs you the fixes shipped since. In particular, older 0.12.x
 releases lack the fail-closed schema check described below, so a missing dedup index degrades
-**silently** instead of refusing to start — the exact failure mode that check was added for.
+**silently** instead of refusing to start — the failure mode that check exists to catch.
 
 #### The database: no Alembic, three manual steps
 
@@ -127,10 +127,10 @@ ALTER TABLE users ALTER COLUMN max_concurrent_bots SET DEFAULT 3;
 UPDATE users SET max_concurrent_bots = 3 WHERE max_concurrent_bots < 3;
 ```
 
-**3 · API-token scopes — automatic, listed so you can verify it ran.** 0.10 tokens predate the
-`scopes` column, so the additive `ADD COLUMN` leaves them empty, and an empty scope set is a `403`
-on every core route. This one **is** applied for you on boot, precisely because the failure would
-otherwise be an invisible revocation of every existing customer key
+**3 · API-token scopes — applied automatically on boot.** 0.10 tokens predate the `scopes` column,
+so the additive `ADD COLUMN` leaves them empty, and an empty scope set is a `403` on every core
+route. `ensure_schema` backfills them at startup; left unbackfilled, an empty scope set is an
+invisible revocation of every existing customer key
 ([`MIGRATION-0004`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0004-backfill-token-scopes.md)).
 Empty rows converge to the full valid-scope set; already-scoped tokens are never widened.
 
