@@ -84,6 +84,33 @@ export const zoomBotBlockTexts = [
   "sign in to join",
 ];
 
+// ---- Sign-in wall / dead-profile signal (#1061) ----
+// Zoom asks for a sign-in in TWO different situations, and the page text is the
+// same in both:
+//   (a) guest mode + the host enabled "Only authenticated users can join" — the
+//       meeting's policy, nothing wrong on our side;
+//   (b) AUTHENTICATED mode (BOT_AUTHENTICATED=true, a persistent profile restored
+//       from userdata) whose Zoom session has EXPIRED — the profile is signed out,
+//       so Zoom treats the bot as a guest and asks it to sign in.
+// (b) is the dead-profile defect: it is permanent (a re-spawn restores the same
+// dead profile) and platform-owned. Which of the two is in play is decided by
+// `botConfig.authenticated`, not by the text — see session.ts.
+// Case-insensitive substring match against document.body.innerText.
+export const zoomSignInWallTexts = [
+  'sign in to join this meeting',
+  'sign in to join',
+  'authentication is required',
+  'only authenticated users can join',
+  'this meeting requires authentication',
+];
+
+// A canonical-Zoom URL carrying one of these path markers means the web client
+// bounced us to the account sign-in flow — the same markers @vexa/remote-browser's
+// session validator keys "are we still logged in?" on. Matched ONLY on zoom.us /
+// *.zoom.us: a white-label portal (LFX, corporate) can legitimately have /login in
+// its own path while our Zoom session is perfectly alive.
+export const zoomSignInUrlMarkers = ['/signin', '/login'];
+
 // ---- Leave dialog (after clicking Leave button) ----
 // Verified from live DOM: the "Leave Meeting" button has class leave-meeting-options__btn--danger
 // aria-label is empty so text-based selectors are unreliable; use the CSS class directly

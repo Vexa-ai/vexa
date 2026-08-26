@@ -8,7 +8,9 @@ import {
   zoomPreviewMuteSelector,
   zoomPreviewVideoSelector,
   zoomPermissionDismissSelector,
+  zoomSignInWallTexts,
 } from "./selectors";
+import { assertZoomAuthSession } from "./session";
 
 // NOTE vs the monolith: the audio-join flow (prepareZoomWebMeeting) and the
 // per-speaker capture pipeline are RECORDING/HOST concerns and stay outside
@@ -125,17 +127,12 @@ export async function joinZoomMeeting(
     // a field that never appears. Detect early and fail fast with a
     // structured reason so the host receives auth_required, not a
     // generic timeout.
-    const authRequired = await page.evaluate(() => {
+    // The phrase list moved to selectors.ts (#1061) so this guest-mode probe and the
+    // authenticated-mode dead-profile guard read the SAME wall text — one source of truth.
+    const authRequired = await page.evaluate((phrases: string[]) => {
       const body = (document.body?.innerText || '').toLowerCase();
-      const signInIndicators = [
-        'sign in to join this meeting',
-        'sign in to join',
-        'authentication is required',
-        'only authenticated users can join',
-        'this meeting requires authentication',
-      ];
-      return signInIndicators.some(s => body.includes(s));
-    }).catch(() => false);
+      return phrases.some(s => body.includes(s.toLowerCase()));
+    }, zoomSignInWallTexts).catch(() => false);
     if (authRequired && !authenticated) {
       log('[Zoom Web] Sign-in page detected — meeting requires authenticated users');
       // PERMANENT: the host restricted entry to signed-in users and this bot has no session — a
@@ -143,9 +140,10 @@ export async function joinZoomMeeting(
       // path uses; the retry classifier already treats it as no-retry.
       throw new AdmissionError('auth_session_missing', '[Zoom Web] auth_required: meeting host has restricted entry to authenticated Zoom users; bot cannot join without a Zoom account session');
     }
-    if (authRequired && authenticated) {
-      log('[Zoom Web] Authenticated mode: sign-in text present, proceeding (the persistent context should already carry a Zoom session)');
-    }
+    // NB: authenticated mode does NOT decide here. The same wall text means something different
+    // when we hold a profile (a DEAD profile, #1061), and the sign-in REDIRECT variant carries no
+    // wall text at all — so authenticated mode is adjudicated once, by the guard below, on the
+    // page we actually settle on.
 
     if (!isError) break; // Pre-join page loaded
 
@@ -156,6 +154,13 @@ export async function joinZoomMeeting(
     log(`[Zoom Web] Host not started yet (title="${title}"). Retrying in ${HOST_NOT_STARTED_RETRY_INTERVAL_MS / 1000}s...`);
     await page.waitForTimeout(HOST_NOT_STARTED_RETRY_INTERVAL_MS);
   }
+
+  // #1061 — authenticated mode only: is the profile we restored actually still signed in?
+  // A dead profile is PERMANENT (a re-spawn restores the same dead cookies), so it must be named
+  // here, before we spend the join budget on a pre-join page that can never enable Join. Runs on
+  // the settled page so it sees BOTH shapes of the state: the sign-in redirect (no wall text) and
+  // the sign-in wall (no redirect). Not-signed-out returns quietly and the join proceeds as before.
+  if (authenticated) await assertZoomAuthSession(page, 'pre_join_load');
 
   // Notify the host: joining
   await callJoiningCallback(botConfig);
@@ -280,6 +285,11 @@ export async function joinZoomMeeting(
       if (current) {
         log(`[Zoom Web] Signed-in name pre-filled ("${current}") — using account identity`);
       } else {
+        // #1061 — an EMPTY name field in authenticated mode is the GUEST lobby's shape: Zoom stopped
+        // recognising the account and is asking us who we are. The guard convicts only when the
+        // account cookie is provably gone too, so an ambiguous empty field still falls through to
+        // the pre-existing fallback below rather than refusing a legitimate join.
+        await assertZoomAuthSession(page, 'pre_join_name_field');
         await nameField.click({ timeout: 5000 }).catch(() => {});
         await page.keyboard.type(botName, { delay: 30 });
         log(`[Zoom Web] Signed-in name field empty — typed fallback "${botName}"`);

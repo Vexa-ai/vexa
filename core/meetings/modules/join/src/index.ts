@@ -156,4 +156,10 @@ export {
 } from "./msteams/auth-redirect";
 export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
+// The Zoom dead-profile guard (#1061). ZoomAuthSessionError is an AdmissionError subclass, so the
+// JoinDriver's existing `instanceof` catch already maps it to the PERMANENT `auth_session_missing`;
+// it is exported so an embedder can tell "OUR credential is dead" (platform-owned, pages an
+// operator) apart from the host-policy sign-in wall that shares the sealed reason.
+export { ZoomAuthSessionError, classifyZoomSession, ZOOM_AUTH_SESSION_MISSING } from "./zoom/session";
+export type { ZoomSessionObservation, ZoomSessionVerdict, ZoomSignedOutSignal } from "./zoom/session";
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
