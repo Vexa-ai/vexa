@@ -19,6 +19,8 @@
  * `CompletionReason` (`join_failure`, transient) carrying a discriminating reason text.
  */
 
+import { hostOf, urlHostMatches } from "../shared/host-match";
+
 /** Machine-readable discriminator: the navigation landed on a Microsoft sign-in host. */
 export const TEAMS_AUTH_REDIRECT = "teams_auth_redirect";
 
@@ -42,34 +44,24 @@ const MICROSOFT_LOGIN_HOSTS = [
   "login.microsoftonline.de",
 ];
 
-/** Hosts that ARE the Teams web client (world-wide, GCC/DoD, and the cloud.microsoft rename). */
-const TEAMS_HOST_SUFFIXES = [
+/** Hosts that ARE the Teams web client (world-wide, GCC/DoD, and the cloud.microsoft rename).
+ *  This is the package's canonical Teams host list — `resolvePlatform` reads it through
+ *  `isTeamsMeetingUrl` rather than keeping a second copy. */
+export const TEAMS_HOST_SUFFIXES = [
   "teams.microsoft.com",
   "teams.live.com",
   "teams.microsoft.us",
   "teams.cloud.microsoft",
 ];
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 /** True iff `url` is a Microsoft identity sign-in page. */
 export function isMicrosoftLoginUrl(url: string): boolean {
-  const host = hostOf(url);
-  if (!host) return false;
-  return MICROSOFT_LOGIN_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  return urlHostMatches(url, ...MICROSOFT_LOGIN_HOSTS);
 }
 
 /** True iff `url` is served by the Teams web client. */
 export function isTeamsMeetingUrl(url: string): boolean {
-  const host = hostOf(url);
-  if (!host) return false;
-  return TEAMS_HOST_SUFFIXES.some((h) => host === h || host.endsWith(`.${h}`));
+  return urlHostMatches(url, ...TEAMS_HOST_SUFFIXES);
 }
 
 /** The hostname of the meeting link the join was asked to open (null when unparseable). */

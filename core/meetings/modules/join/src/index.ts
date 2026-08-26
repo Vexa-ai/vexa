@@ -12,6 +12,7 @@ import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./
 import { prepareForRecording, leaveGoogleMeet } from "./googlemeet/leave";
 import { startGoogleRemovalMonitor } from "./googlemeet/removal";
 import { joinMicrosoftTeams } from "./msteams/join";
+import { isTeamsMeetingUrl } from "./msteams/auth-redirect";
 import { waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent } from "./msteams/admission";
 import { prepareForRecording as prepareForTeamsRecording, leaveMicrosoftTeams } from "./msteams/leave";
 import { startTeamsRemovalMonitor } from "./msteams/removal";
@@ -24,6 +25,7 @@ import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./ji
 import { leaveJitsiMeeting } from "./jitsi/leave";
 import { startJitsiRemovalMonitor } from "./jitsi/removal";
 import { startDebugView } from "./shared/escalation";
+import { hostOf, hostMatches } from "./shared/host-match";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
 
@@ -58,20 +60,38 @@ export interface JoinOptions {
   hooks?: Partial<Hooks>;
 }
 
-/** Infer the platform from the meeting URL. Throws on an unrecognized host. */
+/** Google Meet's only meeting host. */
+const GOOGLE_MEET_DOMAINS = ["meet.google.com"];
+// Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
+// inferred from the URL; the embedder passes platform: "zoom" explicitly.
+const ZOOM_DOMAINS = ["zoom.us"];
+// Same rule for Jitsi: only the canonical public deployments are inferable —
+// a self-hosted Jitsi lives on an arbitrary host, so the embedder passes
+// platform: "jitsi" explicitly.
+const JITSI_DOMAINS = ["meet.jit.si", "8x8.vc"];
+
+/**
+ * Infer the platform from the meeting URL. Throws on an unrecognized host.
+ *
+ * The match is on the HOSTNAME, exact or as a dotted subdomain (`shared/host-match.ts`).
+ * Matching a substring of the whole URL instead would let a host that is not the platform
+ * carry the platform's name in its query string, its path, or as a prefix of a domain the
+ * caller registered — and the resolved platform decides which join flow, which selectors and
+ * which credential-free anonymous-join assumptions the bot then applies to that page.
+ *
+ * There is no generic fallback here on purpose: a host that matches none of the four lists is
+ * refused, so nothing can be re-admitted below by a looser heuristic.
+ */
 export function resolvePlatform(meetingUrl: string): Platform {
-  if (meetingUrl.includes("meet.google.com")) return "google_meet";
-  if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
-  // Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
-  // inferred from the URL; the embedder passes platform: "zoom" explicitly.
-  // Same rule for Jitsi: only the canonical public deployments are inferable —
-  // a self-hosted Jitsi lives on an arbitrary host, so the embedder passes
-  // platform: "jitsi" explicitly.
-  try {
-    const host = new URL(meetingUrl).hostname;
-    if (host === "zoom.us" || host.endsWith(".zoom.us")) return "zoom";
-    if (host === "meet.jit.si" || host === "8x8.vc" || host.endsWith(".8x8.vc")) return "jitsi";
-  } catch { /* fall through to throw below */ }
+  const host = hostOf(meetingUrl);
+  if (host !== null) {
+    if (hostMatches(host, ...GOOGLE_MEET_DOMAINS)) return "google_meet";
+    // The package's canonical Teams host list lives in msteams/auth-redirect.ts, where the join
+    // flow uses it to assert it is on the meeting; read it from there rather than duplicating it.
+    if (isTeamsMeetingUrl(meetingUrl)) return "teams";
+    if (hostMatches(host, ...ZOOM_DOMAINS)) return "zoom";
+    if (hostMatches(host, ...JITSI_DOMAINS)) return "jitsi";
+  }
   throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
 }
 

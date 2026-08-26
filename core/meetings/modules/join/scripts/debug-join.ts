@@ -14,7 +14,7 @@
  */
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import { joinMeeting, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, getJoinBrowserArgs } from "../src/index";
+import { joinMeeting, resolvePlatform, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, getJoinBrowserArgs, type Platform } from "../src/index";
 
 
 if (process.platform !== "linux" || !process.env.DISPLAY) {
@@ -24,13 +24,12 @@ if (process.platform !== "linux" || !process.env.DISPLAY) {
 }
 
 const url = process.argv[2];
-const isMeetUrl = !!url && url.includes("meet.google.com");
-const isTeamsUrl = !!url && (url.includes("teams.microsoft.com") || url.includes("teams.live.com"));
-const isZoomUrl = !!url && (() => {
-  try { const h = new URL(url).hostname; return h === "zoom.us" || h.endsWith(".zoom.us"); }
-  catch { return false; }
-})();
-if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
+// One rule for "which platform is this URL": the package's own resolver, which matches on the
+// hostname rather than a substring of the URL. joinMeeting() below infers the platform the same
+// way, so the usage check and the join can no longer disagree about what the URL is.
+let platform: Platform | null = null;
+try { platform = url ? resolvePlatform(url) : null; } catch { platform = null; }
+if (platform !== "google_meet" && platform !== "teams" && platform !== "zoom") {
   console.error("Usage: tsx scripts/debug-join.ts <google-meet, teams, or zoom url>");
   process.exit(1);
 }
@@ -122,7 +121,7 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
   // reconnect grace period; Teams/Meet can linger too).
   if (result.admitted) {
     try {
-      const leave = isZoomUrl ? leaveZoomMeeting : isTeamsUrl ? leaveMicrosoftTeams : leaveGoogleMeet;
+      const leave = platform === "zoom" ? leaveZoomMeeting : platform === "teams" ? leaveMicrosoftTeams : leaveGoogleMeet;
       const left = await leave(page, undefined, "debug_harness_done");
       console.log(`Graceful leave: ${left ? "ok" : "leave button not found (already out?)"}`);
     } catch (err: any) {
