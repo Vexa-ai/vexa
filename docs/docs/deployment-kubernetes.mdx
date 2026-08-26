@@ -107,6 +107,40 @@ an in-image executable against the published images, so a profile that diverges 
 fails the release rather than a customer's install.
 </Warning>
 
+### Namespace LimitRange defaults
+
+A spawned bot or agent Pod carries **no resource requests or limits of its own** — the chart does not
+stamp any onto it. On a plain namespace that is fine (the Pod is unbounded and the scheduler places it
+on capacity). In a **quota-controlled namespace**, however, a `LimitRange` supplies the defaults, and
+whatever it says is what the bot gets.
+
+The bot runs a real browser. Either run Vexa's spawn namespace with **no `LimitRange` at all**, or
+give that namespace defaults big enough for a browser:
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: runtime-defaults
+spec:
+  limits:
+  - type: Container
+    default:        {cpu: "2", memory: 4096Mi}
+    defaultRequest: {cpu: "2", memory: 4096Mi}
+```
+
+<Warning>
+**Do not set memory below `4096Mi`.** It is a hard floor, not a starting point: around 2 GB the bot
+is OOM-killed on Teams meetings. Also check that the namespace's `max` (and any `ResourceQuota`)
+is not *below* these defaults, or the Pod is rejected at admission instead.
+</Warning>
+
+Under-provisioned defaults do not fail loudly at schedule time — the Pod is admitted and then
+OOM-killed or CPU-starved partway through the join, which reads as a flaky bot rather than a quota
+problem. Check with `kubectl get limitrange -n <namespace> -o yaml` before an upgrade or a first
+install. Agent-worker Pods are smaller than a bot and are over-provisioned by this default; that is
+the intended trade — they are small and few.
+
 ### Autoscaling and bot bursts — the fresh-node reachability gate
 
 Because every bot is its own bare Pod, a burst of meeting requests can push the cluster autoscaler to
