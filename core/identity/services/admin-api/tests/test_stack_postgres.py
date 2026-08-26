@@ -309,3 +309,50 @@ def test_recordings_live_in_meeting_data_jsonb(engine):
         m = s.get(Meeting, mid)
         assert m.data["recordings"][0]["status"] == "completed"
         assert m.data["recordings"][0]["media_files"][0]["type"] == "audio"
+
+
+def test_meeting_event_time_fn_and_event_order_indexes(engine):
+    """MIGRATION-0005 (#1222) — the list's event-time ordering machinery converges via
+    ensure_schema on a real Postgres:
+      - `meeting_event_time()` exists (created by _sync_functions BEFORE index DDL) and is the
+        IMMUTABLE COALESCE(data.scheduled_at, start_time, created_at) with an exception guard —
+        a malformed scheduled_at falls through instead of erroring (index maintenance must never
+        fail a row write);
+      - both expression indexes built (they reference the function, so ordering matters);
+      - the ORDER BY the collector's list_meetings emits is valid SQL against the function and
+        ranks (pin, event time) as specified: live-imported-row first, terminal rows below.
+    """
+    idx = {i["name"] for i in inspect(engine).get_indexes("meetings")}
+    assert "ix_meeting_user_event_order" in idx, "owner event-order index missing"
+    assert "ix_meeting_workspace_event_order" in idx, "workspace event-order index missing"
+
+    with Session(engine) as s:
+        live = Meeting(user_id=7, platform="google_meet", platform_specific_id="live-now",
+                       status="active",
+                       data={"scheduled_at": "2026-08-18T09:00:00Z"})
+        fresh_terminal = Meeting(user_id=7, platform="google_meet",
+                                 platform_specific_id="fresh-done", status="completed")
+        malformed = Meeting(user_id=7, platform="google_meet", platform_specific_id="bad",
+                            status="completed", data={"scheduled_at": "not-a-timestamp"})
+        s.add_all([live, fresh_terminal, malformed])
+        s.commit()  # malformed row INSERTs cleanly → the guard held during index maintenance
+        live_id = live.id
+
+        rows = s.execute(text(
+            "SELECT id FROM meetings WHERE user_id = 7 "
+            "ORDER BY (status IN ('active', 'awaiting_admission', 'joining', 'requested', "
+            "'scheduled', 'stopping')) DESC, "
+            "meeting_event_time(data, start_time, created_at) DESC, id DESC"
+        )).scalars().all()
+        assert rows[0] == live_id, "non-terminal row must pin above terminal rows"
+
+        # The function itself: scheduled_at wins; malformed falls back to created_at.
+        val = s.execute(text(
+            "SELECT meeting_event_time(data, start_time, created_at) = "
+            "timestamp '2026-08-18 09:00:00' FROM meetings WHERE id = :i"), {"i": live_id}
+        ).scalar()
+        assert val is True
+        fallback = s.execute(text(
+            "SELECT meeting_event_time(data, start_time, created_at) = created_at "
+            "FROM meetings WHERE platform_specific_id = 'bad'")).scalar()
+        assert fallback is True
