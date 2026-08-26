@@ -405,7 +405,7 @@ class TestGuardBehavior:
 
 
 class _FakeClient:
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: Optional[str]) -> None:
         self.host = host
 
 
@@ -423,7 +423,7 @@ class FakeWS:
     def __init__(
         self,
         *,
-        client_host: str = "127.0.0.1",
+        client_host: Optional[str] = "127.0.0.1",
         xff: Optional[str] = None,
         api_key: Optional[str] = None,
     ) -> None:
@@ -492,6 +492,22 @@ class TestWsGuard:
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
         assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_client_fails_open_on_ws(self, monkeypatch) -> None:
+        """A WS connect with no peer address (``ws.client`` is None: Unix-socket or a
+        peer-less ASGI server) resolves to guard-core's ``"unknown"`` identity. The
+        rate-limit primitive raises ValueError on a non-IP, so the guard must skip it
+        and fail open (``fail_secure=False``) rather than 500 the upgrade: the connect
+        reaches the auth layer (missing_api_key + 4401), on every attempt, since an
+        unknown identity has no budget to drain."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        reset_ws_guard(_enforcing_config(rate_limit=1))
+        for _ in range(3):
+            ws = FakeWS(client_host=None, api_key=None)
+            await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
+            assert ws.close_code == 4401
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
     @pytest.mark.asyncio
     async def test_over_limit_ip_denied_at_connect(self, monkeypatch) -> None:
