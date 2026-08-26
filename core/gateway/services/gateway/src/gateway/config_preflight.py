@@ -146,7 +146,14 @@ def probe_url(base: str, path: str) -> str:
     base = (base or "").strip().rstrip("/")
     if not path:
         return base
-    return base if base.endswith(path) else base + path
+    if base.endswith(path):
+        return base
+    # A base that already carries the /v1 prefix (e.g. https://api.groq.com/openai/v1)
+    # would double-path into /v1/v1/... — strip the overlap before appending.
+    overlap = "/v1"
+    if base.endswith(overlap) and path.startswith(overlap + "/"):
+        return base + path[len(overlap):]
+    return base + path
 
 
 #: A ~1s 16 kHz mono WAV of a quiet tone — the smallest body that is unambiguously *audio*, so a

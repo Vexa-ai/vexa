@@ -257,6 +257,9 @@ def test_probe_url_accepts_both_declared_url_shapes():
     full = f"https://api.openai.com{_STT_PATH}"
     assert cp.probe_url(full, _STT_PATH) == full
     assert cp.probe_url(full + "/", _STT_PATH) == full
+    # a base that already carries /v1 (e.g. https://api.groq.com/openai/v1) — appending
+    # /v1/audio/transcriptions would double-path into /v1/v1/... → 404
+    assert cp.probe_url("https://api.groq.com/openai/v1", _STT_PATH) == "https://api.groq.com/openai/v1/audio/transcriptions"
 
 
 def test_probe_404_is_misconfigured_not_ok():
