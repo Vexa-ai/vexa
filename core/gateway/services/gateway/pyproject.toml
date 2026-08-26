@@ -16,12 +16,14 @@ dependencies = [
     "pytest-asyncio>=0.23",
     # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py),
     # and the WS connect guard primitives (check_rate_limit_by_ip / is_ip_allowed /
-    # ip_ban_manager, re-exported at guard's top level since 7.7.0). 7.7 is the floor:
-    # it locksteps to guard-core 3.13.0, the first release with the WS rate-limit
-    # primitive this module drives the /ws path through. Pinned <8.0 so a major bump
-    # (which may rename SecurityConfig fields) can't silently break the gateway on a
-    # `uv sync --frozen` image rebuild.
-    "fastapi-guard>=7.7,<8.0",
+    # ip_ban_manager, re-exported at guard's top level since 7.7.0). 7.8 is the floor:
+    # it declares guard-core>=3.14.0, which carries the WS rate-limit primitive this
+    # module drives the /ws path through (3.13.0) plus the hardening on top of it
+    # (bounded in-memory stores, Retry-After on every 429, canonicalised ban addresses);
+    # 7.8.0 itself joins repeated X-Forwarded-For field lines in its Starlette adapter.
+    # Pinned <8.0 so a major bump (which may rename SecurityConfig fields)
+    # can't silently break the gateway on a `uv sync --frozen` image rebuild.
+    "fastapi-guard>=7.8,<8.0",
 ]
 
 [tool.uv]

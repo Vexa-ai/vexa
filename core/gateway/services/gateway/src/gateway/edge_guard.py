@@ -48,7 +48,7 @@ from guard import (
     is_ip_allowed,
 )
 
-from guard_core.utils import extract_client_ip
+from guard_core.utils import UNKNOWN_CLIENT_IDENTITY, extract_client_ip
 
 from .config_preflight import ConfigError
 from .ratelimit import env_truthy
@@ -409,6 +409,14 @@ class _WsGuard:
         # over-limit. With enable_rate_limit_auto_ban + enable_ip_banning both on, an
         # over-limit feeds the same auto-ban engine the HTTP pipeline uses (per-process
         # counter, ban reason "rate_limit_exceeded") - one knob governs both paths.
+        # No resolvable peer address (Unix-socket or a peer-less ASGI server): the
+        # ban and IP-list checks above already ran against the "unknown" identity, the
+        # way guard-core's HTTP pipeline does under fail_secure=False. The rate-limit
+        # primitive raises ValueError on a non-IP, so skip it here (no budget to key)
+        # instead of turning the connect into a 500 - same shape as fastapi-guard's
+        # guard_websocket dependency.
+        if client_ip == UNKNOWN_CLIENT_IDENTITY:
+            return True
         if cfg.enable_rate_limiting:
             return await check_rate_limit_by_ip(client_ip, cfg, endpoint_path="ws")
         return True
