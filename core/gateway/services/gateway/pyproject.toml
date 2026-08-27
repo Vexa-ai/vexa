@@ -15,18 +15,16 @@ dependencies = [
     # No SQLAlchemy-async here → no greenlet pin needed.
     "pytest-asyncio>=0.23",
     # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py builds and
-    # installs the SecurityConfig / SecurityMiddleware). The /ws path now runs the library's own
+    # installs the SecurityConfig / SecurityMiddleware). The /ws path runs the library's own
     # guard_websocket directly (called from run_multiplex in app.py), so no Vexa-authored guard
-    # orchestration remains for either path. 7.8 is the floor: it declares guard-core>=3.14.0,
+    # orchestration remains for either path. 7.8.1 is the floor: it declares guard-core>=3.14.0,
     # which carries the WS rate-limit primitive guard_websocket uses (3.13.0) plus the hardening
     # on top of it (bounded in-memory stores, Retry-After on every 429, canonicalised ban
-    # addresses); 7.8.0 itself joins repeated X-Forwarded-For field lines in its Starlette
-    # adapter. Known gap on 7.8.0: guard_websocket rate-limits a whitelisted IP on /ws (the HTTP
-    # path skips it); whitelist parity is expected in fastapi-guard 7.8.1 (in development) -
-    # re-pin then and drop the xfail on test_whitelist_cidr_bypasses_ws_guard. Pinned <8.0 so
-    # a major bump (which may rename SecurityConfig fields) can't silently break the gateway
-    # on a `uv sync --frozen` image rebuild.
-    "fastapi-guard>=7.8,<8.0",
+    # addresses); 7.8.0 joins repeated X-Forwarded-For field lines in its Starlette adapter, and
+    # 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path (7.8.0 did not).
+    # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently break
+    # the gateway on a `uv sync --frozen` image rebuild.
+    "fastapi-guard>=7.8.1,<8.0",
 ]
 
 [tool.uv]
