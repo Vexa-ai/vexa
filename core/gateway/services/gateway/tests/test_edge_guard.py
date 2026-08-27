@@ -747,11 +747,6 @@ class TestWsGuard:
         assert ws.accepted is True
         assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="fastapi-guard 7.8.0 rate-limits whitelisted IPs on /ws; parity is expected "
-        "in 7.8.1 (in development), drop this marker on the re-pin",
-    )
     @pytest.mark.asyncio
     async def test_whitelist_cidr_bypasses_ws_guard(self, monkeypatch) -> None:
         """#565: a CIDR in GUARD_IP_WHITELIST should bypass the WS guard's rate limit even
