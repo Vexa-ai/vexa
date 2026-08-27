@@ -28,11 +28,12 @@ shares) and signature-based body scanning would false-positive on legitimate
 content. It is staged for a follow-up behind a passive-mode tuning pass.
 
 ``fail_secure=False`` so a guard check bug fails open instead of taking the public
-gateway down. ``lazy_init=True`` so the heavy guard pipeline is built on first
-request, not at import (keeps ``create_app`` construction cheap and the conformance
-harness unaffected). Redis state reuses the same ``REDIS_URL`` Vexa already runs,
-namespaced under ``vexa:guard:`` to avoid colliding with Vexa's own keys
-(``ratelimit:``, ``gateway:token:``).
+gateway down; ``redis_fail_open=True`` so a Redis outage degrades the rate limiter to
+its in-memory per-process window instead of skipping it. ``lazy_init=True`` so the
+heavy guard pipeline is built on first request, not at import (keeps ``create_app``
+construction cheap and the conformance harness unaffected). Redis state reuses the
+same ``REDIS_URL`` Vexa already runs, namespaced under ``vexa:guard:`` to avoid
+colliding with Vexa's own keys (``ratelimit:``, ``gateway:token:``).
 """
 
 from __future__ import annotations
@@ -208,7 +209,8 @@ def build_guard_config() -> SecurityConfig:
     default to empty/off. Redis state uses the same ``REDIS_URL`` Vexa already
     runs, namespaced under ``vexa:guard:`` to avoid colliding with Vexa's own
     keys (``ratelimit:``, ``gateway:token:``). ``fail_secure=False`` so a guard
-    check bug fails open instead of taking the public gateway down.
+    check bug fails open instead of taking the public gateway down; ``redis_fail_open=True``
+    so a Redis outage keeps the rate limiter running on its per-process window.
 
     ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES`` and
     ``GUARD_BLOCK_CLOUD_PROVIDERS`` are pre-validated here (:func:`_validate_ip_or_cidr_csv`,
@@ -260,6 +262,15 @@ def build_guard_config() -> SecurityConfig:
         enable_cors=False,
         security_headers={"enabled": False},
         fail_secure=False,
+        # redis_fail_open=True: on a Redis outage the rate limiter keeps counting on its
+        # in-memory per-process window (one WARNING per process) instead of skipping the
+        # check. guard-core < 3.15.0 always fell back regardless of this flag; 3.15.0 makes
+        # the limiter honor it, and the default (False) under fail_secure=False would skip
+        # the rate limit entirely for every request until Redis is back. The open pin
+        # (>=7.8.1) resolves to 3.15.0 on a fresh lock, so the flag is set explicitly to
+        # keep one behavior on both sides of that boundary. Ban checks are unaffected:
+        # is_ip_banned already fails open (not banned) under fail_secure=False.
+        redis_fail_open=True,
         lazy_init=True,
         exclude_paths=_GUARD_EXCLUDE_PATHS,
     )
