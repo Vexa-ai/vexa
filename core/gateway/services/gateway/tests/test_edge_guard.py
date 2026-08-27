@@ -140,6 +140,9 @@ class TestGuardWiring:
         assert cfg.enable_penetration_detection is False
         # A guard check bug must fail open, not 500 the public ingress.
         assert cfg.fail_secure is False
+        # A Redis outage must degrade the rate limiter to its per-process window, not skip
+        # it (guard-core 3.15.0 raises GuardRedisError under the default False).
+        assert cfg.redis_fail_open is True
         # CORS + security-headers OFF (moot on 0.12, kept so a future layer can't double up).
         assert cfg.enable_cors is False
         assert cfg.security_headers is not None

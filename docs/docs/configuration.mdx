@@ -277,12 +277,13 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 | `GUARD_AUTO_BAN_RATE_LIMIT` | `true` | Auto-ban an IP that keeps exceeding the rate limit (ban reason `rate_limit_exceeded`) after `GUARD_AUTO_BAN_THRESHOLD` over-limit events, for `GUARD_AUTO_BAN_DURATION` seconds. One knob for both the HTTP pipeline and the `/ws` connect guard; needs the ban store (on by default). |
 
 <Note>
-With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the `/ws` rate window now follows this same setting too, so without Redis it is per-process just like the HTTP window, and WS bans live in the same ban store as HTTP bans, so without Redis both are per-process). The same applies across multiple gateway **replicas** without Redis - each is its own process. On a Redis outage the library degrades both windows to their in-memory per-process fallback and logs an error per request rather than failing closed, so the same `N ×` ceiling applies until Redis is back.
+With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the `/ws` rate window now follows this same setting too, so without Redis it is per-process just like the HTTP window, and WS bans live in the same ban store as HTTP bans, so without Redis both are per-process). The same applies across multiple gateway **replicas** without Redis - each is its own process. On a Redis outage the gateway sets guard's `redis_fail_open=true`, so both windows degrade to their in-memory per-process fallback (one warning per process) rather than skipping the rate limit or failing closed; the same `N ×` ceiling applies until Redis is back.
 
 **Safe configurations:** the shipped gateway runs a **single** uvicorn worker, so the default (`GUARD_ENABLE_REDIS=true`, one worker) enforces the limit globally. If you scale to multiple workers **or** replicas, keep `GUARD_ENABLE_REDIS=true` — Redis-backed state is what shares the buckets and bans across processes. `GUARD_ENABLE_REDIS=false` is only safe with a single worker **and** a single replica; if you must run without Redis at higher concurrency, divide `GUARD_RATE_LIMIT_RPM` by the process count to hold the aggregate cap (note this still will not propagate bans).
 </Note>
 
-The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to
-the app rather than taking the gateway down. Request-body WAF scanning is intentionally off — the
+The guard fails open (`fail_secure=false`): a guard-check bug returns the request to the app rather
+than taking the gateway down, and a Redis outage keeps rate limiting on the per-process window
+(`redis_fail_open=true`, see the Note above) while ban lookups answer "not banned" until Redis is back. Request-body WAF scanning is intentionally off — the
 gateway proxies arbitrary user text (chat, meeting `data`, transcript shares), so signature scanning
 would false-positive on legitimate content.
