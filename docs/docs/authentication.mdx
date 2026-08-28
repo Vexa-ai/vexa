@@ -111,6 +111,6 @@ differently-named entries are self-serve keys the user minted and are never prun
 |---|---|---|
 | `401` | `Missing API key` | no `X-API-Key` header |
 | `401` | `Invalid API key` | unknown or revoked key |
-| `403` | `Token scope not authorized` | key lacks the scope this route needs |
+| `403` | `Insufficient scope for this endpoint` | key lacks the scope this route needs |
 
 See the full [error reference](/api/errors).

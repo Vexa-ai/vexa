@@ -45,6 +45,21 @@ Selection rule: filter to your contributor's lane(s), then to the Human bar and 
 afford. `state: ready` is claimable now; `state: prepared` after the maintainer stamp; items
 with no issue number are declared direction — ask about them, don't claim them.
 
+## Driving Vexa from an agent session
+
+Vexa speaks **MCP**. Point your client at `/mcp` on the same host as the rest of the API — the
+same key, the same gateway — and you get Vexa's meeting tools and prompts with no integration code:
+
+```json
+{"mcpServers": {"Vexa": {"command": "npx", "args": ["-y", "mcp-remote",
+  "https://api.cloud.vexa.ai/mcp", "--header", "Authorization: Bearer ${VEXA_API_KEY}"]}}}
+```
+
+The key lives in `VEXA_API_KEY`. **Scopes decide which tools work**: a `bot`-only key dispatches
+bots and reads recordings but gets `403 Insufficient scope` on transcripts and meetings. The
+key's prefix is a hint, not the truth — call `GET /auth/me` for the scopes you actually hold.
+Full page: https://docs.vexa.ai/vexa-mcp
+
 ## Your issue is your PRD
 
 A prepared issue is a worked delivery spec — read it end to end before touching code:
