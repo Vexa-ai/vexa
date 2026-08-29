@@ -54,6 +54,8 @@ CASES = [
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
      "/meetings/{platform}/{native_meeting_id}/workspace"),
+    ("GET", "/meetings/google_meet/abc-defg-hij/participants",
+     "/meetings/{platform}/{native_meeting_id}/participants"),
 
     ("GET", "/transcripts/by-id/42", "/transcripts/by-id/{meeting_id}"),
     ("GET", "/transcripts/google_meet/abc-defg-hij", "/transcripts/{platform}/{native_meeting_id}"),
