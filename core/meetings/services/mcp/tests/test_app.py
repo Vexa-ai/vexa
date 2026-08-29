@@ -44,6 +44,32 @@ def test_x_api_key_accepted(client, gateway):
 
 # --- tools → gateway paths ---------------------------------------------------
 
+def test_auth_me_path(client, gateway, auth):
+    """`auth_me` is a thin wrapper over the gateway's own identity route — the tool exists so an
+    agent can read its OWN scopes, which is the only authoritative answer to what its key can do."""
+    r = client.get("/auth-me", headers=auth)
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("GET", "/auth/me")
+    assert req.headers["x-api-key"] == API_KEY
+
+
+def test_auth_me_returns_the_identity_verbatim(client, gateway, auth):
+    """The four fields the gateway returns reach the caller unchanged — `scopes` above all,
+    since the whole point of the tool is that the agent stops guessing from the key prefix."""
+    gateway.routes[("GET", "/auth/me")] = (200, {
+        "user_id": 7, "email": "a@b.test", "scopes": ["tx"], "max_concurrent": 3,
+    })
+    r = client.get("/auth-me", headers=auth)
+    assert r.json() == {"user_id": 7, "email": "a@b.test", "scopes": ["tx"], "max_concurrent": 3}
+
+
+def test_auth_me_requires_credentials(client):
+    r = client.get("/auth-me")
+    assert r.status_code == 401
+    assert r.headers.get("www-authenticate") == "Bearer"
+
+
 def test_get_bot_status_path(client, gateway, auth):
     client.get("/bot-status", headers=auth)
     req = gateway.requests[-1]

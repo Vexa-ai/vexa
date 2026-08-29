@@ -499,6 +499,18 @@ def create_app(
                 return {"status": "already_exists", "detail": getattr(e, "detail", None)}
             raise
 
+    @app.get("/auth-me", operation_id="auth_me")
+    async def auth_me(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
+        """
+        Identify the API key you are calling with: user_id, email, granted scopes, and the
+        max number of bots you may run concurrently. Wraps: GET /auth/me
+
+        Call this FIRST when a Vexa call returns 403, and before assuming a capability: the
+        `scopes` list this returns is the authoritative answer to what your key may do. A key's
+        `vxa_<scope>_` prefix is only a naming hint and can disagree with it.
+        """
+        return await make_request("GET", f"{base_url}/auth/me", api_key)
+
     @app.get("/bot-status", operation_id="get_bot_status")
     async def get_bot_status(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
         """

@@ -16,13 +16,14 @@ redis, never reaches into meeting-api or admin-api directly.
 |---|---|---|---|
 | serves | MCP clients | `POST/GET /mcp` (streamable HTTP) | tool calls + prompt gets; auth = `Authorization: Bearer <VEXA_API_KEY>` (back-compat: raw `Authorization` or `X-API-Key`) |
 | calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
-| calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
+| calls | gateway (`GATEWAY_URL`) | `GET /auth/me` · `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
 
-## Tools (10)
+## Tools (11)
 
 | Tool | Wraps |
 |---|---|
 | `parse_meeting_link` | pure (no gateway hop) — URL → platform / native_meeting_id / passcode |
+| `auth_me` | `GET /auth/me` — who this key is and, authoritatively, what it may do |
 | `request_meeting_bot` | `POST /bots` (accepts `meeting_url` OR `native_meeting_id`; 409 → `already_exists`) |
 | `get_bot_status` | `GET /bots/status` |
 | `update_bot_config` | `PUT /bots/{platform}/{native}/config` |
@@ -33,8 +34,12 @@ redis, never reaches into meeting-api or admin-api directly.
 | `get_recording` | `GET /recordings/{recording_id}` |
 | `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
 
-**Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
-`vexa.teams_link_help` (ported; edited only where they referenced unported tools).
+**Prompts (5):** `vexa.capabilities` · `vexa.meeting_prep` · `vexa.during_meeting` ·
+`vexa.post_meeting` · `vexa.teams_link_help` (the last four ported; edited only where they
+referenced unported tools). `vexa.capabilities` is not a workflow — it is the orientation an
+agent reads before its first call: the base URL, `VEXA_API_KEY`, the three scopes, and what to
+do on a 401 or a 403. It states that a key's `vxa_<scope>_` prefix is a naming hint and that the
+DB scopes column is authoritative, so the only way to learn a key's capabilities is `auth_me`.
 
 ## Not yet ported (blocked on API parity)
 
@@ -46,7 +51,9 @@ the routes land:
   stream, not a download-URL JSON); needs a deliberate MCP shape
 - `get_recording_config` / `update_recording_config` — no `/recording-config` routes
 - `create_transcript_share_link` — no `POST /transcripts/{platform}/{native}/share`
-- `update_meeting_data` / `delete_meeting` — no `PATCH`/`DELETE /meetings/{platform}/{native}`
+- `update_meeting_data` / `delete_meeting` — **not blocked on API parity any more**: the gateway
+  now exposes `PATCH` and `DELETE /meetings/{platform}/{native}`. What is missing is the MCP tool
+  shape, not the route
 - `get_meeting_bundle` — composed share-link + media-download tools above
 
 The 0.10.6 interactive-bot / calendar / webhook / TTS tool families predate the carve and are

@@ -1,10 +1,10 @@
-"""MCP prompts — the 4 workflow prompts ported from 0.10.6 ``services/mcp/main.py``.
+"""MCP prompts — the 4 workflow prompts ported from 0.10.6 ``services/mcp/main.py``, plus
+``vexa.capabilities``, which is not a workflow: it is the orientation prompt an agent reads
+BEFORE its first call, so it learns the auth contract from the server instead of guessing.
 
-Edits from the source are ONLY where a referenced tool did not survive the port
-(see the service README, "not yet ported"): meeting_prep no longer instructs
-``update_meeting_data`` (no PATCH /meetings route in the 0.12 public API yet) and
-post_meeting composes ``get_meeting_transcript`` + ``list_recordings`` instead of
-the skipped ``get_meeting_bundle``/share-link tools.
+Edits from the source are ONLY where a referenced tool did not survive the port (see the
+service README, "not yet ported"): post_meeting composes ``get_meeting_transcript`` +
+``list_recordings`` instead of the skipped ``get_meeting_bundle``/share-link tools.
 """
 from __future__ import annotations
 
@@ -12,7 +12,25 @@ from typing import Dict, Optional
 
 import mcp.types as mcp_types
 
+# The hosted API base (docs/docs/authentication.mdx). A self-hoster overrides it with the
+# `api_base_url` argument; the value is only ever shown to the caller, never dialled from here —
+# the tools resolve their own base from GATEWAY_URL, which is an INTERNAL address and would be
+# useless to the agent reading this prompt.
+_HOSTED_API_BASE = "https://api.cloud.vexa.ai"
+
 PROMPTS: Dict[str, mcp_types.Prompt] = {
+    "vexa.capabilities": mcp_types.Prompt(
+        name="vexa.capabilities",
+        title="Vexa: Capabilities and Auth",
+        description="What this key can do, and how to recover from a 401 or 403.",
+        arguments=[
+            mcp_types.PromptArgument(
+                name="api_base_url",
+                description=f"Vexa API base URL (default {_HOSTED_API_BASE}; self-hosters pass their own).",
+                required=False,
+            ),
+        ],
+    ),
     "vexa.meeting_prep": mcp_types.Prompt(
         name="vexa.meeting_prep",
         title="Vexa: Meeting Prep",
@@ -75,6 +93,57 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
     def t(text: str) -> mcp_types.TextContent:
         return mcp_types.TextContent(type="text", text=text)
 
+    if name == "vexa.capabilities":
+        api_base_url = (args.get("api_base_url") or "").strip() or _HOSTED_API_BASE
+        return mcp_types.GetPromptResult(
+            description="Vexa auth contract: the key, the scopes, and how to recover from a denial.",
+            messages=[
+                mcp_types.PromptMessage(
+                    role="user",
+                    content=t(
+                        "Read this before calling Vexa, and again whenever a call is denied.\n\n"
+                        f"API base URL: {api_base_url}\n"
+                        "Credential: one Vexa API key, held in the environment variable "
+                        "VEXA_API_KEY. Send it as `Authorization: Bearer $VEXA_API_KEY` "
+                        "(the header `X-API-Key` is also accepted). There is no login, no refresh "
+                        "and no token exchange — the key is the whole credential.\n\n"
+                        "Scopes. A key carries one or more of three, and they are capabilities, "
+                        "not roles:\n"
+                        "- `bot` — make a bot exist, stop existing, or change how it behaves: the "
+                        "whole bot surface, plus the calendar connections, because auto-join turns "
+                        "a calendar feed into bot spawns.\n"
+                        "- `tx` — the meeting and transcript data plane: meeting records, "
+                        "transcripts, participants.\n"
+                        "- `browser` — browser-tool capabilities. It grants NO route on this API "
+                        "today: a browser-only key can identify itself and nothing else.\n"
+                        "Account-level reads and config (recordings, webhook, model and "
+                        "transcription preferences) accept either `bot` or `tx`.\n\n"
+                        "THE KEY'S PREFIX IS NOT ITS SCOPE. A key looks like "
+                        "`vxa_<scope>_<random>`, but that prefix is a naming hint recorded when the "
+                        "key was minted. The authoritative answer is the scopes column on the key "
+                        "record, and the only way to read it is to ask: call `auth_me`, which "
+                        "returns `user_id`, `email`, `scopes` and `max_concurrent`. Never infer a "
+                        "capability from the key string; a `vxa_bot_`-prefixed key can carry "
+                        "`tx` as well, or not carry `bot` at all.\n\n"
+                        "On 401 — the key is missing, malformed, unknown or revoked. The response "
+                        "carries `WWW-Authenticate: Bearer`, which tells you the scheme to retry "
+                        "under. Check that VEXA_API_KEY is set and being sent; do not retry the "
+                        "same key in a loop, and do not fall back to an unauthenticated call.\n\n"
+                        "On 403 — the key is valid but under-scoped. The body names both sides: "
+                        "`required` is what the route accepts, `granted` is what your key actually "
+                        "carries, and `remediation` says what to do. Compare the two, then either "
+                        "use a key that carries one of `required`, or tell the human exactly which "
+                        "scope is missing and for which call. Do not retry an under-scoped call — "
+                        "it will fail identically every time.\n\n"
+                        "On 503 — the auth service is unreachable, NOT a bad key. Respect "
+                        "`Retry-After` and retry; re-minting a key here would be the wrong fix.\n\n"
+                        "Start by calling `auth_me` and telling me who this key belongs to and "
+                        "what it may do."
+                    ),
+                )
+            ],
+        )
+
     if name == "vexa.meeting_prep":
         meeting_url = (args.get("meeting_url") or "").strip()
         meeting_platform = (args.get("meeting_platform") or "").strip()
@@ -95,8 +164,7 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
                         "- Prefer calling `parse_meeting_link` when `meeting_url` is provided.\n"
                         "- When requesting a bot, pass `meeting_url` if you have it; otherwise use "
                         "`native_meeting_id` (+ `passcode` for Teams, from ?p=).\n"
-                        "- Keep any provided notes in the conversation for the post-meeting summary "
-                        "(storing notes on the meeting record is not available via this MCP yet).\n\n"
+                        "- Keep any provided notes in the conversation for the post-meeting summary.\n\n"
                         f"Input:\n- meeting_url: {meeting_url or '(none)'}\n"
                         f"- meeting_platform: {meeting_platform or '(none)'}\n"
                         f"- meeting_id: {meeting_id or '(none)'}\n"
