@@ -66,3 +66,16 @@ def test_prompts_only_reference_ported_tools():
 def test_unknown_prompt_raises():
     with pytest.raises(ValueError):
         get_prompt_result("vexa.nope")
+
+
+# --- orientation at connect time ---------------------------------------------
+# A client that connects should not have to infer what Vexa is from nine tool descriptions.
+# `instructions` is the MCP field for that, and it shipped empty.
+
+def test_server_ships_instructions():
+    app = create_app("http://gateway.test", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    instructions = app.state.mcp.server.instructions
+    assert instructions, "MCP server must ship `instructions` — a connecting client gets no map without it"
+    # The canonical flow and the identity vocabulary are the two things it exists to say.
+    for expected in ("parse_meeting_link", "request_meeting_bot", "get_meeting_transcript", "native_meeting_id"):
+        assert expected in instructions

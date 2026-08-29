@@ -25,6 +25,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 import mcp.types as mcp_types
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
@@ -381,6 +384,73 @@ class ReportIssue(BaseModel):
         return self
 
 
+# ---------------------------
+# Meeting identity — ONE vocabulary across the whole surface
+# ---------------------------
+# Every tool that RETURNS a meeting returns ``platform`` + ``native_meeting_id`` (so does the
+# public REST API: ``/transcripts/{platform}/{native_meeting_id}``). Three tools used to ACCEPT
+# ``meeting_platform`` + ``meeting_id`` instead, so no tool's output could be fed to the next
+# tool's input without a rename nothing documented. A model chaining calls reads
+# ``native_meeting_id`` off one result and passes it to the next — the correct inference, and it
+# failed. The canonical names below are the ones every tool returns; the old spellings stay as
+# deprecated aliases so no existing client breaks.
+_PLATFORM_DESC = (
+    "Meeting platform: google_meet, teams, zoom, jitsi. Same value that request_meeting_bot, "
+    "list_meetings and parse_meeting_link return as `platform`. Defaults to google_meet."
+)
+_ID_DESC = (
+    "The meeting's native id — exactly the `native_meeting_id` returned by request_meeting_bot, "
+    "list_meetings or parse_meeting_link (e.g. 'abc-defg-hij' for Google Meet)."
+)
+_LEGACY_PLATFORM_DESC = "DEPRECATED alias for `platform`. Use `platform`."
+_LEGACY_ID_DESC = "DEPRECATED alias for `native_meeting_id`. Use `native_meeting_id`."
+
+
+def _resolve_identity(
+    tool: str,
+    platform: Optional[str],
+    native_meeting_id: Optional[str],
+    legacy_platform: Optional[str],
+    legacy_id: Optional[str],
+) -> tuple[str, str]:
+    """Accept the canonical names or the deprecated aliases; fail with a message you can act on."""
+    mid = (native_meeting_id or legacy_id or "").strip()
+    plat = (platform or legacy_platform or "google_meet").strip()
+    if not mid:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{tool}: missing the meeting id. Pass `native_meeting_id` (the field "
+                f"request_meeting_bot / list_meetings / parse_meeting_link return), optionally "
+                f"with `platform`. Received: native_meeting_id=None, meeting_id=None."
+            ),
+        )
+    return plat, mid
+
+
+# What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
+# this is the map: what Vexa is, and the one sequence that matters.
+VEXA_INSTRUCTIONS = """\
+Vexa puts a transcription bot into a live meeting (Google Meet, Microsoft Teams, Zoom, Jitsi) and \
+gives you the transcript while the meeting is still running.
+
+The canonical flow:
+  1. parse_meeting_link(meeting_url)  → platform + native_meeting_id (pure; no side effects)
+  2. request_meeting_bot(meeting_url) → sends the bot. A human in the meeting must ADMIT it, so
+     expect a delay between `requested` and `active`.
+  3. get_meeting_transcript(platform, native_meeting_id) → segments, WHILE the meeting runs.
+     Poll it to follow a live meeting; pass `since_index` to get only what is new since your last
+     call instead of re-reading the whole transcript.
+  4. stop_bot(platform, native_meeting_id) when you are done.
+
+Identity: every tool returns `platform` + `native_meeting_id`, and every tool accepts those same \
+two names. Feed one tool's output straight into the next.
+
+A meeting with status `active` and zero segments usually means the bot has not been admitted yet, \
+or nobody has spoken — it does not mean transcription is broken.
+"""
+
+
 def create_app(
     gateway_url: Optional[str] = None,
     *,
@@ -440,6 +510,43 @@ def create_app(
     @app.get("/health", include_in_schema=False)
     async def health():
         return {"status": "ok", "service": "mcp"}
+
+    # --- validation errors an agent can act on.
+    # The stock message is "Input validation error: 'meeting_id' is a required property": it names
+    # neither the tool nor what was actually sent, so a caller that guessed a near-miss parameter
+    # name has no way to self-correct except by re-reading the schema. Name the tool, echo the
+    # parameters received, and point at the near-miss.
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        tool = "unknown_tool"
+        route = request.scope.get("route")
+        if route is not None:
+            tool = getattr(route, "operation_id", None) or getattr(route, "name", None) or tool
+
+        received = sorted(set(request.query_params.keys()))
+        missing = [
+            str(err["loc"][-1]) for err in exc.errors()
+            if err.get("type") == "missing" and err.get("loc")
+        ]
+        hints = []
+        for want in missing:
+            near = [
+                got for got in received
+                if got != want and (got in want or want in got or got.endswith(want) or want.endswith(got))
+            ]
+            if near:
+                hints.append(f"you sent `{near[0]}` — this tool expects `{want}`")
+        detail = {
+            "tool": tool,
+            "message": f"{tool}: invalid arguments.",
+            "missing": missing,
+            "received": received or ["(none)"],
+            "errors": exc.errors(),
+        }
+        if hints:
+            detail["hint"] = "; ".join(hints)
+            detail["message"] = f"{tool}: invalid arguments — {detail['hint']}."
+        return JSONResponse(status_code=422, content=jsonable_encoder({"detail": detail}))
 
     # ---------------------------
     # Tools (each a FastAPI route; operation_id = MCP tool name)
@@ -506,29 +613,40 @@ def create_app(
         """
         return await make_request("GET", f"{base_url}/bots/status", api_key)
 
-    @app.put("/bot-config/{meeting_platform}/{meeting_id}", operation_id="update_bot_config")
+    @app.put("/bot-config", operation_id="update_bot_config")
     async def update_bot_config(
-        meeting_id: str,
         data: UpdateBotConfig,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Update the configuration of an active bot (e.g., changing the transcription language).
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
-        url = f"{base_url}/bots/{meeting_platform}/{meeting_id}/config"
-        return await make_request("PUT", url, api_key, data.model_dump())
+        plat, mid = _resolve_identity(
+            "update_bot_config", platform, native_meeting_id, meeting_platform, meeting_id
+        )
+        return await make_request("PUT", f"{base_url}/bots/{plat}/{mid}/config", api_key, data.model_dump())
 
-    @app.delete("/bot/{meeting_platform}/{meeting_id}", operation_id="stop_bot")
+    @app.delete("/bot", operation_id="stop_bot")
     async def stop_bot(
-        meeting_id: str,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Remove an active bot from a meeting.
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
-        return await make_request("DELETE", f"{base_url}/bots/{meeting_platform}/{meeting_id}", api_key)
+        plat, mid = _resolve_identity("stop_bot", platform, native_meeting_id, meeting_platform, meeting_id)
+        return await make_request("DELETE", f"{base_url}/bots/{plat}/{mid}", api_key)
 
     @app.get("/meetings", operation_id="list_meetings")
     async def list_meetings(
@@ -552,17 +670,53 @@ def create_app(
             params["platform"] = platform
         return await make_request("GET", f"{base_url}/meetings", api_key, params=params or None)
 
-    @app.get("/meeting-transcript/{meeting_platform}/{meeting_id}", operation_id="get_meeting_transcript")
+    @app.get("/meeting-transcript", operation_id="get_meeting_transcript")
     async def get_meeting_transcript(
-        meeting_id: str,
-        meeting_platform: str = "google_meet",
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        since_index: Optional[int] = Query(
+            None,
+            ge=0,
+            description=(
+                "Return only segments at or after this index. Pass the `next_index` from your "
+                "previous call to follow a live meeting without re-reading what you already have."
+            ),
+        ),
+        meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
+        meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        Get the real-time transcript for a meeting (segments with speaker, timestamp, text).
-        Can be called during or after the meeting.
+        Get the transcript for a meeting (segments with speaker, timestamp, text). Works DURING the
+        meeting as well as after — poll it to follow a live one.
+
+        Identify the meeting with `platform` + `native_meeting_id` — the exact field names
+        request_meeting_bot, list_meetings and parse_meeting_link hand back.
+
+        To follow a live meeting cheaply, pass `since_index` = the `next_index` from your previous
+        call; you get only what has been said since, instead of the whole transcript every time.
         """
-        return await make_request("GET", f"{base_url}/transcripts/{meeting_platform}/{meeting_id}", api_key)
+        plat, mid = _resolve_identity(
+            "get_meeting_transcript", platform, native_meeting_id, meeting_platform, meeting_id
+        )
+        result = await make_request("GET", f"{base_url}/transcripts/{plat}/{mid}", api_key)
+
+        # The cursor is applied here rather than at the gateway: the scarce resource is the
+        # CALLER's context window, not the hop to meeting-api. `total_segments`/`next_index` are
+        # always reported against the full transcript so a caller can tell "nothing new" from
+        # "nothing at all", and can resume after dropping its own state.
+        if isinstance(result, dict):
+            key = "segments" if isinstance(result.get("segments"), list) else (
+                "transcripts" if isinstance(result.get("transcripts"), list) else None
+            )
+            if key:
+                segments = result[key]
+                total = len(segments)
+                start = min(since_index, total) if since_index is not None else 0
+                result = {**result, key: segments[start:], "total_segments": total, "next_index": total}
+                if since_index is not None:
+                    result["since_index"] = start
+        return result
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
@@ -773,6 +927,10 @@ def create_app(
     # MCP mount + prompts
     # ---------------------------
     mcp = FastApiMCP(app, headers=["authorization", "x-api-key"])
+    # Orientation at connect time. FastApiMCP has no `instructions` kwarg, but the lowlevel
+    # Server it wraps carries the field the spec defines — a client that connects should not have
+    # to infer what Vexa is from nine tool descriptions.
+    mcp.server.instructions = VEXA_INSTRUCTIONS
 
     @mcp.server.list_prompts()
     async def _list_prompts() -> mcp_types.ListPromptsResult:
