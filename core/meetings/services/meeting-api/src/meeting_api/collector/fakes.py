@@ -511,7 +511,7 @@ class InMemoryTranscriptStore:
                 data.pop("title", None)
         if metadata is not None:
             if replace_metadata:
-                data["metadata"] = {k: v for k, v in metadata.items() if v is not None}
+                merged = {k: v for k, v in metadata.items() if v is not None}
             else:
                 current = data.get("metadata")
                 merged = dict(current) if isinstance(current, dict) else {}
@@ -520,7 +520,13 @@ class InMemoryTranscriptStore:
                         merged.pop(k, None)   # explicit null deletes one key
                     else:
                         merged[k] = v
-                data["metadata"] = merged
+            # Bound the MERGED result, never the patch alone — mirrors the adapter. Checked
+            # BEFORE anything is stored, so a refusal writes nothing at all.
+            from .projection import check_metadata_bounds
+            reason = check_metadata_bounds(merged)
+            if reason:
+                return {"error": "metadata_too_large", "detail": reason}
+            data["metadata"] = merged
         return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):
