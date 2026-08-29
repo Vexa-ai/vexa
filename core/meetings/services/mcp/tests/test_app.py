@@ -5,6 +5,8 @@ with the caller's key as X-API-Key, and auth is fail-closed (401 with a Bearer h
 """
 import json
 
+import pytest
+
 from conftest import API_KEY, FakeGateway
 
 
@@ -104,7 +106,9 @@ def test_request_meeting_bot_409_reports_already_exists(client, gateway: FakeGat
 
 
 def test_update_bot_config_path_and_payload(client, gateway, auth):
-    r = client.put("/bot-config/teams/9361792952021", headers=auth, json={"language": "es"})
+    r = client.put(
+        "/bot-config?platform=teams&native_meeting_id=9361792952021", headers=auth, json={"language": "es"}
+    )
     assert r.status_code == 200
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("PUT", "/bots/teams/9361792952021/config")
@@ -112,9 +116,48 @@ def test_update_bot_config_path_and_payload(client, gateway, auth):
 
 
 def test_stop_bot_path(client, gateway, auth):
-    client.delete("/bot/google_meet/abc-defg-hij", headers=auth)
+    client.delete("/bot?platform=google_meet&native_meeting_id=abc-defg-hij", headers=auth)
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("DELETE", "/bots/google_meet/abc-defg-hij")
+
+
+# --- one identity vocabulary across the surface ------------------------------
+# Every tool RETURNS `platform` + `native_meeting_id`; three tools used to ACCEPT
+# `meeting_platform` + `meeting_id`, so no tool's output could be fed to the next tool's
+# input without a rename nothing documented. Canonical names must work, the deprecated
+# aliases must keep working, and platform must default rather than being mandatory.
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "platform=zoom&native_meeting_id=12345678901",   # canonical
+        "meeting_platform=zoom&meeting_id=12345678901",  # deprecated aliases
+        "platform=zoom&meeting_id=12345678901",          # mixed
+    ],
+)
+def test_transcript_accepts_canonical_and_legacy_identity(client, gateway, auth, query):
+    r = client.get(f"/meeting-transcript?{query}", headers=auth)
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("GET", "/transcripts/zoom/12345678901")
+
+
+def test_transcript_platform_defaults_to_google_meet(client, gateway, auth):
+    client.get("/meeting-transcript?native_meeting_id=abc-defg-hij", headers=auth)
+    assert gateway.requests[-1].url.path == "/transcripts/google_meet/abc-defg-hij"
+
+
+def test_stop_bot_accepts_legacy_identity(client, gateway, auth):
+    client.delete("/bot?meeting_platform=teams&meeting_id=9361792952021", headers=auth)
+    assert gateway.requests[-1].url.path == "/bots/teams/9361792952021"
+
+
+def test_missing_meeting_id_names_the_tool_and_the_field(client, gateway, auth):
+    r = client.get("/meeting-transcript?platform=zoom", headers=auth)
+    assert r.status_code == 422
+    detail = str(r.json()["detail"])
+    assert "get_meeting_transcript" in detail
+    assert "native_meeting_id" in detail
 
 
 def test_list_meetings_params(client, gateway, auth):
@@ -125,9 +168,50 @@ def test_list_meetings_params(client, gateway, auth):
 
 
 def test_get_meeting_transcript_path(client, gateway, auth):
-    client.get("/meeting-transcript/zoom/12345678901", headers=auth)
+    client.get("/meeting-transcript?platform=zoom&native_meeting_id=12345678901", headers=auth)
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("GET", "/transcripts/zoom/12345678901")
+
+
+# --- following a live meeting without re-reading it --------------------------
+# The scarce resource is the CALLER's context window, not the hop to meeting-api: polling a live
+# meeting used to re-download every segment spoken so far on every call. `since_index` returns
+# only what is new; `total_segments`/`next_index` always describe the FULL transcript so a caller
+# can tell "nothing new" from "nothing at all" and can resume after losing its own state.
+
+def _transcript_route(gateway, n):
+    gateway.routes[("GET", "/transcripts/google_meet/abc-defg-hij")] = (
+        200,
+        {"status": "active", "segments": [{"speaker": "A", "text": f"line {i}"} for i in range(n)]},
+    )
+
+
+def test_transcript_since_index_returns_only_new_segments(client, gateway, auth):
+    _transcript_route(gateway, 6)
+    body = client.get(
+        "/meeting-transcript?native_meeting_id=abc-defg-hij&since_index=4", headers=auth
+    ).json()
+    assert [s["text"] for s in body["segments"]] == ["line 4", "line 5"]
+    assert (body["total_segments"], body["next_index"], body["since_index"]) == (6, 6, 4)
+
+
+def test_transcript_without_cursor_returns_everything(client, gateway, auth):
+    _transcript_route(gateway, 3)
+    body = client.get("/meeting-transcript?native_meeting_id=abc-defg-hij", headers=auth).json()
+    assert len(body["segments"]) == 3
+    assert body["next_index"] == 3
+    assert "since_index" not in body
+
+
+def test_transcript_cursor_past_the_end_is_empty_not_an_error(client, gateway, auth):
+    """The steady state of following a live meeting: caller is caught up, nothing new was said."""
+    _transcript_route(gateway, 2)
+    body = client.get(
+        "/meeting-transcript?native_meeting_id=abc-defg-hij&since_index=99", headers=auth
+    ).json()
+    assert body["segments"] == []
+    assert body["total_segments"] == 2
+    assert body["next_index"] == 2
 
 
 def test_list_recordings_params(client, gateway, auth):
