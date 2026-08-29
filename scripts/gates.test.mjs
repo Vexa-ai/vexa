@@ -202,7 +202,12 @@ const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  const r = withEdited(MINIO_JOB, "image: minio/mc:latest", "image: somevendor/unaudited:1.2",
+  // #1321 moved the mc image from a template literal to values (minio.mcImage) — the template
+  // line is now templated. The test's subject is unchanged: inject a LITERAL pin into the
+  // template and require the gate to read it.
+  const r = withEdited(MINIO_JOB,
+    "image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}",
+    "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
   assert.match(r.out, /undeclared pinned image/);

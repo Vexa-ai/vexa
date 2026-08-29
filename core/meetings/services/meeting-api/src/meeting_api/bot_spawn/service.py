@@ -24,8 +24,10 @@ The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot b
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from typing import Any, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
@@ -54,8 +56,15 @@ from .ports import (
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
 __all__ = [
-    "request_bot", "construct_meeting_url", "DuplicateMeeting", "MeetingStopped",
-    "LOBBY_BUDGET_MS", "DEFAULT_LOBBY_BUDGET_S", "lobby_budget_ms",
+    "request_bot",
+    "construct_meeting_url",
+    "apply_join_passcode",
+    "resolve_teams_base_host",
+    "DuplicateMeeting",
+    "MeetingStopped",
+    "LOBBY_BUDGET_MS",
+    "DEFAULT_LOBBY_BUDGET_S",
+    "lobby_budget_ms",
 ]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
@@ -106,10 +115,75 @@ _STT_VERDICT_MAX_AGE_S = 60.0
 # one), so constructing a URL from the bare id would silently join the public room of that name —
 # the wrong meeting, on someone else's deployment. jitsi callers pass an explicit ``meeting_url``
 # (same passthrough zoom uses); the UI, MCP, and calendar paths all carry it.
+#
+# Teams is NOT one template: see ``_teams_url`` — its two id shapes join over two different paths.
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
-    "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
 }
+
+# The two Teams meeting-id shapes, and why one template cannot serve both.
+#
+#   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
+#     link. It joins at ``/l/meetup-join/<thread>`` and carries no separate passcode: the deep
+#     link's own query string is the credential, so a caller holding this id holds the whole URL.
+#   * SHORT id — the 10–15 digit meeting id Teams prints next to "Meeting ID / Passcode" and
+#     hands out as ``…/meet/<id>?p=<passcode>``. It joins at ``/meet/<id>``, and the passcode is
+#     a SEPARATE value by construction — this is the ONLY shape for which a bare id plus its own
+#     ``passcode`` field is a complete address.
+#
+# Only the SHORT shape is matched: it is the one that needs a different path from the one every
+# Teams id used to get, and its 10–15 digit range mirrors the SSOT parsers that produce these ids
+# (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
+# stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
+# ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
+# passcode to go (#892).
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
+
+#: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
+#: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``
+#: ``TEAMS_HOST_SUFFIXES``): world-wide, personal, the GCC-High/DoD clouds, and the
+#: cloud.microsoft rename. A host is accepted when it equals a suffix or is a subdomain of one.
+#:
+#: The caller names the host through the api.v1 ``teams_base_host`` field (the MCP link parser
+#: fills it from the link it parsed) and the bot's browser then navigates it — so this is an
+#: ALLOWLIST, not a passthrough. An arbitrary host here is the same SSRF surface
+#: ``_validate_meeting_url`` guards on the URL path, and it would also aim an anonymous join at a
+#: look-alike page. ``teams.microsoft.com`` is the default when the caller names nothing.
+_TEAMS_HOST_SUFFIXES = (
+    "teams.microsoft.com",
+    "teams.live.com",
+    "teams.microsoft.us",
+    "teams.cloud.microsoft",
+)
+_TEAMS_DEFAULT_HOST = "teams.microsoft.com"
+
+
+def resolve_teams_base_host(teams_base_host: Optional[str]) -> Optional[str]:
+    """The Teams host to build a constructed URL on, or ``None`` when the caller named a host
+    that is not a Teams web client (the caller's error — the router turns it into a 422).
+
+    Absent/blank resolves to the world-wide default, so every existing caller keeps today's host.
+    """
+    host = (teams_base_host or "").strip().lower().rstrip("/")
+    if not host:
+        return _TEAMS_DEFAULT_HOST
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in _TEAMS_HOST_SUFFIXES):
+        return host
+    return None
+
+
+def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
+    """The join URL for a Teams id, chosen by the id's SHAPE (see ``_TEAMS_SHORT_ID`` above).
+
+    An id matching neither shape keeps the classic ``/l/meetup-join/`` path: that is what every
+    such id resolved to before this rule existed, and shape does not predict joinability here
+    (a bare-numeric id outside the 10–15 range has transcribed real meetings), so an unrecognized
+    id is left on its established path rather than rerouted on a guess.
+    """
+    host = resolve_teams_base_host(teams_base_host) or _TEAMS_DEFAULT_HOST
+    if _TEAMS_SHORT_ID.match(native_meeting_id):
+        return f"https://{host}/meet/{native_meeting_id}"
+    return f"https://{host}/l/meetup-join/{native_meeting_id}"
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
@@ -161,11 +235,53 @@ def _capture_signal_from_context(ctx: dict) -> bool:
     return ctx.get("capture_signal") is not False
 
 
-def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str]:
+def construct_meeting_url(
+    platform: str,
+    native_meeting_id: str,
+    *,
+    teams_base_host: Optional[str] = None,
+) -> Optional[str]:
     """Best-effort meeting URL for ``(platform, native_id)`` (zoom needs more than the id →
-    None; the caller may pass an explicit ``meeting_url`` instead)."""
+    None; the caller may pass an explicit ``meeting_url`` instead).
+
+    PASSCODE-FREE by contract. This is the URL that gets PERSISTED as
+    ``data.constructed_meeting_url`` and read back on every ``MeetingResponse``, so a credential
+    must never reach it. The passcode is applied separately, to the invocation URL alone
+    (``apply_join_passcode``) — the split is what lets the bot receive a joinable address while
+    ordinary meeting readback stays clean (#892 A4).
+    """
+    if platform == "teams":
+        return _teams_url(native_meeting_id, teams_base_host)
     tmpl = _URL_TEMPLATES.get(platform)
     return tmpl.format(native_meeting_id=native_meeting_id) if tmpl else None
+
+
+def apply_join_passcode(platform: str, url: Optional[str], passcode: Optional[str]) -> Optional[str]:
+    """The URL the BOT navigates: ``url`` with the caller's separate ``passcode`` carried on it.
+
+    Only Teams short links (``…/meet/<id>``) take a passcode through the URL — that is where Teams
+    itself puts it (``?p=``), and a bare short id plus a separate passcode is otherwise not a
+    complete address. Every other platform reaches its passcode a different way and is returned
+    unchanged: zoom and jitsi type theirs into a page (``join/src/zoom/join.ts``,
+    ``join/src/jitsi/password.ts``) off the invocation's own ``passcode`` field, and a Teams thread
+    id's ``/l/meetup-join/`` deep link carries its credential in the URL the caller already holds.
+
+    A ``p`` the URL already carries WINS — a caller who pasted a full link is holding the
+    authoritative one, and a stale separate ``passcode`` must not overwrite it.
+    """
+    if platform != "teams" or not url or not passcode:
+        return url
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if not re.match(r"^/meet/[^/]+/?$", parsed.path or ""):
+        return url
+    query = parse_qsl(parsed.query or "", keep_blank_values=True)
+    if any(k == "p" and v for k, v in query):
+        return url
+    query.append(("p", passcode))
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
@@ -264,6 +380,7 @@ async def request_bot(
     bot_name: Optional[str] = None,
     passcode: Optional[str] = None,
     meeting_url: Optional[str] = None,
+    teams_base_host: Optional[str] = None,
     language: Optional[str] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
@@ -295,7 +412,14 @@ async def request_bot(
     """
     authority = authority or AllowAllServiceAuthority()
     # 1. URL.
-    constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
+    constructed_url = meeting_url or construct_meeting_url(
+        platform, native_meeting_id, teams_base_host=teams_base_host
+    )
+    # The address the BOT gets, which is not the address we STORE: the passcode rides on the join
+    # URL (Teams' own `?p=`) and stays off `data.constructed_meeting_url`, which every
+    # MeetingResponse reads back. Both derive from the same constructed URL, so they address the
+    # same meeting — they differ only in carrying the credential (#892 A1/A4).
+    join_url = apply_join_passcode(platform, constructed_url, passcode)
 
     # 1b. Resolve the transcription backend and gate BEFORE any DB write (C1, reorder not
     #     duplicate): the old router gate refused pre-insert; resolving here keeps that property —
@@ -580,7 +704,7 @@ async def request_bot(
     invocation = build_invocation(
         meeting_id=meeting_id,
         platform=platform,
-        meeting_url=constructed_url,
+        meeting_url=join_url,
         bot_name=bot_name or (os.getenv("DEFAULT_BOT_NAME") or f"VexaBot-{uuid.uuid4().hex[:6]}"),
         passcode=passcode,
         token=token,

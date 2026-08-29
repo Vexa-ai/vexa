@@ -32,6 +32,10 @@ On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and 
 keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
 `VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 Transcription needs a backend: point `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`
 at a [transcription unit](/deployment#transcription-the-separate-gpu-unit), or run the bundled
 CPU sidecar:
