@@ -544,7 +544,9 @@ class InMemoryTranscriptStore:
                 )
                 hits.append({
                     "segment_row_id": seg.get("segment_id"),
-                    "meeting_id": mid,
+                    # `meeting_db_id`, never `meeting_id`: the int row id must not travel under
+                    # the name that means the platform's STRING id everywhere else.
+                    "meeting_db_id": mid,
                     "platform": m["platform"],
                     "native_meeting_id": m["native_meeting_id"],
                     "start": float(seg.get("start", 0.0)),
@@ -557,7 +559,7 @@ class InMemoryTranscriptStore:
                     "snippet": snippet,
                     "text": text,
                 })
-        hits.sort(key=lambda h: (-h["rank"], -h["meeting_id"], h["start"]))
+        hits.sort(key=lambda h: (-h["rank"], -h["meeting_db_id"], h["start"]))
         lim = max(1, min(int(limit or 20), 100))
         off = max(0, int(offset or 0))
         return hits[off:off + lim]
@@ -567,8 +569,7 @@ class InMemoryTranscriptStore:
         which is exactly the property that makes skipping the real build safe."""
         return {"status": "skipped", "reason": "in-memory store"}
 
-    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
-                               replace_metadata=False):
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None):
         """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
         nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
         m = self._meetings.get(meeting_id)
@@ -584,16 +585,15 @@ class InMemoryTranscriptStore:
             else:
                 data.pop("title", None)
         if metadata is not None:
-            if replace_metadata:
-                merged = {k: v for k, v in metadata.items() if v is not None}
-            else:
-                current = data.get("metadata")
-                merged = dict(current) if isinstance(current, dict) else {}
-                for k, v in metadata.items():
-                    if v is None:
-                        merged.pop(k, None)   # explicit null deletes one key
-                    else:
-                        merged[k] = v
+            # ALWAYS a merge — mirrors the adapter. No whole-object replace exists, so a caller
+            # can never destroy a key it did not name.
+            current = data.get("metadata")
+            merged = dict(current) if isinstance(current, dict) else {}
+            for k, v in metadata.items():
+                if v is None:
+                    merged.pop(k, None)   # explicit null deletes exactly one key
+                else:
+                    merged[k] = v
             # Bound the MERGED result, never the patch alone — mirrors the adapter. Checked
             # BEFORE anything is stored, so a refusal writes nothing at all.
             from .projection import check_metadata_bounds
