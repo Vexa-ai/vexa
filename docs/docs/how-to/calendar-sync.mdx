@@ -255,7 +255,7 @@ can show:
 | `the URL returns a web page, not a calendar feed` | An embed/share *page* URL, not a feed. (Google's embed page is also rejected at save.) | Copy the address from **Integrate calendar**, not the browser's address bar. |
 | `the URL redirects — paste the final feed URL` | The address bounces through a redirect; the guarded fetch doesn't follow them. | Paste the URL the redirect lands on. |
 | `the URL doesn't return an ICS calendar (no BEGIN:VCALENDAR)` | The server answered, but not with calendar data. | Check you copied the full `.ics` address. |
-| `the feed is too large (over 2 MB)` | Unusually huge feed. | Sync a specific calendar rather than an aggregate. |
+| `the feed is too large (over 10 MB) — an operator can raise CALENDAR_MAX_ICS_BYTES` | The feed exceeds this deployment's cap. A secret iCal address exports the **whole** calendar, past events included, so years of history add up. | Self-hosting: raise [`CALENDAR_MAX_ICS_BYTES`](/configuration). Otherwise sync a single calendar rather than an aggregate. |
 | `couldn't reach the URL (unreachable, timed out, or a blocked/internal address)` | Network failure, or the address points somewhere the server-side guard refuses (internal hosts). | Verify the URL opens from a browser; use the calendar provider's public host. |
 
 ## What imports (and what doesn't)

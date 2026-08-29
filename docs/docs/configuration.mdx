@@ -194,6 +194,7 @@ stack still boots.
 | `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
 | `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
 | `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |
+| `CALENDAR_MAX_ICS_BYTES` | `10485760` | Max size in bytes of a fetched ICS feed (10 MB); the body streams and is abandoned past this. A secret iCal address exports the whole calendar including history, so raise this if a real work calendar is refused as too large. Helm: `meetingApi.maxIcsBytes`. |
 | `ADMIN_API_URL` | — | admin-api base URL for the sweeps' internal lookups (spawn context, calendar configs). |
 
 ## Images & runtime

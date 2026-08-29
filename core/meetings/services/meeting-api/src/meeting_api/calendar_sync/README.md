@@ -21,8 +21,11 @@ domain).
   row (`data.auto_join_user_set`, written by `PATCH /meetings/{id}`), and rows imported before plural
   calendars — bare `data.calendar_uid`, no sources — are claimed only by the `legacy=True` connection,
   which is also the one that may retire them.
-- `fetch_ics(url, client=None)` — **SSRF-pinned** (`webhooks/ssrf.build_pinned_transport`), 2 MB cap,
-  no redirects; pass a `build_ics_client()` to share one connection pool across a sweep.
+- `fetch_ics(url, client=None)` — **SSRF-pinned** (`webhooks/ssrf.build_pinned_transport`), no
+  redirects, and size-budgeted at `CALENDAR_MAX_ICS_BYTES` (default 10 MB). The body **streams**:
+  the not-a-feed sniff runs on the first bytes and the budget is checked per chunk, so an oversize
+  feed is abandoned mid-download rather than buffered and then judged. Pass a `build_ics_client()`
+  to share one connection pool across a sweep — the caller owns its lifetime.
   `fetch_configs(admin_api_url, secret)` — the internal discovery hop.
 
 ## Wiring (entrypoint)

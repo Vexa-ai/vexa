@@ -304,6 +304,10 @@ services:
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
       - ADMIN_API_URL=http://admin-api:8001
+      # #1182: cap on a fetched ICS feed. A secret iCal address exports the WHOLE calendar (all
+      # history, no time-range parameter), so a work calendar with years behind it is megabytes —
+      # raise this when a real feed is refused as too large.
+      - CALENDAR_MAX_ICS_BYTES=${CALENDAR_MAX_ICS_BYTES:-10485760}
       # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
       # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.

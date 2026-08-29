@@ -205,6 +205,11 @@ meetingApi:
   botS3AccessKey: ""
   botS3SecretKey: ""
   minioSecure: "false"
+  # Max size (bytes) of a fetched ICS calendar feed (#1182). A provider's secret iCal address
+  # exports the WHOLE calendar — past events included, no time-range parameter — so a work calendar
+  # with years of history can be tens of MB. Raise when a real feed is refused as too large; the
+  # calendar sweep syncs users one at a time, so this bounds meeting-api's peak, not each user's.
+  maxIcsBytes: "10485760"
   logLevel: "info"
   resources:
     requests: { cpu: 200m, memory: 512Mi }

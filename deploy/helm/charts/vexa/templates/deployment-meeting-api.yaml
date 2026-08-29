@@ -129,6 +129,10 @@ spec:
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
             # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
+            # #1182: ICS feed size cap. A secret iCal address exports the whole calendar
+            # (history included), so real work calendars can exceed a conservative default.
+            - name: CALENDAR_MAX_ICS_BYTES
+              value: {{ .Values.meetingApi.maxIcsBytes | default "10485760" | quote }}
             - name: BOT_AUTHENTICATED
               value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}
             - name: BOT_USERDATA_S3_PATH
