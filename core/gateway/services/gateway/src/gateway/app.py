@@ -113,6 +113,7 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("PATCH", "/meetings/{platform}/{native_meeting_id}"): TX,
     ("DELETE", "/meetings/{platform}/{native_meeting_id}"): TX,
     ("PUT", "/meetings/{platform}/{native_meeting_id}/intent"): TX,
+    ("POST", "/meetings/{platform}/{native_meeting_id}/annotate"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
     # A participants read is meeting DATA, not bot control — same plane as the transcript it is
@@ -120,6 +121,7 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/meetings/{platform}/{native_meeting_id}/participants"): TX,
     # --- transcripts ---
     ("GET", "/transcripts/by-id/{meeting_id}"): TX,
+    ("GET", "/transcripts/search"): TX,
     ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
     ("POST", "/transcripts/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/transcripts/share/accept"): TX,
@@ -567,6 +569,12 @@ def create_app(
     async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
 
+    # Declared BEFORE /transcripts/{platform}/... so `search` is matched as a literal, not
+    # captured as a platform name.
+    @app.get("/transcripts/search")
+    async def search_transcripts(request: Request):
+        return await _forward("GET", _meeting("/transcripts/search"), request)
+
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
@@ -631,6 +639,14 @@ def create_app(
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
     # Mint an INDEPENDENT transcript share link for a meeting (owner) — Lane A / M0.
+    # The caller's own description of a meeting — title + arbitrary metadata — writable in ANY
+    # status (meeting-api refuses nothing here; nothing in the dispatch pipeline reads it).
+    @app.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
+        )
+
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
