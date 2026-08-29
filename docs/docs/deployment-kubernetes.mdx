@@ -35,6 +35,10 @@ helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ### Is this install actually working? — `make probe SURFACE=helm`
 
 The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
