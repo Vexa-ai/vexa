@@ -187,9 +187,22 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            metadata_filter=None):
         from .projection import DEFAULT_LIST_LIMIT, list_order_key, project_list_data
         mws = member_workspaces or set()
+
+        def metadata_matches(m):
+            """Mirror of the adapter's JSONB `@>` on `data.metadata`: every key in the filter must
+            be present with an equal value. Containment, not equality — extra keys on the row do
+            not disqualify it."""
+            if not metadata_filter:
+                return True
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            stored = data.get("metadata")
+            if not isinstance(stored, dict):
+                return False
+            return all(stored.get(k) == v for k, v in metadata_filter.items())
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
@@ -204,6 +217,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and metadata_matches(m)
         ]
         if list_view:
             # #1222: the USER-FACING list orders by (non-terminal pin, event time) — the meeting
@@ -477,6 +491,36 @@ class InMemoryTranscriptStore:
             primary = calendar_sources[0]
             data["calendar_connection_id"] = primary.get("id")
             data["calendar_name"] = primary.get("name") or "Calendar"
+        return self._planned_row(meeting_id)
+
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
+                               replace_metadata=False):
+        """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
+        nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        data = m["data"]
+        # `title` lives in the data blob, NOT as a top-level field — mirrors the adapter and
+        # update_planned_meeting. Writing it anywhere else persists nothing.
+        if title is not None:
+            cleaned = (title or "").strip()[:512]
+            if cleaned:
+                data["title"] = cleaned
+            else:
+                data.pop("title", None)
+        if metadata is not None:
+            if replace_metadata:
+                data["metadata"] = {k: v for k, v in metadata.items() if v is not None}
+            else:
+                current = data.get("metadata")
+                merged = dict(current) if isinstance(current, dict) else {}
+                for k, v in metadata.items():
+                    if v is None:
+                        merged.pop(k, None)   # explicit null deletes one key
+                    else:
+                        merged[k] = v
+                data["metadata"] = merged
         return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):

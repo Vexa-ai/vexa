@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+import json
+
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -196,13 +198,29 @@ def build_router(
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
         exclude_planned: bool = Query(default=False),
+        metadata: Optional[str] = Query(
+            default=None,
+            description=(
+                'JSON object. Returns only meetings whose caller-set metadata CONTAINS it — e.g. '
+                '{"crm_deal":"acme-42"}. Containment, so extra keys on the row still match. '
+                "Filtered in SQL against the data GIN index, not on the fetched page."
+            ),
+        ),
     ):
         user_id = _resolve_user_id(x_user_id)
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         status_filter = status if status is not None else (_NON_PLANNED_STATUSES if exclude_planned else None)
+        metadata_filter = None
+        if metadata:
+            try:
+                metadata_filter = json.loads(metadata)
+            except Exception:
+                raise HTTPException(status_code=422, detail="'metadata' must be a JSON object")
+            if not isinstance(metadata_filter, dict):
+                raise HTTPException(status_code=422, detail="'metadata' must be a JSON object")
         meetings, _has_more = await store.list_meetings(
             user_id, status=status_filter, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces, list_view=True,
+            member_workspaces=member_workspaces, list_view=True, metadata_filter=metadata_filter,
         )
         log_event(
             "meetings_listed",
@@ -589,6 +607,67 @@ def build_router(
     # refuses an FSM-owned row with 409). Unknown/unowned native → 404. Additive: the int routes are
     # unchanged. DELETE returns 200 + a small body (the sealed native-delete response), NOT the 204
     # the row-id route returns. ---
+    # --- POST /meetings/{platform}/{native_meeting_id}/annotate → the caller's OWN description of
+    # a meeting: `title` and arbitrary `metadata`. Works in ANY status, unlike the PATCH below.
+    #
+    # The split is by WHAT is written, not when. PATCH edits the INSTRUCTIONS for a meeting (url,
+    # schedule, auto-join) and is refused once the FSM owns the row, because changing dispatch
+    # parameters under a running bot fights it. Annotations are the caller's DESCRIPTION: nothing
+    # in the pipeline reads them, so writing them can never re-arm, re-dispatch or re-route
+    # anything — and the moments a description is most worth writing are exactly the ones the FSM
+    # owns. Mid-meeting ("this is the Acme renewal call") and after it ends (the agent's own
+    # summary) were both previously impossible: PATCH answered 409 for the entire useful life of
+    # a meeting.
+    #
+    # `metadata` merges key-wise; an explicit null deletes one key; ?replace=true swaps the object.
+    @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
+    async def annotate_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        replace: bool = Query(default=False, description="Replace the metadata object instead of merging."),
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            raise HTTPException(status_code=422, detail="'title' must be a string")
+        metadata = payload.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise HTTPException(status_code=422, detail="'metadata' must be an object")
+        if title is None and metadata is None:
+            raise HTTPException(
+                status_code=422,
+                detail="nothing to annotate: send 'title' and/or 'metadata'",
+            )
+
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        row = await store.annotate_meeting(
+            user_id, meeting_id, title=title, metadata=metadata, replace_metadata=replace,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        log_event(
+            "meeting_annotated", audience="user", span="meetings.annotate",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"title": title is not None,
+                    "metadata_keys": sorted(metadata.keys()) if metadata else [],
+                    "replace": replace, "status": row.get("status")},
+        )
+        return JSONResponse(content=row)
+
     @router.patch("/meetings/{platform}/{native_meeting_id}")
     async def patch_native_meeting(
         platform: str,

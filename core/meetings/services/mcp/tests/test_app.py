@@ -677,3 +677,72 @@ def test_github_format_still_never_forwards_the_api_key(client, gateway: FakeGat
     req = _sink_requests(gateway)[-1]
     assert API_KEY not in req.content.decode()
     assert API_KEY not in json.dumps(dict(req.headers))
+
+
+# --- annotations: the caller's own description of a meeting ------------------
+# The join key between a Vexa meeting and everything else the agent knows. Previously impossible:
+# PATCH /meetings answered 409 for the entire useful life of a meeting (once a bot was dispatched),
+# and there was no metadata field at all.
+
+def test_annotate_forwards_title_and_metadata(client, gateway, auth):
+    r = client.post(
+        "/meeting-annotate?platform=google_meet&native_meeting_id=abc-defg-hij",
+        headers=auth,
+        json={"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}},
+    )
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("POST", "/meetings/google_meet/abc-defg-hij/annotate")
+    assert gateway.last_json() == {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}}
+
+
+def test_annotate_replace_is_forwarded_as_a_query_flag(client, gateway, auth):
+    client.post(
+        "/meeting-annotate?native_meeting_id=abc-defg-hij&replace=true",
+        headers=auth, json={"metadata": {"only": "this"}},
+    )
+    assert dict(gateway.requests[-1].url.params) == {"replace": "true"}
+
+
+def test_annotate_requires_something_to_write(client, gateway, auth):
+    r = client.post("/meeting-annotate?native_meeting_id=abc-defg-hij", headers=auth, json={})
+    assert r.status_code == 422
+
+
+def test_list_meetings_forwards_metadata_filter(client, gateway, auth):
+    client.get('/meetings?metadata_filter={"crm_deal":"acme-42"}', headers=auth)
+    assert dict(gateway.requests[-1].url.params)["metadata"] == '{"crm_deal":"acme-42"}'
+
+
+def test_list_meetings_rejects_a_malformed_metadata_filter(client, gateway, auth):
+    """A filter that silently failed to apply is WORSE than an error: the agent would read a full
+    unfiltered list as 'these all match'."""
+    before = len(gateway.requests)
+    r = client.get("/meetings?metadata_filter=not-json", headers=auth)
+    assert r.status_code == 422
+    assert "metadata_filter" in str(r.json()["detail"])
+    assert len(gateway.requests) == before, "must not reach the gateway with a bad filter"
+
+
+def test_list_meetings_rejects_a_non_object_metadata_filter(client, gateway, auth):
+    r = client.get("/meetings?metadata_filter=[1,2]", headers=auth)
+    assert r.status_code == 422
+
+
+# --- the interactive bot: ours talks, theirs records -------------------------
+
+def test_speak_forwards_to_the_bot_speak_route(client, gateway, auth):
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "Dmitry asked me to say the numbers are in the deck."},
+    )
+    assert r.status_code == 200
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("POST", "/bots/teams/9361792952021/speak")
+    assert gateway.last_json()["text"].startswith("Dmitry asked me")
+
+
+def test_get_meeting_chat_path(client, gateway, auth):
+    client.get("/meeting-chat?native_meeting_id=abc-defg-hij", headers=auth)
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("GET", "/bots/google_meet/abc-defg-hij/chat")

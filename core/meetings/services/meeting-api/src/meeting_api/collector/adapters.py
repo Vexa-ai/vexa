@@ -447,8 +447,9 @@ class SqlAlchemyTranscriptStore:
         return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from sqlalchemy import cast, func, select, text, union_all
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            metadata_filter=None):
+        from sqlalchemy import cast, func, literal, select, text, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
@@ -517,6 +518,19 @@ class SqlAlchemyTranscriptStore:
                     s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
+                if metadata_filter:
+                    # JSONB containment on the whole `data` blob, nesting the caller's filter under
+                    # `metadata` — `data @> '{"metadata": {...}}'`. Written against `data` (not
+                    # `data->'metadata'`) deliberately: THAT is the shape `ix_meeting_data_gin`
+                    # indexes, so this stays an index scan instead of degrading to a seq scan the
+                    # moment an account has history. Filtering in SQL rather than in Python is also
+                    # the difference between "the meetings tagged acme-42" and "the tagged ones on
+                    # the page you happened to fetch" — the latter is a wrong answer, not a slow one.
+                    s = s.where(
+                        cast(Meeting.data, JSONB).op("@>")(
+                            cast(literal(json.dumps({"metadata": metadata_filter})), JSONB)
+                        )
+                    )
                 if fetch_bound is not None:
                     # ORDER BY inside a compound member is only meaningful (and only kept by
                     # the compiler) together with LIMIT; an unbounded branch returns its full
@@ -1121,6 +1135,65 @@ class SqlAlchemyTranscriptStore:
                 data["calendar_name"] = primary.get("name") or "Calendar"
             meeting.data = data
             flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
+
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
+                               replace_metadata=False) -> "Optional[dict]":
+        """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).
+
+        Modelled on ``attach_calendar_source``, not on ``update_planned_meeting``: nothing written
+        here is read by the dispatch pipeline, so there is no FSM to fight and no status check."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+
+            # `title` lives in the data blob, NOT as a column — same place update_planned_meeting
+            # puts it. Both writes therefore go through `data`, and both need flag_modified.
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            touched = False
+
+            if title is not None:
+                cleaned = (title or "").strip()[:512]
+                if cleaned:
+                    data["title"] = cleaned
+                else:
+                    data.pop("title", None)   # empty string clears it
+                touched = True
+
+            if metadata is not None:
+                touched = True
+                if replace_metadata:
+                    merged = {k: v for k, v in metadata.items() if v is not None}
+                else:
+                    current = data.get("metadata")
+                    merged = dict(current) if isinstance(current, dict) else {}
+                    for k, v in metadata.items():
+                        # An explicit null DELETES the key — the only way to take back one
+                        # annotation without replacing the whole object.
+                        if v is None:
+                            merged.pop(k, None)
+                        else:
+                            merged[k] = v
+                data["metadata"] = merged
+
+            if touched:
+                meeting.data = data
+                flag_modified(meeting, "data")
+
             await db.commit()
             await db.refresh(meeting)
             return self._planned_row(meeting)

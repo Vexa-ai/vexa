@@ -60,9 +60,15 @@ class TranscriptStore(Protocol):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         member_workspaces: "Optional[set[str]]" = None,
+        metadata_filter: "Optional[dict]" = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
-        (the body of ``MeetingListResponse``)."""
+        (the body of ``MeetingListResponse``).
+
+        ``metadata_filter`` selects rows whose ``data.metadata`` CONTAINS the given object (JSONB
+        ``@>``, served by ``ix_meeting_data_gin``). It is what turns the list from a log into a
+        queryable store: an agent that stamped ``{"crm_deal": "acme-42"}`` onto its meetings can
+        ask for exactly those back instead of paging the account and filtering client-side."""
         ...
 
     async def authorize_subscribe(
@@ -235,6 +241,34 @@ class TranscriptStore(Protocol):
         ``auto_join_user_set``, ``calendar_managed``, ``scheduled_at`` or ``status``.
 
         Returns the row (``list_meetings`` shape), or ``None`` when the user owns no such row."""
+        ...
+
+    async def annotate_meeting(
+        self, user_id: int, meeting_id: int, *,
+        title: Optional[str] = None,
+        metadata: "Optional[dict]" = None,
+        replace_metadata: bool = False,
+    ) -> Optional[dict]:
+        """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
+        owns, and including one already completed.
+
+        The sibling of ``attach_calendar_source`` (identity stamped onto a live row) rather than of
+        ``update_planned_meeting`` (which refuses an FSM row, because dispatch parameters must not
+        change under a running bot). The distinction is what is being written, not when:
+        ``update_planned_meeting`` edits the INSTRUCTIONS for a meeting — url, schedule, auto-join
+        — and changing those mid-flight fights the FSM. ``title`` and ``metadata`` are the caller's
+        DESCRIPTION of a meeting. Nothing in the pipeline reads them, so writing them can never
+        re-arm, re-dispatch or re-route anything — and the moments a description is most worth
+        writing are exactly the ones the FSM owns: mid-meeting, and after it ends.
+
+        ``metadata`` is arbitrary caller-owned JSON stored at ``data.metadata``. It MERGES key-wise
+        by default (a key set to ``None`` is deleted); ``replace_metadata=True`` swaps the whole
+        object. It is the join key between a Vexa meeting and everything else the caller knows —
+        a CRM record, a ticket, its own summary — and it is queryable through
+        ``list_meetings(metadata_filter=...)``.
+
+        Returns the updated row (``list_meetings`` shape), or ``None`` when the user owns no such
+        row (→ 404). Never returns a conflict: there is no state in which annotating is refused."""
         ...
 
     async def delete_planned_meeting(self, user_id: int, meeting_id: int) -> Optional[bool]:
