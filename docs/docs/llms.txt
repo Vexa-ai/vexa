@@ -2,8 +2,8 @@
 
 > Open-source, self-hosted meeting bot & transcription API (Apache-2.0). A bot joins Google
 > Meet / Microsoft Teams / Zoom calls and streams speaker-attributed transcripts in real time
-> through an API you host. Air-gap-ready: bring your own LLM and self-host the GPU
-> transcription unit. Runs on Docker Compose, a single container (lite), or Kubernetes/Helm.
+> through an API you host. Runs with no egress: bring your own LLM and self-host the
+> bundled GPU or CPU transcription unit. Runs on Docker Compose, a single container (lite), or Kubernetes/Helm.
 
 ## For agents: tell us what you came for
 

@@ -64,7 +64,7 @@ curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
 ## Where it's stored
 
 Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
-On a self-host that's infrastructure you control; air-gapped deployments keep recordings entirely in-VPC.
+On a self-host that's infrastructure you control; a no-egress deployment keeps recordings entirely in-VPC.
 
 ## Delete a recording
 

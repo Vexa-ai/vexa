@@ -1,9 +1,9 @@
 ---
 title: "Deployment"
-description: "Self-host Vexa with Docker Compose — air-gapped, with bring-your-own inference."
+description: "Self-host Vexa with Docker Compose — no egress, with bring-your-own inference."
 ---
 
-Vexa runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
+Vexa runs **in your own environment** — open-source, self-hostable, and able to run with no egress. Data, recordings, and
 agent state stay on infrastructure you control. This page is the Docker Compose path; the other two
 supported shapes are [Vexa Lite](/deployment-lite) (one container, no Docker socket) and
 [Kubernetes](/deployment-kubernetes) (Helm, a Pod per bot).
@@ -35,7 +35,7 @@ the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is 
 this stack's `lifecycle.v1` (bots reach `joining` then fail). `make all` warns loudly if the bot image
 is missing. For a transcript, set a **transcription (STT) token** in `.env`
 (`TRANSCRIPTION_SERVICE_TOKEN`) — get one at `vexa.ai/account`, or self-host the transcription service on
-a GPU for a fully air-gapped install. The API is then at `http://localhost:18056` (the gateway) and the
+a GPU so the audio path never calls out. The API is then at `http://localhost:18056` (the gateway) and the
 terminal web workbench at `http://localhost:13000`.
 
 ## The stack
@@ -159,8 +159,14 @@ source is ignored, so it cannot rotate an abuser's budget. See
 
 The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
 
-## Air-gapped
+## No egress
 
-Everything runs in-VPC: gateway + services + redis/postgres/minio on your host, the
-[transcription unit](#transcription-the-separate-gpu-unit) on your own GPU, **BYO inference**,
-recordings in your object storage. **Zero egress** — the posture the regulated verticals require.
+Everything runs inside your perimeter: gateway + services + redis/postgres/minio on your host, the
+[transcription unit](#transcription-the-separate-gpu-unit) on your own GPU or CPU, **BYO inference**,
+recordings in your object storage. A bundled STT unit means the audio path never calls out — the
+posture the regulated verticals ask for.
+
+We have not run an install on a genuinely disconnected network, so we do not claim one: what a
+procurement review can hold us to is self-hosted with no egress, not a certified air gap. On
+**Kubernetes** the chart does not yet expose `TRANSCRIPTION_MODEL` as a value — see
+[No-egress clusters](/deployment-kubernetes#no-egress-clusters).
