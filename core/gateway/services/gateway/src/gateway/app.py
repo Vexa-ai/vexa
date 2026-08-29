@@ -5,7 +5,9 @@ behavior is the v0.12 carve of the deployed ``services/api-gateway/main.py``:
 
   * the ``forward_request`` auth middleware — ``x-api-key`` resolved via the ``Authorizer``
     port (admin-api ``/internal/validate``); fail-closed 401 when missing/invalid; scope 403
-    via ``ROUTE_SCOPES`` (main.py:287-369, 59-65),
+    via ``ROUTE_SCOPES`` (main.py:287-369, 59-65), now DENY-BY-DEFAULT: the table is keyed by
+    (method, route template) and is exhaustive over the router, so an undeclared route is
+    refused at request time and refuses to build at all,
   * the CORE proxy routes — each forwards its method to the matching downstream URL and returns
     the downstream body + status VERBATIM (main.py:450-831, 367),
   * the ``/ws`` multiplex control loop + redis pub/sub fan-in — subscribe → Subscribed ack;
@@ -29,12 +31,14 @@ import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from urllib.parse import quote
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
 from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
@@ -58,14 +62,152 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
         headers={"Retry-After": "1"},
     )
 
-# Route-prefix → required scope set. Mirrors main.py ROUTE_SCOPES (main.py:59-65) for the CORE
-# surface the gateway lane carves; multi-scope tokens pass for any of their domains.
-ROUTE_SCOPES: Dict[str, Set[str]] = {
-    "/bots": {"bot", "browser"},
-    "/transcripts": {"tx"},
-    "/meetings": {"tx"},
-    "/recordings": {"tx", "bot"},
+# --- the scope model -------------------------------------------------------------------------
+# The three key scopes, as ``docs/docs/authentication.mdx`` defines them:
+#   bot     — "send and manage meeting bots, read transcripts"
+#   tx      — "transcription / transcript access"
+#   browser — "browser-tool capabilities"
+#
+# Read as capabilities, that gives one rule per domain:
+#   BOT       anything that can make a bot EXIST, stop existing, or change how it behaves — the
+#             whole /bots surface, and the calendar connections, because auto-join turns a feed
+#             into bot spawns (the same cost vector as POST /bots, reached by another door).
+#   TX        the transcript/meeting data plane: meeting records, transcripts.
+#   BOT_OR_TX account-level config and reads that belong to either service domain (recordings,
+#             webhook config + delivery history, model/transcription prefs, agent, MCP). Neither
+#             scope alone is privileged over the other here; what matters is that a key with
+#             NEITHER — a browser-only key — is refused.
+#   browser   grants NO gateway route. v0.12 serves no browser-tool surface at this edge, so a
+#             browser-only key can authenticate (GET /auth/me) and do nothing else.
+BOT: FrozenSet[str] = frozenset({"bot"})
+TX: FrozenSet[str] = frozenset({"tx"})
+BOT_OR_TX: FrozenSet[str] = frozenset({"bot", "tx"})
+
+# (HTTP method, ROUTE TEMPLATE) → the scopes that satisfy it; a multi-scope token passes when it
+# holds ANY of them. Keyed by the route's own template (``request.scope["route"].path``), never by
+# a path PREFIX: prefix matching is what let ``/user/webhook`` and ``/user/calendar`` fall through
+# to "no entry, therefore no check", and what made ``{"bot","browser"}`` on the ``/bots`` prefix
+# hand a browser-only key the whole bot lifecycle (rc.18 sweep finding B2 — a browser-only key
+# spawned container ``mtg-26362-7c9e8908`` on staging and then stopped it).
+#
+# THIS TABLE IS EXHAUSTIVE AND ENFORCED AS SUCH. A proxied route that is absent from it is DENIED
+# at request time and, so the hole cannot ship, refuses to build at all: ``create_app`` raises when
+# any registered ``APIRoute`` is neither declared here nor in ``UNSCOPED_ROUTES``. Adding a route
+# therefore requires deciding its scope — the check is not an allowlist anyone must remember to
+# extend, it is a wall the new route walks into.
+ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
+    # --- bot lifecycle: spawn · stop · list · status · config · speak · chat-read ---
+    ("GET", "/bots"): BOT,
+    ("POST", "/bots"): BOT,
+    ("GET", "/bots/status"): BOT,
+    ("DELETE", "/bots/{platform}/{native_meeting_id}"): BOT,
+    ("PUT", "/bots/{platform}/{native_meeting_id}/config"): BOT,
+    ("POST", "/bots/{platform}/{native_meeting_id}/speak"): BOT,
+    ("GET", "/bots/{platform}/{native_meeting_id}/chat"): BOT,
+    # --- the meeting record plane ---
+    ("GET", "/meetings"): TX,
+    ("POST", "/meetings"): TX,
+    ("GET", "/meetings/{meeting_id}"): TX,
+    ("PATCH", "/meetings/{meeting_id}"): TX,
+    ("DELETE", "/meetings/{meeting_id}"): TX,
+    ("PATCH", "/meetings/{platform}/{native_meeting_id}"): TX,
+    ("DELETE", "/meetings/{platform}/{native_meeting_id}"): TX,
+    ("PUT", "/meetings/{platform}/{native_meeting_id}/intent"): TX,
+    ("POST", "/meetings/{platform}/{native_meeting_id}/share"): TX,
+    ("POST", "/meetings/{platform}/{native_meeting_id}/workspace"): TX,
+    # A participants read is meeting DATA, not bot control — same plane as the transcript it is
+    # derived from, so a key that may read the transcript may read who was heard in it.
+    ("GET", "/meetings/{platform}/{native_meeting_id}/participants"): TX,
+    # --- transcripts ---
+    ("GET", "/transcripts/by-id/{meeting_id}"): TX,
+    ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
+    ("POST", "/transcripts/{platform}/{native_meeting_id}/share"): TX,
+    ("POST", "/transcripts/share/accept"): TX,
+    # --- recordings (unchanged: the sealed table already accepted either domain) ---
+    ("GET", "/recordings"): BOT_OR_TX,
+    ("GET", "/recordings/{recording_id}"): BOT_OR_TX,
+    ("GET", "/recordings/{recording_id}/master"): BOT_OR_TX,
+    ("GET", "/recordings/{recording_id}/media/{media_file_id}/raw"): BOT_OR_TX,
+    ("GET", "/recordings/{recording_id}/media/{media_file_id}/download"): BOT_OR_TX,
+    # Destruction is not a read, so it does not inherit the reads' scope. A `tx` key is handed out
+    # for transcript access — to an integration, to an MCP agent — and must never carry the power to
+    # erase an account's recordings and transcripts permanently. The map being per-(method, path) is
+    # what makes declaring this separately possible; declaring it BOT_OR_TX would hand every
+    # read-only key a delete.
+    ("DELETE", "/recordings/{recording_id}"): BOT,
+    # --- calendar connections: BOT, because auto-join spawns bots from the feed ---
+    ("GET", "/user/calendar"): BOT,
+    ("PUT", "/user/calendar"): BOT,
+    ("GET", "/user/calendar/sync"): BOT,
+    ("POST", "/user/calendar/sync"): BOT,
+    ("GET", "/user/calendars"): BOT,
+    ("POST", "/user/calendars"): BOT,
+    ("PATCH", "/user/calendars/{calendar_id}"): BOT,
+    ("DELETE", "/user/calendars/{calendar_id}"): BOT,
+    ("GET", "/user/calendars/{calendar_id}/sync"): BOT,
+    ("POST", "/user/calendars/{calendar_id}/sync"): BOT,
+    # --- the rest of the self-serve account config (no bot-spawn power of its own) ---
+    ("GET", "/user/webhook"): BOT_OR_TX,
+    ("PUT", "/user/webhook"): BOT_OR_TX,
+    ("GET", "/user/webhook/deliveries"): BOT_OR_TX,
+    ("GET", "/user/models"): BOT_OR_TX,
+    ("PUT", "/user/models"): BOT_OR_TX,
+    ("GET", "/user/transcription"): BOT_OR_TX,
+    ("PUT", "/user/transcription"): BOT_OR_TX,
+    # --- the agent control plane. Per-RESOURCE authorization here is still the open Stage-3 gap
+    # (see the strict-xfail in tests/test_proxy.py); this table only settles which KEYS reach it.
+    ("POST", "/agent/chat"): BOT_OR_TX,
+    ("GET", "/agent/meeting/stream"): BOT_OR_TX,
+    ("GET", "/agent/{path:path}"): BOT_OR_TX,
+    ("POST", "/agent/{path:path}"): BOT_OR_TX,
+    ("PUT", "/agent/{path:path}"): BOT_OR_TX,
+    ("PATCH", "/agent/{path:path}"): BOT_OR_TX,
+    ("DELETE", "/agent/{path:path}"): BOT_OR_TX,
+    # --- the MCP front door. Its tools call BACK through this gateway with the caller's own key,
+    # so /bots is gated on that second hop too; this is the first hop.
+    ("GET", "/mcp"): BOT_OR_TX,
+    ("POST", "/mcp"): BOT_OR_TX,
+    ("PUT", "/mcp"): BOT_OR_TX,
+    ("PATCH", "/mcp"): BOT_OR_TX,
+    ("DELETE", "/mcp"): BOT_OR_TX,
+    ("OPTIONS", "/mcp"): BOT_OR_TX,
+    ("GET", "/mcp/{path:path}"): BOT_OR_TX,
+    ("POST", "/mcp/{path:path}"): BOT_OR_TX,
+    ("PUT", "/mcp/{path:path}"): BOT_OR_TX,
+    ("PATCH", "/mcp/{path:path}"): BOT_OR_TX,
+    ("DELETE", "/mcp/{path:path}"): BOT_OR_TX,
+    ("OPTIONS", "/mcp/{path:path}"): BOT_OR_TX,
 }
+
+# The routes that carry NO scope requirement, declared explicitly so "no entry" can mean "denied"
+# everywhere else. Both are identity-only and forward nothing downstream: /health is the LB probe
+# (unauthenticated by design) and /auth/me is "who is this key" — a browser-only key must be able
+# to learn that it is a browser-only key.
+UNSCOPED_ROUTES: FrozenSet[Tuple[str, str]] = frozenset({
+    ("GET", "/health"),
+    ("GET", "/auth/me"),
+})
+
+
+def undeclared_routes(app: FastAPI) -> List[Tuple[str, str]]:
+    """Every (method, route-template) on ``app`` with no entry in ROUTE_SCOPES or UNSCOPED_ROUTES.
+
+    The executable form of the deny-by-default invariant, used by ``create_app``'s build-time
+    assertion and by the guard test. WebSocket routes are out of frame: ``/ws`` is not an
+    ``APIRoute``, it does not pass through ``_authorize``, and its subscribe leg authorizes each
+    meeting against the caller's ownership downstream.
+    """
+    missing: List[Tuple[str, str]] = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue  # FastAPI's own /openapi.json + /docs + /redoc, and the /ws socket
+        for method in sorted(route.methods or ()):
+            if method == "HEAD":
+                continue  # never registered by FastAPI itself; mirrors its GET sibling if it is
+            key = (method, route.path)
+            if key not in ROUTE_SCOPES and key not in UNSCOPED_ROUTES:
+                missing.append(key)
+    return missing
 
 # Default sentinel base URL. The DownstreamClient (real httpx or the fake ASGI transport) resolves
 # it; what matters is the PATH the gateway forwards to (verbatim from the route). v0.12 P2 folded
@@ -90,11 +232,54 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
 
-def _required_scopes(path: str) -> Optional[Set[str]]:
-    for prefix, scopes in ROUTE_SCOPES.items():
-        if path.startswith(prefix):
-            return scopes
-    return None
+# Path params reach a handler URL-DECODED (Starlette resolves %3F/%23/%2E before the route sees
+# them), so interpolating one raw into a downstream URL lets a caller graft a query string, a
+# fragment or a dot-segment onto the hop — ``%2E%2E`` walks /user/calendars/{id} back up to
+# admin-api's /user. Every param is re-encoded as ONE opaque segment before it is interpolated.
+# Control characters (NUL, CR, LF) are refused here instead: httpx raises ``InvalidURL`` for them,
+# which is NOT a ``RequestError`` and would escape the 502/504 mapping as a gateway 500.
+def _path_segment(value: str) -> Tuple[Optional[str], Optional[Response]]:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return None, _invalid_path_param_response()
+    segment = quote(value, safe="")
+    # ``quote`` leaves "." alone (it is unreserved), but httpx RESOLVES a dot-only segment against
+    # the base path — "/user/calendars/.." becomes admin-api's "/user". Percent-encode it so the
+    # id stays data; "%2E%2E" survives httpx untouched and decodes back to ".." downstream.
+    if segment and set(segment) == {"."}:
+        segment = segment.replace(".", "%2E")
+    return segment, None
+
+
+def _invalid_path_param_response() -> Response:
+    return Response(
+        content=json.dumps({"detail": "invalid path parameter"}),
+        status_code=400,
+        media_type="application/json",
+    )
+
+
+def _required_scopes(request: Request) -> Optional[FrozenSet[str]]:
+    """The scopes declared for the route this request MATCHED, or ``None`` when it declares none.
+
+    Resolved from the matched route's template (``request.scope["route"].path``) rather than from
+    the request path, so ``/user/calendars/{id}`` is one declaration instead of a prefix that also
+    swallows whatever route is added beside it next. ``None`` means DENY: the caller of this
+    function fails closed, so a route that reaches ``_authorize`` without a declaration answers 403
+    instead of forwarding.
+    """
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    if not path:
+        return None
+    return ROUTE_SCOPES.get((request.method.upper(), path))
+
+
+def _insufficient_scope_response() -> Response:
+    return Response(
+        content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
+        status_code=403,
+        media_type="application/json",
+    )
 
 
 def create_app(
@@ -194,28 +379,37 @@ def create_app(
                 headers={"Retry-After": "1"},
             )
 
-        # Scope enforcement (main.py:341-351).
-        # Stage 3 SCAFFOLD (not delivered): the agent domain (/api/*) carries NO scope today, so a valid
-        # key reaches any agent route. When Stage 3 lands, add agent-route scopes here (or a canAccess
-        # default-deny resolved per (user_id, resource owner)) so a key can read ONLY its owner's
-        # workspace/sessions/routines — see core/agent canAccess + the capability-token seam.
-        required = _required_scopes(request.url.path)
-        if required is not None:
-            user_scopes = set(user_data.get("scopes", []))
-            if not user_scopes & required:
-                log_event(
-                    "request_denied_scope",
-                    audience="user",
-                    level="warning",
-                    span="auth",
-                    user_id=user_id,
-                    fields={"method": method, "path": request.url.path, "required": sorted(required)},
-                )
-                return None, Response(
-                    content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
-                    status_code=403,
-                    media_type="application/json",
-                )
+        # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
+        # ROUTE_SCOPES; an undeclared route is refused here rather than forwarded, so the failure
+        # mode of forgetting a declaration is a 403 the author trips over, not an open door. (The
+        # build-time check in create_app means an undeclared route cannot normally reach this at
+        # all — this is the second wall, for a route registered onto the app after construction.)
+        #
+        # Per-RESOURCE authorization remains separate and still open on the agent domain: this
+        # decides WHICH KEYS reach a route, not which of the owner's objects they may touch. See
+        # the strict-xfail on GET /agent/meeting/stream in tests/test_proxy.py.
+        required = _required_scopes(request)
+        if required is None:
+            log_event(
+                "request_denied_undeclared_route",
+                audience="system",
+                level="error",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path},
+            )
+            return None, _insufficient_scope_response()
+        user_scopes = set(user_data.get("scopes", []))
+        if not user_scopes & required:
+            log_event(
+                "request_denied_scope",
+                audience="user",
+                level="warning",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path, "required": sorted(required)},
+            )
+            return None, _insufficient_scope_response()
 
         # USER-facing event: the request was accepted on behalf of this user.
         log_event(
@@ -276,6 +470,10 @@ def create_app(
                 params=dict(request.query_params) or None,
                 content=content,
             )
+        except httpx.InvalidURL:
+            # Not a RequestError: without this arm an unparseable hop URL surfaces as a gateway 500
+            # even though the fault is in what the CALLER put in the path.
+            return _invalid_path_param_response()
         except httpx.TimeoutException:
             return Response(content=json.dumps({"detail": "upstream timeout"}),
                             status_code=504, media_type="application/json")
@@ -381,6 +579,10 @@ def create_app(
     async def get_recording(recording_id: int, request: Request):
         return await _forward("GET", _meeting(f"/recordings/{recording_id}"), request)
 
+    @app.delete("/recordings/{recording_id}")
+    async def delete_recording(recording_id: int, request: Request):
+        return await _forward("DELETE", _meeting(f"/recordings/{recording_id}"), request)
+
     # finalize-on-read master metadata (audio|video); the recording player fetches this, then the
     # raw_url it returns. ?type= is preserved by _forward.
     @app.get("/recordings/{recording_id}/master")
@@ -438,6 +640,14 @@ def create_app(
     async def bind_meeting_workspace(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/workspace"), request)
 
+    # Who was in this meeting, as far as the core actually knows — invitation attendees + heard
+    # speakers, each row labelled with its source (Vexa-ai/vexa#451). Owner-scoped downstream.
+    @app.get("/meetings/{platform}/{native_meeting_id}/participants")
+    async def get_meeting_participants(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "GET", _meeting(f"/meetings/{platform}/{native_meeting_id}/participants"), request
+        )
+
     @app.put("/meetings/{platform}/{native_meeting_id}/intent")
     async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
         return await _forward(
@@ -468,8 +678,9 @@ def create_app(
     # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
     # it, exactly like the meeting routes: _forward resolves the key via /internal/validate (the
     # Authorizer), injects identity headers, and returns the downstream body + status verbatim.
-    # No ROUTE_SCOPES entry — any valid key may manage its own webhook (parity with 0.10.6, which
-    # gated it on api_key_scheme alone).
+    # Scoped BOT_OR_TX: the webhook is account config for the two service domains, so a key that
+    # owns either may manage it — but a key that owns NEITHER may not. Until rc.18 this route had
+    # no entry at all, and "no entry" meant "no check" (sweep finding B2).
     def _admin(path: str) -> str:
         return f"{admin_api_url}{path}"
 
@@ -485,15 +696,16 @@ def create_app(
     # #841: the per-user webhook DELIVERY HISTORY — the queryable record of real delivery outcomes
     # (the user-facing completion of #815→#817). Unlike the config above (identity-owned, admin-api),
     # the deliveries live in meeting-api (the dispatcher that records each outcome), so this forwards
-    # THERE. No ROUTE_SCOPES entry (any valid key reads its own history, parity with /user/webhook);
-    # the shared auth prep injects X-User-Id so meeting-api scopes the read to the owner.
+    # THERE. Scoped BOT_OR_TX like the config above; the shared auth prep injects X-User-Id so
+    # meeting-api scopes the read to the owner.
     @app.get("/user/webhook/deliveries")
     async def get_user_webhook_deliveries(request: Request):
         return await _forward("GET", _meeting("/webhooks/deliveries"), request)
 
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
-    # The ICS URL is a secret — admin-api masks it on every read-back. No ROUTE_SCOPES entry
-    # (any valid key manages its own calendar), parity with the webhook self-serve. ----
+    # The ICS URL is a secret — admin-api masks it on every read-back. Scoped BOT, not BOT_OR_TX:
+    # a connection with auto_join on turns every event in the feed into a bot spawn, so managing
+    # one is bot-lifecycle power reached through a different door. ----
     # calendar-sync feedback edges live in MEETING-api (they run the sync), unlike the config
     # (identity). Registered before the config routes only for reading clarity - paths are exact.
     @app.get("/user/calendar/sync")
@@ -512,8 +724,44 @@ def create_app(
     async def get_user_calendar(request: Request):
         return await _forward("GET", _admin("/user/calendar"), request)
 
+    @app.get("/user/calendars")
+    async def list_user_calendars(request: Request):
+        return await _forward("GET", _admin("/user/calendars"), request)
+
+    @app.post("/user/calendars")
+    async def create_user_calendar(request: Request):
+        return await _forward("POST", _admin("/user/calendars"), request)
+
+    @app.patch("/user/calendars/{calendar_id}")
+    async def update_user_calendar(calendar_id: str, request: Request):
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("PATCH", _admin(f"/user/calendars/{segment}"), request)
+
+    @app.delete("/user/calendars/{calendar_id}")
+    async def delete_user_calendar(calendar_id: str, request: Request):
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("DELETE", _admin(f"/user/calendars/{segment}"), request)
+
+    @app.get("/user/calendars/{calendar_id}/sync")
+    async def get_calendar_connection_sync(calendar_id: str, request: Request):
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("GET", _meeting(f"/user/calendars/{segment}/sync"), request)
+
+    @app.post("/user/calendars/{calendar_id}/sync")
+    async def run_calendar_connection_sync(calendar_id: str, request: Request):
+        segment, error = _path_segment(calendar_id)
+        if error is not None:
+            return error
+        return await _forward("POST", _meeting(f"/user/calendars/{segment}/sync"), request)
+
     # ---- user self-serve model + transcription prefs (identity owns them, same shape as
-    # /user/webhook: secrets masked by admin-api on every read-back, no ROUTE_SCOPES entry). ----
+    # /user/webhook: secrets masked by admin-api on every read-back, scoped BOT_OR_TX). ----
     @app.put("/user/models")
     async def set_user_models(request: Request):
         return await _forward("PUT", _admin("/user/models"), request)
@@ -686,6 +934,20 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):
         await run_multiplex(ws, authorizer, redis)
+
+    # ---- deny by default, at BUILD time ----
+    # The route table is now complete, so every route must have declared its scopes. Refusing to
+    # BUILD is the point: a 403 at request time only tells whoever hits the route, and only after
+    # it ships, whereas this fires in every unit test, every conformance run and the container's
+    # own start-up. An under-declared gateway does not boot.
+    missing = undeclared_routes(app)
+    if missing:
+        raise RuntimeError(
+            "gateway routes with no scope declaration: "
+            + ", ".join(f"{m} {p}" for m, p in missing)
+            + " — add each to gateway.app.ROUTE_SCOPES (or, for an identity-only route that needs "
+            "no scope, to UNSCOPED_ROUTES)."
+        )
 
     return app
 

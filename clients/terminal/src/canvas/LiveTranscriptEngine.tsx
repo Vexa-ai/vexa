@@ -91,8 +91,37 @@ const menuItemStyle: React.CSSProperties = {
   cursor: "pointer", padding: "5px 8px", borderRadius: 5, fontSize: 12, lineHeight: 1.3,
 };
 
+function ContestedText({ text }: { text: string }): React.ReactElement | null {
+  const pattern = /⟦([^⟧]+)⟧\{([^}]+)\}/g;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) != null) {
+    if (match.index > cursor) parts.push(text.slice(cursor, match.index));
+    parts.push(
+      <span
+        key={`contest-${match.index}`}
+        data-contested="true"
+        aria-label="Unresolved live transcript"
+        style={{
+          display: "inline",
+          color: "var(--t3)",
+          fontStyle: "italic",
+        }}
+      >
+        {match[1]}
+      </span>,
+    );
+    cursor = pattern.lastIndex;
+  }
+  if (!parts.length) return null;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
+
 /** Render a block's text. With `entities` → inline highlights; without → plain text (raw mode). */
 function BlockText({ text, entities, actions }: { text: string; entities?: EngineEntity[]; actions?: EngineActions }) {
+  if (/⟦[^⟧]+⟧\{[^}]+\}/.test(text)) return <ContestedText text={text} />;
   if (!entities || !entities.length) return <>{text}</>;
   const spans = splitTextIntoSpans(text, entities);
   return (

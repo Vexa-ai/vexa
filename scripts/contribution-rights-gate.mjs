@@ -11,7 +11,13 @@ const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
 // back to the checkbox of the item it belongs to. Matching only the marker's own line silently
 // reports zero selections for every correctly filled template.
 function selectedRights(body = "") {
-  const lines = body.split("\n");
+  // Parse ONLY the declaration section. A body may legitimately MENTION these markers -- quoting the
+  // template, or documenting this gate itself -- and matching the first occurrence anywhere leaves
+  // such a body unable to declare anything, because the prose sits above the real checkbox. The
+  // gate's own error message already points at "the Contribution rights section"; read exactly that.
+  const all = body.split("\n");
+  const heading = all.reduce((last, line, i) => (/^#{1,6}\s+contribution\s+rights\b/i.test(line) ? i : last), -1);
+  const lines = heading >= 0 ? all.slice(heading) : all;
   return RIGHTS.filter((right) => {
     const marker = `<!-- rights:${right} -->`;
     const markerIndex = lines.findIndex((candidate) => candidate.includes(marker));
