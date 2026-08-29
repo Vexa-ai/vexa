@@ -90,6 +90,18 @@ def test_authed_request_passes_body_and_status_verbatim():
     assert r.json() == {"id": 99, "platform": "google_meet"}
 
 
+def test_recording_delete_is_forwarded_to_meeting_api():
+    downstream = FakeDownstream(
+        status_code=200, body={"status": "deleted", "recording_id": 42}
+    )
+    client, _ = _client(downstream=downstream)
+    response = client.delete("/recordings/42", headers=AUTH)
+    assert response.status_code == 200
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"] == "http://meeting-api/recordings/42"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
 def test_range_response_preserves_content_range_headers():
     """A 206 from a recording /raw byte stream must keep its Content-Range/Accept-Ranges on the way
     out. Without them the response is a malformed 206 and browsers abort <audio>/<video> playback
@@ -247,6 +259,25 @@ def test_native_chat_read_forwards_to_meeting_api():
     assert r.status_code == 200
     assert downstream.last["method"] == "GET"
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+
+
+def test_native_participants_read_forwards_to_meeting_api():
+    """#451: GET /meetings/{platform}/{native}/participants forwards, path-for-path, to the
+    owner-scoped meeting-api read. The edge adds no roster logic of its own — it must not, or the
+    ownership check would live in two places and only one of them would be tested."""
+    client, downstream = _client()
+    r = client.get("/meetings/google_meet/abc-defg-hij/participants", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij/participants")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_participants_read_without_a_key_is_401():
+    """Fail-closed: an unauthenticated participants read never reaches meeting-api at all."""
+    client, downstream = _client()
+    assert client.get("/meetings/google_meet/abc-defg-hij/participants").status_code == 401
+    assert downstream.last is None
 
 
 def test_recording_download_alias_forwards_to_raw():
