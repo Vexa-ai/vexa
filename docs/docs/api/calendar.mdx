@@ -6,7 +6,8 @@ description: "Connect and manage multiple ICS calendars, run synchronization, an
 The Calendar API manages named ICS connections and imports upcoming events into the ordinary
 [`meetings`](/api/meetings) lifecycle. Each connection has its own auto-join policy and bot name.
 
-All requests use the same API-key authentication as the rest of Vexa:
+All requests use the same base URL and API-key authentication as the rest of Vexa
+([base URL & auth](/api/meetings#base-url--auth)):
 
 ```bash
 -H "X-API-Key: $API_KEY"
@@ -161,6 +162,17 @@ A feed fetch or parse problem is a successful HTTP response with a non-null `las
 connection exists and the sync attempt was recorded. An unknown, disabled, or deleted connection
 returns **404 Not Found** because it is not available to the sync discovery edge. A deployment with
 calendar sync unwired returns **503 Service Unavailable**.
+
+<Warning>
+**Two divergences from this contract are open on the service today**
+([#1240](https://github.com/Vexa-ai/vexa/issues/1240)):
+
+- A **disabled** connection answers `200` with `last_error: null` and zero counts — and advances
+  `last_sync` — instead of the `404` above. A client that pauses a feed and keeps polling is told
+  the feed is current. Until that is fixed, do not read a `200` here as proof the feed was fetched;
+  check `enabled` on the connection.
+- On the error path the response omits `counts` rather than returning zeros.
+</Warning>
 
 ### Read the last sync result
 
