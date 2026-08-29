@@ -54,6 +54,104 @@ notable line and the migration notes between majors.
 - **Re-check your secrets.** Set real values for `ADMIN_TOKEN`, `INTERNAL_API_SECRET`,
   `VEXA_DISPATCH_SIGNING_KEY`, and DB/MinIO credentials — see [Configuration](/configuration).
 
+### Upgrade runbook: 0.10 to 0.12.x
+
+The items above are the client-side contract changes. This section is the **operator** runbook for
+moving an existing 0.10.x install — with a populated database — onto the current 0.12.x line. The
+path was validated against a production migration in July 2026.
+
+#### Go straight to the latest 0.12.x — no intermediate hop
+
+Upgrade **0.10.x → the latest 0.12.x release** in one step. There is no staged upgrade path and none
+is needed: schema convergence is **state-based, not sequential** (see below), so stopping on an
+older 0.12.x buys nothing and costs you the fixes shipped since. In particular, older 0.12.x
+releases lack the fail-closed schema check described below, so a missing dedup index degrades
+**silently** instead of refusing to start — the failure mode that check exists to catch.
+
+#### The database: no Alembic, three manual steps
+
+Vexa has **no migration tool**. `ensure_schema()` runs on every admin-api boot and *converges* the
+schema: `create_all` → additive `ADD COLUMN` → data backfills → index sync. It never drops a table,
+never rewrites an existing value, and never issues `ALTER … SET DEFAULT`. That is what makes the
+upgrade order-independent — and it is also why three things a live 0.10 database needs are **not**
+done for you.
+
+Run these against the database **before** you deploy 0.12.x, as standalone `psql` statements (not
+wrapped in a `BEGIN`). The runbooks with full SQL, policy notes, and rollback live beside the schema
+in the repo:
+[`core/identity/services/admin-api/src/admin_api/schema/`](https://github.com/Vexa-ai/vexa/tree/main/core/identity/services/admin-api/src/admin_api/schema).
+
+**1 · Pre-flight the active-meeting dedup index — do this first.** 0.12.x adds a partial UNIQUE index
+over `meetings (user_id, platform, platform_specific_id)` for non-terminal rows. If the table already
+holds two or more active rows for the same key, the index **cannot be built** — and admin-api
+**fails closed**: startup raises, the process exits `3`, `/health` never answers, and the compose
+healthcheck / Kubernetes probes never pass. Check for duplicates before you deploy anything
+(read-only):
+
+```sql
+SELECT user_id, platform, platform_specific_id,
+       count(*) AS active_dups,
+       array_agg(id ORDER BY created_at DESC, id DESC) AS meeting_ids
+FROM meetings
+WHERE status NOT IN ('completed', 'failed')
+  AND platform_specific_id IS NOT NULL
+GROUP BY user_id, platform, platform_specific_id
+HAVING count(*) > 1
+ORDER BY active_dups DESC;
+```
+
+Zero rows → go straight to building the index. Rows returned → retire the stale duplicates to a
+terminal status first (policy and the exact statement are in
+[`MIGRATION-0002`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0002-meeting-active-dedup-index.md)),
+re-run the query until it is empty, then build the index out of band so the build does not lock
+writes on the hot spawn table:
+
+```sql
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_meeting_active_user_platform_native
+ON meetings (user_id, platform, platform_specific_id)
+WHERE status NOT IN ('completed', 'failed');
+```
+
+`CONCURRENTLY` is why this is manual: `ensure_schema` runs inside a single transaction, and
+`CREATE INDEX CONCURRENTLY` cannot. With the index already present, the boot-time sync matches it by
+name and no-ops.
+
+**2 · Raise the `max_concurrent_bots` default.** The per-user default moved **1 → 3** in 0.12. The
+additive column sync neither changes the column default nor backfills existing rows, so on an
+upgraded database every existing user stays on their old value. Raise-only, so it never lowers an
+account already granted more
+([`MIGRATION-0003`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0003-default-max-concurrent-bots-3.md)):
+
+```sql
+ALTER TABLE users ALTER COLUMN max_concurrent_bots SET DEFAULT 3;
+UPDATE users SET max_concurrent_bots = 3 WHERE max_concurrent_bots < 3;
+```
+
+**3 · API-token scopes — applied automatically on boot.** 0.10 tokens predate the `scopes` column,
+so the additive `ADD COLUMN` leaves them empty, and an empty scope set is a `403` on every core
+route. `ensure_schema` backfills them at startup; left unbackfilled, an empty scope set is an
+invisible revocation of every existing customer key
+([`MIGRATION-0004`](https://github.com/Vexa-ai/vexa/blob/main/core/identity/services/admin-api/src/admin_api/schema/MIGRATION-0004-backfill-token-scopes.md)).
+Empty rows converge to the full valid-scope set; already-scoped tokens are never widened.
+
+<Note>
+Running on Kubernetes with the Helm chart? The chart's migration Job is off by default
+(`migrations.enabled: false`) — the convergence you rely on is the one admin-api runs at boot, and
+the manual steps above still have to be run against the database yourself.
+</Note>
+
+#### Kubernetes: check the namespace LimitRange before you upgrade
+
+Every bot and agent is spawned as its own bare Pod, and a spawned Pod declares **no resource
+requests or limits of its own**. In a quota-controlled namespace this means the namespace's
+`LimitRange` defaults are what the bot actually gets — and browser-based bots need real headroom.
+Either run Vexa in a namespace with no `LimitRange`, or give that namespace the defaults Vexa's own
+production runs: `default` `{cpu: 1500m, memory: 2560Mi}`, `defaultRequest`
+`{cpu: 1000m, memory: 1100Mi}`. The `2560Mi` limit is a hard ceiling, not a suggestion — a Teams
+call spikes past 2 Gi. Too small a default shows up as a bot that dies mid-join, not as a scheduling
+error. See
+[Kubernetes (Helm)](/deployment-kubernetes#namespace-limitrange-defaults).
+
 ### Parity with the 0.10.x line
 
 The public `api.v1` contract is sealed **hash-equal to `main`'s OpenAPI 1.5.0** and enforced in CI
@@ -74,7 +172,7 @@ probe), not inferred from planning docs.
 | Mid-call bot config — `PUT /bots/{platform}/{id}/config` (change language/task live) | contract-sealed, not wired | The gateway mounts and forwards it, but the live bot-control plane isn't wired in the open-core meeting-api — authenticated calls return the downstream `404`. Flagged in the [Meetings API](/api/meetings) reference. |
 | Voice agent — `POST /bots/{platform}/{id}/speak` (TTS into the call) | contract-sealed, not wired | Proven at contract level (`acts.v1` + the mock-bot speak-ack gate); the real path returns `404` in the shipped stack. Contract-ready, not user-ready. |
 | Interactive bots beyond speak — in-meeting **chat**, **screen share**, **avatar** | contract-sealed, not wired | The `chat`/`screen`/`avatar` endpoints are in the sealed `api.v1`, but the 0.12 gateway does not mount them (edge probe: `404`). **Planned back in the 0.12.x line** — same honest framing as config/speak. |
-| Transcript **share links** — `POST /transcripts/…/share` + `GET /public/transcripts/{id}.txt` | contract-sealed, not mounted | Verified: both routes are in the sealed `api.v1`; neither is mounted at the 0.12 gateway (edge probe: `404`). The feature was dashboard-coupled in 0.10.x. |
+| Transcript **share links** — the 0.10.x public-URL share `GET /public/transcripts/{id}.txt` | not mounted | Verified: sealed in `api.v1`, mounted by no component; a URL of that shape does not resolve on a 0.12 deployment. `POST /transcripts/…/share` **is** served, but as a capability-token mint (`{id, token, mode, expires_at}`) redeemed by another authenticated user at `POST /transcripts/share/accept` — not the 0.10.x public-URL response. See the [api.v1 native-id table](/api/meetings#apiv1-native-id-support-per-route). |
 | `GET …/participants` — meeting participants endpoint (main PR #453) | post-seal | Merged into `main` after the 1.5.0 seal; **planned back in the 0.12.x line** with the next `api.v1` contract revision. |
 | **`discord`** as a non-bot ingest platform (main PR #452) | post-seal | The 0.12 platform enum is `google_meet` / `zoom` / `teams` — a contract test asserts `DELETE /bots/discord/…` → `422`. **Planned back in the 0.12.x line** with the next `api.v1` contract revision. |
 | Zoom **bring-your-own OBF/ZAK tokens** + native SDK path (main PR #320) | not carried — **planned back in the 0.12.x Zoom track** | Verified: the carved bot joins Zoom via the **web client only** (`buildZoomWebClientUrl` → `app.zoom.us/wc/…/join`); no ZAK/OBF token handling and no native-SDK branch exist yet. Authorized-join (tokens and/or SDK) returns with the 0.12.x Zoom work. |
@@ -371,7 +469,7 @@ probe), not inferred from planning docs.
 - **Governance: four D-book amendments from the v0.12.12 retro (#785).** TAKE verdicts now name the head sha they examined (a later push makes the endorsement historical); one rule governs sealed-contract re-stamps (a back-compatible re-seal may ride a `lane:contract` PR whose merge is the ruling, breaking changes get an issue-recorded ruling first); the closure mechanism gains mechanism-vs-tree verification over open prepared issues (catching deliveries no link sweep sees); and the incoming-report template now requires the deployed version / verified tag. See [Delivery](/governance/delivery).
 
 - **Security floor: adm-zip bumped to 0.6.0 via pnpm override (#773).** Closes Dependabot high
-  GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation in adm-zip <0.6.0), which rode in through
+  GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation in adm-zip `<0.6.0`), which rode in through
   onnxruntime-node's install-time unpack under `@vexa/mixed-pipeline`. Exposure was
   postinstall-only, but the resolution layer now excludes the vulnerable range entirely.
 
