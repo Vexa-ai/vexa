@@ -120,7 +120,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
   e.es = es;
   es.onopen = () => { e.state.connected = true; e.state.lastEventAt = Date.now(); armWatchdog(); emit(); };
   es.onmessage = (m) => {
-    let ev: { type?: string; speaker?: string; text?: string; t?: number; tsMs?: number; id?: string; completed?: boolean; card?: LiveCard; note?: LiveNote; error?: LiveModelError | string; message?: string; status?: number };
+    let ev: { type?: string; speaker?: string; text?: string; t?: number; tsMs?: number; id?: string; completed?: boolean; card?: LiveCard; note?: LiveNote; error?: LiveModelError | string; message?: string; status?: number; segment_ids?: string[] };
     try { ev = JSON.parse(m.data); } catch {
       addIssue({ kind: "parse", message: "Could not parse meeting stream event" });
       emit();
@@ -159,6 +159,14 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
       const next: LiveNote = { id: ev.note.id, speaker: ev.note.speaker, chapter: ev.note.chapter, text: ev.note.text, t: ev.note.t, tsMs: absMs(ev.note.t), pass: ev.note.pass, frozen: ev.note.frozen };
       const i = s.notes.findIndex((x) => x.id === next.id);
       if (i >= 0) s.notes[i] = next; else s.notes.push(next);
+    }
+    else if (ev.type === "retract" && Array.isArray(ev.segment_ids) && ev.segment_ids.length) {
+      // The producer withdrew superseded/over-extended pending drafts (the mixed lane's full-replace
+      // tail). Our egress is append-only + we upsert by id, so a retract is the ONLY way a draft leaves
+      // the view — drop the named ids so a stale "unattached"/duplicated line disappears in place.
+      const drop = new Set(ev.segment_ids);
+      const kept = s.transcript.filter((x) => !x.id || !drop.has(x.id));
+      if (kept.length !== s.transcript.length) s.transcript = kept; else return; // nothing here → don't churn
     }
     else if (ev.type === "message-delta" && ev.text) s.note = ev.text;
     else if (ev.type === "stream-error") addIssue({ kind: "stream", message: ev.message || "Meeting stream error", status: ev.status });

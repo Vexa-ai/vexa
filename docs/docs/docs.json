@@ -32,7 +32,8 @@
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
-          "n8n"
+          "n8n",
+          "interactive-bots"
         ]
       },
       {
@@ -72,6 +73,7 @@
       {
         "group": "Architecture",
         "pages": [
+          "architecture/evaluation",
           "architecture/modules",
           "architecture/execution",
           "architecture/dispatch",
@@ -86,6 +88,9 @@
         "group": "API reference",
         "pages": [
           "api/meetings",
+          "api/calendar",
+          "api/settings",
+          "webhooks",
           "api/agent",
           "api/errors"
         ]
@@ -101,6 +106,7 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "support",
           "sdks",
           "vexa-mcp",
           "changelog"
@@ -147,6 +153,10 @@
     {
       "source": "/websocket",
       "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/settings",
+      "destination": "/api/settings"
     },
     {
       "source": "/self-hosted-management",
@@ -332,6 +342,66 @@
       "source": "/self-hosting",
       "destination": "/deployment",
       "permanent": false
+    },
+    {
+      "source": "/api/interactive-bots",
+      "destination": "/interactive-bots"
+    },
+    {
+      "source": "/api/interactive-bots.md",
+      "destination": "/interactive-bots.md"
+    },
+    {
+      "source": "/ws/events",
+      "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/ws/events.md",
+      "destination": "/how-to/stream-transcript.md"
+    },
+    {
+      "source": "/local-webhook-development",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/local-webhook-development.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/how-to/webhooks",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/how-to/webhooks.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/api/webhooks",
+      "destination": "/webhooks"
+    },
+    {
+      "source": "/api/webhooks.md",
+      "destination": "/webhooks.md"
+    },
+    {
+      "source": "/cookbook/share-transcript-url",
+      "destination": "/chatgpt-transcript-share-links"
+    },
+    {
+      "source": "/cookbook/share-transcript-url.md",
+      "destination": "/chatgpt-transcript-share-links.md"
+    },
+    {
+      "source": "/feedback",
+      "destination": "/support"
+    },
+    {
+      "source": "/contact",
+      "destination": "/support"
+    },
+    {
+      "source": "/tell-us",
+      "destination": "/support"
     }
   ]
 }

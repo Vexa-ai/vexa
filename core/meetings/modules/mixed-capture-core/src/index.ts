@@ -9,4 +9,18 @@
  */
 export { createMixedAudioCapture } from './mixed-audio.js';
 export type { MixedAudioCapture, MixedAudioOptions } from './mixed-audio.js';
-export { installRemoteAudioHook } from './webrtc-audio-hook.js';
+export { installRemoteAudioHook, observedPeerConnections } from './webrtc-audio-hook.js';
+export type { WebRtcAudioHookOptions, ObservedPeerConnection } from './webrtc-audio-hook.js';
+export {
+  selectTeamsMixStreams, mainAudioProvedSilent,
+  TEAMS_MAIN_AUDIO_GRACE_MS, TEAMS_MAIN_AUDIO_SILENCE_MS, TEAMS_MAIN_AUDIO_ENERGY_RMS,
+} from './teams-main-audio.js';
+export type {
+  TeamsMixSelection, MainAudioAbsentObservation, MainAudioSilentObservation, StreamLike,
+} from './teams-main-audio.js';
+// The transport sensor: RTP contributing sources → active/inactive transitions (observation only).
+export { createCsrcPoll, toEpochMs, CSRC_POLL_MS, CSRC_INACTIVE_MS } from './csrc-poll.js';
+export type {
+  CsrcPoll, CsrcPollOptions, CsrcPollHealth, CsrcTransition, CsrcPollErrorObservation,
+  CsrcReceiverLike, ContributingSourceLike,
+} from './csrc-poll.js';

@@ -1,0 +1,8 @@
+{"record":"header","schema":"producer_dom_trace.v1","platform":"teams","signal":"dom-outline","provenance":"authored","timebase":"relative-ms"}
+{"record":"tile-state","atMs":0,"tileId":"tile-001","nameToken":"SPEAKER_A","signalState":"present","voiceState":"speaking"}
+{"record":"tile-state","atMs":0,"tileId":"tile-002","nameToken":"SPEAKER_C","signalState":"present","voiceState":"speaking"}
+{"record":"tile-state","atMs":0,"tileId":"tile-003","nameToken":"UNRESOLVED","signalState":"present","voiceState":"speaking"}
+{"record":"tile-state","atMs":0,"tileId":"tile-004","nameToken":"UNRESOLVED","signalState":"absent","voiceState":"speaking"}
+{"record":"tile-state","atMs":250,"tileId":"tile-001","nameToken":"SPEAKER_A","signalState":"present","voiceState":"silent"}
+{"record":"tile-state","atMs":250,"tileId":"tile-002","nameToken":"SPEAKER_C","signalState":"present","voiceState":"silent"}
+{"record":"tile-state","atMs":300,"tileId":"tile-003","nameToken":"SPEAKER_B","signalState":"present","voiceState":"speaking"}

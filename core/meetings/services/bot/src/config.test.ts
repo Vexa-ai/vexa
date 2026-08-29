@@ -39,6 +39,7 @@ for (const g of goldens) {
   check('full: automaticLeave threaded', full.automaticLeave?.waitingRoomTimeout === 300000, String(full.automaticLeave?.waitingRoomTimeout));
   check('full: secret token present (not logged)', typeof full.token === 'string' && full.token.length > 0);
   check('full: transcriptionModel threaded (#522)', full.transcriptionModel === 'whisper-large-v3-turbo', String(full.transcriptionModel));
+  check('full: captureSignalEnabled threaded (O-TEL-1)', full.captureSignalEnabled === true, String(full.captureSignalEnabled));
 }
 
 // ── typed access on the jitsi golden (the platform enum accepts jitsi) ──

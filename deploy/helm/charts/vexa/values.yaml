@@ -173,6 +173,11 @@ adminApi:
 meetingApi:
   enabled: true
   replicaCount: 2
+  # Keep the process alive briefly after Kubernetes marks the Pod terminating. This gives
+  # EndpointSlice/kube-proxy enough time to stop routing fresh connections to the old IP before
+  # Uvicorn exits; it is especially important when multiple co-located replicas disappear.
+  preStopDelaySeconds: 5
+  terminationGracePeriodSeconds: 30
   image:
     repository: vexaai/v012-meeting-api
     tag: v012
@@ -241,6 +246,27 @@ runtime:
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
+  # Sizing for the Pods the runtime SPAWNS (backend=k8s) — NOT `runtime.resources` above, which sizes
+  # the runtime Deployment itself. Namespace policy commonly REQUIRES every container to declare CPU
+  # and memory requests AND limits (a ResourceQuota naming requests.cpu/limits.memory, or a restricted
+  # OpenShift project); a spawned Pod that declares none is rejected at admission and the meeting or
+  # dispatch never starts (#1005).
+  #
+  # The two classes are sized INDEPENDENTLY: a meeting bot is a Chromium browser + capture pipeline,
+  # an agent worker is a code harness. runtime.v1 carries ONE value per dimension, so each value sets
+  # BOTH the request and the limit (Guaranteed QoS) — there is no separate request/limit knob.
+  #
+  # The defaults below are conservative and sized to fit a small dev cluster. RAISE THEM for real
+  # meetings: memoryMb is a hard ceiling, and a bot that exceeds it is OOM-killed mid-meeting (before
+  # #1005 nothing was enforced, so bots ran unbounded). Set a class's values to "" to emit no
+  # resources for it at all and keep exactly the pre-#1005 unbounded behaviour.
+  workloadResources:
+    meetingBot:
+      cpu: 1                    # cores → requests/limits cpu: 1000m
+      memoryMb: 2048            # MiB   → requests/limits memory: 2048Mi
+    agentWorker:
+      cpu: 0.5                  # cores → requests/limits cpu: 500m
+      memoryMb: 1024            # MiB   → requests/limits memory: 1024Mi
   # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
   # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod

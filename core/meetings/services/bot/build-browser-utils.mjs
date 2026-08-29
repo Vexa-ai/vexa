@@ -19,6 +19,7 @@
  *   • createGmeetCapture({ log, onAudio })        — gmeet lane per-channel PCM
  *   • createGmeetSpeakers({ log })                — gmeet lane glow → litNames()
  *   • createMixedAudioCapture(stream, onPcm)      — mixed lane (zoom/teams)
+ *   • createCsrcPoll({ onTransition, … })         — mixed lane transport sensor (CSRC transitions)
  * We additionally expose the rest of the gmeet capture surface
  * (GmeetChannelBinder, createPcmCaptureNode, createGmeetCaptureV1, pickBoundName,
  * installRemoteAudioHook) so the global mirrors production's shape and the same
@@ -71,6 +72,9 @@ import {
 import {
   createMixedAudioCapture,
   installRemoteAudioHook,
+  selectTeamsMixStreams,
+  mainAudioProvedSilent,
+  createCsrcPoll,
 } from ${JSON.stringify(MIXED)};
 import {
   createRecordingTap,
@@ -82,6 +86,7 @@ import {
 } from ${JSON.stringify(JITSI)};
 import {
   createTeamsSpeakers,
+  createTeamsCaptions,
 } from ${JSON.stringify(TEAMS)};
 import {
   createZoomSpeakers,
@@ -98,6 +103,9 @@ const VexaBrowserUtils = {
   // ── mixed lane (zoom/teams single combined stream) ──
   createMixedAudioCapture,   // capture-bridge.ts: w.VexaBrowserUtils.createMixedAudioCapture
   installRemoteAudioHook,
+  selectTeamsMixStreams,     // capture-bridge.ts setupMix: Teams mix vs fail-open (one impl, unit-tested)
+  mainAudioProvedSilent,     // capture-bridge.ts setupMix: presence is not liveness — abandon a silent mix
+  createCsrcPoll,            // capture-bridge.ts: the transport sensor (RTP contributing sources → transitions)
   // ── recording (all platforms): MediaRecorder → recording.v1 chunks ──
   createRecordingTap,        // capture-bridge.ts: w.VexaBrowserUtils.createRecordingTap
   // ── jitsi lane (dominant-speaker naming hints + chat over the app's own state) ──
@@ -106,6 +114,7 @@ const VexaBrowserUtils = {
   sendJitsiChatMessage,
   // ── teams lane (voice-level "blue-square" outline → speaker hints) ──
   createTeamsSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsSpeakers
+  createTeamsCaptions,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsCaptions (live CC → diagnostics)
   // ── zoom lane (active-speaker DOM watcher → 'dom-active' naming hints) ──
   createZoomSpeakers,        // capture-bridge.ts: w.VexaBrowserUtils.createZoomSpeakers
 };
@@ -151,7 +160,7 @@ console.log(`✅ Browser utilities bundle created: ${OUT} (${bytes} bytes)`);
 console.log('📦 window.VexaBrowserUtils exposes:');
 console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1 / pickBoundName');
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
-console.log('  - createMixedAudioCapture / installRemoteAudioHook');
+console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams / createCsrcPoll');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
-console.log('  - createTeamsSpeakers / createZoomSpeakers');
+console.log('  - createTeamsSpeakers / createTeamsCaptions / createZoomSpeakers');
 console.log('  - window.performLeaveAction');

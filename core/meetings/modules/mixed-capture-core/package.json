@@ -6,12 +6,17 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/mixed-capture-core.test.ts",
+    "test": "tsx src/mixed-capture-core.test.ts && tsx src/teams-main-audio.test.ts && tsx src/webrtc-dedup.test.ts && tsx src/csrc-poll.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

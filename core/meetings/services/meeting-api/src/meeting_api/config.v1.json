@@ -317,6 +317,13 @@
    "targets": []
   },
   {
+   "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
+   "class": "defaulted",
+   "default": "0",
+   "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
+   "targets": []
+  },
+  {
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
@@ -368,8 +375,15 @@
   {
    "key": "RECONCILE_PREACTIVE_GRACE_S",
    "class": "defaulted",
-   "default": "660",
-   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — derived from the lobby budget the spawn issues (waitingRoomTimeout 600s) plus headroom, so the control plane is never less patient than the deadline it handed the bot (#862)",
+   "default": "960 (VEXA_LOBBY_BUDGET_S + 60)",
+   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — DERIVED from the lobby budget the spawn issues (VEXA_LOBBY_BUDGET_S, default 900s) plus 60s of headroom, so the control plane is never less patient than the deadline it handed the bot (#862, #1208)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_LOBBY_BUDGET_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "lobby budget (s) issued to every spawned bot as automatic_leave.waitingRoomTimeout — how long it may wait for admission before reporting awaiting_admission_timeout. 15 min so an auto-joined bot outwaits a late host (#1208); the reconcile pre-active grace derives from it, so raising it never leaves a waiter reaped by a shorter watchdog. An explicit automatic_leave.max_wait_for_admission on POST /bots still wins.",
    "targets": []
   },
   {
@@ -499,8 +513,8 @@
   {
    "key": "AUTO_JOIN_LEAD_S",
    "class": "defaulted",
-   "default": "60",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at",
+   "default": "120",
+   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
    "targets": []
   },
   {
@@ -585,6 +599,27 @@
    "class": "defaulted",
    "default": "100",
    "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this — a stuck/orphaned batch is a reportable state (P18)",
+   "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_BUDGET_BYTES",
+   "class": "defaulted",
+   "default": "53687091200 (50 GiB)",
+   "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Fixture collection is default ON, so the bound lives here rather than on the capture path — the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
+   "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_JANITOR_INTERVAL_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "O-TEL-1: captured-signal budget sweep cadence (s) — one paginated listing of the `signal/` prefix plus per-object deletes, single-flighted across replicas",
+   "targets": []
+  },
+  {
+   "key": "SIGNAL_TAPE_MIN_AGE_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it — the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
    "targets": []
   }
  ],

@@ -97,10 +97,41 @@ class TranscriptStore(Protocol):
         Returns {meeting_id, ok}, {error}, or ``None`` (malformed/unknown token). The token IS the authz."""
         ...
 
+    async def get_meeting_participants(
+        self, user_id: int, platform: str, native_meeting_id: str
+    ) -> Optional[dict]:
+        """OWNER-scoped read of everything 0.12 actually PERSISTS about who was in a meeting.
+
+        Returns ``{"meeting_id": int, "invited": [{email, name?, response_status?}], "speakers": [str]}``,
+        or ``None`` when the caller owns no such meeting (the route maps ``None`` → 404 — never an
+        empty roster, which would leak "this meeting exists but is empty" across a tenant boundary).
+
+        Two sources, and they are NOT the same thing:
+
+        * ``invited`` — ``meeting.data['attendees']``, the ATTENDEE lines of the calendar invitation
+          the meeting was imported from (``calendar_sync.service._attendees``). Real people, silent
+          ones included — but only for meetings that came in through a connected calendar feed, and
+          it records who was ASKED, not who showed up.
+        * ``speakers`` — ``SELECT DISTINCT transcriptions.speaker``, first-heard first. People who
+          were heard AND whose name resolved. Not an attendance list: a participant who never spoke,
+          or whose platform tile never yielded a name, is absent by construction.
+
+        There is deliberately NO third source, because the 0.12 core captures none: the platform
+        modules observe only tiles that emit a SPEAKING signal, and no producer writes an observed
+        roster to any store (Vexa-ai/vexa#861). This port must never synthesize one from the two
+        above — inventing attendance from speech is the exact failure #861's preparation forbids."""
+        ...
+
     async def append_segment(self, meeting_id: int, segment: dict) -> None:
         """Persist one ingested transcript segment for ``meeting_id`` (keyed by its
         ``segment_id`` — stable identity, last-write-wins, exactly the collector's Redis-hash
         persistence)."""
+        ...
+
+    async def delete_segments(self, meeting_id: int, segment_ids: list) -> None:
+        """Withdraw retracted drafts by ``segment_id``: drop them from the live segments hash (before an
+        un-flushed draft reaches Postgres) AND delete any already-flushed rows. Idempotent — a missing id
+        is a no-op. The mixed lane's full-replace pending tail leaves stale drafts otherwise."""
         ...
 
     async def connect_doc(
@@ -151,8 +182,11 @@ class TranscriptStore(Protocol):
         workspace_id: Optional[str] = None,
         auto_join: bool = True,
         calendar_uid: Optional[str] = None,
+        calendar_source: Optional[dict] = None,
         workspace_source: Optional[str] = None,
         attendees: Optional[list] = None,
+        auto_join_last_attempt: Optional[str] = None,
+        auto_join_error: Optional[str] = None,
     ) -> dict:
         """Create a PLANNED meeting row — status ``scheduled`` (when ``scheduled_at`` is set) or
         ``idle`` — with NO bot spawned. Link-less plans use ``platform='unknown'`` +
@@ -162,7 +196,13 @@ class TranscriptStore(Protocol):
         Serializes with concurrent spawns via the same per-user advisory lock
         ``create_meeting_guarded`` takes. Returns the created row (``list_meetings`` shape), or
         ``{"error": "duplicate"}`` when a NON-TERMINAL row already exists for
-        ``(user, platform, native)`` (the route maps it → 409)."""
+        ``(user, platform, native)`` (the route maps it → 409).
+
+        ``auto_join_last_attempt`` / ``auto_join_error`` seed the row with an auto-join backoff
+        earned elsewhere. Calendar sync passes them when this row replaces a TERMINAL row the
+        auto-join sweep already dispatched for, so a re-imported occurrence is not due the instant
+        it exists. They must land in the INSERT, never in a follow-up patch: a sweep tick between
+        the two would spawn."""
         ...
 
     async def update_planned_meeting(
@@ -181,10 +221,49 @@ class TranscriptStore(Protocol):
         ``{"error": "duplicate"}`` when a new native id collides with another non-terminal row."""
         ...
 
+    async def attach_calendar_source(
+        self, user_id: int, meeting_id: int, *, calendar_uid: str,
+        calendar_sources: Optional[list] = None,
+    ) -> Optional[dict]:
+        """Stamp calendar IDENTITY onto a row in ANY status — including one the bot FSM owns.
+
+        The narrow complement of ``update_planned_meeting``: calendar sync uses it when an imported
+        event's meeting is ALREADY LIVE, so the live row carries the calendar's uid/sources instead
+        of a duplicate planned row being created beside it (which the auto-join sweep would then
+        dispatch a SECOND bot for). Writes ONLY ``calendar_uid`` / ``calendar_sources`` and the
+        singular ``calendar_connection_id`` / ``calendar_name`` mirrors — never ``auto_join``,
+        ``auto_join_user_set``, ``calendar_managed``, ``scheduled_at`` or ``status``.
+
+        Returns the row (``list_meetings`` shape), or ``None`` when the user owns no such row."""
+        ...
+
     async def delete_planned_meeting(self, user_id: int, meeting_id: int) -> Optional[bool]:
         """OWNER-scoped delete of a PLANNED (``idle``/``scheduled``) row. Returns ``True`` on
         delete, ``None`` when the user owns no such row (→ 404), ``False`` when the row is
         FSM-owned (→ 409). An FSM row is never deletable from here."""
+        ...
+
+    async def prepare_completed_artifact_deletion(
+        self, user_id: int, meeting_id: int
+    ) -> Optional[dict]:
+        """OWNER-scoped snapshot for a completed/failed meeting's artifact erasure.
+
+        Returns ``None`` for unknown/unowned, ``{"error": "conflict"}`` while the FSM is active,
+        or a retryable snapshot containing the persisted recording metadata. It records a
+        ``pending`` tombstone under the row lock so ``continue_meeting`` cannot reopen the row, but
+        retains every artifact and path; storage failures therefore remain addressable/retryable.
+        """
+        ...
+
+    async def finalize_completed_artifact_deletion(
+        self, user_id: int, meeting_id: int
+    ) -> Optional[bool]:
+        """After object deletion succeeds, erase transcript rows and recording metadata atomically.
+
+        The terminal meeting/lifecycle row is retained with an artifact-deletion tombstone. Returns
+        ``None`` for unknown/unowned and ``False`` if the meeting is no longer terminal. Repeated
+        calls on the tombstone are successful no-ops.
+        """
         ...
 
 

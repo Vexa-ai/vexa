@@ -12,7 +12,9 @@
 #                      validate-harness fix is testable BEFORE it merges to main
 #
 #   resolve         version well-formed · every published manifest resolves + carries linux/amd64
-#                   (and linux/arm64 for matrix images except vexa-bot)
+#                   (and linux/arm64 for matrix images except vexa-bot) · plus the packet-bound
+#                   candidate-map identity, enforced on every promote / stable / already-mapped
+#                   version and deferred-with-a-notice in the freeze window (#1237)
 #   image-identity  every published image CONTAINS what its NAME promises — runs in PARALLEL
 #                   with the validate legs (all consume the same published bytes); it gates
 #                   PROMOTE, not the validate verdict, so it no longer sits serially between
@@ -125,12 +127,25 @@ jobs:
   # with linux/amd64 (all images) and linux/arm64 (matrix images except vexa-bot). Everything
   # downstream fans out from here IN PARALLEL — nothing heavier stands between "validate
   # requested" and the first validate leg starting.
+  #
+  # Two checks live here and they are NOT the same check (#1237):
+  #   floor    — version-agnostic: every published manifest resolves with its required platforms.
+  #              Unconditional; a red here means the set is not published as claimed.
+  #   identity — the packet-bound candidate map (a human-reviewed sha256 pinned in the table
+  #              below). Enforced on every promote, every stable version, and every version a
+  #              committed map already names; DEFERRED WITH A LOUD NOTICE only in the freeze
+  #              window, where the map records digests the build has only just published and so
+  #              cannot exist yet. The deferral is rendered in the guarantee block.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      # 'true' when this run PROVED the packet-bound candidate-map identity; 'false' when it
+      # deferred it (see the identity step). The guarantee block renders the difference — a
+      # deferral that does not reach the notes is the silent skip this gate exists to prevent.
+      identity_verified: ${{ steps.identity.outputs.enforce }}
     steps:
       - name: Resolve the version under validation
         id: version
@@ -148,30 +163,182 @@ jobs:
       - uses: actions/checkout@v4
       - name: Registry validator controls
         run: node --test scripts/registry-candidate-validate.test.mjs
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── the always-on floor (restored, #1237) ────────────────────────────────────────────────
+      # This job's contract — stated in its own header and in delivery.mdx — is "every published
+      # manifest resolves and carries the platforms it claims". #949 REPLACED that version-agnostic
+      # check with the version-pinned map check below, which silently narrowed the floor to nothing
+      # for any version not in the table. The floor is back, and it is unconditional: it holds for
+      # every version, reviewed or not, and it is what makes a deferred identity check safe.
+      #
+      # `imagetools inspect` prints no Platform line for classic-driver (schema-v2) manifests even
+      # when the registry descriptor says linux/amd64 — the bot image is built on the classic driver
+      # by design, so read the registry descriptor instead; it is authoritative for both shapes.
+      - name: Every published manifest resolves and carries required platforms
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for img in $ALL_IMAGES; do
+            echo "== $img:$VERSION"
+            # NOTE: a `IMG=... cmd | python3` prefix binds the var only to the first
+            # pipeline command — python3 would KeyError. Export it instead.
+            export IMG="$img"
+            docker manifest inspect -v "$img:$VERSION" | python3 -c "
+          import os, sys, json
+          img = os.environ['IMG']
+          d = json.load(sys.stdin)
+          items = d if isinstance(d, list) else [d]
+          plats = {(m.get('Descriptor', {}).get('platform', {}).get('os'),
+                    m.get('Descriptor', {}).get('platform', {}).get('architecture'))
+                   for m in items}
+          required = {('linux', 'amd64')}
+          if img != 'vexaai/vexa-bot':
+            required.add(('linux', 'arm64'))
+          missing = required - plats
+          if missing:
+            print(f'missing platforms: {sorted(missing)}', file=sys.stderr)
+            sys.exit(1)
+          " || { echo "::error ::$img:$VERSION missing required platform manifest(s) — is the set published?"; exit 1; }
+          done
+          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present with required platforms"
+
+      # ── packet-bound candidate-map identity: when it is enforced, and when it is deferred ─────
+      # The table below is a REVIEW RECORD, not data: a human read that version's committed
+      # candidate map and pinned its sha256 here. A version can only reach the table AFTER its
+      # images exist, because the map records the digests the build published. So at FREEZE time —
+      # the tag-push build that publishes a new rc — the identity is not merely unreviewed, it is
+      # UNKNOWABLE. Failing there made every successful rc freeze conclude FAILURE by construction
+      # (#1237: identical on rc.14/15/16/17/18, all of which published all ten images).
+      #
+      # Deferral is allowed on exactly one shape, and it is announced loudly:
+      #   prerelease  AND  promote:false  AND  no reviewed arm  AND  no committed map naming this
+      #   version  →  identity verification deferred to the standalone release-validate dispatch.
+      # Everything else fails closed, unchanged:
+      #   · any promote request                → the moving tag never moves on an unreviewed map
+      #   · any stable (non-prerelease) version → the witnessed/aliased candidate must be reviewed
+      #   · any version a committed map already names → identity is KNOWABLE, so it must be reviewed
+      # The floor above still runs in every case, and `promote` carries its own independent
+      # stable-promotion map-identity table further down. This gate is defence in depth, not the
+      # only wall between an unreviewed image and prod.
+      - name: Resolve the packet-bound candidate-map identity
+        id: identity
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_MAP=""
+          EXPECTED_MAP_STABLE_TAG=""
+          EXPECTED_MAP_SHA256=""
+          EXPECTED_TOP_DESCRIPTORS=""
+          EXPECTED_PLATFORM_IDENTITIES=""
+          REVIEWED=true
+          case "$VERSION" in
+            v0.12.18)
+              CANDIDATE_MAP=releases/v0.12.18/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.18
+              EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
+              EXPECTED_TOP_DESCRIPTORS=10
+              EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            v0.12.23-rc.21|v0.12.23)
+              CANDIDATE_MAP=releases/v0.12.23/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.23
+              EXPECTED_MAP_SHA256=c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6
+              EXPECTED_TOP_DESCRIPTORS=10
+              EXPECTED_PLATFORM_IDENTITIES=19
+              ;;
+            *)
+              REVIEWED=false
+              ;;
+          esac
+
+          # Is a committed map already claiming this exact version? Then the identity is knowable
+          # and an unreviewed run must fail closed — deferral covers only the freeze window in
+          # which no map can exist yet.
+          BARE="${VERSION#v}"; BASE="${BARE%%-*}"
+          COMMITTED_MAP="releases/v$BASE/candidate-images.json"
+          MAP_CLAIMS_VERSION=false
+          if [ -f "$COMMITTED_MAP" ]; then
+            CLAIMED_TAGS="$(node -e '
+              const { readFileSync } = require("node:fs");
+              const map = JSON.parse(readFileSync(process.argv[1], "utf8"));
+              console.log([map.candidate_tag || "-", map.stable_tag || "-"].join(" "));
+            ' "$COMMITTED_MAP")"
+            for tag in $CLAIMED_TAGS; do
+              if [ "$tag" = "$VERSION" ]; then MAP_CLAIMS_VERSION=true; fi
+            done
+          fi
+
+          ENFORCE=true
+          REASON="$VERSION has a reviewed, packet-bound candidate-map identity"
+          if [ "$REVIEWED" != "true" ]; then
+            if [ "$PROMOTE" = "true" ]; then
+              REASON="a promote was requested"
+            elif [ "$PRERELEASE" != "true" ]; then
+              REASON="$VERSION is a stable version (witnessed/aliased candidates are always reviewed)"
+            elif [ "$MAP_CLAIMS_VERSION" = "true" ]; then
+              REASON="$COMMITTED_MAP already names $VERSION, so its identity is knowable"
+            else
+              ENFORCE=false
+            fi
+          fi
+
+          if [ "$ENFORCE" = "true" ] && [ "$REVIEWED" != "true" ]; then
+            echo "::error ::$VERSION has no reviewed, packet-bound candidate-map identity — required here because $REASON. Bind the candidate packet (releases/v$BASE/candidate-images.json) and pin its sha256 in this workflow's resolve table; see releases/README.md § Bind, validate, freeze."
+            exit 1
+          fi
+
+          {
+            echo "CANDIDATE_MAP=$CANDIDATE_MAP"
+            echo "EXPECTED_MAP_STABLE_TAG=$EXPECTED_MAP_STABLE_TAG"
+            echo "EXPECTED_MAP_SHA256=$EXPECTED_MAP_SHA256"
+            echo "EXPECTED_TOP_DESCRIPTORS=$EXPECTED_TOP_DESCRIPTORS"
+            echo "EXPECTED_PLATFORM_IDENTITIES=$EXPECTED_PLATFORM_IDENTITIES"
+          } >> "$GITHUB_ENV"
+          echo "enforce=$ENFORCE" >> "$GITHUB_OUTPUT"
+          if [ "$ENFORCE" = "true" ]; then
+            echo "✓ enforcing packet-bound identity for $VERSION ($CANDIDATE_MAP)"
+          else
+            echo "· $VERSION has no committed candidate map yet — identity verification deferred"
+          fi
+
       - name: Every frozen descriptor resolves through authenticated registry reads
+        if: steps.identity.outputs.enforce == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          case "$VERSION" in
-            v0.12.18)
-              EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
-              EXPECTED_TOP_DESCRIPTORS=10
-              EXPECTED_PLATFORM_IDENTITIES=19
-              ;;
-            *)
-              echo "::error ::$VERSION has no reviewed, packet-bound candidate-map identity"
-              exit 1
-              ;;
-          esac
           node scripts/registry-candidate-validate.mjs \
-            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --candidate-map "$CANDIDATE_MAP" \
             --tag "$VERSION" \
+            --expected-map-stable-tag "$EXPECTED_MAP_STABLE_TAG" \
             --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
             --expected-top-descriptors "$EXPECTED_TOP_DESCRIPTORS" \
             --expected-platform-identities "$EXPECTED_PLATFORM_IDENTITIES"
+
+      # A skip nobody can see is the same defect as a red nobody can trust. This run's conclusion
+      # says the images published and the legs passed; this notice says what it did NOT prove.
+      - name: Identity verification deferred — say so, loudly
+        if: steps.identity.outputs.enforce != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          MSG="**${VERSION}: packet-bound candidate-map identity NOT verified in this run.** No candidate map names ${VERSION} yet — the map records the digests this build just published, so its identity is not knowable at freeze time. Verification is DEFERRED to the standalone \`release-validate\` dispatch that runs after the packet is bound and its sha256 pinned in the resolve table (releases/README.md § Bind, validate, freeze). This run proves the published manifests resolve with their required platforms and that every validation leg passes on the published bytes. Promote and stable-tag paths remain fail-closed and cannot run on a deferred identity."
+          echo "::notice title=candidate-map identity DEFERRED::$MSG"
+          {
+            echo "> ⚠️ $MSG"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
@@ -691,6 +858,7 @@ jobs:
       - name: Generate the guarantee block from leg results
         env:
           R_RESOLVE: ${{ needs.resolve.result }}
+          R_MAP_IDENTITY: ${{ needs.resolve.outputs.identity_verified }}
           R_IDENTITY: ${{ needs.image-identity.result }}
           R_COMPOSE: ${{ needs.validate-compose.result }}
           R_MOCKFSM: ${{ needs.validate-mock-fsm.result }}
@@ -712,12 +880,23 @@ jobs:
               *)          printf '❌ (%s)' "$1" ;;
             esac
           }
+          # The deferral valve (#1237). resolve may legitimately DEFER the packet-bound
+          # candidate-map identity check at freeze time — the map records digests the build
+          # just published, so it cannot exist yet. A deferral that does not reach the notes
+          # is a silent skip, which is the same defect as a red nobody can trust. Say it here.
+          map_identity() {
+            case "$R_MAP_IDENTITY" in
+              true)  printf '; packet-bound candidate-map identity verified' ;;
+              false) printf '; ⚠️ packet-bound candidate-map identity **DEFERRED** to the standalone release-validate run (no map names this candidate yet — #1237)' ;;
+              *)     printf '; packet-bound candidate-map identity — not reported' ;;
+            esac
+          }
           {
             echo "## The guarantee — $VERSION ([this run]($RUN_URL))"
             echo
             echo "| # | Guarantee | Proof in this run |"
             echo "|---|---|---|"
-            echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve; every leg pulls published bytes only |"
+            echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve$(map_identity); every leg pulls published bytes only |"
             echo "| 2 | Every documented install path stands up and is exercised to its leg's scope (NOT full end-to-end — real audio→words is row 3) | compose $(s "$R_COMPOSE" "installs + API/data-plane wiring, synthetic transcript; real bot in row 5") · FSM $(s "$R_MOCKFSM" "meeting-lifecycle FSM via mock bot, no real browser/STT") · lite $(s "$R_LITE" "front doors + ≥2 concurrent real-bot spawn, no meeting/STT assertion") · helm $(s "$R_HELM" "installs + healthy, bot/meeting/STT not exercised") |"
             echo "| 3 | Real audio → correct, speaker-attributed words | ⚠️ NOT machine-proven in this run — witness-pass only until the wav→words leg (#560) ships |"
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
@@ -809,7 +988,6 @@ jobs:
       VERSION: ${{ needs.resolve.outputs.version }}
       PROMOTE_LATEST: ${{ inputs.promote_latest == true }}
       PROMOTE_REPOSITORY: ${{ inputs.promote_repository }}
-      EXPECTED_MAP_SHA256: 80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
     steps:
       - uses: actions/checkout@v4
       - name: Manifest-preserving promotion and exact readback
@@ -818,6 +996,18 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
+          case "$VERSION" in
+            v0.12.18)
+              EXPECTED_MAP_SHA256=80fe23246f94557279b4da2792119489f7c60f8e452b83de2c1c33ef48ebd03f
+              ;;
+            v0.12.23)
+              EXPECTED_MAP_SHA256=c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6
+              ;;
+            *)
+              echo "::error ::$VERSION has no reviewed stable-promotion map identity"
+              exit 1
+              ;;
+          esac
           move() {
             local image="$1" target="$2"
             case "$image:$target" in

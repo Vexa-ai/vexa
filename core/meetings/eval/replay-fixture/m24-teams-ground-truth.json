@@ -1,0 +1,22 @@
+[
+  {
+    "label": "298-321 Dmitry: 'Alright, so it looks like transcription is working... latency isn't great'",
+    "t0": 1786397298000, "t1": 1786397321000, "who": "Dmitry Grankin"
+  },
+  {
+    "label": "338-345 Jacob: 'is it using the method that I set up for Zoom and Meet?'",
+    "t0": 1786397338000, "t1": 1786397345000, "who": "Jacob (Unverified)"
+  },
+  {
+    "label": "358-407 Dmitry: the teams-capture module, the fixtures, raw input audio + speaker events",
+    "t0": 1786397358000, "t1": 1786397406500, "who": "Dmitry Grankin"
+  },
+  {
+    "label": "421-428 Dmitry: 'it's assigning my speech to you because you are typing'",
+    "t0": 1786397421000, "t1": 1786397428000, "who": "Dmitry Grankin"
+  },
+  {
+    "label": "429-457 Jacob: 'not much we can do on Teams... it doesn't split into separate streams'",
+    "t0": 1786397429000, "t1": 1786397457000, "who": "Jacob (Unverified)"
+  }
+]

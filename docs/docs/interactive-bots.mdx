@@ -1,0 +1,40 @@
+---
+title: "Interactive bots"
+description: "Speaking, chatting, screen-sharing bots — what is actually reachable in 0.12, what is proven at the bot layer but unwired at the API, and where the interactive shape is being decided."
+---
+
+<Warning>
+**Honest status:** the interactive capability family this page once advertised is **partially available
+in 0.12**. Chat *read* works. Speak, chat *write*, screen share and avatar are contract-sealed but not
+reachable through the API today. The API shape for interactive capabilities is under active design —
+it is **not** a straight restoration of the pre-0.12 endpoints.
+</Warning>
+
+## Per-surface status (0.12, verified against the tree)
+
+| Surface | Contract (`api.v1`) | Reachable today | Notes |
+|---|---|---|---|
+| Chat **read** | sealed | ✅ `GET /bots/{platform}/{native_meeting_id}/chat` | mounted and served |
+| **Speak** | sealed | ❌ 404 | proven live at the bot layer (acts.v1 `speak` → TTS → virtual mic), **not wired at the API layer** — tracked in [#514](https://github.com/Vexa-ai/vexa/issues/514) |
+| Chat **write** | sealed | ❌ 404 | Teams chat write is prepared as [#500](https://github.com/Vexa-ai/vexa/issues/500) |
+| Screen share | sealed | ❌ 404 | planned back in 0.12.x |
+| Avatar / virtual camera | sealed | ❌ 404 | planned back in 0.12.x |
+
+"Sealed" means the endpoint shape is frozen in the public API contract; it does not mean served. A call
+to an unmounted surface returns `404` on every deployment.
+
+## What you can do today
+
+- **Read the meeting chat** while a bot is in the room: `GET /bots/{platform}/{native_meeting_id}/chat`
+  with a `bot`-scoped API key.
+- **Capture and transcribe** as usual — the interactive gaps do not affect transcription, recordings,
+  or the transcript API.
+
+## Where this is going
+
+The pre-0.12 shape was REST-per-surface (`POST /bots/.../speak`, `/chat`, `/screen`). That design predates
+the 0.12 agent layer, and the open question is **where interactive capabilities belong** — bot-level REST,
+or the Agent API driving the bot's proven acts layer (cf. the external request to
+[attach an external agent by URL, #333](https://github.com/Vexa-ai/vexa/issues/333)). That design decision
+is tracked openly; demand for this family is measured and sustained, and comments on the design issue are
+exactly the evidence the decision consumes.

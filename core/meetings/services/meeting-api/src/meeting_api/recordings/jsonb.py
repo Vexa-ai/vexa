@@ -152,3 +152,67 @@ def master_storage_key(chunk_key: str, media_format: str) -> str:
     finalizer's ``_chunk_prefix(storage_path) + '/master.<fmt>'``)."""
     prefix = chunk_key.rsplit("/", 1)[0]
     return f"{prefix}/master.{media_format}"
+
+
+# ── captured-signal tapes (O-TEL-1) ─────────────────────────────────────────────────────────────
+# A tape is NOT a recording. It is an internal fixture — the raw captured-signal.v1 stream a bot
+# teed for offline replay — and it deliberately does NOT fold into ``meeting.data['recordings']``:
+# folding would make a "recording" appear in ``GET /recordings`` for every meeting the user never
+# asked to record, carrying a media_files entry no player can open.
+#
+# Its keyspace is TOP-LEVEL ``signal/`` rather than a ``signal/`` folder nested inside a recording's
+# prefix. That is the janitor's constraint, not an aesthetic one: the budget sweep lists every tape
+# in the bucket on a timer, and a nested layout would force it to page through every recording chunk
+# object in the deployment to find them. A top-level prefix keeps the sweep O(tapes).
+_SIGNAL_PREFIX = "signal"
+SIGNAL_ROOT_PREFIX = f"{_SIGNAL_PREFIX}/"
+# The files one bot session leaves: the frame/hint tape, the STT round-trip sidecar, the Teams
+# closed-caption sidecar, the transport (RTP contributing-source) sidecar, and the observations
+# sidecar (every typed diagnostic the capture path emitted, which used to live only in a pod's
+# log). A CLOSED set — the part name lands in an object key, so it is never caller-shaped (the
+# session_uid in the key is already constrained by find_session).
+#
+# `stt`, `captions`, `csrc` and `observations` are SIDECARS rather than record types inside the
+# tape because
+# captured-signal.v1 is sealed at three records (SessionHeader · CapturedFrame · HintEvent): a
+# fourth would make every stored session fail its own contract, and the replay loader validates
+# line by line, so the tape would stop replaying the moment a Teams meeting produced a caption.
+# Adding a caption or transition record to the contract is a v2 decision, not a side effect of
+# wiring a lane.
+#
+# `botlog` and `transcript` are the two parts that are not signal at all. The first is what the bot
+# SAID about its own run — the commentary a human debugs from, which until now lived only in a pod
+# deleted minutes later, so every "why did it do that?" began by asking for a log nobody still had.
+# It is also the ONLY part that may arrive TRUNCATED (with the drop named inside it) rather than
+# skipped: nothing folds a log, a human reads it. The second is the transcript a viewer was
+# actually left with after every retraction — a fold over the publish stream that every consumer
+# performs and nobody stored, so "what did this meeting say?" could only be answered by re-running
+# it against a redis that no longer exists.
+SIGNAL_TAPE_PARTS = ("captured-signal", "stt", "captions", "csrc", "observations", "botlog", "transcript")
+# Not every part is JSONL — the bot log is plain text, and its key must carry its real extension or
+# a curator who downloads it gets a file their tools will try to parse a line at a time as JSON.
+SIGNAL_TAPE_PART_FORMATS = {"botlog": "txt"}
+# Promotion marker: an object beside a tape meaning "this one is in the regression library, keep
+# it". A marker OBJECT rather than a DB flag so the janitor stays PURE STORAGE — it needs no DB
+# session, and a promoted tape survives even if its meeting row is gone.
+SIGNAL_PROMOTED_MARKER = "PROMOTED"
+
+
+def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> str:
+    """The prefix holding ONE bot session's tape (both parts + any promotion marker).
+
+    Keyed by the SESSION, not by a recording id: a tape exists for meetings that were never
+    recorded, so there is often no recording to hang it off, and minting a synthetic recording id
+    would only create a second identifier for the same thing. ``meeting_id`` is the join back to the
+    meeting row; ``session_uid`` (the bot's connectionId) is what a curator actually looks up.
+    """
+    return f"{_SIGNAL_PREFIX}/{user_id}/{meeting_id}/{session_uid}/"
+
+
+def signal_tape_key(*, user_id: int, meeting_id: int, session_uid: str, part: str,
+                    media_format: str = "jsonl") -> str:
+    """The object key for one tape part. ``part`` MUST be in ``SIGNAL_TAPE_PARTS``."""
+    if part not in SIGNAL_TAPE_PARTS:
+        raise ValueError(f"unknown signal tape part {part!r}; known: {list(SIGNAL_TAPE_PARTS)}")
+    prefix = signal_tape_prefix(user_id=user_id, meeting_id=meeting_id, session_uid=session_uid)
+    return f"{prefix}{part}.{media_format}"

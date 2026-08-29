@@ -145,7 +145,13 @@ bot:
 	@echo "→ [1/2] join-env base: vexa/meet-join-env:dev"
 	docker build -f $(REPO_ROOT)/core/meetings/modules/join/Dockerfile.env -t vexa/meet-join-env:dev $(REPO_ROOT)/core/meetings/modules/join
 	@echo "→ [2/2] meeting bot: $(BOT_IMAGE)"
-	docker build -t $(BOT_IMAGE) -f $(REPO_ROOT)/core/meetings/services/bot/Dockerfile $(REPO_ROOT)
+	@# VEXA_IMAGE_VERSION stamps the build into every captured-signal tape this image produces
+	@# (telemetry.ts sessionHeader/sidecarHeader). A dirty tree still stamps its HEAD sha — the tape
+	@# says which commit, never which uncommitted edit, so a fixture from a local build is labelled
+	@# approximately rather than falsely precisely.
+	docker build -t $(BOT_IMAGE) \
+	  --build-arg VEXA_IMAGE_VERSION=$$(git -C $(REPO_ROOT) rev-parse --short HEAD 2>/dev/null || echo unknown) \
+	  -f $(REPO_ROOT)/core/meetings/services/bot/Dockerfile $(REPO_ROOT)
 	@_rt=$$($(COMPOSE) ps -q runtime 2>/dev/null); _live=""; \
 	 [ -n "$$_rt" ] && _live=$$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $$_rt 2>/dev/null \
 	   | grep '^BROWSER_IMAGE=' | cut -d= -f2-); \

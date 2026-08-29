@@ -23,6 +23,28 @@ export interface WebRtcAudioHookOptions {
   log?: (msg: string) => void;
 }
 
+/** The shape a reader needs from one intercepted connection: its receivers. */
+export interface ObservedPeerConnection {
+  getReceivers?: () => unknown[];
+}
+
+/**
+ * The peer connections this hook has intercepted, in creation order.
+ *
+ * The registry itself is not new — `wrapPeerConnection` has always pushed every connection into
+ * `window.__vexa_peer_connections`. This is only its ACCESSOR, and it exists so a second observer
+ * (one reading the TRANSPORT rather than the tracks) can enumerate receivers WITHOUT patching
+ * RTCPeerConnection again: two patches race, and the second wrapper would re-fire `handleTrack`
+ * and mirror every track twice — exactly the doubling webrtc-dedup.test.ts exists to prevent.
+ *
+ * Empty where the hook never installed (no RTCPeerConnection, or a page that builds none), which
+ * is an ordinary state rather than an error. Reads `globalThis` so it also answers outside a window.
+ */
+export function observedPeerConnections(): ObservedPeerConnection[] {
+  const list = (globalThis as any)?.__vexa_peer_connections;
+  return Array.isArray(list) ? (list as ObservedPeerConnection[]) : [];
+}
+
 /**
  * Install the RTCPeerConnection patch (idempotent). Returns true if installed
  * now, false if it was already installed or RTCPeerConnection is unavailable.
@@ -35,6 +57,9 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
   win.__vexaRemoteAudioHookInstalled = true;
   win.__vexaInjectedAudioElements = win.__vexaInjectedAudioElements || [];
   win.__vexaCapturedRemoteAudioStreams = win.__vexaCapturedRemoteAudioStreams || [];
+  // Dedup: BOTH addEventListener('track') AND the ontrack-setter wrapper below fire handleTrack for the
+  // same RTCTrackEvent, so without this each remote track is mirrored twice (duplicate <audio> elements).
+  win.__vexaMirroredTrackIds = win.__vexaMirroredTrackIds || new Set();
   // Collect peer connections too (parity with screen-content.ts __vexa_peer_connections).
   win.__vexa_peer_connections = win.__vexa_peer_connections || [];
 
@@ -43,6 +68,8 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
   const handleTrack = (event: RTCTrackEvent) => {
     try {
       if (!event.track || event.track.kind !== 'audio') return;
+      if (win.__vexaMirroredTrackIds.has(event.track.id)) return;   // already mirrored (both track paths fire)
+      win.__vexaMirroredTrackIds.add(event.track.id);
       const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
 
       const audioEl = document.createElement('audio');

@@ -25,14 +25,28 @@ Public surface:
 from __future__ import annotations
 
 from .jsonb import (
+    SIGNAL_PROMOTED_MARKER,
+    SIGNAL_ROOT_PREFIX,
+    SIGNAL_TAPE_PARTS,
+    SIGNAL_TAPE_PART_FORMATS,
     apply_chunk_to_recording,
     chunk_storage_key,
     master_storage_key,
     new_recording_numeric_id,
+    signal_tape_key,
+    signal_tape_prefix,
 )
 from .ports import RecordingRepo, Storage
 from .router import build_router
-from .service import SessionNotFound, finalize_master, upload_chunk
+from .service import (
+    SIGNAL_MEDIA_TYPE,
+    InvalidSignalTape,
+    SessionNotFound,
+    finalize_master,
+    upload_chunk,
+    upload_signal_tape,
+)
+from .signal_janitor import DEFAULT_BUDGET_BYTES, DEFAULT_MIN_AGE_S, sweep_signal_tapes
 
 __all__ = [
     "build_router",
@@ -45,4 +59,17 @@ __all__ = [
     "RecordingRepo",
     "Storage",
     "SessionNotFound",
+    # captured-signal tapes (O-TEL-1): the upload path + the keep-side budget janitor.
+    "upload_signal_tape",
+    "InvalidSignalTape",
+    "SIGNAL_MEDIA_TYPE",
+    "SIGNAL_TAPE_PARTS",
+    "SIGNAL_TAPE_PART_FORMATS",
+    "SIGNAL_PROMOTED_MARKER",
+    "SIGNAL_ROOT_PREFIX",
+    "signal_tape_key",
+    "signal_tape_prefix",
+    "sweep_signal_tapes",
+    "DEFAULT_BUDGET_BYTES",
+    "DEFAULT_MIN_AGE_S",
 ]

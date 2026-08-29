@@ -22,6 +22,11 @@
 
 import { execSync } from "node:child_process";
 
+// A release compare carries every file patch, so the payload scales with the batch, not with
+// what these scripts read from it. v0.12.18...v0.12.22 returned 1.51 MB and blew execSync's 1 MB
+// default, taking the gate out on exactly the largest releases. Bound it well above any batch.
+const MAX_GH_BYTES = 256 * 1024 * 1024;
+
 const REPO = process.env.GITHUB_REPOSITORY;
 const VERSION = process.env.RELEASE_VERSION;
 if (!REPO || !VERSION) { console.error("release-value-gate: RELEASE_VERSION and GITHUB_REPOSITORY are required"); process.exit(2); }
@@ -34,7 +39,7 @@ const RUNTIME_FILES = ["package.json", "pnpm-lock.yaml"];
 function ghRaw(path) {
   let last;
   for (let i = 0; i < 3; i++) {
-    try { return execSync(`gh api "${path}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    try { return execSync(`gh api "${path}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_GH_BYTES }); }
     catch (e) { last = e; }
   }
   throw last;

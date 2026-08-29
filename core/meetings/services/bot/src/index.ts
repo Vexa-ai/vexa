@@ -24,7 +24,7 @@
  */
 import { createClient } from 'redis';
 import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
-import type { Act, LifecycleEvent } from './contracts.js';
+import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
@@ -32,9 +32,10 @@ import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redi
 import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
-import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
+import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
+import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -175,8 +176,14 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // subscribe surfaces the error and the orchestrator drives to a clean terminal `failed`.
   const transcriptClient = redisClientFrom(inv.redisUrl);
   const actsClient = redisActsClientFrom(inv.redisUrl);
-  const transcript: TranscriptSink = createRedisTranscriptSink({
-    client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
+  const liveTranscript: TranscriptSink = createRedisTranscriptSink({
+    client: transcriptClient,
+    meetingId,
+    nativeMeetingId: inv.nativeMeetingId,
+    // Teams is the current blast radius. Its CSRC lanes need the same complete per-speaker pending
+    // snapshot the Dashboard already consumes for GMeet-style live rendering. Leave every sibling
+    // platform on the existing wire until this is proven on STAGE and deliberately imported back.
+    liveEnvelope: inv.platform === 'teams' ? 'speaker-snapshot' : 'segment',
   });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
 
@@ -197,14 +204,31 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       ? createCaptureSignalRecorder(inv)
       : null;
   if (signalRecorder) console.log(`[bot] capture-signal recording → ${signalRecorder.path}`);
+  // The bot's own commentary, teed beside the tape. Started HERE — before the browser launches —
+  // because the lines that explain a failed join are the ones emitted before anything else exists.
+  const botLog = signalRecorder ? startBotLogSidecar(signalRecorder.botlogPath) : null;
+  // The transcript a VIEWER is left with, folded live and written once at teardown. Every consumer
+  // performs this fold (upsert by segment id, delete on retract) and nobody stored the result, so
+  // "what did this meeting actually say?" could only be answered by re-running it against a redis
+  // that no longer exists by then.
+  const snapshot = signalRecorder ? wrapTranscriptWithSnapshot<TranscriptSegment, TranscriptSink>(liveTranscript, signalRecorder.transcriptPath) : null;
+  const transcript: TranscriptSink = snapshot ?? liveTranscript;
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
   const sttFaults = createSttFaultReporter();
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
-  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs });
-  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs})`);
+  // #1192: the guard's one repair attempt, resolved late — the aloneness monitor is built before
+  // the browser exists, and the restart needs the live page. Unset until the session launches
+  // (and after a launch failure), in which case the guard just holds and keeps checking.
+  let restartCapture: (() => void) | undefined;
+  const aloneness = createSilenceAlonenessSource({
+    activity: remoteAudioActivity,
+    windowMs: aloneSilenceWindowMs,
+    onCaptureFault: () => restartCapture?.(),
+  });
+  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
@@ -217,6 +241,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
       onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
+      // The lane's own observations — today, WHICH TURN SPINE it is running on and why that
+      // changed. A transcript carries no trace of that, so without this line a stored fixture
+      // cannot say whether it is scoring the transport anchor or the fallback that replaced it.
+      onObservation: (source, obs, tMs) => {
+        try {
+          signalRecorder?.sink.captureObservation?.({
+            type: 'observation', t: tMs ?? Date.now(), source, lane: 'mixed', observation: obs,
+          });
+        } catch { /* an observation must never disturb the meeting */ }
+      },
     });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
@@ -224,6 +258,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // the page.evaluate on the BLANK pre-navigation page (no VexaBrowserUtils, no audio), and the
     // subsequent goto to the meeting URL destroyed that context — so capture never attached. (L4.)
     const sess = session, bp = botPipeline, rec = recording;
+    restartCapture = () => {
+      void restartMixedCapture(sess.page)
+        .then((requested) => console.log(`[bot] capture restart ${requested ? 'requested' : 'not applicable (no mixed rescan)'}`))
+        .catch((e) => console.error(`[bot] capture restart failed: ${String(e)}`));
+    };
     // In-meeting chat (jitsi lane) → a transcript.v1 `chat` segment: the sender is the
     // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
     // `completed` is immediate — a chat line has no draft phase.
@@ -300,6 +339,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // path that skipped the orchestrator's teardown. (#593)
     await pipeline.stop().catch(() => { /* best-effort */ });
     await signalRecorder?.close().catch(() => { /* best-effort */ });
+    // The two teardown sidecars, written BEFORE the upload reads the directory. Both are
+    // best-effort by construction: a diagnostic that can change how a meeting ended is worse than
+    // no diagnostic. The log tap is released first so the snapshot's own line lands in the file.
+    await snapshot?.writeSnapshot().catch(() => { /* best-effort */ });
+    botLog?.stop();
+    // O-TEL-1: ship the tape AFTER close() (the file is flushed and finalized there) and BEFORE the
+    // process exits, because the container's disk dies with it. Best-effort by construction —
+    // uploadSignalTapes never throws and never rejects, so nothing here can revise the exit code the
+    // orchestrator already returned. Runs inside the 30s SIGTERM grace: one attempt, streamed, with
+    // its own timeout, so a slow object store cannot ride the grace all the way to a SIGKILL.
+    await uploadSignalTapes(signalRecorder, { inv });
     if (session) await session.close().catch(() => { /* best-effort */ });
     // Quit the redis connections on teardown (best-effort — a quit failure must not change the
     // exit code; they may never have connected if redis was unreachable).

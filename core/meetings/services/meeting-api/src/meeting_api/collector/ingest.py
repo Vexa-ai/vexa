@@ -94,6 +94,10 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
         "text": raw.get("text") or "",
         "language": raw.get("language"),
         "speaker": raw.get("speaker"),
+        # transcript.v1 carries a stable machine identity independently from the mutable display
+        # name. Preserve it in the live hash so downstream policy can distinguish Teams CSRC rows
+        # without parsing human labels or widening behavior for every source='merged' producer.
+        "speaker_key": raw.get("speaker_key"),
         "completed": completed,
         "source": source,
         "absolute_start_time": raw.get("absolute_start_time"),
@@ -189,6 +193,32 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
                 await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "uid": uid})
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
                 _log_publish_failure(meeting_id, e)
+        return 0
+    if msg_type == "transcript_retract":
+        # The bot withdraws superseded/over-extended pending drafts (the mixed lane's full-replace tail).
+        # Delete them from the durable store AND append a `retract` marker to the row-scoped stream so the
+        # copilot worker + terminal SSE drop them live (mirrors the session_end marker path above).
+        mid_raw = data.get("meeting_id")
+        try:
+            meeting_id = int(mid_raw) if mid_raw is not None else None
+        except (TypeError, ValueError):
+            meeting_id = None
+        seg_ids = data.get("segment_ids")
+        if meeting_id is None or not isinstance(seg_ids, list) or not seg_ids:
+            return 0
+        ids = [str(s) for s in seg_ids if s]
+        try:
+            await store.delete_segments(meeting_id, ids)
+        except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch on a retract
+            _log_publish_failure(meeting_id, e)
+        try:
+            await redis.xadd(_transcript_stream(meeting_id), {"type": "retract", "segment_ids": ids})
+            await redis.publish(
+                _mutable_channel(meeting_id),
+                json.dumps({"type": "transcript_retract", "meeting": {"id": meeting_id}, "segment_ids": ids}),
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort live fan-out
+            _log_publish_failure(meeting_id, e)
         return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.

@@ -19,7 +19,16 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import JSONResponse, Response
 
 from .ports import RecordingRepo, Storage
-from .service import SessionNotFound, _verify_meeting_token, finalize_master, upload_chunk
+from .deletion import MeetingNotTerminal, delete_owned_recording
+from .service import (
+    SIGNAL_MEDIA_TYPE,
+    InvalidSignalTape,
+    SessionNotFound,
+    _verify_meeting_token,
+    finalize_master,
+    upload_chunk,
+    upload_signal_tape,
+)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -140,6 +149,33 @@ def build_router(
             raise HTTPException(status_code=422, detail="session_uid required (flat field or metadata)")
         media_type = media_type or meta.get("media_type") or "audio"
         media_format = media_format or meta.get("media_format") or meta.get("format") or "wav"
+        # O-TEL-1 — a captured-signal tape rides this same endpoint (one internal upload edge, one
+        # set of credentials, one network path already open from every bot) but takes a DIFFERENT
+        # server path: no JSONB fold, no chunking, no master. See service.upload_signal_tape.
+        if media_type == SIGNAL_MEDIA_TYPE:
+            part = str(meta.get("part") or "")
+            bearer = _bearer_token(authorization)
+            internal_secret = os.getenv("INTERNAL_API_SECRET")
+            token_meeting_id = None
+            if not (internal_secret and bearer == internal_secret):
+                try:
+                    claims = _verify_meeting_token(bearer, secret=token_secret)
+                except ValueError as e:
+                    raise HTTPException(status_code=401,
+                                        detail=f"Invalid recording upload token: {e}")
+                token_meeting_id = int(claims["meeting_id"])
+            try:
+                receipt = await upload_signal_tape(
+                    repo, storage,
+                    token_meeting_id=token_meeting_id,
+                    session_uid=session_uid, data=await file.read(),
+                    part=part, media_format=media_format,
+                )
+            except InvalidSignalTape as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except SessionNotFound as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            return JSONResponse(content=receipt)
         chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")
@@ -196,6 +232,31 @@ def build_router(
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
         return JSONResponse(content=rec)
+
+    @router.delete("/recordings/{recording_id}")
+    async def delete_recording(
+        recording_id: int,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        """Delete one owned recording's primary-storage objects and JSONB metadata.
+
+        Unknown and unowned ids both return 404. Storage is deleted first so a backend failure
+        leaves the metadata/path available for a retry rather than orphaning an undiscoverable
+        object. Backup expiry remains a deployment retention concern, not a claim of this route.
+        """
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            receipt = await delete_owned_recording(
+                repo, storage, user_id=user_id, recording_id=recording_id
+            )
+        except MeetingNotTerminal:
+            raise HTTPException(
+                status_code=409,
+                detail="Recording can only be deleted after the meeting lifecycle is terminal",
+            )
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return JSONResponse(content=receipt)
 
     @router.get("/recordings/{recording_id}/master")
     async def get_recording_master(

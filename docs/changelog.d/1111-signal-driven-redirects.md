@@ -1,0 +1,1 @@
+docs: redirect five guessed paths onto the pages that already answer them — `/ws/events`, `/local-webhook-development`, `/how-to/webhooks`, `/api/webhooks`, `/cookbook/share-transcript-url` — measured from the docs edge sensor.

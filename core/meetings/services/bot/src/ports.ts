@@ -60,6 +60,12 @@ export interface Pipeline {
  *  adapter publishes them to the redis stream / bus consumed by the collector. */
 export interface TranscriptSink {
   publish(segment: TranscriptSegment): Promise<void>;
+  /** Withdraw previously-published segments by id. The mixed lane republishes its pending tail as a
+   *  FULL-REPLACE block; when an id drops out of that block (confirmed under a new id, tail shrank, or
+   *  turn closed) it must be actively retracted, because the collector's stream is append-only and the
+   *  terminal upserts by id — without this a stale pending draft lingers as a duplicate. Optional so
+   *  lanes/adapters that don't produce retractable drafts (or test fakes) need not implement it. */
+  retract?(segmentIds: string[]): Promise<void>;
 }
 
 /** The reachability verdict of the FIRST (load-bearing) lifecycle emit (#530). `reachable` iff

@@ -1,0 +1,1 @@
+docs: honest-status page at `/interactive-bots` — per-surface truth for the interactive family (chat read works; speak/chat-write/screen/avatar sealed-unserved), with the shape-design question linked (#1086).

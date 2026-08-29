@@ -30,6 +30,11 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
+// A release compare carries every file patch, so the payload scales with the batch, not with
+// what these scripts read from it. v0.12.18...v0.12.22 returned 1.51 MB and blew execSync's 1 MB
+// default, taking the gate out on exactly the largest releases. Bound it well above any batch.
+const MAX_GH_BYTES = 256 * 1024 * 1024;
+
 const REPO = process.env.GITHUB_REPOSITORY;
 const VERSION = process.env.RELEASE_VERSION;
 if (!REPO || !VERSION) { console.error("release-witness-script: RELEASE_VERSION + GITHUB_REPOSITORY required"); process.exit(2); }
@@ -37,7 +42,7 @@ if (!REPO || !VERSION) { console.error("release-witness-script: RELEASE_VERSION 
 const ROOT = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
 const hasReceipt = (tag) => existsSync(`${ROOT}/releases/${tag}/witness.json`);
 
-function ghRaw(p) { let e; for (let i = 0; i < 3; i++) { try { return execSync(`gh api "${p}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (x) { e = x; } } throw e; }
+function ghRaw(p) { let e; for (let i = 0; i < 3; i++) { try { return execSync(`gh api "${p}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_GH_BYTES }); } catch (x) { e = x; } } throw e; }
 const ghj = (p) => JSON.parse(ghRaw(p));
 
 function parseVer(t) { const m = String(t).match(/^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/); return m ? { core: [+m[1], +m[2], +m[3]], pre: m[4] || null, raw: t } : null; }

@@ -1,7 +1,7 @@
 {
   "name": "@vexa/teams-capture",
   "version": "0.1.0",
-  "description": "MS Teams capture (browser): voice-level-outline (blue-squares) active-speaker watcher (→ mixed-capture.v1 hints) + chat reader. Mixed audio from @vexa/mixed-capture-core; names resolve downstream.",
+  "description": "MS Teams capture (browser): voice-level-outline (blue-squares) active-speaker watcher (→ mixed-capture.v1 hints) + chat reader + live closed-caption reader (best-effort, diagnostic). Mixed audio from @vexa/mixed-capture-core; names resolve downstream.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/teams-capture.test.ts",
+    "test": "tsx src/teams-capture.test.ts && tsx src/teams-name-hygiene.test.ts && tsx src/roster-panel.test.ts && tsx src/teams-captions.test.ts && tsx src/teams-name-drift.test.ts && tsx src/teams-name-unresolved.test.ts && tsx src/teams-speaker-indicators.test.ts && tsx src/producer-dom-trace.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

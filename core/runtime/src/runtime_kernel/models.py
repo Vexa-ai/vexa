@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RuntimeState(str, Enum):
@@ -33,10 +33,14 @@ class BackendKind(str, Enum):
 
 
 class Resources(BaseModel):
+    """The workload's resource intent. ONE value per dimension: on Kubernetes ``cpu``/``memoryMb``
+    set BOTH the container's request and its limit (Guaranteed QoS) — sealed v1 models no separate
+    request/limit semantics. The floors mirror the JSON Schema's ``minimum: 0``, so a negative
+    value is rejected at parse time and never reaches a backend."""
     model_config = {"extra": "forbid"}
-    cpu: Optional[float] = None
-    memoryMb: Optional[int] = None
-    gpu: Optional[int] = None
+    cpu: Optional[float] = Field(default=None, ge=0)
+    memoryMb: Optional[int] = Field(default=None, ge=0)
+    gpu: Optional[int] = Field(default=None, ge=0)
 
 
 class WorkloadSpec(BaseModel):

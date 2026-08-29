@@ -865,6 +865,38 @@ def test_sse_fresh_connect_seeds_and_tails(monkeypatch):
     assert fr.xread_last["tc:meeting:m1"] == "$"            # then tails live from now
 
 
+class _RetractRedis:
+    """The live tail delivers a segment then a `retract` marker (the collector withdrew a superseded
+    draft). The SSE must relay the marker as a `retract` event so the terminal drops that id."""
+    def __init__(self):
+        self._reads = 0
+
+    def xrevrange(self, key, count=1):
+        return []
+
+    def xread(self, last, count=500, block=0):
+        import json as _j
+        self._reads += 1
+        if self._reads == 1:
+            return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps(
+                {"type": "transcription", "segments": [{"speaker": "A", "text": "hi", "start": 1, "segment_id": "turn:1:p0"}]})})])]
+        if self._reads == 2:
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "retract", "segment_ids": ["turn:1:p0"]})})])]
+        return []
+
+
+def test_sse_relays_retract_marker(monkeypatch):
+    """A `retract` marker on tc:meeting relays to the client as a `retract` SSE event carrying the ids."""
+    fr = _RetractRedis()
+    c = _stream_client(fr, monkeypatch)
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        assert r.status_code == 200
+        body = "".join(r.iter_text())
+    assert '"retract"' in body        # the marker became a retract SSE event
+    assert "turn:1:p0" in body        # carrying the withdrawn segment id
+
+
 # ── SSE cross-tenant ownership regression (P0 — the FIX-FIRST blocker) ────────────────────────────
 # The by-row-id SSE feed `/api/meeting/stream` must OWNER-SCOPE the row like the WS `/ws` path + the
 # by-id REST path do. Pre-fix it read `tc:meeting:{meeting_id}` straight off the caller-supplied query

@@ -48,6 +48,7 @@
         "v": { "const": 1 },
         "platform": { "type": "string", "description": "google_meet | zoom | teams | youtube | …" },
         "native_meeting_id": { "type": "string" },
+        "image_version": { "type": "string", "description": "the build that produced this tape (the bot image's VEXA_IMAGE_VERSION, 'unknown' where the image was not stamped). OPTIONAL and additive: tapes written before this field validate unchanged. A prod fixture outlives the deployment that made it, so without the build id a tape proves a behaviour it cannot attribute — the same observation means opposite things on either side of a fix" },
         "trace_id": { "type": "string", "description": "the distributed trace_id (logevent.v1) of the meeting session this signal was captured under — links the raw signal back to every structured log across gateway→meeting-api→runtime→bot for the same meeting, so a replay-and-fix starts from the exact trace the bug rode on" },
         "language": { "type": ["string", "null"] },
         "lane": { "$ref": "#/$defs/Lane" },

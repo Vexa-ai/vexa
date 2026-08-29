@@ -1,0 +1,68 @@
+# Mixed-lane hallucination phrases — the MEDIA-ARTIFACT family only.
+#
+# Provenance: this is a SUBSET of the gmeet lane's phrase files
+# (../../../gmeet-pipeline/src/hallucinations/*.txt), selected by one rule: a line stays only
+# if it cannot plausibly be said in a meeting. hallucinations-are-subset.test.ts pins the
+# subset property against those files.
+#
+# Why not the whole list. Measured on the m24 Teams tape (95 published rows, real STT): the
+# gmeet en list would suppress "Yeah." and "I don't know." — both real speech from a real
+# meeting. The gmeet lane can afford that (it is per-channel and re-derives), the mixed lane
+# cannot: a suppressed row is speech deleted from a one-shot mixed stream. So the mixed lane
+# takes only the outro/subtitle-credit family, which no participant utters.
+#
+# Lines beginning with `re:` are case-insensitive regexes — the credit strings arrive in
+# endless variants ("Субтитры сделал X", "Добавил субтитры X", "Редактор субтитров …"), and
+# an exact list loses to every new one. JS \b is ASCII-only, so Cyrillic patterns end in
+# (\s|$) rather than \b. Everything else is an exact match, punctuation-
+# normalised, exactly as the gmeet filter matches.
+
+# ── ru — subtitle credits + the stock silence filler ──
+ Продолжение следует...
+ ДИНАМИЧНАЯ МУЗЫКА
+re:^\s*(субтитры|субтитрами|добавил субтитры|редактор субтитров|корректор)(\s|$)
+re:dimatorzok
+re:дима\s*торзок
+re:^\s*продолжение следует
+re:спасибо за субтитры
+
+# ── en ──
+ Thanks for watching!
+ Thanks for watching.
+ Thanks for watching, and I'll see you next time.
+ We'll be right back.
+re:^\s*(thanks|thank you) for watching\b
+re:^\s*subscribe to (my|the) channel\b
+
+# ── es ──
+ ¡Gracias por ver el vídeo!
+ Gracias por ver este video.
+ Gracias por ver el video.
+ ¡Suscríbete al canal!
+ ¡Suscríbete al canal y dale a like!
+ Y eso es todo por hoy.
+ Y eso es todo por hoy, nos vemos en el próximo video, chau.
+ y nos vemos en el próximo video.
+re:suscr[íi]bete al canal
+
+# ── pt ──
+re:inscreva-se no canal
+
+# ── ja ──
+ご視聴ありがとうございました
+ご視聴ありがとうございます
+次の動画でお会いしましょう
+チャンネル登録をお願いします
+チャンネル登録よろしくお願いします
+高評価とチャンネル登録をお願いします
+また次回の動画でお会いしましょう
+最後までご視聴いただきありがとうございました
+
+# ── tr ──
+Abone olmayı unutmayın
+Abone olmayı unutmayınız
+Beni takip etmeyi unutmayın
+İzlediğiniz için teşekkür ederim
+İzlediğiniz için teşekkürler
+Bir sonraki videoda görüşmek üzere
+Kanalıma abone olmayı unutmayın

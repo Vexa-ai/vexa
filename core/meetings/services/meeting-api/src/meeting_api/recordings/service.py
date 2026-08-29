@@ -20,11 +20,24 @@ from typing import Any, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
-from .jsonb import apply_chunk_to_recording, chunk_storage_key, master_storage_key, new_recording_numeric_id
+from .jsonb import (
+    SIGNAL_TAPE_PARTS,
+    SIGNAL_TAPE_PART_FORMATS,
+    apply_chunk_to_recording,
+    chunk_storage_key,
+    master_storage_key,
+    new_recording_numeric_id,
+    signal_tape_key,
+)
 from .ports import RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
-_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav"}
+_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "jsonl": "application/x-ndjson",
+                  "txt": "text/plain; charset=utf-8"}
+
+# The ``media_type`` that means "a captured-signal tape, not playable media" (O-TEL-1).
+SIGNAL_MEDIA_TYPE = "signal"
+SIGNAL_MEDIA_FORMAT = "jsonl"
 
 
 def _content_type(media_format: str) -> str:
@@ -37,6 +50,10 @@ def _now_iso() -> str:
 
 class SessionNotFound(Exception):
     """The upload's ``session_uid`` matches no MeetingSession AND it is the final chunk → 404."""
+
+
+class InvalidSignalTape(Exception):
+    """A tape upload named a part or format we do not accept → 422 (never a silent store)."""
 
 
 async def upload_chunk(
@@ -124,6 +141,71 @@ async def upload_chunk(
         "status": rec_payload["status"],
         "chunk_seq": chunk_seq,
     }
+
+
+async def upload_signal_tape(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    token_meeting_id: Optional[int],
+    session_uid: str,
+    data: bytes,
+    part: str,
+    media_format: str = SIGNAL_MEDIA_FORMAT,
+) -> dict:
+    """Store ONE captured-signal tape part for a bot session (O-TEL-1 fixture collection).
+
+    Deliberately NOT ``upload_chunk`` with a third media_type. Three properties differ, and each of
+    them is the reason:
+
+      * **No JSONB fold.** A tape is an internal fixture, not the user's recording. Folding it into
+        ``meeting.data['recordings']`` would surface a phantom recording in ``GET /recordings`` for
+        every meeting the user never asked to record.
+      * **No master, no chunk sequence.** The bot uploads a whole flushed file once at teardown;
+        there is nothing to assemble and nothing to finalize-on-read.
+      * **Its own keyspace** (``signal/…``), so the budget janitor can list every tape in the
+        deployment without paging through the recordings prefix.
+
+    Returns ``{"status": "stored", "storage_path", "bytes"}``. Raises ``SessionNotFound`` (404) when
+    the session is unknown — unlike a chunk there is no "pending" case, because a tape is only ever
+    uploaded at teardown, long after the session row exists — and ``InvalidSignalTape`` (422) for an
+    unknown part/format, since the part name lands in an object key.
+    """
+    if part not in SIGNAL_TAPE_PARTS:
+        raise InvalidSignalTape(
+            f"unknown signal tape part {part!r}; known: {list(SIGNAL_TAPE_PARTS)}"
+        )
+    # Most parts are JSONL; the bot log is plain text. The expected format is a property of the
+    # PART, not of the caller, so an uploader cannot choose an extension — the key would otherwise
+    # be caller-shaped, and a curator downloading `botlog.jsonl` would get a text file their tools
+    # try to parse a line at a time as JSON.
+    expected = SIGNAL_TAPE_PART_FORMATS.get(part, SIGNAL_MEDIA_FORMAT)
+    if media_format != expected:
+        raise InvalidSignalTape(
+            f"signal tape part {part!r} is {expected}, got {media_format!r}"
+        )
+
+    session = await repo.find_session(session_uid)
+    if session is None:
+        raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
+    meeting_id = session["meeting_id"]
+    if token_meeting_id is not None and meeting_id != token_meeting_id:
+        # Same fail-closed rule as a chunk upload: a MeetingToken minted for another meeting must
+        # not be able to write into this one's prefix.
+        raise SessionNotFound("MeetingToken meeting_id does not match the session's meeting")
+
+    owner = await repo.owner_of(meeting_id)
+    key = signal_tape_key(user_id=owner or 0, meeting_id=meeting_id, session_uid=session_uid,
+                          part=part, media_format=media_format)
+    await storage.upload(key, data, content_type=_content_type(media_format))
+    log_event(
+        "signal_tape_stored", audience="operator", span="recordings.signal",
+        user_id=owner, meeting_id=str(meeting_id),
+        fields={"session_uid": session_uid, "part": part, "bytes": len(data),
+                "storage_path": key},
+    )
+    return {"status": "stored", "storage_path": key, "bytes": len(data),
+            "meeting_id": meeting_id, "part": part}
 
 
 async def finalize_master(

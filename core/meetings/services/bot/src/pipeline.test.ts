@@ -21,7 +21,7 @@ import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
-import type { ChunkedTranscriberCallbacks } from '@vexa/mixed-pipeline';
+import type { ChunkedTranscriberCallbacks, TeamsCsrcGmeetPipelineOptions } from '@vexa/mixed-pipeline';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -39,10 +39,12 @@ addFormats(ajv);
 ajv.addSchema(txSchema);
 const validateSeg: ValidateFunction = ajv.compile({ $ref: `${txSchema.$id}#/$defs/TranscriptSegment` });
 
-/** A capturing bot-port TranscriptSink — records every published segment (confirmed + drafts). */
-function captureSink(): TranscriptSink & { readonly published: TranscriptSegment[] } {
+/** A capturing bot-port TranscriptSink — records every published segment (confirmed + drafts) and
+ *  every retracted id (the pending-tail withdrawal path). */
+function captureSink(): TranscriptSink & { readonly published: TranscriptSegment[]; readonly retracted: string[] } {
   const published: TranscriptSegment[] = [];
-  return { published, async publish(seg) { published.push(seg); } };
+  const retracted: string[] = [];
+  return { published, retracted, async publish(seg) { published.push(seg); }, async retract(ids) { retracted.push(...ids); } };
 }
 
 const baseInv = (over: Partial<Invocation> = {}): Invocation => ({
@@ -148,7 +150,7 @@ async function main(): Promise<void> {
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
-  // ── 5) MIXED LANE (Teams/Zoom) speaker-label boundary (#890): a turn the mixed lane has NOT
+  // ── 5) LEGACY MIXED LANE (Zoom/Jitsi) speaker-label boundary (#890): a turn the lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display
   //     name — so per-speaker consumers group unattributed turns as ONE speaker, not hundreds.
@@ -162,7 +164,7 @@ async function main(): Promise<void> {
       cb = c;
       return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
     };
-    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, { createMixedTranscriber: factory });
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
     await pipe.start();   // triggers the transcriber factory → captures the mixed lane's publish callback
     check('mixed lane: transcriber factory wired (publish callback captured)', !!cb, 'factory not called');
 
@@ -175,12 +177,24 @@ async function main(): Promise<void> {
 
     const junk = sink.published.find((s) => s.segment_id === 'turn:54:0');
     const real = sink.published.find((s) => s.segment_id === 'turn:55:0');
-    check('unattributed turn: speaker is the stable "Speaker" label, not the seg_N cluster id',
-      junk?.speaker === 'Speaker', JSON.stringify(junk));
+    // Founder ruling (rc.3 witness call): a row we could not attribute publishes an EMPTY speaker.
+    // "Speaker" advertised a failed claim to the customer in their own transcript; a blank reads as
+    // continuation. The refusal is not hidden — speaker_key below still carries the track identity,
+    // and the observations sidecar carries why — it just stops being addressed to the reader.
+    check('unattributed turn: speaker is EMPTY, never the seg_N id and never a "Speaker" placeholder',
+      junk?.speaker === '', JSON.stringify(junk));
     check('unattributed turn: segment_id keeps the unique turn key (late-attribution repaint anchor)',
       junk?.segment_id === 'turn:54:0', junk?.segment_id);
-    check('unattributed turn: speaker_key keeps the unique turn key (NOT collapsed to "Speaker")',
+    check('unattributed turn: speaker_key keeps the unique turn key — the identity survives the blank',
       junk?.speaker_key === 'turn:54:0', junk?.speaker_key);
+    // The letter tracks are the other spelling of "a distinct person we could not name", and the
+    // founder's ruling was about unknown speakers plural — they blank too.
+    cb!.publish('Speaker B', [{ text: 'and this', startMs: 3000, endMs: 4000, language: 'en', segmentId: 'turn:56:0' }], []);
+    await sleep(20);
+    const letter = sink.published.find((s) => s.segment_id === 'turn:56:0');
+    check('a letter track ("Speaker B") also publishes an empty speaker',
+      letter?.speaker === '', JSON.stringify(letter));
+    check('…and keeps its own identity in speaker_key', letter?.speaker_key === 'turn:56:0', letter?.speaker_key);
     check('no seg_N string ever leaks as a display speaker across the mixed lane',
       sink.published.every((s) => !/^seg_\d+$/.test(s.speaker ?? '')), JSON.stringify(sink.published.map((s) => s.speaker)));
     check('a REAL speaker name passes through the boundary untouched',
@@ -196,6 +210,111 @@ async function main(): Promise<void> {
         !!s.absolute_start_time &&
         Math.abs(new Date(s.absolute_start_time).getTime() / 1000 - (s.start ?? 0)) < 1),
       JSON.stringify(sink.published.map((s) => ({ id: s.segment_id, abs: s.absolute_start_time, start: s.start }))));
+  }
+
+  // ── 6) TEAMS CSRC/GMEET ADAPTER: production selects the virtual-channel lane, forwards every
+  //     identity input the capture bridge already collects, preserves one stable speaker key per
+  //     CSRC, and retracts a cleared draft. This is the composition seam module-only tests cannot
+  //     see: it proves the live path selects the virtual-channel lane, not a diarizer. ──
+  {
+    const sink = captureSink();
+    let options: TeamsCsrcGmeetPipelineOptions | null = null;
+    const calls: string[] = [];
+    let disposed = false;
+    const factory = (received: TeamsCsrcGmeetPipelineOptions) => {
+      options = received;
+      return {
+        feedMixedAudio: (_pcm: Float32Array, tsMs: number) => calls.push(`audio:${tsMs}`),
+        recordTransportEvent: (event: { csrc: number; active: boolean; tMs: number }) => calls.push(`csrc:${event.csrc}:${event.active}`),
+        recordHint: (name: string) => calls.push(`hint:${name}`),
+        recordCaption: (name: string) => calls.push(`caption:${name}`),
+        recordRosterName: (name: string) => calls.push(`roster:${name}`),
+        recordRosterCoverage: (named: number, participants: number) => calls.push(`coverage:${named}/${participants}`),
+        async dispose() { disposed = true; },
+      };
+    };
+    let legacyMixedFactoryCalled = false;
+    const pipe = createBotPipeline(baseInv({ platform: 'teams' }), sink, {
+      createTeamsTranscriber: factory,
+      createMixedTranscriber: async () => {
+        legacyMixedFactoryCalled = true;
+        throw new Error('Teams must not construct the legacy mixed lane');
+      },
+    });
+    await pipe.start();
+    pipe.feedMixedAudio(FRAME, 1_000);
+    pipe.recordTransportEvent?.({ csrc: 201, active: true, tMs: 1_000 });
+    pipe.recordHint('Alice', 1_050, false);
+    pipe.recordCaptionName?.('Alice', 1_100);
+    pipe.recordRosterName?.('Alice', 1_150);
+    pipe.recordRosterCoverage?.(1, 2, 1_200);
+
+    options!.onSegment({
+      csrc: 201, speaker: 'Speaker A', sourceKey: 'csrc-201:1', segmentId: 'csrc-201:1:1000',
+      text: 'forming', startMs: 1_000, endMs: 1_800, completed: false, language: 'en',
+    });
+    options!.onSegment({
+      csrc: 201, speaker: 'Alice', sourceKey: 'csrc-201:1', segmentId: 'csrc-201:1:1000',
+      text: 'confirmed words', startMs: 1_000, endMs: 2_000, completed: true, language: 'en',
+    });
+    options!.onSegment({
+      csrc: 840, speaker: 'Speaker B', sourceKey: 'csrc-840:1', segmentId: 'csrc-840:1:2000',
+      text: '', startMs: 2_000, endMs: 2_000, completed: false, language: 'en',
+    });
+    await sleep(20);
+
+    check('Teams selects the CSRC/GMeet factory, never the legacy Pyannote-capable mixed factory',
+      !!options && !legacyMixedFactoryCalled);
+    check('Teams forwards mixed PCM plus CSRC, hint, caption, roster, and coverage evidence',
+      ['audio:1000', 'csrc:201:true', 'hint:Alice', 'caption:Alice', 'roster:Alice', 'coverage:1/2']
+        .every((entry) => calls.includes(entry)), JSON.stringify(calls));
+    const named = sink.published.find((segment) => segment.text === 'confirmed words');
+    check('Teams publishes the earned human name and a stable CSRC speaker key',
+      named?.speaker === 'Alice' && named.speaker_key === 'csrc:201', JSON.stringify(named));
+    check('Teams provisional Speaker A/B labels stay internal',
+      sink.published.find((segment) => segment.text === 'forming')?.speaker === '', JSON.stringify(sink.published));
+    check('Teams segment is transcript.v1-valid and producer-stamped for live rendering',
+      !!named && !!validateSeg(named) && named.absolute_start_time === new Date(1_000).toISOString(),
+      `${JSON.stringify(named)} ${ajv.errorsText(validateSeg.errors)}`);
+    check('Teams cleared draft retracts its exact durable id',
+      sink.retracted.includes('csrc-840:1:2000'), JSON.stringify(sink.retracted));
+    await pipe.stop();
+    check('Teams stop flushes/disposes the CSRC/GMeet lane', disposed);
+  }
+
+  // ── 7) LEGACY MIXED LANE pending RETRACTION (transcript de-dup): the mixed lane republishes its pending
+  //     tail as a FULL-REPLACE block. The bot's egress is append-only + the terminal upserts by id, so a
+  //     draft id that DROPS OUT of the block (confirmed under a new seq id, tail shrank, turn closed) must
+  //     be RETRACTED or it lingers as a stale "unattached" duplicate (and an over-read past the turn
+  //     boundary re-appears when the next turn transcribes the same audio). Assert the diff → retract. ──
+  {
+    const sink = captureSink();
+    let cb: ChunkedTranscriberCallbacks | null = null;
+    const factory = async (c: ChunkedTranscriberCallbacks) => {
+      cb = c;
+      return { feedAudio() { /* stub */ }, recordHint() { /* stub */ }, async dispose() { /* stub */ } };
+    };
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom' }), sink, { createMixedTranscriber: factory });
+    await pipe.start();
+    const seg = (id: string, s: number, e: number) => ({ text: 't', startMs: s, endMs: e, language: 'en', segmentId: id });
+
+    // Open turn: two pending drafts published (nothing departed yet).
+    cb!.publishPending('Speaker', [seg('turn:1:p0', 1000, 2000), seg('turn:1:p1', 2000, 3000)]);
+    // A confirm lands: the leading draft confirms under a NEW seq id and the tail SHRINKS to one — the
+    // dropped draft (turn:1:p1) must be retracted, the surviving draft (turn:1:p0) must NOT.
+    cb!.publish('Speaker', [seg('turn:1:0', 1000, 2000)], [seg('turn:1:p0', 2000, 2500)]);
+    // Turn closes: pending emptied → the last surviving draft is retracted; only confirmed seq ids remain.
+    cb!.clearPending();
+    await sleep(20);
+
+    check('retraction: a draft that dropped out of the pending block was retracted (turn:1:p1)',
+      sink.retracted.includes('turn:1:p1'), JSON.stringify(sink.retracted));
+    check('retraction: the surviving-then-closed draft was retracted on close (turn:1:p0)',
+      sink.retracted.includes('turn:1:p0'), JSON.stringify(sink.retracted));
+    check('retraction: a CONFIRMED seq segment is NEVER retracted (durable content survives)',
+      !sink.retracted.includes('turn:1:0'), JSON.stringify(sink.retracted));
+    check('retraction: the confirmed segment WAS published (real content kept)',
+      sink.published.some((s) => s.segment_id === 'turn:1:0' && s.completed), JSON.stringify(sink.published.map((s) => s.segment_id)));
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

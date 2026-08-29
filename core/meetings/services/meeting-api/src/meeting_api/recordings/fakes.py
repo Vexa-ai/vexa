@@ -20,13 +20,38 @@ class InMemoryStorage:
     def __init__(self):
         self.blobs: dict[str, bytes] = {}
         self.content_types: dict[str, str] = {}
+        # Object mtimes (epoch seconds). The budget janitor evicts oldest-first, so a fake that
+        # cannot express age could not drive that decision at all. ``upload`` stamps a monotonically
+        # increasing counter (upload order IS age order); ``touch`` sets one explicitly.
+        self.mtimes: dict[str, float] = {}
+        self._clock = 0.0
+        self.deleted: list[str] = []
 
     async def upload(self, key: str, data: bytes, *, content_type: str) -> None:
         self.blobs[key] = data
         self.content_types[key] = content_type
+        self._clock += 1.0
+        self.mtimes[key] = self._clock
+
+    def touch(self, key: str, when: float) -> None:
+        """Set an object's mtime (epoch seconds) so a test can order tapes by age explicitly."""
+        self.mtimes[key] = when
 
     async def list(self, prefix: str) -> list[str]:
         return sorted(k for k in self.blobs if k.startswith(prefix))
+
+    async def list_detailed(self, prefix: str) -> list[dict]:
+        return [
+            {"key": k, "size": len(self.blobs[k]), "last_modified": self.mtimes.get(k, 0.0)}
+            for k in sorted(self.blobs)
+            if k.startswith(prefix)
+        ]
+
+    async def delete(self, key: str) -> None:
+        self.blobs.pop(key, None)
+        self.content_types.pop(key, None)
+        self.mtimes.pop(key, None)
+        self.deleted.append(key)
 
     async def get(self, key: str) -> bytes:
         return self.blobs[key]
@@ -50,8 +75,12 @@ class InMemoryRecordingRepo:
         self._meetings: dict[int, dict] = {}
         self._sessions: dict[str, int] = {}
 
-    def seed(self, *, meeting_id: int, user_id: int, session_uid: str) -> None:
-        self._meetings.setdefault(meeting_id, {"user_id": user_id, "recordings": []})
+    def seed(
+        self, *, meeting_id: int, user_id: int, session_uid: str, status: str = "active"
+    ) -> None:
+        self._meetings.setdefault(
+            meeting_id, {"user_id": user_id, "status": status, "recordings": []}
+        )
         self._sessions[session_uid] = meeting_id
 
     async def find_session(self, session_uid: str) -> Optional[dict]:
@@ -76,6 +105,25 @@ class InMemoryRecordingRepo:
 
     async def owner_of(self, meeting_id: int) -> Optional[int]:
         return self._meetings.get(meeting_id, {}).get("user_id")
+
+    async def prepare_recording_deletion(self, user_id: int, recording_id: int) -> Optional[dict]:
+        for meeting_id, meeting in self._meetings.items():
+            if meeting.get("user_id") != user_id:
+                continue
+            recording = next(
+                (r for r in meeting.get("recordings", []) if r.get("id") == recording_id), None
+            )
+            if recording is None:
+                continue
+            if meeting.get("status") not in ("completed", "failed"):
+                return {"error": "conflict"}
+            prepared = {**recording, "deletion_pending": True, "meeting_id": meeting_id}
+            meeting["recordings"] = [
+                prepared if r.get("id") == recording_id else r
+                for r in meeting.get("recordings", [])
+            ]
+            return prepared
+        return None
 
     async def list_meeting_recordings(self, user_id: int) -> list[dict]:
         out: list[dict] = []

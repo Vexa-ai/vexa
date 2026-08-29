@@ -1,17 +1,22 @@
 {
   "name": "@vexa/mixed-pipeline",
   "version": "0.1.0",
-  "description": "The mixed lane: one mixed audio stream → pyannote segmenter (cut-only, the only ONNX) + shared buffer/whisper + hints namer → transcript segments. Names from time-windowed hints; no diarization/clustering.",
+  "description": "Platform-specific mixed transcription: Teams routes CSRC-owned virtual channels through the shared GMeet window; Zoom/Jitsi retain the legacy Pyannote cut-only lane. No diarization, clustering, embeddings, or voiceprints.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
-    "test": "tsx src/confirm-loop.golden.test.ts && tsx src/pending-stability.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts && tsx src/flicker.smoke.test.ts && tsx src/hint-evidence.smoke.test.ts && tsx src/hint-outcome.smoke.test.ts && tsx src/ending-context.smoke.test.ts && tsx src/short-ui-switch.smoke.test.ts",
+    "build": "tsc && rm -rf dist/hallucinations && cp -R src/hallucinations dist/hallucinations",
+    "test": "node eval-ui/safe-resource-url.test.mjs && node eval-ui/teams-contested-word-detector.test.mjs && node eval-ui/teams-csrc-timeline.test.mjs && node eval-ui/teams-csrc-live-transcript.test.mjs && node eval-ui/server.test.mjs && tsx src/teams-contested-word-marker.test.ts && tsx src/teams-csrc-channelizer.test.ts && tsx src/teams-csrc-gmeet-pipeline.test.ts && tsx src/confirm-loop.golden.test.ts && tsx src/pending-stability.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts && tsx src/flicker.smoke.test.ts && tsx src/hint-evidence.smoke.test.ts && tsx src/hint-outcome.smoke.test.ts && tsx src/ending-context.smoke.test.ts && tsx src/short-ui-switch.smoke.test.ts && tsx src/reattribute.smoke.test.ts && tsx src/claim-contested.smoke.test.ts && tsx src/never-lose-tail.test.ts && tsx src/gap-reclaim.test.ts && tsx src/hallucination-gate.test.ts && tsx src/hallucinations-are-subset.test.ts && tsx src/turn-source.smoke.test.ts && tsx src/track-namer.smoke.test.ts && tsx src/source-name-correlator.test.ts && tsx src/csrc-spine.smoke.test.ts && tsx src/virtual-time-equivalence.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
