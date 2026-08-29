@@ -193,3 +193,61 @@ def test_malformed_metadata_filter_is_422_not_a_silent_full_list():
     client, _store, _mid = _client()
     assert client.get("/meetings", params={"metadata": "not-json"}, headers=H).status_code == 422
     assert client.get("/meetings", params={"metadata": "[1,2]"}, headers=H).status_code == 422
+
+
+# ---- bounds: one caller's junk must not become everyone's cost ----------------------
+# Measured on the dogfood stack BEFORE these caps: a 10 MB metadata value was accepted in 3s,
+# after which GET /meetings returned 10.3 MB on EVERY call. The read side is the real blast
+# radius — an MCP client feeds a list response straight into a model's context window.
+
+def test_oversized_metadata_is_refused_with_413():
+    client, store, mid = _client()
+    r = _annotate(client, {"metadata": {"blob": "x" * 20000}})
+    assert r.status_code == 413
+    assert "too large" in r.text
+    assert "metadata" not in store._meetings[mid]["data"], "nothing may be written on refusal"
+
+
+def test_the_cap_is_on_the_MERGED_result_not_the_patch():
+    """A cap on each write is not a cap at all when writes merge: many small writes must not add
+    up past the ceiling."""
+    client, store, mid = _client()
+    for i in range(4):
+        r = _annotate(client, {"metadata": {f"chunk{i}": "x" * 5000}})
+        if r.status_code == 413:
+            break
+    else:
+        raise AssertionError("merged growth was never refused")
+    import json as _json
+    assert len(_json.dumps(store._meetings[mid]["data"]["metadata"])) <= 16 * 1024
+
+
+def test_too_many_keys_is_refused():
+    client, _store, _mid = _client()
+    r = _annotate(client, {"metadata": {f"k{i}": 1 for i in range(200)}})
+    assert r.status_code == 413
+    assert "too many metadata keys" in r.text
+
+
+def test_overlong_key_is_refused():
+    client, _store, _mid = _client()
+    r = _annotate(client, {"metadata": {"k" * 300: "v"}})
+    assert r.status_code == 413
+    assert "key too long" in r.text
+
+
+def test_a_realistic_annotation_still_fits():
+    """The cap must not get in the way of what this field is FOR: join keys, tags, a short summary."""
+    client, store, mid = _client()
+    r = _annotate(client, {"metadata": {
+        "crm_deal": "acme-42", "owner": "dmitry", "stage": "discovery",
+        "tags": ["renewal", "technical"],
+        "summary": "They want SSO before renewal. " * 40,
+    }})
+    assert r.status_code == 200, r.text
+    assert store._meetings[mid]["data"]["metadata"]["crm_deal"] == "acme-42"
+
+
+def test_replace_is_bounded_too():
+    client, _store, _mid = _client()
+    assert _annotate(client, {"metadata": {"blob": "x" * 20000}}, replace="true").status_code == 413

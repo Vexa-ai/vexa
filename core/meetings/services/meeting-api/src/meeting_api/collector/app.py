@@ -659,6 +659,10 @@ def build_router(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        if isinstance(row, dict) and row.get("error") == "metadata_too_large":
+            # 413, not 422: the request is well-formed, it is the SIZE that is refused. Nothing is
+            # written — a partial store would be worse than the refusal.
+            raise HTTPException(status_code=413, detail=row.get("detail", "metadata too large"))
         log_event(
             "meeting_annotated", audience="user", span="meetings.annotate",
             user_id=user_id, meeting_id=str(meeting_id),

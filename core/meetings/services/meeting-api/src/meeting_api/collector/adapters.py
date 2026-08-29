@@ -1188,6 +1188,13 @@ class SqlAlchemyTranscriptStore:
                             merged.pop(k, None)
                         else:
                             merged[k] = v
+                # Bound the MERGED result, never the patch alone: a cap on each write is not a cap
+                # at all when writes merge. Refuse rather than truncate — silently storing part of
+                # what a caller sent is a worse failure than telling them it did not fit.
+                from .projection import check_metadata_bounds
+                reason = check_metadata_bounds(merged)
+                if reason:
+                    return {"error": "metadata_too_large", "detail": reason}
                 data["metadata"] = merged
 
             if touched:
