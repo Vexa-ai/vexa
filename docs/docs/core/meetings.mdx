@@ -53,7 +53,8 @@ later; a plan without a time sits in `idle` until you schedule it.
 Connect your calendar with its **secret ICS address** (Google Calendar and Outlook both provide
 one — see [Calendar sync](/how-to/calendar-sync)); no OAuth needed. Connecting syncs immediately
 and answers with the result — every sync failure is stamped as a human-readable status
-(`GET /user/calendars/{calendar_id}/sync`, shown on the Dashboard Calendar page), never swallowed — failures
+(`GET /user/calendars/{calendar_id}/sync`, surfaced on the Calendar page of the hosted dashboard at
+[dashboard.vexa.ai](https://dashboard.vexa.ai)), never swallowed — failures
 are loud here, like everywhere in the lifecycle. A background sweep re-fetches
 the feed (`CALENDAR_SYNC_INTERVAL_S`; self-hosted default 5 minutes, hosted rollout 60 seconds)
 and upserts planned meetings:

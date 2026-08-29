@@ -18,10 +18,10 @@ failures (`422`).
 | Status | When | Example `detail` |
 |---|---|---|
 | `200` / `201` / `202` | success (`201` create, `202` accepted-for-dispatch) | — |
-| `204` | success, no body (e.g. token deleted, bot stopped) | — |
+| `204` | success, no body (e.g. token deleted, `DELETE /meetings/{id}`) | — |
 | `400` | malformed request — non-conformant envelope on `POST /invocations` | `Invocation envelope is not conformant` |
 | `401` | missing or invalid API key — no/unknown/revoked `X-API-Key` | `Missing API key` · `Invalid API key` |
-| `403` | under-scoped key, or bad/missing admin token | `Token scope not authorized for this endpoint` · `Invalid or missing admin token.` |
+| `403` | under-scoped key, or bad/missing admin token | `Insufficient scope for this endpoint` · `Invalid or missing admin token.` |
 | `404` | resource not found — user, token, meeting, or workspace file | `User not found` · `not found` |
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
 | `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
@@ -39,15 +39,32 @@ failures (`422`).
 - `404` reading a transcript for a meeting that was never started.
 - `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
   on an unrecognizable `meeting_url`.
-- `PATCH`/`DELETE /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting
-  is only editable while it's still planned); `409` on `PATCH` when the new link collides with
-  another active meeting.
+- `PATCH /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting is only
+  editable while it's still planned); `409` when the new link collides with another active meeting.
+- `DELETE /meetings/{id}` deletes a plan before spawn or deletes transcript/recording artifacts after
+  the lifecycle is terminal; it returns `409` while the meeting is in flight.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
   fine — the spawn claims it); `429` past your concurrency limit.
+- `DELETE /bots/{platform}/{native_meeting_id}` → `200` with a body
+  (`{"status":"stopping","meeting_id":…}`), not `204`.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
   — see [Troubleshooting](/troubleshooting#bot-wont-join).
 
-**Agent API** (`/agent/*`)
+<Warning>
+**The concurrency refusal does not match this contract today.** Past your concurrency limit
+`POST /bots` answers `403` with an object `detail`
+(`{"code":"service_not_allowed","reason":"concurrency_limit_reached","decision_id":…}`), not the
+documented `429` with a string. A client that treats `403` as an auth failure will stop instead of
+backing off — until this is fixed, branch on the `reason` field.
+Tracked as [#1240](https://github.com/Vexa-ai/vexa/issues/1240).
+</Warning>
+
+**Calendar API** (`/user/calendar*`) — see [Calendar API → Error summary](/api/calendar#error-summary).
+
+**Agent API** (`/agent/*`) — **not served on the hosted service or on Kubernetes**; every route
+answers `502 {"detail":"upstream unreachable: ConnectError"}` there
+([vexa-platform#324](https://github.com/Vexa-ai/vexa-platform/issues/324)). On a deployment that does
+run agent-api:
 - `POST /invocations` → `400` if the `unit.v1` envelope is non-conformant.
 - `POST /events` → `400` if the `event.v1` event is non-conformant; **`422` if the event carries no plan**.
 - Workspace reads → `404` (`detail: "not found"`) if the path is absent (`GET /agent/workspace/file?path=...`).
@@ -61,6 +78,10 @@ problems **in-band** as SSE frames, not as a status code:
 - `done` with `ok: false` — the turn ended unsuccessfully.
 - On a dropped meeting stream, reconnect with the last `id:` echoed as `Last-Event-ID` to resume gaplessly.
 
+On the hosted service and on Kubernetes both streams open `200` and close with **zero bytes** —
+no frame at all, because agent-api is not deployed. Do not read a successfully-opened stream as a
+healthy one ([vexa-platform#324](https://github.com/Vexa-ai/vexa-platform/issues/324)).
+
 ## Rate limits
 
 Two layers gate the gateway, in order:
@@ -73,8 +94,9 @@ Two layers gate the gateway, in order:
    removes the layer, `GUARD_RATE_LIMIT_RPM=0` keeps it installed but stops rate limiting.
    See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
 2. **Per-user limiter (post-auth).** A token-bucket limiter keyed by user id fires *after* the key is
-   resolved — it catches one token driving too much traffic across many IPs. Self-hosted: **ON** by
-   default (`GATEWAY_RATE_LIMIT_RPS` / `GATEWAY_RATE_LIMIT_BURST`, see [Configuration](/configuration)).
+   resolved — it catches one token driving too much traffic across many IPs. **ON** by default: a
+   bucket of `GATEWAY_RATE_LIMIT_BURST` (120) tokens refilled at `GATEWAY_RATE_LIMIT_RPS` (40)/s,
+   off only when `GATEWAY_RATE_LIMIT_DISABLED` is set. See [Configuration](/configuration).
 
 A throttled request returns `429` with a `Retry-After` header (seconds) — honor it before retrying.
 Beyond rate limits, throughput is bounded by your own infrastructure and per-user concurrency

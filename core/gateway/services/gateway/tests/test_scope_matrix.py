@@ -54,6 +54,8 @@ CASES = [
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
      "/meetings/{platform}/{native_meeting_id}/workspace"),
+    ("GET", "/meetings/google_meet/abc-defg-hij/participants",
+     "/meetings/{platform}/{native_meeting_id}/participants"),
 
     ("GET", "/transcripts/by-id/42", "/transcripts/by-id/{meeting_id}"),
     ("GET", "/transcripts/google_meet/abc-defg-hij", "/transcripts/{platform}/{native_meeting_id}"),
@@ -67,6 +69,7 @@ CASES = [
     ("GET", "/recordings/5/media/9/raw", "/recordings/{recording_id}/media/{media_file_id}/raw"),
     ("GET", "/recordings/5/media/9/download",
      "/recordings/{recording_id}/media/{media_file_id}/download"),
+    ("DELETE", "/recordings/5", "/recordings/{recording_id}"),
 
     ("GET", "/user/calendar", "/user/calendar"),
     ("PUT", "/user/calendar", "/user/calendar"),

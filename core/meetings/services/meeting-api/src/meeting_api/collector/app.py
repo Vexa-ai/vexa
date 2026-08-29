@@ -102,6 +102,7 @@ def build_router(
     log_event: Callable[..., dict] = _default_log_event,
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
+    artifact_object_deleter: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -506,14 +507,47 @@ def build_router(
         # PATCH has no share or workspace branch. The echo is the owner reading their own row back.
         return {**row, "data": project_response_data(row.get("data"), viewer_is_owner=True)}
 
-    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
+    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> dict:
         result = await store.delete_planned_meeting(user_id, meeting_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
         if result is False:
-            raise HTTPException(
-                status_code=409, detail="Meeting is no longer planned (bot lifecycle owns it)"
+            plan = await store.prepare_completed_artifact_deletion(user_id, meeting_id)
+            if plan is None:
+                raise HTTPException(status_code=404, detail="Meeting not found")
+            if plan.get("error") == "conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting artifacts can only be deleted after the lifecycle is terminal",
+                )
+
+            recordings = list(plan.get("recordings") or [])
+            if recordings and artifact_object_deleter is None:
+                raise HTTPException(status_code=503, detail="Artifact storage deletion unavailable")
+            deleted_objects = 0
+            for recording in recordings:
+                # Storage FIRST. Any exception deliberately aborts before DB paths/transcripts are
+                # scrubbed, so the same owner-scoped request can retry with the original keys.
+                deleted_objects += len(await artifact_object_deleter(recording))
+
+            finalized = await store.finalize_completed_artifact_deletion(user_id, meeting_id)
+            if finalized is None:
+                raise HTTPException(status_code=404, detail="Meeting not found")
+            if finalized is False:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting artifacts can only be deleted after the lifecycle is terminal",
+                )
+            log_event(
+                "meeting_artifacts_deleted", audience="user", span="meetings.artifacts.delete",
+                user_id=user_id, meeting_id=str(meeting_id),
+                fields={"recordings": len(recordings), "objects": deleted_objects,
+                        "already_deleted": bool(plan.get("already_deleted"))},
             )
+            return {
+                "kind": "artifacts", "objects_deleted": deleted_objects,
+                "already_deleted": bool(plan.get("already_deleted")),
+            }
         log_event(
             "meeting_plan_deleted", audience="user", span="meetings.plan.delete",
             user_id=user_id, meeting_id=str(meeting_id), fields={},
@@ -522,6 +556,7 @@ def build_router(
             redis, user_id=user_id, meeting_id=meeting_id, native_id=None,
             status="deleted", when=None, log_event=log_event,
         )
+        return {"kind": "plan"}
 
     @router.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(
@@ -588,11 +623,18 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        await _apply_meeting_delete(user_id, meeting_id)
-        return JSONResponse(content={
+        receipt = await _apply_meeting_delete(user_id, meeting_id)
+        body = {
             "status": "deleted", "id": meeting_id,
             "platform": platform, "native_meeting_id": native_meeting_id,
-        })
+        }
+        if receipt["kind"] == "artifacts":
+            body.update({
+                "deleted": "completed_meeting_artifacts",
+                "objects_deleted": receipt["objects_deleted"],
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            })
+        return JSONResponse(content=body)
 
     # --- GET /bots/{platform}/{native_meeting_id}/chat (#579 C3, sealed api.v1 ChatMessagesResponse).
     # Thin HONEST restore: the route + owner boundary are real (unowned/unknown native → 404), but
@@ -615,6 +657,84 @@ def build_router(
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
         return JSONResponse(content={"messages": []})
+
+    # --- GET /meetings/{platform}/{native_meeting_id}/participants → who was in this meeting, as far as
+    # the 0.12 core actually KNOWS. Owner-scoped (404 on someone else's meeting — never an empty roster,
+    # which would confirm the row exists across a tenant boundary).
+    #
+    # The honest shape matters more than the convenient one. Two sources are persisted today and they
+    # answer DIFFERENT questions, so every row says which one it came from:
+    #   `invite`  — the calendar invitation's ATTENDEE lines (meeting.data['attendees']). Who was ASKED.
+    #               Includes people who never spoke — but only when the meeting arrived via a connected
+    #               calendar feed, and an invitee who no-showed still appears.
+    #   `speaker` — DISTINCT transcriptions.speaker. Who was HEARD and named. A silent participant is
+    #               absent by construction; so is a speaker whose platform tile never yielded a name.
+    #
+    # Neither is attendance, and this route does NOT pretend otherwise: `observed_roster` is the flat
+    # statement that nobody recorded who was actually present. The 0.12 platform modules observe only
+    # tiles emitting a SPEAKING signal (msteams-speakers.ts's `hasRequiredSignal` gate; gmeet-speakers'
+    # `t.speaking` filter), and no producer writes a roster to any store — there is no `participants`
+    # table and `lifecycle.v1`'s `speaker_events` has had no writer since the 0.12 cutover
+    # (Vexa-ai/vexa#861). So an EMPTY `participants` here means "we never recorded this", which is why
+    # the field is present and constant rather than absent: a consumer must be able to tell "nobody
+    # attended" (never true from this data) from "attendance was never captured" (always true today).
+    #
+    # NO identity resolution is done. A person who was both invited and heard appears TWICE, once per
+    # source, because matching a voice label to an invitee is a guess and the wrong guess silently
+    # merges two humans. #861's preparation forbids promoting transcript speakers into a roster; keeping
+    # the sources side by side is how this route obeys that while still answering the question. ---
+    @router.get("/meetings/{platform}/{native_meeting_id}/participants")
+    async def get_meeting_participants(
+        platform: str,
+        native_meeting_id: str,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        found = await store.get_meeting_participants(user_id, platform, native_meeting_id)
+        if found is None:
+            log_event(
+                "participants_not_found", audience="system", level="warning",
+                span="meetings.participants", user_id=user_id,
+                meeting_id=f"{platform}/{native_meeting_id}",
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+
+        participants: list[dict] = []
+        for entry in found.get("invited") or []:
+            if not isinstance(entry, dict):
+                continue
+            email = entry.get("email")
+            row = {
+                "name": entry.get("name") or None,
+                "email": email if isinstance(email, str) and email else None,
+                "source": "invite",
+            }
+            # PARTSTAT rides through as the invitee's own answer; absent when the feed carried none.
+            partstat = entry.get("partstat")
+            if isinstance(partstat, str) and partstat.strip():
+                row["response_status"] = partstat.strip().lower()
+            participants.append(row)
+        for name in found.get("speakers") or []:
+            participants.append({"name": name, "email": None, "source": "speaker"})
+
+        sources = sorted({p["source"] for p in participants})
+        log_event(
+            "participants_served", audience="user", span="meetings.participants",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"count": len(participants), "sources": ",".join(sources)},
+        )
+        return JSONResponse(content={
+            "meeting_id": found["meeting_id"],
+            "platform": platform,
+            "native_meeting_id": native_meeting_id,
+            "participants": participants,
+            "sources": sources,
+            # Constant on 0.12 — see the block above. Becomes meaningful when a roster producer exists.
+            "observed_roster": "not_recorded",
+        })
 
     # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
     # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this

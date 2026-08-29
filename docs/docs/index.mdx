@@ -76,8 +76,8 @@ them.
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all      # full stack via Docker Compose — seeds .env, brings everything up, prints your API key + URLs
-make bot      # build the meeting bot from source — needed before a bot can join a meeting
+make all      # full stack via Docker Compose — seeds .env, pulls the published images
+              # (bot included), brings everything up, prints your API key + URLs
 ```
 
 The API comes up at `http://localhost:18056` (gateway) and the terminal web

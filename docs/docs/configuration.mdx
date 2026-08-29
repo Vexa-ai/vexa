@@ -233,7 +233,7 @@ self-hosted and can be left untouched.
 ### Per-user limiter (post-auth, on by default)
 
 A token-bucket limiter keyed by user id fires *after* the API key is resolved — it catches one token
-driving too much traffic. On for self-hosted by default.
+driving too much traffic. On by default.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -241,7 +241,7 @@ driving too much traffic. On for self-hosted by default.
 | `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
 | `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
 
-### Edge guard (pre-auth, off by default for self-hosted)
+### Edge guard (pre-auth, off by default)
 
 An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
 — so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is

@@ -49,6 +49,10 @@ transit a vendor's infrastructure. This page collects what a security review ask
 | [`LICENSE`](https://github.com/Vexa-ai/vexa/blob/main/LICENSE) | Apache-2.0. |
 | CI gates | Isolation, contract seals, config contract, license audit, and a full-stack readiness proof run on every push (`scripts/gates.mjs`). |
 
+If you are the person who has to sign off on this dependency, [Architecture review](/architecture/evaluation)
+is the guided read of that table — what each artifact proves, what it does not, and
+[what running it costs](/architecture/evaluation#3-what-running-it-costs) — without asking us.
+
 ## Known gaps (honest)
 
 At-rest encryption for workspaces, transcripts, and tokens is **planned, not shipped** — today

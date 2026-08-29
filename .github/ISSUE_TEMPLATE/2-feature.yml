@@ -1,5 +1,5 @@
 name: Request a capability
-description: What should Vexa do that it doesn't? Enters the same 3-day triage — it lands on the public roadmap as prepared, declared-later, or declined with a reason.
+description: "What should Vexa do that it doesn't? Enters the same triage queue — three days is our target and the wait is longer today — then lands on the public roadmap as prepared, declared-later, or declined with a reason."
 labels: ["state: incoming", "type: feature"]
 body:
   - type: textarea

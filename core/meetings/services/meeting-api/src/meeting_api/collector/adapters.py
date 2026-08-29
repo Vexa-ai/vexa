@@ -401,6 +401,10 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
@@ -425,6 +429,9 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
+            deletion_state = data.get("artifact_deletion") or {}
+            if deletion_state and deletion_state.get("state", "completed") == "completed":
+                return None
             is_owner = meeting.user_id == user_id                                   # (a) owner
             authorized = (
                 is_owner
@@ -441,11 +448,11 @@ class SqlAlchemyTranscriptStore:
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
-        from sqlalchemy import cast, func, select, union_all
+        from sqlalchemy import cast, func, select, text, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
-        from .projection import DEFAULT_LIST_LIMIT, project_list_data
+        from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -454,9 +461,11 @@ class SqlAlchemyTranscriptStore:
             # #800: the branches are UNIONed, never OR-ed. A single `WHERE a OR b` plans as a backward
             # walk of the created_at index with the OR as a Filter — for a caller with few/old meetings
             # that scans most of the table (100s+ per call under production load). Each branch below is
-            # independently index-scannable (owner → ix_meeting_user_created_at, viewer →
-            # ix_meeting_transcript_viewers_gin, workspace → ix_meeting_workspace_created_at) with its
-            # own top-N ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
+            # independently index-scannable (owner → ix_meeting_user_event_order /
+            # ix_meeting_user_created_at, viewer → ix_meeting_transcript_viewers_gin, workspace →
+            # ix_meeting_workspace_event_order / ix_meeting_workspace_created_at — event-order for
+            # the list_view sort, created_at for internal enumeration) with its own top-N
+            # ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
             access = [
                 Meeting.user_id == user_id,
                 cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
@@ -468,6 +477,26 @@ class SqlAlchemyTranscriptStore:
                 fetch_bound = (offset or 0) + (limit if limit is not None else DEFAULT_LIST_LIMIT) + 1
             else:
                 fetch_bound = ((offset or 0) + limit) if limit else None
+
+            # #1222: the USER-FACING list orders by (non-terminal pin, MEETING EVENT time), not
+            # row-creation time — a calendar-managed row is created at import time, so created_at
+            # buried the meeting that was live right now under every row created since the import.
+            # The expressions are verbatim the ones in ix_meeting_user_event_order /
+            # ix_meeting_workspace_event_order (sessions/models.py): the branch top-N must stay an
+            # index walk (#800), and the planner only substitutes an expression index when the
+            # ORDER BY expression matches it structurally. `meeting_event_time()` is the IMMUTABLE
+            # SQL wrapper for COALESCE(data.scheduled_at, start_time, created_at) — created by the
+            # admin-api schema sync (MIGRATION-0005). Semantics mirrored by the fake via
+            # projection.list_order_key. Internal enumeration (get-by-id filter, /bots/status,
+            # calendar sync) keeps created_at DESC — _resolve_owned_native documents "newest owned
+            # row" against exactly that order.
+            _pin_sql = "status IN ({})".format(
+                ", ".join(f"'{s}'" for s in sorted(LIST_PIN_STATUSES)))
+            event_order = (
+                text(f"({_pin_sql}) DESC"),
+                text("meeting_event_time(data, start_time, created_at) DESC"),
+                Meeting.id.desc(),
+            )
 
             def _branch(cond):
                 s = select(Meeting.id).where(cond)
@@ -491,15 +520,18 @@ class SqlAlchemyTranscriptStore:
                 if fetch_bound is not None:
                     # ORDER BY inside a compound member is only meaningful (and only kept by
                     # the compiler) together with LIMIT; an unbounded branch returns its full
-                    # set, so the outer ORDER BY alone decides.
-                    s = s.order_by(Meeting.created_at.desc()).limit(fetch_bound)
+                    # set, so the outer ORDER BY alone decides. The branch MUST pre-limit by the
+                    # SAME key the outer sort uses — a created_at top-N under the event-time sort
+                    # would silently drop the very rows the sort exists to surface (#1222).
+                    branch_order = event_order if list_view else (Meeting.created_at.desc(),)
+                    s = s.order_by(*branch_order).limit(fetch_bound)
                 return s
 
             ids = union_all(*[_branch(c) for c in access]).subquery()
             stmt = (
                 select(Meeting)
                 .where(Meeting.id.in_(select(ids.c.id)))
-                .order_by(Meeting.created_at.desc())
+                .order_by(*(event_order if list_view else (Meeting.created_at.desc(),)))
             )
             if list_view:
                 # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
@@ -602,6 +634,46 @@ class SqlAlchemyTranscriptStore:
                 if user_id in (data.get("transcript_viewers") or []):
                     return mtg.id  # (c) redeemed an INDEPENDENT transcript-share link for this meeting
             return None
+
+    async def get_meeting_participants(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+        """OWNER-scoped (``ports.TranscriptStore.get_meeting_participants``). ONE session, two reads:
+        the newest owned row's ``data['attendees']`` (the calendar invitation's ATTENDEE lines), and
+        DISTINCT ``transcriptions.speaker`` for that row ordered by FIRST utterance.
+
+        The speaker read is a grouped aggregate, NOT a segment fetch: a long meeting has thousands of
+        rows and this endpoint wants at most a few dozen names, so ``GROUP BY speaker`` keeps the
+        response bounded by the cast rather than by the transcript's length (the #584 lesson — never
+        let a per-meeting response grow with the meeting)."""
+        from sqlalchemy import func, select
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                ).order_by(Meeting.created_at.desc()).limit(1)
+            )).scalars().first()
+            if meeting is None:
+                return None  # → 404. NOT an empty roster: the caller owns no such meeting.
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            rows = (await db.execute(
+                select(Transcription.speaker, func.min(Transcription.start_time).label("first_at"))
+                .where(
+                    Transcription.meeting_id == meeting.id,
+                    Transcription.speaker.isnot(None),
+                )
+                .group_by(Transcription.speaker)
+                .order_by(func.min(Transcription.start_time))
+            )).all()
+            attendees = data.get("attendees")
+            return {
+                "meeting_id": meeting.id,
+                "invited": attendees if isinstance(attendees, list) else [],
+                "speakers": [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()],
+            }
 
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
         """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
@@ -1182,6 +1254,85 @@ class SqlAlchemyTranscriptStore:
             await db.delete(meeting)
             await db.commit()
             return True
+
+    async def prepare_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return {"error": "conflict"}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("artifact_deletion") or {}
+            already_deleted = bool(
+                prior and prior.get("state", "completed") == "completed"
+            )
+            if not already_deleted:
+                data["artifact_deletion"] = {
+                    "state": "pending",
+                    "requested_at": prior.get("requested_at")
+                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scope": "primary_transcript_and_recording_storage",
+                    "backup_residuals": "expire_under_deployment_retention_policy",
+                }
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {
+                "meeting_id": meeting.id,
+                "recordings": list(data.get("recordings") or []),
+                "already_deleted": already_deleted,
+            }
+
+    async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import delete, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("completed", "failed"):
+                return False
+            await db.execute(delete(Transcription).where(Transcription.meeting_id == meeting_id))
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
+                data.pop(key, None)
+            data["artifact_deletion"] = {
+                "state": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "scope": "primary_transcript_and_recording_storage",
+                "backup_residuals": "expire_under_deployment_retention_policy",
+            }
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+
+        # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
+        # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
+        if self._redis is not None:
+            await self._redis.delete(
+                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
+            )
+            await self._redis.srem("active_meetings", str(meeting_id))
+        return True
 
 
 class RedisStreamBus:

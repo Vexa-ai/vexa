@@ -35,7 +35,7 @@ import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -219,8 +219,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
-  const aloneness = createSilenceAlonenessSource({ activity: remoteAudioActivity, windowMs: aloneSilenceWindowMs });
-  console.log(`[bot] aloneness: silence adapter enabled (window_ms=${aloneSilenceWindowMs})`);
+  // #1192: the guard's one repair attempt, resolved late — the aloneness monitor is built before
+  // the browser exists, and the restart needs the live page. Unset until the session launches
+  // (and after a launch failure), in which case the guard just holds and keeps checking.
+  let restartCapture: (() => void) | undefined;
+  const aloneness = createSilenceAlonenessSource({
+    activity: remoteAudioActivity,
+    windowMs: aloneSilenceWindowMs,
+    onCaptureFault: () => restartCapture?.(),
+  });
+  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
@@ -250,6 +258,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // the page.evaluate on the BLANK pre-navigation page (no VexaBrowserUtils, no audio), and the
     // subsequent goto to the meeting URL destroyed that context — so capture never attached. (L4.)
     const sess = session, bp = botPipeline, rec = recording;
+    restartCapture = () => {
+      void restartMixedCapture(sess.page)
+        .then((requested) => console.log(`[bot] capture restart ${requested ? 'requested' : 'not applicable (no mixed rescan)'}`))
+        .catch((e) => console.error(`[bot] capture restart failed: ${String(e)}`));
+    };
     // In-meeting chat (jitsi lane) → a transcript.v1 `chat` segment: the sender is the
     // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
     // `completed` is immediate — a chat line has no draft phase.
