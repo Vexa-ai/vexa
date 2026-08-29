@@ -783,6 +783,41 @@ def create_app(
                     result["since_index"] = start
         return result
 
+    @app.get("/transcript-search", operation_id="search_transcripts")
+    async def search_transcripts(
+        q: str = Query(..., min_length=1, description=(
+            'What was said. Supports "quoted phrases", `or`, and `-excluded` terms. '
+            "Malformed input never errors, so you can pass a user's words through as-is."
+        )),
+        limit: int = Query(20, ge=1, le=100, description="Max hits (default 20)."),
+        offset: int = Query(0, ge=0),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        native_meeting_id: Optional[str] = Query(
+            None, description="Restrict the search to ONE meeting. " + _ID_DESC
+        ),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Search what was SAID across your meetings. Use this instead of pulling transcripts and
+        reading them — it returns ranked snippets, not whole transcripts.
+
+        Each hit carries the meeting's `platform` + `native_meeting_id`, the speaker, the
+        timestamp, and a snippet with the match wrapped in <mark> tags. Feed those identity fields
+        straight into get_meeting_transcript when you need the full context around a hit.
+
+        This is lexical search with stemming, not semantic: "renewal" finds "renewals" but will
+        NOT find "extend the contract". Search the words people actually said.
+
+        Related but different: list_meetings(metadata_filter=...) finds meetings you TAGGED;
+        this finds meetings where something was SAID.
+        """
+        params: Dict[str, Any] = {"q": q, "limit": limit, "offset": offset}
+        if platform:
+            params["platform"] = platform
+        if native_meeting_id:
+            params["native_meeting_id"] = native_meeting_id
+        return await make_request("GET", f"{base_url}/transcripts/search", api_key, params=params)
+
     # --- annotations: the caller's OWN description of a meeting -----------------------------
     # This is the join key between a Vexa meeting and everything else the agent knows. Without it
     # an agent can read a transcript and can do nothing with the fact afterwards: there is nowhere

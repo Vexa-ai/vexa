@@ -1,4 +1,4 @@
-"""L1 — the MCP surface: the /mcp mount exists, exactly the 13 tools are exposed,
+"""L1 — the MCP surface: the /mcp mount exists, exactly the 14 tools are exposed,
 and the 4 prompts render."""
 import httpx
 import pytest
@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "annotate_meeting",
     "speak_in_meeting",
     "get_meeting_chat",
+    "search_transcripts",
 }
 
 

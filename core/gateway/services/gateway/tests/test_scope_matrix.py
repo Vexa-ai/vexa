@@ -46,6 +46,7 @@ CASES = [
     ("GET", "/meetings/42", "/meetings/{meeting_id}"),
     ("PATCH", "/meetings/42", "/meetings/{meeting_id}"),
     ("DELETE", "/meetings/42", "/meetings/{meeting_id}"),
+    ("GET", "/transcripts/search", "/transcripts/search"),
     ("PATCH", "/meetings/google_meet/abc-defg-hij", "/meetings/{platform}/{native_meeting_id}"),
     ("DELETE", "/meetings/google_meet/abc-defg-hij", "/meetings/{platform}/{native_meeting_id}"),
     ("PUT", "/meetings/google_meet/abc-defg-hij/intent",

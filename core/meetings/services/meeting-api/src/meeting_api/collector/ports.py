@@ -243,6 +243,44 @@ class TranscriptStore(Protocol):
         Returns the row (``list_meetings`` shape), or ``None`` when the user owns no such row."""
         ...
 
+    async def search_transcripts(
+        self,
+        user_id: int,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        platform: Optional[str] = None,
+        native_meeting_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Full-text search over the CALLER'S OWN transcript segments, ranked, with snippets.
+
+        Answers the question metadata cannot: not "meetings I tagged X" but "meetings where
+        someone SAID X". Without it the only way to answer that is to pull every transcript and
+        read it — precisely the thing an agent must not do.
+
+        Lexical, not semantic: Postgres FTS over ``to_tsvector('english', text)``. The query is
+        parsed with ``websearch_to_tsquery`` so a caller gets quoted phrases, ``or`` and ``-term``
+        negation for free, and — unlike ``to_tsquery`` — malformed input never raises. Ranked by
+        ``ts_rank_cd`` (cover density: term frequency weighted by proximity; NOT BM25 — no IDF, no
+        length normalisation). Each hit carries a ``ts_headline`` snippet rather than the whole
+        segment, which is what keeps a result cheap in a calling model's context.
+
+        ``'english'`` is the text-search config for BOTH indexing and querying, and it must stay
+        the same on both sides or the index goes unused. It is not an English-only decision:
+        English stemming leaves unknown tokens (e.g. Cyrillic) untouched, so non-English terms
+        still match EXACTLY — what is lost is stemming for those languages, while ``'simple'``
+        would have thrown away English stemming for everyone.
+
+        OWNER-SCOPED ONLY — fail-closed, and deliberately narrower than ``list_meetings``, which
+        also surfaces share-recipient and workspace-member rows. Widening search to those is a
+        separate decision with its own review; a search that over-returns is a disclosure.
+
+        Each hit: ``meeting_id`` · ``platform`` · ``native_meeting_id`` · ``start``/``end`` ·
+        ``speaker`` · ``language`` · ``rank`` · ``snippet`` · ``text``. Newest-meeting-first
+        within equal rank so a tie is deterministic."""
+        ...
+
     async def annotate_meeting(
         self, user_id: int, meeting_id: int, *,
         title: Optional[str] = None,
