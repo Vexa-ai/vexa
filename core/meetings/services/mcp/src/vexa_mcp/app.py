@@ -320,6 +320,28 @@ class AnnotateMeeting(BaseModel):
 class SpeakInMeeting(BaseModel):
     text: str = Field(..., description="What the bot should say out loud in the meeting.")
     language: Optional[str] = Field(None, description="Optional language/voice code, e.g. 'en'.")
+    # A MECHANICAL guard, not another warning. The prose warning is good and a cold-start agent
+    # did obey it — but this tool is one tools/call away from being audible to real people in a
+    # real conversation, and it will be loaded alongside a hundred others whose descriptions get
+    # skimmed. A required field the caller must set deliberately cannot be skimmed past.
+    asked_by_a_human: bool = Field(
+        ...,
+        description=(
+            "Must be true, and only set it if the person you are working for asked you to say "
+            "THIS. Everyone in the meeting hears it and it cannot be taken back. Never set it to "
+            "satisfy the schema, to test, or to acknowledge something."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def refuse_unless_asked(self):
+        if self.asked_by_a_human is not True:
+            raise ValueError(
+                "speak_in_meeting: refused. This says words out loud to real people and cannot be "
+                "undone. Set asked_by_a_human=true only when the person you work for asked you to "
+                "say this; otherwise do not call this tool."
+            )
+        return self
 
 
 class ParseMeetingLinkRequest(BaseModel):
@@ -432,6 +454,67 @@ _LEGACY_PLATFORM_DESC = "DEPRECATED alias for `platform`. Use `platform`."
 _LEGACY_ID_DESC = "DEPRECATED alias for `native_meeting_id`. Use `native_meeting_id`."
 
 
+#: The platforms the link parser can actually produce. A value outside this set is a caller
+#: mistake, and answering it with an empty result set is the worst possible reply: a cold-start
+#: agent reported that `platform="webex"` returned a confident `count: 0`, indistinguishable from
+#: "nobody said that". Silence that looks like an answer is worse than an error.
+VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi")
+
+
+def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
+    """Reject an unknown platform loudly rather than filtering everything away."""
+    if platform is None or platform in VALID_PLATFORMS:
+        return platform
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"{tool}: unknown platform {platform!r}. Valid values: "
+            f"{', '.join(VALID_PLATFORMS)}. Omit `platform` to search every platform."
+        ),
+    )
+
+
+async def reject_unknown_arguments(request: Request) -> None:
+    """Refuse query parameters the route does not declare.
+
+    FastAPI ignores extras, so `get_meeting_transcript(limit=2)` — no such parameter — returned
+    200 with the argument silently dropped. For an agent that is the worst failure mode available:
+    a typo'd or hallucinated parameter looks like it worked, and the wrong answer is indistinguishable
+    from the right one. Named near-misses are called out, because the commonest cause is a caller
+    reaching for another tool's parameter name.
+    """
+    route = request.scope.get("route")
+    if route is None or not getattr(route, "dependant", None):
+        return
+    known = {p.alias or p.name for p in route.dependant.query_params}
+    unknown = sorted(set(request.query_params.keys()) - known)
+    if not unknown:
+        return
+    # Substring matching alone misses the commonest real case — a caller reaching for another
+    # tool's parameter name and getting the word order wrong (`meeting_id_native`). difflib
+    # catches transpositions and typos that `in` does not.
+    import difflib
+
+    hints = []
+    for got in unknown:
+        near = difflib.get_close_matches(got, sorted(known), n=1, cutoff=0.5)
+        if not near:
+            near = [k for k in sorted(known) if k != got and (got in k or k in got)][:1]
+        if near:
+            hints.append(f"`{got}` — did you mean `{near[0]}`?")
+    tool = getattr(route, "operation_id", None) or getattr(route, "name", "this tool")
+    detail = {
+        "tool": tool,
+        "message": f"{tool}: unknown argument(s) {unknown}. This tool accepts {sorted(known)}.",
+        "unknown": unknown,
+        "accepted": sorted(known),
+    }
+    if hints:
+        detail["hint"] = "; ".join(hints)
+        detail["message"] = f"{tool}: unknown argument(s) — {detail['hint']}"
+    raise HTTPException(status_code=422, detail=detail)
+
+
 def _resolve_identity(
     tool: str,
     platform: Optional[str],
@@ -505,6 +588,11 @@ def create_app(
     _public_docs = _vexa_env != "production"
     app = FastAPI(
         title="Vexa MCP Service (v0.12)",
+        # Applied to every route at once rather than injected per-signature: a tool that silently
+        # ignores an argument it does not know is the worst reply available to an agent, so this
+        # must hold for ALL of them, including any added later. The /mcp transport is an ASGI
+        # mount rather than a route, so it is unaffected.
+        dependencies=[Depends(reject_unknown_arguments)],
         docs_url="/docs" if _public_docs else None,
         redoc_url="/redoc" if _public_docs else None,
         openapi_url="/openapi.json" if _public_docs else None,
@@ -707,6 +795,7 @@ def create_app(
         `metadata_filter` is what makes this a query rather than a log: meetings you annotated with
         annotate_meeting can be found again by the values you put on them.
         """
+        _validate_platform("list_meetings", platform)
         params: Dict[str, Any] = {}
         if limit is not None:
             params["limit"] = limit
@@ -811,6 +900,7 @@ def create_app(
         Related but different: list_meetings(metadata_filter=...) finds meetings you TAGGED;
         this finds meetings where something was SAID.
         """
+        _validate_platform("search_transcripts", platform)
         params: Dict[str, Any] = {"q": q, "limit": limit, "offset": offset}
         if platform:
             params["platform"] = platform
@@ -849,7 +939,24 @@ def create_app(
             body["title"] = data.title
         if data.metadata is not None:
             body["metadata"] = data.metadata
-        return await make_request("POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body)
+        row = await make_request("POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body)
+
+        # Return WHAT WAS WRITTEN, not the whole meeting row. Annotating is a small write to one
+        # field; the full row carries object-storage paths, a playback URL and a reference to a
+        # ~69 MB audio artifact, none of which the caller asked for and all of which land in a
+        # calling model's context. Read paths still serve the full row — this trims the WRITE's
+        # echo, which is the one place nobody requested any of it.
+        if not isinstance(row, dict):
+            return row
+        row_data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        return {
+            "platform": row.get("platform", plat),
+            "native_meeting_id": row.get("native_meeting_id", mid),
+            "meeting_db_id": row.get("id"),
+            "status": row.get("status"),
+            "title": row_data.get("title"),
+            "metadata": row_data.get("metadata", {}),
+        }
 
     # --- the interactive bot: our bot TALKS and reads the room ------------------------------
     # No notetaker MCP exposes this, because no notetaker has it: their bot is a recorder. Ours is
@@ -919,7 +1026,7 @@ def create_app(
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        Tell the Vexa maintainers that something went wrong. A human reads every ticket.
+        Tell the Vexa maintainers that something went wrong. A human reads every ticket, and it cannot be withdrawn.
 
         Call this the moment you hit a problem with Vexa — you do not need to have solved it first:
         - something BROKE: an error, a bot that never joined, an empty transcript, a call that hung;
@@ -929,6 +1036,11 @@ def create_app(
         A workaround you had to invent is worth filing too — that is the report we most want.
         Write what you tried and what happened in your own words. Do not paste API keys, and do not
         paste your user's meeting content.
+
+        File only when you hit this while doing REAL WORK for someone. If you are exploring,
+        evaluating or testing this API, do not file — write your findings in your report instead.
+        A ticket reaches humans at another company and cannot be withdrawn, and an evaluation run
+        can otherwise open several in a single session.
 
         If the issue concerns a meeting or a bot, include `native_meeting_id` and `platform`. That is the
         join key: it lines your account of what happened up against our own record of the same
@@ -1108,6 +1220,17 @@ def create_app(
     @mcp.server.get_prompt()
     async def _get_prompt(name: str, arguments: Optional[Dict[str, str]] = None) -> mcp_types.GetPromptResult:
         return get_prompt_result(name, arguments)
+
+    # Close every tool's argument schema. Without `additionalProperties: false` an unknown
+    # argument is not rejected — fastapi-mcp silently DROPS it before the HTTP call, so the
+    # server-side guard never sees it and the tool answers 200 as if the argument had been
+    # honoured. A hallucinated or typo'd parameter then looks like it worked, and the wrong
+    # answer is indistinguishable from the right one. Closing the schema moves the refusal to
+    # where the argument actually is: the MCP validation layer.
+    for _tool in mcp.tools:
+        schema = getattr(_tool, "inputSchema", None)
+        if isinstance(schema, dict) and schema.get("type") == "object":
+            schema.setdefault("additionalProperties", False)
 
     mcp.mount_http()
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE
