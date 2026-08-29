@@ -1,0 +1,139 @@
+---
+title: "Completion reasons"
+description: "Every reason a meeting run can end, what each one means, and whose side it points at."
+---
+
+Every meeting that reaches a terminal state carries a **`completion_reason`** — the bot's own
+account of why the run ended. The field is sealed in the `lifecycle.v1` contract and there are
+**ten values**, no more.
+
+This page is the reference for all ten. [Troubleshooting](/troubleshooting) is the companion:
+it starts from a symptom you can see and walks to a fix. Start here when a run has already
+ended and you want to know what ended it.
+
+<Note>
+Despite the name, `completion_reason` is carried on **`failed`** meetings as well as
+`completed` ones. On a `failed` row it arrives alongside `failure_stage`
+(`requested` · `joining` · `awaiting_admission` · `active`), which records how far the run got.
+</Note>
+
+## Where to read it
+
+`completion_reason` and `failure_stage` are top-level fields on every meeting the API returns —
+no digging into `data`:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots" \
+  | jq '.meetings[] | {id, status, completion_reason, failure_stage}'
+```
+
+```json
+{
+  "id": 11368,
+  "status": "failed",
+  "completion_reason": "awaiting_admission_rejected",
+  "failure_stage": "awaiting_admission"
+}
+```
+
+The same two fields ride the signed `meeting.completed` and `bot.failed`
+[webhooks](/webhooks) under `data.meeting`, so you can route on the reason without polling.
+`GET /meetings/{id}` carries them too.
+
+## The ten reasons
+
+**Whose side** is the column that matters. Two of the ten point at Vexa; the rest are your own
+request, your own policy, or the ordinary friction of putting a bot into someone else's calendar.
+
+| `completion_reason` | What happened | Whose side | What to do |
+|---|---|---|---|
+| `stopped` | The bot was stopped deliberately — `DELETE /bots/…`, the Stop control, or your own automation. | **Yours** | Nothing. The transcript up to that moment is kept. |
+| `left_alone` | After admission, the bot heard no one for the configured window, so it left. | **The meeting** | Nothing, if the call had really ended. If people were still talking, see [`left_alone` is a silence verdict](#left_alone-is-a-silence-verdict-not-a-headcount). |
+| `startup_alone` | Nobody was in the meeting when the bot arrived, and nobody joined within the window. | **The meeting** | Check the bot was sent at the right time. Raise `no_one_joined_timeout` if your bots routinely arrive first. |
+| `evicted` | A host or participant removed the bot from the call. | **The meeting** | Nothing to fix on your side. A person in the call made this decision. |
+| `awaiting_admission_timeout` | The bot waited in the lobby and was never admitted before its budget ran out. | **The meeting** | Have someone admit the bot as they would any guest. Raise `max_wait_for_admission` if your hosts admit late. |
+| `awaiting_admission_rejected` | A host explicitly denied the bot admission. | **The meeting** | Nothing automatic — this was an explicit decision. Ask the host to admit it next time. |
+| `join_failure` | The bot never reached the call: no admission signal ever appeared, or it died before it could join. | **Vexa** | Retry. If it repeats on one platform or one link, tell us — and read the [caveat on this value](#join_failure-is-currently-two-failures-under-one-name) first. |
+| `auth_session_missing` | The run needed a signed-in browser identity and there was no usable one — a meeting restricted to authenticated accounts, or a stored session that has died. | **Vexa, or your bot identity** | A re-spawn against a dead session cannot succeed. Self-hosting: re-provision with `make login` — see [Authenticated bots](/authenticated-bots). Hosted: tell us. |
+| `validation_error` | The request that created the run was not usable — wrong `native_meeting_id`, wrong platform value, malformed parameters. | **Yours** | Fix the request. [Bot won't join the meeting](/troubleshooting#bot-wont-join-the-meeting) lists the usual causes. |
+| `max_bot_time_exceeded` | The run hit its hard lifetime cap and was ended. | **Your policy** | Raise `automatic_leave.max_bot_time` if your meetings run longer. The transcript up to the cap is kept. |
+
+## Tuning the timeouts
+
+Four of the reasons above are a clock running out, and every one of those clocks is yours to set.
+Pass `automatic_leave` on `POST /bots` (all values in milliseconds):
+
+| Field | Governs |
+|---|---|
+| `max_wait_for_admission` | how long the bot waits in the lobby → `awaiting_admission_timeout` |
+| `no_one_joined_timeout` | how long it waits for a first participant → `startup_alone` |
+| `max_time_left_alone` | how long it tolerates silence before leaving → `left_alone` |
+| `max_bot_time` | the absolute lifetime cap → `max_bot_time_exceeded` |
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+        "platform": "google_meet",
+        "native_meeting_id": "abc-defg-hij",
+        "automatic_leave": { "max_wait_for_admission": 1200000 }
+      }'
+```
+
+A bot that keeps timing out in the lobby of hosts who admit slowly is a budget you can change
+today, not a defect you have to wait on.
+
+## Reading a reason honestly
+
+### "Did not complete" is not a fault
+
+A run that ended in anything other than `completed` has not, by that fact, told you anything
+about whether Vexa worked. The user stopping the bot, nobody being in the room, a host declining
+it, a lobby nobody watched — these are ordinary meeting outcomes, and eight of the ten values
+above describe one. Only the reason separates them from the two that point at us, so a count of
+non-completions with the reasons thrown away is not a reliability measure of anything — ours or
+anyone's.
+
+### `join_failure` is currently two failures under one name
+
+`join_failure` today covers both a platform refusing the bot outright and a bot that was reaped
+before any admission verdict arrived. They have different causes and different fixes, and the
+value does not yet distinguish them. Tracked in
+[`Vexa-ai/vexa#1058`](https://github.com/Vexa-ai/vexa/issues/1058) — open. Until it is split,
+treat a `join_failure` as "the bot did not get in", not as a specific diagnosis.
+
+### `left_alone` is a silence verdict, not a headcount
+
+The bot decides it is alone from the audio reaching it, not from a participant list. A meeting
+where nobody spoke for the whole window ends this way with people still present — and so does a
+meeting where the capture path failed and the bot genuinely heard nothing. If you see
+`left_alone` on a call you know was busy, check whether any transcript segments were produced;
+zero segments points at capture, not at an empty room. Tracked in
+[`Vexa-ai/vexa#1192`](https://github.com/Vexa-ai/vexa/issues/1192) — open.
+
+### `completed` is not proof of a transcript
+
+A run can reach `completed` with a benign reason and still have produced no segments. The
+completion reason describes how the *bot's* run ended; it does not assert that transcription
+worked. Check the transcript itself before treating a completed meeting as a delivered one.
+Tracked in [`Vexa-ai/vexa#844`](https://github.com/Vexa-ai/vexa/issues/844) — open.
+
+### There is no per-reason rollup endpoint
+
+The API serves the reason **per meeting**. It does not serve a breakdown across your meetings —
+if you want to know how your runs are ending in aggregate, page `GET /bots` and tally the field
+yourself.
+
+### The OpenAPI schema lists two values the product no longer emits
+
+If you generate a client from the gateway's OpenAPI document, its `MeetingCompletionReason` enum
+still carries `stopped_before_admission` and `stopped_with_no_audio` — 0.10-era values that the
+0.12 codebase never produces. The ten above are the live set. Generated clients should tolerate
+the two extras rather than depend on them.
+
+## Still stuck?
+
+[Troubleshooting](/troubleshooting) covers the symptom-first path — a bot that will not join, a
+join with no transcript, a stack that will not come up. If a reason above does not match what you
+observed, that mismatch is worth reporting: tell us at [Support](/support) with the meeting id,
+the `completion_reason` you got, and what you saw in the call.

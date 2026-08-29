@@ -3,6 +3,10 @@ title: "Troubleshooting"
 description: "The common failures, what causes them, and how to fix them."
 ---
 
+This page starts from a symptom you can see. If the run has already ended and you want to know
+what ended it, every terminal meeting carries a reason —
+[Completion reasons](/troubleshooting/completion-reasons) is the reference for all ten.
+
 ## Bot won't join the meeting
 
 A `POST /bots` returns success once the bot is **dispatched**, not once it's in the call — a join can
@@ -19,7 +23,9 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Bad meeting id** — `native_meeting_id` is the id *inside* the join URL (e.g. `abc-defg-hij`), not the
   whole URL. Wrong platform value also fails: use `google_meet`, `zoom`, or `teams`.
 - **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
-  it. Admit it like any guest.
+  it. Admit it like any guest. A run that ended in the lobby says so:
+  [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
+  and `automatic_leave.max_wait_for_admission` sets how long it waits.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
