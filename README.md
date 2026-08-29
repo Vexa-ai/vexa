@@ -474,6 +474,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 - **Contributor rights** — [one rights choice plus DCO](CONTRIBUTOR_RIGHTS.md) for individuals;
   private, head-bound authorization when an employer or client owns the work.
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
+- **Obsidian**: [obsidian-vexa-bridge](https://github.com/rennf93/obsidian-vexa-bridge) turns completed meetings into Obsidian notes or a knowledge graph, a third-party adapter; see [the docs](https://docs.vexa.ai/obsidian).
 
 Vexa is built in the open. If you self-host it, extend it, or run it air-gapped somewhere interesting,
 we'd love to hear about it.

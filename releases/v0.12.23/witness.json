@@ -1,100 +1,103 @@
 {
- "version": "v0.12.23",
- "candidate": "v0.12.23-rc.18",
- "generated_from": "v0.12.22...v0.12.23",
- "witnessed_by": "Dmitry Grankin",
- "witnessed_at": "2026-08-17",
- "deployment": "helm \u2014 vexa-staging revision 196 (2026-08-18), the rc.18 candidate: vexaai/vexa-bot manifest sha256:7008aaaeba4a4db335894bf9ad6368b303033452c576361a06f72e4df805d167, vexaai/v012-meeting-api manifest sha256:d9b58e5dfc38ae768882bae6f597fdc8457abd244ed21665764bbc7be4b8c3dc (unmoved rc.17\u2192rc.18), vexaai/v012-admin-api manifest sha256:654c3320fd974bc80b67364eac4dab6f2c814fccc82f786a66d35cbdeb04eb60",
- "witness_deployment": {
-  "url": "https://dashboard.staging.vexa.ai/meetings/26312",
-  "provisioned_by": "vexa-staging Helm revisions 189\u2192196 across the rc.11\u2192rc.18 candidates, deployed by the train session under the stage lock; rollback anchors verified at each step; revs 193\u2192196 on a fresh scrubbed prod replica with armed calendars held at 0 throughout",
-  "prevalidated": [
-   "calendar API sweep: 13/14 legs pass against the documented surface (create/list/cap/patch/sync/dedup/edit/cancel/opt-out/legacy/encoding/delete/errors); the one FAIL (auto-join retry storm) fixed in #1200 and re-proven live",
-   "retry-storm live proof on rev 192: one dispatch per 300s backoff per occurrence, measured \u0394300.8s and \u0394301.8s across row recreations, stamps riding the API",
-   "duplicate dispatch: 10-way concurrent POST /bots race \u2192 exactly one 201 across four replications; uq_meeting_active_user_platform_native present and enforcing (created on staging 2026-08-17 after terminal-izing 4 stale blocker rows)",
-   "live bot lifecycle on the exact rc.14 digest (running pod imageID match): spawn\u2192join\u2192active\u2192real transcription (45 verbatim segments)\u2192stop, GMeet-compatible lane, zero Teams paths on non-Teams runs, zero error lines",
-   "denial vocabulary live: all six admit-path reasons produced with truthful bodies from the staged webapp ledger (insufficient_balance for the zero-fund class \u2014 the reason-truth fix verified in the running container); cross-surface balance consistency",
-   "storm-lite: sync idempotent under 20-way parallelism, concurrency ceiling exact under race, 50/50 uniform auth failures, 60-call hostile-id fuzz with zero 5xx",
-   "fixture replays: four production tapes (de/en, 50s\u201358min, 1\u20134 sources) structurally identical head-vs-polished; mixed-pipeline/teams-capture/meeting-api/gateway suites green (961+459 tests); 35-gate suite green; release-validate green on rc.14 (run 32068904993)",
-   "overnight adversarial storm on rev 193 (rc.15): dedup under 10-way fire, two-calendars-one-event single dispatch, disconnect-during-live-bot disarms the future without killing the bot, billing denial at the sweep stamped/bounded/retried-once, zero tracebacks or 5xx; four stop-semantics findings (F1\u2013F4) fixed the same night in #1212",
-   "retry-matrix reprobe on rev 193: dispatch at start\u2212117s/\u2212114s (the \u22122min lead live), failure retries \u0394307.4s/\u0394302.2s with honest stamps riding row recreation, the exact rev-192 double-dispatch condition held zero re-dispatch for 35min with a live positive control, stop-evict contract (also_stopped) live with the unique index making two live rows unprovokable",
-   "stop-is-stop live reprobe on rev 194 (rc.16, #1212 code verified present in the running container): pre-dispatch stop cancels (failed/stopped, no failure_stage, sweep never dispatches, re-sync created:0); 7 mid-spawn races all caught by the ordering interlock with no pod surviving to joining and truthful 409s; reason dominance on all 14 rows (zero join_failure with stop_requested); continue_meeting refused on stopped rows (409) while plain re-POST spawns; failure-retry re-dispatch at +300.76s; zero error-level lines",
-   "rc.18 namer fix (#1228) corpus-validated before merge: 25 Teams tapes (14 prod tier-A + 11 dogfooding), 30 truthed tracks \u2014 baseline 27 correct/1 wrong/2 unnamed \u2192 fix 29/0/1, zero regressions, 22/25 tapes byte-identical, all 38 time-to-first-name values identical; the one witnessed-wrong meeting now names both tracks correctly; fix physically verified in the running rev-196 bot image (rosterSettled/provisional present in the deployed bundle, absent in rc.17's)"
-  ]
- },
- "values": [
-  {
-   "pr": "1151",
-   "title": "feat(calendar,teams): multi-calendar feeds and CSRC transcription (with the review polish)",
-   "visibility": "user",
-   "witnessed": true,
-   "observation": "Founder, live on staging rev 192, meeting 26312 (Teams, imported from his connected calendar 'test'): \"okay, this time all worked fine, calendar + bot + transcripts\". Server-side reconciliation at the same moment: 22 segments, speakers 'Dmitry Grankin' and 'tes (Unverified)' \u2014 real names on real words \u2014 zero contest markers in text, calendar-sourced row with auto_join honored. Earlier in the same witness: real provider feed imported correctly; timed auto-join fired (1 min late \u2014 timing spec deferred as #1208); an incident bot from a cloned replica calendar was diagnosed as the staging-hydration gap (vexa-platform#311, mitigated), not a candidate defect.",
-   "pass": "pass = a founder-connected real calendar imports its events, the timed bot auto-joins, and real-name transcripts arrive on the dashboard meeting page with zero contest markers \u2014 observed end-to-end on meeting 26312"
+  "version": "v0.12.23",
+  "candidate": "v0.12.23-rc.18",
+  "generated_from": "v0.12.22...v0.12.23",
+  "witnessed_by": "Dmitry Grankin",
+  "witnessed_at": "2026-08-17",
+  "deployment": "helm \u2014 vexa-staging revision 196 (2026-08-18), the rc.18 candidate: vexaai/vexa-bot manifest sha256:7008aaaeba4a4db335894bf9ad6368b303033452c576361a06f72e4df805d167, vexaai/v012-meeting-api manifest sha256:d9b58e5dfc38ae768882bae6f597fdc8457abd244ed21665764bbc7be4b8c3dc (unmoved rc.17\u2192rc.18), vexaai/v012-admin-api manifest sha256:654c3320fd974bc80b67364eac4dab6f2c814fccc82f786a66d35cbdeb04eb60",
+  "witness_deployment": {
+    "url": "https://dashboard.staging.vexa.ai/meetings/26312",
+    "provisioned_by": "vexa-staging Helm revisions 189\u2192196 across the rc.11\u2192rc.18 candidates, deployed by the train session under the stage lock; rollback anchors verified at each step; revs 193\u2192196 on a fresh scrubbed prod replica with armed calendars held at 0 throughout",
+    "prevalidated": [
+      "calendar API sweep: 13/14 legs pass against the documented surface (create/list/cap/patch/sync/dedup/edit/cancel/opt-out/legacy/encoding/delete/errors); the one FAIL (auto-join retry storm) fixed in #1200 and re-proven live",
+      "retry-storm live proof on rev 192: one dispatch per 300s backoff per occurrence, measured \u0394300.8s and \u0394301.8s across row recreations, stamps riding the API",
+      "duplicate dispatch: 10-way concurrent POST /bots race \u2192 exactly one 201 across four replications; uq_meeting_active_user_platform_native present and enforcing (created on staging 2026-08-17 after terminal-izing 4 stale blocker rows)",
+      "live bot lifecycle on the exact rc.14 digest (running pod imageID match): spawn\u2192join\u2192active\u2192real transcription (45 verbatim segments)\u2192stop, GMeet-compatible lane, zero Teams paths on non-Teams runs, zero error lines",
+      "denial vocabulary live: all six admit-path reasons produced with truthful bodies from the staged webapp ledger (insufficient_balance for the zero-fund class \u2014 the reason-truth fix verified in the running container); cross-surface balance consistency",
+      "storm-lite: sync idempotent under 20-way parallelism, concurrency ceiling exact under race, 50/50 uniform auth failures, 60-call hostile-id fuzz with zero 5xx",
+      "fixture replays: four production tapes (de/en, 50s\u201358min, 1\u20134 sources) structurally identical head-vs-polished; mixed-pipeline/teams-capture/meeting-api/gateway suites green (961+459 tests); 35-gate suite green; release-validate green on rc.14 (run 32068904993)",
+      "overnight adversarial storm on rev 193 (rc.15): dedup under 10-way fire, two-calendars-one-event single dispatch, disconnect-during-live-bot disarms the future without killing the bot, billing denial at the sweep stamped/bounded/retried-once, zero tracebacks or 5xx; four stop-semantics findings (F1\u2013F4) fixed the same night in #1212",
+      "retry-matrix reprobe on rev 193: dispatch at start\u2212117s/\u2212114s (the \u22122min lead live), failure retries \u0394307.4s/\u0394302.2s with honest stamps riding row recreation, the exact rev-192 double-dispatch condition held zero re-dispatch for 35min with a live positive control, stop-evict contract (also_stopped) live with the unique index making two live rows unprovokable",
+      "stop-is-stop live reprobe on rev 194 (rc.16, #1212 code verified present in the running container): pre-dispatch stop cancels (failed/stopped, no failure_stage, sweep never dispatches, re-sync created:0); 7 mid-spawn races all caught by the ordering interlock with no pod surviving to joining and truthful 409s; reason dominance on all 14 rows (zero join_failure with stop_requested); continue_meeting refused on stopped rows (409) while plain re-POST spawns; failure-retry re-dispatch at +300.76s; zero error-level lines",
+      "rc.18 namer fix (#1228) corpus-validated before merge: 25 Teams tapes (14 prod tier-A + 11 dogfooding), 30 truthed tracks \u2014 baseline 27 correct/1 wrong/2 unnamed \u2192 fix 29/0/1, zero regressions, 22/25 tapes byte-identical, all 38 time-to-first-name values identical; the one witnessed-wrong meeting now names both tracks correctly; fix physically verified in the running rev-196 bot image (rosterSettled/provisional present in the deployed bundle, absent in rc.17's)"
+    ]
   },
-  {
-   "pr": "1185",
-   "title": "one bot per room \u2014 adopt live rows, guard the auto-join dispatch",
-   "visibility": "user",
-   "witnessed": true,
-   "observation": "The originating defect was witnessed live by the founder (two bots, meeting mjm-dycn-qdp); post-fix, the concurrent-race probe produced exactly one 201 in every replication and the founder's witnessed meeting 26312 received exactly one bot per environment-user.",
-   "pass": "pass = at most one live bot per (user, platform, native) under any concurrency \u2014 one 201 per 10-way race in every replication, DB partial unique index present and enforcing"
-  },
-  {
-   "pr": "1200",
-   "title": "one auto-join per backoff per occurrence + three disclosure fixes",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "live replay on rev 192: dispatch intervals 300.8s/301.8s vs the rc.13 7s storm; stamps and stated auto_join_error observable through the API; tombstone-404/PATCH-projection/snapshot-scope covered by the meeting-api suite (961 tests)",
-   "pass": "pass = at most one auto-join dispatch per 300s backoff per occurrence, with the wait disclosed via auto_join_error \u2014 measured \u0394300\u2013308s across five independent live cycles (revs 192/193/194)"
-  },
-  {
-   "pr": "1187",
-   "title": "schema sync fails closed on unique-index failure",
-   "visibility": "backend",
-   "witnessed": "by-proxy",
-   "evidence": "admin-api started clean through the fail-closed path against the remediated staging DB at rev 191 and did not roll at rev 192 (no SchemaInvariantError, zero restarts); unit + docker-gated stack tests (87) green",
-   "pass": "pass = admin-api refuses to start when the unique-index invariant cannot be established, and starts clean when it can \u2014 zero SchemaInvariantError across revs 191\u2013194"
-  },
-  {
-   "pr": "1181",
-   "title": "terminal multi-calendar management",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "staging-only workload (prod keeps terminal disabled); 420-test suite green on the integrated candidate; plural-API semantics machine-swept 13/14",
-   "pass": "pass = terminal manages multiple calendar connections through the plural API surface \u2014 machine-swept 13/14 with the one FAIL fixed and re-proven"
-  },
-  {
-   "pr": "1177",
-   "title": "terminal meeting-id URLs",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "staging-only workload; 424-test suite incl. route/not-found/first-view cases; next build route table emits /meetings/[meetingId]",
-   "pass": "pass = terminal renders stable /meetings/[meetingId] URLs that survive reload \u2014 route table emits the segment, suite covers route/not-found/first-view"
-  },
-  {
-   "pr": "1178",
-   "title": "terminal paywall / transparent join denials",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "staging-only workload; founder dev-witnessed the seven denial states on the dashboard rig; terminal suite 459 tests incl. the vocabulary pin; all six reasons produced live against the staged authority",
-   "pass": "pass = every join denial reaches the user as one of the seven named reasons with a truthful body, never a vague error \u2014 all six admit-path reasons produced live against the staged authority; vocabulary pinned by test on three surfaces"
-  },
-  {
-   "pr": "1212",
-   "title": "stop is stop \u2014 planned-row cancellation, spawn/stop ordering interlock, reason dominance, reopen refusal",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "live reprobe on rev 194: P1\u2013P5 all pass (rows 26327\u201326340); 1115-test suite green with the #1211 matrix extended by a 60-case stop-dominance column; each guard proven load-bearing by neutering",
-   "pass": "pass = an explicit user stop terminates the occurrence on every path: a scheduled row cancels and is never dispatched, a stop racing the spawn leaves no running bot and a truthful answer, no stopped row ever records join_failure, and continue_meeting cannot resurrect a stopped row \u2014 while plain re-POST after stop still works"
-  },
-  {
-   "pr": "1228",
-   "title": "teams namer: names stay retractable until the roster is provably settled (roster >= tracks heard)",
-   "visibility": "user",
-   "witnessed": "by-proxy",
-   "evidence": "corpus scorecard committed on PR #1228 (commit 882049c0): 29/30 correct, 0 wrong, zero latency delta; known residual: label flap on unsettleable rosters filed as #1229 with a deterministic fixture",
-   "pass": "pass = on every corpus tape with established truth, the namer's final labels match truth or honestly refuse (Speaker N), with no wrong name and no added naming latency \u2014 and the founder-witnessed swapped meeting names both speakers correctly"
-  }
- ],
- "signed_off_provenance": "Founder's witness statement given directly in the operating chat session of 2026-08-17 (\"okay, this time all worked fine, calendar + bot + transcripts\"), reconciled against server-side evidence by the train session; deferred findings recorded as Vexa-ai/vexa#1208 (auto-join timing spec), #1184 (dashboard per-meeting toggle), vexa-platform#298 (sync-refresh), #311 (replica scrub gap, mitigated). Overnight 2026-08-18: rc.15\u2192rc.16 cycle (storm findings #1212 fixed, rebuilt, revalidated run 32096550773, redeployed rev 194, re-proven live); residuals filed as Vexa-ai/vexa#1213, #1214, vexa-platform#314. The signed_off flag itself remains for the founder. rc.17\u2192rc.18 (2026-08-18 day): auto-join recording fix #1217 proven on a sweep-spawned bot (rev 195); namer roster-settle fix #1228 corpus-validated and deployed (rev 196); promotion packet re-baselined onto measured prod state (vexa-platform#318). signed_off remains unset pending the founder's witness."
+  "values": [
+    {
+      "pr": "1151",
+      "title": "feat(calendar,teams): multi-calendar feeds and CSRC transcription (with the review polish)",
+      "visibility": "user",
+      "witnessed": true,
+      "observation": "Founder, live on staging rev 192, meeting 26312 (Teams, imported from his connected calendar 'test'): \"okay, this time all worked fine, calendar + bot + transcripts\". Server-side reconciliation at the same moment: 22 segments, speakers 'Dmitry Grankin' and 'tes (Unverified)' \u2014 real names on real words \u2014 zero contest markers in text, calendar-sourced row with auto_join honored. Earlier in the same witness: real provider feed imported correctly; timed auto-join fired (1 min late \u2014 timing spec deferred as #1208); an incident bot from a cloned replica calendar was diagnosed as the staging-hydration gap (vexa-platform#311, mitigated), not a candidate defect.",
+      "pass": "pass = a founder-connected real calendar imports its events, the timed bot auto-joins, and real-name transcripts arrive on the dashboard meeting page with zero contest markers \u2014 observed end-to-end on meeting 26312"
+    },
+    {
+      "pr": "1185",
+      "title": "one bot per room \u2014 adopt live rows, guard the auto-join dispatch",
+      "visibility": "user",
+      "witnessed": true,
+      "observation": "The originating defect was witnessed live by the founder (two bots, meeting mjm-dycn-qdp); post-fix, the concurrent-race probe produced exactly one 201 in every replication and the founder's witnessed meeting 26312 received exactly one bot per environment-user.",
+      "pass": "pass = at most one live bot per (user, platform, native) under any concurrency \u2014 one 201 per 10-way race in every replication, DB partial unique index present and enforcing"
+    },
+    {
+      "pr": "1200",
+      "title": "one auto-join per backoff per occurrence + three disclosure fixes",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "live replay on rev 192: dispatch intervals 300.8s/301.8s vs the rc.13 7s storm; stamps and stated auto_join_error observable through the API; tombstone-404/PATCH-projection/snapshot-scope covered by the meeting-api suite (961 tests)",
+      "pass": "pass = at most one auto-join dispatch per 300s backoff per occurrence, with the wait disclosed via auto_join_error \u2014 measured \u0394300\u2013308s across five independent live cycles (revs 192/193/194)"
+    },
+    {
+      "pr": "1187",
+      "title": "schema sync fails closed on unique-index failure",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "admin-api started clean through the fail-closed path against the remediated staging DB at rev 191 and did not roll at rev 192 (no SchemaInvariantError, zero restarts); unit + docker-gated stack tests (87) green",
+      "pass": "pass = admin-api refuses to start when the unique-index invariant cannot be established, and starts clean when it can \u2014 zero SchemaInvariantError across revs 191\u2013194"
+    },
+    {
+      "pr": "1181",
+      "title": "terminal multi-calendar management",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "staging-only workload (prod keeps terminal disabled); 420-test suite green on the integrated candidate; plural-API semantics machine-swept 13/14",
+      "pass": "pass = terminal manages multiple calendar connections through the plural API surface \u2014 machine-swept 13/14 with the one FAIL fixed and re-proven"
+    },
+    {
+      "pr": "1177",
+      "title": "terminal meeting-id URLs",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "staging-only workload; 424-test suite incl. route/not-found/first-view cases; next build route table emits /meetings/[meetingId]",
+      "pass": "pass = terminal renders stable /meetings/[meetingId] URLs that survive reload \u2014 route table emits the segment, suite covers route/not-found/first-view"
+    },
+    {
+      "pr": "1178",
+      "title": "terminal paywall / transparent join denials",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "staging-only workload; founder dev-witnessed the seven denial states on the dashboard rig; terminal suite 459 tests incl. the vocabulary pin; all six reasons produced live against the staged authority",
+      "pass": "pass = every join denial reaches the user as one of the seven named reasons with a truthful body, never a vague error \u2014 all six admit-path reasons produced live against the staged authority; vocabulary pinned by test on three surfaces"
+    },
+    {
+      "pr": "1212",
+      "title": "stop is stop \u2014 planned-row cancellation, spawn/stop ordering interlock, reason dominance, reopen refusal",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "live reprobe on rev 194: P1\u2013P5 all pass (rows 26327\u201326340); 1115-test suite green with the #1211 matrix extended by a 60-case stop-dominance column; each guard proven load-bearing by neutering",
+      "pass": "pass = an explicit user stop terminates the occurrence on every path: a scheduled row cancels and is never dispatched, a stop racing the spawn leaves no running bot and a truthful answer, no stopped row ever records join_failure, and continue_meeting cannot resurrect a stopped row \u2014 while plain re-POST after stop still works"
+    },
+    {
+      "pr": "1228",
+      "title": "teams namer: names stay retractable until the roster is provably settled (roster >= tracks heard)",
+      "visibility": "user",
+      "witnessed": "by-proxy",
+      "evidence": "corpus scorecard committed on PR #1228 (commit 882049c0): 29/30 correct, 0 wrong, zero latency delta; known residual: label flap on unsettleable rosters filed as #1229 with a deterministic fixture",
+      "pass": "pass = on every corpus tape with established truth, the namer's final labels match truth or honestly refuse (Speaker N), with no wrong name and no added naming latency \u2014 and the founder-witnessed swapped meeting names both speakers correctly"
+    }
+  ],
+  "signed_off_provenance": "Founder's witness statement given directly in the operating chat session of 2026-08-17 (\"okay, this time all worked fine, calendar + bot + transcripts\"), reconciled against server-side evidence by the train session; deferred findings recorded as Vexa-ai/vexa#1208 (auto-join timing spec), #1184 (dashboard per-meeting toggle), vexa-platform#298 (sync-refresh), #311 (replica scrub gap, mitigated). Overnight 2026-08-18: rc.15\u2192rc.16 cycle (storm findings #1212 fixed, rebuilt, revalidated run 32096550773, redeployed rev 194, re-proven live); residuals filed as Vexa-ai/vexa#1213, #1214, vexa-platform#314. The signed_off flag itself remains for the founder. rc.17\u2192rc.18 (2026-08-18 day): auto-join recording fix #1217 proven on a sweep-spawned bot (rev 195); namer roster-settle fix #1228 corpus-validated and deployed (rev 196); promotion packet re-baselined onto measured prod state (vexa-platform#318). signed_off remains unset pending the founder's witness. || signed_off:true recorded 2026-08-20 on the founder's explicit instruction in the operating chat \u2014 verbatim \"sign it\" \u2014 given after: the 2026-08-17 witnessed value session, the 2026-08-19 prod promotion approval (\"sign it as me and deploy\", helm rev 138 live), and the 2026-08-20 explicit go on the corrected release notes (\"go on the release notes\"). Recorded by the operating agent; the decision is the founder's.",
+  "signed_off": true,
+  "signed_off_by": "Dmitry Grankin (founder)",
+  "signed_off_at": "2026-08-20"
 }
