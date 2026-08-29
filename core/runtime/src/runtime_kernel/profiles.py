@@ -20,6 +20,8 @@ import shlex
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
+from .models import Resources
+
 
 @dataclass(frozen=True)
 class Runnable:
@@ -37,6 +39,10 @@ class Profile:
     max_lifetime_sec: Optional[int] = None
     # Base env the profile always sets; the spec's env is layered on top at create() time.
     base_env: dict[str, str] = field(default_factory=dict)
+    # Deployment-wide sizing for THIS workload class, independent of every other class (the chart
+    # renders it per profile). Applied at create() when the caller emits no resources of its own;
+    # an explicit spec.resources always wins. None ⇒ unsized (the optional contract preserved).
+    resources: Optional[Resources] = None
 
 
 class ProfileRegistry:
@@ -87,6 +93,37 @@ def worker_image_for(agent_image: str) -> str:
     return f"{repo}{sep}{tag}"
 
 
+# Per-profile spawned-workload sizing, read from the runtime's OWN env (the chart renders it from
+# runtime.workloadResources.<class>). Distinct keys per class: a meeting bot is a Chromium browser,
+# an agent worker is a code harness — they are sized independently, never off one shared knob.
+_RESOURCE_ENV = {
+    "meeting-bot": ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB"),
+    "agent": ("RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB"),
+}
+
+
+def _numeric_env(key: str, cast):
+    """One resource knob from env. Unset/empty ⇒ None (unsized). A non-numeric value is FATAL:
+    a resource constraint silently dropped is exactly the defect this seam closes — an unsized Pod
+    that a quota-controlled namespace rejects, or admits without the bound the operator asked for."""
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return None
+    try:
+        return cast(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be numeric, got {raw!r}") from exc
+
+
+def _profile_resources(profile: str) -> Optional[Resources]:
+    cpu_key, mem_key = _RESOURCE_ENV[profile]
+    cpu = _numeric_env(cpu_key, float)
+    memory_mb = _numeric_env(mem_key, int)
+    if cpu is None and memory_mb is None:
+        return None
+    return Resources(cpu=cpu, memoryMb=memory_mb)
+
+
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
@@ -135,6 +172,7 @@ def default_registry() -> ProfileRegistry:
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
+                resources=_profile_resources("meeting-bot"),
             ),
             # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
@@ -149,6 +187,7 @@ def default_registry() -> ProfileRegistry:
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,
                 base_env={},
+                resources=_profile_resources("agent"),
             ),
             # Discord bot (#875) — the first-party in-tree Discord platform lane
             # (core/meetings/services/discord-bot): a plain Python entrypoint, unlike meeting-bot's
