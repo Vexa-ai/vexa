@@ -121,6 +121,7 @@ ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = {
     ("GET", "/meetings/{platform}/{native_meeting_id}/participants"): TX,
     # --- transcripts ---
     ("GET", "/transcripts/by-id/{meeting_id}"): TX,
+    ("GET", "/transcripts/search"): TX,
     ("GET", "/transcripts/{platform}/{native_meeting_id}"): TX,
     ("POST", "/transcripts/{platform}/{native_meeting_id}/share"): TX,
     ("POST", "/transcripts/share/accept"): TX,
@@ -567,6 +568,12 @@ def create_app(
     @app.post("/transcripts/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+
+    # Declared BEFORE /transcripts/{platform}/... so `search` is matched as a literal, not
+    # captured as a platform name.
+    @app.get("/transcripts/search")
+    async def search_transcripts(request: Request):
+        return await _forward("GET", _meeting("/transcripts/search"), request)
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):

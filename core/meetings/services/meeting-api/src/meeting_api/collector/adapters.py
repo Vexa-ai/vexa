@@ -1139,6 +1139,104 @@ class SqlAlchemyTranscriptStore:
             await db.refresh(meeting)
             return self._planned_row(meeting)
 
+    # The text-search config, used for BOTH the index expression and every query. These MUST be
+    # the same string: an index on to_tsvector('english', text) is invisible to a query that says
+    # to_tsvector('simple', text), and the failure is silent — correct answers, seq scan, no error.
+    FTS_CONFIG = "english"
+
+    async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
+                                 platform=None, native_meeting_id=None) -> list[dict]:
+        """Owner-scoped FTS over transcript segments (see ports.search_transcripts).
+
+        Measured on 210k segments across two tenants (dogfood, 2026-08-29): a rare term took
+        914ms unindexed for a 400-meeting tenant and 0.108ms with the GIN index — and 45.7ms →
+        0.126ms even for a 24-meeting one, because the dominant cost is computing to_tsvector()
+        per row at query time, not finding the rows. The index is part of the feature, not a
+        later optimisation.
+        """
+        from sqlalchemy import text as sql_text
+
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        cfg = self.FTS_CONFIG
+        sql = sql_text(f"""
+            SELECT t.id                AS segment_row_id,
+                   t.meeting_id        AS meeting_id,
+                   m.platform          AS platform,
+                   m.platform_specific_id AS native_meeting_id,
+                   t.start_time        AS start,
+                   t.end_time          AS "end",
+                   t.speaker           AS speaker,
+                   t.language          AS language,
+                   ts_rank_cd(to_tsvector('{cfg}', t.text), qq) AS rank,
+                   ts_headline('{cfg}', t.text, qq,
+                       'StartSel=<mark>,StopSel=</mark>,MaxWords=24,MinWords=8,MaxFragments=2') AS snippet,
+                   t.text              AS text
+            FROM transcriptions t
+            JOIN meetings m ON m.id = t.meeting_id,
+                 websearch_to_tsquery('{cfg}', :q) AS qq
+            WHERE m.user_id = :uid
+              AND to_tsvector('{cfg}', t.text) @@ qq
+              -- Explicit casts: asyncpg cannot infer a bind parameter's type when it appears
+              -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
+              -- optional filter must state its own type.
+              AND (CAST(:platform AS text) IS NULL OR m.platform = CAST(:platform AS text))
+              AND (CAST(:native AS text) IS NULL
+                   OR m.platform_specific_id = CAST(:native AS text))
+            ORDER BY rank DESC, t.meeting_id DESC, t.start_time ASC
+            LIMIT :lim OFFSET :off
+        """)
+        async with self._session_factory() as db:
+            rows = (await db.execute(sql, {
+                "q": q, "uid": user_id, "platform": platform, "native": native_meeting_id,
+                "lim": max(1, min(int(limit or 20), 100)), "off": max(0, int(offset or 0)),
+            })).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def ensure_fts_index(self) -> dict:
+        """Build the transcript FTS index CONCURRENTLY, idempotently, out of band.
+
+        Deliberately NOT part of ``_sync_indexes``: that wraps each index in a SAVEPOINT, and
+        ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction block. It also must not run
+        in-band at boot — a plain CREATE INDEX takes ACCESS EXCLUSIVE on ``transcriptions``, the
+        highest-row-count table, which would stall startup for as long as the build takes.
+
+        Safe to call on every boot BECAUSE SEARCH WORKS WITHOUT IT: a missing or half-built index
+        means a slower query, never a wrong answer and never a failed request. That is what keeps
+        this off the deploy's critical path — unlike ``meeting_event_time`` (MIGRATION-0005),
+        whose absence makes every list request fail.
+
+        Handles the one real trap: a failed CONCURRENTLY build leaves an INVALID index behind that
+        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and let
+        the next call rebuild.
+        """
+        from sqlalchemy import text as sql_text
+
+        name = "ix_transcription_text_fts"
+        # AUTOCOMMIT: CREATE/DROP INDEX CONCURRENTLY cannot run in a transaction block.
+        engine = self._session_factory.kw["bind"] if hasattr(self._session_factory, "kw") else None
+        engine = engine or getattr(self, "_engine", None)
+        if engine is None:
+            return {"status": "skipped", "reason": "no engine handle"}
+
+        async with engine.connect() as conn:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            state = (await conn.execute(sql_text(
+                "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+                "WHERE c.relname = :n"), {"n": name})).scalar()
+            if state is True:
+                return {"status": "present", "index": name}
+            if state is False:
+                # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
+                # Postgres will not error on it, it will simply never use it. Drop and rebuild.
+                await conn.execute(sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
+            await conn.execute(sql_text(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
+                f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))"))
+            return {"status": "created", "index": name}
+
     async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
                                replace_metadata=False) -> "Optional[dict]":
         """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).

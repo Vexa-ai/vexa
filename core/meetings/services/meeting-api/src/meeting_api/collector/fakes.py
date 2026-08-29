@@ -493,6 +493,80 @@ class InMemoryTranscriptStore:
             data["calendar_name"] = primary.get("name") or "Calendar"
         return self._planned_row(meeting_id)
 
+    async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
+                                 platform=None, native_meeting_id=None):
+        """A DELIBERATELY CRUDE stand-in for Postgres FTS — enough to test the ROUTE's contract
+        (owner scoping, filters, paging, hit shape), never the search semantics.
+
+        Case-insensitive whole-word AND matching, quoted phrases, `-term` negation. It does NOT
+        stem, does NOT rank by cover density, and does NOT implement `or`. Anything asserting real
+        tsquery behaviour must run against Postgres — meeting-api has no `requires_docker` lane
+        the way admin-api does, so that assertion lives in this branch's live validation.
+        Pretending otherwise here would produce tests that pass while production is wrong.
+        """
+        import re as _re
+
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        phrases = _re.findall(r'"([^"]+)"', q)
+        rest = _re.sub(r'"[^"]*"', " ", q)
+        negations = [w[1:].lower() for w in rest.split() if w.startswith("-") and len(w) > 1]
+        terms = [w.lower() for w in rest.split() if not w.startswith("-")]
+
+        def matches(text: str) -> bool:
+            low = text.lower()
+            words = set(_re.findall(r"\w+", low))
+            if any(n in words for n in negations):
+                return False
+            if not all(p.lower() in low for p in phrases):
+                return False
+            return all(t in words for t in terms)
+
+        hits = []
+        for mid, m in self._meetings.items():
+            if m["user_id"] != user_id:
+                continue          # owner-scoped, fail-closed — mirrors the adapter
+            if platform and m["platform"] != platform:
+                continue
+            if native_meeting_id and m["native_meeting_id"] != native_meeting_id:
+                continue
+            for seg in m["segments"].values():
+                text = seg.get("text") or ""
+                if not matches(text):
+                    continue
+                low = text.lower()
+                needle = (phrases + terms or [""])[0].lower()
+                i = low.find(needle)
+                snippet = text if i < 0 else (
+                    ("…" if i > 30 else "") + text[max(0, i - 30): i + len(needle) + 60] + "…"
+                )
+                hits.append({
+                    "segment_row_id": seg.get("segment_id"),
+                    "meeting_id": mid,
+                    "platform": m["platform"],
+                    "native_meeting_id": m["native_meeting_id"],
+                    "start": float(seg.get("start", 0.0)),
+                    "end": float(seg.get("end", 0.0)),
+                    "speaker": seg.get("speaker"),
+                    "language": seg.get("language"),
+                    # A flat count, NOT ts_rank_cd — enough to make ordering deterministic in a
+                    # test, not a claim about relevance.
+                    "rank": float(sum(low.count(t) for t in terms) + len(phrases)),
+                    "snippet": snippet,
+                    "text": text,
+                })
+        hits.sort(key=lambda h: (-h["rank"], -h["meeting_id"], h["start"]))
+        lim = max(1, min(int(limit or 20), 100))
+        off = max(0, int(offset or 0))
+        return hits[off:off + lim]
+
+    async def ensure_fts_index(self):
+        """No index to build without Postgres. The fake always answers 'search works anyway',
+        which is exactly the property that makes skipping the real build safe."""
+        return {"status": "skipped", "reason": "in-memory store"}
+
     async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
                                replace_metadata=False):
         """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:

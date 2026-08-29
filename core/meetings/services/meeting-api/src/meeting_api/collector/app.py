@@ -145,6 +145,41 @@ def build_router(
         )
         return JSONResponse(content=doc)
 
+    # --- GET /transcripts/search?q= → ranked, snippeted hits across the caller's OWN transcripts.
+    # Registered BEFORE /transcripts/{platform}/{native_meeting_id} so `search` is not swallowed
+    # as a platform — the same ordering `by-id` above depends on.
+    #
+    # This answers what metadata cannot: not "meetings I tagged X" but "meetings where someone
+    # SAID X". Owner-scoped only, deliberately narrower than GET /meetings (which also surfaces
+    # share-recipient and workspace rows) — a search that over-returns is a disclosure, so it
+    # fails closed until widening it has had its own review.
+    @router.get("/transcripts/search")
+    async def search_transcripts(
+        request: Request,
+        q: str = Query(..., min_length=1, description=(
+            "Search text. Supports \"quoted phrases\", `or`, and `-excluded` terms "
+            "(websearch syntax). Malformed input never errors."
+        )),
+        limit: int = Query(20, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        platform: Optional[str] = Query(None, description="Restrict to one platform."),
+        native_meeting_id: Optional[str] = Query(None, description="Restrict to one meeting."),
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        if not (q or "").strip():
+            raise HTTPException(status_code=422, detail="'q' must not be blank")
+        hits = await store.search_transcripts(
+            user_id, q, limit=limit, offset=offset,
+            platform=platform, native_meeting_id=native_meeting_id,
+        )
+        log_event(
+            "transcripts_searched", audience="user", span="transcripts.search",
+            user_id=user_id,
+            fields={"query_chars": len(q), "hits": len(hits), "platform": platform},
+        )
+        return JSONResponse(content={"query": q, "hits": hits, "count": len(hits)})
+
     # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
     @router.get("/transcripts/{platform}/{native_meeting_id}")
     async def get_transcript(
