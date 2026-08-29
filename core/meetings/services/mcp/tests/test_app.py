@@ -696,14 +696,20 @@ def test_annotate_forwards_title_and_metadata(client, gateway, auth):
     assert gateway.last_json() == {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}}
 
 
-def test_annotate_never_forwards_a_replace_flag(client, gateway, auth):
-    """There is no whole-object replace. A caller sharing an account's API key must not be able to
-    destroy annotations written by another agent, or by the human, that it never saw."""
-    client.post(
+def test_replace_is_refused_outright_not_silently_ignored(client, gateway, auth):
+    """There is no whole-object replace: a caller sharing an account's API key must not be able to
+    destroy annotations another agent — or the human — wrote and it never saw.
+
+    It is REFUSED rather than dropped. A caller that believes it replaced the object and was
+    silently merged holds a false model of the stored state, which is worse than an error."""
+    before = len(gateway.requests)
+    r = client.post(
         "/meeting-annotate?native_meeting_id=abc-defg-hij&replace=true",
         headers=auth, json={"metadata": {"only": "this"}},
     )
-    assert "replace" not in dict(gateway.requests[-1].url.params)
+    assert r.status_code == 422
+    assert "replace" in r.text
+    assert len(gateway.requests) == before, "an unknown argument must not reach the gateway"
 
 
 def test_annotate_requires_something_to_write(client, gateway, auth):
@@ -736,7 +742,9 @@ def test_list_meetings_rejects_a_non_object_metadata_filter(client, gateway, aut
 def test_speak_forwards_to_the_bot_speak_route(client, gateway, auth):
     r = client.post(
         "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
-        headers=auth, json={"text": "Dmitry asked me to say the numbers are in the deck."},
+        headers=auth,
+        json={"text": "Dmitry asked me to say the numbers are in the deck.",
+              "asked_by_a_human": True},
     )
     assert r.status_code == 200
     req = gateway.requests[-1]
@@ -744,7 +752,113 @@ def test_speak_forwards_to_the_bot_speak_route(client, gateway, auth):
     assert gateway.last_json()["text"].startswith("Dmitry asked me")
 
 
+# --- speaking out loud needs a MECHANICAL guard, not only a warning ----------
+# This tool is one tools/call from being audible to real people in a real conversation, and it
+# will be loaded alongside a hundred others whose descriptions get skimmed. A required field
+# cannot be skimmed past the way a paragraph can.
+
+def test_speak_is_refused_without_the_explicit_acknowledgement(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello"},
+    )
+    assert r.status_code == 422
+    assert len(gateway.requests) == before, "nothing may reach the meeting without the acknowledgement"
+
+
+def test_speak_is_refused_when_the_acknowledgement_is_false(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello", "asked_by_a_human": False},
+    )
+    assert r.status_code == 422
+    assert len(gateway.requests) == before
+
+
+def test_the_acknowledgement_is_not_forwarded_as_speech(client, gateway, auth):
+    """It is a gate on the caller, not a field the bot should carry downstream."""
+    client.post(
+        "/meeting-speak?platform=teams&native_meeting_id=9361792952021",
+        headers=auth, json={"text": "hello", "asked_by_a_human": True},
+    )
+    assert "hello" in gateway.last_json()["text"]
+
+
 def test_get_meeting_chat_path(client, gateway, auth):
     client.get("/meeting-chat?native_meeting_id=abc-defg-hij", headers=auth)
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("GET", "/bots/google_meet/abc-defg-hij/chat")
+
+
+# --- an empty result must never be a guess -----------------------------------
+# A cold-start agent reported `platform="webex"` returning a confident `count: 0` — silence that
+# looks like an answer. "Nobody said that" and "you filtered everything away" must not be the
+# same reply.
+
+def test_unknown_platform_is_refused_not_answered_with_zero(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.get("/transcript-search", params={"q": "panel", "platform": "webex"}, headers=auth)
+    assert r.status_code == 422
+    detail = str(r.json()["detail"])
+    assert "webex" in detail and "google_meet" in detail, "the error must name the valid values"
+    assert len(gateway.requests) == before
+
+
+def test_unknown_platform_is_refused_on_list_meetings_too(client, auth):
+    assert client.get("/meetings", params={"platform": "webex"}, headers=auth).status_code == 422
+
+
+def test_a_valid_platform_still_works(client, gateway, auth):
+    assert client.get("/meetings", params={"platform": "zoom"}, headers=auth).status_code == 200
+
+
+def test_omitting_platform_searches_everything(client, gateway, auth):
+    r = client.get("/transcript-search", params={"q": "panel"}, headers=auth)
+    assert r.status_code == 200
+    assert "platform" not in dict(gateway.requests[-1].url.params)
+
+
+# --- a typo must not look like success ---------------------------------------
+# FastAPI ignores unknown query params, so `get_meeting_transcript(limit=2)` — no such parameter —
+# returned 200 with the argument dropped. For an agent that is the worst failure available: the
+# wrong answer is indistinguishable from the right one.
+
+def test_an_unknown_argument_is_refused(client, gateway, auth):
+    before = len(gateway.requests)
+    r = client.get("/meeting-transcript",
+                   params={"native_meeting_id": "abc-defg-hij", "limit": 2}, headers=auth)
+    assert r.status_code == 422
+    assert "limit" in r.text
+    assert len(gateway.requests) == before, "an unknown argument must not reach the gateway"
+
+
+def test_a_near_miss_argument_gets_a_suggestion(client, auth):
+    r = client.get("/transcript-search", params={"q": "x", "meeting_id_native": "abc"}, headers=auth)
+    assert r.status_code == 422
+    assert "did you mean" in str(r.json()["detail"]).lower()
+
+
+def test_the_accepted_arguments_are_listed_in_the_error(client, auth):
+    detail = client.get("/meetings", params={"totally_bogus": 1}, headers=auth).json()["detail"]
+    assert "accepted" in detail and "platform" in detail["accepted"]
+
+
+# --- a write echoes what it wrote, not the whole meeting ----------------------
+
+def test_annotate_returns_only_what_was_written(client, gateway, auth):
+    """The full row carries object-storage paths, a playback URL and a ~69 MB audio reference —
+    none of it requested, all of it landing in a calling model's context."""
+    gateway.routes[("POST", "/meetings/google_meet/abc-defg-hij/annotate")] = (200, {
+        "id": 1, "platform": "google_meet", "native_meeting_id": "abc-defg-hij", "status": "active",
+        "data": {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"},
+                 "recordings": [{"playback_url": "https://minio/…", "bytes": 69_000_000}],
+                 "webhook_url": "https://hooks.example/x"},
+    })
+    body = client.post("/meeting-annotate?native_meeting_id=abc-defg-hij",
+                       headers=auth, json={"metadata": {"crm_deal": "acme-42"}}).json()
+    assert body["metadata"] == {"crm_deal": "acme-42"}
+    assert body["title"] == "Acme renewal"
+    assert body["native_meeting_id"] == "abc-defg-hij" and body["meeting_db_id"] == 1
+    assert "recordings" not in body and "data" not in body and "webhook_url" not in body
