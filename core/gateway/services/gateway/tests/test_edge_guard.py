@@ -152,23 +152,35 @@ class TestGuardEnvValidation:
     rejected) that a later guard-core (>=3.12.0) turns into a raise. Either way, without a
     Vexa-side check a bad operator entry either silently vanishes or surfaces as a bare
     ``ValueError``/pydantic stack trace from deep inside ``SecurityConfig(...)`` construction.
-    ``build_guard_config`` now pre-validates all four and raises :class:`ConfigError` naming the
-    var, the bad entry, and (for cloud providers) the accepted spellings, before the library
-    ever sees the value. See ``edge_guard.py`` for the field-by-field evidence."""
+
+    ``build_guard_config`` pre-validates the IP-list fields unconditionally, raising
+    :class:`ConfigError` naming the var and the bad entry before the library ever sees the
+    value. ``block_cloud_providers`` is different: normalizing/rejecting it by default would
+    change LIVE behavior for anyone already running the var (an inert ``aws`` entry would start
+    enforcing on upgrade), so that path is gated behind ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT``
+    (default false) - see ``TestBlockCloudProvidersDefaultOff`` for the default-off behavior and
+    ``edge_guard.py`` for the field-by-field evidence."""
 
     def test_unrecognized_cloud_provider_raises_clear_error(self, monkeypatch) -> None:
-        """A name that is not case-insensitively AWS/GCP/Azure raises, naming the var, the
-        entry, and the exact accepted spellings - the natural 'aws,digitalocean' typo case."""
+        """Under STRICT, a name that is not case-insensitively AWS/GCP/Azure raises, naming the
+        var, the entry, and the exact accepted spellings - the natural 'aws,digitalocean' typo
+        case."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
         with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
             build_guard_config()
         message = str(exc_info.value)
         assert "digitalocean" in message
         assert "AWS, GCP, Azure" in message
+        # The unrecognized-provider message must not recommend the ':!region' carve-out - that
+        # suffix is non-functional on the pinned guard-core (3.4.0) and irrelevant to a
+        # provider name that was not even recognized.
+        assert ":!" not in message
 
     def test_cloud_provider_mixed_case_and_region_carveout_construct(self, monkeypatch) -> None:
-        """Lowercase/mixed-case provider names normalize to guard-core's canonical spelling
-        (aws -> AWS); the ':!region' carve-out suffix survives untouched."""
+        """Under STRICT, lowercase/mixed-case provider names normalize to guard-core's
+        canonical spelling (aws -> AWS); the ':!region' carve-out suffix survives untouched."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,GCP,Azure:!us-east-1")
         cfg = build_guard_config()
         assert cfg.block_cloud_providers == {"AWS", "GCP", "Azure:!us-east-1"}
@@ -176,7 +188,8 @@ class TestGuardEnvValidation:
     def test_uppercase_region_carveout_raises_clear_error(self, monkeypatch) -> None:
         """guard-core's ``is_cloud_ip`` matches a carve-out region with a case-sensitive '==';
         real region strings are lowercase, so an uppercase region would silently never match.
-        Vexa rejects it at boot instead, naming the casing rule."""
+        Under STRICT, Vexa rejects it at boot instead, naming the casing rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!US-EAST-1")
         with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
             build_guard_config()
@@ -185,20 +198,24 @@ class TestGuardEnvValidation:
         assert "lowercase" in message
 
     def test_lowercase_region_carveout_constructs(self, monkeypatch) -> None:
-        """A properly lowercase carve-out region normalizes only the provider half."""
+        """Under STRICT, a properly lowercase carve-out region normalizes only the provider
+        half."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws:!us-east-1")
         cfg = build_guard_config()
         assert cfg.block_cloud_providers == {"AWS:!us-east-1"}
 
     def test_global_region_carveout_constructs(self, monkeypatch) -> None:
         """'GLOBAL' is the one synthetic, uppercase region guard-core (AWS) actually uses, so
-        it is accepted as-is rather than rejected by the lowercase rule."""
+        under STRICT it is accepted as-is rather than rejected by the lowercase rule."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!GLOBAL")
         cfg = build_guard_config()
         assert cfg.block_cloud_providers == {"AWS:!GLOBAL"}
 
     def test_empty_region_carveout_raises_clear_error(self, monkeypatch) -> None:
-        """A ':!' suffix with nothing after it is not a valid carve-out."""
+        """Under STRICT, a ':!' suffix with nothing after it is not a valid carve-out."""
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS:!")
         with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
             build_guard_config()
@@ -250,6 +267,41 @@ class TestGuardEnvValidation:
         assert not cfg.blacklist
         assert not cfg.trusted_proxies
         assert not cfg.block_cloud_providers
+
+
+class TestBlockCloudProvidersDefaultOff:
+    """``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` defaults to false: ``GUARD_BLOCK_CLOUD_PROVIDERS``
+    reaches ``SecurityConfig`` exactly as written, no normalization, no raise, so a deploy that
+    boots today keeps booting after this ships. See ``_resolve_block_cloud_providers`` in
+    edge_guard.py for the rationale."""
+
+    def test_default_off_passthrough_warns_on_entries_guard_core_drops(
+        self, monkeypatch, caplog
+    ) -> None:
+        """Without STRICT, neither 'aws' nor 'digitalocean' is rejected or normalized - the
+        value passes straight to SecurityConfig, where guard-core 3.4.0's own filter (an
+        exact-case match against AWS/GCP/Azure) silently drops both, so
+        ``block_cloud_providers`` ends up empty. A boot WARNING names each dropped entry so an
+        operator sees why cloud blocking is not doing anything."""
+        monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
+        with caplog.at_level("WARNING", logger="gateway.edge_guard"):
+            cfg = build_guard_config()
+        assert cfg.block_cloud_providers == set()
+        assert "aws" in caplog.text
+        assert "digitalocean" in caplog.text
+
+    def test_default_off_canonical_entry_passes_through_without_warning(
+        self, monkeypatch, caplog
+    ) -> None:
+        """An already-canonical 'AWS' entry passes through unchanged (guard-core's own filter
+        would keep it as-is too), and does not warn - there is nothing for it to drop."""
+        monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS")
+        with caplog.at_level("WARNING", logger="gateway.edge_guard"):
+            cfg = build_guard_config()
+        assert cfg.block_cloud_providers == {"AWS"}
+        assert caplog.text == ""
 
 
 def create_app_with_guard() -> FastAPI:

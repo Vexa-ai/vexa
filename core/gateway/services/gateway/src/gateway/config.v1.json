@@ -150,6 +150,13 @@
    "targets": ["compose"]
   },
   {
+   "key": "GUARD_BLOCK_CLOUD_PROVIDERS_STRICT",
+   "class": "defaulted",
+   "default": "false",
+   "description": "opt-in strict validation (case-normalize, reject unrecognized names) for GUARD_BLOCK_CLOUD_PROVIDERS",
+   "targets": ["compose"]
+  },
+  {
    "key": "GUARD_REDIS_PREFIX",
    "class": "defaulted",
    "default": "vexa:guard:",
