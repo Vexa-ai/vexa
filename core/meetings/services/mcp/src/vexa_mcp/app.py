@@ -18,6 +18,7 @@ conformance tests drive the SHIPPED app in-process with a fake gateway — the r
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -296,6 +297,31 @@ class UpdateBotConfig(BaseModel):
     language: str = Field(..., description="New language code for transcription (e.g., 'en', 'es')")
 
 
+class AnnotateMeeting(BaseModel):
+    title: Optional[str] = Field(
+        None, description="Human-readable title for the meeting. Max 512 chars."
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Arbitrary JSON you own — CRM ids, ticket refs, tags, your own summary. Merges "
+            "key-wise with what is already there; send a key as null to delete just that key. "
+            "Retrieve these meetings later with list_meetings(metadata_filter=...)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_something_to_write(self):
+        if self.title is None and self.metadata is None:
+            raise ValueError("Nothing to annotate: provide title and/or metadata.")
+        return self
+
+
+class SpeakInMeeting(BaseModel):
+    text: str = Field(..., description="What the bot should say out loud in the meeting.")
+    language: Optional[str] = Field(None, description="Optional language/voice code, e.g. 'en'.")
+
+
 class ParseMeetingLinkRequest(BaseModel):
     meeting_url: str = Field(..., description="Full meeting URL to parse.")
 
@@ -445,6 +471,17 @@ The canonical flow:
 
 Identity: every tool returns `platform` + `native_meeting_id`, and every tool accepts those same \
 two names. Feed one tool's output straight into the next.
+
+Make the data yours: annotate_meeting attaches a title and arbitrary metadata — a CRM id, a \
+ticket, tags, your own summary — to a meeting, DURING it or after it ended. Anything you put \
+there you can find again with list_meetings(metadata_filter={...}), searched in the database \
+rather than on one page. If you learn something durable about a meeting, write it back; that is \
+what lets the next agent (or the next you) pick it up.
+
+The bot is a PARTICIPANT, not just a recorder: get_meeting_chat reads the in-call chat, and \
+speak_in_meeting says something out loud to everyone present. Speaking is irreversible and \
+visible to real people — do it only when the person you work for asked you to say that thing, \
+never to test and never on your own initiative.
 
 A meeting with status `active` and zero segments usually means the bot has not been admitted yet, \
 or nobody has spoken — it does not mean transcription is broken.
@@ -654,10 +691,21 @@ def create_app(
         offset: Optional[int] = Query(0, ge=0, description="Number of meetings to skip"),
         status: Optional[str] = Query(None, description="Filter by status: active, completed, failed"),
         platform: Optional[str] = Query(None, description="Filter by platform: google_meet, teams, zoom"),
+        metadata_filter: Optional[str] = Query(
+            None,
+            description=(
+                'JSON object — return only meetings whose metadata (set via annotate_meeting) '
+                'CONTAINS it, e.g. {"crm_deal":"acme-42"}. Extra keys on the meeting still match. '
+                "Filtered in the database, so this searches your whole history, not just one page."
+            ),
+        ),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        List meetings associated with your API key (pagination + status/platform filters).
+        List meetings associated with your API key (pagination + status/platform/metadata filters).
+
+        `metadata_filter` is what makes this a query rather than a log: meetings you annotated with
+        annotate_meeting can be found again by the values you put on them.
         """
         params: Dict[str, Any] = {}
         if limit is not None:
@@ -668,6 +716,23 @@ def create_app(
             params["status"] = status
         if platform:
             params["platform"] = platform
+        if metadata_filter:
+            # Validate here so a malformed filter is a clear tool error rather than a gateway 422
+            # the agent has to decode. A filter that silently failed to apply would be worse than
+            # an error: the agent would read a full unfiltered list as "these all match".
+            try:
+                parsed = json.loads(metadata_filter)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail="list_meetings: 'metadata_filter' must be a JSON object string, e.g. {\"crm_deal\":\"acme-42\"}",
+                )
+            if not isinstance(parsed, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail="list_meetings: 'metadata_filter' must be a JSON OBJECT, not a bare value or array.",
+                )
+            params["metadata"] = metadata_filter
         return await make_request("GET", f"{base_url}/meetings", api_key, params=params or None)
 
     @app.get("/meeting-transcript", operation_id="get_meeting_transcript")
@@ -717,6 +782,75 @@ def create_app(
                 if since_index is not None:
                     result["since_index"] = start
         return result
+
+    # --- annotations: the caller's OWN description of a meeting -----------------------------
+    # This is the join key between a Vexa meeting and everything else the agent knows. Without it
+    # an agent can read a transcript and can do nothing with the fact afterwards: there is nowhere
+    # to record that this meeting is the Acme renewal, nowhere to keep its own summary, and so no
+    # way to find the meeting again by anything other than its platform id.
+    @app.post("/meeting-annotate", operation_id="annotate_meeting")
+    async def annotate_meeting(
+        data: AnnotateMeeting,
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        replace: bool = Query(False, description="Replace the whole metadata object instead of merging."),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Set the meeting's title and/or attach arbitrary metadata to it. Works DURING a live meeting
+        and after it has ended.
+
+        `metadata` is your own JSON — a CRM id, a ticket, tags, your own summary, anything. It
+        merges key-wise (send a key as null to delete it; pass replace=true to swap the whole
+        object), and you can find those meetings again with
+        `list_meetings(metadata_filter={"your_key": "your_value"})`.
+        """
+        plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id, None, None)
+        body: Dict[str, Any] = {}
+        if data.title is not None:
+            body["title"] = data.title
+        if data.metadata is not None:
+            body["metadata"] = data.metadata
+        return await make_request(
+            "POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body,
+            params={"replace": "true"} if replace else None,
+        )
+
+    # --- the interactive bot: our bot TALKS and reads the room ------------------------------
+    # No notetaker MCP exposes this, because no notetaker has it: their bot is a recorder. Ours is
+    # a participant, so an agent connected here can answer a question out loud in the meeting it is
+    # listening to. These wrap gateway routes that already exist and were simply unreachable.
+    @app.post("/meeting-speak", operation_id="speak_in_meeting")
+    async def speak_in_meeting(
+        data: SpeakInMeeting,
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        SPEAK OUT LOUD in a live meeting through the Vexa bot. Everyone in the meeting hears it.
+
+        This is an irreversible, human-visible action in a real conversation — never call it to
+        test, to acknowledge, or on your own initiative. Say something only when the person you are
+        working for has asked you to say that thing.
+        """
+        plat, mid = _resolve_identity("speak_in_meeting", platform, native_meeting_id, None, None)
+        return await make_request(
+            "POST", f"{base_url}/bots/{plat}/{mid}/speak", api_key, data.model_dump(exclude_none=True)
+        )
+
+    @app.get("/meeting-chat", operation_id="get_meeting_chat")
+    async def get_meeting_chat(
+        native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
+        platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
+        api_key: str = Depends(get_api_key),
+    ) -> Dict[str, Any]:
+        """
+        Read the meeting's in-call chat messages. Complements the transcript: links, spellings and
+        side comments land in chat and are never spoken aloud.
+        """
+        plat, mid = _resolve_identity("get_meeting_chat", platform, native_meeting_id, None, None)
+        return await make_request("GET", f"{base_url}/bots/{plat}/{mid}/chat", api_key)
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(

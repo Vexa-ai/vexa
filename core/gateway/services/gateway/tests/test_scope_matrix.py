@@ -50,6 +50,8 @@ CASES = [
     ("DELETE", "/meetings/google_meet/abc-defg-hij", "/meetings/{platform}/{native_meeting_id}"),
     ("PUT", "/meetings/google_meet/abc-defg-hij/intent",
      "/meetings/{platform}/{native_meeting_id}/intent"),
+    ("POST", "/meetings/google_meet/abc-defg-hij/annotate",
+     "/meetings/{platform}/{native_meeting_id}/annotate"),
     ("POST", "/meetings/google_meet/abc-defg-hij/share",
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
