@@ -846,6 +846,128 @@ probe), not inferred from planning docs.
   `FROM python:3.12-slim` every compose image (and helm, which ships those images) already pinned.
   Compose and helm never shared the exposure.
 
+- **Microsoft Teams speaker attribution (#499).** Teams uses CSRC transport activity to route the
+  mixed audio into per-speaker transcription windows with the same LocalAgreement buffering contract
+  as Google Meet. A transport-contested phrase is currently published under both contributing tracks — detected and counted in pipeline health, not yet resolved or marked in the public transcript.
+
+- **Every deploy surface now runs Valkey 8.1.9 instead of Redis (#653).** Vexa Lite, Docker
+  Compose, and Helm all use [Valkey](https://valkey.io) — the Linux Foundation's BSD-3 fork of
+  Redis 7.2.4 — for the bus, scheduler, and per-dispatch streams. This gives every surface (Lite
+  included) `XAUTOCLAIM` orphan-reclaim parity, and moves off source-available Redis ≥7.4
+  (RSALv2/SSPLv1). The store is wire-compatible (RESP): `REDIS_URL` and every `redis.*` config key
+  are unchanged, so existing overrides keep working. See [Deployment](/deployment).
+- **Two new license/parity gates close the class the audit exposed (#653).** `gate:image-licenses`
+  audits container-image pins and image-baked binaries (which `gate:licenses` never saw), and
+  `gate:runtime-parity` asserts every surface's engine version supports the RESP commands the code
+  actually calls — the rung that catches a backing store shipped without a capability the code
+  assumes.
+
+docs: attribute the FunASR/SenseVoice client validation to the upstream maintainers who ran it, and state plainly that no Vexa maintainer has reproduced it (#928).
+
+Release promotion now assigns moving image aliases by copying the authenticated
+registry manifest bytes and media type exactly, then reads back all frozen
+descriptors. Single-platform images can no longer be silently wrapped in a new
+index, and `:latest` is checked as an unchanged negative control unless its
+promotion was explicitly requested.
+
+- **Start here: hosted now runs Vexa 0.12 for meeting bots and transcription (#954).** The Overview
+  page no longer says hosted [vexa.ai](https://vexa.ai) is on the 0.10 line. It states the current
+  boundary: hosted runs 0.12 for meeting bots and transcription but does not include the agent
+  runtime — agents and the full stack require [self-hosting](/deployment).
+
+- **Meeting completion now reports the service that actually ran (#984).** Lifecycle events carry
+  producer-observed transition times, and completed meetings expose privacy-safe bot runtime and
+  transcription-provider outcomes so hosted billing can distinguish Vexa transcription from a
+  customer endpoint without inspecting configuration or credentials.
+
+- **Self-hosted deployments can opt into an external service authority without importing hosted
+  billing policy (#988).** Meeting-api can now ask a signed, versioned authority before bot spawn
+  and at each one-minute active-service boundary; stock OSS remains explicit allow-all when the
+  integration is unset. See [Configuration](/configuration#optional-service-authority).
+
+- **Operators can route terminal meeting facts to one signed, boot-frozen system callback (#992).**
+  The optional destination accepts only `meeting.completed` and `bot.failed`, has its own
+  retry/dead-letter lane, and may explicitly target an in-cluster HTTP service without weakening
+  the SSRF guard on customer-configured webhooks. See
+  [Configuration](/configuration#operator-terminal-callback).
+
+- **Admin identity reads now resolve an existing user by authoritative ID (#994).** Internal
+  service consumers can bind admission and lifecycle work to the authenticated numeric user
+  identity without falling back to email or creating a user as a side effect.
+
+- **Fixed (Teams):** speaker attribution now names participants again. Teams migrated its meeting UI to Fluent-UI v9, whose hashed class names churn every release — the old class-based name selectors resolved to `""`, so every hint was suppressed and all speech fell back to `Speaker`. Names now resolve from Teams' **stable** `data-tid` on the `[data-stream-type]` tile wrapper (anchored on the voice-level outline). The `vdi-frame-occlusion` speaking signal was correct all along; only the name lookup had rotted.
+- **Fixed (Teams):** transcription no longer repeats words. Teams delivers the whole meeting as a single server-side audio mix (track id prefixed `mainAudio`) — witnessed live: the standard web client receives exactly one audio receiver — but the bot is handed an extra redundant track whose audio is already in that mix. The mixed lane combined both, double-feeding every word to the transcriber. Teams now transcribes **only** the `mainAudio` mix. Separately, the WebRTC hook was mirroring each remote track twice (both `addEventListener('track')` and the `ontrack` setter fired) — now deduped by track id.
+
+- **Automate meeting summaries with n8n, documented (#1076).** New [n8n guide](/n8n) walks the
+  no-code path end to end — calendar trigger, `POST /bots`, transcript fetch, summary, Slack — and
+  states plainly that the published community template still points at the retired
+  `gateway.dev.vexa.ai` base URL, which must be swapped for `api.cloud.vexa.ai` after import. Also
+  covers the self-hosted reachability variants and the option to skip the calendar trigger entirely
+  by using [Vexa's own calendar sync](/how-to/calendar-sync). The `/n8n` URL had been drawing steady
+  traffic to a 404.
+
+- **The MCP server has a page, and it states the boundary (#1077).** New [MCP server](/vexa-mcp)
+  page lists the nine tools, gives a working client config, and says plainly what the surface does
+  and does not cover: fronted by the gateway at `/mcp` on self-hosted compose from 0.12.18, **not**
+  deployed by the Helm chart and therefore unavailable on hosted or Kubernetes, and never proven
+  against a real MCP client end to end ([#888](https://github.com/Vexa-ai/vexa/issues/888)). The
+  service README's Status block, which still listed the gateway-fronted `/mcp` forward as planned
+  while its own body documented the shipped behaviour, now matches.
+
+docs: honest-status page at `/chatgpt-transcript-share-links` — the 0.10.x public share-link flow is sealed-but-unserved in 0.12; page states what replaced it and what works today (#1078).
+
+docs: honest-status page at `/interactive-bots` — per-surface truth for the interactive family (chat read works; speak/chat-write/screen/avatar sealed-unserved), with the shape-design question linked (#1086).
+
+docs: redirect five guessed paths onto the pages that already answer them — `/ws/events`, `/local-webhook-development`, `/how-to/webhooks`, `/api/webhooks`, `/cookbook/share-transcript-url` — measured from the docs edge sensor.
+
+- **Manage multiple calendar feeds from the hosted dashboard (#1150).** Calendar is now a
+  first-class sidebar page with named, independently synced and disconnected ICS connections.
+  Meetings deduplicate across feeds, retain every named source under **Imported from**, and keep
+  existing single-calendar API clients compatible. The page groups upcoming auto-joins by calendar,
+  assigns each connection its own bot display name, and persists the complete source event metadata
+  on the planned meeting. The Meetings page requests run history separately, so `idle` and
+  `scheduled` calendar plans appear only in Calendar and no longer displace transcript rows. See
+  [Calendar sync](/how-to/calendar-sync).
+
+- **One bot per meeting, even under concurrent requests (#1185).** Simultaneous requests for the
+  same meeting now resolve to a single bot rather than occasionally admitting two, and a request
+  for a meeting that is already live adopts the running bot instead of starting a second one.
+
+- **Self-hosted deployments fail closed when the one-bot-per-meeting guarantee cannot be enforced
+  (#1187).** The admin service now refuses to start if its database is missing the unique index
+  that prevents duplicate live meetings, instead of starting and allowing duplicates to slip
+  through. Operators upgrading an existing deployment apply the schema migration shipped with this
+  release before rolling out. See [Deployment](/deployment).
+
+- **A failed auto-join retries on a bounded backoff instead of repeatedly (#1200).** When a
+  calendar occurrence's bot fails to join, the next attempt waits out a fixed backoff, and the
+  reason for the wait is readable on the meeting instead of being silent.
+
+- **Scheduled bots arrive two minutes early and wait longer to be admitted (#1210).** Calendar
+  auto-joins now dispatch two minutes before the scheduled start rather than one, and a bot waits
+  up to fifteen minutes in the lobby before giving up. See [Calendar sync](/how-to/calendar-sync).
+
+- **A meeting already served or stopped is never re-armed (#1211).** Calendar sync no longer
+  recreates and re-dispatches an occurrence whose bot already attended the meeting or was stopped
+  by the user; only genuine failures retry, and only within that occurrence's own window.
+
+- **An explicit stop is honoured on every path (#1212).** Stopping a scheduled meeting before its
+  bot is dispatched now cancels that occurrence instead of letting the sweep send a bot anyway; a
+  stop that races a starting bot leaves nothing running; and a stopped meeting records the stop as
+  its outcome rather than a join failure. A meeting the user stopped can no longer be continued in
+  place — request a new bot instead.
+
+- **Calendar auto-joined meetings are recorded like manually started ones (#1217).** A bot
+  dispatched from a connected calendar now follows the same recording setting as one started from
+  the API or the dashboard. Previously those meetings were transcribed but never recorded, and the
+  meeting page reported the missing audio as normal. See [Calendar sync](/how-to/calendar-sync).
+
+- **Teams speaker names no longer lock to the wrong participant (#1228).** When a participant
+  joined during the first minute, a name could be bound permanently to another speaker's audio and
+  never revised, leaving one person's words under another's name for the rest of the meeting. Names
+  earned before the participant list is complete are now provisional and corrected as evidence
+  arrives.
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
