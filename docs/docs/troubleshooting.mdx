@@ -165,7 +165,7 @@ retry budget on the first emit (≤ ~15s) already rides out brief transient prog
 |---|---|---|
 | `401 Missing API key` | no `X-API-Key` header | add the header |
 | `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
-| `403 Token scope not authorized` | key lacks the route's scope | mint with the right `scopes=` |
+| `403 Insufficient scope for this endpoint` | key lacks the route's scope | mint with the right `scopes=` |
 | `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
 
 ## Agent chat says no model credentials are configured

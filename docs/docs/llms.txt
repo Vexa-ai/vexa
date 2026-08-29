@@ -68,6 +68,7 @@ most coding agents).
 
 - [Quickstart](https://docs.vexa.ai/quickstart.md): hosted (sign in → API key → one call) or self-host (clone → running stack → bot in a meeting)
 - [Send a bot](https://docs.vexa.ai/how-to/send-a-bot.md): get a key (hosted or self-hosted), send the bot, read the transcript
+- [MCP server](https://docs.vexa.ai/vexa-mcp.md): point a coding agent at Vexa — meeting tools and prompts over one authenticated endpoint, no integration code
 - [Authentication](https://docs.vexa.ai/authentication.md): API keys and scopes
 - [Meetings API](https://docs.vexa.ai/api/meetings.md): plan meetings, send bots, real-time transcripts, recordings
 - [Calendar API](https://docs.vexa.ai/api/calendar.md): connect up to ten ICS calendars, sync them, read imported-meeting provenance
