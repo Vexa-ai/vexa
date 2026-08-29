@@ -117,6 +117,11 @@ MATRIX: list[Cell] = [
     Cell("failed/auth_session_missing", status="failed", reason="auth_session_missing",
          stage="joining", expect=SERVED,
          why="signed-out profile; a re-spawn hits the same dead cookie jar"),
+    Cell("failed/meeting_not_found", status="failed", reason="meeting_not_found", stage="joining",
+         expect=SERVED,
+         why="Google Meet answered that the meeting SPACE does not exist (#1325) — a dead, revoked "
+             "or mistyped code. Nothing about a re-dispatch conjures it into being, and before the "
+             "reason existed this landed as a TRANSIENT join_failure that the sweep kept retrying"),
     Cell("failed/validation_error", status="failed", reason="validation_error", stage="requested",
          expect=SERVED, why="the request itself is malformed — identical on every retry"),
     Cell("failed/join_failure@active", status="failed", reason="join_failure", stage="active",

@@ -16,7 +16,9 @@ failed             ∅   (terminal)
 attribution (the control plane's reconcile path, when the workload dies before the bot reports
 `active`): `awaiting_admission` → `awaiting_admission_timeout` (reaped while waiting in the lobby —
 the room never admitted the bot), `requested`/`joining` → `join_failure` (died before it could
-join). The machine-checked
+join). A `meeting_not_found` is NOT a stage attribution: it is the platform answering that the
+meeting space does not exist (a dead, revoked or mistyped code), which is permanent by nature and
+must never be retried (#1325). The machine-checked
 `canTransition` lives in the **runtime/bot implementation** (Stage 2) — the contract documents it; the
 impl enforces it (lean: no separate harness, B8).
 

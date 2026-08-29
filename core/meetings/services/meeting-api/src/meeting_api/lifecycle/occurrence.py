@@ -36,7 +36,8 @@ The retry set is DERIVED from the sealed taxonomy already in ``retry.py`` (TRANS
   stands and the backoff bounds it.
 
 Every other reason is SERVED: the host rejected us (``awaiting_admission_rejected``), the profile is
-signed out (``auth_session_missing``), the request was malformed (``validation_error``), or the
+signed out (``auth_session_missing``), the meeting space does not exist (``meeting_not_found`` —
+a dead, revoked or mistyped code; #1325), the request was malformed (``validation_error``), or the
 reason belongs to the active phase at all (``evicted``, ``left_alone``, ``startup_alone``,
 ``max_bot_time_exceeded``) — in which case the bot was in the room whatever the stage says.
 """

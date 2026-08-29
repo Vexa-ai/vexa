@@ -1,0 +1,41 @@
+{
+  "capturedAt": "2026-08-25",
+  "harness": "core/meetings/modules/join/scripts/capture-page-dom.ts (Dockerfile.debug container, host bbb)",
+  "requestedUrl": "https://meet.google.com/aaa-bbbb-ccc?hl=en",
+  "finalUrl": "https://meet.google.com/aaa-bbbb-ccc?hl=en",
+  "httpStatus": 200,
+  "title": "Meet",
+  "htmlLang": "en",
+  "navigatorLanguage": "en-US",
+  "bodyText": "Check your meeting code Make sure you entered the correct meeting code in the URL, for example: https://meet.google.com/xxx-yyyy-zzzLearn more Return to home screen Submit feedback Your meeting is safe No one can join a meeting unless invited or admitted by the host Learn more 44 Returning to home screen 45 seconds left",
+  "buttonLabels": [
+    "Return to home screen",
+    "Submit feedback"
+  ],
+  "console": [
+    "[log] %c%s color:teal;font-size:24px Developing an extension for Meet? An add-on would work better.",
+    "[log] %c%s color:teal;font-size:16px Extensions frequently cause user issues by altering the page.",
+    "[log] %c%s font-size:16px https://developers.google.com/meet/add-ons",
+    "[log] %c%s color: red; background: yellow; font-size: 24px; WARNING!",
+    "[log] %c%s font-size: 18px; Using this console may allow attackers to impersonate you and steal your information using an attack called Self-XSS.\nDo not enter or paste code that you do not understand.",
+    "[warning] [GroupMarkerNotSet(crbug.com/242999)!:A098EA01A4260000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.",
+    "[info] WebGPU is experimental on this platform. See https://github.com/gpuweb/gpuweb/wiki/Implementation-Status#implementation-status",
+    "[warning] Failed to create WebGPU Context Provider",
+    "[error] Failed to load resource: the server responded with a status of 404 ()",
+    "[pageerror] ConnectError: _.NN",
+    "[pageerror] ConnectError: _.NN",
+    "[pageerror] ConnectError: _.NN",
+    "[pageerror] DisconnectedError: _.bXg",
+    "[pageerror] DisconnectedError: _.bXg",
+    "[pageerror] DisconnectedError: _.bXg",
+    "[pageerror] DisconnectedError: _.bXg",
+    "[pageerror] DisconnectedError: _.bXg"
+  ],
+  "reproducedOn": [
+    "https://meet.google.com/aaa-bbbb-ccc?hl=en",
+    "https://meet.google.com/zzz-yyyy-xxx?hl=en"
+  ],
+  "fullDocumentBytes": 2478178,
+  "capturedSubtree": "the div carrying data-startup-code (the error screen), verbatim",
+  "note": "Sanitized by construction: subtree only, no <script>, no cookies/storage/headers."
+}

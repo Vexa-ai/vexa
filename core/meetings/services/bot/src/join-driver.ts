@@ -27,7 +27,9 @@ import type { JoinDriver, JoinOutcome, JoinResult } from './ports.js';
  * `lobby_timeout` → `timeout` → `awaiting_admission_timeout` (transient, a legit retry); a `join_failure`
  * stays `error` → `join_failure` (transient); an `auth_session_missing` (signed-out profile in
  * authenticated mode) → `auth_missing` → `auth_session_missing` (PERMANENT — a re-spawn against a dead
- * profile can never succeed). NB: a distinct `blocked` reason needs a sealed-contract
+ * profile can never succeed); a `meeting_not_found` (Meet's startup-error screen for a dead meeting
+ * code, #1325) → `meeting_not_found` → `meeting_not_found` (PERMANENT — no re-spawn can conjure the
+ * meeting space into existence). NB: a distinct `blocked` reason needs a sealed-contract
  * `CompletionReason` value (lane:contract) — until then a detected block surfaces via this same path.
  */
 export function admissionOutcomeToJoinOutcome(outcome: AdmissionOutcome): JoinOutcome {
@@ -35,6 +37,7 @@ export function admissionOutcomeToJoinOutcome(outcome: AdmissionOutcome): JoinOu
     case 'denial':               return 'rejected';
     case 'lobby_timeout':        return 'timeout';
     case 'auth_session_missing': return 'auth_missing';
+    case 'meeting_not_found':    return 'meeting_not_found';
     case 'join_failure':         return 'error';
     default:                     return 'error';
   }
@@ -72,7 +75,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
           hooks: { onState: (s: JoinState) => { const bs = mapState(s); if (bs) void report(bs); } },
         });
       } catch (e) {
-        // A TYPED admission verdict (denial/lobby_timeout/join_failure) → map its outcome so the
+        // A TYPED admission verdict (denial/lobby_timeout/join_failure/meeting_not_found) → map its outcome so the
         // control plane records the truth, not a generic retried `join_failure` (G1). CARRY the
         // AdmissionError's own message as the reason text (#926) — that's the real Zoom cause
         // ("auth_required: …", "host did not start …") the terminal lifecycle row would otherwise

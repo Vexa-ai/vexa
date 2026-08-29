@@ -20,7 +20,7 @@ const check = (name: string, cond: boolean) => {
 // JoinOutcomes the orchestrator (OUTCOME_FAIL) + retry.py treat as PERMANENT (no retry):
 // 'rejected' → awaiting_admission_rejected. Transient (retried): 'timeout' → awaiting_admission_timeout,
 // 'error'/'blocked' → join_failure.
-const PERMANENT_OUTCOMES = new Set<JoinOutcome>(['rejected', 'auth_missing']);
+const PERMANENT_OUTCOMES = new Set<JoinOutcome>(['rejected', 'auth_missing', 'meeting_not_found']);
 
 console.log('\n=== join-driver: AdmissionError outcome → JoinOutcome (G1) ===');
 
@@ -58,6 +58,17 @@ check('TeamsJoinRedirectError is NOT an AdmissionError (driver re-raises → mes
   !(teamsRedirect instanceof AdmissionError));
 check('TeamsJoinRedirectError carries the typed reasonCode in its message',
   teamsRedirect.message.startsWith(`${TEAMS_AUTH_REDIRECT}:`));
+
+// #1325 — a dead / revoked / mistyped Google Meet code. Meet renders a startup-error screen with no
+// join CTA, detected PRE-CTA; the outcome must be its own PERMANENT reason. Before this it fell out
+// as a generic `join_failure`, which `retry.py` classes TRANSIENT — so the control plane re-spawned
+// bots against a meeting space that does not exist.
+check('meeting_not_found → meeting_not_found', admissionOutcomeToJoinOutcome('meeting_not_found') === 'meeting_not_found');
+const gone = new AdmissionError('meeting_not_found', 'Google Meet has no such meeting space (startup code 217)');
+const goneMapped = admissionOutcomeToJoinOutcome(gone.outcome);
+check('AdmissionError("meeting_not_found") is caught by the driver (instanceof AdmissionError)', gone instanceof AdmissionError);
+check('a dead meeting code is PERMANENT (no re-spawn can conjure the space into existence)', PERMANENT_OUTCOMES.has(goneMapped));
+check('and it is NOT the transient/retried join_failure prod recorded', goneMapped !== 'error' && goneMapped !== 'timeout');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

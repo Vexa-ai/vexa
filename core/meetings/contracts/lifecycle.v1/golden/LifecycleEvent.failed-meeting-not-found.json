@@ -1,0 +1,9 @@
+{
+  "connection_id": "sess-uid",
+  "status": "failed",
+  "timestamp": "2026-08-25T16:56:19.000Z",
+  "exit_code": 1,
+  "failure_stage": "joining",
+  "completion_reason": "meeting_not_found",
+  "reason": "Google Meet has no such meeting space (startup code 217) — Meet says: \"Check your meeting code\". The link is dead, revoked or mistyped — there is no lobby to join and a retry cannot help. url=https://meet.google.com/aaa-bbbb-ccc"
+}

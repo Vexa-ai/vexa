@@ -1,0 +1,43 @@
+<!--
+  REAL CAPTURED FIXTURE — Google Meet "meeting space does not exist" (404) screen.
+
+  Provenance
+    captured   : 2026-08-25
+    harness    : core/meetings/modules/join/scripts/capture-page-dom.ts, run in the
+                 hot debug container (Dockerfile.debug, Xvfb + stealth chromium,
+                 the SAME browser shape the bot joins with) on the bbb host.
+    url        : https://meet.google.com/aaa-bbbb-ccc?hl=en   (a well-formed code
+                 that does not exist; reproduced identically on zzz-yyyy-xxx)
+    http status: 200 (the SPA renders the error; the 404 is the call-setup gRPC)
+    console    : "Failed to load resource: the server responded with a status of
+                 404", then ConnectError x3 and DisconnectedError x5 — byte-for-byte
+                 the signature of prod pods vexa-mtg-26920 / 26921 (2026-08-25),
+                 whose gRPC body read: startupCode: 217, statusCode = 404,
+                 "Requested meeting space does not exist."
+
+  Scope of the capture
+    This is the ERROR-SCREEN SUBTREE only (the div carrying data-startup-code),
+    lifted verbatim from a 2.4 MB document. Nothing was edited, reordered or
+    invented. No cookies, storage, headers or tokens are present — the subtree
+    contains no <script> at all.
+
+  What it proves, and what it corrects
+    1. The screen carries NO join CTA and NO name input. The bot's CTA hunt
+       therefore cannot succeed, and burns its full 60s budget before failing
+       as a generic join_failure.
+    2. The visible copy is "Check your meeting code". NONE of the eight
+       meeting-not-found strings in googleRejectionIndicators ("Meeting not
+       found", "Invalid meeting", "Meeting link expired", …) appear anywhere in
+       the document — those constants were written from imagination, and would
+       have missed this page even if the rejection classifier ran on it.
+    3. The load-bearing signal is STRUCTURAL and locale-agnostic:
+       data-startup-code="217" on the screen container (the same 217 the prod
+       logs print), with data-call-ended="true" on its action buttons.
+    4. "Return to home screen" IS on this page — the same button #471
+       reclassified as a WAITING-room indicator. It must never be the
+       discriminator on its own.
+
+  Unlike the fabricated lobby DOMs in join-cta.test.ts (#857), this file is what
+  Google served.
+-->
+<div class="Fi0Gqc" jsmodel="bFXJu;dpAgje;b0G1je;CcZnhe;" jscontroller="VQ0pCb" jsaction="rcuQ6b:npT2md;VtyfMc:dKWjke;g4fFwf:XkK76;xUQhpc:xmTXPc;ZCn1R:iSJdFd;zXn74e:ddcBJb;oqU8Mc:R0j0c;JIbuQc:JtKe5e(Cjidie),JtKe5e(eHOY6b)" data-companion-mode="false" data-present-mode="false" data-startup-code="217" data-timeout="60000" data-hc-context="4"><div class="lAqQo"><div jscontroller="VMxNjf" class="ODnRWe ptkrG" jsaction="rcuQ6b:pGhgu" jslog="341317;"><div class="RBze0e" jsname="UaslIb"></div></div><h1 jsname="r4nke" class="roSPhc">Check your meeting code</h1><div class="ZQRLqf eZsbJ"><span jsname="PIJwL" class="rzFq7e">Make sure you entered the correct meeting code in the URL, for example: https://meet.google.com/<strong>xxx-yyyy-zzz</strong></span><a jsname="ttVHBc" class="FCnE8d" target="_blank" href="https://support.google.com/meet/answer/10710509?hl=en">Learn more</a></div><div jsname="c6xFrd" class="kJU3pb" data-initial-focus-index="1"><div data-call-ended="true" jscontroller="bNxobe" jsaction="JIbuQc:UxAr5b(dqt8Pb); auxclick:UxAr5b(dqt8Pb)" jslazy="true" data-companion-landing="false" data-present-landing="false" data-is-connection-lost="false" jsname="WIVZEd"><div class="VfPpkd-dgl2Hf-ppHlrf-sM5MNb" data-is-touch-wrapper="true"><button class="UywwFc-LgbsSe UywwFc-LgbsSe-OWXEXe-dgl2Hf UywwFc-StrnGf-YYd4I-VtOx3e UywwFc-kSE8rc-StrnGf-pvxB9-WPi0i ctOmyb q7vyEf" jscontroller="O626Fe" jsaction="click:h5M12e;clickmod:h5M12e;pointerdown:FEiYhc;pointerup:mF5Elf;pointerenter:EX0mI;pointerleave:vpvbp;pointercancel:xyn4sd;contextmenu:xexox; focus:h06R8; blur:zjh6rb;mlnRJb:fLiPzd" data-idom-class="ctOmyb q7vyEf" jsname="dqt8Pb"><span class="XjoK4b"></span><span class="MMvswb"><span class="OLCwg"></span></span><span class="UTNHae" jscontroller="LBaJxb" jsname="m9ZlFb" jsaction="QBlI0e:u4uo5d;BTifte:aV6zj;nqgE9d:f6959e;fHTtBd:ynrQde"></span><span class="UywwFc-RLmnJb"></span><span jsname="Xr1QTb" class="UywwFc-kBDsod-Rtc0Jf UywwFc-kBDsod-Rtc0Jf-OWXEXe-M1Soyc"></span><span jsname="V67aGc" class="UywwFc-vQzf8d">Return to home screen</span><span jsname="UkTUqb" class="UywwFc-kBDsod-Rtc0Jf UywwFc-kBDsod-Rtc0Jf-OWXEXe-UbuQg"></span></button></div></div></div><div></div><div jscontroller="HBEM0c" jsaction="JIbuQc:N7Eqid(rhHFf)" data-call-ended="true" jsname="eHOY6b"><div class="VfPpkd-dgl2Hf-ppHlrf-sM5MNb" data-is-touch-wrapper="true"><button class="mUIrbf-LgbsSe mUIrbf-LgbsSe-OWXEXe-dgl2Hf mUIrbf-StrnGf-YYd4I-VtOx3e mUIrbf-kSE8rc-StrnGf-pvxB9-WPi0i pjt2We" jscontroller="O626Fe" jsaction="click:h5M12e;clickmod:h5M12e;pointerdown:FEiYhc;pointerup:mF5Elf;pointerenter:EX0mI;pointerleave:vpvbp;pointercancel:xyn4sd;contextmenu:xexox; focus:h06R8; blur:zjh6rb;mlnRJb:fLiPzd" data-idom-class="pjt2We" jsname="rhHFf"><span class="XjoK4b"></span><span class="UTNHae" jscontroller="LBaJxb" jsname="m9ZlFb" jsaction="QBlI0e:u4uo5d;BTifte:aV6zj;nqgE9d:f6959e;fHTtBd:ynrQde"></span><span class="mUIrbf-RLmnJb"></span><span jsname="Xr1QTb" class="mUIrbf-kBDsod-Rtc0Jf mUIrbf-kBDsod-Rtc0Jf-OWXEXe-M1Soyc"></span><span jsname="V67aGc" class="mUIrbf-vQzf8d">Submit feedback</span><span jsname="UkTUqb" class="mUIrbf-kBDsod-Rtc0Jf mUIrbf-kBDsod-Rtc0Jf-OWXEXe-UbuQg"></span></button></div></div><div class="MnEWhe" jsname="dhb4h"><div class="RcVecb k3Pzib" jscontroller="x5KxXb" jsaction="rcuQ6b:LzZigc; click:Xc0iL(DPJEMd)"><div class="QoXy2c oJeWuf"><img class="kbSJDc Ce1Y1c" src="https://www.gstatic.com/meet/security_shield_356739b7c38934eec8fb0c8e93de8543.svg" alt="Your meeting is safe" data-iml="3408.7000000178814"><div class="u6zaz"><div class="uh5bac"><h2 class="x4jUzd H72fcf">Your meeting is safe</h2></div><div class="RV5qrc oMJK7">No one can join a meeting unless invited or admitted by the host</div></div></div><div class="YW6vzb"><div class="VfPpkd-dgl2Hf-ppHlrf-sM5MNb" data-is-touch-wrapper="true"><div class="mUIrbf-LgbsSe mUIrbf-LgbsSe-OWXEXe-dgl2Hf mUIrbf-kSE8rc-StrnGf-pvxB9-WPi0i" jscontroller="w9C4d" jsaction="click:h5M12e;clickmod:h5M12e;pointerdown:FEiYhc;pointerup:mF5Elf;pointerenter:EX0mI;pointerleave:vpvbp;pointercancel:xyn4sd;contextmenu:xexox; focus:h06R8; blur:zjh6rb;mlnRJb:fLiPzd" jsname="DPJEMd"><span class="UTNHae" jscontroller="LBaJxb" jsname="m9ZlFb"></span><span jsname="Xr1QTb" class="mUIrbf-kBDsod-Rtc0Jf mUIrbf-kBDsod-Rtc0Jf-OWXEXe-M1Soyc"></span><span jsname="V67aGc" aria-hidden="true" class="mUIrbf-vQzf8d">Learn more</span><span jsname="UkTUqb" class="mUIrbf-kBDsod-Rtc0Jf mUIrbf-kBDsod-Rtc0Jf-OWXEXe-UbuQg"></span><a jsname="hSRGPd" class="mUIrbf-mRLv6 mUIrbf-RLmnJb" href="https://support.google.com/meet/answer/9852160?hl=en" target="_blank" aria-label="Learn more about Google Meet Security &amp; Privacy"></a><span class="XjoK4b mUIrbf-UHGRz"></span></div></div></div></div></div><div jscontroller="RbmC9c" jsaction="rcuQ6b:hqBxXc;YTHmR:P2SeKf;j6YYD:QnPxmd"><div class="cvdVze xo0BHf"><div jscontroller="fKbxOb" class="M1BHXd fleoac" jsname="EEHqpf" jsaction="rcuQ6b:I3Yihd;UeMS3d:I3Yihd" data-line-width="4"><canvas aria-hidden="true" class="XMqAKd" jsname="UzWXSb" width="56" height="56"></canvas><div class="BOo8qd" jsname="Vgu1H" role="timer" aria-label="Returning to home screen">44</div></div><span class="vsfDSb">Returning to home screen</span></div></div></div><div jscontroller="sUf34" jsaction="rcuQ6b:rpmuJd;sb6yqe:aeKUqf" data-hc-context="4" data-hc-mark-fully-rendered="true" style="display: none;"><div></div></div><div style="display: none;"></div></div>
