@@ -28,12 +28,12 @@ const plan = buildContestPlan(result);
 assert.equal(plan.length, 1);
 assert.equal(plan[0].decisionAtMs, 105_000, 'contest activates only after both confirmations');
 const unresolved = toTranscriptSegment(result.candidate.events[0], cutStartMs, plan[0]);
-assert.equal(unresolved.text, '⟦shared words⟧{CSRC 201↔CSRC 840} left');
+assert.equal(unresolved.text, '[shared words] left');
 assert.equal(unresolved.contested, true);
 const rival = toTranscriptSegment(result.candidate.events[2], cutStartMs, plan[0]);
-assert.equal(rival.text, '⟦shared words⟧{CSRC 840↔CSRC 201} right');
+assert.equal(rival.text, '[shared words] right');
 assert.equal(rival.latencyMs, 3900);
 assert.equal(rival.start_time, 1.1);
-assert.equal(flagContestedText('Correct.', 'Correct', 414, 201), '⟦Correct⟧{CSRC 414↔CSRC 201}.');
+assert.equal(flagContestedText('Correct.', 'Correct'), '[Correct].');
 
 console.log('teams-csrc-live-transcript: decision-time, two-party notation, and latency checks passed');

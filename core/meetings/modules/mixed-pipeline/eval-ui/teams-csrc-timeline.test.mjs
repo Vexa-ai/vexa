@@ -39,7 +39,7 @@ assert.equal('resolution' in model.contests[0], false);
 assert.equal('removedConfirmed' in model, false);
 assert.equal(
   flagContestedWords(model.confirmed[0], model.annotations.get('row-1')),
-  'prefix ⟦shared words⟧{CSRC 201↔CSRC 840} suffix',
+  'prefix [shared words] suffix',
 );
 assert.equal(flagContestedWords({ text: 'unchanged' }), 'unchanged');
 assert.throws(() => buildTimelineModel({ kind: 'wrong' }), /expected teams-csrc/);

@@ -25,7 +25,7 @@ describe("LiveTranscriptEngine — processed v2 inline rendering", () => {
     const contested = [{
       id: "s-contested",
       speaker: "Tom Dean",
-      text: "before ⟦shared words⟧{CSRC 201↔CSRC 840} after",
+      text: "before [shared words] after",
       completed: true,
     }];
     const { container, unmount } = render(<LiveTranscriptEngine segments={contested} />);
@@ -36,8 +36,8 @@ describe("LiveTranscriptEngine — processed v2 inline rendering", () => {
     expect(mark.getAttribute("aria-label")).toBe("Unresolved live transcript");
     expect(container.textContent).toContain("before");
     expect(container.textContent).toContain("after");
-    expect(container.textContent).not.toContain("⟦");
-    expect(container.textContent).not.toContain("⟧");
+    expect(container.textContent).not.toContain("[");
+    expect(container.textContent).not.toContain("]");
     expect(container.textContent).not.toContain("{CSRC");
     expect(container.textContent).not.toContain("CONTESTED");
     unmount();

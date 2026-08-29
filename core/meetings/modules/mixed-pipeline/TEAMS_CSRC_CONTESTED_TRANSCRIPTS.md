@@ -14,22 +14,21 @@ A phrase is detected as contested only when rows from different CSRCs satisfy al
 3. consensus Whisper word times for that phrase are close enough across the two lane windows.
 
 This is duplicate detection, not speaker identification. Every detected pair stays in the
-transcript under both CSRCs with verbatim confirmed text. The exact shared phrase may be wrapped in
-evaluation-only diagnostics:
+transcript under both CSRCs, with the exact shared phrase bracketed on each row:
 
 ```text
-CSRC 201: it. ⟦It's not like plug and⟧{CSRC 201↔CSRC 840} plug.
-CSRC 840: ⟦It's not like plug and⟧{CSRC 840↔CSRC 201} play kind of PowerPoint content.
+CSRC 201: it. [It's not like plug and] plug.
+CSRC 840: [It's not like plug and] play kind of PowerPoint content.
 ```
 
 There is no winner, loser, score, confidence, deletion, or reassignment. Different simultaneous
 wording remains ordinary independent speech. If word-time evidence is missing or too distant, the
 detector records no contested pair rather than widening the detected interval.
 
-The production detector is post-confirm inside the Teams pipeline and exposes only the unresolved
-pair count through pipeline health. Public transcript text is never rewritten. The browser
-evaluation copy stays independent and may render the explicit notation so a fixture can audit the
-detector rather than create production output:
+The production detector is post-confirm inside the Teams pipeline: it brackets the shared phrase on
+both rows and exposes the unresolved pair count through pipeline health. The rival CSRC identity
+stays in health telemetry and never enters transcript text. The browser evaluation copy stays
+independent so a fixture can audit the detector rather than create production output:
 
 ```text
 /Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/src/teams-contested-word-marker.ts
@@ -39,9 +38,8 @@ detector rather than create production output:
 /Users/dmitriygrankin/dev/vexa/core/meetings/modules/mixed-pipeline/eval-ui/teams-csrc-live-model.mjs
 ```
 
-The marker is an evaluation diagnostic, not a transcript wire format. The API, Dashboard and
-exports receive the original confirmed text. A consumer must not infer, widen, resolve, or delete a
-contest from text.
+The brackets mark an unresolved duplicate, nothing more. A consumer must not infer, widen, resolve,
+or delete a contest from them, and must not treat either row as the owner of the shared words.
 
 ## Why the heuristic resolver is rejected
 

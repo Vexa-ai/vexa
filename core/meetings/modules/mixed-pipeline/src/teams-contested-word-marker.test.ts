@@ -58,10 +58,10 @@ check('shared routed PCM + near word times + same phrase produces one unresolved
 if (contest) {
   check('only the exact duplicated words are wrapped on the named row',
     markTeamsWordContests(left, [contest])
-      === 'ask ⟦amazing amazing like really good⟧{CSRC 201↔CSRC 840}');
+      === 'ask [amazing amazing like really good]');
   check('the rival row carries the symmetric unresolved marker',
     markTeamsWordContests(right, [contest])
-      === '⟦Amazing amazing like really good⟧{CSRC 840↔CSRC 201} answer');
+      === '[Amazing amazing like really good] answer');
 }
 
 check('same text without shared routed PCM is not a contest',
