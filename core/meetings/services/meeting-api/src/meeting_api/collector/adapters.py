@@ -1163,7 +1163,11 @@ class SqlAlchemyTranscriptStore:
         cfg = self.FTS_CONFIG
         sql = sql_text(f"""
             SELECT t.id                AS segment_row_id,
-                   t.meeting_id        AS meeting_id,
+                   -- `meeting_db_id`, never `meeting_id`: the INT row id must not travel
+                   -- under the name that means the platform's STRING id on every other
+                   -- tool. Emitting it as `meeting_id` is the regression this branch's
+                   -- identity gate exists to stop.
+                   t.meeting_id        AS meeting_db_id,
                    m.platform          AS platform,
                    m.platform_specific_id AS native_meeting_id,
                    t.start_time        AS start,
@@ -1237,8 +1241,8 @@ class SqlAlchemyTranscriptStore:
                 f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))"))
             return {"status": "created", "index": name}
 
-    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None,
-                               replace_metadata=False) -> "Optional[dict]":
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None,
+                               metadata=None) -> "Optional[dict]":
         """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).
 
         Modelled on ``attach_calendar_source``, not on ``update_planned_meeting``: nothing written
@@ -1274,18 +1278,16 @@ class SqlAlchemyTranscriptStore:
 
             if metadata is not None:
                 touched = True
-                if replace_metadata:
-                    merged = {k: v for k, v in metadata.items() if v is not None}
-                else:
-                    current = data.get("metadata")
-                    merged = dict(current) if isinstance(current, dict) else {}
-                    for k, v in metadata.items():
-                        # An explicit null DELETES the key — the only way to take back one
-                        # annotation without replacing the whole object.
-                        if v is None:
-                            merged.pop(k, None)
-                        else:
-                            merged[k] = v
+                # ALWAYS a merge. A caller can only ever affect keys it names — an explicit null
+                # deletes exactly one. There is no whole-object replace, so nothing a writer never
+                # saw can be destroyed by it.
+                current = data.get("metadata")
+                merged = dict(current) if isinstance(current, dict) else {}
+                for k, v in metadata.items():
+                    if v is None:
+                        merged.pop(k, None)
+                    else:
+                        merged[k] = v
                 # Bound the MERGED result, never the patch alone: a cap on each write is not a cap
                 # at all when writes merge. Refuse rather than truncate — silently storing part of
                 # what a caller sent is a worse failure than telling them it did not fit.

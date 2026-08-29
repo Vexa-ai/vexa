@@ -104,11 +104,24 @@ def test_explicit_null_deletes_one_key():
     assert store._meetings[mid]["data"]["metadata"] == {"crm_deal": "acme-42"}
 
 
-def test_replace_swaps_the_whole_object():
+def test_there_is_no_whole_object_replace():
+    """A caller must not be able to destroy annotations it never saw. Every writer on an account
+    shares one API key, so a replace would let any agent wipe keys written by another agent — or
+    by the human. `replace` was removed; the flag is now inert and merge is the only behaviour."""
     client, store, mid = _client()
     _annotate(client, {"metadata": {"crm_deal": "acme-42", "owner": "dmitry"}})
     _annotate(client, {"metadata": {"only": "this"}}, replace="true")
-    assert store._meetings[mid]["data"]["metadata"] == {"only": "this"}
+    assert store._meetings[mid]["data"]["metadata"] == {
+        "crm_deal": "acme-42", "owner": "dmitry", "only": "this",
+    }, "an unknown `replace` flag must not resurrect destructive behaviour"
+
+
+def test_a_writer_can_only_remove_keys_it_names():
+    """The positive form of the same property: deletion is per-key and explicit."""
+    client, store, mid = _client()
+    _annotate(client, {"metadata": {"written_by_someone_else": "keep me", "mine": "x"}})
+    _annotate(client, {"metadata": {"mine": None}})
+    assert store._meetings[mid]["data"]["metadata"] == {"written_by_someone_else": "keep me"}
 
 
 def test_title_and_metadata_are_independent():
@@ -248,6 +261,6 @@ def test_a_realistic_annotation_still_fits():
     assert store._meetings[mid]["data"]["metadata"]["crm_deal"] == "acme-42"
 
 
-def test_replace_is_bounded_too():
+def test_bounds_hold_regardless_of_unknown_flags():
     client, _store, _mid = _client()
     assert _annotate(client, {"metadata": {"blob": "x" * 20000}}, replace="true").status_code == 413

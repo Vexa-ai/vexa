@@ -251,7 +251,7 @@ TICKET = {
     "what_i_tried": "POST /bots for a google_meet room via the MCP request_meeting_bot tool",
     "what_happened": "The bot never appeared in the meeting and bot-status stayed empty for 3 min",
     "deployment": "self-hosted 0.12.3",
-    "meeting_id": "abc-defg-hij",
+    "native_meeting_id": "abc-defg-hij",
     "platform": "google_meet",
     "logs": "RuntimeError: admission timeout",
 }
@@ -270,9 +270,9 @@ def test_report_issue_without_sink_returns_503(client, gateway, auth, monkeypatc
 
 
 # Filing spends the OPERATOR's sink credential, so the caller's own credential is checked first.
-# The ticket carrying no meeting_id is the case that matters: it is the one with no other reason
+# The ticket carrying no native_meeting_id is the case that matters: it is the one with no other reason
 # to touch the gateway, so it is the one an unvalidated key would ride through.
-TICKET_NO_MEETING = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+TICKET_NO_MEETING = {k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")}
 
 
 def test_report_issue_refuses_a_credential_the_gateway_rejects(client, gateway: FakeGateway, auth, monkeypatch):
@@ -303,7 +303,7 @@ def test_report_issue_files_a_ticket_that_names_no_meeting(client, gateway: Fake
 
     assert r.status_code == 200
     body = json.loads(_sink_requests(gateway)[-1].content)
-    assert body["meeting_id"] is None
+    assert body["native_meeting_id"] is None
     assert body["entity"] is None
 
 
@@ -320,7 +320,7 @@ def test_report_issue_forwards_ticket_to_sink(client, gateway: FakeGateway, auth
     assert body["what_happened"] == TICKET["what_happened"]
     assert body["deployment"] == "self-hosted 0.12.3"
     # the join key onto the cluster's own record of the same meeting
-    assert body["meeting_id"] == "abc-defg-hij"
+    assert body["native_meeting_id"] == "abc-defg-hij"
     assert body["platform"] == "google_meet"
     assert body["logs"] == "RuntimeError: admission timeout"
     assert body["logs_truncated"] is False
@@ -439,10 +439,10 @@ def test_report_issue_sink_failure_surfaces_as_502(client, gateway: FakeGateway,
     assert "sink rejected" in str(r.json()["detail"])
 
 
-def test_report_issue_without_meeting_id_still_authenticates_the_caller(client, gateway: FakeGateway, auth, monkeypatch):
+def test_report_issue_without_native_meeting_id_still_authenticates_the_caller(client, gateway: FakeGateway, auth, monkeypatch):
     """With no entity to resolve there is still a credential to check, and it is checked once."""
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
-    payload = {k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")}
+    payload = {k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")}
     client.post("/report-issue", headers=auth, json=payload)
     hops = [r for r in gateway.requests if r.url.host == "gateway.test"]
     assert [(r.method, r.url.path) for r in hops] == [("GET", "/meetings")]
@@ -472,7 +472,7 @@ def test_report_issue_resolves_entity_only_for_a_meeting_the_caller_owns(
     assert json.loads(_sink_requests(gateway)[-1].content)["entity"]["id"] == "abc-defg-hij"
 
 
-def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
+def test_report_issue_unowned_native_meeting_id_files_without_an_entity(client, gateway: FakeGateway, auth, monkeypatch):
     """A quoted id the caller does not own is text, never a resolved join — and never fatal.
 
     The gateway answers with the caller's OWN meetings, so an id belonging to someone else is
@@ -480,12 +480,12 @@ def test_report_issue_unowned_meeting_id_files_without_an_entity(client, gateway
     """
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     gateway.routes[("GET", "/meetings")] = (200, [{"native_meeting_id": "mine", "platform": "google_meet"}])
-    r = client.post("/report-issue", headers=auth, json={**TICKET, "meeting_id": "someone-elses"})
+    r = client.post("/report-issue", headers=auth, json={**TICKET, "native_meeting_id": "someone-elses"})
     assert r.status_code == 200
     assert r.json()["entity"] is None
     body = json.loads(_sink_requests(gateway)[-1].content)
     assert body["entity"] is None
-    assert body["meeting_id"] == "someone-elses"     # quoted, not resolved
+    assert body["native_meeting_id"] == "someone-elses"     # quoted, not resolved
 
 
 def test_report_issue_meeting_absent_from_callers_meetings_does_not_resolve(
@@ -515,7 +515,7 @@ def test_report_issue_has_no_url_shaped_field_and_fetches_nothing(client, gatewa
 
     monkeypatch.setenv("VEXA_TICKET_SINK_URL", SINK_URL)
     poisoned = {
-        **{k: v for k, v in TICKET.items() if k not in ("meeting_id", "platform")},
+        **{k: v for k, v in TICKET.items() if k not in ("native_meeting_id", "platform")},
         "what_happened": "see http://169.254.169.254/latest/meta-data/ and file:///etc/passwd",
         "logs": "http://localhost:6379/ http://internal.svc/admin",
     }
@@ -582,7 +582,7 @@ def test_raw_is_the_default_and_is_byte_unchanged(client, gateway: FakeGateway, 
     assert set(body) == {
         "source", "tool", "reported_at", "fingerprint", "caller_fingerprint", "summary",
         "description", "what_i_tried", "what_happened", "deployment", "version", "severity",
-        "meeting_id", "platform", "entity", "logs", "logs_truncated",
+        "native_meeting_id", "platform", "entity", "logs", "logs_truncated",
     }
     assert req.headers["content-type"] == "application/json"
     assert req.headers["authorization"] == "Bearer sink-secret"
@@ -637,7 +637,7 @@ def test_github_body_calls_out_the_meeting_join_key(client, gateway: FakeGateway
 
 def test_github_body_states_when_no_meeting_was_supplied(client, gateway: FakeGateway, auth, monkeypatch):
     _gh(monkeypatch)
-    ticket = {k: v for k, v in TICKET.items() if k not in {"meeting_id", "platform"}}
+    ticket = {k: v for k, v in TICKET.items() if k not in {"native_meeting_id", "platform"}}
     client.post("/report-issue", headers=auth, json=ticket)
     md = json.loads(_sink_requests(gateway)[-1].content)["body"]
     assert "### Join key" in md
@@ -696,12 +696,14 @@ def test_annotate_forwards_title_and_metadata(client, gateway, auth):
     assert gateway.last_json() == {"title": "Acme renewal", "metadata": {"crm_deal": "acme-42"}}
 
 
-def test_annotate_replace_is_forwarded_as_a_query_flag(client, gateway, auth):
+def test_annotate_never_forwards_a_replace_flag(client, gateway, auth):
+    """There is no whole-object replace. A caller sharing an account's API key must not be able to
+    destroy annotations written by another agent, or by the human, that it never saw."""
     client.post(
         "/meeting-annotate?native_meeting_id=abc-defg-hij&replace=true",
         headers=auth, json={"metadata": {"only": "this"}},
     )
-    assert dict(gateway.requests[-1].url.params) == {"replace": "true"}
+    assert "replace" not in dict(gateway.requests[-1].url.params)
 
 
 def test_annotate_requires_something_to_write(client, gateway, auth):

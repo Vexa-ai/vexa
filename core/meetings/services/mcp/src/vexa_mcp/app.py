@@ -87,8 +87,8 @@ def _description_of(data: "ReportIssue") -> str:
     parts = [f"What I tried:\n{data.what_i_tried}", f"What happened:\n{data.what_happened}"]
     where = data.deployment + (f" {data.version}" if data.version else "")
     parts.append(f"Deployment: {where}")
-    if data.meeting_id:
-        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.meeting_id}")
+    if data.native_meeting_id:
+        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.native_meeting_id}")
     if data.logs:
         parts.append(f"Logs:\n{data.logs}")
     return "\n\n".join(parts)
@@ -137,8 +137,8 @@ def _github_issue_body(payload: Dict[str, Any]) -> str:
     lines.append(str(payload.get("what_happened") or "—"))
     lines.append("")
     lines.append("### Join key")
-    if payload.get("meeting_id"):
-        lines.append(f"- **meeting_id:** `{payload['meeting_id']}`")
+    if payload.get("native_meeting_id"):
+        lines.append(f"- **native_meeting_id:** `{payload['native_meeting_id']}`")
         lines.append(f"- **platform:** `{payload.get('platform') or 'unknown'}`")
         entity = payload.get("entity")
         if isinstance(entity, dict):
@@ -351,7 +351,7 @@ class ReportIssue(BaseModel):
             "plus the version if you know it (e.g. 'self-hosted 0.12.3')."
         ),
     )
-    meeting_id: Optional[str] = Field(
+    native_meeting_id: Optional[str] = Field(
         None,
         description=(
             "The native meeting id this issue concerns (e.g. 'abc-defg-hij'). Include it whenever "
@@ -402,7 +402,7 @@ class ReportIssue(BaseModel):
         self.what_i_tried = _clip(self.what_i_tried, _MAX_TEXT_CHARS)
         self.what_happened = _clip(self.what_happened, _MAX_TEXT_CHARS)
         self.deployment = _clip(self.deployment, 200)
-        self.meeting_id = _clip(self.meeting_id, 200)
+        self.native_meeting_id = _clip(self.native_meeting_id, 200)
         self.platform = _clip(self.platform, 50)
         self.version = _clip(self.version, 100)
         self._logs_truncated = bool(self.logs and len(self.logs.strip()) > _MAX_LOGS_CHARS)
@@ -828,17 +828,20 @@ def create_app(
         data: AnnotateMeeting,
         native_meeting_id: Optional[str] = Query(None, description=_ID_DESC),
         platform: Optional[str] = Query(None, description=_PLATFORM_DESC),
-        replace: bool = Query(False, description="Replace the whole metadata object instead of merging."),
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
         Set the meeting's title and/or attach arbitrary metadata to it. Works DURING a live meeting
         and after it has ended.
 
-        `metadata` is your own JSON — a CRM id, a ticket, tags, your own summary, anything. It
-        merges key-wise (send a key as null to delete it; pass replace=true to swap the whole
-        object), and you can find those meetings again with
-        `list_meetings(metadata_filter={"your_key": "your_value"})`.
+        `metadata` is your own JSON — a CRM id, a ticket, tags, your own summary, anything.
+        It always MERGES key-wise, and sending a key as null deletes exactly that key. You can
+        only ever affect keys you name: other agents and the human may have written annotations
+        here that you cannot see, and nothing you send can destroy them.
+
+        Find these meetings again with
+        `list_meetings(metadata_filter='{"your_key":"your_value"}')` — note the filter is a JSON
+        STRING, not an object.
         """
         plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id, None, None)
         body: Dict[str, Any] = {}
@@ -846,10 +849,7 @@ def create_app(
             body["title"] = data.title
         if data.metadata is not None:
             body["metadata"] = data.metadata
-        return await make_request(
-            "POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body,
-            params={"replace": "true"} if replace else None,
-        )
+        return await make_request("POST", f"{base_url}/meetings/{plat}/{mid}/annotate", api_key, body)
 
     # --- the interactive bot: our bot TALKS and reads the room ------------------------------
     # No notetaker MCP exposes this, because no notetaker has it: their bot is a recorder. Ours is
@@ -930,7 +930,7 @@ def create_app(
         Write what you tried and what happened in your own words. Do not paste API keys, and do not
         paste your user's meeting content.
 
-        If the issue concerns a meeting or a bot, include `meeting_id` and `platform`. That is the
+        If the issue concerns a meeting or a bot, include `native_meeting_id` and `platform`. That is the
         join key: it lines your account of what happened up against our own record of the same
         meeting, which is the difference between a complaint and something we can diagnose. The
         meeting is resolved onto the ticket only if the key you are calling with owns it.
@@ -992,20 +992,20 @@ def create_app(
         # still files the ticket (with the id quoted as text, entity null), because a ticket we
         # refused to accept teaches us nothing.
         entity: Optional[Dict[str, Any]] = None
-        if data.meeting_id:
+        if data.native_meeting_id:
             rows = meetings if isinstance(meetings, list) else (meetings or {}).get("meetings", [])
             for m in rows if isinstance(rows, list) else []:
                 if not isinstance(m, dict):
                     continue
-                if m.get("native_meeting_id") != data.meeting_id:
+                if m.get("native_meeting_id") != data.native_meeting_id:
                     continue
                 if data.platform and m.get("platform") != data.platform:
                     continue
                 entity = {
                     "type": "meeting",
-                    "id": data.meeting_id,
+                    "id": data.native_meeting_id,
                     "platform": m.get("platform"),
-                    "url": f"/transcripts/{m.get('platform')}/{data.meeting_id}",
+                    "url": f"/transcripts/{m.get('platform')}/{data.native_meeting_id}",
                 }
                 break
 
@@ -1029,7 +1029,7 @@ def create_app(
             "deployment": data.deployment,
             "version": data.version,
             "severity": data.severity,
-            "meeting_id": data.meeting_id,
+            "native_meeting_id": data.native_meeting_id,
             "platform": data.platform,
             "entity": entity,
             "logs": data.logs,

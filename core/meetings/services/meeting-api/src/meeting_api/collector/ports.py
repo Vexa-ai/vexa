@@ -285,7 +285,6 @@ class TranscriptStore(Protocol):
         self, user_id: int, meeting_id: int, *,
         title: Optional[str] = None,
         metadata: "Optional[dict]" = None,
-        replace_metadata: bool = False,
     ) -> Optional[dict]:
         """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
         owns, and including one already completed.
@@ -299,9 +298,12 @@ class TranscriptStore(Protocol):
         re-arm, re-dispatch or re-route anything — and the moments a description is most worth
         writing are exactly the ones the FSM owns: mid-meeting, and after it ends.
 
-        ``metadata`` is arbitrary caller-owned JSON stored at ``data.metadata``. It MERGES key-wise
-        by default (a key set to ``None`` is deleted); ``replace_metadata=True`` swaps the whole
-        object. It is the join key between a Vexa meeting and everything else the caller knows —
+        ``metadata`` is arbitrary caller-owned JSON stored at ``data.metadata``. It ALWAYS merges
+        key-wise; a key set to ``None`` deletes that one key. There is deliberately NO whole-object
+        replace: every writer shares one API key, so a replace would let a caller destroy keys
+        written by another agent — or by the human — that it never saw. Merge plus explicit nulls
+        expresses every legitimate edit while making it impossible to affect a key you did not
+        name. It is the join key between a Vexa meeting and everything else the caller knows —
         a CRM record, a ticket, its own summary — and it is queryable through
         ``list_meetings(metadata_filter=...)``.
 

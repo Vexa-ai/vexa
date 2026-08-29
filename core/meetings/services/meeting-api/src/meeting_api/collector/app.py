@@ -654,13 +654,16 @@ def build_router(
     # summary) were both previously impossible: PATCH answered 409 for the entire useful life of
     # a meeting.
     #
-    # `metadata` merges key-wise; an explicit null deletes one key; ?replace=true swaps the object.
+    # `metadata` ALWAYS merges key-wise; an explicit null deletes exactly one key. There is
+    # deliberately NO whole-object replace: every writer on an account shares one API key, so a
+    # replace would let any caller destroy annotations written by another agent — or by the human
+    # — that it never saw and could not have known about. Merge plus explicit nulls expresses
+    # every legitimate edit while making "corrupt what you did not write" unrepresentable.
     @router.post("/meetings/{platform}/{native_meeting_id}/annotate")
     async def annotate_native_meeting(
         platform: str,
         native_meeting_id: str,
         request: Request,
-        replace: bool = Query(default=False, description="Replace the metadata object instead of merging."),
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
@@ -689,9 +692,7 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        row = await store.annotate_meeting(
-            user_id, meeting_id, title=title, metadata=metadata, replace_metadata=replace,
-        )
+        row = await store.annotate_meeting(user_id, meeting_id, title=title, metadata=metadata)
         if row is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
         if isinstance(row, dict) and row.get("error") == "metadata_too_large":
@@ -703,7 +704,7 @@ def build_router(
             user_id=user_id, meeting_id=str(meeting_id),
             fields={"title": title is not None,
                     "metadata_keys": sorted(metadata.keys()) if metadata else [],
-                    "replace": replace, "status": row.get("status")},
+                    "status": row.get("status")},
         )
         return JSONResponse(content=row)
 
