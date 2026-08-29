@@ -59,7 +59,7 @@ So the honest statement is conditional, and the condition is yours to set:
 
 - **Point `TRANSCRIPTION_SERVICE_URL` at your own STT** — the bundled GPU unit under
   `deploy/transcription`, or any OpenAI-compatible endpoint — and audio never leaves your
-  perimeter. This is the air-gapped posture [Security & compliance](/security-compliance)
+  perimeter. This is the no-egress posture [Security & compliance](/security-compliance)
   describes.
 - **Leave it unset and follow the quickstart** and you are using hosted STT: the variable ships
   empty in `deploy/compose/.env.example`, and the quickstart hands you a hosted token to get
@@ -73,13 +73,28 @@ neither is modelled by the gate yet.
 
 ## 3. What running it costs
 
+<Note>
+Everything in this section is the cost of running it **yourself**. The
+[hosted service](/how-to/send-a-bot) removes all of it — one authenticated `POST /bots`, nothing to
+install, nothing to operate. Self-host when the audio must not leave your perimeter, or when you
+want the agent plane, which the hosted service does not run.
+</Note>
+
 Three shapes, all in-tree, none requiring a GPU for the control plane:
 
 | Shape | What you actually run | Stateful |
 |---|---|---|
-| **Lite** | 1 app container (supervisord tree inside) + 2 sidecars | Postgres, MinIO |
+| **Lite** | 1 app container — 13 supervised programs inside it — plus 2 sidecars | Postgres, MinIO |
 | **Compose** | 11 services by default (13 declared, 2 profile-gated) + one ephemeral browser container per meeting | Postgres 17, Valkey 8, MinIO, 4 named volumes |
-| **Kubernetes** | 6 Deployments, a Postgres StatefulSet, Valkey + MinIO, an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
+| **Kubernetes** | 7 Deployments, 2 StatefulSets (Postgres, MinIO) and an init Job; bots and agents are bare Pods | as above, plus an **RWX** storage class for the agent-workspace PVC on multi-node |
+
+Every count in that table is a command, not a claim. On a clean clone, before you install anything:
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml config --services   # 11 lines
+helm template vexa deploy/helm/charts/vexa | grep -E '^kind:' | sort | uniq -c
+grep -c '^\[program:' deploy/lite/supervisord.conf                      # 13
+```
 
 **GPU** is needed only if you self-host STT, and then only for that one unit
 (`deploy/transcription`, which ships a CPU variant too).
@@ -94,15 +109,26 @@ Helm's shipped resource requests, which is the number a capacity plan wants:
 | terminal | 2 | 100m / 256Mi | 1000m / 1Gi |
 | runtime | 1 | 50m / 256Mi | 500m / 768Mi |
 | agent-api | 1 | 100m / 256Mi | 1000m / 1Gi |
+| **application tier** | | **1150m / 3 GiB** | 7500m / 7.75 GiB |
+| postgres · valkey · minio (bundled, default-on) | 1 each | 400m / 1 GiB | 5500m / 6 GiB |
+| **whole default render** | | **1550m / 4 GiB** | **13000m / 13.75 GiB** |
 
-That sums to **1.15 vCPU and 3 GiB requested** for the control plane before a single meeting runs.
-Meetings and agent dispatches are ephemeral Pods on top.
+So **1.55 vCPU and 4 GiB requested**, and a burst ceiling of 13 vCPU / 13.75 GiB, before a single
+meeting runs. Point the chart at an external Postgres and object store and you schedule the
+application tier only — 1.15 vCPU / 3 GiB. Meetings and agent dispatches are ephemeral Pods on top,
+and are **not** in either figure.
 
-**Is it working?** `make probe` runs a full-journey smoke — spawn → schedule → boot → join →
-transcribe → live-view → stop, plus a log sweep — with a per-stage Expected/Actual/Verdict. It
-runs against all three surfaces (`make probe`, `make probe SURFACE=lite`,
-`make probe SURFACE=helm`). Every long-running service answers `GET /health`; compose gates
-bring-up on `service_healthy` rather than sleeping.
+**Configuration surface.** `deploy/compose/.env.example` declares **77 variables**. `make all` seeds
+`.env` from it and the stack comes up on the defaults for all but two credential blocks you supply
+yourself: transcription (`TRANSCRIPTION_SERVICE_URL` + `_TOKEN` — without it bots join and record but
+produce no transcript) and one model credential for the agent plane (any one of five accepted names —
+without it agent chat refuses). `make all` warns loudly about both rather than failing quietly.
+
+**Is it working?** `make probe` runs a full-journey smoke in **nine stages** — S0 ready, spawn,
+schedule, boot, join, transcribe, live-view, stop, S8 log sweep — each printing
+Expected / Actual / Verdict. It runs against all three surfaces (`make probe`,
+`make probe SURFACE=lite`, `make probe SURFACE=helm`). Every long-running service answers
+`GET /health`; compose gates bring-up on `service_healthy` rather than sleeping.
 
 **Upgrades** are a tag bump and a re-run — `IMAGE_TAG` for Lite and compose,
 `--set global.imageTag=…` for Helm. Schema migrations converge in-process on service start; there
@@ -120,6 +146,27 @@ Say this part out loud, because an architecture review will find it anyway:
   (8 vCPU / 16 GB) is stated for the full stack, and the README and quickstart disagree about
   whether it applies to running published images or only to building from source. Size from the
   table above, not from that line.
+
+### What we do not measure
+
+Everything above is an **inventory of what there is to run**, taken from the tree. That is a
+smaller claim than it may look: it does not tell you how many hours you will spend running it.
+We have not run the study that would, so we publish no operator-hours figure, no total cost of
+ownership, and no setup-time comparison against any other product.
+
+Operability is the row this field most often argues with a percentage. Three such figures are
+published today. We went looking for the source of each and did not find one:
+
+| The published figure | Where it is published | Source published with it |
+|---|---|---|
+| a self-hosted solution "requires 45-48% more time to operate" | Recall.ai, [Recall.ai vs Attendee](https://www.recall.ai/recall-ai-vs-attendee) | none on the page |
+| "By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors" | Attendee, [README](https://github.com/attendee-labs/attendee#readme) | none |
+| Vexa "requires significant DevOps expertise to set up", and "the development time and infrastructure costs outweigh the savings" | Skribby, [Best Meeting Bot APIs 2026](https://skribby.io/blog/meeting-bot-api-comparison-2026) | none |
+
+We are not answering any of them with a number of our own. The question worth asking any vendor —
+this one included — is whether they will tell you how much before you commit, and in a form you can
+check without asking them. Ours is the three commands above, the requests table, and the list of
+what we do not ship.
 
 ## 4. How it fails
 
@@ -203,6 +250,7 @@ licences, listed in the tree.
 | Encryption at rest | planned, not shipped |
 | Backup / restore / DR | not documented; operator-owned |
 | Automated upgrades | none; manual tag bump |
+| Operator hours / total cost of ownership | not measured; we publish an inventory of what runs, not a time or cost figure |
 | Third-party certification | none claimed |
 | Failure-taxonomy reference page | contract is public and sealed; no docs page enumerates it |
 | Mid-call bot control | not wired in the open-core stack |

@@ -110,6 +110,7 @@ def build_argv(
     session: Optional[str] = None,
     model: Optional[str] = None,
     mcp_config: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> list[str]:
     """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
 
@@ -118,6 +119,11 @@ def build_argv(
     does the git commit). `--mcp-config <file>` + `--strict-mcp-config` attach EXACTLY the unit's
     granted MCP tools (the toolbelt) and nothing else. The container sandbox is the other
     enforcement layer.
+
+    `effort` — when set — pins the session's reasoning effort (`--effort low|medium|high|xhigh`).
+    Backends that validate the OpenAI-compatible `reasoning_effort` field (e.g. vLLM/LiteLLM model
+    groups) reject the CLI's default `high` when it is outside their allowlist; an explicit value
+    overrides that default. Unset ⇒ no flag ⇒ the CLI's own behaviour, unchanged.
     """
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
             "--include-partial-messages", "--permission-mode", "acceptEdits"]
@@ -130,6 +136,8 @@ def build_argv(
         argv += ["--resume", session]
     if model:
         argv += ["--model", model]
+    if effort:
+        argv += ["--effort", effort]
     return argv
 
 
@@ -218,6 +226,7 @@ class ClaudeCodeHarness:
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
         argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
+                          effort=(os.environ.get("VEXA_AGENT_EFFORT") or None),
                           mcp_config=mcp_config)
         yield from parse_stream_json(self._exec(argv, str(work)))
 

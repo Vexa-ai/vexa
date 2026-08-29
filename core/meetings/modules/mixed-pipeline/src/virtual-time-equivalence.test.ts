@@ -14,6 +14,23 @@
  * introduced the tier. Even so this pays a few seconds of real time ONCE, which is the point: every
  * other replay in the loop no longer pays any.
  *
+ * WHY THE SPEED CHECK DOES NOT COMPARE THE TWO RUNS. It used to assert `virtualMs < realMs`, and
+ * that assertion measured the runner rather than the tier. The 1x run's wall clock is FLOORED by
+ * the tape — ~8.5 s, and it barely moves under load — while the virtual run is pure compute, and it
+ * is strictly MORE compute than the 1x run does, because every event and every heartbeat awaits a
+ * drain that `--realtime` never performs. On a fast machine that costs ~1.5 s and the comparison
+ * looks comfortable; on a 2-core CI runner it stretches past 8.5 s and the comparison inverts. It
+ * inverted on PRs whose entire diff was one Markdown file (10035 vs 8672 ms, and 14687 vs 8496 ms),
+ * which is the signature of a check that is not testing its own subject.
+ *
+ * So the speed claim is now stated against the thing it is actually about: the virtual run reports
+ * how much LANE CLOCK it advanced, and must come in under that. A clock that genuinely slept could
+ * not — it would need at least 1x, and the two CI runs above sit at 0.27x and 0.39x of the budget.
+ * The companion check asserts the mechanism ran at all (a heartbeat for every second of lane time),
+ * which the old wall-clock comparison never tested: a tier that fired NO heartbeats would have been
+ * fast, and would have passed. `realMs` is still measured and printed, because it is useful when
+ * reading a failure — it is simply never asserted on.
+ *
  * Run: npx tsx src/virtual-time-equivalence.test.ts
  */
 import { execFileSync } from 'node:child_process';
@@ -32,6 +49,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'vexa-vt-'));
 const T0 = 1786470000000;
 const SR = 16000;
+const TAPE_MS = 8000;
 
 // Two speakers on the transport, alternating, long enough that the heartbeat fires several times
 // within a turn — which is the only way a growing-window submission (and therefore a draft, and
@@ -45,7 +63,7 @@ const tape: string[] = [JSON.stringify({
   type: 'captured_signal_header', v: 1, platform: 'teams', native_meeting_id: 'vt',
   language: null, lane: 'mixed', sample_rate: SR, started_at: new Date(T0).toISOString(), trace_id: 'vt',
 })];
-for (let ms = 0; ms < 8000; ms += 100) {
+for (let ms = 0; ms < TAPE_MS; ms += 100) {
   const tr = activeAt(ms);
   if (tr === null) continue;
   const n = SR / 10;
@@ -60,12 +78,16 @@ writeFileSync(join(dir, 'vt.csrc.jsonl'), runs.flatMap(([tr, a, b]) => [
   JSON.stringify({ type: 'csrc', t: T0 + b, csrc: tr, active: false, lane: 'mixed' }),
 ]).join('\n') + '\n');
 
-const run = (mode: string, tag: string): { rows: string; writes: string } => {
-  execFileSync('npx', ['tsx', join(here, 'tape-replay.ts'),
+const run = (mode: string, tag: string): { rows: string; writes: string; stdout: string } => {
+  const stdout = execFileSync('npx', ['tsx', join(here, 'tape-replay.ts'),
     '--tape', join(dir, 'vt.captured-signal.jsonl'), '--turn-source', 'csrc', mode,
     '--out-json', join(dir, `${tag}.json`), '--out-writes', join(dir, `${tag}.writes.jsonl`)],
-    { stdio: 'pipe', cwd: join(here, '..') });
-  return { rows: readFileSync(join(dir, `${tag}.json`), 'utf8'), writes: readFileSync(join(dir, `${tag}.writes.jsonl`), 'utf8') };
+    { stdio: 'pipe', cwd: join(here, '..'), encoding: 'utf8' });
+  return {
+    rows: readFileSync(join(dir, `${tag}.json`), 'utf8'),
+    writes: readFileSync(join(dir, `${tag}.writes.jsonl`), 'utf8'),
+    stdout,
+  };
 };
 
 const t0 = Date.now();
@@ -75,6 +97,13 @@ const t1 = Date.now();
 const real = run('--realtime', 'rt');
 const realMs = Date.now() - t1;
 
+// The virtual run reports its own mechanism — how far it moved the lane's clock, and how many
+// heartbeats fired inside that span. Both assertions below read THOSE numbers; see the header for
+// why neither one is allowed to look at how long the 1x run next to it happened to take.
+const report = /virtual time: (\d+) heartbeat\(s\) fired, (\d+)ms of lane clock advanced/.exec(virtual.stdout);
+const heartbeats = report ? Number(report[1]) : -1;
+const advancedMs = report ? Number(report[2]) : -1;
+
 check('the virtual run reproduces the real run\'s durable rows exactly',
   virtual.rows === real.rows, `virtual ${virtual.rows.length}B vs real ${real.rows.length}B`);
 check('…and its whole publish stream, drafts and retractions included',
@@ -82,8 +111,15 @@ check('…and its whole publish stream, drafts and retractions included',
   `virtual ${virtual.writes.split('\n').length} calls vs real ${real.writes.split('\n').length}`);
 check('the run actually exercised the draft/confirm cycle (otherwise it proves nothing)',
   real.writes.includes('"completed":false'), 'no draft was ever published — the tape is too short');
-check(`and it did so without paying the wall clock (${virtualMs}ms vs ${realMs}ms)`,
-  virtualMs < realMs, `${virtualMs}ms vs ${realMs}ms`);
+check('the virtual run drove the lane\'s clock over the whole tape, a heartbeat every second of it',
+  advancedMs >= TAPE_MS && heartbeats >= Math.floor(advancedMs / 1000) - 1,
+  `${heartbeats} heartbeat(s) across ${advancedMs}ms of lane clock — the tape alone is ${TAPE_MS}ms`);
+check('…and it SKIPPED that time rather than sleeping through it',
+  advancedMs > 0 && virtualMs < advancedMs,
+  `${virtualMs}ms of wall clock to replay ${advancedMs}ms of lane clock` +
+  ` (${(advancedMs / Math.max(virtualMs, 1)).toFixed(1)}x) — a clock that really slept could not beat 1x`);
 
 if (failed) { console.error(`\n❌ virtual-time-equivalence: ${failed} check(s) FAILED.`); process.exit(1); }
-console.log(`\n✅ virtual-time-equivalence: the tape's clock produces the identical run in ${virtualMs}ms that the wall clock takes ${realMs}ms to produce.`);
+console.log(`\n✅ virtual-time-equivalence: the tape's clock produced the identical run — ${heartbeats} heartbeat(s) over ` +
+  `${advancedMs}ms of lane time — in ${virtualMs}ms of wall clock. (The 1x confirmation run beside it took ${realMs}ms; ` +
+  `that number is reported, never asserted on.)`);

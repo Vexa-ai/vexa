@@ -53,15 +53,34 @@ reports a witness run on self-hosted Jitsi where audio recorded but the transcri
 Meet, Teams and Zoom are production. See [Status](/roadmap/status#capability-truth-table).
 
 *Operability* is the row most often argued with a number and no source, so here are ours. The
-control plane is GPU-free and ships in three sizes: **Lite** (one app container plus two
-sidecars), **compose** (11 services by default, with Postgres, Valkey and MinIO), and **Helm**
-(6 Deployments requesting 1.15 vCPU / 3 GiB in total before a meeting runs). `make probe` runs the
-whole journey — spawn → join → transcribe → live-view → stop — against any of the three and
-prints a per-stage verdict. What we do **not** ship: a backup or DR procedure, an automated
-upgrade path, or a published hardware minimum for Lite and Kubernetes. Those are real operator
-costs and they are enumerated, with the rest, on
-[Architecture review](/architecture/evaluation#3-what-running-it-costs). Self-hosting is work; the
-question worth asking a vendor is whether they will tell you how much before you commit.
+control plane is GPU-free and ships in three sizes: **Lite** (one app container, 13 supervised
+programs inside it, plus two sidecars), **compose** (11 services by default, with Postgres, Valkey
+and MinIO), and **Helm** (7 Deployments and 2 StatefulSets, requesting **1.55 vCPU / 4 GiB** in
+total before a meeting runs — 1.15 vCPU / 3 GiB if you bring your own datastores). Those counts are
+commands, not claims: `docker compose config --services` and `helm template` produce them on a clean
+clone. `make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in
+nine stages with a per-stage verdict, against any of the three. What we do **not** ship: a backup or
+DR procedure, an automated upgrade path, or a published hardware minimum for Lite and Kubernetes.
+Those are real operator costs and they are enumerated, with the rest, on
+[Architecture review](/architecture/evaluation#3-what-running-it-costs).
+
+**Or pay none of it.** The [hosted service](/how-to/send-a-bot) is one authenticated `POST /bots` —
+nothing to install, nothing to operate, no figure in this paragraph applies. Self-host when the
+audio must stay inside your perimeter, or when you want the agent plane, which the hosted service
+does not run.
+
+Three operability figures circulate in this field, and we went looking for the source of each
+without finding one. Recall.ai publishes that a self-hosted solution
+[requires 45-48% more time to operate](https://www.recall.ai/recall-ai-vs-attendee).
+Attendee's README publishes that self-hosting
+[reduces costs by 10x compared to closed source vendors](https://github.com/attendee-labs/attendee#readme).
+Skribby publishes that Vexa
+[requires significant DevOps expertise to set up](https://skribby.io/blog/meeting-bot-api-comparison-2026).
+No source accompanies any of the three. We are not answering them with a percentage of our own — we
+have not run that study, and what is above is an inventory of what there is to run, not a
+measurement of your hours.
+Self-hosting is work. The question worth asking any vendor, this one included, is whether they will
+tell you how much before you commit, in a form you can check without asking them.
 
 *Bring your own models* covers both halves of the STT contract: the endpoint
 (`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
@@ -81,6 +100,10 @@ ignore it. See [Configuration](/configuration#transcription-stt).
   real-time attributed transcripts through an API you host, **your** STT and LLM endpoints, scaling
   from one Linux box to an OpenShift cluster inside your walls — and, when you want it, the
   [agent layer](/core/agents) that compounds those transcripts into a knowledge base your team owns.
+
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
 
 The deeper positioning discussion — why capture sits upstream of every "chat with your docs" tool —
 is in [Concepts](/concepts). For the regulated-enterprise posture (air-gap, procurement artifacts,

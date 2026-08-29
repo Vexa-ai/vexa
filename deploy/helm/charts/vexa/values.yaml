@@ -447,6 +447,19 @@ minio:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 1Gi }
+  # The bucket-init Job's client image. It used to be hardcoded `minio/mc:latest`
+  # in templates/job-minio-init.yaml, so no deployment could pin it and an
+  # enterprise delivery gate that requires digest-pinned images refused the whole
+  # chart on it. It is a value now; pin it with `repository@sha256:...` in your
+  # own values (or via the enterprise node baseline) when you need reproducibility.
+  mcImage:
+    repository: minio/mc
+    tag: latest
+  # ...and the Job declared no resources at all, so a namespace LimitRange would
+  # silently assign it whatever default it likes — the 64Mi-squeeze class.
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 256Mi }
 
 # ---------- Ingress (optional; fronts the terminal web UI by default) ----------
 # The terminal is the human front door (it proxies /ws → gateway and /api → agent-api/admin-api
