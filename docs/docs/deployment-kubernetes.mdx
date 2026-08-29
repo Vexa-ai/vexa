@@ -382,6 +382,21 @@ binds into each worker Pod as a PVC, scoped per-mount). The Compose stack is the
 most production mileage today; the chart is the right starting point for a cluster
 evaluation — track the [status page](/roadmap/status).
 
+## Immutable image references
+
+Every chart-owned Pod and Job image can be selected by digest. For structured image values, set
+`image.digest: sha256:<64 lowercase hex>` and clear both `image.tag` and `global.imageTag`. The chart
+fails to render when a digest is malformed or a mutable tag remains selected. The bundled
+Postgres, Redis and PgBouncer images preserve their legacy scalar `image` setting; immutable mode
+uses `imageRepository` plus `imageDigest` and requires `image` to be empty. The runtime's spawned
+bot, agent and agent-worker references likewise use their `*ImageRepository` and `*ImageDigest`
+values with the legacy full-reference value cleared.
+
+Digest syntax is only the deployment declaration. Release validation must also compare the
+expected registry digest with each running Pod's `status.containerStatuses[].imageID`, and must
+observe spawned bot and agent Pods separately. A successful Helm render does not prove that the
+registry or cluster ran the intended bytes.
+
 ## Air-gapped clusters
 
 Everything the chart deploys pulls from images you build and host in your own registry; pair it
