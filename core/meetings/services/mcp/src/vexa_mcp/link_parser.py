@@ -22,7 +22,7 @@ class ParseMeetingLinkResponse(BaseModel):
     native_meeting_id: str
     passcode: Optional[str] = None
     meeting_url: Optional[str] = None       # raw URL for long Teams /l/meetup-join/ links
-    teams_base_host: Optional[str] = None   # non-default Teams host (e.g. teams.microsoft.com)
+    teams_base_host: Optional[str] = None   # Teams web client this short link is served by
     warnings: List[str] = Field(default_factory=list)
 
 
@@ -83,7 +83,17 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         passcode = (query.get("p") or [None])[0]
         if not passcode:
             warnings.append("Teams meeting link has no ?p= passcode. Many Teams meetings require it.")
-        return ParseMeetingLinkResponse(platform="teams", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
+        # The host rides along like every other short-link parse: a personal meeting id addresses
+        # a meeting on teams.live.com, and the id alone does not say so. Whoever rebuilds the join
+        # URL from (id, passcode) — bot_spawn's construct_meeting_url — would otherwise default to
+        # the world-wide enterprise host and send the bot to a different Teams entirely.
+        return ParseMeetingLinkResponse(
+            platform="teams",
+            native_meeting_id=native_id,
+            passcode=passcode,
+            teams_base_host=host,
+            warnings=warnings,
+        )
 
     # Teams enterprise: teams.microsoft.com, gov.teams.microsoft.us, dod.teams.microsoft.us, etc.
     if _is_teams_enterprise_host(host):

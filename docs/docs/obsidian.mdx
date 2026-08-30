@@ -1,0 +1,123 @@
+---
+title: "Write meetings into Obsidian"
+description: "Completed meeting → transcript → summary → Obsidian note (or a knowledge graph), with nothing else to host."
+---
+
+If you keep your notes in Obsidian, you can have every completed meeting land there automatically, summarized and speaker-tagged, without writing or hosting anything of your own.
+
+[**obsidian-vexa-bridge**](https://github.com/rennf93/obsidian-vexa-bridge) is a small, always-on container that does the whole path: it watches Vexa for meetings that finish, summarizes the transcript, and writes an Obsidian note, or, in its other mode, folds the transcript into a markdown knowledge graph instead.
+
+<Note>
+This is a **third-party project**: written and maintained by its author, not by Vexa. It is licensed AGPL-3.0-or-later, with a commercial license available for closed SaaS or proprietary embedding. File issues and feature requests on [its own repo](https://github.com/rennf93/obsidian-vexa-bridge/issues), not Vexa's.
+</Note>
+
+## What it does
+
+The bridge runs as a long-running container, not a one-shot script. It repeats one pass on an interval: list completed meetings across the platforms you configured, skip anything already done or too short to be worth summarizing, fetch the speaker-tagged transcript, summarize it through any OpenAI-compatible endpoint, and write the result into your vault. Alongside the poll it can also receive Vexa's signed `meeting.completed` webhook (see [Webhooks](/webhooks)) and process that meeting immediately instead of waiting for the next tick; the poll stays the fallback for anything the webhook misses.
+
+## Two modes
+
+**`BRIDGE_MODE=note`** (default): one LLM call per completed meeting, written straight into a vault folder. Pick the sink with `OBSIDIAN_SINK`: `fs` writes markdown files into a bind-mounted vault directory (`VAULT_DIR`), `mcp` writes through the vault-as-MCP plugin instead. Works against any Vexa 0.12 deployment, hosted included.
+
+**`BRIDGE_MODE=graph`**: no LLM runs in the bridge itself. Each transcript is uploaded into a Vexa [agent workspace](/core/agents), a standing agent routine folds it into a markdown knowledge graph, entities for person, company, project, meeting, decision, and topic, all wikilinked, and the bridge pushes that workspace to git. Your vault mirrors the repo: pull it (the bridge does this itself when it can reach the vault, otherwise keep it pulled with the Obsidian Git plugin or a timer). Graph mode needs a self-hosted Vexa 0.12 stack with `agent-api` reachable and a Claude Code credential configured there; the hosted service and the Kubernetes deployment don't expose `/agent/*` yet.
+
+## What you need
+
+- A Vexa API key scoped `tx` (minted below) and a base URL ([Authentication](/authentication)):
+
+  | Deployment | `API_BASE` |
+  |---|---|
+  | Hosted | `https://api.cloud.vexa.ai` |
+  | Self-hosted (`make all` / compose) | `http://localhost:18056` (`API_GATEWAY_HOST_PORT`) |
+
+  Running the bridge on the same Docker network as Vexa's gateway? Use the service name instead of `localhost`, e.g. `http://gateway:8000` (the stock compose file names it `gateway`).
+- An OpenAI-compatible endpoint for summarization: a self-hosted ollama's `/v1`, or any cloud provider LiteLLM understands.
+- For `BRIDGE_MODE=graph` only: a self-hosted Vexa with `agent-api` up, and a private git repo to hold the workspace.
+
+## Setup
+
+<Steps>
+  <Step title="Mint a per-user token">
+    Scope it `tx`, the bridge only reads meetings and transcripts:
+
+    ```bash
+    curl -X POST "$ADMIN/admin/users/1/tokens?scopes=tx" \
+      -H "X-Admin-API-Key: $ADMIN_TOKEN"
+    ```
+
+    The `token` field in the response is your `VEXA_API_KEY`. See [Authentication](/authentication) for what `$ADMIN` / `$ADMIN_TOKEN` are.
+  </Step>
+
+  <Step title="Point it at a model">
+    Set `AI_BASE_URL` to any OpenAI-compatible endpoint, a self-hosted ollama at `.../v1`, or a cloud provider, and set `AI_MODEL` in LiteLLM's `provider/model` dialect: `openai/qwen2.5:7b` for ollama, `anthropic/claude-sonnet-5` for Anthropic, and so on.
+  </Step>
+
+  <Step title="Add the service to your compose file">
+    Same network as Vexa's gateway service (`gateway` in the stock compose file). The repo ships a [`compose-snippet.yml`](https://github.com/rennf93/obsidian-vexa-bridge/blob/main/compose-snippet.yml) with the full block; the shape is:
+
+    ```yaml
+    obsidian-vexa-bridge:
+      image: renzof93/obsidian-vexa-bridge:latest
+      environment:
+        VEXA_API_URL: http://gateway:8000
+        VEXA_API_KEY: "${VEXA_SUMMARIZER_TOKEN}"
+        AI_MODEL: "openai/qwen2.5:7b"
+        AI_BASE_URL: "http://ollama:11434/v1"
+        OBSIDIAN_SINK: "fs"
+        VAULT_DIR: "/vault"
+      depends_on: [gateway]
+      volumes:
+        - /path/on/host:/vault
+      networks: [vexa]
+      restart: unless-stopped
+    ```
+  </Step>
+
+  <Step title="Bind-mount a vault folder">
+    Set `VAULT_DIR` to a host folder synced into your actual vault, by Syncthing, iCloud, a git repo, whatever you already use to get files onto the machine where you read notes.
+  </Step>
+
+  <Step title="Start it">
+    ```bash
+    docker compose up -d obsidian-vexa-bridge
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+| Variable | Default | What it does |
+|---|---|---|
+| `VEXA_API_URL` | - | Vexa gateway base URL, e.g. `http://gateway:8000` in-stack. |
+| `VEXA_API_KEY` | - | The per-user `tx`-scoped token from step 1. Not the admin token. |
+| `SUMMARIZE_PLATFORMS` | `discord` | CSV of platforms to summarize, e.g. `discord,google_meet,zoom`. |
+| `MIN_TRANSCRIPT_SECONDS` | `30` | Skip meetings with less speech than this. |
+| `MIN_TRANSCRIPT_COVERAGE` | `0.05` | Skip meetings, past a wall-clock floor, whose speech-to-wall-clock ratio falls below this. |
+| `AI_MODEL` | `anthropic/claude-sonnet-5` | LiteLLM model id, `provider/model`, e.g. `openai/qwen2.5:7b`. |
+| `AI_BASE_URL` | - | OpenAI-compatible base URL for summarization. |
+| `OBSIDIAN_SINK` | `fs` | Where notes go: `fs` (filesystem, `VAULT_DIR`) or `mcp` (vault-as-MCP plugin). |
+| `VAULT_DIR` | - | Host folder bind-mounted into the container when `OBSIDIAN_SINK=fs`. |
+| `OBSIDIAN_MCP_URL` | `http://localhost:8765/mcp` | vault-as-MCP plugin URL, used when `OBSIDIAN_SINK=mcp`. |
+| `OBSIDIAN_MCP_TOKEN` | - | Bearer token for the vault-as-MCP plugin. Required when `OBSIDIAN_SINK=mcp`. |
+| `OBSIDIAN_NOTE_FOLDER` | `Meetings` | Folder, relative to the vault root, notes are written into. |
+| `INCLUDE_TRANSCRIPT` | `true` | Append the full speaker-tagged transcript to each note. |
+| `POLL_INTERVAL_SECONDS` | `180` | Seconds between poll passes. |
+| `STATE_DIR` | `~/.local/share/vexa-summarizer` | Where the idempotency state (`state.json`) lives. Mount a named volume here. |
+| `BRIDGE_MODE` | `note` | `note` for an LLM summary per meeting, `graph` for the agent-maintained knowledge graph. |
+| `VEXA_VAULT_FOLDER` | `Vexa` | `BRIDGE_MODE=graph` only. Folder in `VAULT_DIR` the bridge fast-forwards from the agent workspace repo. |
+| `GRAPH_ROUTINE_NAME` | `meeting-to-graph` | `BRIDGE_MODE=graph` only. Name of the agent routine that folds transcripts into the graph. |
+| `GRAPH_ROUTINE_CRON` | `0 * * * *` | `BRIDGE_MODE=graph` only. Cron schedule for the routine, the safety net behind the webhook trigger. |
+| `WEBHOOK_ENABLED` | `false` | Start the event-driven receiver alongside the poll. |
+| `WEBHOOK_HOST` | `0.0.0.0` | Bind address for the receiver. |
+| `WEBHOOK_PORT` | `8080` | Bind port for the receiver. |
+| `WEBHOOK_PATH` | `/webhook` | Route the receiver listens on. |
+| `WEBHOOK_SECRET` | - | Shared secret verifying `X-Webhook-Signature` on incoming deliveries. Required when `WEBHOOK_ENABLED=true`. |
+| `WEBHOOK_PUBLIC_URL` | - | When set, the bridge registers this URL with Vexa (`PUT /user/webhook`) at startup, instead of you configuring it by hand. |
+
+## Events
+
+`WEBHOOK_ENABLED=true` starts a small HTTP receiver in the same container; set `WEBHOOK_PUBLIC_URL` and the bridge calls `PUT /user/webhook` for you at startup. Without it, wire the two up yourself with [Webhooks](/webhooks): point `webhook_url` at the bridge's public address and select `meeting.completed`. Either way, deliveries are verified with the same `X-Webhook-Signature` scheme Vexa signs with; `WEBHOOK_SECRET` is the shared secret on both sides.
+
+## Source
+
+[rennf93/obsidian-vexa-bridge](https://github.com/rennf93/obsidian-vexa-bridge) is a third-party project, written and maintained by its author, not by Vexa. It's licensed AGPL-3.0-or-later, with a commercial license available for closed SaaS or proprietary embedding.

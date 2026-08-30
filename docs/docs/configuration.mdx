@@ -112,10 +112,18 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 
 ## Bot participant name
 
-The terminal client uses `NEXT_PUBLIC_DEFAULT_BOT_NAME` at build time and falls back to
-`Vexa`. The meeting-api uses `DEFAULT_BOT_NAME` for raw `POST /bots` callers and falls back to
-`VexaBot-{random}`. Direct `joinMeeting` callers use the same variable and fall back to
-`Vexa Join Layer`. An explicit `bot_name` in the request takes precedence over these defaults.
+`DEFAULT_BOT_NAME` on meeting-api names the bot, and compose, Lite and helm ship it as `Vexa`. To
+rename the bot, set it in `.env` (compose/Lite) or `meetingApi.defaultBotName` (helm) and restart
+meeting-api — the terminal needs no rebuild, because it omits `bot_name` when it sends a bot and
+lets the deployment decide. Blank the variable and meeting-api falls back to `VexaBot-{random}`.
+
+Two things still win over it. An explicit `bot_name` in a `POST /bots` request always takes
+precedence, which is also how a calendar connection applies its own per-calendar bot name. And a
+name baked into the terminal image at build time overrides the deployment: pass
+`NEXT_PUBLIC_DEFAULT_BOT_NAME` as a Docker build arg (there is a commented-out line for it under the
+terminal's `build.args` in compose) and rebuild the image — a rename then costs another rebuild,
+which is why the runtime variable is the better knob. Direct `joinMeeting` callers read
+`DEFAULT_BOT_NAME` too and fall back to `Vexa Join Layer`.
 
 ## Database & storage
 
@@ -187,7 +195,7 @@ stack still boots.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DEFAULT_BOT_NAME` | — | Bot participant name used when the caller omits `bot_name` in `POST /bots`. Falls back to `VexaBot-{random}` if unset. |
+| `DEFAULT_BOT_NAME` | `Vexa` | The bot's display name in the meeting. The terminal omits `bot_name` when it sends a bot, so this names those bots; an explicit `bot_name` still wins. Blank it and meeting-api falls back to `VexaBot-{random}`. |
 | `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
 | `AUTO_JOIN_LEAD_S` | `120` | The bot is sent this many seconds *before* the scheduled time, so it is already standing in the lobby when the meeting starts. |
 | `VEXA_LOBBY_BUDGET_S` | `900` | How long a spawned bot waits for admission before giving up (`automatic_leave.waitingRoomTimeout`). The reconciler's pre-active grace derives from this, so raising it never leaves a waiting bot reaped early. |
@@ -233,7 +241,7 @@ self-hosted and can be left untouched.
 ### Per-user limiter (post-auth, on by default)
 
 A token-bucket limiter keyed by user id fires *after* the API key is resolved — it catches one token
-driving too much traffic. On for self-hosted by default.
+driving too much traffic. On by default.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -241,7 +249,7 @@ driving too much traffic. On for self-hosted by default.
 | `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
 | `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
 
-### Edge guard (pre-auth, off by default for self-hosted)
+### Edge guard (pre-auth, off by default)
 
 An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
 — so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is

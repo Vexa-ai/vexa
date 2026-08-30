@@ -33,6 +33,7 @@
           "how-to/custom-stt",
           "how-to/recordings",
           "n8n",
+          "obsidian",
           "interactive-bots"
         ]
       },
@@ -90,6 +91,7 @@
           "api/meetings",
           "api/calendar",
           "api/settings",
+          "webhooks",
           "api/agent",
           "api/errors"
         ]
@@ -105,6 +107,7 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "troubleshooting/completion-reasons",
           "support",
           "sdks",
           "vexa-mcp",

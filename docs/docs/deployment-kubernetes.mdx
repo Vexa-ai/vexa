@@ -35,6 +35,10 @@ helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 ### Is this install actually working? — `make probe SURFACE=helm`
 
 The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
@@ -106,6 +110,55 @@ image↔profile conformance gate (`image-identity`) asserts each profile command
 an in-image executable against the published images, so a profile that diverges from its image
 fails the release rather than a customer's install.
 </Warning>
+
+### Namespace LimitRange defaults
+
+A spawned bot or agent Pod carries **no resource requests or limits of its own** — the chart does not
+stamp any onto it. On a plain namespace that is fine (the Pod is unbounded and the scheduler places it
+on capacity). In a **quota-controlled namespace**, however, a `LimitRange` supplies the defaults, and
+whatever it says is what the bot gets.
+
+The bot runs a real browser. Either run Vexa's spawn namespace with **no `LimitRange` at all**, or
+give that namespace the defaults Vexa's own production runs:
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: runtime-defaults
+spec:
+  limits:
+  - type: Container
+    default:        {cpu: 1500m, memory: 2560Mi}
+    defaultRequest: {cpu: 1000m, memory: 1100Mi}
+```
+
+**Sizing basis:** a live bot runs ~1.0–1.3 Gi steady state, which is what the
+request is sized to; a Teams call spikes past 2 Gi, which is what the 2560Mi limit is sized to (an
+OOM at ~2 Gi is why that ceiling exists). These values have run production since April 2026.
+
+<Warning>
+**Do not set the memory limit below `2560Mi`** — it is a hard ceiling, not a starting point. Also
+check that the namespace's `max` (and any `ResourceQuota`) is not *below* these defaults, or the Pod
+is rejected at admission instead of merely being under-provisioned.
+</Warning>
+
+Under-provisioned defaults do not fail loudly at schedule time — the Pod is admitted and then
+OOM-killed or CPU-starved partway through the join, which reads as a flaky bot rather than a quota
+problem. Check with `kubectl get limitrange -n <namespace> -o yaml` before an upgrade or a first
+install. Agent-worker Pods are smaller than a bot and are over-provisioned by these defaults; that
+is the intended trade — they are small and few.
+
+<Note>
+**`/dev/shm` — 2 Gi, and on Kubernetes there is no knob for it.** The bot runs Chromium **without**
+`--disable-dev-shm-usage`, so it needs a real shared-memory mount, and Teams is the workload that
+actually consumes it. The Docker backend sizes it at **`2g`** by default (`DOCKER_SHM_SIZE`); on
+Kubernetes the equivalent is **`2Gi`**, but the k8s backend exposes **no setting for it in
+`v0.12.23`** — the only spawn-time knobs it reads are `RUNTIME_K8S_TOLERATIONS` and
+`RUNTIME_K8S_NODE_SELECTOR`. A spawned Pod therefore takes the kubelet's default `/dev/shm`, which on
+most distributions is far below 2 Gi. Two consequences: do not trim the memory ceiling above, and if
+Teams calls crash the browser on your cluster, an undersized `/dev/shm` is the first thing to check.
+</Note>
 
 ### Autoscaling and bot bursts — the fresh-node reachability gate
 
@@ -333,9 +386,17 @@ binds into each worker Pod as a PVC, scoped per-mount). The Compose stack is the
 most production mileage today; the chart is the right starting point for a cluster
 evaluation — track the [status page](/roadmap/status).
 
-## Air-gapped clusters
+## No-egress clusters
 
 Everything the chart deploys pulls from images you build and host in your own registry; pair it
-with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) and
-your own LLM endpoint ([Configuration](/configuration)) for a zero-egress posture. See
-[Security & compliance](/security-compliance).
+with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) — bundled
+GPU or CPU — and your own LLM endpoint ([Configuration](/configuration)) so the audio path never
+calls out. See [Security & compliance](/security-compliance).
+
+**One gap on this path, and it is this chart's:** `TRANSCRIPTION_MODEL` is **not values-plumbed**
+— set it on the meeting-api and terminal Deployments via `extraEnv` until it lands, which the
+chart's own [known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md)
+state. Compose and Lite plumb it as a first-class setting. So no egress is ✅ on **Compose and
+Lite** and 🟡 **here**. We have not run an install on a genuinely disconnected network, so we do
+not claim one: what a procurement review can hold us to is self-hosted with no egress, not a
+certified air gap.

@@ -232,7 +232,7 @@ class CalendarPatch(BaseModel):
 # resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
 # (dispatch/bot_spawn only override what is set here).
 MODEL_MODES = ("subscription", "custom")
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key")
+_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -256,6 +256,7 @@ class ModelPrefsUpdate(BaseModel):
     meeting_model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -699,6 +700,7 @@ def create_app() -> FastAPI:
             "model": prefs.get("model"),
             "meeting_model": prefs.get("meeting_model"),
             "base_url": prefs.get("base_url"),
+            "effort": prefs.get("effort"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
