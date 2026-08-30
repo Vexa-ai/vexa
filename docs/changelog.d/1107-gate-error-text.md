@@ -1,1 +1,0 @@
-fix(gates): every gate failure now prints its diagnostic — an empty stdout Buffer is truthy, so `(e.stdout || e.stderr || e)` was discarding the real error at all 21 call sites (#1107). A gate that fails because the worktree has no dependencies installed now says so.
