@@ -835,8 +835,18 @@ export async function startCaptureBridge(
             // even in the window where the watcher's self marker is transiently absent.
             selfName: botName,
             onBind: (ch: number, name: string, votes: number): void => {
+              // A FLIP (the resolver changing its mind about a channel) is a different event from a
+              // first BIND and reads differently in a tape: the first is the algorithm working, the
+              // second is it correcting a wrong name — which the per-channel lane cannot repaint, so
+              // an unexplained flip rate is the symptom that would send us to the fixture.
+              if (!w.__vexaTrackBound) w.__vexaTrackBound = new Map();
+              const prev = w.__vexaTrackBound.get(ch);
+              w.__vexaTrackBound.set(ch, name);
               w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + name + ' (' + votes + ' votes)');
-              w.__vexaObservation?.('pertrack', { type: 'pertrack-bind', channel: ch, name, votes, tMs: Date.now() }, Date.now());
+              w.__vexaObservation?.('pertrack', {
+                type: prev ? 'pertrack-flip' : 'pertrack-bind',
+                channel: ch, name, previous: prev, votes, tMs: Date.now(),
+              }, Date.now());
             },
           });
         } else {
@@ -876,6 +886,17 @@ export async function startCaptureBridge(
           } catch { /* a stream may have been torn down mid-walk */ }
         }
         try { w.__vexaStreamPresence?.(live); } catch { /* presence must never break capture */ }
+      };
+      // The lane's SHAPE as data (P18/ADR-0010), not only as a log line — the same reason
+      // mix-topology exists, and the csrc-wiring test's own assertion: "the mix topology crossed as
+      // DATA". N per-participant tracks behave nothing like one server mix, and the difference
+      // decides how a tape may be read. Emitted on the first capture and on every CHANGE, so the
+      // fixture carries the shape over time rather than one snapshot taken before everyone arrived.
+      const reportPerTrackTopology = (): void => {
+        const n = w.__vexaTrackCaps ? w.__vexaTrackCaps.size : 0;
+        if (w.__vexaTrackTopology === n) return;
+        w.__vexaTrackTopology = n;
+        w.__vexaObservation?.('pertrack', { type: 'pertrack-topology', streams: n, tMs: Date.now() }, Date.now());
       };
       const setupPerTrack = (): void => {
         reportPerTrackPresence();
@@ -922,8 +943,15 @@ export async function startCaptureBridge(
             proc.connect(ctx.destination);                     // pull the processor (it outputs silence)
             w.__vexaTrackCaps.set(s.id, { ch, src, proc });
             w.logBot?.('[pertrack] capturing ch=' + ch + ' (' + w.__vexaTrackCaps.size + ' track(s))');
+            reportPerTrackTopology();
             w.__vexaRemoteAudioReady?.();
-          } catch (e: any) { w.logBot?.('[pertrack] track setup failed ch=' + ch + ': ' + String(e)); }
+          } catch (e: any) {
+            // A track we could not tap is a participant we cannot hear — a fault, and one that only
+            // this line ever sees. It crosses as data for the same reason the watcher's no-signal
+            // observation does: absence of an expected signal is itself a reportable state.
+            w.logBot?.('[pertrack] track setup failed ch=' + ch + ': ' + String(e));
+            w.__vexaObservation?.('pertrack', { type: 'pertrack-capture-failed', channel: ch, error: String(e), tMs: Date.now() }, Date.now());
+          }
         }
       };
       setupPerTrack();
