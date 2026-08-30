@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.23 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.25 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.23`** — the current release candidate control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.25`** — the current release candidate control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -967,6 +967,51 @@ docs: redirect five guessed paths onto the pages that already answer them — `/
   never revised, leaving one person's words under another's name for the rest of the meeting. Names
   earned before the participant list is complete are now provisional and corrected as evidence
   arrives.
+
+- **Added (Meetings API):** `GET /meetings/{platform}/{native_meeting_id}/participants` — who was in a meeting, as far as the core actually knows. Every row is labelled with its `source`: `invite` (the calendar invitation's attendee list, which **does** include people who never spoke — for meetings imported from a connected calendar) and `speaker` (distinct speakers heard in the transcript, first-heard first). Owner-scoped: another user's meeting answers `404`, never an empty roster. The response also carries `observed_roster: "not_recorded"`, which is the honest part — nothing in the core records who was actually present, so an empty `participants` means *attendance was never captured*, never *nobody attended*. No identity resolution is performed: someone both invited and heard appears once per source, because matching a voice label to an invitee is a guess.
+
+- **Teams bots join with a separate `passcode` (#892).** A numeric Teams meeting ID plus its
+  `passcode` now builds the join URL Teams actually uses — `…/meet/<id>?p=<passcode>` — instead of
+  interpolating the id into the thread-id deep link and dropping the passcode; a
+  `19:…@thread.v2` id keeps its `…/l/meetup-join/` path. `teams_base_host` is honoured for the
+  personal and GCC-High/DoD clouds (unknown hosts are a `422`), and the passcode is kept off the
+  stored `constructed_meeting_url` and out of the bot's logs. Unsupported password aliases
+  (`password`, `meeting_password`, …) are refused with a typed `422` naming `passcode` rather than
+  accepted and silently ignored. See [Send a bot](/how-to/send-a-bot).
+
+- **Spawned bot and agent-worker Pods declare CPU/memory requests and limits, so quota-controlled
+  namespaces admit them (#1005).** The runtime accepted `resources` on a `runtime.v1` WorkloadSpec
+  but dropped it before the backend, so every dynamically created Pod was unsized — and a namespace
+  whose policy requires each container to declare requests *and* limits (a `ResourceQuota`, a
+  restricted OpenShift project) rejected both shipped workload classes at admission. Resource intent
+  now crosses the backend port, and the Kubernetes backend submits a complete Pod manifest carrying
+  the container's requests and limits alongside its image, command, env, labels, workspace mounts
+  and scheduling. Size the two classes independently with the chart's `runtime.workloadResources`
+  (`meetingBot` / `agentWorker`); each value sets both the request and the limit, and leaving a
+  class empty keeps the previous unsized behaviour. Enforcement is Kubernetes-only — the docker and
+  process backends accept the same intent without acting on it. See
+  [Deployment](/deployment-kubernetes).
+
+- **Interactive meeting capabilities get one API home — and the status page stops overstating speak (#1089).**
+  [ADR-0035](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0035-interactive-capabilities-live-behind-one-act-endpoint.md)
+  settles where speak / chat / screen / avatar live: a single `POST /bots/{platform}/{native_meeting_id}/acts`
+  endpoint carrying an `acts.v1` act, with `POST`/`DELETE …/speak` and `POST …/chat` kept as aliases for
+  callers already coding against them; `…/screen` and `…/avatar` retire from `api.v1`. The
+  [status page](/roadmap/status) is corrected in the same change: a bot spawned through the public API
+  cannot speak today even once the route lands, because `voice_agent_enabled` is accepted by `POST /bots`
+  and silently dropped before the invocation is built. See [Roadmap status](/roadmap/status).
+
+fix(gates): every gate failure now prints its diagnostic — an empty stdout Buffer is truthy, so `(e.stdout || e.stderr || e)` was discarding the real error at all 21 call sites (#1107). A gate that fails because the worktree has no dependencies installed now says so.
+
+- **Fixed:** a bot whose audio capture breaks mid-meeting no longer leaves a **live** meeting as `completed(left_alone)` (#1192). `left_alone` had one oracle — whether remote audio frames were arriving — so a broken capture chain was indistinguishable from an emptied room, and the meeting ended as a recorded success with an empty transcript. The bot now also reads whether any remote stream is currently connected and live: connected streams delivering nothing for a whole silence window are a capture fault, not an empty room. The bot holds the meeting open, logs `aloneness: capture-fault suspected`, and attempts one capture restart. **Behaviour change worth knowing:** where the platform keeps a server-side mix alive on an empty meeting (Teams), affected runs now end at the `maxActiveMs` ceiling instead of at the silence window — holding a live meeting is preferred to reporting a false success. An empty room with no connected streams still resolves `left_alone` exactly as before.
+
+- **Changed (API): your meetings list is ordered by when the meeting happened (#1226).** `GET /meetings` previously ordered by row creation, so a meeting imported from a calendar after it ran could sort above one that happened later. The list now orders by event time, and meetings that have not reached a terminal state stay pinned at the top where you are looking for them. See [Meetings](/api/meetings).
+
+- **New (MCP): an agent can file a ticket from inside its own session (#1272).** The `report_issue` tool lets a calling agent that hits a wall tell the operator what happened, in its own words, without leaving the session. Supplying `meeting_id` binds the report to the cluster's own record of the same meeting, so an operator reads the agent's account and the machine's account of the same seconds side by side. The caller's credential is verified before anything is filed, and the caller's API key never reaches the ticket sink — only a salted fingerprint of it. Ticketing is off until the deployment sets `VEXA_TICKET_SINK_URL`; until then the tool answers `503` and nothing else changes.
+
+- **Restarting mid-leave no longer strands a meeting in "stopping" (#1280).** When Vexa restarted while a
+  bot was still leaving, the meeting could sit in "stopping" — shown as active — indefinitely across a
+  redeploy burst. A meeting whose stop was explicitly requested now converges on the short stop grace.
 
 ## Versioning
 
