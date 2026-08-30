@@ -404,6 +404,7 @@ services:
       - GUARD_TRUST_X_FORWARDED_PROTO=${GUARD_TRUST_X_FORWARDED_PROTO:-false}
       - GUARD_BLOCKED_COUNTRIES=${GUARD_BLOCKED_COUNTRIES:-}
       - GUARD_BLOCK_CLOUD_PROVIDERS=${GUARD_BLOCK_CLOUD_PROVIDERS:-}
+      - GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=${GUARD_BLOCK_CLOUD_PROVIDERS_STRICT:-false}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s
