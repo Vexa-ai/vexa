@@ -10,7 +10,14 @@ rejects illegal transitions.
 * ``BotStatus`` / ``CompletionReason`` / ``FailureStage`` — the sealed lifecycle.v1
   enums, re-expressed as Python enums.
 * ``MeetingRecord`` — the in-memory record the FSM advances.
-* ``MeetingStore`` — an in-memory record store (no DB; the eval runs fully in-process).
+* ``MeetingStore`` — the record store: in-memory, keyed by ``connection_id``, holding no DB handle
+  of its own. **That is true of the STORE and false of the BRICK.** This is the live bot-callback
+  FSM in production, and its ``MeetingRecord.data`` projection is the SOLE writer of meeting
+  attribution into Postgres: ``app.py`` posts the callback here, ``apply_change`` advances the
+  record, and ``rec.data`` is handed to ``update_meeting_status(data=…)``, which shallow-merges
+  every top-level key into the ``meetings.data`` JSONB column. Everything ``data`` projects — the
+  reason, the completion reason, the failure stage, the join evidence — is what a customer's
+  ``GET /meetings`` and every operator query read. Nothing else writes them.
 * ``LifecycleSink`` — the port: ``apply(event)`` validates the seam + advances the FSM.
 * ``IllegalTransition`` — raised (and surfaced as HTTP 409) on a forbidden transition.
 * ``can_transition`` / ``LEGAL_TRANSITIONS`` — the machine, derived from the parent's

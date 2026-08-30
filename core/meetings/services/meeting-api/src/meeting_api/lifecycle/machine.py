@@ -311,6 +311,13 @@ class MeetingRecord:
         Mirrors the parent's `meeting.data` keys (`status_transition`, `completion_reason`,
         `failure_stage`, `bot_logs`, `bot_resources`, `last_error`, `stop_requested`) so a
         recordings/transcript reader sees the same attribution shape it does in prod.
+
+        THIS IS A WRITE PATH, not a view. The dict returned here is handed to
+        `update_meeting_status(data=…)`, whose adapter shallow-merges every top-level key into the
+        real `meetings.data` JSONB column — no allow-list, so a key added here reaches production and
+        the public `GET /meetings` the moment it is projected. That is also why omission matters:
+        a key this property does not emit is a fact no query can ever ask about, which is exactly
+        how 83 `join_failure` rows came to carry `reason: None` (see the `reason` note below).
         """
         d: Dict[str, Any] = {"status_transition": list(self.status_transition)}
         if self.completion_reason is not None:
@@ -347,7 +354,13 @@ class MeetingRecord:
 
 
 class MeetingStore:
-    """In-memory record store, keyed by connection_id. No DB — the eval is in-process."""
+    """In-memory record store, keyed by connection_id — it holds no DB handle.
+
+    Read that narrowly: the STORE is in-process, the BRICK is not a simulation. Records advanced
+    here are projected through `MeetingRecord.data` and merged into the `meetings.data` JSONB column
+    by `update_meeting_status`, which is how production learns why a meeting ended. A record lost on
+    restart is re-created from the DB status (`rehydrate`), not from here.
+    """
 
     def __init__(self) -> None:
         self._records: Dict[str, MeetingRecord] = {}
