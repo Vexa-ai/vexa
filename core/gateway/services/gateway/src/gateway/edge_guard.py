@@ -158,12 +158,14 @@ def _validate_block_cloud_providers(env: str) -> set[str]:
 
 
 def _warn_cloud_providers_guard_core_would_drop(env: str, entries: list[str]) -> None:
-    """Log ONE boot-time WARNING per ``entries`` item guard-core 3.4.0's OWN filter
-    (``models.py::validate_cloud_providers``, see :func:`_validate_block_cloud_providers`'s
-    docstring) would silently drop: its provider half is not an exact-case member of
-    ``_VALID_CLOUD_PROVIDERS`` (unrecognized name, or a recognized one in the wrong case, e.g.
-    ``aws``). Called only from the default-off (non-STRICT) path of
-    :func:`_resolve_block_cloud_providers`; under STRICT the same entries raise instead via
+    """Log ONE boot-time WARNING per ``entries`` item whose provider half is not an exact-case
+    member of ``_VALID_CLOUD_PROVIDERS`` (unrecognized name, or a recognized one in the wrong
+    case, e.g. ``aws``). What happens to that entry next depends on the installed guard-core:
+    3.4.0 silently drops it (``guard_core/models.py:658-661``, ``validate_cloud_providers``, see
+    :func:`_validate_block_cloud_providers`'s docstring for the full evidence), while >=3.12.0
+    raises a ``ValidationError`` instead, deep inside ``SecurityConfig`` construction. Called
+    only from the default-off (non-STRICT) path of :func:`_resolve_block_cloud_providers`; under
+    STRICT the same entries raise a Vexa :class:`ConfigError` instead via
     :func:`_validate_block_cloud_providers`, so this and that function are mutually exclusive
     per entry, never both firing for it.
     """
@@ -171,9 +173,11 @@ def _warn_cloud_providers_guard_core_would_drop(env: str, entries: list[str]) ->
         provider = entry.partition(":!")[0]
         if provider not in _VALID_CLOUD_PROVIDERS:
             log.warning(
-                "%s entry %r will be silently dropped by guard-core 3.4.0 (it only keeps an "
-                "exact-case match against %s). Set GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=true to "
-                "normalize case and reject unrecognized names at boot instead.",
+                "%s entry %r does not match guard-core's accepted provider spellings (%s), so "
+                "it will not block anything. Depending on the installed guard-core, it is "
+                "either ignored or refused during SecurityConfig construction. Set "
+                "GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=true to normalize case and reject "
+                "unrecognized names at Vexa's own boundary with a clear error instead.",
                 env,
                 entry,
                 ", ".join(_VALID_CLOUD_PROVIDERS),
@@ -188,8 +192,8 @@ def _resolve_block_cloud_providers(env: str) -> set[str]:
     normalization, no raise on an unrecognized name - so a deploy that boots today keeps
     booting after this ships, byte-for-byte the same ``SecurityConfig`` input. The only addition
     is a boot-time WARNING (:func:`_warn_cloud_providers_guard_core_would_drop`) naming any entry
-    guard-core 3.4.0's own filter will silently drop, so an operator debugging "why isn't cloud
-    blocking working" sees it at boot instead of discovering it in production traffic.
+    guard-core will not accept, so an operator debugging "why isn't cloud blocking working" sees
+    it at boot instead of discovering it in production traffic.
 
     ON: :func:`_validate_block_cloud_providers` runs - case-insensitive normalization to guard-
     core's canonical spelling, and a :class:`ConfigError` on an unrecognized name. An operator
