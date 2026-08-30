@@ -210,14 +210,23 @@ def _capture_join_evidence(
     claims about its stage (the orchestrator stamps a fixed `awaiting_admission` on every
     non-admitted verdict). Same discipline as `failure_stage`: derive server-side, never trust a
     stale payload field (FM-003).
+
+    `needs_help` is deliberately NOT proof of a lobby on its own. It implies one only while
+    `LEGAL_TRANSITIONS` permits reaching it from `awaiting_admission` alone — and #1251 adds
+    `joining -> needs_help` precisely so a PRE-lobby blocker (a consent gate, a captcha) can
+    escalate. The day that lands, a bot that never saw a waiting room would be stamped
+    `reached_lobby` -> `admission_timeout` -> `host_action`: filed as *the host did not let us in*,
+    and excluded from `system_failure_rate` — the metric under-reporting our own defects in exactly
+    the cohort #1251 exists to investigate. So the test is how `needs_help` was ENTERED, not that it
+    occurred.
     """
     try:
         from .join_evidence import evidence_from_event
 
         reached_lobby = (
             BotStatus.AWAITING_ADMISSION in rec.history
-            or BotStatus.NEEDS_HELP in rec.history
-            or frm in (BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP)
+            or frm is BotStatus.AWAITING_ADMISSION
+            or (frm is BotStatus.NEEDS_HELP and BotStatus.AWAITING_ADMISSION in rec.history)
         )
         if rec.failure_stage is FailureStage.ACTIVE:
             # A bot that reached `active` was ADMITTED — whatever killed it afterwards (a pipeline
