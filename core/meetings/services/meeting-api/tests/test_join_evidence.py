@@ -424,6 +424,40 @@ def test_reached_lobby_is_derived_from_history_not_the_payload():
     assert data["join_evidence"]["attribution"] == "system_fault"
 
 
+def test_needs_help_is_only_proof_of_a_lobby_when_it_was_entered_from_one():
+    """``needs_help`` implies a waiting room only while the FSM can be reached from nowhere else.
+
+    #1251 adds ``joining -> needs_help`` so a PRE-lobby blocker (a consent gate, a captcha) can
+    escalate. Reading the mere presence of ``needs_help`` as proof of a lobby would then stamp a bot
+    that never saw a waiting room as ``admission_timeout`` / ``host_action`` — filed as *the host
+    did not let us in*, and excluded from ``system_failure_rate``: the metric under-reporting our own
+    defects in exactly the cohort #1251 exists to investigate. Driven at the function, because
+    ``LEGAL_TRANSITIONS`` still forbids the edge that makes it reachable.
+    """
+    from meeting_api.lifecycle.machine import (
+        BotStatus,
+        FailureStage,
+        MeetingRecord,
+        _capture_join_evidence,
+    )
+
+    event = {"completion_reason": "join_failure", "reason": "blocked before the waiting room"}
+
+    pre_lobby = MeetingRecord(connection_id="sess-blocked")
+    pre_lobby.history = [BotStatus.JOINING, BotStatus.NEEDS_HELP]   # the post-#1251 path
+    pre_lobby.failure_stage = FailureStage.JOINING
+    ev = _capture_join_evidence(pre_lobby, event, BotStatus.NEEDS_HELP)
+    assert ev["reason"] == "never_reached_lobby"
+    assert ev["attribution"] == "system_fault"
+
+    from_lobby = MeetingRecord(connection_id="sess-lobby")
+    from_lobby.history = [BotStatus.JOINING, BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP]
+    from_lobby.failure_stage = FailureStage.AWAITING_ADMISSION
+    ev = _capture_join_evidence(from_lobby, event, BotStatus.NEEDS_HELP)
+    assert ev["reason"] == "admission_timeout"
+    assert ev["attribution"] == "host_action"
+
+
 def test_no_join_evidence_for_a_failure_after_admission():
     """A bot that reached ``active`` was admitted; whatever killed it later is not a join failure.
     The taxonomy stays silent rather than filing it under ``unknown``."""
