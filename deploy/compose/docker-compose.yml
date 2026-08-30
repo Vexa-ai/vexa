@@ -299,7 +299,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
-      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-}
+      # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
+      # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
+      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
       # The background sweeps' internal lookups: auto-join fetches per-user spawn context
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
@@ -487,6 +489,10 @@ services:
         # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
         # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
         # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
+        # Bot display name baked into the bundle. Leave commented: the terminal then omits bot_name and
+        # meeting-api's DEFAULT_BOT_NAME (above) names the bot at runtime, renameable with a restart.
+        # Uncomment + REBUILD only to pin a name into the image, which then wins over DEFAULT_BOT_NAME:
+        # NEXT_PUBLIC_DEFAULT_BOT_NAME: ${TERMINAL_BOT_NAME:-}
         # Runtime node_modules flavor (clients/terminal/Dockerfile): prod (default, pruned) or
         # dev (full tree). Set TERMINAL_RUNTIME_DEPS=dev in .env on hosts that run the terminal
         # under the hot overlay's NODE_ENV=development — dev-mode Next needs the dev toolchain at
