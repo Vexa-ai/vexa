@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, cancel, postgres_db, resume, retry  # noqa: E402
+from flows import Registry, SystemClock, cancel, postgres_db, resume, retry, wake  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_steps.common import db_url  # noqa: E402
 
@@ -117,9 +117,9 @@ def list_reactions(status: Optional[str] = None):
 @app.post("/reactions/{reaction_id}/{verb}", dependencies=[Depends(auth)])
 def signal_reaction(reaction_id: str, verb: str, x_actor: str = Header(default="api"),
                     body: dict = Body(default={})):
-    fns = {"retry": retry, "resume": resume, "cancel": cancel}
+    fns = {"retry": retry, "resume": resume, "cancel": cancel, "wake": wake}
     if verb not in fns:
-        raise HTTPException(status_code=404, detail="retry | resume | cancel")
+        raise HTTPException(status_code=404, detail="retry | resume | cancel | wake")
     ok = fns[verb](db, reaction_id, actor=x_actor, clock=clock, reason=body.get("reason"))
     if not ok:
         raise HTTPException(status_code=409, detail=f"{verb} not applicable in current status")

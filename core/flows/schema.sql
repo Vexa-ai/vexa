@@ -87,6 +87,6 @@ CREATE TABLE IF NOT EXISTS signal (
 	created_at DOUBLE PRECISION NOT NULL, 
 	consumed_at DOUBLE PRECISION, 
 	PRIMARY KEY (signal_id), 
-	CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel')), 
+	CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake')), 
 	FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)
 );
