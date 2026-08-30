@@ -87,11 +87,11 @@ def _stored_data(repo: InMemoryMeetingRepo, meeting_id: int) -> dict:
 # (label, kwargs, expected reason). The two #1058 populations lead: they are the whole point.
 _CLASSIFY_CASES = [
     (
-        "meet: 13min in a 10min lobby budget → admission_timeout",
+        "meet: 13min in a 10min lobby budget → awaiting_admission_timeout",
         dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
              time_in_lobby_ms=780_000, lobby_budget_ms=BUDGET_MS,
              detail="still in the Google Meet waiting room after timeout"),
-        JoinFailureReason.ADMISSION_TIMEOUT,
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     ),
     (
         "teams: dead at ~20s having never seen a lobby → never_reached_lobby",
@@ -103,29 +103,29 @@ _CLASSIFY_CASES = [
         "a lobby exit at 3% of the budget is a refusal, not an expiry",
         dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
              time_in_lobby_ms=19_000, lobby_budget_ms=BUDGET_MS, detail="removed from the waiting room"),
-        JoinFailureReason.PLATFORM_REJECTION,
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED,
     ),
     (
         "exactly 90% of the budget is already an expiry (boundary)",
         dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
              time_in_lobby_ms=540_000, lobby_budget_ms=BUDGET_MS),
-        JoinFailureReason.ADMISSION_TIMEOUT,
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     ),
     (
         "one ms under the boundary is still a refusal",
         dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
              time_in_lobby_ms=539_999, lobby_budget_ms=BUDGET_MS),
-        JoinFailureReason.PLATFORM_REJECTION,
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED,
     ),
     (
         "the sealed rejection reason is read directly",
         dict(completion_reason="awaiting_admission_rejected", stage="awaiting_admission"),
-        JoinFailureReason.PLATFORM_REJECTION,
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED,
     ),
     (
         "the sealed timeout reason is read directly",
         dict(completion_reason="awaiting_admission_timeout", stage="awaiting_admission"),
-        JoinFailureReason.ADMISSION_TIMEOUT,
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     ),
     (
         "the sealed auth reason is read directly",
@@ -135,7 +135,7 @@ _CLASSIFY_CASES = [
     (
         "a pre-active `stopped` is the USER, not a defect",
         dict(completion_reason="stopped", stage="awaiting_admission", reached_lobby=True),
-        JoinFailureReason.STOPPED_BEFORE_ADMISSION,
+        JoinFailureReason.STOPPED_WHILE_JOINING,
     ),
     (
         "a transport marker names a navigation failure even from inside the lobby",
@@ -159,7 +159,7 @@ _CLASSIFY_CASES = [
     (
         "reaped IN the lobby with no timings at all: the stage is still evidence",
         dict(completion_reason="join_failure", stage="awaiting_admission"),
-        JoinFailureReason.ADMISSION_TIMEOUT,
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     ),
     (
         "reaped at `requested` — the bot never spoke, so we honestly do not know",
@@ -192,18 +192,18 @@ def test_the_two_conflated_populations_are_now_different_reasons():
         time_in_lobby_ms=793_000, lobby_budget_ms=BUDGET_MS, detail="host did not admit",
     )
     assert teams is not meet
-    assert (teams, meet) == (JoinFailureReason.NEVER_REACHED_LOBBY, JoinFailureReason.ADMISSION_TIMEOUT)
+    assert (teams, meet) == (JoinFailureReason.NEVER_REACHED_LOBBY, JoinFailureReason.AWAITING_ADMISSION_TIMEOUT)
 
 
 # ══ 2. attribution ═══════════════════════════════════════════════════════════════════════════════
 
 _ATTRIBUTION_CASES = [
-    (JoinFailureReason.PLATFORM_REJECTION, JoinFailureAttribution.HOST_ACTION),
-    (JoinFailureReason.ADMISSION_TIMEOUT, JoinFailureAttribution.HOST_ACTION),
+    (JoinFailureReason.AWAITING_ADMISSION_REJECTED, JoinFailureAttribution.HOST_ACTION),
+    (JoinFailureReason.AWAITING_ADMISSION_TIMEOUT, JoinFailureAttribution.HOST_ACTION),
     (JoinFailureReason.AUTH_SESSION_MISSING, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NEVER_REACHED_LOBBY, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NAVIGATION_FAILURE, JoinFailureAttribution.SYSTEM_FAULT),
-    (JoinFailureReason.STOPPED_BEFORE_ADMISSION, JoinFailureAttribution.USER_ACTION),
+    (JoinFailureReason.STOPPED_WHILE_JOINING, JoinFailureAttribution.USER_ACTION),
     (JoinFailureReason.UNKNOWN, JoinFailureAttribution.UNKNOWN),
 ]
 
@@ -222,11 +222,11 @@ def test_every_reason_has_an_attribution():
 
 def test_platform_policy_refusal_is_exogenous_not_the_hosts_doing():
     assert attribute_join_failure(
-        JoinFailureReason.PLATFORM_REJECTION,
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED,
         detail="[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins",
     ) is JoinFailureAttribution.EXOGENOUS_PLATFORM
     assert attribute_join_failure(
-        JoinFailureReason.PLATFORM_REJECTION, detail="reCAPTCHA challenge presented",
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED, detail="reCAPTCHA challenge presented",
     ) is JoinFailureAttribution.EXOGENOUS_PLATFORM
 
 
@@ -234,11 +234,11 @@ def test_a_broken_admission_flow_is_ours_not_the_hosts():
     """The founder's carve-out: a host who never admitted is ``host_action`` UNLESS the evidence
     shows the admission flow itself broke — then the host never got the chance to decline."""
     assert attribute_join_failure(
-        JoinFailureReason.ADMISSION_TIMEOUT, detail="no meeting indicators found after polling",
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT, detail="no meeting indicators found after polling",
     ) is JoinFailureAttribution.SYSTEM_FAULT
     # …and without that evidence it stays with the host.
     assert attribute_join_failure(
-        JoinFailureReason.ADMISSION_TIMEOUT, detail="host did not admit within the waiting-room timeout",
+        JoinFailureReason.AWAITING_ADMISSION_TIMEOUT, detail="host did not admit within the waiting-room timeout",
     ) is JoinFailureAttribution.HOST_ACTION
 
 
@@ -246,17 +246,17 @@ def test_overrides_are_scoped_to_their_reason():
     """An override must not leak across reasons — admission-flow words do not move a rejection, and
     a user stop is never reattributed however alarming its detail looks."""
     assert attribute_join_failure(
-        JoinFailureReason.PLATFORM_REJECTION, detail="no meeting indicators found",
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED, detail="no meeting indicators found",
     ) is JoinFailureAttribution.HOST_ACTION
     assert attribute_join_failure(
-        JoinFailureReason.STOPPED_BEFORE_ADMISSION, detail="net::ERR_FAILED; no meeting indicators found",
+        JoinFailureReason.STOPPED_WHILE_JOINING, detail="net::ERR_FAILED; no meeting indicators found",
     ) is JoinFailureAttribution.USER_ACTION
 
 
 def test_the_gate_metric_separates_the_two_populations():
     """The reason the attribution axis exists: of #1058's two populations, exactly one is ours."""
     meet = build_join_evidence(
-        reason=JoinFailureReason.ADMISSION_TIMEOUT, stage="awaiting_admission",
+        reason=JoinFailureReason.AWAITING_ADMISSION_TIMEOUT, stage="awaiting_admission",
         detail="host did not admit", time_in_lobby_ms=780_000, lobby_budget_ms=BUDGET_MS,
     )
     teams = build_join_evidence(
@@ -272,11 +272,11 @@ def test_the_gate_metric_separates_the_two_populations():
 
 def test_build_emits_only_what_is_known():
     ev = build_join_evidence(
-        reason=JoinFailureReason.ADMISSION_TIMEOUT, stage="awaiting_admission", source="bot",
+        reason=JoinFailureReason.AWAITING_ADMISSION_TIMEOUT, stage="awaiting_admission", source="bot",
         detail="host did not admit", time_to_lobby_ms=7_000, time_in_lobby_ms=780_000,
         total_ms=787_000, lobby_budget_ms=BUDGET_MS,
     )
-    assert ev["reason"] == "admission_timeout"
+    assert ev["reason"] == "awaiting_admission_timeout"
     assert ev["attribution"] == "host_action"
     assert ev["stage"] == "awaiting_admission"
     assert ev["source"] == "bot"
@@ -321,19 +321,19 @@ def test_normalize_preserves_an_unknown_vocabulary_word():
 def test_normalize_discards_an_uninterpretable_attribution():
     """Attribution feeds the reliability gate — a value we cannot interpret must not be counted as
     anything, so the derivation from the reason takes over."""
-    out = normalize_evidence({"reason": "admission_timeout", "attribution": "vibes"})
+    out = normalize_evidence({"reason": "awaiting_admission_timeout", "attribution": "vibes"})
     assert out["attribution"] == "host_action"
 
 
 def test_normalize_honours_a_valid_producer_attribution():
-    out = normalize_evidence({"reason": "admission_timeout", "attribution": "system_fault",
+    out = normalize_evidence({"reason": "awaiting_admission_timeout", "attribution": "system_fault",
                               "detail": "our admission flow wedged"})
     assert out["attribution"] == "system_fault"
 
 
 def test_normalize_rejects_impossible_timings():
     out = normalize_evidence({
-        "reason": "admission_timeout",
+        "reason": "awaiting_admission_timeout",
         "timings": {"time_in_lobby_ms": -1, "total_ms": "soon", "time_to_lobby_ms": True},
     })
     assert "timings" not in out
@@ -371,14 +371,14 @@ def test_join_evidence_lands_on_the_meeting_row():
          "completion_reason": "awaiting_admission_timeout",
          "reason": "host did not admit",
          "join_evidence": {
-             "reason": "admission_timeout", "attribution": "host_action", "source": "bot",
+             "reason": "awaiting_admission_timeout", "attribution": "host_action", "source": "bot",
              "stage": "awaiting_admission", "detail": "host did not admit",
              "timings": {"time_to_lobby_ms": 7_000, "time_in_lobby_ms": 780_000, "total_ms": 787_000},
              "lobby_budget_ms": BUDGET_MS,
          }},
     )
     ev = _stored_data(repo, meeting["id"])["join_evidence"]
-    assert ev["reason"] == "admission_timeout"
+    assert ev["reason"] == "awaiting_admission_timeout"
     assert ev["attribution"] == "host_action"
     assert ev["source"] == "bot"
     assert ev["timings"]["time_in_lobby_ms"] == 780_000
@@ -398,7 +398,7 @@ def test_evidence_is_derived_when_the_bot_sends_none():
          "completion_reason": "join_failure", "reason": "gave up waiting"},
     )
     ev = _stored_data(repo, meeting["id"])["join_evidence"]
-    assert ev["reason"] == "admission_timeout"      # derived from the stage it died in
+    assert ev["reason"] == "awaiting_admission_timeout"      # derived from the stage it died in
     assert ev["attribution"] == "host_action"
     assert ev["source"] == "derived"                # honestly labelled as second-hand
     assert ev["detail"] == "gave up waiting"
@@ -429,7 +429,7 @@ def test_needs_help_is_only_proof_of_a_lobby_when_it_was_entered_from_one():
 
     #1251 adds ``joining -> needs_help`` so a PRE-lobby blocker (a consent gate, a captcha) can
     escalate. Reading the mere presence of ``needs_help`` as proof of a lobby would then stamp a bot
-    that never saw a waiting room as ``admission_timeout`` / ``host_action`` — filed as *the host
+    that never saw a waiting room as ``awaiting_admission_timeout`` / ``host_action`` — filed as *the host
     did not let us in*, and excluded from ``system_failure_rate``: the metric under-reporting our own
     defects in exactly the cohort #1251 exists to investigate. Driven at the function, because
     ``LEGAL_TRANSITIONS`` still forbids the edge that makes it reachable.
@@ -454,7 +454,7 @@ def test_needs_help_is_only_proof_of_a_lobby_when_it_was_entered_from_one():
     from_lobby.history = [BotStatus.JOINING, BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP]
     from_lobby.failure_stage = FailureStage.AWAITING_ADMISSION
     ev = _capture_join_evidence(from_lobby, event, BotStatus.NEEDS_HELP)
-    assert ev["reason"] == "admission_timeout"
+    assert ev["reason"] == "awaiting_admission_timeout"
     assert ev["attribution"] == "host_action"
 
 
@@ -487,7 +487,7 @@ def test_evidence_survives_the_list_view_projection():
     assert "join_evidence" not in LIST_OMIT_KEYS
     projected = project_list_data({
         "reason": "host did not admit",
-        "join_evidence": {"reason": "admission_timeout", "attribution": "host_action"},
+        "join_evidence": {"reason": "awaiting_admission_timeout", "attribution": "host_action"},
         "last_error": {"trace": "x" * 5000},
         "bot_logs": ["noise"] * 100,
     })
@@ -554,12 +554,12 @@ _FIXTURES = [
         {"status": "failed", "exit_code": 1, "completion_reason": "awaiting_admission_timeout",
          "reason": "Bot is still in the Google Meet waiting room after timeout — host did not admit",
          "join_evidence": {
-             "reason": "admission_timeout", "attribution": "host_action", "source": "bot",
+             "reason": "awaiting_admission_timeout", "attribution": "host_action", "source": "bot",
              "stage": "awaiting_admission",
              "detail": "Bot is still in the Google Meet waiting room after timeout — host did not admit",
              "timings": {"time_to_lobby_ms": 7_000, "time_in_lobby_ms": 780_000, "total_ms": 787_000},
              "lobby_budget_ms": BUDGET_MS}},
-        ("admission_timeout", "host_action"),
+        ("awaiting_admission_timeout", "host_action"),
     ),
     (
         "teams-never-reached-lobby",
@@ -578,14 +578,14 @@ _FIXTURES = [
         ["joining", "awaiting_admission"],
         {"status": "failed", "exit_code": 1, "completion_reason": "awaiting_admission_rejected",
          "reason": "Bot admission was rejected by meeting admin"},
-        ("platform_rejection", "host_action"),
+        ("awaiting_admission_rejected", "host_action"),
     ),
     (
         "zoom-blocks-automated-joins",
         ["joining"],
         {"status": "failed", "exit_code": 1, "completion_reason": "awaiting_admission_rejected",
          "reason": "[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins"},
-        ("platform_rejection", "exogenous_platform"),
+        ("awaiting_admission_rejected", "exogenous_platform"),
     ),
     (
         "signed-out-profile",
@@ -606,7 +606,7 @@ _FIXTURES = [
         ["joining", "awaiting_admission"],
         {"status": "failed", "exit_code": 0, "completion_reason": "stopped",
          "reason": "stopped while awaiting admission (withdrew the join request)"},
-        ("stopped_before_admission", "user_action"),
+        ("stopped_while_joining", "user_action"),
     ),
 ]
 
@@ -685,7 +685,7 @@ def _run_sweep(client: TestClient, repo: InMemoryMeetingRepo):
 @pytest.mark.parametrize(
     "status,expected_reason,expected_attribution",
     [
-        ("awaiting_admission", "admission_timeout", "host_action"),
+        ("awaiting_admission", "awaiting_admission_timeout", "host_action"),
         ("joining", "never_reached_lobby", "system_fault"),
     ],
 )
@@ -754,7 +754,7 @@ def test_runtime_destroy_terminal_stamps_typed_evidence():
     ))
     assert drove is True
     ev = _stored_data(repo, meeting["id"])["join_evidence"]
-    assert ev["reason"] == "admission_timeout"
+    assert ev["reason"] == "awaiting_admission_timeout"
     assert ev["attribution"] == "host_action"
     assert ev["source"] == "runtime_destroy"
 
@@ -765,7 +765,7 @@ def test_runtime_destroy_terminal_stamps_typed_evidence():
 @pytest.mark.parametrize("hostile", [
     {"join_evidence": "not-an-object"},
     {"join_evidence": {"reason": {"nested": "junk"}, "timings": ["nope"]}},
-    {"join_evidence": {"reason": "admission_timeout", "timings": {"total_ms": "NaN"}}},
+    {"join_evidence": {"reason": "awaiting_admission_timeout", "timings": {"total_ms": "NaN"}}},
     {"join_evidence": {"reason": 7, "attribution": ["system_fault"], "detail": {"a": 1}}},
     {"join_evidence": None},
     {"join_evidence": []},
@@ -798,7 +798,7 @@ def test_classification_is_total_under_hostile_input():
     assert classify_join_failure(
         stage="awaiting_admission", reached_lobby=True, time_in_lobby_ms="soon",  # type: ignore[arg-type]
         lobby_budget_ms=BUDGET_MS,
-    ) is JoinFailureReason.ADMISSION_TIMEOUT
+    ) is JoinFailureReason.AWAITING_ADMISSION_TIMEOUT
     assert evidence_from_event({}) is not None
     assert attribute_join_failure("not-a-reason") is JoinFailureAttribution.UNKNOWN  # type: ignore[arg-type]
 

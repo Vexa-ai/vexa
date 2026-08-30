@@ -215,7 +215,7 @@ def _capture_join_evidence(
     `LEGAL_TRANSITIONS` permits reaching it from `awaiting_admission` alone — and #1251 adds
     `joining -> needs_help` precisely so a PRE-lobby blocker (a consent gate, a captcha) can
     escalate. The day that lands, a bot that never saw a waiting room would be stamped
-    `reached_lobby` -> `admission_timeout` -> `host_action`: filed as *the host did not let us in*,
+    `reached_lobby` -> `awaiting_admission_timeout` -> `host_action`: filed as *the host did not let us in*,
     and excluded from `system_failure_rate` — the metric under-reporting our own defects in exactly
     the cohort #1251 exists to investigate. So the test is how `needs_help` was ENTERED, not that it
     occurred.

@@ -29,7 +29,7 @@ lifecycle.v1 ``CompletionReason`` (which stays untouched: it is the retry classi
         system_failure_rate = failures(attribution = system_fault) / fair-chance meetings
 
     per release and per platform. The two axes are genuinely independent — the SAME typed
-    ``admission_timeout`` is a host's choice normally, and ours the moment the evidence shows our
+    ``awaiting_admission_timeout`` is a host's choice normally, and ours the moment the evidence shows our
     admission flow is what broke.
 
 **ATTRIBUTE, never manufacture.** Every value below is reachable from evidence the system already
@@ -72,14 +72,24 @@ class JoinFailureReason(str, Enum):
     Deliberately small and extensible: each value names a distinct OWNER and a distinct FIX, which
     is the whole point of splitting them. Add a value only when it would be acted on differently.
 
-    * :attr:`PLATFORM_REJECTION` — the platform/host actively DENIED us. A moderator clicked deny, or
-      the client refused the automated join outright (the sealed ``awaiting_admission_rejected``
-      path, a Zoom RTMS block, a bot-detection block). Deterministic and fast; a re-spawn hits the
-      same wall. Owner: the account/meeting policy, not us.
-    * :attr:`ADMISSION_TIMEOUT` — nobody ever answered. The bot reached the waiting room and sat
-      there until the lobby budget the control plane issued (``bot_spawn.service.LOBBY_BUDGET_MS``)
-      ran out. This is the ~13min Google Meet population of #1058: a REAPING, not a refusal. Owner:
-      the meeting host (or our budget), not the join code.
+    **ONE WORD PER FACT.** Where this axis names a fact the sealed ``lifecycle.v1``/``api.v1`` enums
+    already name, it reuses THEIR word — ``awaiting_admission_rejected``, ``awaiting_admission_timeout``,
+    ``auth_session_missing``. A second dictionary for the same fact costs every reader a translation
+    and every query a CASE arm, and the axes are layered rather than competing: this one adds the
+    values the sealed enum does not have (the three-way split of ``join_failure``) and says nothing
+    new about the ones it does. Where the fact is NOT the same, the word must not be either — which
+    is why the user-stop value is ``stopped_while_joining`` and not ``stopped_before_admission``: the
+    latter is a declared value of the sealed ``api.v1 MeetingCompletionReason``, on a different
+    field, with a near-but-not-identical meaning. Two vocabularies may compose; they may not collide.
+
+    * :attr:`AWAITING_ADMISSION_REJECTED` — the platform/host actively DENIED us. A moderator clicked
+      deny, or the client refused the automated join outright (the sealed
+      ``awaiting_admission_rejected`` path, a Zoom RTMS block, a bot-detection block). Deterministic
+      and fast; a re-spawn hits the same wall. Owner: the account/meeting policy, not us.
+    * :attr:`AWAITING_ADMISSION_TIMEOUT` — nobody ever answered. The bot reached the waiting room and
+      sat there until the lobby budget the control plane issued
+      (``bot_spawn.service.LOBBY_BUDGET_MS``) ran out. This is the ~13min Google Meet population of
+      #1058: a REAPING, not a refusal. Owner: the meeting host (or our budget), not the join code.
     * :attr:`AUTH_SESSION_MISSING` — authenticated mode found a signed-out browser profile. The
       profile is dead; no re-spawn can fix it. Owner: session provisioning.
     * :attr:`NEVER_REACHED_LOBBY` — the meeting page loaded but no admission signal ever appeared:
@@ -89,20 +99,21 @@ class JoinFailureReason(str, Enum):
     * :attr:`NAVIGATION_FAILURE` — the bot never got as far as the meeting page: a navigation error,
       a redirect off the meeting origin (the Teams sign-in redirect), a closed target, an
       unsupported platform. Owner: infra / URL construction.
-    * :attr:`STOPPED_BEFORE_ADMISSION` — the USER ended the run while the bot was still knocking (the
-      orchestrator's withdraw branch; the sealed reason is ``stopped``). It lands with status
+    * :attr:`STOPPED_WHILE_JOINING` — the USER ended the run while the bot was still knocking (the
+      orchestrator's withdraw branch; the sealed ``lifecycle.v1`` reason is ``stopped``, and this
+      value is deliberately NOT the sealed ``api.v1`` ``stopped_before_admission``). It lands with status
       ``failed`` because the bot never became active, and it is emphatically NOT a failure of ours —
       counting it as one is exactly what makes a raw failed-status rate meaningless.
     * :attr:`UNKNOWN` — the signals do not support any of the above. ``detail`` carries whatever the
       producer did observe. Never a synonym for "probably X".
     """
 
-    PLATFORM_REJECTION = "platform_rejection"
-    ADMISSION_TIMEOUT = "admission_timeout"
+    AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"
+    AWAITING_ADMISSION_TIMEOUT = "awaiting_admission_timeout"
     AUTH_SESSION_MISSING = "auth_session_missing"
     NEVER_REACHED_LOBBY = "never_reached_lobby"
     NAVIGATION_FAILURE = "navigation_failure"
-    STOPPED_BEFORE_ADMISSION = "stopped_before_admission"
+    STOPPED_WHILE_JOINING = "stopped_while_joining"
     UNKNOWN = "unknown"
 
 
@@ -110,7 +121,7 @@ class JoinFailureAttribution(str, Enum):
     """WHO the failure belongs to — the second axis, and the one the reliability gate reads.
 
     The typed reason says WHAT happened; this says whether it counts AGAINST US. They are genuinely
-    independent: `admission_timeout` is normally a host who never clicked admit (a funnel outcome),
+    independent: `awaiting_admission_timeout` is normally a host who never clicked admit (a funnel outcome),
     but the SAME typed reason is ours the moment the evidence shows our admission flow was the thing
     that broke. Collapsing the two axes is what made the raw failed-status rate uninterpretable —
     it counts user stops and host non-admissions as if the software had failed.
@@ -162,13 +173,13 @@ LOBBY_EXPIRY_FRACTION = 0.9
 #: the typed reason is a direct read, no inference needed.
 _REASON_BY_COMPLETION_REASON: Dict[str, JoinFailureReason] = {
     "auth_session_missing": JoinFailureReason.AUTH_SESSION_MISSING,
-    "awaiting_admission_rejected": JoinFailureReason.PLATFORM_REJECTION,
-    "awaiting_admission_timeout": JoinFailureReason.ADMISSION_TIMEOUT,
+    "awaiting_admission_rejected": JoinFailureReason.AWAITING_ADMISSION_REJECTED,
+    "awaiting_admission_timeout": JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     # A pre-active `stopped` is the USER ending the run while the bot was still knocking (the
     # orchestrator's withdraw branch, and `reconcile._pre_active_completion_reason` under
     # `stop_requested`). It shares the `failed` status with real defects and must never share
     # their attribution.
-    "stopped": JoinFailureReason.STOPPED_BEFORE_ADMISSION,
+    "stopped": JoinFailureReason.STOPPED_WHILE_JOINING,
 }
 
 #: Default owner per typed reason. Overridden only by POSITIVE evidence in the producer's own
@@ -177,16 +188,16 @@ _REASON_BY_COMPLETION_REASON: Dict[str, JoinFailureReason] = {
 _ATTRIBUTION_BY_REASON: Dict[JoinFailureReason, JoinFailureAttribution] = {
     # Someone/something on the far side said no. Default to the HOST (a moderator denying is the
     # overwhelmingly common case); a platform-policy refusal is detected below and reattributed.
-    JoinFailureReason.PLATFORM_REJECTION: JoinFailureAttribution.HOST_ACTION,
+    JoinFailureReason.AWAITING_ADMISSION_REJECTED: JoinFailureAttribution.HOST_ACTION,
     # Nobody answered the knock. The host's call — unless the evidence says our admission flow is
     # what broke, which is detected below.
-    JoinFailureReason.ADMISSION_TIMEOUT: JoinFailureAttribution.HOST_ACTION,
+    JoinFailureReason.AWAITING_ADMISSION_TIMEOUT: JoinFailureAttribution.HOST_ACTION,
     # Ours end to end: session provisioning, the join layer, the browser.
     JoinFailureReason.AUTH_SESSION_MISSING: JoinFailureAttribution.SYSTEM_FAULT,
     JoinFailureReason.NEVER_REACHED_LOBBY: JoinFailureAttribution.SYSTEM_FAULT,
     JoinFailureReason.NAVIGATION_FAILURE: JoinFailureAttribution.SYSTEM_FAULT,
     # The user ended it. Not a failure; excluded from the gate metric's denominator.
-    JoinFailureReason.STOPPED_BEFORE_ADMISSION: JoinFailureAttribution.USER_ACTION,
+    JoinFailureReason.STOPPED_WHILE_JOINING: JoinFailureAttribution.USER_ACTION,
     JoinFailureReason.UNKNOWN: JoinFailureAttribution.UNKNOWN,
 }
 
@@ -317,14 +328,14 @@ def classify_join_failure(
             budget_ms = _positive_int(lobby_budget_ms)
             if lobby_ms is not None and budget_ms:
                 if lobby_ms >= budget_ms * LOBBY_EXPIRY_FRACTION:
-                    return JoinFailureReason.ADMISSION_TIMEOUT
+                    return JoinFailureReason.AWAITING_ADMISSION_TIMEOUT
                 # Out of the lobby well inside the budget, and no denial reason attached: the
                 # platform ended the wait, we did not. That is a rejection in everything but name.
-                return JoinFailureReason.PLATFORM_REJECTION
+                return JoinFailureReason.AWAITING_ADMISSION_REJECTED
             # No usable timing (the reconcile sweep holds none): the stage is still evidence —
             # a bot reaped IN the waiting room exhausted the wait, because a denial would have
             # arrived as its own sealed reason.
-            return JoinFailureReason.ADMISSION_TIMEOUT
+            return JoinFailureReason.AWAITING_ADMISSION_TIMEOUT
 
         if stage == "joining" or reached_lobby is False:
             return JoinFailureReason.NEVER_REACHED_LOBBY
@@ -359,11 +370,11 @@ def attribute_join_failure(
         text = (_clean_detail(detail) or "").lower()
         if not text:
             return base
-        if reason is JoinFailureReason.PLATFORM_REJECTION and any(
+        if reason is JoinFailureReason.AWAITING_ADMISSION_REJECTED and any(
             marker in text for marker in _PLATFORM_POLICY_MARKERS
         ):
             return JoinFailureAttribution.EXOGENOUS_PLATFORM
-        if reason is JoinFailureReason.ADMISSION_TIMEOUT and any(
+        if reason is JoinFailureReason.AWAITING_ADMISSION_TIMEOUT and any(
             marker in text for marker in _ADMISSION_FLOW_FAULT_MARKERS
         ):
             return JoinFailureAttribution.SYSTEM_FAULT
