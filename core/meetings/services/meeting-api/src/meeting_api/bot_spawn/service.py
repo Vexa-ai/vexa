@@ -129,7 +129,6 @@ _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
 }
 
-<<<<<<< HEAD
 # The two Teams meeting-id shapes, and why one template cannot serve both.
 #
 #   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
@@ -193,11 +192,9 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
     if _TEAMS_SHORT_ID.match(native_meeting_id):
         return f"https://{host}/meet/{native_meeting_id}"
     return f"https://{host}/l/meetup-join/{native_meeting_id}"
-=======
 # NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all, a different case from the
 # templates above) now lives in invocation.py, imported above, so build_invocation's meetingUrl
 # null-survival check reads the SAME set as the router's URL-required gate below.
->>>>>>> 6378f52d (fix(discord): spawn the discord-bot profile, and stop requiring a meeting URL)
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
