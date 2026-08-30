@@ -78,63 +78,69 @@ def _guard_csv(env: str) -> list[str]:
     return [value.strip() for value in os.getenv(env, "").split(",") if value.strip()]
 
 
-# guard_core.CloudProvider = Literal["AWS", "GCP", "Azure"] (guard-core >=3.12.0, closed set,
-# case-sensitive). Mirrored here (not imported) so a library-side rename doesn't quietly change
-# what Vexa accepts out from under this error message.
-_VALID_CLOUD_PROVIDERS = ("AWS", "GCP", "Azure")
+# guard_core.models.CloudProvider = Literal["AWS", "GCP", "Azure", "DigitalOcean", "Linode",
+# "Vultr"] (guard-core 3.15.0, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
+# six names as a frozenset - both verified in this venv). Mirrored here (not imported) so a
+# library-side rename doesn't quietly change what Vexa accepts out from under this error
+# message.
+_VALID_CLOUD_PROVIDERS = ("AWS", "Azure", "DigitalOcean", "GCP", "Linode", "Vultr")
 _CLOUD_PROVIDER_BY_UPPER = {name.upper(): name for name in _VALID_CLOUD_PROVIDERS}
 
 
-def _validate_block_cloud_providers(env: str) -> set[str]:
+def _validate_block_cloud_providers(env: str, *, normalize: bool) -> set[str]:
     """Parse + validate ``GUARD_BLOCK_CLOUD_PROVIDERS`` against guard-core's closed set BEFORE
     it reaches ``SecurityConfig(...)``.
 
-    Only runs when ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=true`` (see
-    :func:`_resolve_block_cloud_providers`). Default OFF is deliberate, not an oversight: a
-    config that boots today must still boot tomorrow. Normalizing/rejecting by default would
-    change LIVE behavior on upgrade for anyone already running this var (see the evidence
-    below), so enforcement is opt-in until an operator has audited what they actually have set.
+    On the pinned guard-core (3.15.0), an unrecognized ``block_cloud_providers`` entry is NOT
+    silently dropped: ``SecurityConfig.validate_cloud_providers`` (``guard_core/models.py:163-165``)
+    delegates to a value validator that raises a pydantic ``ValidationError`` naming the bad
+    entries, from deep inside ``SecurityConfig`` construction. Verified in this venv:
+    ``SecurityConfig(block_cloud_providers={"aws"})`` raises ``Unknown cloud providers in
+    block_cloud_providers: ['aws']. Valid: ['AWS', 'Azure', 'DigitalOcean', 'GCP', 'Linode',
+    'Vultr']...``. So a bad entry fails the boot EITHER WAY, whether or not Vexa validates it
+    itself.
 
-    On the guard-core version this repo's uv.lock actually pins (3.4.0), ``block_cloud_providers``
-    is a SILENT, case-sensitive filter (``models.py::validate_cloud_providers``):
-    ``{sel for sel in v if sel.partition(":!")[0] in VALID_CLOUD_PROVIDERS}``. An unrecognized or
-    wrong-case entry (the natural operator spelling, ``aws``) is just dropped, no error, no log.
-    An unvalidated ``{"aws", "digitalocean"}`` silently becomes ``set()``, cloud blocking quietly
-    off. Under STRICT, the case-normalization below repairs that LIVE silent no-op on the pinned
-    version: ``aws`` normalizes to ``AWS`` so it survives guard-core's filter instead of being
-    dropped by it. Without STRICT, normalizing ``aws`` to ``AWS`` would flip cloud blocking from
-    inert to enforcing the moment this ships, exactly the upgrade hazard STRICT exists to gate.
+    ``normalize`` controls only how strict the match is, not whether a bad entry raises:
 
-    A later guard-core (>=3.12.0) turns the same unrecognized-name mistake into a raise instead
-    of a silent drop
-    (``guard_core/_security_config_validators.py:_validate_block_cloud_providers_value``), a
-    library stack trace deep inside ``SecurityConfig`` construction. Either way, today's silent
-    drop or a future raise, this function (under STRICT) is the fix: it validates at Vexa's own
-    boundary with a message naming the var, the bad entry, and the exact accepted spellings, so
-    a typo is caught the same way regardless of which guard-core version is installed.
+    * ``normalize=False`` (the default - see :func:`_resolve_block_cloud_providers`): the
+      provider half must be an exact-case member of ``_VALID_CLOUD_PROVIDERS``. A wrong-case
+      entry (the natural operator spelling, ``aws``) or a genuinely unknown one still raises -
+      that boot was going to fail in the library regardless - but as a Vexa :class:`ConfigError`
+      naming the var, the bad entry, and the exact accepted spellings, instead of a bare
+      pydantic stack trace from inside ``SecurityConfig``.
+    * ``normalize=True`` (``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=true``): the provider half is
+      case-normalized first (``aws`` -> ``AWS``), so a wrong-case entry that would otherwise
+      raise now constructs and blocks live. This is the one genuinely behavior-changing part -
+      it turns a boot failure into real cloud enforcement - so it stays opt-in behind STRICT.
 
     The ``:!region`` carve-out suffix (``NAME:!REGION``, see guard-core's ``cloud_handler.py``,
-    which reads it via the same ``selector.partition(":!")`` used below) is preserved; only the
-    provider-name half is case-normalized. The region half is validated too, not normalized:
-    guard-core's real provider region strings are lowercase by convention (``us-east-1``,
-    ``asia-south1``), with one synthetic exception, ``GLOBAL``, and ``is_cloud_ip`` matches the
-    carve-out region with a plain, case-sensitive ``==``. An uppercase region would silently
-    never match, making the carve-out a no-op, so it is rejected here instead of lowercased:
-    rewriting a provider-defined string risks creating a NEW silent mismatch instead of fixing
-    one. The carve-out syntax itself is accepted but non-functional on the pinned guard-core
-    (a confirmed upstream bug, 3.2.0 through 3.12.0, fixed in 3.13.0 which this repo does not
-    pin), parsed here so a config does not need to change again once a guard-core bump lands,
-    not because it works today.
+    which reads it via the same ``selector.partition(":!")`` used below) is preserved either
+    way; only the provider-name half is ever case-normalized. The region half is validated too,
+    not normalized: guard-core's real provider region strings are lowercase by convention
+    (``us-east-1``, ``asia-south1``), with one synthetic exception, ``GLOBAL``, and
+    ``CloudManager.is_cloud_ip`` (``guard_core/handlers/cloud_handler.py``) checks a carve-out
+    region for exact, case-sensitive membership against those lowercase strings. An uppercase
+    region here would silently never match, making the carve-out a no-op, so it is rejected here
+    instead of lowercased: rewriting a provider-defined string risks creating a NEW silent
+    mismatch instead of fixing one. The carve-out is functional on the pinned guard-core:
+    ``CloudManager._refresh_providers`` (same module) iterates
+    ``_bare_provider_names(providers)`` (``guard_core/handlers/_cloud_provider_registry.py``),
+    which strips the ``:!region`` selector before fetching ranges, so a carved-out provider
+    still gets its IP ranges refreshed - verified by reading both in this venv.
     """
     result: set[str] = set()
     for entry in _guard_csv(env):
         provider, marker, region = entry.partition(":!")
-        canonical = _CLOUD_PROVIDER_BY_UPPER.get(provider.upper())
+        if normalize:
+            canonical = _CLOUD_PROVIDER_BY_UPPER.get(provider.upper())
+        else:
+            canonical = provider if provider in _VALID_CLOUD_PROVIDERS else None
         if canonical is None:
             raise ConfigError(
-                f"{env} entry {entry!r} is not a recognized cloud provider. Accepted values "
-                f"(case-insensitive): {', '.join(_VALID_CLOUD_PROVIDERS)}. Fix or remove the "
-                "entry and restart."
+                f"{env} entry {entry!r} is not a recognized cloud provider. Accepted values: "
+                f"{', '.join(_VALID_CLOUD_PROVIDERS)}"
+                f"{' (case-insensitive)' if normalize else ''}. Fix or remove the entry and "
+                "restart."
             )
         if marker:
             if not region:
@@ -146,81 +152,55 @@ def _validate_block_cloud_providers(env: str) -> set[str]:
             if region != "GLOBAL" and region != region.lower():
                 raise ConfigError(
                     f"{env} entry {entry!r} has region {region!r}, which is not lowercase. "
-                    "guard-core matches a carve-out region with a case-sensitive '==' against "
-                    "real provider region strings, which are lowercase by convention (e.g. "
-                    "'us-east-1', 'asia-south1'), with the single synthetic exception 'GLOBAL'. "
-                    "An uppercase region here would silently never match, and the carve-out "
-                    "would be a no-op. Use the lowercase region spelling or 'GLOBAL'. Fix the "
-                    "entry and restart."
+                    "guard-core matches a carve-out region against real provider region "
+                    "strings, which are lowercase by convention (e.g. 'us-east-1', "
+                    "'asia-south1'), with the single synthetic exception 'GLOBAL', using an "
+                    "exact, case-sensitive comparison. An uppercase region here would silently "
+                    "never match, and the carve-out would be a no-op. Use the lowercase region "
+                    "spelling or 'GLOBAL'. Fix the entry and restart."
                 )
         result.add(f"{canonical}{marker}{region}" if marker else canonical)
     return result
-
-
-def _warn_cloud_providers_guard_core_would_drop(env: str, entries: list[str]) -> None:
-    """Log ONE boot-time WARNING per ``entries`` item whose provider half is not an exact-case
-    member of ``_VALID_CLOUD_PROVIDERS`` (unrecognized name, or a recognized one in the wrong
-    case, e.g. ``aws``). What happens to that entry next depends on the installed guard-core:
-    3.4.0 silently drops it (``guard_core/models.py:658-661``, ``validate_cloud_providers``, see
-    :func:`_validate_block_cloud_providers`'s docstring for the full evidence), while >=3.12.0
-    raises a ``ValidationError`` instead, deep inside ``SecurityConfig`` construction. Called
-    only from the default-off (non-STRICT) path of :func:`_resolve_block_cloud_providers`; under
-    STRICT the same entries raise a Vexa :class:`ConfigError` instead via
-    :func:`_validate_block_cloud_providers`, so this and that function are mutually exclusive
-    per entry, never both firing for it.
-    """
-    for entry in entries:
-        provider = entry.partition(":!")[0]
-        if provider not in _VALID_CLOUD_PROVIDERS:
-            log.warning(
-                "%s entry %r does not match guard-core's accepted provider spellings (%s), so "
-                "it will not block anything. Depending on the installed guard-core, it is "
-                "either ignored or refused during SecurityConfig construction. Set "
-                "GUARD_BLOCK_CLOUD_PROVIDERS_STRICT=true to normalize case and reject "
-                "unrecognized names at Vexa's own boundary with a clear error instead.",
-                env,
-                entry,
-                ", ".join(_VALID_CLOUD_PROVIDERS),
-            )
 
 
 def _resolve_block_cloud_providers(env: str) -> set[str]:
     """Build the ``block_cloud_providers`` value passed to ``SecurityConfig``, gated by
     ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false).
 
-    OFF (default): passed through EXACTLY as before strict validation existed - no case
-    normalization, no raise on an unrecognized name - so a deploy that boots today keeps
-    booting after this ships, byte-for-byte the same ``SecurityConfig`` input. The only addition
-    is a boot-time WARNING (:func:`_warn_cloud_providers_guard_core_would_drop`) naming any entry
-    guard-core will not accept, so an operator debugging "why isn't cloud blocking working" sees
-    it at boot instead of discovering it in production traffic.
+    On the pinned guard-core (3.15.0) an unrecognized entry raises inside ``SecurityConfig``
+    construction no matter what Vexa does (see :func:`_validate_block_cloud_providers`'s
+    docstring for the evidence), so boundary validation is unconditional here - there is no
+    passthrough path left to gate. ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` only chooses how
+    strict the match is:
 
-    ON: :func:`_validate_block_cloud_providers` runs - case-insensitive normalization to guard-
-    core's canonical spelling, and a :class:`ConfigError` on an unrecognized name. An operator
-    opts into this once they have confirmed their existing ``GUARD_BLOCK_CLOUD_PROVIDERS`` value
-    survives the normalization the way they expect (see that function's docstring for why this
-    is not the default).
+    OFF (default): exact-case match against ``_VALID_CLOUD_PROVIDERS``. A wrong-case or unknown
+    entry still raises - that boot was failing in the library regardless - as a legible Vexa
+    :class:`ConfigError` naming the var, the entry, and the accepted spellings, instead of a
+    bare pydantic stack trace.
+
+    ON: case-insensitive normalization to guard-core's canonical spelling (``aws`` -> ``AWS``),
+    so a wrong-case entry that would otherwise raise now constructs and blocks live. That is a
+    genuine behavior change (inert-on-boot-failure becomes active enforcement), so it stays
+    opt-in.
     """
-    if _env_bool("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", False):
-        return _validate_block_cloud_providers(env)
-    entries = _guard_csv(env)
-    _warn_cloud_providers_guard_core_would_drop(env, entries)
-    return set(entries)
+    strict = _env_bool("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", False)
+    return _validate_block_cloud_providers(env, normalize=strict)
 
 
 def _validate_ip_or_cidr_csv(env: str) -> list[str]:
     """Parse + validate ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES``
     BEFORE they reach ``SecurityConfig(...)``.
 
-    Unlike ``block_cloud_providers`` (above), these three fields ALREADY raise on the guard-core
-    version this repo's uv.lock actually pins (3.4.0): ``models.py``'s ``validate_ip_lists`` /
-    ``validate_trusted_proxies`` field validators run each entry through the same
-    ``ipaddress.ip_address`` / ``ipaddress.ip_network`` parse and raise ``ValueError`` on
-    failure, deep inside ``SecurityConfig`` construction, a bare library stack trace with no
-    indication of which var or entry was wrong. So this pre-validation is load-bearing TODAY,
-    not future-proofing against a later guard-core: its only job is error-message quality,
-    surfacing the exact same failure as a Vexa :class:`ConfigError` naming the var and the
-    offending entry, before the library ever sees the value.
+    Like ``block_cloud_providers`` (above), these three fields already raise on the pinned
+    guard-core (3.15.0): ``guard_core/models.py``'s ``validate_ip_lists`` (lines 143-145, for
+    ``whitelist``/``blacklist``) and ``validate_trusted_proxies`` (lines 147-150) field
+    validators run each entry through the same ``ipaddress``-based parse and raise a pydantic
+    ``ValidationError`` on failure, from deep inside ``SecurityConfig`` construction, a bare
+    library stack trace with no indication of which var or entry was wrong. Verified in this
+    venv: ``SecurityConfig(whitelist=["not-an-ip"])`` raises ``Invalid IP or CIDR range:
+    not-an-ip``. So this pre-validation is load-bearing on the pinned version: its job is
+    error-message quality, surfacing the exact same failure as a Vexa :class:`ConfigError`
+    naming the var and the offending entry, before the library ever sees the value.
     """
     entries = _guard_csv(env)
     for entry in entries:
@@ -297,18 +277,18 @@ def build_guard_config() -> SecurityConfig:
 
     ``GUARD_IP_WHITELIST`` / ``GUARD_IP_BLACKLIST`` / ``GUARD_TRUSTED_PROXIES`` are pre-validated
     here (:func:`_validate_ip_or_cidr_csv`) and raise :class:`ConfigError` on a bad entry - they
-    already raise on the pinned guard-core (3.4.0) too, so this pre-validation is load-bearing
-    for error-message quality today, not future-proofing.
+    already raise on the pinned guard-core (3.15.0) too, so this pre-validation is load-bearing
+    for error-message quality, not future-proofing.
 
     ``GUARD_BLOCK_CLOUD_PROVIDERS`` goes through :func:`_resolve_block_cloud_providers` instead,
-    gated by ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false). On 3.4.0,
-    ``block_cloud_providers`` is a SILENT case-sensitive filter (a bad or lowercase entry is
-    dropped, not rejected) - case-normalizing it by default would flip a config that has been
-    silently inert since it was set (e.g. ``aws``) into live enforcement the moment this ships,
-    an upgrade-time behavior change with no operator action. So by default the value passes
-    through unchanged (a boot WARNING names any entry that will be silently dropped) and
-    normalization + rejection is opt-in via STRICT. See :func:`_resolve_block_cloud_providers`
-    and :func:`_validate_block_cloud_providers` for the field-by-field evidence.
+    gated by ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false). On the pinned guard-core, an
+    unrecognized or wrong-case entry raises inside ``SecurityConfig`` construction regardless of
+    what Vexa does, so by default the value is validated (exact-case, no normalization) and a
+    bad entry raises a legible Vexa :class:`ConfigError` instead of a bare pydantic stack trace -
+    that boot fails either way. STRICT additionally case-normalizes (``aws`` -> ``AWS``), which
+    turns a would-be boot failure into live cloud enforcement, so it stays opt-in. See
+    :func:`_resolve_block_cloud_providers` and :func:`_validate_block_cloud_providers` for the
+    field-by-field evidence.
     """
     rate_limit_rpm = _env_int("GUARD_RATE_LIMIT_RPM", _GUARD_RATE_LIMIT_RPM_DEFAULT)
     return SecurityConfig(

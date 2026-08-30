@@ -146,35 +146,34 @@ class TestGuardWiring:
 
 
 class TestGuardEnvValidation:
-    """The IP-list fields (``whitelist`` / ``blacklist`` / ``trusted_proxies``) already raise on
-    the guard-core version this repo pins (3.4.0); ``block_cloud_providers`` on that same
-    version is a SILENT case-sensitive filter (a bad or lowercase entry is dropped, not
-    rejected) that a later guard-core (>=3.12.0) turns into a raise. Either way, without a
-    Vexa-side check a bad operator entry either silently vanishes or surfaces as a bare
-    ``ValueError``/pydantic stack trace from deep inside ``SecurityConfig(...)`` construction.
+    """The IP-list fields (``whitelist`` / ``blacklist`` / ``trusted_proxies``) and
+    ``block_cloud_providers`` all raise on the pinned guard-core (3.15.0): an invalid IP/CIDR
+    entry, or a provider name that is not an exact (or, under STRICT, case-insensitive) member
+    of the accepted set, surfaces as a bare pydantic ``ValidationError`` from deep inside
+    ``SecurityConfig(...)`` construction. Without a Vexa-side check, that boot fails the same
+    way either way - just with no indication of which var or entry was wrong.
 
-    ``build_guard_config`` pre-validates the IP-list fields unconditionally, raising
+    ``build_guard_config`` pre-validates all four fields unconditionally, raising
     :class:`ConfigError` naming the var and the bad entry before the library ever sees the
-    value. ``block_cloud_providers`` is different: normalizing/rejecting it by default would
-    change LIVE behavior for anyone already running the var (an inert ``aws`` entry would start
-    enforcing on upgrade), so that path is gated behind ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT``
-    (default false) - see ``TestBlockCloudProvidersDefaultOff`` for the default-off behavior and
-    ``edge_guard.py`` for the field-by-field evidence."""
+    value. ``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` (default false) does not decide WHETHER an
+    entry is validated - it always is - only whether the provider-name match is
+    case-normalized first. See ``TestBlockCloudProvidersDefaultOff`` for that default-vs-STRICT
+    split and ``edge_guard.py`` for the field-by-field evidence."""
 
     def test_unrecognized_cloud_provider_raises_clear_error(self, monkeypatch) -> None:
-        """Under STRICT, a name that is not case-insensitively AWS/GCP/Azure raises, naming the
-        var, the entry, and the exact accepted spellings - the natural 'aws,digitalocean' typo
-        case."""
+        """A name that is not a member of the accepted set raises, naming the var, the entry,
+        and the exact accepted spellings - the natural 'aws,hetzner' typo case. Set under
+        STRICT to show normalization does not invent providers: a genuinely unknown name is
+        rejected either way."""
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", "true")
-        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS,hetzner")
         with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
             build_guard_config()
         message = str(exc_info.value)
-        assert "digitalocean" in message
-        assert "AWS, GCP, Azure" in message
-        # The unrecognized-provider message must not recommend the ':!region' carve-out - that
-        # suffix is non-functional on the pinned guard-core (3.4.0) and irrelevant to a
-        # provider name that was not even recognized.
+        assert "hetzner" in message
+        assert "AWS, Azure, DigitalOcean, GCP, Linode, Vultr" in message
+        # The unrecognized-provider message must not recommend the ':!region' carve-out - it is
+        # irrelevant to a provider name that was not even recognized.
         assert ":!" not in message
 
     def test_cloud_provider_mixed_case_and_region_carveout_construct(self, monkeypatch) -> None:
@@ -270,38 +269,32 @@ class TestGuardEnvValidation:
 
 
 class TestBlockCloudProvidersDefaultOff:
-    """``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` defaults to false: ``GUARD_BLOCK_CLOUD_PROVIDERS``
-    reaches ``SecurityConfig`` exactly as written, no normalization, no raise, so a deploy that
-    boots today keeps booting after this ships. See ``_resolve_block_cloud_providers`` in
-    edge_guard.py for the rationale."""
+    """``GUARD_BLOCK_CLOUD_PROVIDERS_STRICT`` defaults to false, which means exact-case
+    validation, not passthrough: on the pinned guard-core (3.15.0) an unrecognized or
+    wrong-case entry raises inside ``SecurityConfig`` regardless of what Vexa does, so the
+    default already validates - it just does not case-normalize. See
+    ``_resolve_block_cloud_providers`` in edge_guard.py for the rationale."""
 
-    def test_default_off_passthrough_warns_on_entries_guard_core_drops(
-        self, monkeypatch, caplog
-    ) -> None:
-        """Without STRICT, neither 'aws' nor 'digitalocean' is rejected or normalized - the
-        value passes straight to SecurityConfig, where guard-core 3.4.0's own filter (an
-        exact-case match against AWS/GCP/Azure) silently drops both, so
-        ``block_cloud_providers`` ends up empty. A boot WARNING names each dropped entry so an
-        operator sees why cloud blocking is not doing anything."""
+    def test_default_off_wrong_case_entry_raises_clear_error(self, monkeypatch) -> None:
+        """Without STRICT, 'aws' is not silently accepted or normalized - it raises exactly as
+        an unrecognized name would, because the pinned guard-core rejects it too and this check
+        only makes that failure legible, it does not invent new enforcement."""
         monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
-        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws,digitalocean")
-        with caplog.at_level("WARNING", logger="gateway.edge_guard"):
-            cfg = build_guard_config()
-        assert cfg.block_cloud_providers == set()
-        assert "aws" in caplog.text
-        assert "digitalocean" in caplog.text
+        monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "aws")
+        with pytest.raises(ConfigError, match="GUARD_BLOCK_CLOUD_PROVIDERS") as exc_info:
+            build_guard_config()
+        message = str(exc_info.value)
+        assert "'aws'" in message
+        # Without STRICT the message must not claim case-insensitivity - it isn't one.
+        assert "case-insensitive" not in message
 
-    def test_default_off_canonical_entry_passes_through_without_warning(
-        self, monkeypatch, caplog
-    ) -> None:
-        """An already-canonical 'AWS' entry passes through unchanged (guard-core's own filter
-        would keep it as-is too), and does not warn - there is nothing for it to drop."""
+    def test_default_off_canonical_entry_constructs(self, monkeypatch) -> None:
+        """An already-canonical 'AWS' entry constructs fine without STRICT - there is nothing
+        to normalize, so no ConfigError."""
         monkeypatch.delenv("GUARD_BLOCK_CLOUD_PROVIDERS_STRICT", raising=False)
         monkeypatch.setenv("GUARD_BLOCK_CLOUD_PROVIDERS", "AWS")
-        with caplog.at_level("WARNING", logger="gateway.edge_guard"):
-            cfg = build_guard_config()
+        cfg = build_guard_config()
         assert cfg.block_cloud_providers == {"AWS"}
-        assert caplog.text == ""
 
 
 def create_app_with_guard() -> FastAPI:
@@ -688,7 +681,15 @@ class TestBothLayers:
         self,
     ) -> None:
         """A valid-key burst → per-user 429 (rate_limiter, ``Retry-After: 1``); a keyless
-        flood from one IP → per-IP 429 (guard, no ``Retry-After``). Neither shadows the other.
+        flood from one IP → per-IP 429 (guard, ``Retry-After`` set to guard's rate WINDOW, not
+        the limiter's retry delay). Neither shadows the other.
+
+        On the pinned guard-core (3.15.0), guard's own 429 now sets ``Retry-After`` too (an
+        older guard-core did not, which is what this test originally asserted) - so the two
+        429s are told apart by the header VALUE instead of its presence: the per-user limiter
+        always sends ``"1"`` (app.py:154, a fixed one-second retry hint unrelated to its
+        window), while guard sends its configured ``rate_limit_window`` (``"60"``, see
+        ``_app_with_both_layers``'s default guard config).
 
         Uses XFF IPs unique to this test (10.0.0.50/10.0.0.51): guard's
         ``RateLimitManager`` is a process-wide singleton, so the in-memory
@@ -713,10 +714,10 @@ class TestBothLayers:
                 headers={"x-api-key": VALID_KEY, "X-Forwarded-For": "10.0.0.50"},
             )
             assert resp.status_code == 429
-            # Retry-After: 1 is the per-user limiter's signature (app.py:154); guard's 429 has none.
+            # Retry-After: "1" is the per-user limiter's signature (app.py:154).
             assert resp.headers.get("retry-after") == "1"
 
-            # Per-IP path: keyless flood from a distinct IP → guard 429 (no Retry-After).
+            # Per-IP path: keyless flood from a distinct IP → guard 429.
             for _ in range(4):
                 resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
                 assert (
@@ -724,6 +725,7 @@ class TestBothLayers:
                 )  # guard passes, auth rejects (missing key)
             resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
             assert resp.status_code == 429  # guard per-IP 429
-            assert (
-                resp.headers.get("retry-after") is None
-            )  # guard's 429, not the limiter's
+            # guard-core 3.15.0 sets Retry-After to its own rate window ("60"), not the
+            # per-user limiter's "1" - the value, not the header's presence, is what tells the
+            # two 429 sources apart.
+            assert resp.headers.get("retry-after") == "60"
