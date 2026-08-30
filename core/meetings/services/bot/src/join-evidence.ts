@@ -32,12 +32,19 @@
 import type { FailureStage } from './contracts.js';
 import type { JoinOutcome, JoinSignals } from './ports.js';
 
-/** WHAT happened — see the Python mirror for the per-value ownership rationale. */
+/**
+ * WHAT happened — see the Python mirror for the per-value ownership rationale.
+ *
+ * ONE WORD PER FACT: where this axis names a fact the sealed lifecycle.v1 / api.v1 enums already
+ * name, it reuses THEIR word, so the two vocabularies layer instead of needing a translation table.
+ * Where the fact differs, so does the word — `stopped_while_joining` is deliberately not api.v1's
+ * `stopped_before_admission`, which is a different field with a near-but-not-identical meaning.
+ */
 export type JoinFailureReason =
   /** The platform or its host actively DENIED us (moderator deny, automated-join block, captcha). */
-  | 'platform_rejection'
+  | 'awaiting_admission_rejected'
   /** We reached the waiting room and nobody ever answered; the lobby budget ran out. */
-  | 'admission_timeout'
+  | 'awaiting_admission_timeout'
   /** Authenticated mode found a signed-out browser profile — the session is dead. */
   | 'auth_session_missing'
   /** The page loaded but no admission signal ever appeared (selector rot / platform UI change). */
@@ -45,7 +52,7 @@ export type JoinFailureReason =
   /** We never got as far as the meeting page (navigation error, off-origin redirect, closed target). */
   | 'navigation_failure'
   /** The USER stopped the run while the bot was still knocking. Not a failure. */
-  | 'stopped_before_admission'
+  | 'stopped_while_joining'
   /** The signals do not support a verdict. `detail` carries what was observed. */
   | 'unknown';
 
@@ -126,12 +133,12 @@ const ADMISSION_FLOW_FAULT_MARKERS = [
 
 /** Default owner per typed reason; moved only by positive evidence in `detail`. */
 const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> = {
-  platform_rejection: 'host_action',
-  admission_timeout: 'host_action',
+  awaiting_admission_rejected: 'host_action',
+  awaiting_admission_timeout: 'host_action',
   auth_session_missing: 'system_fault',
   never_reached_lobby: 'system_fault',
   navigation_failure: 'system_fault',
-  stopped_before_admission: 'user_action',
+  stopped_while_joining: 'user_action',
   unknown: 'unknown',
 };
 
@@ -173,7 +180,7 @@ export function classifyJoinFailure(
   signals: JoinSignals = {},
 ): JoinFailureReason {
   try {
-    if (outcome === 'stopped') return 'stopped_before_admission';
+    if (outcome === 'stopped') return 'stopped_while_joining';
     if (outcome === 'auth_missing') return 'auth_session_missing';
 
     const detail = cleanDetail(signals.detail);
@@ -181,18 +188,18 @@ export function classifyJoinFailure(
 
     // A typed denial (or a bot-detection block, which is the platform refusing us just as flatly)
     // is a verdict, not an inference — it outranks any timing.
-    if (outcome === 'rejected' || outcome === 'blocked') return 'platform_rejection';
+    if (outcome === 'rejected' || outcome === 'blocked') return 'awaiting_admission_rejected';
 
     if (signals.reachedLobby) {
       const inLobby = millis(signals.timeInLobbyMs);
       const budget = millis(signals.lobbyBudgetMs);
       if (inLobby !== undefined && budget) {
-        return inLobby >= budget * LOBBY_EXPIRY_FRACTION ? 'admission_timeout' : 'platform_rejection';
+        return inLobby >= budget * LOBBY_EXPIRY_FRACTION ? 'awaiting_admission_timeout' : 'awaiting_admission_rejected';
       }
-      return 'admission_timeout';
+      return 'awaiting_admission_timeout';
     }
 
-    if (outcome === 'timeout') return 'admission_timeout';
+    if (outcome === 'timeout') return 'awaiting_admission_timeout';
     if (signals.reachedLobby === false) return 'never_reached_lobby';
     return 'unknown';
   } catch {
@@ -213,10 +220,10 @@ export function attributeJoinFailure(
     const base = ATTRIBUTION_BY_REASON[reason] ?? 'unknown';
     const text = cleanDetail(detail);
     if (!text) return base;
-    if (reason === 'platform_rejection' && matches(text, PLATFORM_POLICY_MARKERS)) {
+    if (reason === 'awaiting_admission_rejected' && matches(text, PLATFORM_POLICY_MARKERS)) {
       return 'exogenous_platform';
     }
-    if (reason === 'admission_timeout' && matches(text, ADMISSION_FLOW_FAULT_MARKERS)) {
+    if (reason === 'awaiting_admission_timeout' && matches(text, ADMISSION_FLOW_FAULT_MARKERS)) {
       return 'system_fault';
     }
     return base;

@@ -312,7 +312,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         await emit('failed', {
           failure_stage: stage, completion_reason: 'stopped',
           reason: abortDetail, exit_code: 0,
-          // `stopped_before_admission` → attribution `user_action`. This row shares its `failed`
+          // `stopped_while_joining` → attribution `user_action`. This row shares its `failed`
           // status with real defects, and counting it as one is precisely how a raw failed-status
           // rate stops meaning anything: the user ended this run themselves.
           ...joinEvidenceFor('stopped', stage, driverSignals(deps.join), abortDetail),

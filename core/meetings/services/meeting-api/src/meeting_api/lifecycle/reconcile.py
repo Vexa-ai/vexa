@@ -603,7 +603,7 @@ async def synthesize_terminal_for_dead_workload(
         }
         # Same typed axes on the runtime-confirmed-destroy path — a terminal driven by teardown
         # evidence deserves the same decomposition as one driven by the sweep (#1059/#1058). A user
-        # stop lands `stopped_before_admission` → `user_action`, so a deliberate cancellation never
+        # stop lands `stopped_while_joining` → `user_action`, so a deliberate cancellation never
         # counts against the system-failure rate.
         evidence = _reconcile_join_evidence(
             status=status,

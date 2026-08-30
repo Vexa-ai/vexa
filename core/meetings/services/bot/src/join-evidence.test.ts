@@ -77,11 +77,11 @@ type Case = {
 const CASES: Case[] = [
   // — #1058's two populations, told apart by the timing signature and nothing else —
   {
-    name: '#1058 Meet: 13min in the lobby against a 10min budget → admission_timeout',
+    name: '#1058 Meet: 13min in the lobby against a 10min budget → awaiting_admission_timeout',
     outcome: 'timeout',
     signals: { reachedLobby: true, timeToLobbyMs: 7_000, timeInLobbyMs: 780_000, totalMs: 787_000, lobbyBudgetMs: BUDGET_MS,
                detail: 'Bot is still in the Google Meet waiting room after timeout — host did not admit' },
-    expect: 'admission_timeout',
+    expect: 'awaiting_admission_timeout',
   },
   {
     name: '#1058 Teams: dead at ~20s having never seen a lobby → never_reached_lobby',
@@ -91,23 +91,23 @@ const CASES: Case[] = [
     expect: 'never_reached_lobby',
   },
   {
-    name: 'a lobby exit at 3% of the budget with no denial reason → platform_rejection, not a timeout',
+    name: 'a lobby exit at 3% of the budget with no denial reason → awaiting_admission_rejected, not a timeout',
     outcome: 'error',
     signals: { reachedLobby: true, timeInLobbyMs: 19_000, totalMs: 21_000, lobbyBudgetMs: BUDGET_MS,
                detail: 'meeting ended or bot removed from the waiting room' },
-    expect: 'platform_rejection',
+    expect: 'awaiting_admission_rejected',
   },
   {
     name: 'a lobby exit at exactly 90% of the budget is already an expiry (boundary)',
     outcome: 'error',
     signals: { reachedLobby: true, timeInLobbyMs: 540_000, lobbyBudgetMs: BUDGET_MS },
-    expect: 'admission_timeout',
+    expect: 'awaiting_admission_timeout',
   },
   {
     name: 'one millisecond under the 90% boundary is still a rejection',
     outcome: 'error',
     signals: { reachedLobby: true, timeInLobbyMs: 539_999, lobbyBudgetMs: BUDGET_MS },
-    expect: 'platform_rejection',
+    expect: 'awaiting_admission_rejected',
   },
   // — verdicts that are already precise —
   {
@@ -115,13 +115,13 @@ const CASES: Case[] = [
     outcome: 'rejected',
     signals: { reachedLobby: true, timeInLobbyMs: 590_000, lobbyBudgetMs: BUDGET_MS,
                detail: 'Bot admission was rejected by meeting admin' },
-    expect: 'platform_rejection',
+    expect: 'awaiting_admission_rejected',
   },
   {
-    name: 'a bot-detection block is the platform refusing us → platform_rejection',
+    name: 'a bot-detection block is the platform refusing us → awaiting_admission_rejected',
     outcome: 'blocked',
     signals: { reachedLobby: false, detail: 'reCAPTCHA challenge presented' },
-    expect: 'platform_rejection',
+    expect: 'awaiting_admission_rejected',
   },
   {
     name: 'a signed-out profile → auth_session_missing',
@@ -130,10 +130,10 @@ const CASES: Case[] = [
     expect: 'auth_session_missing',
   },
   {
-    name: 'a user stop in the lobby → stopped_before_admission',
+    name: 'a user stop in the lobby → stopped_while_joining',
     outcome: 'stopped',
     signals: { reachedLobby: true, timeInLobbyMs: 12_000, lobbyBudgetMs: BUDGET_MS },
-    expect: 'stopped_before_admission',
+    expect: 'stopped_while_joining',
   },
   // — transport markers outrank the stage buckets —
   {
@@ -159,10 +159,10 @@ const CASES: Case[] = [
   },
   // — honest ignorance —
   {
-    name: 'a lobby timeout verdict with no measurements at all is still an admission_timeout',
+    name: 'a lobby timeout verdict with no measurements at all is still an awaiting_admission_timeout',
     outcome: 'timeout',
     signals: {},
-    expect: 'admission_timeout',
+    expect: 'awaiting_admission_timeout',
   },
   {
     name: 'a bare error with nothing observed → unknown, never a guess',
@@ -182,12 +182,12 @@ for (const c of CASES) {
 console.log('\n=== 2. attribution: typed reason → who it belongs to ===');
 
 const ATTRIBUTION: Array<[JoinFailureReason, JoinFailureAttribution]> = [
-  ['platform_rejection', 'host_action'],
-  ['admission_timeout', 'host_action'],
+  ['awaiting_admission_rejected', 'host_action'],
+  ['awaiting_admission_timeout', 'host_action'],
   ['auth_session_missing', 'system_fault'],
   ['never_reached_lobby', 'system_fault'],
   ['navigation_failure', 'system_fault'],
-  ['stopped_before_admission', 'user_action'],
+  ['stopped_while_joining', 'user_action'],
   ['unknown', 'unknown'],
 ];
 
@@ -199,29 +199,29 @@ for (const [reason, expected] of ATTRIBUTION) {
 check(
   'a Zoom automated-join block reattributes host_action → exogenous_platform',
   attributeJoinFailure(
-    'platform_rejection',
+    'awaiting_admission_rejected',
     '[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins',
   ) === 'exogenous_platform',
 );
 check(
   'a captcha wall is exogenous, not the host declining',
-  attributeJoinFailure('platform_rejection', 'reCAPTCHA challenge presented') === 'exogenous_platform',
+  attributeJoinFailure('awaiting_admission_rejected', 'reCAPTCHA challenge presented') === 'exogenous_platform',
 );
 check(
   'an admission wait that ended because OUR selectors went blind is a system_fault',
-  attributeJoinFailure('admission_timeout', 'no meeting indicators found after polling') === 'system_fault',
+  attributeJoinFailure('awaiting_admission_timeout', 'no meeting indicators found after polling') === 'system_fault',
 );
 check(
   'a plain lobby expiry stays with the host (no override without evidence)',
-  attributeJoinFailure('admission_timeout', 'host did not admit within the waiting-room timeout') === 'host_action',
+  attributeJoinFailure('awaiting_admission_timeout', 'host did not admit within the waiting-room timeout') === 'host_action',
 );
 check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',
-  attributeJoinFailure('platform_rejection', 'no meeting indicators found') === 'host_action',
+  attributeJoinFailure('awaiting_admission_rejected', 'no meeting indicators found') === 'host_action',
 );
 check(
   'a user stop is never a system fault, whatever the detail says',
-  attributeJoinFailure('stopped_before_admission', 'no meeting indicators found; net::ERR_FAILED') === 'user_action',
+  attributeJoinFailure('stopped_while_joining', 'no meeting indicators found; net::ERR_FAILED') === 'user_action',
 );
 
 // The gate metric's whole point: only ONE of the two #1058 populations is ours.
@@ -239,7 +239,7 @@ check(
 console.log('\n=== 3. the evidence block that gets persisted ===');
 
 const meetTimeout = buildJoinEvidence('timeout', 'awaiting_admission', CASES[0].signals)!;
-check('carries the typed reason', meetTimeout.reason === 'admission_timeout');
+check('carries the typed reason', meetTimeout.reason === 'awaiting_admission_timeout');
 check('carries the attribution', meetTimeout.attribution === 'host_action');
 check('carries the stage', meetTimeout.stage === 'awaiting_admission');
 check('is tagged first-hand (source=bot)', meetTimeout.source === 'bot');
@@ -344,7 +344,7 @@ const FIXTURES: Fixture[] = [
                    detail: 'Bot is still in the Google Meet waiting room after timeout — host did not admit' },
       },
     }),
-    expectReason: 'admission_timeout',
+    expectReason: 'awaiting_admission_timeout',
     expectAttribution: 'host_action',
     expectStage: 'awaiting_admission',
   },
@@ -368,7 +368,7 @@ const FIXTURES: Fixture[] = [
                 signals: { reachedLobby: true, timeInLobbyMs: 31_000, totalMs: 38_000, lobbyBudgetMs: BUDGET_MS,
                            detail: 'Bot admission was rejected by meeting admin' } },
     }),
-    expectReason: 'platform_rejection',
+    expectReason: 'awaiting_admission_rejected',
     expectAttribution: 'host_action',
     expectStage: 'awaiting_admission',
   },
@@ -380,7 +380,7 @@ const FIXTURES: Fixture[] = [
                 signals: { reachedLobby: false, totalMs: 12_100,
                            detail: '[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins' } },
     }),
-    expectReason: 'platform_rejection',
+    expectReason: 'awaiting_admission_rejected',
     expectAttribution: 'exogenous_platform',
     expectStage: 'joining',
   },
@@ -456,7 +456,7 @@ async function runFixtures(): Promise<void> {
     const terminal = lifecycle.events[lifecycle.events.length - 1];
     const ev = terminal.join_evidence;
     check('[user-stop-in-lobby] terminal conforms to sealed lifecycle.v1', validateLifecycle(terminal) === true);
-    check('[user-stop-in-lobby] reason = stopped_before_admission', ev?.reason === 'stopped_before_admission',
+    check('[user-stop-in-lobby] reason = stopped_while_joining', ev?.reason === 'stopped_while_joining',
       `got ${ev?.reason}`);
     check('[user-stop-in-lobby] attribution = user_action — NOT a system failure',
       ev?.attribution === 'user_action', `got ${ev?.attribution}`);

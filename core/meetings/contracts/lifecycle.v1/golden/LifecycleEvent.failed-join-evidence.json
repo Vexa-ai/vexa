@@ -7,7 +7,7 @@
   "completion_reason": "awaiting_admission_timeout",
   "reason": "Bot is still in the Google Meet waiting room after timeout — host did not admit",
   "join_evidence": {
-    "reason": "admission_timeout",
+    "reason": "awaiting_admission_timeout",
     "attribution": "host_action",
     "source": "bot",
     "stage": "awaiting_admission",
