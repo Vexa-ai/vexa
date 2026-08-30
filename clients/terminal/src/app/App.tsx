@@ -39,6 +39,7 @@ function InviteGate({ children }: { children: ReactNode }) {
   const meeting = params.get("meeting");   // ?meeting=<platform>/<native> deep-link → open that meeting
   const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
   const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
+  const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
 
   // MINUTES `?setup=global`: stash the intent; the workbench fires the admin conversation once
   // the chat is mounted. Re-runnable on purpose — amending the org tier is the same conversation.
@@ -58,6 +59,15 @@ function InviteGate({ children }: { children: ReactNode }) {
     } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [assign, invite, tshare]);
+
+  // A `?view=` composed-layout deep-link: the sender (usually the person's own agent over MCP)
+  // constructs WHICH panes open — e.g. a meeting beside its minutes doc. Same stash-and-clean
+  // discipline as `?meeting=`.
+  useEffect(() => {
+    if (!view) return;
+    try { localStorage.setItem("vexa.composedView", view); } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [view, invite, tshare]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.

@@ -5,9 +5,11 @@ import { meetingsOnly } from "../../../mode";
 
 export const dynamic = "force-dynamic";
 
-/** Meetings-only mode: the workspace KG is an agent surface — refused at the edge (404). */
-function refusedResponse(): Response | null {
-  if (!meetingsOnly()) return null;
+/** Meetings-only mode: workspace WRITES stay refused, but READS are allowed — composed
+ *  deep-links (?view=file:...) open workspace pages beside a meeting in the MCP-first
+ *  viewer shape, and a read-only page is not an agent surface. */
+function refusedResponse(method = "GET"): Response | null {
+  if (!meetingsOnly() || method === "GET") return null;
   return new Response(JSON.stringify({ error: "not_found", detail: "agent endpoints are disabled in meetings mode" }), { status: 404, headers: { "Content-Type": "application/json" } });
 }
 
@@ -37,7 +39,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ seg: string
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
-  const refused = refusedResponse();
+  const refused = refusedResponse("POST");
   if (refused) return refused;
   const { seg } = await ctx.params;
   try {

@@ -6,7 +6,7 @@ import { useContext, useEffect, useRef, useState, type CSSProperties, type Mouse
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
-import { meetingsOnly, minutesOnly } from "../app/mode";
+import { minutesOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { RoomOnboarding } from "./roomOnboarding";
@@ -1291,16 +1291,15 @@ function DocTab({ id, params }: TabProps) {
   );
 }
 
-// Agent surface — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings).
-if (!meetingsOnly()) {
-  // In MINUTES mode this list is the product's primary navigation, and is named for what it holds:
-  // rooms. A room IS its README — the index the assistant keeps current — so the list leads.
-  registerList({
-    id: "files",
-    label: minutesOnly() ? "Groups" : "Knowledge",
-    icon: minutesOnly() ? "folder" : "panel",
-    order: minutesOnly() ? 10 : 30,
-    component: FilesList,
-  });
-  registerTab("doc", DocTab);
-}
+// The workspace is FIRST-CLASS in every shape — meetings mode included: the MCP-first viewer
+// shows meetings AND the knowledge the meetings produce. Only chat stays out. In MINUTES the
+// list is the product's primary navigation, named for what it holds: rooms — a room IS its
+// README. The doc TAB KIND is what composed deep-links (?view=file:...) open beside a meeting.
+registerList({
+  id: "files",
+  label: minutesOnly() ? "Groups" : "Knowledge",
+  icon: minutesOnly() ? "folder" : "panel",
+  order: minutesOnly() ? 10 : 30,
+  component: FilesList,
+});
+registerTab("doc", DocTab);

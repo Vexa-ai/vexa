@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
   // (api/auth/[...nextauth]). Restrict it to test accounts so it can't be used as a password-less bypass.
   // MINUTES local-dev: emailed door links are MAGIC LINKS — the recipient's own address IS the
   // identity (prod = a signed token). Any address is accepted in this mode; still dev-only.
-  const minutesDev = process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_TERMINAL_MODE === "minutes";
+  const minutesDev = process.env.NODE_ENV === "development" && ["minutes", "meetings"].includes(process.env.NEXT_PUBLIC_TERMINAL_MODE ?? "");
   if (!minutesDev && !normalized.includes("test")) {
     return NextResponse.json(
       { error: "Direct email login is for test accounts only — use Google or Microsoft sign-in." },

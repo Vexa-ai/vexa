@@ -288,7 +288,7 @@ export function Workbench() {
   // persisted "sessions" → the default), so `activeList` is never "sessions" and the chat-only branch
   // never renders. Kept (rather than ripping out its render sites) to avoid a risky pane refactor the
   // owner didn't ask for; the `=== "sessions"` guards below are dead but harmless.
-  const meetOnly = meetingsOnly();
+  const meetOnly = meetingsOnly() || process.env.NEXT_PUBLIC_NO_CHAT === "1";
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -326,7 +326,7 @@ export function Workbench() {
 
   // A `?meeting=<platform>/<native>` deep-link (clicked in a meeting note, or the cold-load URL) →
   // resolve the native id to its meeting row and open the canvas (transcript + recording).
-  const openMeetingByRef = useCallback((mid: string) => {
+  const openMeetingByRef = useCallback((mid: string, beside = false) => {
     // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
     // in the meetings list opens); the canvas fetches its transcript/recording by that id.
     const ref = mid.trim();
@@ -351,7 +351,8 @@ export function Workbench() {
       if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
       const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
       // the emailed name wins — the row often only knows the platform·code fallback
-      layout.openTab({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
+      const openIt = beside ? layout.openTabBeside.bind(layout) : layout.openTab.bind(layout);
+      openIt({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
     };
     // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
     // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
@@ -457,6 +458,44 @@ export function Workbench() {
   const resolveFirstView = async (fresh: boolean) => {
     // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
     // directly. Explicit navigation wins over the plan below.
+    try {
+      // A `?view=` composed layout (App.tsx stashed it): open every listed pane, in order —
+      // the last one keeps focus. The composition is the sender's to decide.
+      const composed = localStorage.getItem("vexa.composedView");
+      if (composed) {
+        localStorage.removeItem("vexa.composedView");
+        // the saved-dock restore lands after this resolver — defer so the composition is
+        // applied ON TOP of (not under) whatever the dock brings back
+        await new Promise((r) => setTimeout(r, 450));
+        // the composition is authoritative: the sender decided what this view IS, so the
+        // restored dock yields to it entirely
+        try { apiRef.current?.clear(); } catch { /* noop */ }
+        // the optimal viewer frame (founder-arranged): list rail collapsed, the reading pane
+        // takes ~2/3, the beside pane the rest
+        if (!layout.store.getState().leftCollapsed) layout.toggleLeft();
+        let first = true;
+        for (const pane of composed.split(",")) {
+          const [kind, ...rest] = pane.split(":");
+          const ref = rest.join(":");
+          const openDoc = first ? layout.openTab.bind(layout) : layout.openTabBeside.bind(layout);
+          if (kind === "meeting" && ref) openMeetingByRef(ref, !first);
+          else if (kind === "file" && ref) {
+            const base = ref.split("/").pop() || ref;
+            try { openDoc({ id: `doc:${ref}`, title: base, kind: "doc", params: { path: ref } }); } catch { /* noop */ }
+          } else if (kind === "readme") {
+            openDoc({ id: "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md" } });
+          } else { continue; }
+          first = false;
+        }
+        try {
+          const api = apiRef.current;
+          if (api && api.groups.length >= 2) {
+            api.groups[api.groups.length - 1].api.setSize({ width: Math.round(api.width * 0.36) });
+          }
+        } catch { /* noop */ }
+        return;
+      }
+    } catch { /* noop */ }
     try {
       const mref = localStorage.getItem("vexa.openMeetingRef");
       if (mref) { localStorage.removeItem("vexa.openMeetingRef"); openMeetingByRef(mref); return; }
