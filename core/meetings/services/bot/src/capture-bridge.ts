@@ -817,93 +817,35 @@ export async function startCaptureBridge(
       // WebRTC stream (a permanent channel here), appearing when they first become active and never
       // remapped or reused — 5 streams for 5 speakers, ch=3/ch=4 arriving only when the 4th/5th person
       // first spoke. The unreliable part is the NAME: Zoom's active-speaker DOM is a sticky dominant-
-      // speaker spotlight (worse under screen-share) that lags/holds the wrong person. So the resolver's
-      // whole job is to attach each stable channel to the right name and DEFEND it against the flaky DOM:
-      //   • VOTE: every clean moment (this channel is the loudest hot one + exactly one speaker lit) casts
-      //     one channel<->name vote. The binding is the argmax — so a wrong early sample is a single vote
-      //     that the true speaker outweighs. SELF-CORRECTING: no bad first bind can lock in for the meeting.
-      //   • MARGIN hysteresis: a new leader must beat the current binding by MARGIN votes to flip, so the
-      //     sticky DOM's stray votes can't churn an established name (holds "Scott" while Zoom shows Justin).
-      //   • 1:1 BY IDENTITY: a name is another active channel's identity — the DOM can't paste "Justin"
-      //     onto Scott's channel even if it over-votes it there. It frees up only when its owner goes
-      //     long-idle (IDLE_RELEASE_MS) — so leave-then-rejoin-under-a-new-stream works. Exception: two
-      //     genuinely same-named people each earn the name with HIGH-PURITY votes → both are named (a
-      //     mixed minority — contamination — does not qualify).
-      // Floor: a channel still needs the DOM to name it correctly at least sometimes; a speaker Zoom never
-      // lights (e.g. throughout a screen-share) stays unknown — separated, but unnamed.
+      // speaker spotlight (worse under screen-share) that lags/holds the wrong person. Attaching each
+      // stable channel to the right name and DEFENDING it against that DOM is the resolver's whole job,
+      // and it is the SAME job GmeetChannelBinder does for Meet's glow and TrackNamer for the Teams
+      // CSRC spine — so, like both of those, it is a pure module (@vexa/zoom-capture,
+      // createTrackNameResolver: vote · margin hysteresis · 1:1 by identity · purity co-hold · idle
+      // release · self-exclusion · Speaker A/B/C) with goldens, bundled into VexaBrowserUtils. It is
+      // NOT written here: an attribution algorithm inside a serialized page closure cannot be tested,
+      // diffed against its two siblings, or replayed against a fixture, which is exactly why this lane
+      // was the one lane with no offline evidence.
       if (!w.__vexaTrackNamer) {
-        w.__vexaTrackNamer = {
-          mode: (isTeams ? 'additive' : 'exclusive') as 'additive' | 'exclusive',
-          speaking: new Map<string, number>(),                 // active-speaker name → since (ms)
-          hot: new Map<number, { ts: number; e: number }>(),   // channel → last-energetic {ts, peak}
-          votes: new Map<number, Map<string, number>>(),       // channel → name → co-occurrence tally
-          names: new Map<number, string>(),                    // channel → committed name (= argmax vote)
-          HOT_MS: 600, MARGIN: 3, IDLE_RELEASE_MS: 8000, PURITY: 0.7,
-          onSpeak(name: string | null, tMs: number, isEnd: boolean): void {
-            if (!name) return;
-            if (isEnd) { this.speaking.delete(name); return; }
-            if (this.mode === 'exclusive') { this.speaking.clear(); this.speaking.set(name, tMs); }
-            else if (!this.speaking.has(name)) this.speaking.set(name, tMs);
-          },
-          markHot(ch: number, ts: number, e: number): void { this.hot.set(ch, { ts, e }); },
-          resolve(ch: number, ts: number): string | undefined {
-            // VOTE whenever THIS channel is the loudest hot one while exactly one speaker is lit — a clean
-            // channel<->name co-occurrence. The binding is the argmax vote (rederive below), so a wrong
-            // early sample (the sticky DOM naming Justin during Scott's turn) is just ONE vote and gets
-            // outweighed as the true speaker accumulates — self-correcting, no permanent early lock-in.
-            let loud = -1, loudE = -1;
-            for (const [c, h] of this.hot) { if (ts - h.ts < this.HOT_MS && h.e > loudE) { loudE = h.e; loud = c; } }
-            const active = Array.from(this.speaking.keys()) as string[];
-            if (loud === ch && active.length === 1) {
-              const n = active[0];
-              let v = this.votes.get(ch); if (!v) { v = new Map(); this.votes.set(ch, v); }
-              v.set(n, (v.get(n) || 0) + 1);
-              this.rederive(ch, ts);
-            }
-            return this.names.get(ch);   // committed binding (undefined until the first confident bind)
-          },
-          rederive(ch: number, ts: number): void {
-            const v = this.votes.get(ch); if (!v) return;
-            let total = 0; for (const c of v.values()) total += c;
-            // A name is AVAILABLE to this channel if no OTHER active channel holds it (1:1 BY IDENTITY:
-            // a name is another stream's identity no matter how many stray sticky-DOM votes it collected
-            // here — raw-count 1:1 would let Scott's channel STEAL "Justin" when the sticky DOM over-votes
-            // it, which must not happen). The ONE exception: this channel's votes for the name are
-            // high-PURITY — it overwhelmingly IS this channel's own identity — which distinguishes a
-            // genuine SECOND same-named speaker (two "John Smith": pure votes on each → co-hold both)
-            // from contamination (a mixed minority on someone else's channel → stays blocked). A name
-            // also frees up once its owner goes long-idle (IDLE_RELEASE_MS — a leave / reconnect).
-            const available = (name: string): boolean => {
-              let activeOwner = false;
-              for (const [c, n] of this.names) {
-                if (n !== name || c === ch) continue;
-                const h = this.hot.get(c);
-                if (h && ts - h.ts <= this.IDLE_RELEASE_MS) { activeOwner = true; break; }
-              }
-              if (!activeOwner) return true;
-              const vn = v.get(name) || 0;
-              return vn >= this.PURITY * total && vn >= this.MARGIN;
-            };
-            // Best AVAILABLE name = argmax vote among names this channel may hold.
-            let best = '', bestN = -1;
-            for (const [n, c] of v) if (c > bestN && available(n)) { bestN = c; best = n; }
-            if (best === '') return;
-            const cur = this.names.get(ch);
-            if (best === cur) return;
-            const curN = cur ? (v.get(cur) || 0) : -1;
-            // Hysteresis: a new leader must beat the current binding by MARGIN before it flips — so a few
-            // stray sticky-DOM votes can't churn an established name, but real evidence still corrects it.
-            if (bestN < curN + this.MARGIN) return;
-            // Release only IDLE owners of the name (a leave/reconnect); keep active co-holders (duplicates).
-            for (const [c, n] of this.names) {
-              if (n !== best || c === ch) continue;
-              const h = this.hot.get(c);
-              if (!h || ts - h.ts > this.IDLE_RELEASE_MS) this.names.delete(c);
-            }
-            this.names.set(ch, best);
-            w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + best + ' (' + bestN + ' votes)');
-          },
-        };
+        const makeResolver = w.VexaBrowserUtils?.createTrackNameResolver;
+        if (makeResolver) {
+          w.__vexaTrackNamer = makeResolver({
+            mode: isTeams ? 'additive' : 'exclusive',
+            // The leak-proof backstop: our own tile can never become a remote channel's identity,
+            // even in the window where the watcher's self marker is transiently absent.
+            selfName: botName,
+            onBind: (ch: number, name: string, votes: number): void => {
+              w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + name + ' (' + votes + ' votes)');
+              w.__vexaObservation?.('pertrack', { type: 'pertrack-bind', channel: ch, name, votes, tMs: Date.now() }, Date.now());
+            },
+          });
+        } else {
+          // Absence of an expected signal is itself a reportable state (P18/ADR-0010): without the
+          // resolver every channel stays unnamed, which is a degraded run, not a broken one — so say
+          // so as DATA and keep capturing.
+          w.logBot?.('[pertrack] resolver unavailable — VexaBrowserUtils.createTrackNameResolver missing; channels stay unnamed');
+          w.__vexaObservation?.('pertrack', { type: 'pertrack-resolver-absent', tMs: Date.now() }, Date.now());
+        }
       }
 
       // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
@@ -940,9 +882,17 @@ export async function startCaptureBridge(
               let maxVal = 0;
               for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
               if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)
-              w.__vexaTrackNamer.markHot(ch, ts, maxVal);      // peak energy → the dominant-slot ranking
-              const name = w.__vexaTrackNamer.resolve(ch, ts);
+              w.__vexaTrackNamer?.markHot(ch, ts, maxVal);     // peak energy → the dominant-slot ranking
+              const name = w.__vexaTrackNamer?.resolve(ch, ts);
               const arr = Array.from(input);                   // copy — the input buffer is reused
+              // An UNBOUND channel deliberately crosses with NO name, not with its Speaker A/B/C
+              // label: the per-channel lane opens such a turn UNKNOWN and RENAMES it in place the
+              // moment the resolver binds (gmeet-pipeline's onset-adopt). Handing it a label instead
+              // would make that turn already-named, so the real name would arrive as a rotation and
+              // SPLIT one person's turn in two. The label is what a reader should see for a channel
+              // that never earns a name; carrying it to the transcript needs the retroactive repaint
+              // the transport spine has (stable speaker_key) and the per-channel lane does not — the
+              // Commit-B follow-up. Until then it is reported as data on the bind observations.
               if (name) w.__vexaNamedAudioData(ch, name, arr, ts);
               else w.__vexaPerSpeakerAudioData(ch, arr, ts);
             };
