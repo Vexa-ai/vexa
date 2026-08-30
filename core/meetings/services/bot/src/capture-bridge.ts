@@ -856,7 +856,29 @@ export async function startCaptureBridge(
       // The accumulated-audio-time clock (anchor + samples/rate, the SAME the mix path proved) stamps
       // every frame on the page clock = the hints' clock, so the resolver can correlate energy with the
       // active-speaker signal and the per-channel lane times turns correctly.
+      // #1195 — the deaf-capture guard's presence oracle, on THIS lane too. The guard abstains
+      // whenever it is never told about streams (aloneness.ts row 2: `streamsPresentAt === undefined`
+      // → 'alone', i.e. no objection), so a capture branch that never calls __vexaStreamPresence
+      // silently opts its platform OUT of the guard: a Zoom bot whose capture chain dies mid-meeting
+      // could once again leave a LIVE meeting as completed(left_alone) — a recorded success, and
+      // silent. The mixed branch walks __vexaMixStreamRefs; per-track walks the hook's own array and
+      // counts the same bit — an audio track that is `live` and not `muted` (a remote track mutes
+      // when packets stop arriving). Reported on every rescan INCLUDING the zero case, because zero
+      // is what row 2 (the genuinely empty room) is made of.
+      const reportPerTrackPresence = (): void => {
+        let live = 0;
+        for (const s of (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>) {
+          try {
+            const tracks = s?.getAudioTracks ? s.getAudioTracks() : [];
+            for (const t of tracks) {
+              if (t && t.readyState === 'live' && t.muted !== true) { live++; break; }
+            }
+          } catch { /* a stream may have been torn down mid-walk */ }
+        }
+        try { w.__vexaStreamPresence?.(live); } catch { /* presence must never break capture */ }
+      };
       const setupPerTrack = (): void => {
+        reportPerTrackPresence();
         const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
         if (!streams.length) return;
         if (!w.__vexaTrackCtx) {
