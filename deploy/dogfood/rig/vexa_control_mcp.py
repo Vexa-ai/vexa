@@ -240,10 +240,71 @@ CONFIG_VOCAB = {
 UI_BASE = os.environ.get("VEXA_UI_URL", "http://localhost:18300")
 
 
+_TZ_FILE = HOME / ".storm/user-timezones.json"
+
+
+def _person_tz(uid: str, set_to: str = "") -> str:
+    """This person's IANA timezone, remembered across calls.
+
+    Times were rendered on the server's clock, so a Lisbon person booking a standup was told it
+    would join at 19:15 when it was 17:15 where they stood. The agent knows their zone from its
+    own environment; we only have to be told once and then never state a bare time again.
+    """
+    try:
+        d = json.loads(_TZ_FILE.read_text())
+    except Exception:  # noqa: BLE001
+        d = {}
+    uid = str(uid)
+    if set_to:
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(set_to)
+        except Exception:  # noqa: BLE001
+            return d.get(uid, "")
+        d[uid] = set_to
+        _TZ_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TZ_FILE.write_text(json.dumps(d, indent=1))
+        return set_to
+    return d.get(uid, "")
+
+
+def _in_their_clock(epoch: float, tz: str) -> str:
+    """A time, always with the zone attached. Never a bare HH:MM."""
+    import datetime
+    if tz:
+        try:
+            import zoneinfo
+            z = zoneinfo.ZoneInfo(tz)
+            t = datetime.datetime.fromtimestamp(epoch, z)
+            return t.strftime("%H:%M") + " " + (t.tzname() or tz)
+        except Exception:  # noqa: BLE001
+            pass
+    return datetime.datetime.fromtimestamp(
+        epoch, datetime.timezone.utc).strftime("%H:%M") + " UTC"
+
+
 def _caller_email() -> str:
+    """This caller's address, however they authenticated.
+
+    It used to read CALL_TOKEN alone, which is empty for a session authenticated by the
+    registration URL (?c=...) — the middleware sets CURRENT there instead. An empty address then
+    met a fallback that invented one, and the invite flow provisioned a whole second account for
+    the invented address: the person's own bot joined a room they could not see.
+    """
     tok = CALL_TOKEN.get()
     rec = (_tokens().get(tok) if tok else None) or {}
-    return rec.get("email", "")
+    if rec.get("email"):
+        return rec["email"]
+    uid = CURRENT.get()
+    if uid:
+        for r in _tokens().values():
+            if str(r.get("uid")) == str(uid) and r.get("email"):
+                return r["email"]
+        st, u = _http("GET", f"{ADMIN_API}/admin/users/{uid}",
+                      {"X-Admin-API-Key": _admin_key()})
+        if st == 200 and (u or {}).get("email"):
+            return u["email"]
+    return ""
 
 
 def _ui_meeting_url(platform: str, native: str, title: str = "", row_id=None) -> str:
@@ -1038,6 +1099,7 @@ in <code>.cursor/mcp.json</code>.</p>""", "Connected")
         # refuses, correctly, when they contain commands to run and things to conceal.
         # First use promotes the code into a durable credential: a registration that dies with a
         # fifteen-minute login record would be worse than none at all.
+        bad_setup_code = ""
         if not tok:
             import urllib.parse as _up
             _q = dict(_up.parse_qsl((scope.get("query_string") or b"").decode()))
@@ -1053,6 +1115,34 @@ in <code>.cursor/mcp.json</code>.</p>""", "Connected")
                                   "via": "setup-url"}
                         (HOME / ".storm/mcp-tokens.json").write_text(json.dumps(_d, indent=1))
                         tok = _c
+                    else:
+                        # NEVER FALL THROUGH TO ANONYMOUS. A registration carrying a code we no
+                        # longer know kept working in a reduced way — no account, no error — and
+                        # an agent cannot tell that apart from a server with nothing to say. It
+                        # spent turns concluding it had "lost access to the account" and burning
+                        # one-time sign-in links. Refuse, and name the fix.
+                        bad_setup_code = _c
+
+        if bad_setup_code:
+            base = CANONICAL.rsplit("/mcp", 1)[0]
+            body = json.dumps({
+                "error": "invalid_setup_code",
+                "detail": "This connection carries a setup code this server does not know. It "
+                          "was used once and rotated, or the account it belonged to is gone.",
+                "tell_your_person": "Their Vexa sign-in is no longer valid — one plain "
+                                    "sentence, and give them the link below. Do not conclude "
+                                    "the account is lost, do not mint sign-in links in a loop, "
+                                    "and do not carry on anonymously pretending to be them.",
+                "fix": f"They sign in at {base} and it hands back one line to re-add this "
+                       f"server. Thirty seconds, and everything they had is still there.",
+            }).encode()
+            await send({"type": "http.response.start", "status": 401, "headers": [
+                (b"content-type", b"application/json"),
+                (b"www-authenticate", b'Bearer realm="vexa", error="invalid_token"'),
+                (b"content-length", str(len(body)).encode()),
+            ]})
+            await send({"type": "http.response.body", "body": body})
+            return
 
         # An OAuth-issued token wins; a hand-minted one still works for scripts and the rig.
         oa = vexa_oauth.resolve_token(tok, CANONICAL) if tok else None
@@ -2570,12 +2660,18 @@ def _scheduled_joins(mid: str):
 @mcp.tool()
 @_anon_guard
 def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
+                 at_local: str = "", tz: str = "",
                  title: str = "", cancel: bool = False, token: str = "") -> str:
     """Book the bot to join a meeting LATER, or call that booking off with cancel=True.
 
-    Give in_minutes (from now) or at_epoch (unix seconds). The booking lives on the server, so
-    it does not depend on this conversation, this client, or this laptop staying alive. The
-    person gets an acknowledgment email; after the call the write-up runs on its own.
+    ALWAYS PASS tz — the person's IANA zone ("Europe/Lisbon"), which you know from their
+    environment. Then say a time the way they said it: at_local="17:10" or "2026-09-01 17:10"
+    is read in THEIR clock, and everything said back to you carries its zone. Do not convert
+    times yourself; that arithmetic is where silent, late errors come from.
+
+    in_minutes (from now) and at_epoch (unix seconds) still work. The booking lives on the
+    server, so it does not depend on this conversation, this client, or this laptop staying
+    alive. The person gets an acknowledgment email; after the call the write-up runs on its own.
 
     cancel=True with the same meeting_url calls off whatever was booked for that meeting —
     no id to find, no queue to read."""
@@ -2609,10 +2705,52 @@ def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
             "next_options": ["Book it for a different time",
                              "Send the bot in now instead — paste the link again",
                              "Nothing else"]})
+    their_tz = _person_tz(uid, tz) or _person_tz(uid)
+    if at_local and not at_epoch:
+        import datetime
+        try:
+            import zoneinfo
+            z = zoneinfo.ZoneInfo(their_tz) if their_tz else datetime.timezone.utc
+        except Exception:  # noqa: BLE001
+            z = datetime.timezone.utc
+        txt = at_local.strip()
+        now_there = datetime.datetime.now(z)
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%H:%M", "%H%M"):
+            try:
+                t = datetime.datetime.strptime(txt, fmt)
+            except ValueError:
+                continue
+            if fmt in ("%H:%M", "%H%M"):
+                t = now_there.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+                if t < now_there:                       # a time already gone means tomorrow
+                    t += datetime.timedelta(days=1)
+            else:
+                t = t.replace(tzinfo=z)
+            parsed = t
+            break
+        if parsed is None:
+            return json.dumps({
+                "error": f"could not read the time {at_local!r}",
+                "give_me": "HH:MM, or YYYY-MM-DD HH:MM — in their own clock, with tz set",
+            })
+        at_epoch = parsed.timestamp()
+
     start = float(at_epoch) if at_epoch else time.time() + max(1, int(in_minutes)) * 60
     if start < time.time() - 60:
-        return json.dumps({"error": "that time is in the past"})
-    email = _caller_email() or f"user-{uid}@unknown"
+        return json.dumps({"error": "that time is in the past",
+                           "their_clock": _in_their_clock(start, their_tz)})
+    # NEVER INVENT AN ADDRESS. The old fallback, f"user-{uid}@unknown", was handed to the
+    # invite flow, which provisioned a real account for it — so the bot joined under a person
+    # who did not exist and the meeting was invisible to the one who asked for it. A refusal is
+    # recoverable; a silent second account is not.
+    email = _caller_email()
+    if not email:
+        return json.dumps({
+            "error": "cannot tell which account this is",
+            "do": "report_friction() with this — it is ours. Do not create an account and do "
+                  "not ask your person for their email; they are already signed in.",
+        })
     sid_ev = f"sched-{mid}-{int(start)}"
     res = json.loads(fact_emit(
         event_type="invite.received", source_event_id=sid_ev,
@@ -2622,8 +2760,7 @@ def bot_schedule(meeting_url: str, in_minutes: int = 0, at_epoch: float = 0,
     if not res.get("admitted"):
         return json.dumps({"error": "the schedule could not be filed",
                            "detail": str(res)[:200], "do": "report_friction() with this"})
-    import datetime
-    when = datetime.datetime.fromtimestamp(start).strftime("%H:%M")
+    when = _in_their_clock(start, their_tz)
     return json.dumps({
         "scheduled": True, "meeting": f"{platform}/{mid}", "joins_at": when,
         "durable": "this lives in the flows engine on the server — nothing on your side "
