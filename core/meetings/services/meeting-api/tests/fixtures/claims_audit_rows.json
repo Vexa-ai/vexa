@@ -1,0 +1,244 @@
+[
+  {
+    "id": "clean-completed-stopped",
+    "_note": "SYNTHETIC. The happy path: a user-stopped run that was admitted and captured audio. Duration derived from created_at/updated_at rather than duration_s. Zero findings.",
+    "status": "completed",
+    "completion_reason": "stopped",
+    "failure_stage": null,
+    "segments_captured": 412,
+    "created_at": "2026-06-02T09:00:00Z",
+    "updated_at": "2026-06-02T09:30:00Z",
+    "transition_source": "user_stop",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-02T09:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-02T09:00:12Z"},
+      {"from": "awaiting_admission", "to": "active", "source": "bot_callback", "timestamp": "2026-06-02T09:00:41Z"},
+      {"from": "active", "to": "completed", "source": "user_stop", "timestamp": "2026-06-02T09:30:00Z"}
+    ]
+  },
+  {
+    "id": "left-alone-at-awaiting-admission",
+    "_note": "SYNTHETIC replica of prod shape (a) from #1191: completion_reason=left_alone carried with failure_stage=awaiting_admission, reconciled to failed by runtime teardown evidence. A bot that never entered a meeting, recorded as left alone in one. Lifecycle fields nested under the data JSONB, as prod writes them.",
+    "status": "failed",
+    "created_at": "2026-06-03T14:00:00Z",
+    "updated_at": "2026-06-03T14:10:40Z",
+    "data": {
+      "completion_reason": "left_alone",
+      "failure_stage": "awaiting_admission",
+      "segments_captured": 0,
+      "last_error": {"reason": "bot gone while awaiting_admission; reconciled to failed"},
+      "status_transition": [
+        {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-03T14:00:00Z"},
+        {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-03T14:00:18Z"},
+        {"from": "awaiting_admission", "to": "failed", "source": "runtime_destroy", "timestamp": "2026-06-03T14:10:40Z"}
+      ]
+    }
+  },
+  {
+    "id": "admission-timeout-at-joining",
+    "_note": "SYNTHETIC replica of prod shape (b) from #1191: awaiting_admission_timeout recorded with failure_stage=joining. The bot cannot have timed out in a lobby it never reached. Duration sits inside the budget envelope, so only I1 fires.",
+    "status": "failed",
+    "completion_reason": "awaiting_admission_timeout",
+    "failure_stage": "joining",
+    "segments_captured": 0,
+    "duration_s": 905,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-05T08:00:00Z"},
+      {"from": "joining", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-05T08:15:05Z"}
+    ]
+  },
+  {
+    "id": "deaf-run-completed-left-alone",
+    "_note": "SYNTHETIC replica of prod shape (c) from #1191: status=completed, left_alone, zero captured segments, eleven minutes long. The run recorded success and delivered nothing; no failure metric can count it.",
+    "status": "completed",
+    "completion_reason": "left_alone",
+    "failure_stage": null,
+    "segments_captured": 0,
+    "created_at": "2026-06-04T11:00:00Z",
+    "updated_at": "2026-06-04T11:11:00Z",
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-04T11:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-04T11:00:09Z"},
+      {"from": "awaiting_admission", "to": "active", "source": "bot_callback", "timestamp": "2026-06-04T11:00:31Z"},
+      {"from": "active", "to": "completed", "source": "bot_callback", "timestamp": "2026-06-04T11:11:00Z"}
+    ]
+  },
+  {
+    "id": "rejected-fast",
+    "_note": "SYNTHETIC. A lobby rejection at 45s: fast, staged in the lobby, nothing captured. Consistent — zero findings.",
+    "status": "failed",
+    "completion_reason": "awaiting_admission_rejected",
+    "failure_stage": "awaiting_admission",
+    "segments_captured": 0,
+    "duration_s": 45,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-06T16:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-06T16:00:11Z"},
+      {"from": "awaiting_admission", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-06T16:00:45Z"}
+    ]
+  },
+  {
+    "id": "admission-timeout-at-budget",
+    "_note": "SYNTHETIC. An admission timeout at 926s against a 900s issued budget — inside the +/-25% envelope. Consistent, zero findings; this row is the false-positive guard on I3.",
+    "status": "failed",
+    "completion_reason": "awaiting_admission_timeout",
+    "failure_stage": "awaiting_admission",
+    "segments_captured": 0,
+    "duration_s": 926,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-07T10:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-07T10:00:14Z"},
+      {"from": "awaiting_admission", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-07T10:15:26Z"}
+    ]
+  },
+  {
+    "id": "left-alone-before-silence-window",
+    "_note": "SYNTHETIC. left_alone declared at 300s, under the 600s silence window the bot is supposed to wait out. It captured audio, so the run was real — but it did not leave for the reason it recorded.",
+    "status": "completed",
+    "completion_reason": "left_alone",
+    "failure_stage": null,
+    "segments_captured": 88,
+    "duration_s": 300,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-08T13:00:00Z"},
+      {"from": "joining", "to": "active", "source": "bot_callback", "timestamp": "2026-06-08T13:00:20Z"},
+      {"from": "active", "to": "completed", "source": "bot_callback", "timestamp": "2026-06-08T13:05:00Z"}
+    ]
+  },
+  {
+    "id": "rejected-too-long",
+    "_note": "SYNTHETIC. A 'rejection' that took 930s. Rejections arrive fast; this was a timeout wearing a rejection's label.",
+    "status": "failed",
+    "completion_reason": "awaiting_admission_rejected",
+    "failure_stage": "awaiting_admission",
+    "segments_captured": 0,
+    "duration_s": 930,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-09T09:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-09T09:00:10Z"},
+      {"from": "awaiting_admission", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-09T09:15:30Z"}
+    ]
+  },
+  {
+    "id": "admission-timeout-far-under-budget",
+    "_note": "SYNTHETIC. An admission timeout at 120s against a 900s issued budget — the budget cannot have expired. Fires I3 on the lower bound (the envelope is two-sided).",
+    "status": "failed",
+    "completion_reason": "awaiting_admission_timeout",
+    "failure_stage": "awaiting_admission",
+    "segments_captured": 0,
+    "duration_s": 120,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-10T07:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "source": "bot_callback", "timestamp": "2026-06-10T07:00:08Z"},
+      {"from": "awaiting_admission", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-10T07:02:00Z"}
+    ]
+  },
+  {
+    "id": "terminal-without-reason",
+    "_note": "SYNTHETIC. A terminal row with no completion_reason at all — the run ended and nothing recorded why.",
+    "status": "failed",
+    "completion_reason": null,
+    "failure_stage": "joining",
+    "segments_captured": 0,
+    "duration_s": 60,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-11T12:00:00Z"},
+      {"from": "joining", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-11T12:01:00Z"}
+    ]
+  },
+  {
+    "id": "silent-reconciliation-jump",
+    "_note": "SYNTHETIC. The row reads failed, but nothing named the driver and the trail still ends in the lobby: the terminal hop was written around the machine. This is the I4 shape that hides every other class.",
+    "status": "failed",
+    "completion_reason": "join_failure",
+    "failure_stage": "joining",
+    "segments_captured": 0,
+    "duration_s": 90,
+    "transition_source": null,
+    "status_transition": [
+      {"from": null, "to": "joining", "timestamp": "2026-06-12T15:00:00Z"},
+      {"from": "joining", "to": "awaiting_admission", "timestamp": "2026-06-12T15:00:22Z"}
+    ]
+  },
+  {
+    "id": "join-failure-at-active",
+    "_note": "SYNTHETIC. join_failure recorded against failure_stage=active — a bot cannot fail to join a meeting it was admitted to.",
+    "status": "failed",
+    "completion_reason": "join_failure",
+    "failure_stage": "active",
+    "segments_captured": 0,
+    "duration_s": 800,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-13T18:00:00Z"},
+      {"from": "joining", "to": "active", "source": "bot_callback", "timestamp": "2026-06-13T18:00:25Z"},
+      {"from": "active", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-13T18:13:20Z"}
+    ]
+  },
+  {
+    "id": "failed-without-stage",
+    "_note": "SYNTHETIC. A failed run that names a reason but records no furthest stage — attribution lost between the bot and the row. Unverifiable rather than false, so this one warns.",
+    "status": "failed",
+    "completion_reason": "evicted",
+    "failure_stage": null,
+    "segments_captured": 5,
+    "duration_s": 700,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-14T08:00:00Z"},
+      {"from": "joining", "to": "active", "source": "bot_callback", "timestamp": "2026-06-14T08:00:30Z"},
+      {"from": "active", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-14T08:11:40Z"}
+    ]
+  },
+  {
+    "id": "clean-failed-join-failure",
+    "_note": "SYNTHETIC. A genuine fast join failure: pre-lobby stage, no segments, named source, terminal hop on the trail. Zero findings.",
+    "status": "failed",
+    "completion_reason": "join_failure",
+    "failure_stage": "joining",
+    "segments_captured": 0,
+    "duration_s": 38,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-15T11:00:00Z"},
+      {"from": "joining", "to": "failed", "source": "bot_callback", "timestamp": "2026-06-15T11:00:38Z"}
+    ]
+  },
+  {
+    "id": "short-completed-no-segments",
+    "_note": "SYNTHETIC. A 240s completed run with nothing captured — under the 300s deaf-run threshold, so it does NOT fire. The lower-boundary false-positive guard on I2.",
+    "status": "completed",
+    "completion_reason": "stopped",
+    "failure_stage": null,
+    "segments_captured": 0,
+    "duration_s": 240,
+    "transition_source": "user_stop",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-16T09:00:00Z"},
+      {"from": "joining", "to": "active", "source": "bot_callback", "timestamp": "2026-06-16T09:00:15Z"},
+      {"from": "active", "to": "completed", "source": "user_stop", "timestamp": "2026-06-16T09:04:00Z"}
+    ]
+  },
+  {
+    "id": "in-flight-active",
+    "_note": "SYNTHETIC. A non-terminal row: the run is still going, so it has made no claim yet. Skipped, never flagged.",
+    "status": "active",
+    "completion_reason": null,
+    "failure_stage": null,
+    "segments_captured": 12,
+    "duration_s": 300,
+    "transition_source": "bot_callback",
+    "status_transition": [
+      {"from": null, "to": "joining", "source": "creation", "timestamp": "2026-06-17T10:00:00Z"},
+      {"from": "joining", "to": "active", "source": "bot_callback", "timestamp": "2026-06-17T10:00:19Z"}
+    ]
+  }
+]
