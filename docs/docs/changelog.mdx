@@ -1023,6 +1023,14 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
 - **More accurate Zoom speaker attribution (#1018).** Zoom transcripts are named per-participant with a
   self-correcting vote, so a speaker's words are far less likely to land under the wrong name.
 
+- **Known limit — the Zoom bot joins as a web client, so not every Zoom meeting can be
+  recorded.** Some Zoom accounts and meetings block automated browser clients outright; the bot is
+  refused at the door there, ends as `failed` with reason `zoom_requires_rtms`, and no transcript is
+  produced. This is a platform policy on the host's side, not a fault in the bot — those meetings
+  need Zoom's Realtime Media Streams path, which this release does not ship
+  ([#706](https://github.com/Vexa-ai/vexa/issues/706)). Meetings that do admit a web client are
+  unaffected, and this release also improves the bot's ability to be admitted at all.
+
 - **Text-only custom STT responses now reach the transcript (#1148).** OpenAI-compatible
   endpoints may return only `text`; the mixed pipeline now assigns that text to the submitted
   speech window instead of discarding it for missing provider timestamps. See
