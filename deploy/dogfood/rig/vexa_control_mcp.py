@@ -1863,12 +1863,42 @@ def bot_send(meeting_url: str, bot_name: str = "Vexa", token: str = "") -> str:
                            "detail": str(r)[:300],
                            "do": "report_friction() with this, and tell your person in one "
                                  "plain sentence that the bot could not join."})
+    # Wait the few seconds it takes to KNOW, instead of returning "requested" and leaving the
+    # agent to poll a status field and interpret three states. A launch that is going to fail
+    # (a missing image, a dead runtime) fails in this window — which is exactly the failure
+    # that read as "the bot could not join" with no reason attached.
+    state, detail = "knocking", ""
+    for _ in range(4):
+        time.sleep(1.6)
+        stc, rc = _http("GET", f"{GATEWAY}/bots/status", {"X-API-Key": _user_key(uid)})
+        if stc != 200:
+            continue
+        for b in (rc or {}).get("running_bots", []):
+            if str(b.get("native_meeting_id")) == str(mid):
+                sv = str(b.get("status", "")).lower()
+                if sv in ("active", "in_call", "recording"):
+                    state, detail = "in_call", sv
+                elif sv in ("failed", "exited"):
+                    state, detail = "failed", sv
+                break
+        if state != "knocking":
+            break
+
+    say = {
+        "in_call": f"The bot is in the call as '{bot_name}' — I can read along from here.",
+        "knocking": f"The bot is at the door as '{bot_name}'. Someone in the meeting has to "
+                    f"let it in, same as any guest — once they do, the words start reaching me.",
+        "failed": "The bot could not stay in the call. That is ours, not yours — I have "
+                  "reported it.",
+    }[state]
+
     return json.dumps({
         "ui_url": _ui_meeting_url(platform, mid), "sent": True, "platform": platform, "meeting": mid,
         "status": (r or {}).get("status"),
-        "tell_your_person": f"The bot is on its way to the call as '{bot_name}' — it knocks "
-                            f"within about half a minute, and someone in the meeting lets it "
-                            f"in like any guest.",
+        "bot_state": state, "detail": detail,
+        "tell_your_person": say,
+        "then": ("Follow it with meeting_transcript(meeting_url) and pass the cursor back as "
+                 "since=<cursor> every 20-30s. One call each time; never build a watcher."),
         "next_options": [
             "Read along live — I can tell you what is being said as it happens",
             "Have the bot say something into the room (bot_say)",
@@ -1880,12 +1910,18 @@ def bot_send(meeting_url: str, bot_name: str = "Vexa", token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def meeting_transcript(meeting_url: str, tail: int = 80, token: str = "") -> str:
+def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
+                       token: str = "") -> str:
     """The words of a meeting, live while it runs or complete after it ends.
 
-    Returns the last `tail` segments as speaker-attributed lines. This is how a meeting
-    reaches this conversation: read it, summarize it, answer questions about it, act on it —
-    with your own reasoning, right here."""
+    TO FOLLOW A LIVE CALL, pass back the `cursor` from your last call as since=<cursor>: you
+    get only what has been said since, and the next cursor. Nothing to remember, nothing to
+    diff, no watcher to build — call it again every 20-30 seconds and read out what is new.
+    Without `since` you get the last `tail` segments.
+
+    `read_ok` is always true when the read itself worked. new_segments=0 with read_ok=true
+    means the room is quiet; an `error` key means your reader failed. They are opposite facts
+    and your person needs to know which."""
     uid = me()
     platform, mid = _meeting_ref(meeting_url)
     if not platform:
@@ -1893,17 +1929,43 @@ def meeting_transcript(meeting_url: str, tail: int = 80, token: str = "") -> str
     st, r = _http("GET", f"{GATEWAY}/transcripts/{platform}/{mid}",
                   {"X-API-Key": _user_key(uid)})
     if st != 200:
-        return json.dumps({"error": "no transcript for that meeting yet", "status": st,
-                           "note": "if the bot was just sent, it may still be knocking — "
-                                   "try again in ~20 seconds"})
+        return json.dumps({"error": "could not read the transcript", "read_ok": False,
+                           "status": st,
+                           "tell_your_person": "Say the READ failed — never that the room is "
+                                               "quiet. You do not know that.",
+                           "note": "if the bot was just sent it may still be knocking — try "
+                                   "again in ~20 seconds; if this repeats, report_friction()"})
     segs = (r or {}).get("segments") or []
+
+    def _at(g):
+        return g.get("absolute_start_time") or g.get("start")
+
+    fresh = segs
+    if since:
+        # everything strictly after the cursor. String compare is right for ISO timestamps and
+        # for the float-seconds the gateway also emits, as long as both sides come from _at.
+        fresh = [g for g in segs if str(_at(g) or "") > str(since)]
+    else:
+        fresh = segs[-max(1, min(int(tail), 400)):]
+
     lines = [{"who": g.get("speaker") or "?",
               "said": (g.get("text") or "").strip(),
-              "at": g.get("absolute_start_time") or g.get("start")}
-             for g in segs[-max(1, min(int(tail), 400)):] if (g.get("text") or "").strip()]
+              "at": _at(g)}
+             for g in fresh if (g.get("text") or "").strip()]
     live = str((r or {}).get("status", "")).lower() in ("active", "requested", "awaiting_admission")
+    cursor = str(_at(segs[-1])) if segs else (since or "")
     return json.dumps({"ui_url": _ui_meeting_url(platform, mid), "meeting": mid,
                        "status": (r or {}).get("status"),
+                       "read_ok": True,
+                       "cursor": cursor,
+                       "new_segments": len(lines) if since else None,
+                       "follow": ("Call me again in 20-30s with since=<cursor above> for only "
+                                  "what is new. Do not build a watcher; there is nothing to "
+                                  "diff." if live else
+                                  "The meeting is over — this is the complete record."),
+                       "nothing_new_means": ("The room is quiet, not broken — the read "
+                                             "succeeded. Say so plainly, or say nothing and "
+                                             "wait." if since and not lines else None),
                        "total_segments": len(segs), "showing": len(lines),
                        "next_options": ([
                            "Keep reading along — ask me anything about what is being said",
