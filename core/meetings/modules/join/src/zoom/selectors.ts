@@ -36,6 +36,30 @@ export const zoomLeaveButtonSelector = 'button[aria-label="Leave"]';
 // The meeting app container
 export const zoomMeetingAppSelector = '.meeting-app';
 
+// In-meeting footer markers, matched on DOM PRESENCE rather than visibility.
+//
+// Zoom's footer toolbar auto-hides after a few seconds without pointer movement,
+// so isVisible() on any footer control returns false for a bot that is very much
+// inside the meeting. Presence survives the auto-hide; visibility does not.
+//
+// These are admission concerns, not recording concerns: they answer "am I in the
+// meeting", which is exactly what isAdmitted() needs and what the auto-hide breaks.
+//
+// Deliberately broad and redundant — Zoom ships unannounced DOM changes and A/B
+// tests them, so no single selector can be trusted. Any one match is sufficient.
+// None of these render in the waiting room or on the pre-join page.
+export const zoomInMeetingMarkers = [
+  'button[aria-label="Leave"]',
+  'button[aria-label*="Leave"]',
+  '.footer__leave-btn',
+  'button.join-audio-container__btn',
+  'button.send-video-container__btn',
+  'button[aria-label*="participants list"]',
+  'button[aria-label*="chat panel"]',
+  '#wc-footer',
+  '.footer-button-base__button',
+];
+
 // ---- Host-not-started / invalid meeting ----
 // When host hasn't started: title="Error - Zoom", text="This meeting link is invalid (3,001)"
 export const zoomInvalidMeetingText = 'This meeting link is invalid';
