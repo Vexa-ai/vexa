@@ -70,6 +70,9 @@ Self-host on one host, then explore it in the Terminal or drive it over the API.
 Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works fine for a local
 evaluation — everything runs in containers either way.
 
+> **Client direction:** the legacy hosted Dashboard is being deprecated in favor of the Terminal,
+> which is the primary UI for new self-hosted and product workflows.
+
 **Prerequisites** — `make`, **Docker engine ≥ v26** (`make all` checks), and transcription: a free token at
 [vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
 air-gapped setup. By default `POST /bots` **requires** STT and answers **503** when it is missing
