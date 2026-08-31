@@ -4,11 +4,14 @@ One dialect covers nearly every provider — OpenRouter, Ollama, vLLM, LM Studio
 most gateways all speak ``POST {base}/chat/completions``. Raw httpx, no vendor SDK: the request is
 ~10 lines and a pinned SDK would be a heavier supply-chain surface than the protocol itself.
 
-Config (constructor args win over env): ``VEXA_LLM_BASE_URL`` (required — e.g.
-``https://openrouter.ai/api/v1``, ``http://ollama:11434/v1``; falls back to ``ANTHROPIC_BASE_URL``
-for deployments that already point one at a multi-protocol gateway), ``VEXA_LLM_API_KEY`` (falls
-back ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY``; optional — local runtimes need none),
-``VEXA_LLM_MODEL`` (the deployment-default model).
+Config (constructor args win over env): ``VEXA_LLM_BASE_URL`` (required unless a ``default_base``
+is supplied — e.g. ``https://openrouter.ai/api/v1``, ``http://ollama:11434/v1``; falls back to
+``ANTHROPIC_BASE_URL`` for deployments that already point one at a multi-protocol gateway),
+``VEXA_LLM_API_KEY`` (falls back ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY``; optional —
+local runtimes need none), ``VEXA_LLM_MODEL`` (the deployment-default model).
+
+Named single-provider adapters (``orca.py``) subclass this with a ``default_base`` so their
+deployments opt in with just the provider key — no endpoint to type.
 """
 from __future__ import annotations
 
@@ -24,11 +27,12 @@ from llm.ports import CompletionResult
 class OpenAICompatCompletion:
     name = "openai-compat"
 
-    def __init__(self, *, base_url: Optional[str] = None, api_key: Optional[str] = None,
-                 model: Optional[str] = None, timeout: float = 120.0,
+    def __init__(self, *, base_url: Optional[str] = None, default_base: str = "",
+                 api_key: Optional[str] = None, model: Optional[str] = None,
+                 timeout: float = 120.0,
                  transport: Optional[httpx.BaseTransport] = None) -> None:
         self._base = (base_url or os.environ.get("VEXA_LLM_BASE_URL")
-                      or os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
+                      or default_base or os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
         self._key = (api_key or os.environ.get("VEXA_LLM_API_KEY")
                      or os.environ.get("ANTHROPIC_AUTH_TOKEN")
                      or os.environ.get("ANTHROPIC_API_KEY") or "")
@@ -40,8 +44,8 @@ class OpenAICompatCompletion:
         target = (model or "").strip() or self._model
         if not self._base:
             raise LLMConfigError(
-                "no completion endpoint: set VEXA_LLM_BASE_URL (e.g. https://openrouter.ai/api/v1, "
-                "http://ollama:11434/v1) — the openai-compat provider has no default host"
+                f"no completion endpoint: set VEXA_LLM_BASE_URL (e.g. https://openrouter.ai/api/v1, "
+                f"http://ollama:11434/v1) — the {self.name} provider has no default host"
             )
         if not target:
             raise LLMConfigError(

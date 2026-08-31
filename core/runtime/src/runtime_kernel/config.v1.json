@@ -295,7 +295,7 @@
    "key": "VEXA_LLM_PROVIDER",
    "class": "defaulted",
    "default": "(openai-compat)",
-   "description": "llm-module CompletionPort adapter key, brokered into spawned workers",
+   "description": "llm-module CompletionPort adapter key, brokered into spawned workers (openai-compat | anthropic | orcarouter | claude-cli)",
    "targets": [
     "compose"
    ]

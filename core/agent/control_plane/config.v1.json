@@ -160,7 +160,7 @@
       "key": "VEXA_LLM_PROVIDER",
       "class": "defaulted",
       "default": "(openai-compat)",
-      "description": "llm-module CompletionPort adapter key forwarded into workers by dispatch",
+      "description": "llm-module CompletionPort adapter key forwarded into workers by dispatch (openai-compat | anthropic | orcarouter | claude-cli)",
       "targets": [
         "compose"
       ]
