@@ -21,6 +21,10 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
+      {{- with .Values.global.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
       # See deployment-minio.yaml header for the full rationale.
       affinity:
@@ -40,6 +44,10 @@ spec:
       {{- end }}
       containers:
         - name: redis
+          {{- with .Values.global.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           image: "{{ .Values.redis.image }}"
           imagePullPolicy: IfNotPresent
           {{- /* v0.10.5 Pack C.5 — paired-durability invariant guard */}}

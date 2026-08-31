@@ -24,6 +24,7 @@ template:
 test:
 	bash tests/test_helm_lint.sh
 	bash tests/test_template.sh
+	bash tests/test_redis_security_context.sh
 
 ## build — build the 5 control-plane images (:dev) via the compose build
 build:
