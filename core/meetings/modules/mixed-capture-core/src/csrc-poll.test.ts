@@ -81,7 +81,10 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
   t += 200; poll.poll();
   check('inside the inactivity window a stale entry is NOT yet a deactivation',
     out.length === 1, JSON.stringify(out));
-  t += 700; poll.poll();   // 900ms > 800ms default
+  t += 550; poll.poll();   // 750ms staleness — just inside the 800ms window
+  check('just inside the window the entry is STILL held open (the boundary, not the middle)',
+    out.length === 1, JSON.stringify(out));
+  t += 100; poll.poll();   // 850ms > 800ms default
   check('past inactiveMs the deactivation is SYNTHESIZED (the transport never sends this edge)',
     out.length === 2 && out[1].active === false && out[1].csrc === 7 && out[1].tMs === t,
     JSON.stringify(out));
