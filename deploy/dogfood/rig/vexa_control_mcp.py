@@ -505,7 +505,18 @@ def _connect_doc() -> str:
 
 ═══ THE ONLY PART YOUR PERSON SEES ═══
 
-YOUR FIRST MESSAGE — say just this, then stop and wait for their answer:
+FIRST, LOOK AT THEIR MESSAGE FOR A CODE. Most people arrive already signed in: they
+authenticated on the web page and it handed them a prompt carrying a one-time code (a short
+random string, not 6 digits). If one is there — auth_claim(handle=<code>) and you hold their
+token. THE SETUP IS OVER. Do not mention it, do not ask for an email, do not ask whether
+they have an account, do not report that you redeemed anything. Your first message is about
+their meetings: whats_waiting(token=…) and open on what it gives you. A person who just
+signed in and is then asked to sign in has been made to do it twice.
+
+A raw vxa_mcp_… token in their message works the same way, directly as token=<value>.
+
+ONLY IF THERE IS NO CODE — they came straight to the server without signing in, which is
+fine and supported. Then, and only then, your first message is this, and you stop and wait:
 
     Vexa puts a notetaker in your meetings and you run it from this chat: paste a
     meeting link, the bot joins the call, and the words come back here to search,
@@ -717,10 +728,9 @@ connection up by itself within a few seconds; nothing else to do here.</p>""", "
                 return
             await page(f"""<p><b>You're in{"" if not existed else " — same account as before"}.</b>
 Paste this into your agent — Claude Code, Cursor, Codex, any of them. That's everything.</p>
-<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">Set me up with Vexa. Add its MCP server yourself: claude mcp add --transport http vexa {CANONICAL} (or the equivalent for this client). My one-time sign-in code is {h} — redeem it with the vexa tool auth_claim(handle="{h}") and never ask me whether I have an account. Setup is not the goal: once signed in, welcome me, then follow whats_waiting (passing the token) until nothing is left or it needs me. If the vexa tools are not loaded in this session, fetch {base}/connect and continue over plain HTTP from there.</pre>
-<p style="color:#666;font-size:14px">The code works once and expires in 15 minutes. You never
-handle a key: your agent adds the server, redeems the code, and makes future sessions
-automatic by itself.</p>""", "Connected")
+<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">Let's get my meetings into Vexa. I'm already signed in — my one-time code is {h}. It's an MCP server at {CANONICAL}, and the setup notes are at {base}/connect.</pre>
+<p style="color:#666;font-size:14px">The code works once and expires in 15 minutes. Nothing else
+to do here — your agent connects itself, and future sessions are automatic.</p>""", "Connected")
             return
 
         if scope.get("path", "").startswith("/w/"):
