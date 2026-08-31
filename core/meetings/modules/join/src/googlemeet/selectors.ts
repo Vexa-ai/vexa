@@ -83,6 +83,19 @@ export const googleConsentPromptIndicators: string[] = [
   '[role="alertdialog"]:has-text("taking notes")',
 ];
 
+// The affirmative on the "Gemini is taking notes" dialog. Confirmed live (screenshot): the dialog
+// reads "Gemini is taking notes" with two actions — "Leave" (exit) and "Join now" (proceed into the
+// meeting). It is a JOIN NOTICE that AI notetaking is active in the call, NOT a consent-to-record
+// gate the bot must decide on someone's behalf — clicking "Join now" is how any participant enters,
+// exactly what a human does. Scoped to the dialog (has-text "taking notes"/"Gemini") so it never
+// matches the pre-join lobby "Join now". NEVER target "Leave" — that would drop the bot from the call.
+export const geminiNotesJoinNowSelectors: string[] = [
+  '[role="dialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="dialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+];
+
 export const googleRejectionIndicators: string[] = [
   // Waiting-room denial patterns. Google Meet can leave some lobby text in
   // the DOM after a host rejects the bot, so these must be checked before

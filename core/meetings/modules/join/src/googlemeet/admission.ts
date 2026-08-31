@@ -6,7 +6,8 @@ import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
   googleRejectionIndicators,
-  googleConsentPromptIndicators
+  googleConsentPromptIndicators,
+  geminiNotesJoinNowSelectors
 } from "./selectors";
 
 // AdmissionError + AdmissionOutcome moved to ../shared/admission so every platform (jitsi/zoom/
@@ -213,14 +214,21 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
     return false;
   }
 
-  // 1b. NEGATIVE GUARD: a Gemini "take notes" consent prompt is a pre-admission
-  // consent gate. Meeting controls can be visible behind it, but the bot is not
-  // truly participating until a human accepts/declines — reporting admitted here
-  // yields "status active, 0 transcriptions" (Vexa-ai/vexa#429). Suppress admission.
+  // 1b. The "Gemini is taking notes" dialog. Confirmed live (screenshot): it reads "Gemini is
+  // taking notes" with "Leave" / "Join now" — a JOIN NOTICE that AI notetaking is active in the
+  // meeting, NOT a consent-to-record gate. Clicking "Join now" is how any participant enters (a
+  // human does exactly this); it does not enable Gemini or consent on anyone's behalf. So proceed
+  // by clicking "Join now". Only if the dialog is present but has no "Join now" (a genuinely
+  // different consent gate) do we hold as not-admitted so a human can look.
   const consentPending = await hasConsentPrompt(page);
   if (consentPending) {
-    log(`⚠️ Gemini consent prompt visible — suppressing admission (consent pending; bot not truly in the call)`);
-    return false;
+    if (await acknowledgeGeminiNotesPrompt(page)) {
+      log(`✅ "Gemini is taking notes" notice — clicked "Join now" to enter the meeting`);
+      // Fall through to the admission checks below; the dialog is dismissed.
+    } else {
+      log(`⚠️ Consent prompt visible with no "Join now" — suppressing admission (bot not truly in the call)`);
+      return false;
+    }
   }
 
   // Wake the UI before probing. Google Meet auto-hides the in-call toolbar
@@ -305,16 +313,35 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
-// Detect Google's Gemini "take notes for me" in-call consent prompt — a consent
-// gate where the bot isn't truly participating until a human accepts/declines
-// (Vexa-ai/vexa#429). Mirrors checkForWaitingRoomIndicators: a pre-admission
-// state that suppresses the "admitted" signal. Consent must be a human decision,
-// so callers escalate to needs_human_help rather than auto-clicking it.
+// Detect Google's "Gemini is taking notes" dialog — a pre-admission notice that reads as "admitted"
+// behind it (meeting controls visible) but leaves the bot NOT truly in the call (status active, 0
+// transcriptions) until it is acknowledged. Mirrors checkForWaitingRoomIndicators. The caller
+// acknowledges it with acknowledgeGeminiNotesPrompt (clicks "Join now"); only a variant with no
+// "Join now" holds as not-admitted for a human to look.
 export async function hasConsentPrompt(page: Page): Promise<boolean> {
   for (const selector of googleConsentPromptIndicators) {
     try {
       const element = await page.locator(selector).first();
       if (await element.isVisible()) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+// Acknowledge the "Gemini is taking notes" dialog by clicking its "Join now" affirmative so the bot
+// enters the meeting (a human clicks exactly this). Scoped to the dialog so it never hits the pre-join
+// lobby "Join now", and it targets ONLY "Join now" — never "Leave", which would drop the bot. Returns
+// true if it clicked (dialog handled), false if no "Join now" is present (a different gate → hold).
+export async function acknowledgeGeminiNotesPrompt(page: Page): Promise<boolean> {
+  for (const selector of geminiNotesJoinNowSelectors) {
+    try {
+      const btn = page.locator(selector).first();
+      if (await btn.isVisible({ timeout: 0 })) {
+        await btn.click();
         return true;
       }
     } catch {
@@ -380,15 +407,16 @@ export async function waitForGoogleMeetingAdmission(
       return true;
     }
 
-    // Consent gate: if Google's Gemini "take notes" consent prompt is present,
-    // the bot is held behind a human decision (accept/decline) — not admitted.
-    // Do NOT auto-click it; consent is the user's choice (Vexa-ai/vexa#429).
-    // Summon a human via needs_human_help and keep polling, so admission
-    // proceeds once consent is granted (mirrors the reCAPTCHA "stay for human
-    // solve" handling).
+    // "Gemini is taking notes" notice (see §1b in checkForGoogleAdmissionIndicators): acknowledge it
+    // by clicking "Join now" so the bot enters — a join notice, not a consent-to-record gate, so we do
+    // NOT wait for a human. Only a variant with no "Join now" is a real gate that needs a human.
     if (await hasConsentPrompt(page)) {
-      log("🧑‍⚖️ Gemini consent prompt detected — bot is behind a consent gate (not admitted). Escalating to needs_human_help; not auto-consenting.");
-      await triggerEscalation(botConfig, "consent_required");
+      if (await acknowledgeGeminiNotesPrompt(page)) {
+        log("✅ \"Gemini is taking notes\" notice — clicked \"Join now\"; re-checking admission");
+      } else {
+        log("🧑‍⚖️ Consent prompt with no \"Join now\" — escalating to needs_human_help (not auto-consenting).");
+        await triggerEscalation(botConfig, "consent_required");
+      }
     }
 
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");

@@ -253,13 +253,21 @@ def create_app(
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
-    app.include_router(
-        _bot_spawn.build_router(
-            meeting_repo,
-            runtime,
-            service_authority,
-        )
-    )
+    # A fresh meeting must start on an EMPTY transcript stream. Wire a redis-backed purge (None offline)
+    # so bot_spawn can clear tc:meeting:{new_row_id} on a FRESH insert — a reused row id (e.g. after a DB
+    # id-sequence reset without a redis flush) would otherwise carry a prior generation's stale
+    # session_end and the terminal would show "Meeting ended" before the first word. continue_meeting is
+    # untouched (it keeps the reused row's stream). See bot_spawn.service.request_bot.
+    _stream_purge = None
+    if redis is not None and hasattr(redis, "delete"):
+        async def _stream_purge(meeting_id, _r=redis):
+            await _r.delete(f"tc:meeting:{meeting_id}")
+    app.include_router(_bot_spawn.build_router(
+        meeting_repo,
+        runtime,
+        service_authority,
+        transcript_stream_purge=_stream_purge,
+    ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
@@ -854,6 +862,32 @@ def _mount_lifecycle(
                     )
                 except Exception as e:  # noqa: BLE001 — the worker's idle timeout is the backstop
                     log_event("meeting_copilot_reap_failed", audience="system", level="warning",
+                              span="lifecycle.callback",
+                              fields={"meeting_row_id": meeting_row_id, "error": str(e)})
+        # NEW-SESSION MARKER (mirror of the reap above): when a meeting goes ACTIVE, write a
+        # `session_start` marker onto the same ROW-scoped stream. tc:meeting:{row_id} is SHARED across a
+        # meeting's sessions — a re-sent bot REUSES a terminal row — so a prior session's `session_end`
+        # lingers in the terminal SSE's replay tail and shows "Meeting ended" over the new live meeting.
+        # This marker lets the SSE reset that stale end (agent api.py's seed treats any non-session_end
+        # entry as "still live"), so even a SILENT new session clears the banner. Best-effort.
+        if (
+            redis is not None
+            and not change.no_op
+            and rec.status is not None
+            and rec.status.value == "active"
+            and isinstance(meeting_row, dict)
+            and hasattr(redis, "xadd")
+        ):
+            meeting_row_id = meeting_row.get("id")
+            native = meeting_row.get("native_meeting_id") or rec.connection_id
+            if meeting_row_id is not None:
+                try:
+                    await redis.xadd(
+                        f"tc:meeting:{meeting_row_id}",
+                        {"type": "session_start", "uid": str(native or meeting_row_id)},
+                    )
+                except Exception as e:  # noqa: BLE001 — best-effort; the seed also resets on new segments
+                    log_event("meeting_session_start_marker_failed", audience="system", level="warning",
                               span="lifecycle.callback",
                               fields={"meeting_row_id": meeting_row_id, "error": str(e)})
         log_event(
