@@ -1,5 +1,12 @@
 %% GENERATED — pnpm arch:dsl --write
 flowchart LR
+  fl_reaction[("reaction (table)")]
+  fl_signal[("signal (table)")]
+  fl_flow_version[("flow_version (table)")]
+  fl_effect_receipt[("effect_receipt (table)")]
+  fl_mail_thread[("mail_thread (table)")]
+  fl_mail_cursor[("mail_cursor (table)")]
+  fl_mail_outbox[("mail_outbox_sent (table)")]
   segments_stream[("transcription_segments (stream)")]
   tc_mutable[("tc:meeting:{id}:mutable (pubsub)")]
   style tc_mutable stroke-dasharray: 5 5,stroke-width:3px
@@ -47,3 +54,10 @@ flowchart LR
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
   admin_api -->|write| identity_db
+  flows -->|write| fl_reaction
+  flows -->|write| fl_signal
+  flows -->|write| fl_flow_version
+  flows -->|write| fl_effect_receipt
+  flows -->|write| fl_mail_thread
+  flows -->|write| fl_mail_cursor
+  flows -->|write| fl_mail_outbox

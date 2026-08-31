@@ -1,0 +1,8 @@
+{ "steps_vocabulary": [
+    { "name": "require_workspace", "doc": "THE QUEUE GATE: minutes wait for workspace readiness; nudge on a cadence then Wait." },
+    { "name": "process_meeting", "doc": "REAL agent turn: write the meeting note into the workspace and commit." },
+    { "name": "email_minutes", "doc": "Send the committed note verbatim in the email body + the feedback ask." } ],
+  "flows": [
+    { "name": "post_meeting", "version": 1, "on": "meeting.completed",
+      "steps": ["require_workspace", "process_meeting", "email_minutes"],
+      "source": "image", "status": "active" } ] }

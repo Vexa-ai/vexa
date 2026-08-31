@@ -1,0 +1,3 @@
+{ "name": "post_meeting", "on_event": "meeting.completed",
+  "steps": ["require_workspace", "process_meeting", "email_minutes"],
+  "params": { "style": "decided-committed-open" }, "activate": true }

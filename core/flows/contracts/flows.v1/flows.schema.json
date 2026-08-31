@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/flows.v1",
+  "title": "flows.v1",
+  "description": "The flows control-plane REST surface (flows-api) — the boundary between an MCP/agent client and the reaction engine. Flows are DATA: an ordered list of step names drawn from a fixed vocabulary, plus a trigger event. The API never accepts code, so a wrong step name is a 400 with the vocabulary returned, never a runtime failure. A submitted flow admits a reaction per matching fact; reactions walk their steps and can be steered by audited signals (retry/resume/cancel/wake), never by table surgery. This is a cross-process, independently-deployable boundary (P4): sealed, versioned, golden-pinned.",
+  "$defs": {
+    "FlowSubmission": {
+      "description": "POST /flows body — submit a new flow version. `steps` must all be in the live vocabulary or the call is a 400.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "on_event", "steps"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "flow name; a resubmission mints the next version" },
+        "on_event": { "type": "string", "minLength": 1, "maxLength": 120, "description": "the trigger event type, e.g. meeting.completed" },
+        "steps": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "ordered step names, all from the vocabulary (GET /flows.steps_vocabulary)" },
+        "params": { "type": "object", "description": "optional per-flow parameters passed to steps" },
+        "activate": { "type": "boolean", "default": true, "description": "true → active (live within ~10s); false → draft" }
+      }
+    },
+    "Flow": {
+      "description": "One flow version as listed by GET /flows. `source` distinguishes an image-baked flow from an API-submitted one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "on", "steps", "source", "status"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "on": { "type": "string", "description": "trigger event type" },
+        "steps": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "string", "enum": ["image", "api"], "description": "image = baked into the deployment; api = submitted via POST /flows" },
+        "status": { "type": "string", "enum": ["active", "draft", "retired"] },
+        "params": { "type": "object" },
+        "created_by": { "type": "string", "description": "the X-Actor that submitted it (api flows only)" }
+      }
+    },
+    "StepDoc": {
+      "description": "One entry of the step vocabulary — a step name and its one-line doc. The vocabulary is the closed set of names a FlowSubmission may use.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "doc"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "type": "string" }
+      }
+    },
+    "FlowList": {
+      "description": "GET /flows response — the vocabulary that bounds submissions, plus every known flow (image + api).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps_vocabulary", "flows"],
+      "properties": {
+        "steps_vocabulary": { "type": "array", "items": { "$ref": "#/$defs/StepDoc" } },
+        "flows": { "type": "array", "items": { "$ref": "#/$defs/Flow" } }
+      }
+    },
+    "SubmitResult": {
+      "description": "POST /flows 201 response.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "status"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "enum": ["active", "draft"] },
+        "live_within_s": { "type": ["integer", "null"], "description": "seconds until an active flow is live; null for a draft" }
+      }
+    },
+    "StatusResult": {
+      "description": "POST /flows/{name}/{version}/{activate|retire} response.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "status"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "enum": ["active", "retired"] }
+      }
+    },
+    "UnknownSteps": {
+      "description": "POST /flows 400 body — the submission named steps outside the vocabulary. The vocabulary is returned so the caller can self-correct. This is the P4 forcing function: a wrong step is a contract error, not a runtime one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unknown_steps", "vocabulary"],
+      "properties": {
+        "unknown_steps": { "type": "array", "items": { "type": "string" } },
+        "vocabulary": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Reaction": {
+      "description": "One reaction (a fact walking a flow's steps) as listed by GET /reactions. `next_run_at` is the parked wake time — how a scheduled bot dispatch or a blocked step waits at zero cost.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "flow", "step", "status", "attempt"],
+      "properties": {
+        "id": { "type": "string", "description": "reaction_id" },
+        "flow": { "type": "string", "description": "flow@version, e.g. post_meeting@1" },
+        "step": { "type": "string" },
+        "status": { "type": "string", "enum": ["admitted", "running", "retrying", "blocked", "done", "failed", "cancelled"] },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "reason": { "type": ["string", "null"], "description": "why it is retrying/failed/blocked" },
+        "next_run_at": { "type": ["number", "null"], "description": "epoch seconds of the next scheduled run; null when not parked" }
+      }
+    },
+    "ReactionList": {
+      "description": "GET /reactions response (newest first, ≤100).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reactions"],
+      "properties": {
+        "reactions": { "type": "array", "items": { "$ref": "#/$defs/Reaction" } }
+      }
+    },
+    "SignalResult": {
+      "description": "POST /reactions/{id}/{retry|resume|cancel|wake} response — the applied verb, true. A verb not applicable in the current status is a 409, never a silent no-op.",
+      "type": "object",
+      "additionalProperties": true,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "retry": { "const": true },
+        "resume": { "const": true },
+        "cancel": { "const": true },
+        "wake": { "const": true }
+      }
+    }
+  }
+}

@@ -12,12 +12,12 @@ description: "Generated map: every modularity principle and the gate that enforc
 
 | Principle | Rule | Gate(s) | Evidence | Status |
 |---|---|---|---|---|
-| **P2** | Couple only through contracts — no import reaches around a contract into a sibling module's internals (prod AND tests). | `gate:isolation` · `gate:isolation-py` · `gate:test-isolation` | 17 brick(s) checked; every Python sibling import is own-module, declared, or an allowed edge; no Python test imports a sibling module's internals (test lane gated, P2) | ✅ |
+| **P2** | Couple only through contracts — no import reaches around a contract into a sibling module's internals (prod AND tests). | `gate:isolation` · `gate:isolation-py` · `gate:test-isolation` | 19 brick(s) checked; every Python sibling import is own-module, declared, or an allowed edge; no Python test imports a sibling module's internals (test lane gated, P2) | ✅ |
 | **P3** | Dependencies point inward to the kernel; the graph is acyclic (runtime depends on nothing above). | `gate:graph` · `gate:graph-py` | acyclic + allowed-edges; Python cross-package edges acyclic + allow-listed | ✅ |
-| **P4** | Cross a process/network boundary → a sealed, versioned, golden-pinned schema. | `gate:schema` · `gate:contract-version` | 24 contract(s) conform (goldens ≡ schema); 24 sealed contract(s) frozen | ✅ |
-| **P6** | One public front door per module; internals are private. | `gate:exports` | 13 library package(s) lock their front door | ✅ |
-| **P12** | Every folder self-documents (README: concern · surface · deps). | `gate:readme` | 299 dirs each carry a README | ✅ |
-| **P23** | One writer per data carrier; a reader never re-derives a producer's data (data-flow ownership, architecture.calm.json). | `gate:dataflow` | 81 nodes · 52 edges · 11 carriers · complete + sealed (P23) | ✅ |
+| **P4** | Cross a process/network boundary → a sealed, versioned, golden-pinned schema. | `gate:schema` · `gate:contract-version` | 26 contract(s) conform (goldens ≡ schema); 25 sealed contract(s) frozen; 1 unsealed (in development): core/flows/contracts/flows.v1 | ✅ |
+| **P6** | One public front door per module; internals are private. | `gate:exports` | 14 library package(s) lock their front door | ✅ |
+| **P12** | Every folder self-documents (README: concern · surface · deps). | `gate:readme` | 354 dirs each carry a README | ✅ |
+| **P23** | One writer per data carrier; a reader never re-derives a producer's data (data-flow ownership, architecture.calm.json). | `gate:dataflow` | 98 nodes · 72 edges · 19 carriers · complete + sealed (P23) | ✅ |
 
 **Modularity verdict: all gates green — the v0.12 backend is fully modular by the constitution's own definition.**
 

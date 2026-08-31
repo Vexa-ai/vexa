@@ -122,6 +122,179 @@
    ]
   },
   {
+   "unique-id": "flows.v1",
+   "node-type": "contract",
+   "name": "flows.v1",
+   "description": "flows.v1 \u2014 the flows control-plane REST surface (submit/list/activate-retire flows, list/signal reactions); UNSEALED stub, sealed when flows-api joins the stack behind the gateway",
+   "metadata": [
+    {
+     "path": "core/flows/contracts/flows.v1",
+     "domain": "flows"
+    }
+   ]
+  },
+  {
+   "unique-id": "fl-reaction",
+   "node-type": "database",
+   "name": "reaction (table)",
+   "description": "the reaction queue \u2014 one row per admitted fact, walking its flow's steps; status + next_run_at is the parked scheduler",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "reaction",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-signal",
+   "node-type": "database",
+   "name": "signal (table)",
+   "description": "audited reaction signals (retry/resume/cancel/wake) \u2014 the only sanctioned way to steer a reaction, never table surgery",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "signal",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-flow-version",
+   "node-type": "database",
+   "name": "flow_version (table)",
+   "description": "submitted flow versions (name, trigger, steps, status) \u2014 image flows live in code, api flows here",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "flow_version",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-effect-receipt",
+   "node-type": "database",
+   "name": "effect_receipt (table)",
+   "description": "idempotency + provenance receipts for step effects (a step's side effect recorded once)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "effect_receipt",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-mail-thread",
+   "node-type": "database",
+   "name": "mail_thread (table)",
+   "description": "outbound mail threads registered to a session, so a reply reconnects to its meeting",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "mail_thread",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-mail-cursor",
+   "node-type": "database",
+   "name": "mail_cursor (table)",
+   "description": "the inbound mail poller's position \u2014 how far the mailbox has been consumed",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "mail_cursor",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "fl-mail-outbox",
+   "node-type": "database",
+   "name": "mail_outbox_sent (table)",
+   "description": "sent-mail dedup ledger \u2014 a note is emailed at most once per (subject, session)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "flows"
+        ],
+        "match": "mail_outbox_sent",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "conformance",
    "node-type": "service",
    "name": "conformance",
@@ -1291,8 +1464,7 @@
       "out-stream",
       "unit-in",
       "proc-stream",
-      "va-chat",
-      "flows"
+      "va-chat"
      ]
     }
    }
@@ -2417,6 +2589,152 @@
     }
    },
    "description": "dispatch_bot POSTs /bots with the subject's key \u2014 flows is a CLIENT of the gateway, not a service behind it"
+  },
+  {
+   "unique-id": "flows-writes-reaction",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-reaction"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-signal",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-signal"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-flow-version",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-flow-version"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-effect-receipt",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-effect-receipt"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-mail-thread",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-mail-thread"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-mail-cursor",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-mail-cursor"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-writes-mail-outbox",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "fl-mail-outbox"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "flows",
+     "nodes": [
+      "flows",
+      "flows.v1",
+      "fl-reaction",
+      "fl-signal",
+      "fl-flow-version",
+      "fl-effect-receipt",
+      "fl-mail-thread",
+      "fl-mail-cursor",
+      "fl-mail-outbox"
+     ]
+    }
+   },
+   "description": "the flows domain: the reaction engine service, its REST contract, and the seven carriers it owns"
   }
  ],
  "flows": [

@@ -11,7 +11,6 @@ flowchart LR
   subgraph agent["agent"]
     agent_api["agent-api"]
     agent_worker["agent-worker"]
-    flows["flows"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -61,3 +60,10 @@ flowchart LR
   extension -->|"WebSocket"| gateway
   flows -->|""| agent_api
   flows -->|""| gateway
+  flows -->|"write"| fl_reaction
+  flows -->|"write"| fl_signal
+  flows -->|"write"| fl_flow_version
+  flows -->|"write"| fl_effect_receipt
+  flows -->|"write"| fl_mail_thread
+  flows -->|"write"| fl_mail_cursor
+  flows -->|"write"| fl_mail_outbox

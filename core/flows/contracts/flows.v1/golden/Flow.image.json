@@ -1,0 +1,3 @@
+{ "name": "post_meeting", "version": 1, "on": "meeting.completed",
+  "steps": ["require_workspace", "process_meeting", "email_minutes"],
+  "source": "image", "status": "active" }

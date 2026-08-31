@@ -54,7 +54,6 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   data-asset unit-in
   data-asset proc-stream [writers: agent-worker]
   data-asset va-chat
-  service flows
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -141,6 +140,13 @@ edges:
   extension -req-> gateway  # browser extension client; live WS via gateway
   flows -req-> agent-api  # process_meeting is a REAL agent turn: the worker drives agent-api and detects completion by a commit touching the workspace
   flows -req-> gateway  # dispatch_bot POSTs /bots with the subject's key — flows is a CLIENT of the gateway, not a service behind it
+  flows -write-> fl-reaction
+  flows -write-> fl-signal
+  flows -write-> fl-flow-version
+  flows -write-> fl-effect-receipt
+  flows -write-> fl-mail-thread
+  flows -write-> fl-mail-cursor
+  flows -write-> fl-mail-outbox
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
