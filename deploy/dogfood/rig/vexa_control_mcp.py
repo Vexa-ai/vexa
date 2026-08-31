@@ -248,8 +248,6 @@ SETTINGS_PATH = ".settings.json"
 SETTINGS_VOCAB = {
     "bot_name":     ("Vexa", "text",
                      "the name the notetaker shows up as in the room"),
-    "transcribe":   (True, "on/off",
-                     "turn spoken words into text — off records audio only"),
     "mail_minutes": (True, "on/off",
                      "the write-up after a meeting ends"),
     "mail_join":    (False, "on/off",
