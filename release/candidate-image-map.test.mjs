@@ -304,3 +304,24 @@ test("refuses any runtime-input drift", () => {
     /new candidate|runtime image inputs differ/,
   );
 });
+
+test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.25/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "d9d0cdd13623cb1a9b3772adff271b2b1b0aa457c11a7286cfb13655d813b289",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.25");
+  assert.equal(map.candidate_tag, "v0.12.25-rc.1");
+  assert.equal(map.build_source, "dedb017355aa5a2827b6c910b87d91c730b33963");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/33303578205",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:65f6904b98abb110f591c5082f12319955723e2a6e2c777f26aac9709548f00a",
+  );
+});
