@@ -563,7 +563,14 @@ works right now, before anything is registered:
      {{"jsonrpc":"2.0","method":"notifications/initialized"}}, then
      {{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"whats_waiting",
       "arguments":{{}}}}}}
-     Answers may arrive as text/event-stream — the JSON rides the `data:` lines.
+     THE NOTIFICATION ANSWERS 202 WITH AN EMPTY BODY — it is a notification, it has no id and
+     no result. Do not parse it as JSON; a parser that assumes a body crashes right here.
+     Tool answers may arrive as text/event-stream — the JSON rides the `data:` lines.
+
+FOLLOWING A LIVE MEETING: there is no push and no socket to open. Re-call
+meeting_transcript(meeting_url) on a timer — every 20-30 seconds is plenty — and diff on the
+`at` timestamp of the last segment you showed. Do not build a watcher, a daemon or a
+notification handshake for this; a timed re-read is the whole mechanism.
 
   b) GET-only environments — every tool is also a URL:
        {base}/do/whats_waiting
@@ -1063,6 +1070,14 @@ mcp = MCPServer(
         "about tokens, endpoints, sessions, HTTP, tool names or this server's internals. "
         "Machinery goes in report_friction(), not in the conversation; if something blocks "
         "you, one plain sentence of it is the most they should ever see.\n\n"
+
+        "AN EMPTY RESULT IS NOT SILENCE UNTIL YOU KNOW THE READ WORKED. \"Nobody has "
+        "spoken yet\" and \"my reader is broken\" look identical from inside your code and are "
+        "opposite facts to your person — one is patience, the other is a product that appears "
+        "dead. If a call errored, timed out, or you are not certain it returned, say which; "
+        "meeting_transcript reports total_segments and status, so a live meeting with words in "
+        "it can always be told apart from a failed read. Never narrate quiet you have not "
+        "confirmed.\n\n"
 
         "READABLE OR IT DID NOT HAPPEN — this chat IS the product, and a wall of prose is a "
         "broken screen. Short lines. One idea per line. No paragraph longer than three "
