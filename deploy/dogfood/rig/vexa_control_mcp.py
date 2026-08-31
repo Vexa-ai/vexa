@@ -2188,7 +2188,7 @@ def _meeting_ref(meeting_url: str):
 
 @mcp.tool()
 @_anon_guard
-def bot_send(meeting_url: str, bot_name: str = "Vexa", token: str = "") -> str:
+def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
     """Send a Vexa bot into a live meeting NOW. THE main verb — when your person hands you a
     meeting link, this is the call.
 
@@ -2199,9 +2199,17 @@ def bot_send(meeting_url: str, bot_name: str = "Vexa", token: str = "") -> str:
     platform, mid = _meeting_ref(meeting_url)
     if not platform:
         return json.dumps({"error": mid})
+    # THE URL TRAVELS. Parsing gives a platform and a stable id to key on, but it is a
+    # derivation and not a replacement: a Zoom link carries its passcode in ?pwd=, which no
+    # downstream can reconstruct from the numeric id. Dropping it produced a refusal that asked
+    # for the exact thing the person had already pasted.
+    # resolved ONCE: the request and the sentence we say back must name the same bot. An
+    # earlier cut resolved it inline and left the reply reading the raw empty parameter —
+    # "the bot is at the door as ''".
+    bot_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
     st, r = _gw_http(uid, "POST", "/bots",
                      {"platform": platform, "native_meeting_id": mid,
-                      "bot_name": bot_name})
+                      "meeting_url": meeting_url.strip(), "bot_name": bot_name})
     if st not in (200, 201):
         if st == 409:
             return json.dumps({"already_there": True,
@@ -2924,6 +2932,15 @@ def workspace_pull(token: str = "") -> str:
 
 # ---------------------------------------------------------------- calling home
 CALLHOME_PATCH = True
+def _fdb():
+    """The flows Postgres, for the friction table. Opened per call and closed by GC — this is a
+    low-traffic write path and a pool would be machinery for nothing."""
+    import psycopg
+    url = (HOME / ".storm/dburl").read_text().strip().replace(
+        "postgresql+psycopg://", "postgresql://")
+    return psycopg.connect(url, autocommit=True)
+
+
 FRICTION_LOG = HOME / ".storm/friction.jsonl"
 
 
@@ -2956,12 +2973,33 @@ def report_friction(what_i_was_doing: str, what_went_wrong: str,
         "severity": severity if severity in ("blocker", "annoyance", "papercut", "idea")
                     else "annoyance",
     }
+    # THE FILE FIRST, ALWAYS. It is the fallback, not the store: if the database is
+    # unreachable the report still lands somewhere, and losing feedback because a store was
+    # briefly down is the worst failure available to the one channel that tells us what using
+    # this is like.
     try:
         with FRICTION_LOG.open("a") as f:
             f.write(json.dumps(rec) + "\n")
         ok = True
     except Exception:  # noqa: BLE001
         ok = False
+
+    # then the durable store, deduped: the same edge reported twice is one row carrying the
+    # newest wording, not two rows nobody can count.
+    try:
+        import hashlib
+        fp = hashlib.sha256(
+            f"{rec.get('tool','')}|{(rec.get('wrong') or '')[:300]}".encode()).hexdigest()[:32]
+        _fdb().execute(
+            "INSERT INTO friction (at,uid,doing,wrong,would_help,tool,severity,fingerprint) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (fingerprint) DO UPDATE SET at=EXCLUDED.at, doing=EXCLUDED.doing, "
+            "would_help=EXCLUDED.would_help, severity=EXCLUDED.severity",
+            (rec["at"], rec["uid"], rec["doing"], rec["wrong"], rec["would_help"],
+             rec["tool"], rec["severity"], fp))
+        ok = True
+    except Exception:  # noqa: BLE001
+        pass
     return json.dumps({
         "recorded": ok,
         "thank_you": "This is the only signal we get about what it is actually like to use "
@@ -2977,11 +3015,20 @@ def friction_so_far(token: str = "") -> str:
     Useful before reporting: if the thing you hit is already here, add what is different about
     your case rather than filing it again."""
     me()   # account-scoped: this touches shared state
+    rows = []
     try:
-        rows = [json.loads(x) for x in FRICTION_LOG.read_text().splitlines() if x.strip()]
+        for at, uid_, doing, wrong, help_, tool_, sev, filed in _fdb().execute(
+                "SELECT at,uid,doing,wrong,would_help,tool,severity,filed_as "
+                "FROM friction ORDER BY at DESC LIMIT 60").fetchall():
+            rows.append({"at": at, "uid": uid_, "doing": doing, "wrong": wrong,
+                         "would_help": help_, "tool": tool_, "severity": sev,
+                         "already_filed": filed})
     except Exception:  # noqa: BLE001
-        rows = []
-    rows.reverse()
+        try:
+            rows = [json.loads(x) for x in FRICTION_LOG.read_text().splitlines() if x.strip()]
+            rows.reverse()
+        except Exception:  # noqa: BLE001
+            rows = []
     return json.dumps({"count": len(rows), "reports": rows[:40]})[:12000]
 
 
