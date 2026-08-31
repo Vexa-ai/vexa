@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.25 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.26 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.25`** — the current release candidate control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.26`** — the current release candidate control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -1012,6 +1012,33 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
 - **Restarting mid-leave no longer strands a meeting in "stopping" (#1280).** When Vexa restarted while a
   bot was still leaving, the meeting could sit in "stopping" — shown as active — indefinitely across a
   redeploy burst. A meeting whose stop was explicitly requested now converges on the short stop grace.
+
+- **The bot and Lite images now build on Ubuntu 24.04 (Noble) (#1011).** The meeting-bot image and
+  the Vexa Lite single-container image moved from the Jammy to the Noble Playwright base — one base
+  for both. Self-hosters running the agent worker also get a fix: it already exec'd its Python
+  interpreter as a non-root per-subject uid, but that interpreter lives under `/root`, which is
+  `0700`, so every dispatch died with `Permission denied` and respawned. `/root` is now
+  traverse-only for others (`chmod o+x`); it stays unlistable and root-owned files keep their modes.
+
+- **More accurate Zoom speaker attribution (#1018).** Zoom transcripts are named per-participant with a
+  self-correcting vote, so a speaker's words are far less likely to land under the wrong name.
+
+- **Text-only custom STT responses now reach the transcript (#1148).** OpenAI-compatible
+  endpoints may return only `text`; the mixed pipeline now assigns that text to the submitted
+  speech window instead of discarding it for missing provider timestamps. See
+  [Custom STT endpoints](/how-to/custom-stt).
+
+- **Self-host: `DEFAULT_BOT_NAME` now names the bots the terminal sends (#1258).** The terminal hardcoded
+  `bot_name: "Vexa"` on every join, so the variable compose, Lite and helm already passed to
+  meeting-api could never take effect. The terminal now omits `bot_name` and lets the deployment
+  decide, making a rename a `.env` edit plus a meeting-api restart — no terminal rebuild. The stock
+  name is unchanged (`Vexa`), an explicit `bot_name` in `POST /bots` still wins, and
+  `NEXT_PUBLIC_DEFAULT_BOT_NAME` is now a real terminal build arg for baking a name into the image.
+  See [Configuration](/configuration#bot-participant-name).
+
+- **Custom STT: JSON-only Voxtral models now transcribe meetings.** Vexa negotiates down from
+  `verbose_json` to `json` once when a backend rejects verbose output, while Whisper backends keep
+  their richer segment metadata. See [Use a custom STT endpoint](/how-to/custom-stt).
 
 ## Versioning
 
