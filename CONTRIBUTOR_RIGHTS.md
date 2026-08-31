@@ -41,6 +41,12 @@ handles open-source approvals where you work. It is a short letter they fill in,
 to [dmitry@vexa.ai](mailto:dmitry@vexa.ai) — it adds no terms beyond what Apache-2.0 already
 provides. You sign nothing beyond your own DCO sign-off.
 
+If your organization's process cannot route a letter it has not seen before, Vexa also accepts the
+[ASWF 2020 v2 CCLA](CLA/ccla-aswf2020.md) — the Academy Software Foundation's Apache-derived
+corporate CLA, reproduced with only its header fields completed. It is an accepted alternative and
+never a requirement; either instrument satisfies this path. Note that it is per-project, so an
+ASWF CLA signed for another project does not cover Vexa.
+
 If you cannot reach your own approvers, or they would rather hear from Vexa directly, email
 [dmitry@vexa.ai](mailto:dmitry@vexa.ai) with the pull-request URL and the rights holder's legal/IP
 contact instead. Do not attach executed agreements, signatures, addresses, employment documents,
