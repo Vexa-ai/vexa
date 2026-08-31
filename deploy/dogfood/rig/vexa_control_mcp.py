@@ -240,6 +240,42 @@ CONFIG_VOCAB = {
 UI_BASE = os.environ.get("VEXA_UI_URL", "http://localhost:18300")
 
 
+SETTINGS_PATH = ".settings.json"
+
+# CLOSED VOCABULARY. key -> (default, kind, what it means to the person). An unknown key is
+# refused with this list: a setting that silently does nothing is worse than an error, and an
+# agent with no vocabulary invents one.
+SETTINGS_VOCAB = {
+    "bot_name":     ("Vexa", "text",
+                     "the name the notetaker shows up as in the room"),
+    "transcribe":   (True, "on/off",
+                     "turn spoken words into text — off records audio only"),
+    "mail_minutes": (True, "on/off",
+                     "the write-up after a meeting ends"),
+    "mail_join":    (False, "on/off",
+                     "a note each time the notetaker joins a call"),
+    "mail_rsvp":    (True, "on/off",
+                     "replying yes in the calendar when Vexa is invited to a meeting"),
+    "timezone":     ("", "text",
+                     "their IANA zone, e.g. Europe/Lisbon — every time is stated in it"),
+}
+
+
+def _settings(uid: str) -> dict:
+    """This person's preferences, defaults filled in. Never raises, never empty."""
+    raw = _read_json(uid, SETTINGS_PATH, {}) or {}
+    out = {k: v[0] for k, v in SETTINGS_VOCAB.items()}
+    out.update({k: v for k, v in raw.items() if k in SETTINGS_VOCAB})
+    return out
+
+
+def _settings_set(uid: str, key: str, value) -> dict:
+    raw = _read_json(uid, SETTINGS_PATH, {}) or {}
+    raw[key] = value
+    _write_json(uid, SETTINGS_PATH, raw)
+    return _settings(uid)
+
+
 _TZ_FILE = HOME / ".storm/user-timezones.json"
 
 
@@ -250,22 +286,16 @@ def _person_tz(uid: str, set_to: str = "") -> str:
     would join at 19:15 when it was 17:15 where they stood. The agent knows their zone from its
     own environment; we only have to be told once and then never state a bare time again.
     """
-    try:
-        d = json.loads(_TZ_FILE.read_text())
-    except Exception:  # noqa: BLE001
-        d = {}
     uid = str(uid)
     if set_to:
         try:
             import zoneinfo
             zoneinfo.ZoneInfo(set_to)
         except Exception:  # noqa: BLE001
-            return d.get(uid, "")
-        d[uid] = set_to
-        _TZ_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _TZ_FILE.write_text(json.dumps(d, indent=1))
+            return _settings(uid).get("timezone", "")
+        _settings_set(uid, "timezone", set_to)
         return set_to
-    return d.get(uid, "")
+    return _settings(uid).get("timezone", "")
 
 
 def _in_their_clock(epoch: float, tz: str) -> str:
@@ -2816,6 +2846,55 @@ def workspace_regime(mode: str = "", local_path: str = "", token: str = "") -> s
             "Call workspace_pull() at the start of sessions to mirror new flow outputs "
             "(meeting docs) down into the local directory.",
         ],
+    })
+
+
+@mcp.tool()
+@_anon_guard
+def settings(key: str = "", value: str = "", token: str = "") -> str:
+    """How Vexa behaves for THIS person. Call with nothing to see everything; with key and
+    value to change one thing.
+
+    These are per-person and take effect on the next meeting — changing one never touches
+    anyone else. When your person asks for something that is one of these, set it rather than
+    explaining that it cannot be done, and never edit a flow to achieve it.
+
+    on/off settings accept on/off, true/false, yes/no."""
+    uid = me()
+    cur = _settings(uid)
+    if not key:
+        return json.dumps({
+            "settings": cur,
+            "what_each_means": {k: v[2] for k, v in SETTINGS_VOCAB.items()},
+            "to_change": "settings(key=..., value=...) — one at a time",
+        })
+    if key not in SETTINGS_VOCAB:
+        return json.dumps({
+            "refused": f"there is no setting called {key!r}",
+            "the_settings_that_exist": {k: v[2] for k, v in SETTINGS_VOCAB.items()},
+            "do": "pick one of these, or report_friction() if the thing they want is missing "
+                  "— do NOT edit a flow to work around it.",
+        })
+    default, kind, meaning = SETTINGS_VOCAB[key]
+    if kind == "on/off":
+        v = str(value).strip().lower()
+        if v not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
+            return json.dumps({"refused": f"{key} is on or off", "you_sent": value})
+        val = v in ("on", "true", "yes", "1")
+    else:
+        val = str(value).strip()
+        if key == "timezone" and val:
+            try:
+                import zoneinfo
+                zoneinfo.ZoneInfo(val)
+            except Exception:  # noqa: BLE001
+                return json.dumps({"refused": f"{val!r} is not a timezone",
+                                   "give_me": "an IANA name like Europe/Lisbon"})
+    after = _settings_set(uid, key, val)
+    return json.dumps({
+        "changed": {key: val}, "settings": after,
+        "tell_your_person": f"Done — {meaning}: now {val!r}. It applies from the next meeting.",
+        "scope": "this is theirs alone; nobody else's Vexa changed",
     })
 
 
