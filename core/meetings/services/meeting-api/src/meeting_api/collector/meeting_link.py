@@ -7,6 +7,10 @@ DESCRIPTION). Pure string logic — no I/O, no framework imports; the one config
 ``VEXA_JITSI_HOSTS`` (P14, declared in config.v1.json), consulted per call so tests and
 reloads see the live env.
 
+Hosts are matched EXACTLY or as a dotted subdomain (``_host_matches``) — never by substring,
+which would read ``meet.google.com.attacker.example`` as Google Meet. ``vexa_mailroom``'s
+vendored copy carries the same helper; the two parsers are meant to agree.
+
 Id formats (mirrors the dashboard join-form):
   * google_meet → ``abc-defg-hij``
   * zoom        → 9–11 digits
@@ -30,6 +34,43 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
+
+# Zoom's meeting domains. Canonical zoom.us (+ every regional subdomain: us02web, us05web, a
+# customer's company.zoom.us) and the US-government tenant. Matches the join brick's own rule
+# (``modules/join/src/index.ts::resolvePlatform``) — a white-label portal is not inferable from
+# its URL, so it is not listed here and never was.
+_ZOOM_DOMAINS = ("zoom.us", "zoomgov.com")
+# Every domain a hosted platform claims. Used both to match and to recognise a lookalike.
+_PLATFORM_DOMAINS = ("meet.google.com", *_ZOOM_DOMAINS, "teams.microsoft.com", "teams.live.com")
+
+
+def _host_matches(host: str, *domains: str) -> bool:
+    """Exact host, or a subdomain of one of ``domains`` — never a substring match.
+
+    A substring test (``"meet.google.com" in host``) also accepts
+    ``meet.google.com.attacker.example``: the platform name is a *prefix* of an arbitrary
+    domain the submitter controls, so anyone who can post a meeting URL chooses the host the
+    bot's browser later opens. The registrable domain is the rightmost part of a hostname, so
+    the only sound test is equality or a dotted suffix.
+
+    The mailroom's vendored copy (``vexa_mailroom.meeting_link``) carries the same helper; the
+    two parsers must agree, since the mailroom hands its ``meeting_url`` to ``POST /meetings``
+    for a second parse.
+    """
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _is_platform_lookalike(host: str) -> bool:
+    """True when ``host`` merely CONTAINS a platform's domain without being it or a subdomain
+    of it — ``meet.google.com.attacker.example``, ``zoom.us.attacker.example``.
+
+    Such a host is not the platform, and it must not reach the jitsi naming heuristics either:
+    ``meet.google.com.attacker.example`` carries a "meet" LABEL, so the self-hosted fallback
+    below would otherwise adopt it as a jitsi room and hand the bot the same attacker-chosen
+    host the exact-match rule just refused. Explicitly declared hosts (``VEXA_JITSI_HOSTS``)
+    are unaffected — an operator naming their own deployment is not a guess.
+    """
+    return any(d in host and not _host_matches(host, d) for d in _PLATFORM_DOMAINS)
 
 
 def _configured_jitsi_hosts() -> set[str]:
@@ -61,13 +102,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     parsed = urlparse(value)
     host = (parsed.hostname or "").lower()
     if host:
-        if "meet.google.com" in host:
+        if _host_matches(host, "meet.google.com"):
             code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
             return ("google_meet", code) if _GMEET_ID.match(code) else None
-        if "zoom" in host:
+        if _host_matches(host, *_ZOOM_DOMAINS):
             m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
             return ("zoom", m.group(0)) if m else None
-        if "teams.microsoft.com" in host or "teams.live.com" in host:
+        if _host_matches(host, "teams.microsoft.com", "teams.live.com"):
             # Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
             thread = _TEAMS_THREAD.search(unquote(value))
             if thread:
@@ -93,8 +134,15 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
             # jitsi's recommended naming, regionalized). Both are too loose for the ICS scan,
             # where an event description full of arbitrary links (jitsi.github.io docs, vendor
             # meet.* products) must not import as joinable rooms — there, only the explicit
-            # hosts above count; VEXA_JITSI_HOSTS is the opt-in.
-            or (generic_hosts and ("jitsi" in host or "meet" in host.split(".")))
+            # hosts above count; VEXA_JITSI_HOSTS is the opt-in. A host that merely LOOKS like
+            # a hosted platform is excluded outright: the branches above already refused it by
+            # name, and meet.google.com.attacker.example carries a "meet" label that would
+            # otherwise let it back in through this door.
+            or (
+                generic_hosts
+                and not _is_platform_lookalike(host)
+                and ("jitsi" in host or "meet" in host.split("."))
+            )
         )
         if is_jitsi_host:
             room = parsed.path.strip("/")

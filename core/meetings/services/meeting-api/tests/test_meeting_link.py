@@ -6,6 +6,8 @@ with jitsi as the newest row. Pure string logic — no app, no DB.
 """
 from __future__ import annotations
 
+import pytest
+
 from meeting_api.bot_spawn.service import construct_meeting_url
 from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_url
 
@@ -62,6 +64,71 @@ class TestParseExistingPlatformsUnchanged:
 
     def test_teams_short(self):
         assert parse_meeting_url("https://teams.live.com/meet/9361792952021?p=abc") == ("teams", "9361792952021")
+
+
+class TestHostMatchingIsExact:
+    """A platform host is matched exactly or as a dotted subdomain — never by substring.
+
+    A substring test puts the host the bot's browser opens under the submitter's control: the
+    platform name becomes a prefix of a domain they registered. The parse is the only thing
+    standing between a submitted URL and a real navigation, so a host that is not the platform
+    must resolve to no platform at all — including via the self-hosted jitsi fallback, which a
+    google-meet lookalike would otherwise satisfy on its "meet" label.
+    """
+
+    @pytest.mark.parametrize("url", [
+        "https://meet.google.com.attacker.example/abc-defg-hij",
+        "https://zoom.attacker.example/j/84335626851",
+        "https://zoom.us.attacker.example/j/84335626851",
+        "https://notzoom.com/j/84335626851",
+        "https://teams.microsoft.com.evil.example/meet/9361792952021",
+        "https://teams.live.com.evil.example/meet/9361792952021",
+        "https://teams.microsoft.com.evil.example/l/meetup-join/19%3ameeting_YWJj%40thread.v2/0",
+    ])
+    def test_lookalike_host_resolves_to_no_platform(self, url):
+        assert parse_meeting_url(url) is None
+        # …in the pasted-link mode too, where the jitsi naming heuristics are live.
+        assert parse_meeting_url(url, generic_hosts=True) is None
+        assert find_meeting_link(f"Join here: {url} thanks") is None
+
+    @pytest.mark.parametrize("url,expected", [
+        # Google Meet: the exact host only — it has no meeting subdomains.
+        ("https://meet.google.com/abc-defg-hij", ("google_meet", "abc-defg-hij")),
+        # Zoom: the apex, the regional subdomains, a customer vanity host, and the gov tenant.
+        ("https://zoom.us/j/84335626851", ("zoom", "84335626851")),
+        ("https://us02web.zoom.us/j/84335626851", ("zoom", "84335626851")),
+        ("https://us05web.zoom.us/j/84335626851?pwd=x", ("zoom", "84335626851")),
+        ("https://company.zoom.us/j/84335626851", ("zoom", "84335626851")),
+        ("https://zoomgov.com/j/84335626851", ("zoom", "84335626851")),
+        # Teams: both hosts, both link shapes, plus a tenant subdomain.
+        ("https://teams.live.com/meet/9361792952021?p=abc", ("teams", "9361792952021")),
+        ("https://teams.microsoft.com/meet/9351274713?p=abc", ("teams", "9351274713")),
+        ("https://teams.microsoft.com/l/meetup-join/19%3ameeting_YWJj%40thread.v2/0",
+         ("teams", "19:meeting_YWJj@thread.v2")),
+        ("https://foo.teams.microsoft.com/meet/9351274713?p=abc", ("teams", "9351274713")),
+    ])
+    def test_real_platform_hosts_still_parse(self, url, expected):
+        assert parse_meeting_url(url) == expected
+
+    @pytest.mark.parametrize("url,expected", [
+        # The self-hosted jitsi conventions are untouched: a jitsi-named host, a "meet" LABEL
+        # at the front, and the same label mid-hostname (regionalized deployments).
+        ("https://meet.jit.si/VexaStandup", ("jitsi", "VexaStandup")),
+        ("https://jitsi.example.org/MyRoom", ("jitsi", "MyRoom@jitsi.example.org")),
+        ("https://meet.example.org/TeamSync", ("jitsi", "TeamSync@meet.example.org")),
+        ("https://eu.meet.example.org/Weekly", ("jitsi", "Weekly@eu.meet.example.org")),
+    ])
+    def test_self_hosted_jitsi_conventions_survive(self, url, expected):
+        assert parse_meeting_url(url) == expected
+
+    def test_declared_jitsi_host_is_honoured_even_if_it_looks_like_a_platform(self, monkeypatch):
+        # An operator naming their own deployment is an explicit opt-in, not a guess, so the
+        # lookalike rule does not apply to VEXA_JITSI_HOSTS — only to the naming heuristics.
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "meet.google.com.internal.example")
+        assert parse_meeting_url("https://meet.google.com.internal.example/Standup") == (
+            "jitsi",
+            "Standup@meet.google.com.internal.example",
+        )
 
 
 class TestFindMeetingLinkJitsi:
