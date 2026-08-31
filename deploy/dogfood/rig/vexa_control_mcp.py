@@ -933,16 +933,23 @@ class _Auth:
 connection up by itself within a few seconds; nothing else to do here.</p>""", "Approved")
                 return
             await page(f"""<p><b>You're in{"" if not existed else " — same account as before"}.</b>
-Paste this into your agent — Claude Code, Cursor, Codex, any of them. That's everything.</p>
-<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">claude mcp add --transport http vexa "{CANONICAL}?c={h}" -s user</pre>
-<p style="font-size:15px;margin-top:18px">Paste that to your agent — or run it in a terminal,
-either works. Then say:</p>
+This is your Vexa address. Give it to your agent — it carries your sign-in, so treat
+it like a password.</p>
+<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">{CANONICAL}?c={h}</pre>
+<p style="font-size:15px;margin-top:18px">Wherever your agent keeps its connectors:</p>
+<ul style="font-size:14px;color:#333;line-height:1.85;padding-left:20px;margin:8px 0 0">
+<li><b>Claude desktop, Cowork, claude.ai</b> — Settings → Connectors → Add custom connector,
+    transport HTTP, that URL</li>
+<li><b>Claude Code</b> — <code>claude mcp add --transport http vexa "{CANONICAL}?c={h}" -s
+    user</code></li>
+<li><b>Codex</b> — <code>codex mcp add vexa -- npx -y mcp-remote "{CANONICAL}?c={h}"</code></li>
+<li><b>Cursor</b> — <code>{{"vexa": {{"url": "{CANONICAL}?c={h}"}}}}</code> in
+    <code>.cursor/mcp.json</code></li>
+</ul>
+<p style="font-size:15px;margin-top:20px">Then say:</p>
 <pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:14px">get me started with Vexa</pre>
-<p style="color:#666;font-size:14px">That line carries your sign-in, so treat it like a password:
-it is yours, it keeps working, and you never have to do this again.</p>
-<p style="color:#666;font-size:14px">Codex: <code>codex mcp add vexa -- npx -y mcp-remote
-"{CANONICAL}?c={h}"</code> · Cursor: put <code>{{"vexa": {{"url": "{CANONICAL}?c={h}"}}}}</code>
-in <code>.cursor/mcp.json</code>.</p>""", "Connected")
+<p style="color:#666;font-size:14px">You never have to do this again — the address keeps
+working.</p>""", "Connected")
             return
 
         if scope.get("path", "").startswith("/w/"):
