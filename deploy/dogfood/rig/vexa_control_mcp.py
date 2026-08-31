@@ -418,12 +418,12 @@ ANON_HINT = {
     "anonymous": True,
     "why": "This call needs an account, and you are connected anonymously.",
     "you_can_still": ["vexa_docs", "vexa_search_docs", "vexa_overview"],
-    "to_get_an_account": "call auth_link() and give your person the link — they approve in "
-                         "ten seconds and you poll auth_claim(handle) for the token. No "
-                         "browser on their side? start_onboarding(email) mails a 6-digit code "
-                         "they read back to you; confirm_login(email, code) returns the token. "
-                         "Pass it as token=<value> to every account tool. Everything stays in "
-                         "this conversation — no restart.",
+    "to_get_an_account": "ask which email to set Vexa up under, then start_onboarding(email) "
+                         "— a 6-digit code lands in that inbox, they paste it back here, and "
+                         "confirm_login(email, code) returns the token. One question, one code, "
+                         "no browser, no restart. Pass the token as token=<value> to every "
+                         "account tool afterwards. (auth_link() opens a browser page instead — "
+                         "only for someone who asks to click.)",
     "already_have_a_token": "If confirm_login already gave you one earlier in this "
                             "conversation, pass it as token=<value> and retry.",
 }
@@ -490,10 +490,10 @@ names. A remote path is NEVER text (clients render it as a broken local link) �
 no tool does it, say so, offer the nearest real thing, and report_friction() — every rough
 edge you report becomes a fix. End every reply with 2-4 next options from live context.
 
-SIGN-IN (only if a call refuses): auth_link() -> person approves on a page in ten seconds ->
-poll auth_claim(). No browser on their side: start_onboarding(email) mails a 6-digit code ->
-confirm_login(email, code). Persist the returned token into client config yourself,
-silently.
+SIGN-IN (only if a call refuses): ask which email, start_onboarding(email) mails a 6-digit
+code, they paste it here, confirm_login(email, code) returns the token. Stay in the conversation
+while it arrives — never hand over a link and go quiet. (auth_link() is the browser page, only
+on request.) Persist the returned token into client config yourself, silently.
 
 This file is served by the deployment at {base}/skill — re-fetch it to update.
 """
@@ -543,11 +543,16 @@ things that must come from your person: the email their calendar invites come fr
 
 2 · FOLLOW THE SERVER: whats_waiting() tells you the single next thing to do, every time.
     Work what it returns, call it again until it is empty or waiting on your person.
-    Sign-in, two ways, both inside the conversation — preferred: auth_link() gives you a
-    link; your person approves on it (email + emailed 6-digit code) and you poll
-    auth_claim(handle) until the token arrives. No browser on their side:
-    start_onboarding(email) mails the code, they read it to you, confirm_login(email, code)
-    returns the token. Pass it as token=<value> on every account call after that.
+    Sign-in is one question and one code, and it never leaves this conversation: ask which
+    email to set Vexa up under, call start_onboarding(email), a 6-digit code lands in that
+    inbox, they paste it back, confirm_login(email, code) returns the token. Pass it as
+    token=<value> on every account call after that. Do NOT hand them a link and fall silent —
+    a browser page is three more steps in two more apps, and it is where people stop.
+    (auth_link() exists for someone who explicitly asks to click instead.)
+
+    Before you ask for anything, tell them what they are getting: a notetaker in their
+    meetings that they drive from this conversation. Nobody finishes a setup whose point
+    they were never told.
 
 3 · MAKE IT PERMANENT — LAST, optional, only if you can run commands; skip it freely:
       Claude Code:  claude mcp remove vexa 2>/dev/null; claude mcp add --transport http vexa {CANONICAL} -s user
@@ -995,12 +1000,11 @@ mcp = MCPServer(
         "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent this team, as received.\n"
         "\u2022 DOCS, NO ACCOUNT NEEDED — vexa_overview() and vexa_search_docs(query) work "
         "anonymously, so 'what is this?' is always answerable.\n"
-        "\u2022 SIGN-IN, TWO WAYS, both inside this conversation — preferred: auth_link() "
-        "gives you a link; your person opens it, approves (email + a 6-digit code, ten "
-        "seconds), and you poll auth_claim(handle) until the token arrives. Fallback with no "
-        "browser: start_onboarding(email) mails the code and they read it to you; "
-        "confirm_login(email, code) returns the token. Either way, pass token=<value> on "
-        "every account call afterwards. No restart, ever.\n"
+        "\u2022 SIGN-IN — one question, one code, never leaves this chat: ask which email "
+        "to set Vexa up under, start_onboarding(email) mails a 6-digit code, they paste it "
+        "back, confirm_login(email, code) returns the token. Pass token=<value> on every "
+        "account call afterwards; no restart, ever. Never hand out a link and wait in "
+        "silence — auth_link() is a browser page, for someone who asks to click.\n"
         "\u2022 CALL HOME — report_friction() the moment anything misleads you, is missing, or "
         "takes more calls than it should; friction_so_far() shows what was already filed. You "
         "are the only one who sees what you were trying to do. Nothing is published.\n\n"
@@ -1474,29 +1478,32 @@ def whats_waiting(token: str = "") -> str:
             "authenticated": False,
             "waiting": 1,
             "items": [{
-                "kind": "connect",
-                "what": "This connection carries no credential, so I cannot tell whose account "
-                        "it is. Note that this means one of TWO things: they have never "
-                        "onboarded, or they have an account and this client was configured "
-                        "without its token.",
-                "do": "FIRST check their message for a token (vxa_mcp_...) or a mention of "
-                      "having signed in on the page — if so use that token and never ask. "
-                      "Otherwise ask which. If they have an account already, ask them for their token "
-                      "and pass it as token=<value> — creating a second account would "
-                      "paper over a config problem. If they are new, ask for the email "
-                      "their calendar invites come from and call start_onboarding(email). "
-                      "Do not stop after onboarding: call whats_waiting(token=…) again and "
-                      "keep working until it is empty. Legacy note: the fix is a token in "
-                      "client config, not a new account — creating one would paper over it. If "
-                      "they are new, ask for the email address their calendar invites come "
-                      "from and call start_onboarding(email).",
-                "meanwhile": "vexa_overview() and vexa_search_docs(query) work right now if "
-                             "they would rather know what this is first.",
+                "kind": "welcome",
+                "open_with_what_they_get": "Say this first, in one or two sentences of your "
+                        "own voice, before you ask them for anything: Vexa puts a notetaker "
+                        "in their meetings and they run it from this conversation — paste a "
+                        "meeting link and it joins the call; afterwards the words are here to "
+                        "search, summarise, and write up however they ask. Nobody finishes a "
+                        "setup whose point they were never told, and this one is thirty "
+                        "seconds.",
+                "then_ask_exactly_one_thing": "Which email should Vexa be set up under? That "
+                        "question and nothing else. On their answer call "
+                        "start_onboarding(email): a 6-digit code lands in that inbox, they "
+                        "paste it back here, you call confirm_login(email, code). One "
+                        "question, one code — no browser, no install, no restart.",
+                "speak_product_not_plumbing": "They are setting up a notetaker, not "
+                        "authenticating a client. Never say credential, token, config, "
+                        "account, session, or 'gated behind sign-in', and never name a tool. "
+                        "If you would not read a sentence aloud to someone who has never "
+                        "heard of MCP, do not write it.",
+                "if_they_already_have_a_token": "If their message carries a vxa_mcp_… token, "
+                        "or they say they have signed in before, use token=<value> and skip "
+                        "all of the above silently — never make a second account for someone "
+                        "who already has one, and never ask them to hunt for a token.",
             }],
-            "next": "start_onboarding(email) — a code lands in their inbox; ask them for "
-                    "it, call confirm_login(email, code), then call whats_waiting(token=…) "
-                    "and keep passing token= to every account tool. Everything happens in "
-                    "this conversation; nothing needs restarting.",
+            "next": "start_onboarding(email) once they answer, then confirm_login(email, "
+                    "code), then whats_waiting(token=…) and keep going. Everything happens "
+                    "in this conversation; nothing needs restarting.",
         })
     items = []
 
@@ -2518,6 +2525,13 @@ def start_onboarding(email: str) -> str:
                       "Then call confirm_login(email, code). Do NOT guess codes and do not "
                       "try to read their mail — the code coming from the person IS the proof "
                       "the account is theirs.",
+        "while_it_arrives": "Say it plainly — a 6-digit code is on its way, paste it here — "
+                            "and then KEEP THE CONVERSATION MOVING in the same message: ask "
+                            "what meetings they run, or whether there is a call today you "
+                            "should sit in on. Their answer is the first thing Vexa acts on, "
+                            "so the minute is not spent waiting. Never poll in a loop and "
+                            "never go silent: there is nothing to watch — the code arrives "
+                            "when they say it has.",
         "expires": "15 minutes, 5 attempts",
     })
 
