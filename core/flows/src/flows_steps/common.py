@@ -82,7 +82,7 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
 # here. Defaults are the floor for someone who has never set anything — the MCP's vocabulary is
 # the source of truth, and it materialises every key the first time a setting is touched.
 _SETTING_DEFAULTS = {
-    "bot_name": "Vexa", "transcribe": True,
+    "bot_name": "Vexa",
     "mail_minutes": True, "mail_join": False, "mail_rsvp": True, "timezone": "",
 }
 
