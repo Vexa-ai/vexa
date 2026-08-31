@@ -1,660 +1,667 @@
 {
- "contract": "config.v1",
- "service": "meeting-api",
- "keys": [
-  {
-   "key": "ADMIN_TOKEN",
-   "class": "required-explicit",
-   "secret": true,
-   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4)"
-  },
-  {
-   "key": "DB_HOST",
-   "class": "defaulted",
-   "default": "postgres",
-   "description": "PostgreSQL host (the meeting/session/transcript store)"
-  },
-  {
-   "key": "DB_PORT",
-   "class": "defaulted",
-   "default": "5432",
-   "description": "PostgreSQL port"
-  },
-  {
-   "key": "DB_NAME",
-   "class": "defaulted",
-   "default": "vexa",
-   "description": "PostgreSQL database name"
-  },
-  {
-   "key": "DB_USER",
-   "class": "defaulted",
-   "default": "postgres",
-   "description": "PostgreSQL user"
-  },
-  {
-   "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
-   "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
-  },
-  {
-   "key": "DATABASE_URL",
-   "class": "defaulted",
-   "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
-   "secret": true,
-   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
-   "targets": []
-  },
-  {
-   "key": "DB_POOL_SIZE",
-   "class": "defaulted",
-   "default": "5",
-   "description": "SQLAlchemy async-engine pool_size (persistent connections per pod) applied at every engine site via meeting_api.db.build_engine. Pure runtime override — reconcile with deploy/db-budget.json (Σ replicas × (pool_size + max_overflow) + reserved ≤ max_connections) on managed Postgres. #635.",
-   "targets": []
-  },
-  {
-   "key": "DB_MAX_OVERFLOW",
-   "class": "defaulted",
-   "default": "10",
-   "description": "SQLAlchemy async-engine max_overflow (burst connections above pool_size per pod). Pure runtime override — reconcile with deploy/db-budget.json. #635.",
-   "targets": []
-  },
-  {
-   "key": "REDIS_URL",
-   "class": "defaulted",
-   "default": "redis://redis:6379/0",
-   "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
-  },
-  {
-   "key": "RUNTIME_API_URL",
-   "class": "defaulted",
-   "default": "http://runtime:8090",
-   "description": "the runtime kernel's runtime.v1 surface bot_spawn creates workloads on"
-  },
-  {
-   "key": "MEETING_API_URL",
-   "class": "defaulted",
-   "default": "http://meeting-api:8080",
-   "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose relies on the default service DNS name, helm sets it explicitly to the release-qualified Service DNS, lite overrides to localhost",
-   "targets": [
-    "lite"
-   ]
-  },
-  {
-   "key": "INTERNAL_API_SECRET",
-   "class": "defaulted",
-   "default": "(unset — the internal lifecycle-callback header is then not attached)",
-   "secret": true,
-   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
-  },
-  {
-   "key": "DEFAULT_BOT_NAME",
-   "class": "defaulted",
-   "default": "(unset — request_bot falls back to VexaBot-{random})",
-   "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
-  },
-  {
-   "key": "TRANSCRIPTION_SERVICE_URL",
-   "class": "capability",
-   "capability": "stt",
-   "description": "STT base URL the spawned bot transcribes against (the client appends /v1/audio/transcriptions) — self-hosted deploy/transcription or a hosted vexa.ai token's endpoint"
-  },
-  {
-   "key": "TRANSCRIPTION_SERVICE_TOKEN",
-   "class": "capability",
-   "capability": "stt",
-   "secret": true,
-   "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
-  },
-  {
-   "key": "TRANSCRIPTION_MODEL",
-   "class": "defaulted",
-   "default": "(unset — the whisper client sends whisper-1)",
-   "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part) — required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
-   "targets": [
-    "compose",
-    "lite"
-   ]
-  },
-  {
-   "key": "TRANSCRIBE_ENABLED",
-   "class": "defaulted",
-   "default": "true",
-   "description": "deployment-level default for a spawn's transcribe_enabled when the request does not say — set false for a capture-only deployment with no STT",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "VEXA_JITSI_HOSTS",
-   "class": "defaulted",
-   "default": "",
-   "description": "Comma-separated additional Jitsi deployment hostnames (a self-hosted instance whose name carries neither 'jitsi' nor a 'meet' label, e.g. calls.example.org) recognized when parsing pasted meeting links AND calendar (ICS) links; meet.jit.si, *jitsi* hosts, and (for pasted links) meet-labelled hosts are always recognized — unset ⇒ no extra hosts",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "RECORDING_ENABLED",
-   "class": "defaulted",
-   "default": "true",
-   "description": "deployment-level default for a spawn's recording_enabled when the request does not say",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "BOT_AUTHENTICATED",
-   "class": "defaulted",
-   "default": "false",
-   "description": "deployment-scoped authenticated-bot knob: when true, EVERY POST /bots spawn carries the invocation.v1 auth block so the bot restores the provisioned browser session (make login) and joins signed-in. Demands the BOT_USERDATA_S3_PATH + BOT_S3_* keys — incomplete config answers a typed 503 (never a silent anonymous join).",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "BOT_USERDATA_S3_PATH",
-   "class": "defaulted",
-   "default": "(unset — required when BOT_AUTHENTICATED=true; the userdata prefix holding the provisioned session, e.g. userdata/bot-identity-1)",
-   "description": "stored-session prefix; also the per-identity serialization key (one live authenticated bot per prefix)",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "BOT_S3_ENDPOINT",
-   "class": "defaulted",
-   "default": "(unset — required when BOT_AUTHENTICATED=true)",
-   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "BOT_S3_BUCKET",
-   "class": "defaulted",
-   "default": "(unset — required when BOT_AUTHENTICATED=true)",
-   "description": "userdata store bucket",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "BOT_S3_ACCESS_KEY",
-   "class": "defaulted",
-   "default": "(unset)",
-   "secret": true,
-   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "BOT_S3_SECRET_KEY",
-   "class": "defaulted",
-   "default": "(unset)",
-   "secret": true,
-   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
-   "targets": [
-    "compose",
-    "helm"
-   ]
-  },
-  {
-   "key": "MINIO_ENDPOINT",
-   "class": "defaulted",
-   "default": "minio:9000",
-   "description": "object-store host:port (or full http(s) URL) recordings are written to"
-  },
-  {
-   "key": "MINIO_ACCESS_KEY",
-   "class": "capability",
-   "capability": "object_storage",
-   "description": "object-store access key (recordings upload/finalize)"
-  },
-  {
-   "key": "MINIO_SECRET_KEY",
-   "class": "capability",
-   "capability": "object_storage",
-   "secret": true,
-   "description": "object-store secret key"
-  },
-  {
-   "key": "MINIO_BUCKET",
-   "class": "defaulted",
-   "default": "vexa",
-   "description": "recordings bucket"
-  },
-  {
-   "key": "MINIO_SECURE",
-   "class": "defaulted",
-   "default": "false",
-   "description": "https toward the object store when true"
-  },
-  {
-   "key": "S3_ENDPOINT",
-   "class": "defaulted",
-   "default": "(unset — falls back to MINIO_ENDPOINT/MINIO_SECURE)",
-   "description": "explicit S3 endpoint override for a non-MinIO store",
-   "targets": []
-  },
-  {
-   "key": "S3_ACCESS_KEY",
-   "class": "defaulted",
-   "default": "(unset — falls back to MINIO_ACCESS_KEY)",
-   "description": "explicit S3 access-key override",
-   "targets": []
-  },
-  {
-   "key": "S3_SECRET_KEY",
-   "class": "defaulted",
-   "default": "(unset — falls back to MINIO_SECRET_KEY)",
-   "secret": true,
-   "description": "explicit S3 secret-key override",
-   "targets": []
-  },
-  {
-   "key": "RECORDING_BUCKET",
-   "class": "defaulted",
-   "default": "recordings",
-   "description": "recordings bucket for the standalone recordings composition (the unified app uses MINIO_BUCKET first)",
-   "targets": []
-  },
-  {
-   "key": "STORAGE_BACKEND",
-   "class": "defaulted",
-   "default": "minio",
-   "description": "storage-backend label stamped into the recording's meeting.data JSONB",
-   "targets": []
-  },
-  {
-   "key": "MEETING_TOKEN_TTL_SECONDS",
-   "class": "defaulted",
-   "default": "18000",
-   "description": "MeetingToken lifetime — must outlive the bot's max active time (default 4h) or transcription dies mid-meeting",
-   "targets": []
-  },
-  {
-   "key": "SEGMENT_CONSUMER_INTERVAL",
-   "class": "defaulted",
-   "default": "0.5",
-   "description": "poll interval (s) of the transcription_segments stream consumer loop",
-   "targets": []
-  },
-  {
-   "key": "DB_WRITER_INTERVAL_S",
-   "class": "defaulted",
-   "default": "10",
-   "description": "db-writer cadence (seconds) — each tick flushes immutable live segments from the redis hash meeting:{id}:segments into the transcriptions table and drains proc:meeting:{id} notes into meeting.data (the restored 0.10 flush loop)",
-   "targets": []
-  },
-  {
-   "key": "BACKGROUND_TASK_INTERVAL",
-   "class": "defaulted",
-   "default": "10",
-   "description": "parent-name alias for DB_WRITER_INTERVAL_S (0.10 collector env parity) — used only when DB_WRITER_INTERVAL_S is unset",
-   "targets": []
-  },
-  {
-   "key": "DB_WRITER_RECONCILE_INTERVAL_S",
-   "class": "defaulted",
-   "default": "300",
-   "description": "how often (seconds) the db-writer runs its self-healing O(keyspace) meeting:*:segments SCAN — startup + every this-many seconds, off the DB_WRITER_INTERVAL_S hot path. The active_meetings set is authoritative in steady state; the per-tick scan saturated redis and starved /health, restarting healthy pods (#893)",
-   "targets": []
-  },
-  {
-   "key": "IMMUTABILITY_THRESHOLD",
-   "class": "defaulted",
-   "default": "30",
-   "description": "seconds a live segment must sit unmodified before the db-writer flushes it to postgres — the still-mutable tail (drafts being refined) stays in redis until it settles (0.10 parity)",
-   "targets": []
-  },
-  {
-   "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
-   "class": "defaulted",
-   "default": "0",
-   "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
-   "targets": []
-  },
-  {
-   "key": "REDIS_SEGMENT_TTL",
-   "class": "defaulted",
-   "default": "3600",
-   "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append — an abandoned hash cannot linger forever once flushed (0.10 parity)",
-   "targets": []
-  },
-  {
-   "key": "PROC_PENDING_GRACE_SEC",
-   "class": "defaulted",
-   "default": "120",
-   "description": "bounded grace (s) for draining a finalized meeting's processed_pending entries after its view_end marker — the copilot's final post-session beat must land within this window or the drain is abandoned with a warning (ADR-0027 Train 2)",
-   "targets": []
-  },
-  {
-   "key": "WEBHOOK_DRAIN_INTERVAL",
-   "class": "defaulted",
-   "default": "5",
-   "description": "sweep interval (s) of the webhook retry-queue drain loop",
-   "targets": []
-  },
-  {
-   "key": "SCHEDULER_TICK_INTERVAL",
-   "class": "defaulted",
-   "default": "1",
-   "description": "tick interval (s) of the schedule.v1 job loop (drives join-retry re-spawns)",
-   "targets": []
-  },
-  {
-   "key": "STOP_RECONCILE_GRACE_S",
-   "class": "defaulted",
-   "default": "45",
-   "description": "grace (s) before a stopping meeting whose workload is gone is reconciled",
-   "targets": []
-  },
-  {
-   "key": "STOP_RECONCILE_INTERVAL_S",
-   "class": "defaulted",
-   "default": "15",
-   "description": "interval (s) of the stop-reconcile loop",
-   "targets": []
-  },
-  {
-   "key": "RECONCILE_ACTIVE_GRACE_S",
-   "class": "defaulted",
-   "default": "300",
-   "description": "grace (s) before an active meeting with a dead workload is failed by the reconciler",
-   "targets": []
-  },
-  {
-   "key": "RECONCILE_PREACTIVE_GRACE_S",
-   "class": "defaulted",
-   "default": "960 (VEXA_LOBBY_BUDGET_S + 60)",
-   "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled — DERIVED from the lobby budget the spawn issues (VEXA_LOBBY_BUDGET_S, default 900s) plus 60s of headroom, so the control plane is never less patient than the deadline it handed the bot (#862, #1208)",
-   "targets": []
-  },
-  {
-   "key": "VEXA_LOBBY_BUDGET_S",
-   "class": "defaulted",
-   "default": "900",
-   "description": "lobby budget (s) issued to every spawned bot as automatic_leave.waitingRoomTimeout — how long it may wait for admission before reporting awaiting_admission_timeout. 15 min so an auto-joined bot outwaits a late host (#1208); the reconcile pre-active grace derives from it, so raising it never leaves a waiter reaped by a shorter watchdog. An explicit automatic_leave.max_wait_for_admission on POST /bots still wins.",
-   "targets": []
-  },
-  {
-   "key": "MEETING_UNTRACKED_GRACE_SEC",
-   "class": "defaulted",
-   "default": "600",
-   "description": "continuous-untracked window (s): a meeting whose workload the runtime 404s for this long with no re-adoption and no bot callback is presumed lost and failed with an evidence note",
-   "targets": []
-  },
-  {
-   "key": "VEXA_SERVICE_AUTHORITY_CONFIG",
-   "class": "defaulted",
-   "default": "(unset — explicit allow-all OSS behavior)",
-   "description": "JSON service-authority.v1 adapter config: credential-free endpoint URL, contract_version, timeout_ms, response_max_age_seconds, failure_policy=closed, and mode=enforce|observe. When set, unavailable or malformed authority decisions fail closed.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_SERVICE_AUTHORITY_SECRET",
-   "class": "defaulted",
-   "default": "(unset — required when VEXA_SERVICE_AUTHORITY_CONFIG is set)",
-   "secret": true,
-   "description": "shared HMAC secret for exact-byte timestamped service-authority requests",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "SERVICE_AUTHORITY_SWEEP_INTERVAL_S",
-   "class": "defaulted",
-   "default": "15",
-   "description": "poll cadence for due one-minute active-service decisions; boundary timestamps remain admitted_at + N minutes regardless of polling cadence",
-   "targets": []
-  },
-  {
-   "key": "VEXA_SYSTEM_WEBHOOK_URL",
-   "class": "defaulted",
-   "default": "(unset — no operator-owned terminal callback)",
-   "description": "Boot-frozen operator destination for signed meeting.completed and bot.failed envelopes. It is never read from user or meeting data. HTTPS is required unless VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP explicitly enables an in-cluster HTTP service.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_SYSTEM_WEBHOOK_SECRET",
-   "class": "defaulted",
-   "default": "(unset — required when VEXA_SYSTEM_WEBHOOK_URL is set)",
-   "secret": true,
-   "description": "Shared secret for Bearer compatibility and exact-byte timestamped HMAC signing of the operator-owned terminal callback.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP",
-   "class": "defaulted",
-   "default": "false",
-   "description": "Explicit operator opt-in for an HTTP system callback on a private/in-cluster service network. This never changes the customer webhook SSRF policy.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S",
-   "class": "defaulted",
-   "default": "10",
-   "description": "Bounded HTTP timeout in seconds for the operator-owned terminal callback; must be greater than 0 and at most 60.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "HOST",
-   "class": "defaulted",
-   "default": "0.0.0.0",
-   "description": "uvicorn bind host (lite binds 127.0.0.1 behind its internal proxy)",
-   "targets": [
-    "lite"
-   ]
-  },
-  {
-   "key": "PORT",
-   "class": "defaulted",
-   "default": "8080",
-   "description": "uvicorn bind port",
-   "targets": [
-    "lite"
-   ]
-  },
-  {
-   "key": "LOG_LEVEL",
-   "class": "defaulted",
-   "default": "info",
-   "description": "uvicorn/app log level"
-  },
-  {
-   "key": "ADMIN_API_URL",
-   "class": "defaulted",
-   "default": "(unset — calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
-   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
-   "class": "defaulted",
-   "default": "30",
-   "description": "auto-join sweep cadence (s) — how often scheduled meetings are checked for a due start",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_LEAD_S",
-   "class": "defaulted",
-   "default": "120",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_GRACE_S",
-   "class": "defaulted",
-   "default": "600",
-   "description": "auto-join grace (s) — a scheduled meeting older than this is never auto-joined (no hours-late joins)",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_RETRY_BACKOFF_S",
-   "class": "defaulted",
-   "default": "300",
-   "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_ALLOW_UNCAPPED",
-   "class": "defaulted",
-   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
-   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
-   "targets": []
-  },
-  {
-   "key": "CALENDAR_SYNC_INTERVAL_S",
-   "class": "defaulted",
-   "default": "300",
-   "description": "calendar-sync sweep cadence (s) — how often connected ICS feeds are re-fetched and upserted into planned meetings",
-   "targets": []
-  },
-  {
-   "key": "PIPELINE_TICK_STALE_S",
-   "class": "defaulted",
-   "default": "120",
-   "description": "#527: a background loop whose last heartbeat is older than this flips /health to degraded+503 (a hung consumer no longer looks alive)",
-   "targets": []
-  },
-  {
-   "key": "PIPELINE_LAG_ALARM",
-   "class": "defaulted",
-   "default": "500",
-   "description": "#527: collector-group lag (unread transcription_segments) over this flips /health to degraded+503",
-   "targets": []
-  },
-  {
-   "key": "STREAM_RETENTION_S",
-   "class": "defaulted",
-   "default": "3600",
-   "description": "#527: acked transcription_segments entries older than this are trimmed; an unread (un-acked) entry is NEVER trimmed regardless of age (the 2026-04-26 data-loss guard)",
-   "targets": []
-  },
-  {
-   "key": "COLLECTOR_CONSUMER_NAME",
-   "class": "defaulted",
-   "default": "",
-   "description": "#636: per-replica Redis consumer name for the segment group; empty → derived as collector-<hostname> (pod identity) so a crashed replica's pending batch is attributable + reclaimable",
-   "targets": []
-  },
-  {
-   "key": "COLLECTOR_CONSUMER_TTL_MS",
-   "class": "defaulted",
-   "default": "1800000",
-   "description": "#660: idle (ms) after which an abandoned per-recreate consumer (pending==0) is pruned from collector_group by the reclaim sweep (XGROUP DELCONSUMER); default 30 min, well above COLLECTOR_RECLAIM_MIN_IDLE_MS so a briefly-quiet live replica is never removed",
-   "targets": []
-  },
-  {
-   "key": "COLLECTOR_RECLAIM_MIN_IDLE_MS",
-   "class": "defaulted",
-   "default": "60000",
-   "description": "#636: min idle (ms) before a replica reclaims another replica's un-acked segment batch via XAUTOCLAIM, so a live peer's in-flight batch is never stolen",
-   "targets": []
-  },
-  {
-   "key": "SEGMENT_RECLAIM_EVERY_N_TICKS",
-   "class": "defaulted",
-   "default": "120",
-   "description": "#636: run the orphan-reclaim scan every N segment-consumer ticks",
-   "targets": []
-  },
-  {
-   "key": "PIPELINE_PENDING_ALARM",
-   "class": "defaulted",
-   "default": "100",
-   "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this — a stuck/orphaned batch is a reportable state (P18)",
-   "targets": []
-  },
-  {
-   "key": "SIGNAL_TAPE_BUDGET_BYTES",
-   "class": "defaulted",
-   "default": "53687091200 (50 GiB)",
-   "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Fixture collection is default ON, so the bound lives here rather than on the capture path — the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
-   "targets": []
-  },
-  {
-   "key": "SIGNAL_TAPE_JANITOR_INTERVAL_S",
-   "class": "defaulted",
-   "default": "900",
-   "description": "O-TEL-1: captured-signal budget sweep cadence (s) — one paginated listing of the `signal/` prefix plus per-object deletes, single-flighted across replicas",
-   "targets": []
-  },
-  {
-   "key": "SIGNAL_TAPE_MIN_AGE_S",
-   "class": "defaulted",
-   "default": "600",
-   "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it — the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
-   "targets": []
-  }
- ],
- "capabilities": {
-  "stt": {
-   "description": "spawned bots can transcribe (the STT service bot_spawn threads into the invocation.v1 payload)",
-   "mode": "all",
-   "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s) — bots must opt out explicitly (transcribe_enabled=false / TRANSCRIBE_ENABLED=false) to spawn capture-only",
-   "probe": {
-    "kind": "http",
-    "timeout_s": 15,
-    "ttl_s": 900,
-    "http": {
-     "method": "POST",
-     "url_key": "TRANSCRIPTION_SERVICE_URL",
-     "path": "/v1/audio/transcriptions",
-     "auth_key": "TRANSCRIPTION_SERVICE_TOKEN",
-     "unauthorized_statuses": [
-      401,
-      403
-     ],
-     "invalid_statuses": [
-      404
-     ],
-     "payload": "audio",
-     "exhausted_statuses": [
-      402
-     ]
+  "contract": "config.v1",
+  "service": "meeting-api",
+  "keys": [
+    {
+      "key": "ADMIN_API_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
+      "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "ADMIN_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload \u2014 the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4)"
+    },
+    {
+      "key": "AUTO_JOIN_ALLOW_UNCAPPED",
+      "class": "defaulted",
+      "default": "false \u2014 with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+      "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode \u2014 chosen, never defaulted.",
+      "targets": []
+    },
+    {
+      "key": "AUTO_JOIN_GRACE_S",
+      "class": "defaulted",
+      "default": "600",
+      "description": "auto-join grace (s) \u2014 a scheduled meeting older than this is never auto-joined (no hours-late joins)",
+      "targets": []
+    },
+    {
+      "key": "AUTO_JOIN_LEAD_S",
+      "class": "defaulted",
+      "default": "120",
+      "description": "auto-join lead (s) \u2014 the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
+      "targets": []
+    },
+    {
+      "key": "AUTO_JOIN_RETRY_BACKOFF_S",
+      "class": "defaulted",
+      "default": "300",
+      "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+      "targets": []
+    },
+    {
+      "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
+      "class": "defaulted",
+      "default": "30",
+      "description": "auto-join sweep cadence (s) \u2014 how often scheduled meetings are checked for a due start",
+      "targets": []
+    },
+    {
+      "key": "BACKGROUND_TASK_INTERVAL",
+      "class": "defaulted",
+      "default": "10",
+      "description": "parent-name alias for DB_WRITER_INTERVAL_S (0.10 collector env parity) \u2014 used only when DB_WRITER_INTERVAL_S is unset",
+      "targets": []
+    },
+    {
+      "key": "BOT_AUTHENTICATED",
+      "class": "defaulted",
+      "default": "false",
+      "description": "deployment-scoped authenticated-bot knob: when true, EVERY POST /bots spawn carries the invocation.v1 auth block so the bot restores the provisioned browser session (make login) and joins signed-in. Demands the BOT_USERDATA_S3_PATH + BOT_S3_* keys \u2014 incomplete config answers a typed 503 (never a silent anonymous join).",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "BOT_S3_ACCESS_KEY",
+      "class": "defaulted",
+      "default": "(unset)",
+      "secret": true,
+      "description": "SCOPED userdata-store access key \u2014 never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "BOT_S3_BUCKET",
+      "class": "defaulted",
+      "default": "(unset \u2014 required when BOT_AUTHENTICATED=true)",
+      "description": "userdata store bucket",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "BOT_S3_ENDPOINT",
+      "class": "defaulted",
+      "default": "(unset \u2014 required when BOT_AUTHENTICATED=true)",
+      "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "BOT_S3_SECRET_KEY",
+      "class": "defaulted",
+      "default": "(unset)",
+      "secret": true,
+      "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "BOT_USERDATA_S3_PATH",
+      "class": "defaulted",
+      "default": "(unset \u2014 required when BOT_AUTHENTICATED=true; the userdata prefix holding the provisioned session, e.g. userdata/bot-identity-1)",
+      "description": "stored-session prefix; also the per-identity serialization key (one live authenticated bot per prefix)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "CALENDAR_ICS_MAX_BYTES",
+      "class": "defaulted",
+      "description": "Largest ICS feed body calendar sync will accept, in bytes (default 25 MiB). A real work calendar exports its ENTIRE history because an ICS address takes no time-range parameter, while parse_ics keeps a 14-day window and discards the rest \u2014 so the old hardcoded 2 MB refused feeds over bytes it was never going to read (Vexa-ai/vexa#1182). Raise it when a legitimate feed is refused as too large.",
+      "default": "26214400",
+      "targets": []
+    },
+    {
+      "key": "CALENDAR_SYNC_INTERVAL_S",
+      "class": "defaulted",
+      "default": "300",
+      "description": "calendar-sync sweep cadence (s) \u2014 how often connected ICS feeds are re-fetched and upserted into planned meetings",
+      "targets": []
+    },
+    {
+      "key": "COLLECTOR_CONSUMER_NAME",
+      "class": "defaulted",
+      "default": "",
+      "description": "#636: per-replica Redis consumer name for the segment group; empty \u2192 derived as collector-<hostname> (pod identity) so a crashed replica's pending batch is attributable + reclaimable",
+      "targets": []
+    },
+    {
+      "key": "COLLECTOR_CONSUMER_TTL_MS",
+      "class": "defaulted",
+      "default": "1800000",
+      "description": "#660: idle (ms) after which an abandoned per-recreate consumer (pending==0) is pruned from collector_group by the reclaim sweep (XGROUP DELCONSUMER); default 30 min, well above COLLECTOR_RECLAIM_MIN_IDLE_MS so a briefly-quiet live replica is never removed",
+      "targets": []
+    },
+    {
+      "key": "COLLECTOR_RECLAIM_MIN_IDLE_MS",
+      "class": "defaulted",
+      "default": "60000",
+      "description": "#636: min idle (ms) before a replica reclaims another replica's un-acked segment batch via XAUTOCLAIM, so a live peer's in-flight batch is never stolen",
+      "targets": []
+    },
+    {
+      "key": "DATABASE_URL",
+      "class": "defaulted",
+      "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
+      "secret": true,
+      "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
+      "targets": []
+    },
+    {
+      "key": "DB_HOST",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "PostgreSQL host (the meeting/session/transcript store)"
+    },
+    {
+      "key": "DB_MAX_OVERFLOW",
+      "class": "defaulted",
+      "default": "10",
+      "description": "SQLAlchemy async-engine max_overflow (burst connections above pool_size per pod). Pure runtime override \u2014 reconcile with deploy/db-budget.json. #635.",
+      "targets": []
+    },
+    {
+      "key": "DB_NAME",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "PostgreSQL database name"
+    },
+    {
+      "key": "DB_PASSWORD",
+      "class": "defaulted",
+      "default": "postgres",
+      "secret": true,
+      "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+    },
+    {
+      "key": "DB_POOL_SIZE",
+      "class": "defaulted",
+      "default": "5",
+      "description": "SQLAlchemy async-engine pool_size (persistent connections per pod) applied at every engine site via meeting_api.db.build_engine. Pure runtime override \u2014 reconcile with deploy/db-budget.json (\u03a3 replicas \u00d7 (pool_size + max_overflow) + reserved \u2264 max_connections) on managed Postgres. #635.",
+      "targets": []
+    },
+    {
+      "key": "DB_PORT",
+      "class": "defaulted",
+      "default": "5432",
+      "description": "PostgreSQL port"
+    },
+    {
+      "key": "DB_USER",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "PostgreSQL user"
+    },
+    {
+      "key": "DB_WRITER_INTERVAL_S",
+      "class": "defaulted",
+      "default": "10",
+      "description": "db-writer cadence (seconds) \u2014 each tick flushes immutable live segments from the redis hash meeting:{id}:segments into the transcriptions table and drains proc:meeting:{id} notes into meeting.data (the restored 0.10 flush loop)",
+      "targets": []
+    },
+    {
+      "key": "DB_WRITER_RECONCILE_INTERVAL_S",
+      "class": "defaulted",
+      "default": "300",
+      "description": "how often (seconds) the db-writer runs its self-healing O(keyspace) meeting:*:segments SCAN \u2014 startup + every this-many seconds, off the DB_WRITER_INTERVAL_S hot path. The active_meetings set is authoritative in steady state; the per-tick scan saturated redis and starved /health, restarting healthy pods (#893)",
+      "targets": []
+    },
+    {
+      "key": "DEFAULT_BOT_NAME",
+      "class": "defaulted",
+      "default": "(unset \u2014 request_bot falls back to VexaBot-{random})",
+      "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
+    },
+    {
+      "key": "HOST",
+      "class": "defaulted",
+      "default": "0.0.0.0",
+      "description": "uvicorn bind host (lite binds 127.0.0.1 behind its internal proxy)",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
+      "key": "IMMUTABILITY_THRESHOLD",
+      "class": "defaulted",
+      "default": "30",
+      "description": "seconds a live segment must sit unmodified before the db-writer flushes it to postgres \u2014 the still-mutable tail (drafts being refined) stays in redis until it settles (0.10 parity)",
+      "targets": []
+    },
+    {
+      "key": "IMMUTABILITY_THRESHOLD_TEAMS_CSRC_CONFIRMED",
+      "class": "defaulted",
+      "default": "0",
+      "description": "the hold (seconds) for a CONFIRMED Teams CSRC segment (source=merged plus speaker_key=csrc:<id>), whose drafts are explicitly retractable. Never raises the hold above IMMUTABILITY_THRESHOLD; pending Teams rows and every other lane keep the full hold",
+      "targets": []
+    },
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "defaulted",
+      "default": "(unset \u2014 the internal lifecycle-callback header is then not attached)",
+      "secret": true,
+      "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "class": "defaulted",
+      "default": "info",
+      "description": "uvicorn/app log level"
+    },
+    {
+      "key": "MEETING_API_URL",
+      "class": "defaulted",
+      "default": "http://meeting-api:8080",
+      "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose relies on the default service DNS name, helm sets it explicitly to the release-qualified Service DNS, lite overrides to localhost",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
+      "key": "MEETING_TOKEN_TTL_SECONDS",
+      "class": "defaulted",
+      "default": "18000",
+      "description": "MeetingToken lifetime \u2014 must outlive the bot's max active time (default 4h) or transcription dies mid-meeting",
+      "targets": []
+    },
+    {
+      "key": "MEETING_UNTRACKED_GRACE_SEC",
+      "class": "defaulted",
+      "default": "600",
+      "description": "continuous-untracked window (s): a meeting whose workload the runtime 404s for this long with no re-adoption and no bot callback is presumed lost and failed with an evidence note",
+      "targets": []
+    },
+    {
+      "key": "MINIO_ACCESS_KEY",
+      "class": "capability",
+      "capability": "object_storage",
+      "description": "object-store access key (recordings upload/finalize)"
+    },
+    {
+      "key": "MINIO_BUCKET",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "recordings bucket"
+    },
+    {
+      "key": "MINIO_ENDPOINT",
+      "class": "defaulted",
+      "default": "minio:9000",
+      "description": "object-store host:port (or full http(s) URL) recordings are written to"
+    },
+    {
+      "key": "MINIO_SECRET_KEY",
+      "class": "capability",
+      "capability": "object_storage",
+      "secret": true,
+      "description": "object-store secret key"
+    },
+    {
+      "key": "MINIO_SECURE",
+      "class": "defaulted",
+      "default": "false",
+      "description": "https toward the object store when true"
+    },
+    {
+      "key": "PIPELINE_LAG_ALARM",
+      "class": "defaulted",
+      "default": "500",
+      "description": "#527: collector-group lag (unread transcription_segments) over this flips /health to degraded+503",
+      "targets": []
+    },
+    {
+      "key": "PIPELINE_PENDING_ALARM",
+      "class": "defaulted",
+      "default": "100",
+      "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this \u2014 a stuck/orphaned batch is a reportable state (P18)",
+      "targets": []
+    },
+    {
+      "key": "PIPELINE_TICK_STALE_S",
+      "class": "defaulted",
+      "default": "120",
+      "description": "#527: a background loop whose last heartbeat is older than this flips /health to degraded+503 (a hung consumer no longer looks alive)",
+      "targets": []
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "8080",
+      "description": "uvicorn bind port",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
+      "key": "PROC_PENDING_GRACE_SEC",
+      "class": "defaulted",
+      "default": "120",
+      "description": "bounded grace (s) for draining a finalized meeting's processed_pending entries after its view_end marker \u2014 the copilot's final post-session beat must land within this window or the drain is abandoned with a warning (ADR-0027 Train 2)",
+      "targets": []
+    },
+    {
+      "key": "RECONCILE_ACTIVE_GRACE_S",
+      "class": "defaulted",
+      "default": "300",
+      "description": "grace (s) before an active meeting with a dead workload is failed by the reconciler",
+      "targets": []
+    },
+    {
+      "key": "RECONCILE_PREACTIVE_GRACE_S",
+      "class": "defaulted",
+      "default": "960 (VEXA_LOBBY_BUDGET_S + 60)",
+      "description": "grace (s) before a meeting whose bot has NOT yet reached the room (requested/joining/awaiting_admission) is reconciled \u2014 DERIVED from the lobby budget the spawn issues (VEXA_LOBBY_BUDGET_S, default 900s) plus 60s of headroom, so the control plane is never less patient than the deadline it handed the bot (#862, #1208)",
+      "targets": []
+    },
+    {
+      "key": "RECORDING_BUCKET",
+      "class": "defaulted",
+      "default": "recordings",
+      "description": "recordings bucket for the standalone recordings composition (the unified app uses MINIO_BUCKET first)",
+      "targets": []
+    },
+    {
+      "key": "RECORDING_ENABLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "deployment-level default for a spawn's recording_enabled when the request does not say",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "REDIS_SEGMENT_TTL",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append \u2014 an abandoned hash cannot linger forever once flushed (0.10 parity)",
+      "targets": []
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "redis://redis:6379/0",
+      "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
+    },
+    {
+      "key": "RUNTIME_API_URL",
+      "class": "defaulted",
+      "default": "http://runtime:8090",
+      "description": "the runtime kernel's runtime.v1 surface bot_spawn creates workloads on"
+    },
+    {
+      "key": "S3_ACCESS_KEY",
+      "class": "defaulted",
+      "default": "(unset \u2014 falls back to MINIO_ACCESS_KEY)",
+      "description": "explicit S3 access-key override",
+      "targets": []
+    },
+    {
+      "key": "S3_ENDPOINT",
+      "class": "defaulted",
+      "default": "(unset \u2014 falls back to MINIO_ENDPOINT/MINIO_SECURE)",
+      "description": "explicit S3 endpoint override for a non-MinIO store",
+      "targets": []
+    },
+    {
+      "key": "S3_SECRET_KEY",
+      "class": "defaulted",
+      "default": "(unset \u2014 falls back to MINIO_SECRET_KEY)",
+      "secret": true,
+      "description": "explicit S3 secret-key override",
+      "targets": []
+    },
+    {
+      "key": "SCHEDULER_TICK_INTERVAL",
+      "class": "defaulted",
+      "default": "1",
+      "description": "tick interval (s) of the schedule.v1 job loop (drives join-retry re-spawns)",
+      "targets": []
+    },
+    {
+      "key": "SEGMENT_CONSUMER_INTERVAL",
+      "class": "defaulted",
+      "default": "0.5",
+      "description": "poll interval (s) of the transcription_segments stream consumer loop",
+      "targets": []
+    },
+    {
+      "key": "SEGMENT_RECLAIM_EVERY_N_TICKS",
+      "class": "defaulted",
+      "default": "120",
+      "description": "#636: run the orphan-reclaim scan every N segment-consumer ticks",
+      "targets": []
+    },
+    {
+      "key": "SERVICE_AUTHORITY_SWEEP_INTERVAL_S",
+      "class": "defaulted",
+      "default": "15",
+      "description": "poll cadence for due one-minute active-service decisions; boundary timestamps remain admitted_at + N minutes regardless of polling cadence",
+      "targets": []
+    },
+    {
+      "key": "SIGNAL_TAPE_BUDGET_BYTES",
+      "class": "defaulted",
+      "default": "53687091200 (50 GiB)",
+      "description": "O-TEL-1: the captured-signal tape KEEP budget in bytes. Fixture collection is default ON, so the bound lives here rather than on the capture path \u2014 the janitor evicts oldest-unpromoted tapes under the `signal/` prefix until total tape bytes fit. Promoted tapes (a PROMOTED marker object beside them) are NEVER evicted; if promotion alone exceeds the budget the sweep deletes nothing and logs signal_tape_budget_unreclaimable for a human to decide",
+      "targets": []
+    },
+    {
+      "key": "SIGNAL_TAPE_JANITOR_INTERVAL_S",
+      "class": "defaulted",
+      "default": "900",
+      "description": "O-TEL-1: captured-signal budget sweep cadence (s) \u2014 one paginated listing of the `signal/` prefix plus per-object deletes, single-flighted across replicas",
+      "targets": []
+    },
+    {
+      "key": "SIGNAL_TAPE_MIN_AGE_S",
+      "class": "defaulted",
+      "default": "600",
+      "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it \u2014 the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
+      "targets": []
+    },
+    {
+      "key": "STOP_RECONCILE_GRACE_S",
+      "class": "defaulted",
+      "default": "45",
+      "description": "grace (s) before a stopping meeting whose workload is gone is reconciled",
+      "targets": []
+    },
+    {
+      "key": "STOP_RECONCILE_INTERVAL_S",
+      "class": "defaulted",
+      "default": "15",
+      "description": "interval (s) of the stop-reconcile loop",
+      "targets": []
+    },
+    {
+      "key": "STORAGE_BACKEND",
+      "class": "defaulted",
+      "default": "minio",
+      "description": "storage-backend label stamped into the recording's meeting.data JSONB",
+      "targets": []
+    },
+    {
+      "key": "STREAM_RETENTION_S",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "#527: acked transcription_segments entries older than this are trimmed; an unread (un-acked) entry is NEVER trimmed regardless of age (the 2026-04-26 data-loss guard)",
+      "targets": []
+    },
+    {
+      "key": "TRANSCRIBE_ENABLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "deployment-level default for a spawn's transcribe_enabled when the request does not say \u2014 set false for a capture-only deployment with no STT",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "TRANSCRIPTION_MODEL",
+      "class": "defaulted",
+      "default": "(unset \u2014 the whisper client sends whisper-1)",
+      "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part) \u2014 required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) \u2014 use extraEnv there for now",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_TOKEN",
+      "class": "capability",
+      "capability": "stt",
+      "secret": true,
+      "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_URL",
+      "class": "capability",
+      "capability": "stt",
+      "description": "STT base URL the spawned bot transcribes against (the client appends /v1/audio/transcriptions) \u2014 self-hosted deploy/transcription or a hosted vexa.ai token's endpoint"
+    },
+    {
+      "key": "VEXA_JITSI_HOSTS",
+      "class": "defaulted",
+      "default": "",
+      "description": "Comma-separated additional Jitsi deployment hostnames (a self-hosted instance whose name carries neither 'jitsi' nor a 'meet' label, e.g. calls.example.org) recognized when parsing pasted meeting links AND calendar (ICS) links; meet.jit.si, *jitsi* hosts, and (for pasted links) meet-labelled hosts are always recognized \u2014 unset \u21d2 no extra hosts",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LOBBY_BUDGET_S",
+      "class": "defaulted",
+      "default": "900",
+      "description": "lobby budget (s) issued to every spawned bot as automatic_leave.waitingRoomTimeout \u2014 how long it may wait for admission before reporting awaiting_admission_timeout. 15 min so an auto-joined bot outwaits a late host (#1208); the reconcile pre-active grace derives from it, so raising it never leaves a waiter reaped by a shorter watchdog. An explicit automatic_leave.max_wait_for_admission on POST /bots still wins.",
+      "targets": []
+    },
+    {
+      "key": "VEXA_SERVICE_AUTHORITY_CONFIG",
+      "class": "defaulted",
+      "default": "(unset \u2014 explicit allow-all OSS behavior)",
+      "description": "JSON service-authority.v1 adapter config: credential-free endpoint URL, contract_version, timeout_ms, response_max_age_seconds, failure_policy=closed, and mode=enforce|observe. When set, unavailable or malformed authority decisions fail closed.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SERVICE_AUTHORITY_SECRET",
+      "class": "defaulted",
+      "default": "(unset \u2014 required when VEXA_SERVICE_AUTHORITY_CONFIG is set)",
+      "secret": true,
+      "description": "shared HMAC secret for exact-byte timestamped service-authority requests",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP",
+      "class": "defaulted",
+      "default": "false",
+      "description": "Explicit operator opt-in for an HTTP system callback on a private/in-cluster service network. This never changes the customer webhook SSRF policy.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SYSTEM_WEBHOOK_SECRET",
+      "class": "defaulted",
+      "default": "(unset \u2014 required when VEXA_SYSTEM_WEBHOOK_URL is set)",
+      "secret": true,
+      "description": "Shared secret for Bearer compatibility and exact-byte timestamped HMAC signing of the operator-owned terminal callback.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SYSTEM_WEBHOOK_TIMEOUT_S",
+      "class": "defaulted",
+      "default": "10",
+      "description": "Bounded HTTP timeout in seconds for the operator-owned terminal callback; must be greater than 0 and at most 60.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SYSTEM_WEBHOOK_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no operator-owned terminal callback)",
+      "description": "Boot-frozen operator destination for signed meeting.completed and bot.failed envelopes. It is never read from user or meeting data. HTTPS is required unless VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP explicitly enables an in-cluster HTTP service.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "WEBHOOK_DRAIN_INTERVAL",
+      "class": "defaulted",
+      "default": "5",
+      "description": "sweep interval (s) of the webhook retry-queue drain loop",
+      "targets": []
     }
-   }
-  },
-  "object_storage": {
-   "description": "recordings persist to the object store (chunk upload + finalize → meeting.data JSONB)",
-   "mode": "all",
-   "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+  ],
+  "capabilities": {
+    "stt": {
+      "description": "spawned bots can transcribe (the STT service bot_spawn threads into the invocation.v1 payload)",
+      "mode": "all",
+      "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s) \u2014 bots must opt out explicitly (transcribe_enabled=false / TRANSCRIBE_ENABLED=false) to spawn capture-only",
+      "probe": {
+        "kind": "http",
+        "timeout_s": 15,
+        "ttl_s": 900,
+        "http": {
+          "method": "POST",
+          "url_key": "TRANSCRIPTION_SERVICE_URL",
+          "path": "/v1/audio/transcriptions",
+          "auth_key": "TRANSCRIPTION_SERVICE_TOKEN",
+          "unauthorized_statuses": [
+            401,
+            403
+          ],
+          "invalid_statuses": [
+            404
+          ],
+          "payload": "audio",
+          "exhausted_statuses": [
+            402
+          ]
+        }
+      }
+    },
+    "object_storage": {
+      "description": "recordings persist to the object store (chunk upload + finalize \u2192 meeting.data JSONB)",
+      "mode": "all",
+      "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+    }
   }
- }
 }

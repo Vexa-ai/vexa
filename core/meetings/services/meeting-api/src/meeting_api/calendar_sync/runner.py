@@ -42,6 +42,7 @@ async def run_user_sync(
     now: Optional[datetime] = None,
     rows: Optional[list] = None,
     client: Any = None,
+    prev: Optional[dict] = None,
 ) -> dict:
     """Run one full sync for ``cfg = {user_id, ics_url, auto_join}`` → the status stamp.
 
@@ -49,22 +50,39 @@ async def run_user_sync(
     not to the sweep). ``publish`` (optional) is called per created/updated/cancelled row so live
     lists refresh. ``rows`` (optional) is the user's meeting rows, read ONCE per tick by the
     sweep and shared across that user's connections — ``sync_user`` keeps the list current as it
-    writes. ``client`` (optional) is a shared pinned httpx client for the feed fetch."""
+    writes. ``client`` (optional) is a shared pinned httpx client for the feed fetch. ``prev``
+    (optional) is this connection's LAST stamp: its ``etag``/``last_modified`` make the fetch
+    conditional, so an unchanged feed answers 304 with no body and both the parse and the sync
+    are skipped entirely."""
     from . import fetch_ics, parse_ics, sync_user
 
     user_id = cfg.get("user_id")
     moment = now or datetime.now(timezone.utc)
     stamp: dict = {"last_sync": moment.isoformat(), "last_error": None}
+    prev = prev or {}
     try:
         # A tombstone (deleted) or a PAUSED (enabled: false) connection parses as an empty feed:
         # sync_user then strips this connection's sources and retires the rows only it managed.
         if cfg.get("deleted") or cfg.get("paused"):
             parsed = {"events": [], "cancelled_uids": []}
         else:
-            text, fetch_err = await fetch_ics(cfg["ics_url"], client=client)
+            text, fetch_err, validators = await fetch_ics(
+                cfg["ics_url"], client=client,
+                etag=prev.get("etag"), last_modified=prev.get("last_modified"))
+            # NOTHING CHANGED: the feed answered 304 and sent no body. Skip the parse and the
+            # sync entirely and keep the counts we last reported — "checked, nothing new" is a
+            # different fact from "synced 14 events", and the panel could not tell them apart.
+            if validators.get("not_modified"):
+                stamp["unchanged"] = True
+                stamp["counts"] = prev.get("counts")
+                stamp["etag"] = validators.get("etag")
+                stamp["last_modified"] = validators.get("last_modified")
+                return stamp
             if text is None:
                 stamp["last_error"] = fetch_err or "fetch failed"
                 return stamp
+            stamp["etag"] = validators.get("etag")
+            stamp["last_modified"] = validators.get("last_modified")
             parsed = parse_ics(text, now=moment, redact_values=(cfg.get("ics_url") or "",))
         result = await sync_user(store, user_id, parsed,
                                  auto_join_default=bool(cfg.get("auto_join", True)),
