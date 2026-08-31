@@ -79,16 +79,12 @@ async def _sync_user_calendars(store, redis_client, user_id: int, configs: list,
     connection's sources get stripped and its rows retired. But a tombstone's stamp is neither
     persisted nor RETURNED: the returned list is what ``aggregate_stamps`` turns into the
     user-visible ``calendars[]`` roster, and a connection the user deleted has no place in it."""
-    from .calendar_sync import read_stamp, run_user_sync, store_stamp
+    from .calendar_sync import run_user_sync, store_stamp
 
     rows = await store.list_meetings(user_id)
     stamps = []
     for cfg in configs:
-        # LAST TIME'S VALIDATORS. Without them every tick re-downloads every feed in full; with
-        # them an unchanged feed answers 304 and sends no body, which is most ticks.
-        prev = await read_stamp(redis_client, user_id, cfg.get("calendar_id"))
-        stamp = await run_user_sync(store, cfg, publish=publish, rows=rows, client=client,
-                                    prev=prev)
+        stamp = await run_user_sync(store, cfg, publish=publish, rows=rows, client=client)
         if cfg.get("deleted"):
             continue
         stamp["calendar_id"] = cfg.get("calendar_id")

@@ -119,8 +119,7 @@ def test_fetch_ics_error_taxonomy(monkeypatch, body, status, expect):
     import meeting_api.webhooks.ssrf as ssrf
     monkeypatch.setattr(ssrf, "build_pinned_transport", fake_transport)
 
-    text, err, _validators = asyncio.run(
-        cal_adapters.fetch_ics("https://calendar.example.com/basic.ics"))
+    text, err = asyncio.run(cal_adapters.fetch_ics("https://calendar.example.com/basic.ics"))
     if expect is None:
         assert err is None and text is not None
     else:
@@ -220,47 +219,3 @@ def test_no_response_ever_names_a_deleted_connection():
     aggregate = aggregate_stamps(stamps)
     assert [s["calendar_id"] for s in aggregate["calendars"]] == ["work"]
     assert "dead" not in str(aggregate)
-
-
-def test_unchanged_feed_transfers_no_body(monkeypatch):
-    """The point of conditional fetching: an unchanged feed costs a header exchange.
-
-    Without this, every sweep downloads every feed in full — at ten thousand feeds on a
-    five-minute tick, 120k full transfers an hour, and the provider throttles us long before
-    anyone connects the two facts.
-    """
-    import asyncio
-
-    import httpx
-
-    from meeting_api.calendar_sync import adapters as cal_adapters
-
-    seen: list[dict] = []
-
-    def fake_transport():
-        def handler(request):
-            seen.append(dict(request.headers))
-            if request.headers.get("If-None-Match") == '"v1"':
-                # a real 304 carries no body at all
-                return httpx.Response(304)
-            return httpx.Response(200, text="BEGIN:VCALENDAR\nEND:VCALENDAR",
-                                  headers={"ETag": '"v1"'})
-        return httpx.MockTransport(handler)
-
-    import meeting_api.webhooks.ssrf as ssrf
-    monkeypatch.setattr(ssrf, "build_pinned_transport", fake_transport)
-
-    url = "https://calendar.example.com/basic.ics"
-
-    # first poll: nothing known yet, so a full fetch — and the feed hands back its validator
-    text, err, validators = asyncio.run(cal_adapters.fetch_ics(url))
-    assert err is None and text is not None
-    assert validators["etag"] == '"v1"'
-    assert "if-none-match" not in seen[0]
-
-    # second poll, carrying it back: no body, and the caller is told why
-    text2, err2, v2 = asyncio.run(cal_adapters.fetch_ics(url, etag=validators["etag"]))
-    assert seen[1]["if-none-match"] == '"v1"'
-    assert v2.get("not_modified") is True
-    assert text2 is None          # nothing transferred
-    assert err2 is None           # and nothing wrong — unchanged is not a failure
