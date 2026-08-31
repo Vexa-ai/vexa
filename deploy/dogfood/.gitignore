@@ -1,0 +1,4 @@
+# The live env carries this stack's real secrets, and .dogfood-key is a live API key.
+# Only the .example ships.
+.env.dogfood
+.dogfood-key
