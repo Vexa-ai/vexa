@@ -340,6 +340,47 @@ Both forms return the meeting record alongside its `segments` — `id`, `platfor
 `native_meeting_id`, `status`, `start_time`, `end_time`, `constructed_meeting_url`, `notes`,
 `recordings`, and the full `data` detail. `404` for an unknown record or one you don't own.
 
+### Following a live meeting — `since`
+
+A plain poll returns the **whole** transcript every time, so following a long meeting re-downloads
+everything you already have. Pass `since` to get back **only what changed**.
+
+Every response carries **`next_since`** — the watermark for your next poll. Read it, pass it back:
+
+```bash Incremental poll — GET /transcripts/{platform}/{id}?since=…
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/transcripts/google_meet/abc-defg-hij?since=2026-08-18T08:20:00Z"
+```
+
+```json Response
+{
+  "segments": [ { "segment_id": "sess_9c2a:spk1:12400", "text": "…", "updated_at": "2026-08-18T08:20:04Z" } ],
+  "retracted_segment_ids": [],
+  "next_since": "2026-08-18T08:20:09Z",
+  "resynced": false
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `since` (query) | ISO-8601 UTC. Returns every segment **created or changed** at/after this instant. |
+| `updated_at` (per segment) | When the server last wrote that segment. |
+| `next_since` | The watermark for your next poll. Always present, including on a full read. |
+| `retracted_segment_ids` | Segments **deleted** since your cursor — drop them. Only on a `since` read. |
+| `resynced` | `true` when your cursor was too old to honour and the full transcript was returned instead. |
+
+**Merge by `segment_id`.** `since` is a *change* cursor, not an append pointer: a live draft is
+rewritten in place as its confirmation, and a speaker can be repainted across segments you already
+hold. So a segment you have seen before will come back when it changes — upsert it, don't append it.
+The cursor deliberately errs toward re-sending: a repeated segment is free, a missed one is not.
+
+<Note>
+`limit`, `offset`, `after`, and `start_time` are **not** accepted here and return `400` naming the
+parameter. `since` is the bounding mechanism — a page-limited transcript would truncate a follower's
+feed while `next_since` claimed it was complete. A first read of a finished meeting returns the whole
+transcript in one response; that is its own size, not a multiple of it.
+</Note>
+
 ## Manage the bot
 
 ```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config

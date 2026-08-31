@@ -327,7 +327,14 @@
    "key": "REDIS_SEGMENT_TTL",
    "class": "defaulted",
    "default": "3600",
-   "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append — an abandoned hash cannot linger forever once flushed (0.10 parity)",
+   "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append — an abandoned hash cannot linger forever once flushed (0.10 parity). Also bounds the retraction-tombstone hash meeting:{id}:retracted, so the ?since= cursor's deletion window matches the window in which live segments exist at all",
+   "targets": []
+  },
+  {
+   "key": "TRANSCRIPT_CURSOR_LAG_SEC",
+   "class": "defaulted",
+   "default": "2",
+   "description": "seconds the transcript read cursor's next_since watermark lags read-start (GET /transcripts/…?since=) — a segment written concurrently with a poll is re-sent on the next poll rather than skipped, and the lag absorbs clock skew between the ingest process and the reader (both stamps are process-local wall-clock). Re-delivery is free (clients upsert by segment_id); a skip is undetectable data loss, so raise this rather than lower it (#1219)",
    "targets": []
   },
   {

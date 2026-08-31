@@ -22,9 +22,14 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from .cursor import changed_since as _changed_since
+from .cursor import is_stale as _cursor_is_stale
+from .cursor import retractions_hash_key
+from .cursor import watermark as _cursor_watermark
+from .cursor import RETRACTION_TOMBSTONE_TTL_SEC
 from .ports import RedisBus, TranscriptStore
 
 log = logging.getLogger("meeting_api.collector.adapters")
@@ -226,10 +231,15 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "speaker_key", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time", "created_at"):
+    for k in ("speaker", "speaker_key", "completed", "segment_id", "source",
+              "absolute_start_time", "absolute_end_time", "created_at", "updated_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
+
+
+# The incremental-read cursor (`?since=`) — semantics, constants and the fail-open predicates live in
+# `cursor.py`, shared with the in-memory fake so the two reads can never drift.
 
 
 class SqlAlchemyTranscriptStore:
@@ -279,7 +289,7 @@ class SqlAlchemyTranscriptStore:
     # session in scope. The response is byte-identical to the old single-pass build; only the
     # transaction scope changes. (See C2's tx-scope gate, which enforces this shape for good.)
 
-    async def _transcript_pg_part(self, db, meeting) -> "tuple[dict, dict, list]":
+    async def _transcript_pg_part(self, db, meeting, since: Optional[datetime] = None) -> "tuple[dict, dict, list]":
         """DB-ONLY half: SELECT the persisted ``transcriptions`` for this row and SNAPSHOT every
         meeting-row field the response needs into plain values — all while the session is live.
         Returns ``(snap, seg_by_id, order)``. Nothing here awaits a non-DB backend, so the caller's
@@ -292,11 +302,18 @@ class SqlAlchemyTranscriptStore:
 
         from .models import Transcription
 
-        seg_rows = (
-            await db.execute(
-                select(Transcription).where(Transcription.meeting_id == meeting.id)
+        stmt = select(Transcription).where(Transcription.meeting_id == meeting.id)
+        if since is not None:
+            # `created_at` is the LAST-FLUSH stamp (the upsert re-stamps it on conflict), so this is a
+            # changed-since filter, not a created-since one. The column is naive-UTC, so the aware
+            # cursor is dropped to naive UTC before it reaches the driver. `IS NULL` rides along on
+            # purpose: an unstamped legacy row fails OPEN (returned) rather than vanishing from a
+            # follower's feed.
+            naive_since = since.astimezone(timezone.utc).replace(tzinfo=None)
+            stmt = stmt.where(
+                (Transcription.created_at.is_(None)) | (Transcription.created_at >= naive_since)
             )
-        ).scalars().all()
+        seg_rows = (await db.execute(stmt)).scalars().all()
         data = meeting.data if isinstance(meeting.data, dict) else {}
         # Postgres-persisted segments (the background db-writer flush path).
         seg_by_id: dict = {}
@@ -306,6 +323,7 @@ class SqlAlchemyTranscriptStore:
                 "start": r.start_time, "end": r.end_time, "text": r.text,
                 "language": r.language, "speaker": r.speaker,
                 "segment_id": r.segment_id, "completed": True,
+                "updated_at": _iso_utc(r.created_at),
             })
             sid = s.get("segment_id") or f"pg-{len(order)}"
             if sid not in seg_by_id:
@@ -325,7 +343,8 @@ class SqlAlchemyTranscriptStore:
         return snap, seg_by_id, order
 
     async def _merge_live_segments(
-        self, pg: "tuple[dict, dict, list]", *, viewer_is_owner: bool,
+        self, pg: "tuple[dict, dict, list]", since: Optional[datetime] = None,
+        next_since: Optional[datetime] = None, *, viewer_is_owner: bool,
     ) -> dict:
         """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
         assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
@@ -357,6 +376,8 @@ class SqlAlchemyTranscriptStore:
                         seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
                     except Exception:
                         continue
+                    if not _changed_since(seg, since):
+                        continue
                     s = _segment_to_api(seg)
                     sid = s.get("segment_id") or f"rh-{len(order)}"
                     if sid not in seg_by_id:
@@ -381,13 +402,22 @@ class SqlAlchemyTranscriptStore:
             "notes": data.get("notes"),
             "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
+            # The watermark for the caller's NEXT poll. Always present, so a follower bootstraps from
+            # a full read and goes incremental from the second request onwards.
+            "next_since": _iso_utc(next_since or _cursor_watermark()),
         }
 
-    async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+    async def get_transcript(self, user_id, platform, native_meeting_id,
+                             since: Optional[datetime] = None) -> Optional[dict]:
         from sqlalchemy import select  # lazy: SQLAlchemy not needed for the in-memory fakes
 
         from .models import Meeting  # local re-export of the admin-api models
 
+        # Both taken BEFORE the read: anything written while this response is assembled lands at or
+        # after the watermark, so the next poll re-sends it instead of stepping over it.
+        watermark = _cursor_watermark()
+        stale = _cursor_is_stale(since)
+        effective_since = None if stale else since
         async with self._session_factory() as db:
             stmt = (
                 select(Meeting)
@@ -405,13 +435,31 @@ class SqlAlchemyTranscriptStore:
             deletion_state = data.get("artifact_deletion") or {}
             if deletion_state and deletion_state.get("state", "completed") == "completed":
                 return None
-            pg = await self._transcript_pg_part(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting, effective_since)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         # The SELECT above constrains ``Meeting.user_id == user_id``, so a row reached through this
         # path is by construction the caller's own — the native-keyed read has no share branch.
-        return await self._merge_live_segments(pg, viewer_is_owner=True)
+        return await self._cursor_response(
+            pg, since, effective_since, watermark, stale, viewer_is_owner=True,
+        )
 
-    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
+    async def _cursor_response(self, pg, since, effective_since, watermark, stale, *,
+                               viewer_is_owner: bool) -> dict:
+        """Assemble the response for a (possibly incremental) read. NO database session is open here
+        — both awaits are Redis, which is the whole point of the #508 two-phase split.
+
+        ``viewer_is_owner`` is REQUIRED and passed straight through: this helper only shapes the
+        cursor fields, it never re-decides who may see which tier of the meeting blob."""
+        doc = await self._merge_live_segments(
+            pg, effective_since, watermark, viewer_is_owner=viewer_is_owner,
+        )
+        if since is not None:
+            doc["retracted_segment_ids"] = await self.retractions_since(pg[0]["id"], effective_since)
+            doc["resynced"] = stale
+        return doc
+
+    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None,
+                                   since: Optional[datetime] = None) -> Optional[dict]:
         """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
         authorize_subscribe: (a) owner, (b) member of the bound workspace, (c) redeemed a transcript-share
         link (``data.transcript_viewers``). Any other caller → ``None`` (→ 404), so it can never leak an
@@ -424,6 +472,9 @@ class SqlAlchemyTranscriptStore:
             mid = int(meeting_id)
         except (TypeError, ValueError):
             return None
+        watermark = _cursor_watermark()
+        stale = _cursor_is_stale(since)
+        effective_since = None if stale else since
         async with self._session_factory() as db:
             meeting = (await db.execute(select(Meeting).where(Meeting.id == mid))).scalars().first()
             if not meeting:
@@ -440,11 +491,13 @@ class SqlAlchemyTranscriptStore:
             )
             if not authorized:
                 return None
-            pg = await self._transcript_pg_part(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting, effective_since)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         # The response projection reuses branch (a) above — the SAME decision that authorized this
         # read decides which tier of the blob it may carry, so the two can never disagree.
-        return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
+        return await self._cursor_response(
+            pg, since, effective_since, watermark, stale, viewer_is_owner=is_owner,
+        )
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -793,6 +846,39 @@ class SqlAlchemyTranscriptStore:
             pipe.expire(hash_key, ttl)
             await pipe.execute()
 
+    async def _record_retractions(self, meeting_id, ids) -> None:
+        """Stamp each retracted segment id into ``meeting:{id}:retracted`` with the retraction instant.
+
+        The hash carries the SAME TTL as the live segment hash, which bounds it: a follower whose
+        cursor predates that window is re-synced with a full transcript instead of being handed an
+        incomplete retraction list (see ``retractions_since``)."""
+        if self._redis is None:
+            return
+        now = _iso_utc(datetime.now(timezone.utc))
+        try:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.hset(retractions_hash_key(meeting_id), mapping={str(i): now for i in ids})
+                pipe.expire(retractions_hash_key(meeting_id), RETRACTION_TOMBSTONE_TTL_SEC)
+                await pipe.execute()
+        except Exception:  # noqa: BLE001 — a tombstone miss degrades the cursor, never the retraction
+            pass
+
+    async def retractions_since(self, meeting_id, since: Optional[datetime]) -> "list":
+        """The segment ids retracted at-or-after ``since`` — what an incremental follower must DROP."""
+        if since is None or self._redis is None:
+            return []
+        try:
+            raw = await self._redis.hgetall(retractions_hash_key(meeting_id))
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for field, value in (raw.items() if isinstance(raw, dict) else []):
+            sid = field.decode() if isinstance(field, (bytes, bytearray)) else field
+            stamp = value.decode() if isinstance(value, (bytes, bytearray)) else value
+            if _changed_since({"updated_at": stamp}, since):
+                out.append(sid)
+        return sorted(out)
+
     async def delete_segments(self, meeting_id, segment_ids) -> None:
         # Retraction: withdraw superseded/over-extended pending drafts by segment id. Two legs mirror the
         # append path — HDEL the live hash so an UN-flushed draft never reaches Postgres, and DELETE any
@@ -817,6 +903,16 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             await db.execute(stmt, {"mid": int(meeting_id), "sids": ids})
             await db.commit()
+        # Leg 3: TOMBSTONE the retracted ids. A deletion is the one change a changed-since cursor
+        # cannot express as data — the segment is simply gone, so an incremental follower would keep
+        # serving a draft the full transcript no longer contains. The tombstone carries the retraction
+        # instant, so `?since=` reports it as `retracted_segment_ids` on the very poll that would
+        # otherwise have gone silent. Recorded HERE, where the retraction is introduced, rather than
+        # reconstructed by the reader — and only AFTER both deletes committed: a tombstone for a row
+        # that is still in Postgres would tell a follower to drop a segment a full read still returns,
+        # and the follower could never recover it (the durable stamp predates its cursor). Failing the
+        # other way leaves a stale segment in the follower's hands, which the next full read fixes.
+        await self._record_retractions(meeting_id, ids)
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink — UPSERT a batch of flushed segments into ``transcriptions``

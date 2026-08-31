@@ -18,6 +18,12 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from .cursor import changed_since as _changed_since
+from .cursor import is_stale as _cursor_is_stale
+from .cursor import iso as _iso
+from .cursor import now_iso as _now_iso
+from .cursor import watermark as _cursor_watermark
+
 
 def _segment_to_api(seg: dict) -> dict:
     """A stored segment → api.v1 ``TranscriptionSegment`` (start/end/text/language required)."""
@@ -27,7 +33,8 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "speaker_key", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time"):
+    for k in ("speaker", "speaker_key", "completed", "segment_id", "source",
+              "absolute_start_time", "absolute_end_time", "updated_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
@@ -48,6 +55,9 @@ class InMemoryTranscriptStore:
         #                data, segments: {segment_id: seg}}
         self._meetings: dict[int, dict] = {}
         self._next_id = 1
+        # meeting_id -> {segment_id: retracted_at} — the retraction tombstones the `?since=` cursor
+        # reports, mirroring the prod store's `meeting:{id}:retracted` hash.
+        self._retracted: dict[int, dict[str, str]] = {}
         # Optional live-segment redis (fakeredis in tests) — mirrors the prod adapter's split
         # between the in-flight hash (redis) and the durable rows (the dict standing in for PG).
         self._redis = redis_client
@@ -115,14 +125,21 @@ class InMemoryTranscriptStore:
         matches.sort(key=lambda kv: (kv[1].get("created_at") or "", kv[0]), reverse=True)
         return matches[0][0]
 
-    async def _transcript_doc(self, mid, *, viewer_is_owner: bool) -> dict:
+    async def _transcript_doc(self, mid, since=None, *, viewer_is_owner: bool) -> dict:
         """Build the api.v1 ``TranscriptionResponse`` for row ``mid`` — shared by ``get_transcript``
         (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
         by-id read returns exactly that row's segments/notes. Mirrors the real store's viewer-aware
         response projection, ``viewer_is_owner`` included — the fake and the real store must agree on
-        what a share recipient receives, since most of the suite drives the fake."""
+        what a share recipient receives, since most of the suite drives the fake.
+
+        ``since`` applies the incremental-read cursor exactly as the prod store does (see
+        ``cursor.py``): change-stamp filter, watermark taken before the read, stale cursor → full
+        re-read with ``resynced: true``, retractions reported so a follower can DROP them."""
         from .projection import project_response_data
 
+        watermark = _cursor_watermark()
+        stale = _cursor_is_stale(since)
+        effective_since = None if stale else since
         m = self._meetings[mid]
         by_id = dict(m["segments"])
         # Redis-wired (prod-topology) mode: merge the LIVE in-flight hash over the durable rows,
@@ -137,8 +154,9 @@ class InMemoryTranscriptStore:
                 sid = seg.get("segment_id")
                 if sid:
                     by_id[sid] = seg
-        segments = sorted(by_id.values(), key=lambda s: float(s.get("start", 0.0)))
-        return {
+        kept = [s for s in by_id.values() if _changed_since(s, effective_since)]
+        segments = sorted(kept, key=lambda s: float(s.get("start", 0.0)))
+        doc = {
             "id": mid,
             "platform": m["platform"],
             "native_meeting_id": m["native_meeting_id"],
@@ -150,9 +168,14 @@ class InMemoryTranscriptStore:
             "notes": m["data"].get("notes"),
             "data": project_response_data(m["data"], viewer_is_owner=viewer_is_owner),
             "segments": [_segment_to_api(s) for s in segments],
+            "next_since": _iso(watermark),
         }
+        if since is not None:
+            doc["retracted_segment_ids"] = await self.retractions_since(mid, effective_since)
+            doc["resynced"] = stale
+        return doc
 
-    async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+    async def get_transcript(self, user_id, platform, native_meeting_id, since=None) -> Optional[dict]:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:
             return None
@@ -161,9 +184,10 @@ class InMemoryTranscriptStore:
             return None
         # ``_find`` matches on ``m["user_id"] == user_id`` (mirroring the real store's SQL), so a row
         # reached by the native-keyed path is always the caller's own.
-        return await self._transcript_doc(mid, viewer_is_owner=True)
+        return await self._transcript_doc(mid, since, viewer_is_owner=True)
 
-    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
+    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None,
+                                   since=None) -> Optional[dict]:
         """Exact-row transcript authorized by owner OR transcript-viewer OR bound-workspace member (mirrors
         authorize_subscribe) — any other caller → ``None`` (a different tenant's row never leaks)."""
         try:
@@ -184,7 +208,7 @@ class InMemoryTranscriptStore:
             or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
         )
         # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
-        return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
+        return await self._transcript_doc(mid, since, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False):
@@ -649,6 +673,10 @@ class InMemoryTranscriptStore:
         ids = [str(s) for s in (segment_ids or []) if s]
         if not ids:
             return
+        # Tombstone the retraction so an incremental reader learns the segment is GONE (the prod
+        # store's `_record_retractions`); a deletion is the one change `?since=` cannot express as data.
+        stamp = _now_iso()
+        self._retracted.setdefault(int(meeting_id), {}).update({sid: stamp for sid in ids})
         if self._redis is not None:
             from .db_writer import segments_hash_key
 
@@ -657,6 +685,15 @@ class InMemoryTranscriptStore:
         segs = self._row_or_placeholder(meeting_id)["segments"]
         for sid in ids:
             segs.pop(sid, None)
+
+    async def retractions_since(self, meeting_id, since) -> list:
+        """The segment ids retracted at-or-after ``since`` — mirrors the prod store."""
+        if since is None:
+            return []
+        return sorted(
+            sid for sid, stamp in self._retracted.get(int(meeting_id), {}).items()
+            if _changed_since({"updated_at": stamp}, since)
+        )
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink (the dict stands in for the ``transcriptions`` table):

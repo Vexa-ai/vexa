@@ -36,10 +36,17 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..http_params import parse_optional_iso8601_utc, reject_unsupported_query_params
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
+
+# The WHOLE accepted query surface of the two transcript reads. Anything else is refused with a 400
+# that names it — a parameter that changes nothing must never answer 200 (#1219). `limit`/`offset`
+# are deliberately absent: `since` is the bounding mechanism, and a page-limited transcript would
+# silently truncate a follower's feed while `next_since` claimed it was complete.
+TRANSCRIPT_QUERY_PARAMS = ("since",)
 
 
 # The two INTENT states the USER owns (pre-FSM). The user dropdown is the source of truth for
@@ -126,10 +133,13 @@ def build_router(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_workspaces: Optional[str] = Header(default=None),
+        since: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        reject_unsupported_query_params(request, TRANSCRIPT_QUERY_PARAMS)
+        since_at = parse_optional_iso8601_utc(since, param="since")
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
-        doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces)
+        doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces, since=since_at)
         if doc is None:
             log_event(
                 "transcript_not_found", audience="system", level="warning",
@@ -139,7 +149,7 @@ def build_router(
         log_event(
             "transcript_served", audience="user", span="transcripts.get_by_id",
             user_id=user_id, meeting_id=str(meeting_id),
-            fields={"segments": len(doc.get("segments", []))},
+            fields={"segments": len(doc.get("segments", [])), "incremental": since is not None},
         )
         return JSONResponse(content=doc)
 
@@ -150,9 +160,12 @@ def build_router(
         native_meeting_id: str,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        since: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        doc = await store.get_transcript(user_id, platform, native_meeting_id)
+        reject_unsupported_query_params(request, TRANSCRIPT_QUERY_PARAMS)
+        since_at = parse_optional_iso8601_utc(since, param="since")
+        doc = await store.get_transcript(user_id, platform, native_meeting_id, since=since_at)
         if doc is None:
             log_event(
                 "transcript_not_found",
@@ -173,7 +186,7 @@ def build_router(
             span="transcripts.get",
             user_id=user_id,
             meeting_id=f"{platform}/{native_meeting_id}",
-            fields={"segments": len(doc.get("segments", []))},
+            fields={"segments": len(doc.get("segments", [])), "incremental": since is not None},
         )
         return JSONResponse(content=doc)
 
