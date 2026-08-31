@@ -52,6 +52,22 @@ authenticated front door.
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
 
+### Claude Code — one command
+
+```bash
+claude mcp add --transport http vexa https://api.cloud.vexa.ai/mcp \
+  --header "Authorization: Bearer $VEXA_API_KEY"
+```
+
+Then run `/mcp` inside Claude Code to confirm it connected, and **restart** so the tools load.
+Self-hosted: swap the URL for your own gateway, e.g. `http://localhost:18056/mcp`.
+
+Keep this in **user** scope rather than a project `.mcp.json`: `claude mcp add` stores the header
+value literally in the config file it writes, so a project-scoped server puts a live key in a file
+you may commit.
+
+### Claude Desktop, ChatGPT, and other MCP hosts
+
 ```json Hosted
 {
   "mcpServers": {
