@@ -11,6 +11,7 @@ flowchart LR
   subgraph agent["agent"]
     agent_api["agent-api"]
     agent_worker["agent-worker"]
+    flows["flows"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -58,3 +59,5 @@ flowchart LR
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
+  gateway -->|""| flows
+  flows -->|""| agent_api

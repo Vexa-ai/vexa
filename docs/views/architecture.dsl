@@ -54,6 +54,7 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   data-asset unit-in
   data-asset proc-stream [writers: agent-worker]
   data-asset va-chat
+  service flows
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -138,6 +139,8 @@ edges:
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
+  gateway -req-> flows  # proxy to the flows control plane (submit a flow, list reactions, signal one)
+  flows -req-> agent-api  # process_meeting is a REAL agent turn: the worker drives agent-api and detects completion by a commit touching the workspace
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 

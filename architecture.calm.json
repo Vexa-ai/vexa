@@ -4,7 +4,7 @@
   {
    "vexa": {
     "purpose": "SSOT architecture model: module/service/contract inventory AND the runtime data plane (carriers, ownership, flows, egress boundary). gate:dataflow enforces model<->disk completeness, single-writer + render-only ownership, and a reality diff against code; gate:calm validates it against the FINOS meeting-intelligence pattern.",
-    "principle": "P23 — one writer per data carrier; readers never re-derive a producer's data; the model covers every module/service/contract (no drift)."
+    "principle": "P23 \u2014 one writer per data carrier; readers never re-derive a producer's data; the model covers every module/service/contract (no drift)."
    }
   }
  ],
@@ -13,7 +13,7 @@
    "unique-id": "meetings",
    "node-type": "system",
    "name": "meetings",
-   "description": "capture → transcribe → record; owns the raw transcript",
+   "description": "capture \u2192 transcribe \u2192 record; owns the raw transcript",
    "metadata": [
     {
      "path": "core/meetings"
@@ -105,10 +105,27 @@
    ]
   },
   {
+   "unique-id": "flows",
+   "node-type": "service",
+   "name": "flows",
+   "description": "reaction queue + cadence engine: flows are DATA (an ordered list of step names plus a trigger), each admitted fact spawns a reaction row that walks them. Time is a column \u2014 a reaction parks with Wait(until) at zero cost, which is how a bot is dispatched on schedule and how post-meeting work waits for a workspace instead of failing. Signals (resume/retry/cancel/wake) are audited rows, never table surgery.",
+   "metadata": [
+    {
+     "path": "core/flows"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "flows-rest",
+     "type": "api"
+    }
+   ]
+  },
+  {
    "unique-id": "conformance",
    "node-type": "service",
    "name": "conformance",
-   "description": "conformance — service in gateway",
+   "description": "conformance \u2014 service in gateway",
    "metadata": [
     {
      "path": "core/gateway/services/conformance"
@@ -174,7 +191,7 @@
    "unique-id": "transcription",
    "node-type": "service",
    "name": "transcription",
-   "description": "transcription — STT service (faster-whisper / CTranslate2, OpenAI-compatible /v1/audio/transcriptions). The GPU workload, deployed separately from the main stack; the bot streams audio windows to it and receives segments. Does not write any redis carrier (the bot XADDs segments).",
+   "description": "transcription \u2014 STT service (faster-whisper / CTranslate2, OpenAI-compatible /v1/audio/transcriptions). The GPU workload, deployed separately from the main stack; the bot streams audio windows to it and receives segments. Does not write any redis carrier (the bot XADDs segments).",
    "metadata": [
     {
      "path": "core/meetings/services/transcription"
@@ -270,7 +287,7 @@
    "unique-id": "buffer",
    "node-type": "module",
    "name": "buffer",
-   "description": "buffer — atomic module in meetings",
+   "description": "buffer \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/buffer"
@@ -281,7 +298,7 @@
    "unique-id": "capture-codec",
    "node-type": "module",
    "name": "capture-codec",
-   "description": "capture-codec — atomic module in meetings",
+   "description": "capture-codec \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/capture-codec"
@@ -292,7 +309,7 @@
    "unique-id": "gmeet-capture",
    "node-type": "module",
    "name": "gmeet-capture",
-   "description": "gmeet-capture — atomic module in meetings",
+   "description": "gmeet-capture \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/gmeet-capture"
@@ -303,7 +320,7 @@
    "unique-id": "gmeet-pipeline",
    "node-type": "module",
    "name": "gmeet-pipeline",
-   "description": "gmeet-pipeline — atomic module in meetings",
+   "description": "gmeet-pipeline \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/gmeet-pipeline"
@@ -314,7 +331,7 @@
    "unique-id": "jitsi-capture",
    "node-type": "module",
    "name": "jitsi-capture",
-   "description": "jitsi-capture — atomic module in meetings",
+   "description": "jitsi-capture \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/jitsi-capture"
@@ -325,7 +342,7 @@
    "unique-id": "join",
    "node-type": "module",
    "name": "join",
-   "description": "join — atomic module in meetings",
+   "description": "join \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/join"
@@ -336,7 +353,7 @@
    "unique-id": "mixed-capture-core",
    "node-type": "module",
    "name": "mixed-capture-core",
-   "description": "mixed-capture-core — atomic module in meetings",
+   "description": "mixed-capture-core \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/mixed-capture-core"
@@ -347,7 +364,7 @@
    "unique-id": "mixed-pipeline",
    "node-type": "module",
    "name": "mixed-pipeline",
-   "description": "mixed-pipeline — atomic module in meetings",
+   "description": "mixed-pipeline \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/mixed-pipeline"
@@ -358,7 +375,7 @@
    "unique-id": "record-chunker",
    "node-type": "module",
    "name": "record-chunker",
-   "description": "record-chunker — atomic module in meetings",
+   "description": "record-chunker \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/record-chunker"
@@ -369,7 +386,7 @@
    "unique-id": "recording",
    "node-type": "module",
    "name": "recording",
-   "description": "recording — atomic module in meetings",
+   "description": "recording \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/recording"
@@ -380,7 +397,7 @@
    "unique-id": "remote-browser",
    "node-type": "module",
    "name": "remote-browser",
-   "description": "remote-browser — atomic module in meetings",
+   "description": "remote-browser \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/remote-browser"
@@ -391,7 +408,7 @@
    "unique-id": "teams-capture",
    "node-type": "module",
    "name": "teams-capture",
-   "description": "teams-capture — atomic module in meetings",
+   "description": "teams-capture \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/teams-capture"
@@ -402,7 +419,7 @@
    "unique-id": "whisper",
    "node-type": "module",
    "name": "whisper",
-   "description": "whisper — atomic module in meetings",
+   "description": "whisper \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/whisper"
@@ -413,7 +430,7 @@
    "unique-id": "zoom-capture",
    "node-type": "module",
    "name": "zoom-capture",
-   "description": "zoom-capture — atomic module in meetings",
+   "description": "zoom-capture \u2014 atomic module in meetings",
    "metadata": [
     {
      "path": "core/meetings/modules/zoom-capture"
@@ -424,7 +441,7 @@
    "unique-id": "event.v1",
    "node-type": "contract",
    "name": "event.v1",
-   "description": "event.v1 — sealed/published contract (agent)",
+   "description": "event.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/event.v1",
@@ -436,7 +453,7 @@
    "unique-id": "invoke.v1",
    "node-type": "contract",
    "name": "invoke.v1",
-   "description": "invoke.v1 — sealed/published contract (agent)",
+   "description": "invoke.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/invoke.v1",
@@ -448,7 +465,7 @@
    "unique-id": "proactive-card.v1",
    "node-type": "contract",
    "name": "proactive-card.v1",
-   "description": "proactive-card.v1 — sealed/published contract (agent)",
+   "description": "proactive-card.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/proactive-card.v1",
@@ -460,7 +477,7 @@
    "unique-id": "routine.v1",
    "node-type": "contract",
    "name": "routine.v1",
-   "description": "routine.v1 — sealed/published contract (agent)",
+   "description": "routine.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/routine.v1",
@@ -472,7 +489,7 @@
    "unique-id": "task.v1",
    "node-type": "contract",
    "name": "task.v1",
-   "description": "task.v1 — sealed/published contract (agent)",
+   "description": "task.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/task.v1",
@@ -484,7 +501,7 @@
    "unique-id": "tool.v1",
    "node-type": "contract",
    "name": "tool.v1",
-   "description": "tool.v1 — sealed/published contract (agent)",
+   "description": "tool.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/tool.v1",
@@ -496,7 +513,7 @@
    "unique-id": "unit.v1",
    "node-type": "contract",
    "name": "unit.v1",
-   "description": "unit.v1 — sealed/published contract (agent)",
+   "description": "unit.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/unit.v1",
@@ -508,7 +525,7 @@
    "unique-id": "processed-notes.v1",
    "node-type": "contract",
    "name": "processed-notes.v1",
-   "description": "processed-notes.v1 — sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker → meeting-api db-writer / agent-api SSE; ADR-0027)",
+   "description": "processed-notes.v1 \u2014 sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker \u2192 meeting-api db-writer / agent-api SSE; ADR-0027)",
    "metadata": [
     {
      "path": "core/agent/contracts/processed-notes.v1",
@@ -520,7 +537,7 @@
    "unique-id": "workspace.v1",
    "node-type": "contract",
    "name": "workspace.v1",
-   "description": "workspace.v1 — sealed/published contract (agent)",
+   "description": "workspace.v1 \u2014 sealed/published contract (agent)",
    "metadata": [
     {
      "path": "core/agent/contracts/workspace.v1",
@@ -532,7 +549,7 @@
    "unique-id": "api.v1",
    "node-type": "contract",
    "name": "api.v1",
-   "description": "api.v1 — sealed/published contract (gateway)",
+   "description": "api.v1 \u2014 sealed/published contract (gateway)",
    "metadata": [
     {
      "path": "core/gateway/contracts/api.v1",
@@ -544,7 +561,7 @@
    "unique-id": "logevent.v1",
    "node-type": "contract",
    "name": "logevent.v1",
-   "description": "logevent.v1 — sealed/published contract (gateway)",
+   "description": "logevent.v1 \u2014 sealed/published contract (gateway)",
    "metadata": [
     {
      "path": "core/gateway/contracts/logevent.v1",
@@ -556,7 +573,7 @@
    "unique-id": "ws.v1",
    "node-type": "contract",
    "name": "ws.v1",
-   "description": "ws.v1 — sealed/published contract (gateway)",
+   "description": "ws.v1 \u2014 sealed/published contract (gateway)",
    "metadata": [
     {
      "path": "core/gateway/contracts/ws.v1",
@@ -568,7 +585,7 @@
    "unique-id": "identity.v1",
    "node-type": "contract",
    "name": "identity.v1",
-   "description": "identity.v1 — sealed/published contract (identity)",
+   "description": "identity.v1 \u2014 sealed/published contract (identity)",
    "metadata": [
     {
      "path": "core/identity/contracts/identity.v1",
@@ -580,7 +597,7 @@
    "unique-id": "acts.v1",
    "node-type": "contract",
    "name": "acts.v1",
-   "description": "acts.v1 — sealed/published contract (meetings)",
+   "description": "acts.v1 \u2014 sealed/published contract (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/acts.v1",
@@ -592,7 +609,7 @@
    "unique-id": "captured-signal.v1",
    "node-type": "contract",
    "name": "captured-signal.v1",
-   "description": "captured-signal.v1 — sealed/published contract (meetings)",
+   "description": "captured-signal.v1 \u2014 sealed/published contract (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/captured-signal.v1",
@@ -604,7 +621,7 @@
    "unique-id": "flagged-issue.v1",
    "node-type": "contract",
    "name": "flagged-issue.v1",
-   "description": "flagged-issue.v1 — sealed/published contract (meetings)",
+   "description": "flagged-issue.v1 \u2014 sealed/published contract (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/flagged-issue.v1",
@@ -616,7 +633,7 @@
    "unique-id": "invocation.v1",
    "node-type": "contract",
    "name": "invocation.v1",
-   "description": "invocation.v1 — sealed/published contract (meetings)",
+   "description": "invocation.v1 \u2014 sealed/published contract (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/invocation.v1",
@@ -628,7 +645,7 @@
    "unique-id": "lifecycle.v1",
    "node-type": "contract",
    "name": "lifecycle.v1",
-   "description": "lifecycle.v1 — sealed/published bot status with producer-observed transition time (meetings)",
+   "description": "lifecycle.v1 \u2014 sealed/published bot status with producer-observed transition time (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/lifecycle.v1",
@@ -640,7 +657,7 @@
    "unique-id": "service-authority.v1",
    "node-type": "contract",
    "name": "service-authority.v1",
-   "description": "service-authority.v1 — sealed opt-in admission and active-service decision contract without hosted billing data",
+   "description": "service-authority.v1 \u2014 sealed opt-in admission and active-service decision contract without hosted billing data",
    "metadata": [
     {
      "path": "core/meetings/contracts/service-authority.v1",
@@ -652,7 +669,7 @@
    "unique-id": "transcript.v1",
    "node-type": "contract",
    "name": "transcript.v1",
-   "description": "transcript.v1 — sealed/published contract (meetings)",
+   "description": "transcript.v1 \u2014 sealed/published contract (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/transcript.v1",
@@ -664,7 +681,7 @@
    "unique-id": "webhook.v1",
    "node-type": "contract",
    "name": "webhook.v1",
-   "description": "webhook.v1 — sealed/published delivery including privacy-safe terminal service provenance (meetings)",
+   "description": "webhook.v1 \u2014 sealed/published delivery including privacy-safe terminal service provenance (meetings)",
    "metadata": [
     {
      "path": "core/meetings/contracts/webhook.v1",
@@ -676,7 +693,7 @@
    "unique-id": "runtime.v1",
    "node-type": "contract",
    "name": "runtime.v1",
-   "description": "runtime.v1 — sealed/published contract (runtime)",
+   "description": "runtime.v1 \u2014 sealed/published contract (runtime)",
    "metadata": [
     {
      "path": "core/runtime/contracts/runtime.v1",
@@ -688,7 +705,7 @@
    "unique-id": "schedule.v1",
    "node-type": "contract",
    "name": "schedule.v1",
-   "description": "schedule.v1 — sealed/published contract (runtime)",
+   "description": "schedule.v1 \u2014 sealed/published contract (runtime)",
    "metadata": [
     {
      "path": "core/runtime/contracts/schedule.v1",
@@ -700,7 +717,7 @@
    "unique-id": "execution-targets.v1",
    "node-type": "contract",
    "name": "execution-targets.v1",
-   "description": "execution-targets.v1 — sealed/published contract (deploy)",
+   "description": "execution-targets.v1 \u2014 sealed/published contract (deploy)",
    "metadata": [
     {
      "path": "deploy/contracts/execution-targets.v1",
@@ -712,7 +729,7 @@
    "unique-id": "config.v1",
    "node-type": "contract",
    "name": "config.v1",
-   "description": "config.v1 — sealed/published contract (deploy): per-service deployment-config declaration (required-explicit / defaulted / capability tri-state + live probes), preflight + gate:config-contract (ADR-0026)",
+   "description": "config.v1 \u2014 sealed/published contract (deploy): per-service deployment-config declaration (required-explicit / defaulted / capability tri-state + live probes), preflight + gate:config-contract (ADR-0026)",
    "metadata": [
     {
      "path": "deploy/contracts/config.v1",
@@ -724,7 +741,7 @@
    "unique-id": "slim",
    "node-type": "webclient",
    "name": "slim",
-   "description": "slim — client",
+   "description": "slim \u2014 client",
    "metadata": [
     {
      "path": "clients/slim"
@@ -735,7 +752,7 @@
    "unique-id": "extension",
    "node-type": "webclient",
    "name": "extension",
-   "description": "extension — client",
+   "description": "extension \u2014 client",
    "metadata": [
     {
      "path": "clients/extension"
@@ -746,7 +763,7 @@
    "unique-id": "terminal",
    "node-type": "webclient",
    "name": "terminal",
-   "description": "terminal — client",
+   "description": "terminal \u2014 client",
    "metadata": [
     {
      "path": "clients/terminal"
@@ -806,7 +823,7 @@
    "description": "change-only transcript deltas the gateway + agent-api subscribe to",
    "controls": {
     "ownership": {
-     "description": "shared — review (P23 prefers one writer)",
+     "description": "shared \u2014 review (P23 prefers one writer)",
      "requirements": [
       {
        "requirement-url": "vexa/controls/single-writer",
@@ -897,7 +914,7 @@
    "unique-id": "out-stream",
    "node-type": "data-asset",
    "name": "unit:{id}:out (stream)",
-   "description": "worker output stream (cards / agent activity / message deltas — notes moved to proc-stream per ADR-0027); agent-api relays as SSE",
+   "description": "worker output stream (cards / agent activity / message deltas \u2014 notes moved to proc-stream per ADR-0027); agent-api relays as SSE",
    "controls": {
     "ownership": {
      "description": "single writer (P23)",
@@ -1244,7 +1261,7 @@
    "unique-id": "dashboard",
    "node-type": "webclient",
    "name": "dashboard (deprecated)",
-   "description": "dashboard — DEPRECATED 0.10 web client, shipped as an off-by-default compose/helm option while still load-bearing (#813): the multi-user UI hosted production runs against the 0.12 core via the gateway's hosted-compat surface. External pinned image (vexaai/dashboard), not built from this tree; versions on its own tag, never global.imageTag. Deprecation exit: deleted when the terminal covers the authenticated-session/browser-session flows.",
+   "description": "dashboard \u2014 DEPRECATED 0.10 web client, shipped as an off-by-default compose/helm option while still load-bearing (#813): the multi-user UI hosted production runs against the 0.12 core via the gateway's hosted-compat surface. External pinned image (vexaai/dashboard), not built from this tree; versions on its own tag, never global.imageTag. Deprecation exit: deleted when the terminal covers the authenticated-session/browser-session flows.",
    "metadata": [
     {
      "path": "deploy/compose",
@@ -1274,7 +1291,8 @@
       "out-stream",
       "unit-in",
       "proc-stream",
-      "va-chat"
+      "va-chat",
+      "flows"
      ]
     }
    }
@@ -2130,7 +2148,7 @@
      }
     }
    },
-   "description": "proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)",
+   "description": "proxy /mcp \u2014 POST buffered, GET relayed unbuffered (SSE stream)",
    "protocol": "HTTPS"
   },
   {
@@ -2278,7 +2296,7 @@
   },
   {
    "unique-id": "dash-gw-rest",
-   "description": "dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)",
+   "description": "dashboard \u2192 gateway REST (hosted-compat aliases; the hosted-proven wiring)",
    "relationship-type": {
     "connects": {
      "source": {
@@ -2293,7 +2311,7 @@
   },
   {
    "unique-id": "dash-gw-ws",
-   "description": "dashboard → gateway /ws (live transcript view)",
+   "description": "dashboard \u2192 gateway /ws (live transcript view)",
    "relationship-type": {
     "connects": {
      "source": {
@@ -2369,6 +2387,36 @@
      ]
     }
    }
+  },
+  {
+   "unique-id": "gw-flows",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "gateway"
+     },
+     "destination": {
+      "node": "flows",
+      "interface": "flows-rest"
+     }
+    }
+   },
+   "description": "proxy to the flows control plane (submit a flow, list reactions, signal one)"
+  },
+  {
+   "unique-id": "flows-aa",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "agent-api",
+      "interface": "agent-api-rest"
+     }
+    }
+   },
+   "description": "process_meeting is a REAL agent turn: the worker drives agent-api and detects completion by a commit touching the workspace"
   }
  ],
  "flows": [
