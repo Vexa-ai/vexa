@@ -185,6 +185,7 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `PATCH /meetings/{platform}/{native_meeting_id}` | **Yes** — resolves to your newest owned row. |
 | `DELETE /meetings/{platform}/{native_meeting_id}` | **Yes** — `200` on success (by-id path is `204`). |
 | `GET /bots/status` | **Yes** — body carries both `running_bots` (0.10) and `running`/`count` (0.12). |
+| `GET /transcripts/{platform}/{native_meeting_id}` | **Yes, newest-wins** — resolves to the newest record on that link; earlier runs, records with no native id, and URL-shaped native ids are reachable only via `GET /meetings/{meeting_id}/transcript`. |
 | `POST /transcripts/{platform}/{native_meeting_id}/share` | **Aliased** to the moved `POST /meetings/{platform}/{native_meeting_id}/share` mint. The response is the capability-token share (`{id, token, mode, expires_at}`), not the 0.10 public-URL `TranscriptShareResponse` — the public-URL-share backend is not in the 0.12 core. |
 | `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
 | `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
@@ -329,16 +330,63 @@ Segments stream in while the meeting runs — poll this endpoint, or subscribe o
 per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
 confirmations.
 
-The same response is reachable **by record id**, which is what you have after planning a meeting that
-has no link yet:
+### Two keys, and when the native key is not enough
 
-```bash GET /transcripts/by-id/{meeting_id}
-curl -H "X-API-Key: $API_KEY" "$API_BASE/transcripts/by-id/12345"
+A `native_meeting_id` is a **join link**, not a record key. Records and links are not one-to-one, so
+the two routes answer different questions:
+
+| Route | Keyed by | Answers |
+|---|---|---|
+| `GET /transcripts/{platform}/{native_meeting_id}` | the join link | "the latest run on this link" |
+| `GET /meetings/{meeting_id}/transcript` | the record | "this specific run" |
+
+`GET /transcripts/{platform}/{native_meeting_id}` **resolves to the newest record on that link.** A
+recurring link produces one record per run, and only the newest is reachable this way — every earlier
+run on the same link is invisible to this route. Two more record shapes it cannot express at all: a
+record with **no** `native_meeting_id` (a link-less planned meeting, or a session that never bound a
+link), and a `native_meeting_id` that is itself a **URL** — its `/` and `?` reshape the path.
+
+For any of those, address the **record**:
+
+```bash GET /meetings/{meeting_id}/transcript
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/15496/transcript"
 ```
 
-Both forms return the meeting record alongside its `segments` — `id`, `platform`,
+Same body, same owner scoping (`404` if the record is not yours or shared with you), no resolution
+step. Get the ids from `GET /meetings`. This is the route to build an **archive** on; the native route
+is the convenient one when you hold a link and want its current run. (`GET /transcripts/by-id/{id}` is
+an older spelling of the same read and continues to work.)
+
+All three forms return the meeting record alongside its `segments` — `id`, `platform`,
 `native_meeting_id`, `status`, `start_time`, `end_time`, `constructed_meeting_url`, `notes`,
-`recordings`, and the full `data` detail. `404` for an unknown record or one you don't own.
+`recordings`, and the `data` detail your viewer tier may see.
+
+### Empty is stated, not implied
+
+A meeting with no stored segments answers `200`, not `404` — the record exists, the transcript is
+empty. To keep that distinguishable from a successful non-empty fetch, **every** transcript response
+carries `empty`, and empty ones also carry `empty_reason`:
+
+```json Empty transcript
+{
+  "id": 12038,
+  "status": "completed",
+  "segments": [],
+  "empty": true,
+  "empty_reason": "no_segments_stored"
+}
+```
+
+| `empty_reason` | Meaning |
+|---|---|
+| `transcription_disabled` | The bot ran capture-only (`transcribe_enabled: false`); no transcript was ever requested. |
+| `transcription_fault` | The record carries an STT fault — transcription was attempted and failed. |
+| `meeting_failed` | The run ended in `failed`; see `failure_stage` in the meeting's `data`. |
+| `transcription_in_progress` | The run has not reached a terminal status — segments may still arrive. |
+| `no_segments_stored` | Terminal run, no segments, and the record states no cause. |
+
+Both fields are additive; existing fields are unchanged. Do not infer emptiness from `len(segments)`
+when `empty` is present.
 
 ## Manage the bot
 
@@ -377,6 +425,30 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
 ```bash Single meeting — GET /meetings/{meeting_id}
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 ```
+
+### List filters
+
+`GET /meetings` accepts exactly these query parameters:
+
+| Parameter | Type | Effect |
+|---|---|---|
+| `limit` | integer 1–100 | Page size. Default `50`. |
+| `offset` | integer ≥ 0 | Page start. |
+| `platform` | string | Only meetings on that platform (`google_meet`, `teams`, `zoom`, …). |
+| `status` | string | Only meetings in that status (`completed`, `failed`, `active`, …). |
+| `updated_after` | ISO-8601 timestamp | Only meetings whose `updated_at` is **strictly later** — the incremental cursor. |
+
+**Anything else is refused with `400`**, naming the parameter and the accepted set. An unrecognized
+filter is never ignored: silently dropping one returns `200` and your entire history, which an
+incremental sync reads as "nothing changed" — a failure indistinguishable from success.
+
+```bash Incremental sync — GET /meetings?updated_after=…
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings?updated_after=2026-08-16T00:00:00Z&platform=google_meet"
+```
+
+Resume from the largest `updated_at` you have already stored; the comparison is strict, so that row
+is not returned again. `GET /bots` is unchanged and does not validate unknown parameters.
 
 ### List rows are slim; detail is full
 

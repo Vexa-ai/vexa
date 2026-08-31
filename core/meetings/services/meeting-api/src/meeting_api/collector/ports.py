@@ -60,9 +60,15 @@ class TranscriptStore(Protocol):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         member_workspaces: "Optional[set[str]]" = None,
+        updated_after: Optional[str] = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
-        (the body of ``MeetingListResponse``)."""
+        (the body of ``MeetingListResponse``).
+
+        ``updated_after`` is the INCREMENTAL cursor (ISO-8601): only rows whose ``updated_at`` is
+        strictly later are returned, so a consumer can resume from its last sync instead of re-reading
+        the whole account. Callers pass the raw string; the store parses it (an unparseable value is
+        rejected at the route with 400, never silently dropped)."""
         ...
 
     async def authorize_subscribe(

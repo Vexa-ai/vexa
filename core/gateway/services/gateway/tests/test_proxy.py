@@ -216,6 +216,27 @@ def test_planned_meeting_routes_forward_to_meeting_api():
     assert downstream.last["url"].endswith("/meetings/42")
 
 
+def test_record_keyed_transcript_forwards_to_meeting_api():
+    """GET /meetings/{id}/transcript — the RECORD-keyed transcript read. Negative control: before it
+    was registered this path answered 405, because `/meetings/{a}/{b}` matched the native-keyed
+    PATCH/DELETE pair (platform="42", native="transcript"), which declares no GET. The literal
+    sub-resource is declared FIRST so it wins the match, and forwards verbatim."""
+    client, downstream = _client()
+    r = client.get("/meetings/42/transcript", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/meetings/42/transcript")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_record_keyed_transcript_does_not_shadow_the_native_mutate_routes():
+    """The new literal segment must not swallow PATCH/DELETE /meetings/{platform}/{native}."""
+    client, downstream = _client()
+    client.patch("/meetings/google_meet/transcript", headers=AUTH, json={"title": "x"})
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"].endswith("/meetings/google_meet/transcript")
+
+
 def test_native_meeting_mutate_forwards_to_meeting_api():
     """#579 C1: native-keyed PATCH/DELETE /meetings/{platform}/{native} forward verbatim to
     meeting-api (which resolves native → owned row). Negative control: on v0.12.2 there was no

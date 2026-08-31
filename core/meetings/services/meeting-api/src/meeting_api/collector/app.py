@@ -5,10 +5,14 @@ v0.12 carve of the deployed ``services/meeting-api/meeting_api/collector/endpoin
 
   * **GET /transcripts/{platform}/{native_meeting_id}** — the meeting's transcript document,
     conforming to api.v1 ``#/components/schemas/TranscriptionResponse`` (sealed). 404 when the
-    caller owns no such meeting.
+    caller owns no such meeting. A native id is a JOIN LINK, so this resolves to the NEWEST record
+    on that link — see the route's own note.
+  * **GET /meetings/{meeting_id}/transcript** (and its older spelling ``GET /transcripts/by-id/{id}``)
+    — the SAME document keyed by the RECORD, which is the only way to address a run whose native id
+    is NULL or URL-shaped, or one shadowed inside a recurring-link collapse set.
   * **GET /meetings** — the caller's meetings, conforming to api.v1
-    ``#/components/schemas/MeetingListResponse`` (sealed). Optional ``status`` / ``platform`` /
-    ``limit`` / ``offset`` filters (parent's ``get_meetings``).
+    ``#/components/schemas/MeetingListResponse`` (sealed). ``status`` / ``platform`` / ``limit`` /
+    ``offset`` / ``updated_after`` filters; an UNKNOWN query param is refused with 400, never ignored.
   * **POST /ws/authorize-subscribe** — the gateway's ``/ws`` subscribe-authorization hop: given
     ``{meetings:[{platform, native_meeting_id}]}`` + the identity headers the gateway injects,
     returns ``{authorized:[{platform, native_id, user_id, meeting_id}], errors:[]}`` — the exact
@@ -31,6 +35,7 @@ gateway's contextvars (the cross-hop trace ``test_tracing.py`` asserts).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
@@ -51,6 +56,56 @@ _FSM_OWNED_STATUSES = frozenset({
     "requested", "joining", "awaiting_admission", "needs_help",
     "active", "stopping", "completed", "failed",
 })
+
+# Statuses at which a transcript is legitimately still filling — the run has not reached a terminal
+# state, so `segments: []` means "not yet", not "never".
+_UNFINISHED_STATUSES = frozenset(_INTENT_STATUSES | {
+    "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+})
+
+# --- EXPLICIT EMPTY STATE -------------------------------------------------------------------------
+# A transcript read that finds no segments answers `200` with `segments: []`. That is indistinguishable
+# from a successful non-empty fetch to any consumer that only checks the status code, and it is not
+# rare: a 2026-08-16 sweep of a production account found 60 of 284 addressable meetings answering
+# exactly that. So every transcript response now carries `empty` (always present, both ways) and,
+# when empty, `empty_reason` — the KNOWN cause where the record states one, else `no_segments_stored`.
+# Additive: no existing field changes shape, and api.v1 TranscriptionResponse does not close the
+# object (`additionalProperties` unset), so a 0.10 consumer is unaffected.
+EMPTY_REASON_TRANSCRIPTION_DISABLED = "transcription_disabled"
+EMPTY_REASON_TRANSCRIPTION_FAULT = "transcription_fault"
+EMPTY_REASON_MEETING_FAILED = "meeting_failed"
+EMPTY_REASON_IN_PROGRESS = "transcription_in_progress"
+EMPTY_REASON_UNKNOWN = "no_segments_stored"
+
+
+def _empty_reason(doc: dict) -> str:
+    """Why this transcript has no segments, from what the record itself states. Ordered most-specific
+    first; `no_segments_stored` is the honest fallback — the record gives no reason, and inventing one
+    from status alone would be a guess."""
+    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    status = doc.get("status")
+    if data.get("transcribe_enabled") is False:
+        return EMPTY_REASON_TRANSCRIPTION_DISABLED
+    if data.get("stt_fault"):
+        return EMPTY_REASON_TRANSCRIPTION_FAULT
+    if status == "failed":
+        return EMPTY_REASON_MEETING_FAILED
+    if status in _UNFINISHED_STATUSES:
+        return EMPTY_REASON_IN_PROGRESS
+    return EMPTY_REASON_UNKNOWN
+
+
+def annotate_emptiness(doc: dict) -> dict:
+    """Stamp `empty` (and `empty_reason` when empty) onto a TranscriptionResponse-shaped dict.
+
+    `empty` is emitted on EVERY transcript response, not only the empty ones, so a consumer can test
+    one field unconditionally instead of inferring emptiness from `len(segments)`."""
+    out = dict(doc)
+    is_empty = not out.get("segments")
+    out["empty"] = is_empty
+    if is_empty:
+        out["empty_reason"] = _empty_reason(out)
+    return out
 
 
 async def _publish_user_meeting_status(
@@ -82,6 +137,19 @@ async def _publish_user_meeting_status(
     except Exception as e:  # noqa: BLE001 — publish is best-effort
         log_event("user_meeting_status_publish_failed", audience="system", level="warning",
                   span="meetings.intent.publish", fields={"error": str(e)})
+
+
+def _parse_iso8601(value: str) -> "Optional[datetime]":
+    """ISO-8601 → aware UTC datetime, or ``None`` when it does not parse (the route maps that → 400).
+    Accepts the trailing ``Z`` spelling `datetime.fromisoformat` rejects before 3.11, and treats a
+    naive timestamp as UTC — every timestamp this service stores and serves is UTC (``_iso_utc``)."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -120,6 +188,32 @@ def build_router(
     # leak another tenant's transcript NOR (unlike the native path, which resolves to the NEWEST row)
     # hydrate the wrong one of a user's several rows on the same meeting link. The terminal fetches the
     # EXACT row it is displaying by its id. ---
+    async def _serve_transcript_by_row_id(
+        meeting_id: int, x_user_id: Optional[str], x_user_workspaces: Optional[str], *, span: str
+    ) -> JSONResponse:
+        """The record-keyed transcript read, shared by both spellings of it (`/transcripts/by-id/{id}`
+        and the RESTful `/meetings/{id}/transcript`). Keyed on the ROW, so it addresses records the
+        native path structurally cannot: a NULL native id (61.7% of one production account), a native
+        id that is a full URL (its slashes reshape the native path), and every shadowed member of a
+        recurring-link collapse set."""
+        user_id = _resolve_user_id(x_user_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces)
+        if doc is None:
+            log_event(
+                "transcript_not_found", audience="system", level="warning",
+                span=span, user_id=user_id, meeting_id=str(meeting_id),
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        body = annotate_emptiness(doc)
+        log_event(
+            "transcript_served", audience="user", span=span,
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"segments": len(body.get("segments", [])),
+                    "empty_reason": body.get("empty_reason")},
+        )
+        return JSONResponse(content=body)
+
     @router.get("/transcripts/by-id/{meeting_id}")
     async def get_transcript_by_id(
         meeting_id: int,
@@ -127,23 +221,33 @@ def build_router(
         x_user_id: Optional[str] = Header(default=None),
         x_user_workspaces: Optional[str] = Header(default=None),
     ):
-        user_id = _resolve_user_id(x_user_id)
-        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
-        doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces)
-        if doc is None:
-            log_event(
-                "transcript_not_found", audience="system", level="warning",
-                span="transcripts.get_by_id", user_id=user_id, meeting_id=str(meeting_id),
-            )
-            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
-        log_event(
-            "transcript_served", audience="user", span="transcripts.get_by_id",
-            user_id=user_id, meeting_id=str(meeting_id),
-            fields={"segments": len(doc.get("segments", []))},
+        return await _serve_transcript_by_row_id(
+            meeting_id, x_user_id, x_user_workspaces, span="transcripts.get_by_id"
         )
-        return JSONResponse(content=doc)
 
-    # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
+    # --- GET /meetings/{meeting_id}/transcript → the SAME record-keyed read under the RESTful spelling
+    # a connector reaches for first: the meeting is the resource, its transcript is the sub-resource.
+    # Before this existed the path answered 405 — `/meetings/{a}/{b}` matched the native-keyed
+    # PATCH/DELETE pair (platform="123", native="transcript") which registers no GET — so the honest
+    # by-row read existed but was findable only under `/transcripts/by-id/{id}`. Registered BEFORE the
+    # native `/meetings/{platform}/{native_meeting_id}` routes so the literal last segment wins. ---
+    @router.get("/meetings/{meeting_id}/transcript")
+    async def get_meeting_transcript(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
+    ):
+        return await _serve_transcript_by_row_id(
+            meeting_id, x_user_id, x_user_workspaces, span="meetings.get_transcript"
+        )
+
+    # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse.
+    # COLLAPSE (documented, unchanged): a native meeting id is a JOIN LINK, not a record key. A
+    # recurring link produces one record per run, and this route resolves to the NEWEST of them — every
+    # older run on the same link is unreachable here. Measured on one production account 2026-08-16:
+    # 46 links carried >1 record, the largest 8 records behind one link, and the resolution was to the
+    # newest in 45 of 46. To address a SPECIFIC run, use GET /meetings/{meeting_id}/transcript. ---
     @router.get("/transcripts/{platform}/{native_meeting_id}")
     async def get_transcript(
         platform: str,
@@ -166,6 +270,7 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
+        body = annotate_emptiness(doc)
         # USER-facing: this user read their transcript.
         log_event(
             "transcript_served",
@@ -173,9 +278,20 @@ def build_router(
             span="transcripts.get",
             user_id=user_id,
             meeting_id=f"{platform}/{native_meeting_id}",
-            fields={"segments": len(doc.get("segments", []))},
+            fields={"segments": len(body.get("segments", [])),
+                    "empty_reason": body.get("empty_reason")},
         )
-        return JSONResponse(content=doc)
+        return JSONResponse(content=body)
+
+    # --- GET /meetings → api.v1 MeetingListResponse.
+    # HONEST FILTERS: an unrecognized query param is REFUSED (400 naming the accepted set), never
+    # ignored. Silently dropping it answered 200 with the caller's whole unfiltered history, which an
+    # incremental consumer reads as "nothing changed since" — the worst possible failure, because it
+    # looks exactly like success. `updated_after` is the incremental cursor; `platform` / `status`
+    # already worked and are now declared. ---
+    MEETINGS_QUERY_PARAMS = (
+        "limit", "offset", "status", "platform", "updated_after", "exclude_planned",
+    )
 
     # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.
     # Keep the set explicit so list pagination can exclude plans in SQL rather than making
@@ -195,21 +311,39 @@ def build_router(
         offset: Optional[int] = Query(default=None, ge=0),
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
+        updated_after: Optional[str] = Query(
+            default=None,
+            description="ISO-8601 timestamp; return only meetings whose `updated_at` is strictly later.",
+        ),
         exclude_planned: bool = Query(default=False),
     ):
         user_id = _resolve_user_id(x_user_id)
+        unknown = sorted(set(request.query_params.keys()) - set(MEETINGS_QUERY_PARAMS))
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown query parameter(s): {', '.join(unknown)}. "
+                    f"accepted: {', '.join(MEETINGS_QUERY_PARAMS)}"
+                ),
+            )
+        if updated_after is not None and _parse_iso8601(updated_after) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="'updated_after' must be an ISO-8601 timestamp (e.g. 2026-08-16T00:00:00Z)",
+            )
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         status_filter = status if status is not None else (_NON_PLANNED_STATUSES if exclude_planned else None)
         meetings, _has_more = await store.list_meetings(
             user_id, status=status_filter, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces, list_view=True,
+            member_workspaces=member_workspaces, list_view=True, updated_after=updated_after,
         )
         log_event(
             "meetings_listed",
             audience="user",
             span="meetings.list",
             user_id=user_id,
-            fields={"count": len(meetings)},
+            fields={"count": len(meetings), "updated_after": updated_after},
         )
         return JSONResponse(content={"meetings": meetings})
 

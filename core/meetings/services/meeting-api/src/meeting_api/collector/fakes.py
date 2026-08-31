@@ -187,9 +187,18 @@ class InMemoryTranscriptStore:
         return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            updated_after=None):
+        from .app import _parse_iso8601
         from .projection import DEFAULT_LIST_LIMIT, list_order_key, project_list_data
         mws = member_workspaces or set()
+        since = _parse_iso8601(updated_after) if updated_after else None
+
+        def changed_since(m):
+            if since is None:
+                return True
+            stamp = _parse_iso8601(m.get("updated_at") or m.get("created_at") or "")
+            return stamp is not None and stamp > since
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
@@ -204,6 +213,7 @@ class InMemoryTranscriptStore:
                                     else m["status"] == status))
             and (meeting_id is None or mid == meeting_id)
             and (platform is None or m["platform"] == platform)
+            and changed_since(m)
         ]
         if list_view:
             # #1222: the USER-FACING list orders by (non-terminal pin, event time) — the meeting

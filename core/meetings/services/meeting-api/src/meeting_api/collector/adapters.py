@@ -447,12 +447,21 @@ class SqlAlchemyTranscriptStore:
         return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
-                            member_workspaces=None, list_view=False, meeting_id=None, slim=False):
+                            member_workspaces=None, list_view=False, meeting_id=None, slim=False,
+                            updated_after=None):
         from sqlalchemy import cast, func, select, text, union_all
         from sqlalchemy.dialects.postgresql import JSONB
 
+        from .app import _parse_iso8601
         from .models import Meeting
         from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
+
+        # Incremental cursor: filter IN SQL on each access branch, so a consumer resuming from its last
+        # sync reads its delta rather than the whole account. An unparseable value never reaches here —
+        # the route refuses it with 400. `meetings.updated_at` is `timestamp WITHOUT time zone` holding
+        # UTC, so the aware parse is normalized to UTC and then made NAIVE before it is bound.
+        _cursor = _parse_iso8601(updated_after) if updated_after else None
+        updated_since = _cursor.replace(tzinfo=None) if _cursor is not None else None
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -517,6 +526,8 @@ class SqlAlchemyTranscriptStore:
                     s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
+                if updated_since is not None:
+                    s = s.where(Meeting.updated_at > updated_since)
                 if fetch_bound is not None:
                     # ORDER BY inside a compound member is only meaningful (and only kept by
                     # the compiler) together with LIMIT; an unbounded branch returns its full
