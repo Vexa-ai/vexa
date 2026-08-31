@@ -4,6 +4,10 @@ Pure function (no network): a full meeting URL → platform / native_meeting_id 
 (+ the raw URL for legacy Teams enterprise links, + the non-default Teams host for
 enterprise short links). Raises HTTPException(422) for unsupported/invalid URLs so the
 FastAPI tool route (and the MCP transport on top of it) surfaces a proper error.
+
+Hosts are matched EXACTLY or as a dotted subdomain (``_host_matches``) — never by substring,
+which would read ``zoom.us.attacker.example`` as Zoom. meeting-api's parser
+(``meeting_api.collector.meeting_link``) carries the same helper; the two are meant to agree.
 """
 from __future__ import annotations
 
@@ -32,13 +36,60 @@ _TEAMS_ENTERPRISE_HOSTS = {
     "dod.teams.microsoft.us",
 }
 
+# Zoom's meeting domains. Canonical zoom.us (+ every regional subdomain: us02web, us05web, a
+# customer's company.zoom.us) and the US-government tenant. Matches the join brick's own rule
+# (``modules/join/src/index.ts::resolvePlatform``) — a white-label portal is not inferable from
+# its URL, so it is not listed here and never was.
+_ZOOM_DOMAINS = ("zoom.us", "zoomgov.com")
+# Zoom Events registration portals — recognised only to refuse them with a useful message.
+_ZOOM_EVENTS_DOMAINS = ("events.zoom.us", "ev.zoom.com")
+# Every domain a hosted platform claims. Used both to match and to recognise a lookalike.
+_PLATFORM_DOMAINS = (
+    "meet.google.com",
+    *_ZOOM_DOMAINS,
+    *_ZOOM_EVENTS_DOMAINS,
+    "teams.live.com",
+    "teams.microsoft.com",
+    "teams.microsoft.us",
+)
+
+
+def _host_matches(host: str, *domains: str) -> bool:
+    """Exact host, or a subdomain of one of ``domains`` — never a substring match.
+
+    A substring test (``"zoom.us" in host``) also accepts ``zoom.us.attacker.example``: the
+    platform name is a *prefix* of an arbitrary domain the submitter controls, so anyone who
+    can hand this service a meeting URL chooses the host the bot's browser later opens. The
+    registrable domain is the rightmost part of a hostname, so the only sound test is equality
+    or a dotted suffix — the leading dot is what makes the suffix test a label boundary rather
+    than a substring (``host.endswith("teams.live.com")`` matches ``notteams.live.com``).
+
+    meeting-api's parser (``meeting_api.collector.meeting_link``) carries the same helper; the
+    two must agree, since a URL accepted here is handed to ``POST /meetings`` for a second parse.
+    """
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _is_platform_lookalike(host: str) -> bool:
+    """True when ``host`` merely CONTAINS a platform's domain without being it or a subdomain
+    of it — ``meet.google.com.attacker.example``, ``zoom.us.attacker.example``.
+
+    Such a host is not the platform, and it must not reach the jitsi naming heuristics either:
+    ``meet.google.com.attacker.example`` carries a "meet" LABEL, so the self-hosted fallback at
+    the bottom of the parser would otherwise adopt it as a jitsi room and hand the bot the same
+    submitter-chosen host the exact-match rules just refused. Explicitly declared hosts
+    (``VEXA_JITSI_HOSTS``) are unaffected — an operator naming their own deployment is not a guess.
+    """
+    return any(d in host and not _host_matches(host, d) for d in _PLATFORM_DOMAINS)
+
 
 def _is_teams_enterprise_host(host: str) -> bool:
-    return (
-        host in _TEAMS_ENTERPRISE_HOSTS
-        or host.endswith(".teams.microsoft.us")
-        or host.endswith(".teams.microsoft.com")
-    )
+    """teams.microsoft.com, the gov/dod tenants, and any tenant subdomain of either.
+
+    Unchanged in reach: these suffix tests already carried the leading dot, so they were always
+    label-boundary tests; they are routed through ``_host_matches`` so one rule governs the file.
+    """
+    return _host_matches(host, *_TEAMS_ENTERPRISE_HOSTS) or host.endswith(".teams.microsoft.us")
 
 
 def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
@@ -75,7 +126,7 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         )
 
     # Teams personal (teams.live.com/meet/<digits>?p=<passcode>)
-    if host.endswith("teams.live.com"):
+    if _host_matches(host, "teams.live.com"):
         m = re.match(r"^/meet/(\d{10,15})/?$", path)
         if not m:
             raise HTTPException(status_code=422, detail="Unsupported teams.live.com URL format. Expected /meet/<10-15 digit id>.")
@@ -151,14 +202,14 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         )
 
     # Zoom Events — not joinable via shareable URL (check before general zoom.us match)
-    if host in {"events.zoom.us", "ev.zoom.com"} or host.endswith(".events.zoom.us"):
+    if _host_matches(host, *_ZOOM_EVENTS_DOMAINS):
         raise HTTPException(
             status_code=422,
             detail="Zoom Events links are not supported. Attendees receive unique per-registrant join links via email; these cannot be shared with a bot.",
         )
 
     # Zoom: zoom.us (all subdomains) and zoomgov.com
-    if "zoom.us" in host or "zoomgov.com" in host:
+    if _host_matches(host, *_ZOOM_DOMAINS):
         parts = [p for p in path.split("/") if p]
         native_id = ""
         if len(parts) >= 2 and parts[0] in {"j", "w"}:
@@ -189,8 +240,12 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
     configured_hosts = {
         h.strip().lower() for h in os.getenv("VEXA_JITSI_HOSTS", "").split(",") if h.strip()
     }
+    # A host that merely LOOKS like a hosted platform is excluded from the naming heuristics
+    # outright: the branches above already refused it by name, and
+    # meet.google.com.attacker.example carries a "meet" label that would otherwise let it back
+    # in through this door and hand the bot the host the exact-match rules just rejected.
     explicit_jitsi = host == "meet.jit.si" or host in configured_hosts
-    inferred_jitsi = "jitsi" in host or "meet" in host.split(".")
+    inferred_jitsi = not _is_platform_lookalike(host) and ("jitsi" in host or "meet" in host.split("."))
     if explicit_jitsi or inferred_jitsi:
         room = path.strip("/")
         if not room or not re.fullmatch(r"[^/?#\s]+", room):

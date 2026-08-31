@@ -242,6 +242,79 @@ class TestJitsi:
         assert_422("https://meetings.example.org/Room", "unknown provider")
 
 
+class TestHostMatchingIsExact:
+    """A platform host is matched exactly or as a dotted subdomain — never by substring.
+
+    A substring test puts the host the bot's browser opens under the submitter's control: the
+    platform name becomes a prefix of a domain they registered. The parse is the only thing
+    between a submitted URL and a real navigation, so a host that is not the platform must
+    resolve to no platform at all — including via the self-hosted jitsi fallback, which a
+    google-meet lookalike would otherwise satisfy on its "meet" label.
+
+    Mirrors meeting-api's ``TestHostMatchingIsExact`` (#1168); the two parsers must agree.
+    """
+
+    @pytest.mark.parametrize("url", [
+        # A "meet" LABEL would otherwise re-admit these through the self-hosted jitsi door.
+        "https://meet.google.com.attacker.example/abc-defg-hij",
+        "https://meet.zoom.us.attacker.example/j/12345678901",
+        "https://meet.teams.microsoft.com.evil.example/meet/9361792952021",
+        # Substring matches on the zoom / teams branches.
+        "https://zoom.us.attacker.example/j/12345678901",
+        "https://zoomgov.com.attacker.example/j/12345678901",
+        "https://notteams.live.com/meet/9361792952021?p=abc",
+        "https://eviltteams.live.com/meet/9361792952021?p=abc",
+        "https://teams.live.com.evil.example/meet/9361792952021?p=abc",
+        "https://teams.microsoft.com.evil.example/meet/9361792952021",
+        "https://teams.microsoft.com.evil.example/l/meetup-join/19%3ameeting_YWJj%40thread.v2/0",
+        # No platform domain at all, just the word.
+        "https://zoom.attacker.example/j/12345678901",
+        "https://notzoom.com/j/12345678901",
+    ])
+    def test_lookalike_host_resolves_to_no_platform(self, url):
+        assert_422(url, "unknown provider")
+
+    @pytest.mark.parametrize("url,platform,native_id", [
+        # Google Meet: the exact host only — it has no meeting subdomains.
+        ("https://meet.google.com/abc-defg-hij", "google_meet", "abc-defg-hij"),
+        # Zoom: the apex, the regional subdomains, a customer vanity host, and the gov tenant.
+        ("https://zoom.us/j/12345678901", "zoom", "12345678901"),
+        ("https://us02web.zoom.us/j/12345678901", "zoom", "12345678901"),
+        ("https://company.zoom.us/j/12345678901?pwd=xyz", "zoom", "12345678901"),
+        ("https://zoomgov.com/j/12345678901", "zoom", "12345678901"),
+        ("https://frbmeetings.zoomgov.com/j/12345678901?pwd=xyz", "zoom", "12345678901"),
+        # Teams: personal, enterprise, the gov/dod tenants, and a tenant subdomain.
+        ("https://teams.live.com/meet/9361792952021?p=abc", "teams", "9361792952021"),
+        ("https://teams.microsoft.com/meet/33749853217630?p=abc", "teams", "33749853217630"),
+        ("https://gov.teams.microsoft.us/meet/12345678901234", "teams", "12345678901234"),
+        ("https://dod.teams.microsoft.us/meet/12345678901234", "teams", "12345678901234"),
+        ("https://contoso.teams.microsoft.us/meet/12345678901234", "teams", "12345678901234"),
+        ("https://foo.teams.microsoft.com/meet/33749853217630?p=abc", "teams", "33749853217630"),
+        # Self-hosted jitsi conventions: canonical, a jitsi-named host, a "meet" label at the
+        # front, and the same label mid-hostname (regionalized deployments).
+        ("https://meet.jit.si/VexaStandup", "jitsi", "VexaStandup"),
+        ("https://jitsi.example.org/MyRoom", "jitsi", "MyRoom@jitsi.example.org"),
+        ("https://meet.example.org/TeamSync", "jitsi", "TeamSync@meet.example.org"),
+        ("https://eu.meet.example.org/Weekly", "jitsi", "Weekly@eu.meet.example.org"),
+    ])
+    def test_real_platform_hosts_still_parse(self, url, platform, native_id):
+        r = parse(url)
+        assert (r.platform, r.native_meeting_id) == (platform, native_id)
+
+    def test_zoom_events_still_refused_by_name(self):
+        # The dedicated message survives; it is a rejection either way, but a useful one.
+        assert_422("https://events.zoom.us/ev/abc123", "zoom events")
+
+    def test_declared_jitsi_host_is_honoured_even_if_it_looks_like_a_platform(self, monkeypatch):
+        # An operator naming their own deployment is an explicit opt-in, not a guess, so the
+        # lookalike rule applies only to the naming heuristics — never to VEXA_JITSI_HOSTS.
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "meet.google.com.internal.example")
+        r = parse("https://meet.google.com.internal.example/Standup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "Standup@meet.google.com.internal.example"
+        assert r.warnings == []
+
+
 class TestMisc:
     def test_empty_url_rejected(self):
         assert_422("", "empty")

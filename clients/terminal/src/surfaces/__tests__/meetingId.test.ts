@@ -115,6 +115,58 @@ describe("parseMeetingInput", () => {
     expect(parseMeetingInput("https://jitsi.example.org/a/b")).toBeNull();
   });
 
+  it("matches platform hosts exactly or as a dotted subdomain, never by substring", () => {
+    // A substring test puts the host under the control of whoever pasted the link: the platform
+    // name becomes a prefix of a domain they registered. Mirrors the server parsers' rule.
+    for (const url of [
+      // A "meet" LABEL would otherwise re-admit these through the self-hosted jitsi door.
+      "https://meet.google.com.attacker.example/abc-defg-hij",
+      "https://meet.zoom.us.attacker.example/j/12345678901",
+      "https://meet.teams.microsoft.com.evil.example/meet/33832851446746",
+      // Substring / suffix-without-the-dot matches on the zoom and teams branches.
+      "https://zoom.us.attacker.example/j/12345678901",
+      "https://zoomgov.com.attacker.example/j/12345678901",
+      "https://zoom.attacker.example/j/12345678901",
+      "https://notzoom.com/j/12345678901",
+      "https://notteams.live.com/meet/33832851446746",
+      "https://eviltteams.live.com/meet/33832851446746",
+      "https://teams.live.com.evil.example/meet/33832851446746",
+      "https://teams.microsoft.com.evil.example/l/meetup-join/19%3ameeting_abc123%40thread.v2/0",
+    ]) {
+      expect(parseMeetingInput(url), url).toBeNull();
+    }
+  });
+
+  it("keeps every real platform host parsing", () => {
+    const cases: [string, string, string][] = [
+      ["https://meet.google.com/abc-defg-hij", "google_meet", "abc-defg-hij"],
+      ["https://zoom.us/j/12345678901", "zoom", "12345678901"],
+      ["https://us02web.zoom.us/j/12345678901", "zoom", "12345678901"],
+      ["https://company.zoom.us/j/12345678901?pwd=xyz", "zoom", "12345678901"],
+      ["https://zoomgov.com/j/12345678901", "zoom", "12345678901"],
+      ["https://frbmeetings.zoomgov.com/j/12345678901", "zoom", "12345678901"],
+      ["https://teams.live.com/meet/33832851446746?p=abc", "teams", "33832851446746"],
+      ["https://teams.microsoft.com/meet/33832851446746?p=abc", "teams", "33832851446746"],
+      ["https://foo.teams.microsoft.com/meet/33832851446746?p=abc", "teams", "33832851446746"],
+      ["https://meet.jit.si/VexaStandup", "jitsi", "VexaStandup"],
+      ["https://jitsi.example.org/MyRoom", "jitsi", "MyRoom@jitsi.example.org"],
+      ["https://meet.example.org/TeamSync", "jitsi", "TeamSync@meet.example.org"],
+      ["https://eu.meet.example.org/Weekly", "jitsi", "Weekly@eu.meet.example.org"],
+    ];
+    for (const [url, platform, native_meeting_id] of cases) {
+      expect(parseMeetingInput(url), url).toEqual({ platform, native_meeting_id });
+    }
+  });
+
+  it("honours a declared jitsi host even when it looks like a platform", () => {
+    // An operator naming their own deployment is an explicit opt-in, not a guess, so the
+    // lookalike rule applies only to the naming heuristics.
+    expect(parseMeetingInput("https://meet.google.com.internal.example/Standup", ["meet.google.com.internal.example"])).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "Standup@meet.google.com.internal.example",
+    });
+  });
+
   it("returns null for garbage", () => {
     expect(parseMeetingInput("")).toBeNull();
     expect(parseMeetingInput("not a meeting")).toBeNull();
