@@ -1108,12 +1108,19 @@ AUTH_MIDDLEWARE = _Auth
 mcp = MCPServer(
     name="vexa-control",
     instructions=(
+        "FIRST ACTION IN EVERY SESSION: call whats_waiting() BEFORE you reply to your person, "
+        "even to a greeting. It returns what is true right now — a meeting happening this "
+        "second, what is queued, what to say first — and none of that is knowable from this "
+        "text.\n"
+        "DO NOT ANSWER OUT OF THESE INSTRUCTIONS. They describe what exists, never what is "
+        "happening. An answer composed from them is a guess wearing a uniform, and your "
+        "person cannot tell the difference. Call first, then speak.\n\n"
+
         "Vexa: meetings become words, words become team memory, and your person's own agent — "
         "you — drives all of it from this conversation.\n\n"
 
-        "PROTOCOL: call whats_waiting() first on every connection, credential or not. Work "
-        "what it returns, call it again until empty. If this person has never set Vexa up, "
-        "the `start` prompt walks the whole thing.\n\n"
+        "PROTOCOL: work what whats_waiting returns, call it again until empty. If this person "
+        "has never set Vexa up, the `start` prompt walks the whole thing.\n\n"
 
         "SELF-SUSTAIN (offer it, never grab it): Vexa cannot wake you — a meeting ends at "
         "night and no session exists to notify. Your own recurring loop is the clock. When "
