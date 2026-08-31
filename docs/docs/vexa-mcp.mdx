@@ -1,11 +1,12 @@
 ---
 title: "MCP server"
-description: "Vexa's meeting capabilities as MCP tools — live on the hosted service, on Kubernetes, and on self-hosted compose."
+description: "Vexa's meeting capabilities as MCP tools — live on the hosted service and on self-hosted compose."
 ---
 
-The MCP server runs as its own service and is fronted by the gateway at `/mcp` on **self-hosted
-Docker Compose from 0.12.18 onward**, on **Kubernetes**, and on the **hosted service** at
-`https://api.cloud.vexa.ai/mcp`.
+The MCP server runs as its own service and is fronted by the gateway at `/mcp` on the **hosted
+service** at `https://api.cloud.vexa.ai/mcp` and on **self-hosted Docker Compose from 0.12.18
+onward**. The open-source Helm chart does not deploy it — see
+[Kubernetes and Helm](#kubernetes-and-helm) below.
 
 Verified against the hosted service on 2026-08-18: `initialize` returns
 `Vexa MCP Service (v0.12)` over protocol `2024-11-05`, `tools/list` returns the nine tools below,
@@ -79,9 +80,23 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 Self-hosted compose requires **0.12.18 or later** — that is the release in which the gateway began
 fronting `/mcp`. `18056` is the compose `API_GATEWAY_HOST_PORT`.
 
-The key may arrive as `X-API-Key` or as the MCP transport's `Authorization: Bearer <key>`; both are
-forwarded on. Auth at the edge is fail-closed and identical to every other route
+### Credentials and scopes
+
+Your own Vexa API key is the only credential — no OAuth, no separate MCP key, no allow-list. It may
+arrive as `X-API-Key` or as the MCP transport's `Authorization: Bearer <key>`; both are accepted.
+Use **Bearer** with `mcp-remote` and the desktop connectors, which is the carrier the transport
+sends. Auth at the edge is fail-closed and identical to every other route
 ([Authentication](/authentication)).
+
+Opening a session needs only a valid key — the gateway applies no scope requirement to `/mcp`
+itself. **Scopes bite on the tool calls**, because each tool wraps a scoped REST route: `bot` for
+the four bot tools, `tx` for `list_meetings` and `get_meeting_transcript`, either for the recording
+tools. A key missing them opens the session and then fails the call with
+`403 Insufficient scope for this endpoint`.
+
+Hosted keys carry `bot`, `tx` and `browser` from sign-up, so there is nothing to configure. Self-host
+tokens need minting with at least `bot,tx` — the default for
+[`deploy/compose/bin/provision-token`](https://github.com/Vexa-ai/vexa/blob/main/deploy/compose/bin/provision-token).
 
 <Note>
 The MCP service also publishes a direct host port (`127.0.0.1:18010` by default) for local
@@ -102,8 +117,20 @@ Buffering the `GET` leg is what produced the original failure: the proxy waits o
 of a healthy-but-silent stream, hits its read timeout, and manufactures a `503` the MCP service
 never sees.
 
+## Kubernetes and Helm
+
+**The open-source Helm chart does not deploy the MCP service.**
+[`deploy/helm/charts/vexa`](https://github.com/Vexa-ai/vexa/tree/main/deploy/helm) renders no MCP
+Deployment or Service and sets no `MCP_URL` on the gateway, so `/mcp` on a chart install has no
+service behind it. Compose and the hosted service are the two ways to reach MCP today.
+
+Vexa's own hosted service does run MCP on Kubernetes — through the separate platform chart that
+operates [vexa.ai](https://vexa.ai), not through the chart above. Reach it at
+`https://api.cloud.vexa.ai/mcp` rather than by installing it yourself.
+
 ## What is not available
 
+- **Kubernetes / Helm.** The open-source chart deploys no MCP service — see above.
 - **Tools blocked on API parity** — these wrap REST routes the public API does not expose yet, and
   will be ported when the routes land: `delete_recording` · `get_recording_media_download` ·
   `get_recording_config` / `update_recording_config` · `create_transcript_share_link` ·
