@@ -108,7 +108,7 @@
    "unique-id": "flows",
    "node-type": "service",
    "name": "flows",
-   "description": "reaction queue + cadence engine: flows are DATA (an ordered list of step names plus a trigger), each admitted fact spawns a reaction row that walks them. Time is a column \u2014 a reaction parks with Wait(until) at zero cost, which is how a bot is dispatched on schedule and how post-meeting work waits for a workspace instead of failing. Signals (resume/retry/cancel/wake) are audited rows, never table surgery.",
+   "description": "reaction queue + cadence engine: flows are DATA (an ordered list of step names plus a trigger), each admitted fact spawns a reaction row that walks them. Time is a column \u2014 a reaction parks with Wait(until) at zero cost, which is how a bot is dispatched on schedule and how post-meeting work waits for a workspace instead of failing. Signals (resume/retry/cancel/wake) are audited rows, never table surgery. NOT YET IN THE DEPLOYED STACK: core/flows ships a Dockerfile but deploy/compose has no flows service, and nothing (gateway, mcp) routes into it \u2014 today it runs as processes beside the stack. Wiring it in is the integration the port owes.",
    "metadata": [
     {
      "path": "core/flows"
@@ -2389,21 +2389,6 @@
    }
   },
   {
-   "unique-id": "gw-flows",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "gateway"
-     },
-     "destination": {
-      "node": "flows",
-      "interface": "flows-rest"
-     }
-    }
-   },
-   "description": "proxy to the flows control plane (submit a flow, list reactions, signal one)"
-  },
-  {
    "unique-id": "flows-aa",
    "relationship-type": {
     "connects": {
@@ -2417,6 +2402,21 @@
     }
    },
    "description": "process_meeting is a REAL agent turn: the worker drives agent-api and detects completion by a commit touching the workspace"
+  },
+  {
+   "unique-id": "flows-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "dispatch_bot POSTs /bots with the subject's key \u2014 flows is a CLIENT of the gateway, not a service behind it"
   }
  ],
  "flows": [
