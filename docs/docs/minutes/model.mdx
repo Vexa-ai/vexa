@@ -1,0 +1,80 @@
+---
+title: "Running it on your own model"
+description: "Minutes runs on any model, in your estate. One requirement: something must answer the Anthropic dialect — and we ship it."
+---
+
+<Note>**Status:** proven in dev against an OpenAI-only endpoint. Not yet run against a production
+model server. See [what is real today](/minutes/status).</Note>
+
+## The one requirement
+
+Everything in Minutes is one operation: **an agent working in a workspace**. Chat is that. A
+completed meeting raises one event per participant and dispatches that same agent in the group's
+workspace, prompted for that person.
+
+That runtime speaks one wire format: **`POST /v1/messages`**, the Anthropic dialect. So the
+requirement is not an Anthropic *model* — the model can be anything. It is that **something in your
+estate answers that route**.
+
+Self-hosted servers (vLLM, Ollama, llama.cpp, TGI) serve only `POST /v1/chat/completions`. Hosted
+gateways usually serve both — which is why pointing at one appears to work and pointing at your own
+box does not.
+
+The fix is a translator, not a second model. Proven in dev, with nothing from that vendor in the
+path:
+
+```json
+POST /v1/messages  →  {"model": "google/gemini-2.5-flash", "content": [{"text": "SPAWN OK…"}]}
+```
+
+## The front door
+
+```bash
+docker compose --profile llm-shim up -d llm-shim
+```
+
+It accepts the Anthropic dialect, forwards OpenAI to your endpoint, translates the answer back.
+Configure it with your endpoint, the model it serves, and its key (or none). Then point the
+deployment's model settings at the shim rather than at your endpoint.
+
+Skip it only if your endpoint already serves both dialects. If it is OpenAI-only, this is not
+optional — without it there is no working assistant.
+
+## The setting that silently breaks everything
+
+Some servers make a non-standard parameter load-bearing. The measured case: **a self-hosted
+reasoning model spends its whole token budget thinking and answers with nothing.** Not slower —
+broken. Turning thinking off fixes it completely.
+
+Such parameters have no field in the OpenAI dialect, so the shim passes them through explicitly:
+
+```yaml
+extra_body:
+  chat_template_kwargs:
+    enable_thinking: false
+```
+
+There is **no default** — this is a fact about your server, and a wrong guess is worse than none.
+It is a file you edit rather than an environment variable, because a variable that silently does
+nothing would fail here exactly as badly: unusable output, everything reporting healthy.
+
+<Warning>
+Not one vendor's quirk — it reproduces on separate deployments of the same model family. If your
+endpoint serves a reasoning model, assume you need this until you have seen valid output without it.
+</Warning>
+
+## Choosing a model
+
+It needs reliable **structured output** and solid **tool use** — it reads and writes files in your
+groups. Test with a real task, not a greeting: ask for a JSON extraction from a meeting line and
+check it is well-formed *and* semantically right. A frequent failure is naming the person who
+**asked** rather than the person who must **act**.
+
+## What never leaves
+
+- **Model traffic** goes to your endpoint.
+- **Mail** goes through your relay.
+- **No calendar credential** exists in the deployment at all.
+- **No hosted fallback** is configured or defaulted. A fallback means that the moment your endpoint
+  fails, meeting content goes to a third party — silently, at the worst moment. Deciding otherwise
+  is a decision to write down.

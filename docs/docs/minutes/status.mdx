@@ -1,0 +1,96 @@
+---
+title: "What is real today"
+description: "Per component: built, stubbed, or not started — and where this design overlaps something that already ships."
+---
+
+<Warning>
+**Nothing on these pages is shipped.** The product described in this section was designed on
+2026-08-16 and built in dev overnight across ten draft pull requests. None is merged, released,
+or running in production. This page exists so no other page has to hedge.
+</Warning>
+
+## Per component
+
+| Component | State | Evidence |
+|---|---|---|
+| **Meetings by invitation** | built in dev | parses Google + Exchange invitations, recurring series, updates, cancellations; 22/22 against an invitation corpus; live smoke against a dev mailbox |
+| **The eligibility gate** | built in dev | run over 22 real meeting records: 19 send, 1 hold, 2 suppress; both non-meetings caught by independent rules |
+| **Post-meeting dispatch** | built in dev | gather → gate → write → deliver → run log; 66 extracts from the same corpus; non-meetings produce zero |
+| **Writing the artifact** | **template only** | a deterministic template proves the loop end to end. The real thing is the agentic workspace operation — the same one that answers chat — and it needs the model backend wired per deployment. See [running it on your own model](/minutes/model). |
+| **Email delivery** | built in dev | SMTP, against a local sink; a production relay is a config value |
+| **Inbound mail (mailbox ingest)** | **not built** | invitations are parsed and series bind, but nothing polls a real mailbox yet — in dev, mail is read from a test sink's API. One IMAP poller against the assistant's one mailbox closes it. |
+| **`#group:` binding tag** | **not built** | the tag in the invite description that assigns a meeting identity to a group — see [how meetings arrive](/minutes/invitation#the-tag) |
+| **Post-hoc assignment** | **not built** | the *assign to a group* affordance on the personal artifact, and the re-run it triggers |
+| **The door + steering write** | built in dev | signed single-use links, lazy identity, scope enforcement, steering into the personal layer |
+| **The conversation behind the door** | **not built** | the reply box records; it does not answer |
+| **Participants on the record** | built in dev | invite roster stored and filterable |
+| **Context stack + triage** | built in dev | four layers, policy routing, owner triage, write-only secrets |
+| **The interface** | **built in dev** | a `minutes` terminal mode: three surfaces register (groups · meetings · chat), the rest do not. Groups are single-select — one group per meeting-bound turn — and the developer affordances (git panel, private-store toggle, repo attach) are absent |
+| **Group creation** | **built in dev** | a conversation, not a form: the assistant asks what the group is about, infers the kind of meeting from the answer, names the shape it picked so a wrong guess is correctable in one reply, and writes the group's purpose + index at creation |
+| **Group removal** | **built in dev** | confirmed by name; unshares then deletes, and resolves the rename that unsharing performs |
+| **Running on your own model** | **built in dev** | see [Running it on your own model](/minutes/model) — an opt-in Anthropic front door, plus a pass-through for server-specific parameters. Proven against an OpenAI-only endpoint, not yet against a production model server |
+| **Read-only membership** | **blocked** | see below |
+| **Organisation membership** | **blocked** | see below |
+| **Admin UI** | **not built** | the pieces exist; the flow described in [setup](/minutes/setup) has no interface |
+| **Real-time chat during a meeting** | **not started** | deliberately sequenced last |
+
+## Two blockers worth naming
+
+[The interface](/minutes/interface) offers members **read** or **read and write**. The substrate
+has both roles, but **only read/write is currently invitable** — the read-only tier is retained in
+the permission lattice and deliberately not offered when minting an invitation.
+
+Minutes needs it: most members of a group should be able to receive extracts and ask questions
+without being able to rewrite what the group knows. Re-enabling it is a small change to what an
+invitation may mint, not a new permission model.
+
+**Second: "your organisation" membership cannot be expressed yet.** Invitations match an exact
+email address and fail closed; there is no domain matching. So the mode that needs no upkeep — and
+that carries [how the product spreads](/minutes/manifest#how-it-spreads) — has nothing to mint
+today. It needs domain-scoped invitations: additive, and small.
+
+## The open decision
+
+**Whose model key.** The design assumes the workspace owner brings their own — a provider key
+or an endpoint, including a model inside their own network. The alternative, a shared key we
+meter, would route inference cost through billing machinery that is not ready for it.
+
+Until this is settled the pipeline runs on the deterministic template instead. This is the single
+decision blocking the product's headline feature — and it is one decision, not two: because the
+artifact is written by the same agentic operation that answers chat, wiring the model backend
+lights up both at once.
+
+## Where this sits on top of what already ships
+
+Most of the substrate this product needs **is already built**, and the design above deliberately
+adds as little as possible to it.
+
+**Already shipping, unchanged:** workspaces with owners, members and invitations; invitations
+restricted to an allowed email list; per-tenant isolation enforced below the application on every
+backend, with no opt-out; a private per-user store that is never shared; and a platform-owned
+policy area that an assistant turn is structurally forbidden to write — any attempt is reverted.
+
+**What the one-workspace-per-meeting rule removes.** An earlier draft of this design specified a
+four-layer context stack with policy-routed writes and a review queue for machine-proposed
+changes to shared knowledge. **A meeting-bound assistant needs none of it**, because it has
+exactly one workspace: nothing to compose, nothing to route between, one destination for what it
+learns. Composition and routing remain real, but they belong to the terminal and to a person's
+own assistant chat — not to this product.
+
+**What is genuinely new here:** meetings arriving by invitation to a workspace's own address; the
+eligibility gate; the extract as a per-person reading of the group's minutes; and delivery by email with a
+one-click door. Those four are the product. The rest is a naming convention over machinery that
+exists.
+
+**One thing to settle before any of it merges:** an implementation built ahead of this design
+introduced a second workspace and membership model in SQL, beside the git-backed one that ships.
+It should be reduced to the parts that are new, or dropped. **Two workspace models in one product
+is the failure mode to avoid.**
+
+## Also true
+
+**Naming this product resolved a collision worth recording.** "Artifact" was used here for the
+per-person context delta, and is used elsewhere in the codebase for a meeting's recordings and
+transcripts — the same word for two different things. Calling this product's output an
+**extract** leaves "artifact" to mean recordings and transcripts, and nothing has to be renamed
+in the code that already ships.
