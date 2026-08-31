@@ -1038,8 +1038,19 @@ mcp = MCPServer(
         "operator. Speak to them about their meetings, their team, their workspace — NEVER "
         "about tokens, endpoints, sessions, HTTP, tool names or this server's internals. "
         "Machinery goes in report_friction(), not in the conversation; if something blocks "
-        "you, one plain sentence of it is the most they should ever see. And never hand them "
-        "a numbered form — say it as a short paragraph they can correct in a sentence.\n\n"
+        "you, one plain sentence of it is the most they should ever see.\n\n"
+
+        "READABLE OR IT DID NOT HAPPEN — this chat IS the product, and a wall of prose is a "
+        "broken screen. Short lines. One idea per line. No paragraph longer than three "
+        "sentences, ever. Nothing they did not ask about, no recap of what you just did, no "
+        "harness or plugin business that is not Vexa. If a sentence would not survive being "
+        "read aloud, cut it.\n\n"
+
+        "ALWAYS LEAVE THEM A MOVE — end every single reply with two to four concrete next "
+        "options drawn from where they actually are right now, phrased as things they can say "
+        "back ('paste the link and I will send the bot in', 'want the last standup written "
+        "up?'). whats_waiting returns next_options for exactly this — use them. A reply that "
+        "ends without a move is where people stop.\n\n"
 
         "THE RULE THAT MATTERS: anything you research or infer goes through propose(), and "
         "becomes company context only when a human answers and you record it with "
@@ -1514,12 +1525,19 @@ def whats_waiting(token: str = "") -> str:
             "kind": "setup", "id": "scaffold",
             "what": "The workspace does not yet know whose it is, so meeting write-ups wait "
                     "until it does.",
-            "do": "Research the company from PUBLIC sources — their site, GitHub, LinkedIn. "
-                  "Two or three quick searches; 4-6 claims is plenty — this is a first sketch, "
-                  "not an investigation, and meetings will fill it in. File them in ONE "
-                  "propose(claims=[...]) call. Then put it to your person as ONE short "
-                  "paragraph ('here is what I think I understand — what is wrong or "
-                  "missing?'), never a numbered form. Record their whole answer in ONE "
+            "do": "Research from PUBLIC sources — their site, GitHub, LinkedIn — but only "
+                  "for things that CHANGE HOW A WRITE-UP READS: what the team builds, who is "
+                  "on it, the words and shorthand they use, what is in flight now, which "
+                  "meetings recur. Pricing, licensing, funding and marketing copy change "
+                  "nothing about a standup write-up — do not collect them. Four to six "
+                  "claims, one line each; this is a sketch and meetings will fill it in. "
+                  "File them in ONE propose(claims=[...]) call.\n"
+                  "SHOW IT SO IT CAN BE READ: a few SHORT LINES, one claim per line, plainly "
+                  "worded, scannable in fifteen seconds. Not a paragraph — a paragraph of "
+                  "claims is a wall nobody corrects. Not a numbered form either, and no "
+                  "headings. Open with one sentence of why you are asking ('here is what I "
+                  "think I understand about your work — correct anything wrong'), then the "
+                  "lines, then stop. Their whole answer, however brief, goes into ONE "
                   "validate(verdicts=[...]) call, then mark_scaffolded().",
             "why_it_is_worth_their_minute": "Write-ups are drafted against this context — it "
                   "is the difference between minutes in their language and minutes from a "
@@ -1536,8 +1554,9 @@ def whats_waiting(token: str = "") -> str:
                 "kind": "question", "id": c["id"],
                 "what": c["claim"],
                 "why": c.get("source", "extracted from a meeting"),
-                "do": "Fold every open question into one short paragraph and ask what is "
-                      "wrong or missing — people correct a paragraph in a sentence; nobody "
+                "do": "Ask the open questions as a few SHORT LINES, one per line, after "
+                      "one sentence of context — scannable and correctable at a glance. Never "
+                      "a paragraph, which is a wall nobody corrects, and never "
                       "answers a numbered form. Record the whole answer in ONE "
                       "validate(verdicts=[{id, verdict, note}, ...]) call.",
             })
@@ -1609,6 +1628,20 @@ def whats_waiting(token: str = "") -> str:
     kinds = {i.get("kind") for i in items}
     out = {"uid": uid, "waiting": len(items), "items": items,
            "next": "Work these, then call whats_waiting again."}
+    # A queue with work in it still has to leave the person a move. Before, next_options only
+    # existed when nothing was waiting — so on the first turn after sign-in, the turn that
+    # decides whether they stay, the agent had nothing concrete to offer.
+    out["next_options"] = [
+        "Send the bot into a meeting — paste any Meet / Teams / Zoom link",
+        "Is there a call today it should sit in on?",
+        "Bring a past meeting in — a Zoom export, YouTube captions, any transcript",
+    ] if "live_now" not in kinds else [
+        "Read along live as it is being said",
+        "A recap of the meeting so far",
+        "Open the live view beside the notes",
+    ]
+    out["close_with_options"] = ("End your reply with two or three of these, in their words, "
+                                 "as things they can say back. Never end without a move.")
     # a loop only earns its token cost when something will keep arriving: a live meeting now,
     # or a scaffolded account whose queue fills as meetings complete. Not for a one-off setup gate.
     if ("live_now" in kinds) or (scaffolded and len(items) >= 2):
