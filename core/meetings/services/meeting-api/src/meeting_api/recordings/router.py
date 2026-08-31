@@ -15,7 +15,7 @@ import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from .ports import RecordingRepo, Storage
@@ -24,11 +24,52 @@ from .service import (
     SIGNAL_MEDIA_TYPE,
     InvalidSignalTape,
     SessionNotFound,
+    _hls_content_type,
     _verify_meeting_token,
     finalize_master,
+    finalize_hls_download,
+    hls_download_ready_key,
     upload_chunk,
+    upload_hls_file,
     upload_signal_tape,
 )
+
+
+def _combined_enabled() -> bool:
+    """ENABLE_COMBINED_RECORDING gates the muxed (combined) download — default OFF. When off, the
+    combined master is never built and the ``type=combined`` route 404s with ``status: "disabled"`` so
+    the player hides the download control. When on, the download is available: built on-demand the first
+    time it is requested (202 "preparing" → 200 link), or ahead of time when AUTO_COMBINED_RECORDING is on."""
+    return os.getenv("ENABLE_COMBINED_RECORDING", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _combined_auto() -> bool:
+    """AUTO_COMBINED_RECORDING (default OFF) builds the combined download automatically when a recording
+    completes, so the download is ready without a first request paying the remux latency. Only consulted
+    when ENABLE_COMBINED_RECORDING is on."""
+    return os.getenv("AUTO_COMBINED_RECORDING", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Recording ids whose combined remux is building right now (this process). The read path schedules ONE
+# background build per recording and returns 202 while it runs, so repeated page loads never spawn a
+# second ffmpeg. FastAPI is single-threaded async, so the check-and-add below is atomic (no await between).
+_combined_building: set[int] = set()
+
+
+def _schedule_combined_build(
+    background_tasks: "BackgroundTasks", repo, storage, meeting_id: int, recording_id: int
+) -> None:
+    if recording_id in _combined_building:
+        return  # a build is already in flight — do NOT restart it
+    _combined_building.add(recording_id)
+
+    async def _run() -> None:
+        try:
+            await finalize_hls_download(repo, storage, meeting_id=meeting_id, recording_id=recording_id)
+        finally:
+            _combined_building.discard(recording_id)
+
+    background_tasks.add_task(_run)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -209,6 +250,67 @@ def build_router(
             raise HTTPException(status_code=404, detail=str(e))
         return JSONResponse(content=receipt)
 
+    @router.post("/internal/recordings/hls", include_in_schema=False)
+    async def internal_upload_hls(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        session_uid: Optional[str] = Form(None),
+        relpath: Optional[str] = Form(None),
+        is_final: Optional[bool] = Form(None),
+        metadata: Optional[str] = Form(None),
+        authorization: Optional[str] = Header(default=None),
+    ):
+        """ffmpeg-for-all HLS upload: store ONE HLS file (init.mp4, chunk-<NNNNN>.m4s, or playlist.m3u8)
+        verbatim under the recording's .../hls/ prefix. session_uid + relpath come from flat fields or
+        the JSON `metadata` part. Same auth as the chunk upload (INTERNAL_API_SECRET or a MeetingToken)."""
+        meta: dict = {}
+        if metadata:
+            try:
+                meta = json.loads(metadata)
+            except (ValueError, TypeError):
+                meta = {}
+        session_uid = session_uid or meta.get("session_uid")
+        relpath = relpath or meta.get("relpath")
+        if not session_uid or not relpath:
+            raise HTTPException(status_code=422, detail="session_uid and relpath required")
+        if is_final is None:
+            is_final = bool(meta.get("is_final", False))
+
+        bearer = _bearer_token(authorization)
+        internal_secret = os.getenv("INTERNAL_API_SECRET")
+        token_meeting_id: Optional[int] = None
+        if internal_secret and bearer == internal_secret:
+            token_meeting_id = None
+        else:
+            try:
+                claims = _verify_meeting_token(bearer, secret=token_secret)
+            except ValueError as e:
+                raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
+            token_meeting_id = int(claims["meeting_id"])
+
+        data = await file.read()
+        try:
+            receipt = await upload_hls_file(
+                repo, storage, token_meeting_id=token_meeting_id,
+                session_uid=session_uid, relpath=relpath, data=data, is_final=bool(is_final),
+                started_at=meta.get("started_at"), has_video=meta.get("has_video"),
+            )
+        except SessionNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        # Recording completed (final manifest) → optionally build the combined download ahead of time,
+        # so it is ready without the first request paying the remux latency. AUTO off ⇒ built on-demand.
+        if (
+            is_final
+            and _combined_enabled()
+            and _combined_auto()
+            and receipt.get("meeting_id") is not None
+            and receipt.get("recording_id") is not None
+        ):
+            _schedule_combined_build(
+                background_tasks, repo, storage, receipt["meeting_id"], receipt["recording_id"]
+            )
+        return JSONResponse(content=receipt)
+
     @router.get("/recordings")
     async def list_recordings(
         request: Request,
@@ -262,7 +364,9 @@ def build_router(
     async def get_recording_master(
         recording_id: int,
         request: Request,
+        background_tasks: BackgroundTasks,
         type: str = "audio",
+        build: int = 0,
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
@@ -271,12 +375,48 @@ def build_router(
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
-        mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
-        master_key = await finalize_master(
-            repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id, media_type=type
-        )
-        if master_key is None:
-            raise HTTPException(status_code=404, detail="No such media file to finalize")
+
+        # ── combined (muxed audio+video mp4 remuxed from the DASH): NEVER block on the ffmpeg remux ──
+        # The remux of a long recording takes seconds-to-minutes and would exceed the gateway timeout —
+        # and re-run on every reload. Instead: serve it ONLY if already built; otherwise kick off ONE
+        # guarded background build and return 202. The player streams DASH meanwhile and polls this route,
+        # swapping to the combined download the moment it is ready.
+        if type == "combined":
+            if not _combined_enabled():
+                # ENABLE_COMBINED_RECORDING off → the download is disabled; 404 so the player hides it.
+                return JSONResponse(
+                    status_code=404,
+                    content={"id": recording_id, "type": "combined", "status": "disabled",
+                             "media_file_id": None, "raw_url": None},
+                )
+            ready_key = await hls_download_ready_key(
+                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id
+            )
+            if ready_key is None:
+                # Not built. A plain GET only REPORTS status (so the player can show the button without
+                # paying the remux); the build starts on ?build=1 (the download click) or AUTO on complete.
+                building = recording_id in _combined_building
+                if build and not building:
+                    _schedule_combined_build(background_tasks, repo, storage, rec["meeting_id"], recording_id)
+                    building = True
+                return JSONResponse(
+                    status_code=202 if building else 200,
+                    content={"id": recording_id, "type": "combined",
+                             "status": "building" if building else "available",
+                             "media_file_id": None, "raw_url": None},
+                )
+            master_key = ready_key
+            # hls_download_ready_key stamped the synthetic `combined` media-file — re-resolve it fresh.
+            recs = await repo.list_meeting_recordings(user_id)
+            rec = next((r for r in recs if r.get("id") == recording_id), rec)
+            mf = next((m for m in rec.get("media_files", []) if m.get("type") == "combined"), None)
+        else:
+            mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
+            master_key = await finalize_master(
+                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id, media_type=type
+            )
+            if master_key is None:
+                raise HTTPException(status_code=404, detail="No such media file to finalize")
         # The dashboard player (api.ts getRecordingMasterStreamUrl) reads ``raw_url`` and streams it via
         # the proxy — the master metadata (``storage_path``) alone is not playable. Point it at the byte
         # route below so playback actually resolves (recordings P3: master byte stream).
@@ -289,11 +429,43 @@ def build_router(
         return JSONResponse(content={
             "id": recording_id,
             "type": type,
+            # A resolved master IS ready — say so explicitly. The `combined` polling path (player's
+            # combinedStatus) only sees "building"/"available" on the not-built branches above; the
+            # built fall-through MUST carry status:"ready" or the client can't tell a finished remux
+            # from an unbuilt one (both otherwise look statusless) and loops on the build button.
+            "status": "ready",
             "storage_path": master_key,
             "media_file_id": media_file_id,
             "raw_url": raw_url,
             "duration_seconds": (mf or {}).get("duration_seconds"),
         })
+
+    @router.get("/recordings/{recording_id}/hls/{path:path}")
+    async def get_recording_hls(
+        recording_id: int,
+        path: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        """Serve the ffmpeg-for-all HLS bundle: ``playlist.m3u8`` then its relative segments
+        (``init.mp4``, ``chunk-00000.m4s``, …). Native Safari and hls.js load playlist.m3u8 and fetch
+        the segments against this same route. Zero server assembly — the bot's ffmpeg produced
+        HLS-native fMP4 segments, stored verbatim under the recording's hls/ prefix."""
+        if ".." in path:  # no traversal outside the bundle prefix
+            raise HTTPException(status_code=400, detail="bad path")
+        user_id = _resolve_user_id(x_user_id)
+        recs = await repo.list_meeting_recordings(user_id)
+        rec = next((r for r in recs if r.get("id") == recording_id), None)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        hmf = next((m for m in rec.get("media_files", []) if m.get("type") == "hls" and m.get("storage_path")), None)
+        if not hmf:
+            raise HTTPException(status_code=404, detail="HLS not available")
+        obj_key = f"{hmf['storage_path'].rsplit('/', 1)[0]}/{path}"
+        data = await storage.get(obj_key)
+        if data is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return Response(content=data, media_type=_hls_content_type(obj_key))
 
     @router.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(

@@ -1,7 +1,7 @@
 "use client";
 import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchDurableTranscript, mergeNotesById, type DurableTranscript } from "../surfaces/liveMeetings";
-import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
+import { meetingEntities, type MeetingMock } from "../surfaces/meetingModel";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
 import { cleanTranscriptText, extractNotableNumbers } from "./textSignals";
@@ -79,10 +79,6 @@ function cardKindFromText(text: string, fallback = "insight"): string {
   if (lower.includes("next step") || lower.includes("follow-up") || lower.includes("follow up")) return "next-step";
   if (lower.includes("action") || lower.includes("task")) return "action";
   return fallback;
-}
-
-function lineTs(line: TranscriptLine): string | undefined {
-  return line.t || undefined;
 }
 
 function safeArray<T>(value: T[] | null | undefined): T[] {
@@ -365,9 +361,36 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       docs: safeArray(selected.docs),
     };
     const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
-    const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
+    // `ts` MUST be the numeric relative-seconds offset (the media clock the player seeks on). A durable
+    // line's `startSec` is an ABSOLUTE epoch (seconds) — the DB's start_time — so anchor every line to the
+    // EARLIEST one, mapping the transcript onto the recording's 0..duration timeline. (Using the display
+    // string, or the raw epoch, made every line resolve to one huge/constant time.)
+    const durableLines = safeArray(durable.lines);
+    // Pass the ABSOLUTE epoch (seconds) — the transcript engine anchors it to the recording's true start
+    // (end_time − played-file duration), which only the player knows and which differs per track. Anchoring
+    // to the first line here was slightly early (the recording starts a beat after the first spoken word).
+    const recordedSegments = durableLines.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
+    // LIVE meeting: the SSE store only carries the seed's bounded tail (the agent replays the last N stream
+    // entries) plus new deltas, so opening mid-meeting would otherwise show only the last few lines. Merge the
+    // durable FULL history UNDER the live edge — same segment_id ⇒ the live version wins; everything the live
+    // edge doesn't cover comes from the DB. That durable remainder is strictly older than the live edge, so we
+    // prepend it (sorted among itself) and leave the live edge in its SSE arrival order untouched.
+    const liveById = new Map(liveSegments.map((s) => [s.id, s]));
+    const durableUnderLive = durableLines
+      .filter((s) => s.segment_id && !liveById.has(s.segment_id))
+      .map((s) => ({
+        id: s.segment_id,
+        speaker: s.speaker,
+        text: cleanTranscriptText(s.text),
+        // Absolute wall-clock (epoch ms) — the same clock the SSE lines render/sort in. Durable startSec is
+        // an absolute epoch in SECONDS.
+        tsMs: typeof s.startSec === "number" && Number.isFinite(s.startSec) ? s.startSec * 1000 : undefined,
+        completed: true,
+      }))
+      .sort((a, b) => (a.tsMs ?? 0) - (b.tsMs ?? 0));
+    const liveMerged = durableUnderLive.length ? [...durableUnderLive, ...liveSegments] : liveSegments;
+    const segments = selected.session_uid ? liveMerged : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     const diagnostics = {
       liveConnected: live.connected,

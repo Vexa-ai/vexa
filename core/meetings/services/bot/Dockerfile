@@ -156,6 +156,27 @@ ENV VEXA_HF_CACHE=/opt/hf-cache
 # per-release SPDX SBOM (scripts/sbom.mjs); model weights sit outside gate:licenses.
 COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache/LICENSE.pyannote-segmentation-3.0
 
+# Non-root user for the browser. The entrypoint re-execs itself as this user (unless CHROME_NO_SANDBOX=1)
+# so Chromium runs its namespace sandbox instead of --no-sandbox — no "unsupported flag" banner in the
+# recording. This container therefore brings up Xvfb + PulseAudio (per-user) + the worker all as `vexa`,
+# and MUST be launched allowing user namespaces (security_opt: seccomp=unconfined). -m gives a writable
+# HOME for Chromium's profile; audio/video/render cover the capture + GPU path (device nodes are
+# world-readable, so membership is best-effort). /app is world-readable from the COPY above. The gmeet
+# join flow also writes diagnostic checkpoint screenshots to /app/storage/screenshots (hardcoded, 12
+# sites); Playwright mkdir's the parent, which would fail EACCES under root-owned /app as vexa and ABORT
+# the join — so pre-create it vexa-owned.
+RUN useradd -m -u 1500 -s /usr/sbin/nologin vexa \
+ && for g in audio video render pulse-access; do getent group "$g" >/dev/null 2>&1 && usermod -aG "$g" vexa || true; done \
+ && mkdir -p /app/storage/screenshots && chown -R vexa:vexa /app/storage
+
+# Suppress Chromium's "unsupported command-line flag" security banner (it overlays the recording). The
+# bot must pass flags Chromium deems security-reducing — above all --disable-blink-features=Automation
+# Controlled, the anti-detection flag (dropping it makes Meet flag the bot) — so we can't remove our way
+# out, and --test-type correlated with Meet not admitting the bot. This managed policy disables the
+# command-line-flag warnings with NO automation signal (Chromium reads /etc/chromium/policies/managed).
+RUN mkdir -p /etc/chromium/policies/managed \
+ && printf '%s\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/vexa.json
+
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.
 COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
