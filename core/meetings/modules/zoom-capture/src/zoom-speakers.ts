@@ -71,6 +71,15 @@ export interface ZoomSpeakersState {
 const ACTIVE_CONTAINER_SELECTORS = [
   '.speaker-active-container__video-frame',
   '.speaker-bar-container__video-frame--active',
+  // Speaker/main view: Zoom renders exactly one large tile that follows the
+  // dominant (actively-speaking) participant — the footer name flips as the turn
+  // passes. The wrapper prefix drifts across client builds and view states
+  // (single-suspension-container, single-main-container, … — both observed live
+  // within ONE meeting), so match the family by the stable "-container__video-frame"
+  // leaf scoped to the "single-" prefix rather than pinning one name. The old
+  // speaker-active-/speaker-bar- classes above are gone from the DOM; the
+  // .video-avatar__avatar-footer name node is a descendant, so nameFromContainer reads it.
+  '[class*="single-"][class*="-container__video-frame"]',
 ];
 const NAME_FOOTER_SELECTOR = '.video-avatar__avatar-footer';
 
@@ -153,10 +162,23 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
   const HEARTBEAT_POLLS = Math.max(1, Math.round(2000 / pollMs));
   let sinceEmit = 0;
 
+  // DIAGNOSTIC (#speaker-split): the active-speaker selectors (.speaker-active-container__…)
+  // are the Zoom web-client classes; if Zoom drifts them, readActiveSpeaker() returns null
+  // forever and every segment lands as "Speaker". When we go a sustained stretch with NO
+  // active speaker, dump getState() forensics (per-selector present/name + every name-footer
+  // tile's ancestor classes + "speaking"-hint tokens) so the real lit-tile marker is visible
+  // in the bot log. Rate-limited so it prints ~once/6s. Remove with the fix.
+  let _diagNullPolls = 0;
+  const _DIAG_EVERY = Math.max(1, Math.round(6000 / pollMs));
+  function _diagDump(): void {
+    try { log('[DIAG] no active speaker — ' + JSON.stringify(getState())); } catch { /* never throw */ }
+  }
+
   // One poll cycle: read the lit speaker; emit on change, or periodically re-assert.
   function tick(): void {
     let name: string | null = null;
     try { name = readActiveSpeaker(); } catch { /* DOM in flux */ return; }
+    if (!name && !active) { if (++_diagNullPolls % _DIAG_EVERY === 0) _diagDump(); } else { _diagNullPolls = 0; }
     if (name !== active) {
       // A change must hold for CONFIRM_POLLS consecutive reads before we commit it,
       // so a single flicker poll can't emit a hint (and can't hijack attribution).
