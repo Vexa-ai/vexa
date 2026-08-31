@@ -78,5 +78,24 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 
+# A person's preferences, read from their workspace. The MCP writes this file; steps read it
+# here. Defaults are the floor for someone who has never set anything — the MCP's vocabulary is
+# the source of truth, and it materialises every key the first time a setting is touched.
+_SETTING_DEFAULTS = {
+    "bot_name": "Vexa", "transcribe": True,
+    "mail_minutes": True, "mail_join": False, "mail_rsvp": True, "timezone": "",
+}
+
+
+def setting(uid: str, key: str):
+    """One preference for one person. Never raises: a missing file means defaults."""
+    import json as _j
+    try:
+        raw = _j.loads(ws_file(uid, ".settings.json") or "{}")
+    except Exception:  # noqa: BLE001
+        raw = {}
+    return raw.get(key, _SETTING_DEFAULTS.get(key))
+
+
 def scaffolded(uid: str, slug: Optional[str] = None) -> bool:
     return ws_file(uid, ".scaffolded", slug) is not None
