@@ -42,6 +42,16 @@ export function isMixedLanePlatform(p: Platform | string): boolean {
   return p === 'zoom' || p === 'teams' || p === 'jitsi';
 }
 
+/** True for mixed-lane platforms whose per-participant WebRTC streams are confirmed stable
+ *  (one track per person, no remapping) — captured PER-TRACK and transcribed through the
+ *  per-channel (gmeet) engine instead of the pyannote mix. Zoom is verified live (10 stable
+ *  streams, 0 teardowns). Teams/Jitsi stay on the mix until witnessed the same way — a Teams
+ *  active-speaker SLOT model would defeat per-track, so it is NOT assumed. Both the capture
+ *  bridge (which capture) and the pipeline pick (which engine) read THIS one predicate. */
+export function isPerTrackLanePlatform(p: Platform | string): boolean {
+  return p === 'zoom';
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;
