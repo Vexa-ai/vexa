@@ -29,6 +29,28 @@ _COMPOSE_LABEL = "com.docker.compose.project"
 logger = logging.getLogger("runtime_kernel.docker_backend")
 
 
+#: The claude CLI's own filename inside ``~/.claude``.
+CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+
+
+def host_claude_credentials(env: Optional[Any] = None) -> Optional[str]:
+    """The DOCKER-HOST path of the claude subscription credential to broker into a spawned worker.
+
+    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
+    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
+    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
+    single-FILE bind is pinned to the inode it was created with. A worker bind is created fresh at
+    every spawn so it was never the half that went stale, but a deployment that configures only the
+    directory must still produce an authenticated worker. ``None`` = no subscription file
+    configured (an API-style key may still be brokered as env)."""
+    env = os.environ if env is None else env
+    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
+    if explicit:
+        return explicit
+    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
+    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
+
+
 def _stop_grace_sec() -> int:
     """How long ``terminate`` lets a workload leave gracefully before the daemon SIGKILLs it.
 
@@ -210,7 +232,7 @@ class DockerBackend:
         # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
         # API-style provider env (the VEXA_LLM_* completion dials + the claude-code runner's
         # ANTHROPIC_*) is copied from the trusted runtime service into spawned workers.
-        creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
+        creds = host_claude_credentials(os.environ)
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over

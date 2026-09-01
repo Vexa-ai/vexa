@@ -194,10 +194,19 @@
    "class": "capability",
    "capability": "model_inference",
    "secret": true,
-   "description": "DOCKER-HOST path (NOT an in-container path) to a claude credentials JSON (~/.claude/.credentials.json); the docker backend bind-mounts it READ-ONLY into every spawned agent-worker at /root/.claude/.credentials.json — the claude-code runner's subscription credential path. compose also mirror-mounts it into the runtime container at /var/lib/vexa/host-claude-credentials so the config.v1 file probe can verify the host file actually exists (docker turns a MISSING host path into an empty directory in the worker → 'Model inference failed: Not logged in')",
+   "description": "DOCKER-HOST path (NOT an in-container path) to a claude credentials JSON (~/.claude/.credentials.json); the docker backend bind-mounts it READ-ONLY into every spawned agent-worker at /root/.claude/.credentials.json — the claude-code runner's subscription credential path. compose also mirror-mounts it into the runtime container at /var/lib/vexa/host-claude-credentials so the config.v1 file probe can verify the host file actually exists (docker turns a MISSING host path into an empty directory in the worker → 'Model inference failed: Not logged in'). PAIR IT WITH HOST_CLAUDE_DIR: this single-FILE mirror is pinned to the inode it was created with, so it goes stale the moment the CLI refreshes the token",
    "targets": [
     "compose",
     "lite"
+   ]
+  },
+  {
+   "key": "HOST_CLAUDE_DIR",
+   "class": "defaulted",
+   "default": "(unset — only the legacy single-file mirror is available)",
+   "description": "DOCKER-HOST path of the claude config DIRECTORY (~/.claude), mirror-mounted READ-ONLY into the long-lived runtime + agent-api containers at /var/lib/vexa/host-claude. Same credential as HOST_CLAUDE_CREDENTIALS, delivered in the shape that SURVIVES A TOKEN REFRESH: the CLI replaces .credentials.json via rename(2) (a NEW inode), and a single-FILE bind stays pinned to the inode it was created with, so a long-lived container reads the pre-refresh token until it is recreated (32h of 'Not logged in' on the dogfood stack, 2026-08-31). A DIRECTORY bind resolves the filename live. Set it to the parent of HOST_CLAUDE_CREDENTIALS",
+   "targets": [
+    "compose"
    ]
   },
   {
@@ -351,6 +360,7 @@
     "file": {
      "path_key": "HOST_CLAUDE_CREDENTIALS",
      "fallback_paths": [
+      "/var/lib/vexa/host-claude/.credentials.json",
       "/var/lib/vexa/host-claude-credentials"
      ]
     }

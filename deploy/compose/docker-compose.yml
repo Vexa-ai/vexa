@@ -153,6 +153,10 @@ services:
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      # The DIRECTORY holding it (~/.claude). Same credential, inode-stable delivery — see the
+      # volumes: block below and .env.example. The docker backend derives the worker's credential
+      # bind from this when HOST_CLAUDE_CREDENTIALS is unset.
+      - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
       # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
       # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
@@ -170,11 +174,26 @@ services:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mirror of HOST_CLAUDE_CREDENTIALS (a DOCKER-HOST path — see .env.example) into THIS container,
-      # so the config.v1 `model_inference` file probe can verify the host file actually exists before
-      # any worker spawns: docker bind-mounts a MISSING host path as an empty DIRECTORY, which is how
-      # a bad path becomes 'Model inference failed: Not logged in' inside the worker. /dev/null when
-      # unset (the probe is skipped then — an ANTHROPIC_* key may be the credential path instead).
+      # THE CREDENTIAL MIRROR, TWO SHAPES. The probe reads the DIRECTORY one first (config.v1
+      # `model_inference` fallback_paths) and only falls back to the file.
+      #
+      #   ~/.claude          → /var/lib/vexa/host-claude:ro              ← use this one
+      #   ~/.claude/.credentials.json → /var/lib/vexa/host-claude-credentials:ro   ← legacy
+      #
+      # WHY THE DIRECTORY: a single-FILE bind is resolved once, at container create, and pinned to
+      # that INODE. The claude CLI refreshes an expiring OAuth token by writing a temp file and
+      # rename(2)-ing it over .credentials.json — a new inode — so a LONG-LIVED container keeps
+      # reading the pre-refresh token until it is recreated. That is 32h of dead agents on the
+      # dogfood stack (2026-08-31 → 09-01): `claude` worked fine on the host the whole time.
+      # A directory bind tracks the directory and resolves the filename live, so the refresh is
+      # visible immediately. Spawned workers were never affected (a fresh bind per container).
+      #
+      # The file mount is KEPT so deployments that only set HOST_CLAUDE_CREDENTIALS keep working;
+      # it is simply second in line. /dev/null when unset — the probe skips then (an ANTHROPIC_*
+      # key may be the credential path instead), and a MISSING host path would otherwise arrive as
+      # an empty DIRECTORY, which is the 'Model inference failed: Not logged in' signature the
+      # probe exists to catch.
+      - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
       # The _global org tier: bound at the SAME path inside this container so the control plane's
       # exists()-check and the worker's host-side bind agree on one path string.
@@ -266,13 +285,22 @@ services:
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # The credential is MOUNTED below, but the capability oracle reads this env to know a
+      # subscription path is CONFIGURED at all. Without the pair, a correctly-mounted credential
+      # reports "No model credentials are configured" and the turn is refused before dispatch
+      # (found by dogfooding 2026-08-30).
+      - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
     volumes:
       # The Workspace store backing (dev): the worker mounts the subject's subdir; agent-api reads the tree.
       - agent-workspaces:/workspaces
       # Settings → Models "Test" button: /api/models/test inspects the SAME subscription credential
-      # file the runtime brokers into workers (existence + expiry check — surfaces the stale-Keychain
-      # 401 with its remedy instead of failing the next chat turn). /dev/null when unset, same
-      # convention as the runtime's probe mount.
+      # the runtime brokers into workers (existence + expiry check — surfaces the stale-Keychain
+      # 401 with its remedy instead of failing the next chat turn). Both shapes, DIRECTORY first —
+      # see the runtime service above for why the single-file bind goes stale on a token refresh
+      # (inode pinning) and why this surface then reports a live token as expired. /dev/null when
+      # unset, same convention as the runtime's probe mount.
+      - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
       # _global org tier at its HOST path — the control plane's exists() check runs here —
       # AND at /workspaces/_global so the terminal's workspace-file API can read the org page.

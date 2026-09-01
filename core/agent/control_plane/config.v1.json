@@ -251,10 +251,19 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself \u2014 the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) \u2014 but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails",
+      "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself \u2014 the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) \u2014 but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails, and Settings \u2192 Models \"Test\" reads the mirrored file. PAIR IT WITH HOST_CLAUDE_DIR: the single-FILE mirror is inode-pinned and goes stale on the CLI's next token refresh",
       "targets": [
         "compose",
         "lite"
+      ]
+    },
+    {
+      "key": "HOST_CLAUDE_DIR",
+      "class": "defaulted",
+      "default": "(unset \u2014 only the legacy single-file mirror is available)",
+      "description": "DOCKER-HOST path of the claude config DIRECTORY (~/.claude), mirror-mounted READ-ONLY at /var/lib/vexa/host-claude. Settings \u2192 Models \"Test\" (control_plane.config_test) resolves .credentials.json inside it PER CALL. Same credential as HOST_CLAUDE_CREDENTIALS in the shape that survives a refresh: the CLI replaces the file via rename(2) (NEW inode) and a single-FILE bind stays pinned to the original inode, so this surface reported an already-refreshed token as expired for 32h (dogfood, 2026-08-31). Set it to the parent of HOST_CLAUDE_CREDENTIALS",
+      "targets": [
+        "compose"
       ]
     },
     {

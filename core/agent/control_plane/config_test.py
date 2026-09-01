@@ -23,9 +23,19 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-# The compose-mounted subscription credential file (same :ro mount the runtime probes; the
-# docker backend mounts the same host path into workers at /root/.claude/.credentials.json).
-CREDS_PATH = "/var/lib/vexa/host-claude-credentials"
+from shared.host_claude import LEGACY_CREDENTIALS_MOUNT, credentials_path
+
+# The compose-mounted subscription credential (same mounts the runtime probes; the docker backend
+# brokers the same host file into workers at /root/.claude/.credentials.json).
+#
+# NOT a resolved path — deliberately. This used to be
+#     CREDS_PATH = "/var/lib/vexa/host-claude-credentials"
+# bound straight into `def test_subscription_credentials(creds_path=CREDS_PATH)`, i.e. decided ONCE
+# at import. Under the old single-FILE bind that also pinned an inode, so a token the claude CLI
+# had already refreshed on the host stayed invisible until the container was recreated — 32h of
+# "Not logged in" on the dogfood stack. `credentials_path()` re-resolves per call and prefers the
+# DIRECTORY mount; see shared/host_claude.py for the mechanics.
+CREDS_PATH = LEGACY_CREDENTIALS_MOUNT
 
 # The macOS remedy, verbatim — the error message must carry the fix (fail loud AND helpful).
 KEYCHAIN_REFRESH = ('security find-generic-password -s "Claude Code-credentials" -w '
@@ -68,9 +78,14 @@ def _result(ok: bool, summary: str, **extra) -> dict:
 
 # ── models ────────────────────────────────────────────────────────────────────────────────────
 
-def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional[float] = None) -> dict:
+def test_subscription_credentials(creds_path: Optional[str] = None, *, now: Optional[float] = None) -> dict:
     """The mounted credentials file: present → parseable → unexpired. Expiry IS the recurring
-    local failure (stale Keychain export), so the failure message ships the exact remedy."""
+    local failure (stale Keychain export), so the failure message ships the exact remedy.
+
+    ``creds_path=None`` resolves the mount FRESH on every call (directory mount first, legacy file
+    mount second). A default argument would be evaluated once at import — which is precisely how
+    this surface kept reporting a token that the host had already refreshed."""
+    creds_path = creds_path or credentials_path()
     if not os.path.isfile(creds_path):
         # docker turns a MISSING host path into an empty dir — same failure, same message.
         return _result(False, "No subscription credentials mounted "
@@ -151,7 +166,7 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
-                    creds_path: str = CREDS_PATH, post: HttpPost = _post) -> dict:
+                    creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
     """The EFFECTIVE model credential test — same resolution the dispatch overlay applies
     (Settings user > global config already collapsed by admin-api; env is the floor)."""
     env = env if env is not None else dict(os.environ)
