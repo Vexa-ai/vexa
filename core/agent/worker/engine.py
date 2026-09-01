@@ -302,9 +302,50 @@ def _extra_mount_paths(work: Path) -> list[Path]:
     return extras
 
 
+# The MCP server id the delegated vexa toolbelt is attached under. It is also the allow-set prefix
+# (`mcp__vexa`), so the two must agree — hence one constant, not two string literals.
+VEXA_MCP_SERVER = "vexa"
+
+
+def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
+    """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
+
+    The dispatcher minted a short-lived delegation token for this dispatch and handed it over in the
+    env (``VEXA_MCP_DELEGATION_TOKEN`` + ``VEXA_MCP_URL``); this turns that into the ``.mcp.json`` the
+    harness attaches with ``--mcp-config`` + ``--strict-mcp-config``. Returns ``(None, [])`` when either
+    is absent — the pre-delegation behaviour, an unauthenticated worker with no MCP, not a failure.
+
+    THE TOKEN TRAVELS IN A HEADER, never in the URL. The rig accepts both (``?c=<tok>`` is its
+    setup-link dialect), but a credential in a query string leaks into every access log and proxy trace
+    it passes through, and this one crosses a public hostname.
+
+    It is written under ``.claude/`` because that directory is GITIGNORED in the workspace seed — the
+    post-turn ``git add -A`` in ``run_harness_turn`` commits every changed mount, so a credential
+    written anywhere else in the workspace would be committed and synced to the workspace store. The
+    file is chmod 600 for the same reason the env var is not echoed: it is a bearer credential.
+    """
+    url = (os.environ.get("VEXA_MCP_URL") or "").strip()
+    token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
+    if not url or not token:
+        return None, []
+    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
+        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
+    }}}
+    d = work / ".claude"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / "mcp.json"
+    path.write_text(json.dumps(cfg))
+    try:
+        path.chmod(0o600)
+    except OSError:  # a store backend that does not carry modes — the attachment still stands
+        pass
+    return str(path), [f"mcp__{VEXA_MCP_SERVER}"]
+
+
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
+    mcp_config: str | None = None,
 ) -> Iterator[dict]:
     """One governed agent turn over the mounted workspace SET: resume from the session file, DECLARE the
     active mounts to the model, drive ``run_harness_turn`` (which commits EACH changed mount, authored by
@@ -335,13 +376,13 @@ def run_turn_over_workspace(
     extras = _extra_mount_paths(work)
     turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + prompt
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
-                           commit=commit, author=author, extra_mounts=extras)
+                           commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
         if sess_file.exists():
             sess_file.unlink()
         gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
-                               commit=commit, author=author, extra_mounts=extras)
+                               commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
         first = next(gen, None)
     captured: str | None = None
     for ev in (gen if first is None else itertools.chain([first], gen)):
@@ -559,8 +600,19 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
                       or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
         session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
+        # The delegated vexa MCP (meetings, transcripts, workspaces) — attached ONLY when the dispatcher
+        # minted a token for this dispatch. Attaching the server is not enough: `--strict-mcp-config`
+        # scopes WHICH servers exist, `--allowedTools` scopes what the model may CALL, so the server id
+        # must enter the allow-set too or every tool call would stall on a permission prompt that no
+        # human is there to answer.
+        mcp_cfg, mcp_tools = mcp_delegation_config(work)
+        if mcp_cfg:
+            chat_tools = chat_tools + mcp_tools
+            log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)",
+                     os.environ.get("VEXA_OWNER"))
         serve(
             client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model, allowed_tools=chat_tools, session=session),
+            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model, allowed_tools=chat_tools,
+                                                        session=session, mcp_config=mcp_cfg),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
         )

@@ -365,6 +365,38 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "VEXA_MCP_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no MCP is attached to a worker; the pre-delegation behaviour)",
+      "description": "the vexa-control MCP endpoint a spawned chat worker connects to (e.g. https://rig.dev.vexa.ai/mcp). Set together with VEXA_MCP_DELEGATION_SECRET: either alone leaves the toolbelt OFF, because an endpoint with no credential and a credential with no endpoint are both unusable",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_SECRET",
+      "class": "defaulted",
+      "default": "(unset \u2014 delegation is OFF and no worker receives an MCP credential)",
+      "description": "the symmetric HS256 key agent-api SIGNS the per-dispatch MCP delegation token with and the vexa-control MCP VERIFIES with (shared.delegation). Empty must mean ABSENT, never 'signed with nothing' \u2014 a zero-length HMAC key would authenticate anyone who guessed the token format",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_TTL_SEC",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "lifetime of a minted MCP delegation token. It only has to outlast one dispatch's warm window, so it is deliberately short: a leaked worker env goes stale on its own rather than needing the human's own credential rotated",
+      "targets": []
+    },
+    {
+      "key": "VEXA_MCP_DELEGATION_TOKEN",
+      "class": "defaulted",
+      "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
+      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker writes it into its gitignored .claude/mcp.json as an Authorization header. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
     }
   ],
   "capabilities": {

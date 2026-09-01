@@ -23,6 +23,7 @@ from control_plane.workspace_attach import active_workspaces, shared_active_moun
 from control_plane.workspace_purpose import read_purpose
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
+from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
@@ -254,6 +255,36 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     env["VEXA_PRINCIPAL_EMAIL"] = (
         os.environ.get("VEXA_PRINCIPAL_EMAIL") or principal.get("email") or f"{subject}@vexa.local"
     )
+    # ── the worker's AUTHENTICATED toolbelt (shared.delegation) ──────────────────────────────────
+    # The dispatch is the only place that knows BOTH who this turn acts for and why it fired, so it is
+    # the only place that can mint a credential saying exactly that. The worker receives a short-lived,
+    # scoped, revocable delegation token — never a durable user credential — and attaches it to the
+    # vexa-control MCP. REGIME comes from the trigger: `message` is a human turn (soft scope: everything
+    # already theirs, because a person is watching and can correct it); anything else fired unwatched
+    # and carries the HARD isolation set — the exact workspaces this dispatch was granted.
+    #
+    # Fails SOFT and SILENT-BY-DESIGN: no secret or no endpoint ⇒ no token, and the worker runs exactly
+    # as it did before delegation existed. A mint that RAISES, though, is a dispatcher bug (a bad regime/
+    # scope combination), and it is logged rather than swallowed — an unauthenticated worker that was
+    # supposed to be authenticated looks, from the chat, exactly like an MCP with nothing to say.
+    mcp_secret = settings.mcp_delegation_secret.get_secret_value()
+    if mcp_secret and settings.mcp_url:
+        regime = delegation.regime_for_trigger(invocation["trigger"])
+        # Human ⇒ "*" (soft focus over the subject's own account). Autonomous ⇒ the granted workspace
+        # ids, verbatim from the invocation — the dispatch's isolation set is already the right answer.
+        scope_ws = "*" if regime == "human" else [
+            str(w.get("id")) for w in (invocation.get("workspaces") or []) if w.get("id")
+        ]
+        try:
+            env["VEXA_MCP_URL"] = settings.mcp_url
+            env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
+                mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
+                ttl_sec=settings.mcp_delegation_ttl_sec,
+            )
+        except ValueError:
+            env.pop("VEXA_MCP_URL", None)
+            logger.exception("mcp delegation mint refused for subject=%s regime=%s — worker runs "
+                             "WITHOUT the vexa MCP", subject, regime)
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:

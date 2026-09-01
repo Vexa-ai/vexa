@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     meeting_api_url: str = "http://meeting-api:8080"
     # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
 
+    # ── vexa-control MCP seam — the authenticated toolbelt a chat worker gets ─
+    # The MCP endpoint a spawned worker connects to, carrying a short-lived delegation token minted
+    # per dispatch (see shared.delegation). Empty ⇒ no MCP is attached (the pre-delegation behaviour).
+    mcp_url: str = ""
+    # How long that delegation token lives. It only has to outlast ONE turn — the chat worker's warm
+    # window is the real bound — so it is deliberately short: a leaked worker env goes stale on its own.
+    mcp_delegation_ttl_sec: int = 3600
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")
@@ -112,6 +120,11 @@ class Settings(BaseSettings):
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
     # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
     internal_api_secret: SecretStr = SecretStr("")
+    # The symmetric key agent-api signs the worker's MCP DELEGATION token with, and the Vexa control
+    # MCP verifies with (shared.delegation). Empty ⇒ the feature is OFF and no worker is given an MCP
+    # credential at all: a delegation token signed with a zero-length key would verify for anyone who
+    # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
+    mcp_delegation_secret: SecretStr = SecretStr("")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""

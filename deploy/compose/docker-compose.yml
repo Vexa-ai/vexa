@@ -282,6 +282,11 @@ services:
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
+      # The AUTHENTICATED vexa-control MCP a chat worker gets. agent-api mints a short-lived, scoped,
+      # revocable delegation token per dispatch and the MCP verifies it with the same secret — so a
+      # worker never holds a durable user credential. Both unset ⇒ no MCP is attached (default).
+      - VEXA_MCP_URL=${VEXA_MCP_URL:-}
+      - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
