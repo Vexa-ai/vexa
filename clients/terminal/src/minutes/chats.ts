@@ -14,15 +14,29 @@
  */
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 
+/** One open document in the right panel — a TAB. Identical in shape to `Page`, and deliberately so:
+ *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
+ *  step. `label` is carried rather than recomputed because a phase page's name ("Minutes" vs
+ *  "Brief") is a property of the room that produced it, not of the path. */
+export type Artifact = { path: string; slug?: string; label: string };
+
+/** A tab's identity. Path alone is not enough — `README.md` exists in every workspace. */
+export const artifactKey = (a: { path: string; slug?: string }) => `${a.slug ?? ""}|${a.path}`;
+
 /** The record. `touched` is the whole filter: it is written at SEND time and at explicit-create
  *  time, never derived by fetching a history — an untouched auto-created chat is exactly the thing
- *  the default filter hides. */
+ *  the default filter hides.
+ *
+ *  `artifacts` + `focus` are the human's reading state, and they are saved HERE rather than in the
+ *  panel: opening, switching and closing a tab is a fact about the conversation, so reopening the
+ *  chat restores its documents and the agent's context bundle can name what is in front of you. */
 export type Chat = {
   id: string;                 // also the agent session id — `meet-<meetingId>` for a meeting's chat
   label: string;
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
-  artifacts: string[];        // opening right-panel pages (seeded by `?view=`)
+  artifacts: Artifact[];      // the open tabs (seeded by the room's phase pages and by `?view=`)
+  focus?: string;             // artifactKey() of the tab in front
   touched?: boolean;          // a user wrote in it, or a user made it by hand
   createdAt: number;
   lastActivityAt: number;
@@ -319,7 +333,13 @@ function normalise(raw: unknown, now: number): Chat[] {
       label: typeof r.label === "string" && r.label ? r.label : "Chat",
       meeting: typeof r.meeting === "string" && r.meeting ? r.meeting : undefined,
       workspaces: Array.isArray(r.workspaces) && r.workspaces.length ? r.workspaces.filter((w) => typeof w === "string") : ["personal", "_global"],
-      artifacts: Array.isArray(r.artifacts) ? r.artifacts.filter((a) => typeof a === "string") : [],
+      // tolerant on purpose: an early build stored artifacts as bare path strings, and a stored tab
+      // whose shape we no longer understand is dropped rather than allowed to render as nothing.
+      artifacts: Array.isArray(r.artifacts)
+        ? (r.artifacts as unknown[]).filter((a): a is Artifact =>
+            !!a && typeof a === "object" && typeof (a as Artifact).path === "string" && typeof (a as Artifact).label === "string")
+        : [],
+      focus: typeof r.focus === "string" && r.focus ? r.focus : undefined,
       touched: !!r.touched,
       createdAt: Number.isFinite(r.createdAt) ? Number(r.createdAt) : now,
       lastActivityAt: Number.isFinite(r.lastActivityAt) ? Number(r.lastActivityAt) : Number(r.createdAt) || now,

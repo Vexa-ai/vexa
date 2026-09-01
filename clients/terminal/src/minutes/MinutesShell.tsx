@@ -16,12 +16,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
-import { readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile } from "../surfaces/workspaceApi";
+import {
+  readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
+  listSharedMemberships, listWorkspaceTree, type Membership,
+} from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
-import { PagesPanel } from "./PagesPanel";
+import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   chatForRow, loadChats, loadRailAll, markTouched, meetingTitle, newChat, railRows, removeChat,
-  saveChats, saveRailAll, upsertChat, visibleRows, PERSONAL_CHAT_ID,
+  saveChats, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
   type Chat as ChatRec, type Row,
 } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
@@ -30,11 +33,14 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface } from "./tokens";
+import { useService } from "../platform";
+import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 
 const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"] };
 
 export function MinutesShell() {
+  const layout = useService(LayoutServiceId);
   const realMeetings = useLiveMeetings();
   // `?mock=1` — three fabricated meetings, one per phase, plus a handful of never-touched
   // auto-created chats so the rail's FILTER can be judged before the data exists. Off unless the
@@ -65,6 +71,10 @@ export function MinutesShell() {
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   const [docBody, setDocBody] = useState<string | null>(null);
   const [docNonce, setDocNonce] = useState(0);
+  // a folder the breadcrumb navigated to — it takes over the panel body until a file is opened
+  const [listing, setListing] = useState<Listing | null>(null);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
   const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
   const selKey = `c:${sel.chatId}`;
@@ -125,11 +135,45 @@ export function MinutesShell() {
     } catch { /* best-effort */ }
   }, []);
 
-  /** Open a chat. The ONE place a room's artifacts land: the chat's `meeting` ref decides whether
-   *  this is the meeting layout (prep vs has-transcript, transcript on the right) or a workspace
-   *  room, and a pending `?view=` then seeds which artifact opens, exactly once. */
+  /** Open a chat. The ONE place a room's artifacts land.
+   *
+   *  A chat that has been read before REOPENS ITS OWN TABS — `artifacts[]` and `focus` are saved on
+   *  the record, so leaving a conversation and coming back finds the same documents. A fresh chat
+   *  starts from what the ROOM offers: the meeting's phase pages (prep vs has-transcript), or a
+   *  README per mounted workspace. A pending `?view=` then seeds which artifact opens, exactly once.
+   *
+   *  Every setState below runs after the single `await`, so React commits them together — which is
+   *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
   const openChat = useCallback(async (c: ChatRec) => {
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
+    await mountSet(c.workspaces);
+    const roomPages = (): Page[] => {
+      if (c.meeting) {
+        // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
+        // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
+        // chat.tsx needs them for its mode chip — but live/post render the same room here.
+        // It is a property of the MEETING, never of the link that opened it: an emailed link is
+        // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
+        return pagesForPhase(m ? meetingPhase(m) : "post", (m as { native_id?: string } | undefined)?.native_id);
+      }
+      const shared = c.workspaces.filter((w) => w !== "_global");
+      if (!shared.length) return [{ path: "README.md", slug: "_global", label: "The organisation" }];
+      const ps: Page[] = shared.map((w) => w === "personal"
+        ? { path: "README.md", label: "personal" }
+        : { path: "README.md", slug: w, label: w });
+      ps.push({ path: "README.md", slug: "_global", label: "_global" });
+      return ps;
+    };
+    const base: Page[] = c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : roomPages();
+    let list = base;
+    let focus: Page | null = c.focus ? base.find((pg) => artifactKey(pg) === c.focus) ?? null : null;
+    if (!viewSpent.current && pendingView) {
+      viewSpent.current = true;
+      try { localStorage.removeItem(VIEW_KEY); } catch { /* locked-down storage */ }
+      const r = resolveView(pendingView, base);
+      list = r.pages; focus = r.focus ?? focus;
+    }
+    const front = focus ?? list[0];
     setSel({
       kind: c.meeting ? "meeting" : "chat",
       chatId: c.id,
@@ -137,36 +181,10 @@ export function MinutesShell() {
       label: c.label || (m ? meetingTitle(m) : "Chat"),
       workspaces: c.workspaces,
     });
+    setPages(list);
+    setListing(null);
+    if (front) { setDocPath(front.path); setDocSlug(front.slug); }
     setDocBody(null); setDocNonce((n) => n + 1);
-    const openPages = (p: Page[]) => {
-      let list = p, focus: Page | null = null;
-      if (!viewSpent.current && pendingView) {
-        viewSpent.current = true;
-        try { localStorage.removeItem(VIEW_KEY); } catch { /* locked-down storage */ }
-        ({ pages: list, focus } = resolveView(pendingView, p));
-      }
-      const front = focus ?? list[0];
-      setPages(list);
-      if (front) { setDocPath(front.path); setDocSlug(front.slug); }
-    };
-    await mountSet(c.workspaces);
-    if (c.meeting) {
-      const native = (m as { native_id?: string } | undefined)?.native_id;
-      // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
-      // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
-      // chat.tsx needs them for its mode chip — but live/post render the same room here.
-      // It is a property of the MEETING, never of the link that opened it: an emailed link is
-      // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
-      openPages(pagesForPhase(m ? meetingPhase(m) : "post", native));
-      return;
-    }
-    const shared = c.workspaces.filter((w) => w !== "_global");
-    if (!shared.length) { openPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); return; }
-    const ps: Page[] = shared.map((w) => w === "personal"
-      ? { path: "README.md", label: "personal" }
-      : { path: "README.md", slug: w, label: w });
-    ps.push({ path: "README.md", slug: "_global", label: "_global" });
-    openPages(ps);
   }, [meetings, mountSet, pendingView]);
 
   /** Open a rail row. A row derived from a meeting has no chat yet — first open MATERIALISES one
@@ -201,6 +219,38 @@ export function MinutesShell() {
     if (sel.chatId === chatId) setSel(PERSONAL_SEL);
   };
 
+  // The tab strip IS the chat's `artifacts[]`, and this effect is its ONE writer. Persisting here
+  // rather than at each call site is what makes that true: `openChat` commits `sel.chatId` and
+  // `pages` together, so this can never write one chat's tabs onto another. A mock chat is not in
+  // the stored list, so it simply finds no row and writes nothing.
+  useEffect(() => {
+    if (!pages.length) return;
+    const id = sel.chatId;
+    const focus = artifactKey({ path: docPath, slug: docSlug });
+    persist((prev) => {
+      const i = prev.findIndex((c) => c.id === id);
+      if (i < 0) return prev;
+      const c = prev[i];
+      const same = c.focus === focus && c.artifacts.length === pages.length
+        && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label);
+      if (same) return prev;
+      const next = [...prev];
+      next[i] = { ...c, artifacts: pages.map((pg) => ({ path: pg.path, slug: pg.slug, label: pg.label })), focus };
+      return next;
+    });
+  }, [sel.chatId, pages, docPath, docSlug, persist]);
+
+  // The agent should see what the human is reading. chat.tsx builds its context bundle from the
+  // layout store's active tab (chatContext.focusTarget maps a `doc` tab to `{kind:"file", ref:
+  // "@file:<path>"}`), and in minutes mode nothing ever set it — so `focus` went out null on every
+  // turn while a document sat open beside the conversation. The workbench never mounts beside this
+  // shell, so the store keeps exactly one writer. Only `path` reaches the wire today; `tabs` rides
+  // along for the server to pick up when it wants the whole open set.
+  useEffect(() => {
+    layout.setActiveTab({ kind: "doc", params: { path: docPath, slug: docSlug, tabs: pages.map((pg) => pg.path) } });
+  }, [layout, docPath, docSlug, pages]);
+  useEffect(() => () => layout.setActiveTab(null), [layout]);
+
   // A user-authored send is the whole definition of "touched" — the cheap flag the default filter
   // reads instead of fetching every chat's history. chat.tsx fires this with its session id, which
   // IS the chat id.
@@ -212,6 +262,55 @@ export function MinutesShell() {
     window.addEventListener(CHAT_TOUCHED_EVENT, onTouched);
     return () => window.removeEventListener(CHAT_TOUCHED_EVENT, onTouched);
   }, [persist]);
+
+  /** Open a document as a TAB: already open → just focus it; new → append and focus. Every route
+   *  into the panel goes through here (entity link, breadcrumb listing, phase page), which is why
+   *  the tab set can be trusted as the record of what has been looked at. */
+  const openPage = (pg: Page) => {
+    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(pg)) ? prev : [...prev, pg]);
+    setDocPath(pg.path); setDocSlug(pg.slug); setListing(null); setDocNonce((n) => n + 1);
+  };
+
+  /** Close a tab. The last one never closes — an empty panel is not a state worth reaching — and
+   *  closing the tab in front hands focus to its neighbour rather than to nothing. */
+  const closeTab = (pg: Page) => {
+    if (pages.length <= 1) return;
+    const key = artifactKey(pg);
+    const i = pages.findIndex((x) => artifactKey(x) === key);
+    if (i < 0) return;
+    const next = pages.filter((_, k) => k !== i);
+    setPages(next);
+    if (key === artifactKey({ path: docPath, slug: docSlug })) {
+      const to = next[Math.min(i, next.length - 1)];
+      setDocPath(to.path); setDocSlug(to.slug); setListing(null); setDocNonce((n) => n + 1);
+    }
+  };
+
+  /** The breadcrumb navigates. `listWorkspaceTree` returns every path in a workspace, so a folder
+   *  is just that list cut at one prefix: the names with no further slash are files, the first
+   *  segment of the rest are directories. No new endpoint, and no tree state to keep in step. */
+  const navigate = useCallback(async (slug: string | undefined, prefix: string) => {
+    const files = await listWorkspaceTree(slug ? { slug } : undefined).catch(() => [] as string[]);
+    const head = prefix ? `${prefix}/` : "";
+    const dirs = new Set<string>(), leaves = new Set<string>();
+    for (const f of files) {
+      if (head && !f.startsWith(head)) continue;
+      const rest = f.slice(head.length);
+      if (!rest) continue;
+      const cut = rest.indexOf("/");
+      if (cut < 0) leaves.add(rest); else dirs.add(rest.slice(0, cut));
+    }
+    setListing({ slug, prefix, dirs: [...dirs].sort(), files: [...leaves].sort() });
+  }, []);
+
+  /** The chat's focus set, edited from the header. The mount set follows immediately — the point of
+   *  changing it is the next turn, not the next reload. */
+  const setWorkspaces = (fn: (ws: string[]) => string[]) => {
+    const id = sel.chatId, next = fn(sel.workspaces);
+    setSel((x) => ({ ...x, workspaces: next }));
+    persist((prev) => prev.map((c) => (c.id === id ? { ...c, workspaces: next } : c)));
+    void mountSet(next);
+  };
 
   useEffect(() => {
     let dead = false;
@@ -246,7 +345,7 @@ export function MinutesShell() {
       if (!r) return;
       const label = (r.path.split("/").pop() ?? r.path).replace(/\.md$/, "");
       setPages((prev) => prev.some((pg) => pg.path === r.path && pg.slug === r.slug) ? prev : [...prev, { path: r.path, slug: r.slug, label }]);
-      setDocPath(r.path); setDocSlug(r.slug); setDocNonce((n) => n + 1);
+      setDocPath(r.path); setDocSlug(r.slug); setListing(null); setDocNonce((n) => n + 1);
     };
     const onMeeting = (e: Event) => {
       const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
@@ -287,8 +386,6 @@ export function MinutesShell() {
   const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
     : sel.workspaces.filter((w) => w !== "_global").length === 0 ? "chat · admin" : "chat";
-  const mounts = sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
-    : `[${[...new Set([...sel.workspaces, "_global"])].join(" · ")} · _system]`;
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
   // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
@@ -344,7 +441,9 @@ export function MinutesShell() {
       <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
         selKey={selKey} onSelect={(r) => void openRow(r)}
         onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat} />
-      <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
+      <ContextBar sel={sel} flavor={flavor} memberships={memberships}
+        onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
+        onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />
       </main>
@@ -360,7 +459,10 @@ export function MinutesShell() {
         style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
       </div>
-      <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
+      <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug}
+        onOpen={openPage} onClose={closeTab}
+        listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
+        body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
     </div>
   );
 }

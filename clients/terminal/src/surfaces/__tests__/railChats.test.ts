@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { MeetingMock } from "../meetingModel";
 import {
   CHATS_KEY, PROJECTS_KEY, ORG_CHAT_LABEL, PERSONAL_CHAT_ID,
-  chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows, whenShort,
+  artifactKey, chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows, whenShort,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
 import { T, maxPagesW } from "../../minutes/tokens";
@@ -105,7 +105,7 @@ describe("railRows — recency, newest first, live on top", () => {
   });
 });
 
-describe("whenShort — ONE token, because the rail is 248px wide", () => {
+describe("whenShort — ONE token, because a name needs the room more than a timestamp does", () => {
   it("today is a clock, this week a weekday, further out a date", () => {
     expect(whenShort(T0 - 3 * 3600000, { now: T0 })).toMatch(/^\d{1,2}:\d{2}( ?[AP]M)?$/);
     expect(whenShort(T0 - 2 * 86400000, { now: T0 })).toMatch(/^[A-Za-z]{3}$/);
@@ -262,6 +262,37 @@ describe("migrateProjects — the project registry flattens, one way", () => {
 
   it("an empty registry migrates to nothing", () => {
     expect(migrateProjects([], T0)).toEqual([]);
+  });
+});
+
+describe("artifacts — the open tabs ARE the chat record", () => {
+  it("a tab's identity is workspace + path, because README.md exists in every workspace", () => {
+    expect(artifactKey({ path: "README.md" })).not.toBe(artifactKey({ path: "README.md", slug: "_global" }));
+    expect(artifactKey({ path: "README.md", slug: "acme" })).toBe(artifactKey({ path: "README.md", slug: "acme" }));
+  });
+
+  it("a saved tab set survives a reload, focus included", () => {
+    localStorage.clear();
+    const tabs = [{ path: "kg/entities/meeting/m1.md", label: "Minutes" }, { path: "README.md", slug: "_global", label: "_global" }];
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: artifactKey(tabs[1]), createdAt: T0, lastActivityAt: T0 },
+    ]));
+    const c = loadChats(T0).find((x) => x.id === "c1")!;
+    expect(c.artifacts).toEqual(tabs);
+    expect(c.focus).toBe("_global|README.md");
+  });
+
+  it("tolerates the earlier build's bare-string artifacts instead of rendering junk tabs", () => {
+    localStorage.clear();
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      { id: "c1", label: "Acme", workspaces: ["personal"], artifacts: ["README.md", null, 7], createdAt: T0, lastActivityAt: T0 },
+    ]));
+    expect(loadChats(T0).find((x) => x.id === "c1")!.artifacts).toEqual([]);
+  });
+
+  it("a chat with no artifacts is the signal to fall back to the room's own pages", () => {
+    localStorage.clear();
+    expect(loadChats(T0).every((c) => c.artifacts.length === 0)).toBe(true);
   });
 });
 
