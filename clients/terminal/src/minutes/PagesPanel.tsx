@@ -113,7 +113,7 @@ export function PagesPanel(p: {
           const on = tabOn(pg);
           return (
             <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...chipBase, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
-              <button onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
+              <button data-tab onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
                 style={{ ...ty.chip, ...chipBase, color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: p.onClose && p.pages.length > 1 ? "3px 3px 3px 10px" : "3px 10px", cursor: "pointer" }}>
                 {pg.label}
               </button>
@@ -163,12 +163,12 @@ function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undef
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
       {dirs.map((d) => (
-        <button key={"d/" + d} style={{ ...entryS, color: "var(--t2)" }} onClick={() => p.onNavigate?.(slug, at(d))}
+        <button key={"d/" + d} data-entry="dir" style={{ ...entryS, color: "var(--t2)" }} onClick={() => p.onNavigate?.(slug, at(d))}
           onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{d}/</button>
       ))}
       {files.map((f) => (
-        <button key={"f/" + f} style={{ ...entryS, color: "var(--t1)" }}
+        <button key={"f/" + f} data-entry="file" style={{ ...entryS, color: "var(--t1)" }}
           onClick={() => p.onOpen({ path: at(f), slug, label: f.replace(/\.md$/i, "") })}
           onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{f}</button>

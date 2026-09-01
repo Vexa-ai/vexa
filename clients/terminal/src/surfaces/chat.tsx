@@ -597,6 +597,12 @@ export function Chat({ params = {} }: ChatProps) {
   const activeMeeting = activeRef?.kind === "meeting"
     ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value)
     : undefined;
+  // MINUTES: the composer stops ADVERTISING the focused doc (founder, 2026-09-01 — same treatment
+  // as 722629588 gave the schedule chip). The context still flows: contextRef below continues to
+  // ground the prompt and to fill the wire bundle; only the FOCUS chip and the badge stamped on the
+  // user bubble go away. In minutes mode the open document is already visible in the panel beside
+  // the conversation, so the badge was repeating what the eye can see.
+  const advertiseFocus = !minutesOnly();
   const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
     ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
     : focusRef;
@@ -775,7 +781,7 @@ export function Chat({ params = {} }: ChatProps) {
     if (!v || !basePrompt || state.busy) return;
     const n = state.nextId;
     const agentId = `a-${n}`;
-    const displayText = appendReferenceToken(v, contextRef);
+    const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
     const newTurns = hidden
       ? [{ id: agentId, role: "agent" as const, text: "", ops: [] }]
@@ -1034,7 +1040,7 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {(contextRef || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
+        {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
@@ -1054,7 +1060,7 @@ export function Chat({ params = {} }: ChatProps) {
             ) : null}
             {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
                 uppercase label plus a second raw-id Focus chip for the same meeting. */}
-            {contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
+            {advertiseFocus && contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
                 <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
@@ -1068,14 +1074,14 @@ export function Chat({ params = {} }: ChatProps) {
                     style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
                 </span>
               );
-            })() : contextRef ? (
+            })() : advertiseFocus && contextRef ? (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <ReferenceChip refToken={contextRef} />
                 <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
               </>
             ) : null}
-            {!contextRef && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
+            {(!advertiseFocus || !contextRef) && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
