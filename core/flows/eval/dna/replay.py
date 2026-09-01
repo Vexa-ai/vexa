@@ -255,7 +255,23 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     vid = f"dna-{date}"
     (caps / f"{vid}.segments.json").write_text(json.dumps(segs))
 
-    seed = rig.call("meeting_seed", native_id=m["native_meeting_id"], title=m["title"], video_id=vid)
+    # PER-OCCURRENCE IDENTITY, and it is not a convenience.
+    #
+    # A recurring meeting keeps ONE native id across every occurrence — the ten DNA fixtures are
+    # all Zoom 96088138284. `process_meeting` has the agent write its note at
+    # `kg/entities/meeting/{date}-{native}.md` where `date` is the day the note is WRITTEN, not the
+    # day the meeting happened (flows_defs/production.py). Replay a series in one afternoon and
+    # every occurrence points at one path: the second silently overwrote the first, and the third
+    # found a note about a different meeting where it was told to write, refused, and asked a
+    # clarifying question — so no commit arrived and the step sat until its timeout. One of those
+    # two failures looks like a failure. The other one looks like success.
+    #
+    # That is a defect in the product (a same-day backfill or re-process collides too, and the
+    # first note loses), reported as its own finding. The harness stops tripping over it by giving
+    # each occurrence the identity it already has everywhere else — each one is its own meeting row
+    # — so a bad note is never confused with a clobbered one.
+    native = f"{m['native_meeting_id']}-{date}"
+    seed = rig.call("meeting_seed", native_id=native, title=m["title"], video_id=vid)
     if not isinstance(seed, dict) or "meeting_id" not in seed:
         rec["error"] = f"meeting_seed: {str(seed)[:300]}"
         return rec
@@ -278,7 +294,7 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     rec["emit_completed"] = rig.call(
         "fact_emit", event_type="meeting.completed", source_event_id=done_id,
         subject_refs={"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
-                      "native": m["native_meeting_id"], "transcript": transcript})
+                      "native": native, "transcript": transcript})
     hit = wait_note(uid, shas_before, 1200)
     note_path = None
     if hit:
