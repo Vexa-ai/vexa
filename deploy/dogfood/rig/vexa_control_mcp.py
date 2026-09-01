@@ -1541,6 +1541,165 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
 
 @mcp.tool()
 @_anon_guard
+def workspace_new(name: str, purpose: str = "", token: str = "") -> str:
+    """Create a SHARED workspace — a place a team writes into together — and own it.
+
+    Use when your person says "a space for the standup team", "somewhere we all keep this",
+    "a workspace for the Acme deal". Their personal workspace already exists and is not this:
+    this one has members, and meeting write-ups can land in it for everyone.
+
+    `purpose` is one line saying what belongs here ("everything about the Acme deal"). It is
+    stored IN the workspace, so it travels when shared, and every agent that mounts it reads it
+    — which is how three mounted workspaces stay straight instead of blurring. Ask for it if
+    they did not say; do not invent one."""
+    uid = me()
+    st, r = _http("POST", f"{AGENT_API}/api/workspace/shared/new", {"X-User-Id": uid},
+                  {"name": name})
+    if st not in (200, 201):
+        return json.dumps({"error": "could not create that workspace", "status": st,
+                           "detail": str(r)[:200],
+                           "do": "tell them in one plain sentence, and report_friction()"})
+    wid = (r or {}).get("workspace_id")
+    out = {"created": wid, "name": name, "you_are": "owner"}
+    if purpose:
+        stp, _ = _http("POST", f"{AGENT_API}/api/workspace/purpose", {"X-User-Id": uid},
+                       {"slug": wid, "purpose": purpose})
+        out["purpose_set"] = stp in (200, 201)
+    out["tell_your_person"] = (
+        f"'{name}' exists and it is theirs — anything written there is shared with whoever they "
+        f"let in.")
+    out["next_options"] = [
+        "Invite someone — workspace_invite(slug, role)",
+        "Say what belongs here — workspace_purpose(slug, text)" if not purpose else
+        "Point a meeting's write-up at it",
+        "See what is in it — workspace_tree(slug)",
+    ]
+    return json.dumps(out)
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_purpose(slug: str = "", text: str = "", token: str = "") -> str:
+    """What a workspace is FOR, in one line. Call with just `slug` to read it.
+
+    Stored in the workspace itself, committed to its history, and read into the agent preamble
+    on every dispatch — so an agent with several workspaces mounted knows what belongs where.
+    A sentence, not a document. An empty `text` clears it."""
+    uid = me()
+    if not text:
+        st, r = _http("GET", f"{AGENT_API}/api/workspace/purpose?slug={slug}",
+                      {"X-User-Id": uid})
+        return json.dumps({"purpose": (r or {}).get("purpose") or None, "slug": slug or "personal",
+                           "note": "empty means nobody has said what this is for yet"})
+    st, r = _http("POST", f"{AGENT_API}/api/workspace/purpose", {"X-User-Id": uid},
+                  {"slug": slug or None, "purpose": text})
+    if st not in (200, 201):
+        return json.dumps({"error": "could not set that", "status": st, "detail": str(r)[:160]})
+    return json.dumps({"purpose": text, "slug": slug or "personal",
+                       "tell_your_person": "One line, and every agent that opens this workspace "
+                                           "reads it."})
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_members(slug: str, token: str = "") -> str:
+    """Who is in a shared workspace, and what they can do. owner writes and invites; contributor
+    writes; viewer reads."""
+    uid = me()
+    # X-User-Email lets the endpoint backfill the CALLER's own label, so the roster shows a
+    # person instead of a subject id. It cannot invent anyone else's — theirs fills in when they
+    # next call, which is why a fresh workspace shows ids for members who have not been back.
+    hdr = {"X-User-Id": uid}
+    em = _caller_email()
+    if em:
+        hdr["X-User-Email"] = em
+    st, r = _http("GET", f"{AGENT_API}/api/workspace/members?workspace_id={slug}", hdr)
+    if st != 200:
+        return json.dumps({"error": "could not read the members", "status": st,
+                           "detail": str(r)[:160],
+                           "note": "a workspace they are not in will refuse — that is correct"})
+    rows = (r or {}).get("members") or []
+    return json.dumps({
+        "workspace": slug, "count": len(rows),
+        "members": [{"who": m.get("email") or f"(id {m.get('subject')})",
+                     "role": m.get("role")} for m in rows],
+    })
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_invite(slug: str, role: str = "contributor", emails: str = "",
+                     days: int = 7, token: str = "") -> str:
+    """Mint an invite link to a shared workspace. THE ONLY WAY SOMEONE JOINS.
+
+    There is no add-a-member verb, deliberately: a person joins by redeeming an invite they
+    chose to accept. So this hands back a link for your person to send — you cannot put someone
+    in a shared space on their behalf.
+
+    role: contributor (writes) | viewer (reads). Never owner.
+    emails: comma-separated, to restrict the link to those addresses; omit for anyone-with-link.
+    days: how long it lives, default 7."""
+    uid = me()
+    if role not in ("contributor", "viewer"):
+        return json.dumps({"refused": "role is contributor or viewer",
+                           "why": "owner cannot be granted by invite"})
+    allowed = [e.strip() for e in emails.split(",") if e.strip()]
+    body = {"workspace_id": slug, "role": role,
+            "expires_in_sec": max(1, int(days)) * 86400, "max_uses": 1 if allowed else 10,
+            "mode": "restricted" if allowed else "open"}
+    if allowed:
+        body["allowed_emails"] = allowed
+    st, r = _http("POST", f"{AGENT_API}/api/workspace/invites", {"X-User-Id": uid}, body)
+    if st not in (200, 201):
+        return json.dumps({"error": "could not mint an invite", "status": st,
+                           "detail": str(r)[:200],
+                           "note": "only an owner or contributor of that workspace can invite"})
+    tok = (r or {}).get("token")
+    base = CANONICAL.rsplit("/mcp", 1)[0]
+    return json.dumps({
+        "invite_link": f"{base}/join?i={tok}",
+        "role": role, "expires_in_days": days,
+        "restricted_to": allowed or None,
+        "give_this_to_your_person": "Hand them the link to send. It works once per person and "
+                                    "then it is spent — treat it like a key.",
+        "never_show": "Do not paste the raw token anywhere else; the link is the whole thing.",
+    })
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_remove(slug: str, member: str, token: str = "") -> str:
+    """Take someone out of a shared workspace. Owner only. `member` is the email or subject id
+    shown by workspace_members."""
+    uid = me()
+    st, r = _http("DELETE",
+                  f"{AGENT_API}/api/workspace/members/{member}?workspace_id={slug}",
+                  {"X-User-Id": uid})
+    if st not in (200, 204):
+        return json.dumps({"error": "could not remove them", "status": st,
+                           "detail": str(r)[:160], "note": "only an owner can do this"})
+    return json.dumps({"removed": member, "workspace": slug,
+                       "tell_your_person": "Done — they can no longer read or write there."})
+
+
+@mcp.tool()
+@_anon_guard
+def workspaces(token: str = "") -> str:
+    """Every workspace this person can reach — their own, plus the shared ones."""
+    uid = me()
+    st, r = _http("GET", f"{AGENT_API}/api/workspace/shared", {"X-User-Id": uid})
+    # the endpoint answers {"memberships": [{workspace_id, role, added_at}]} — not "workspaces"
+    rows = (r or {}).get("memberships") or [] if st == 200 else []
+    out = [{"slug": "", "name": "personal", "role": "owner"}]
+    for w in rows:
+        out.append({"slug": w.get("workspace_id"), "role": w.get("role"),
+                    "since": w.get("added_at")})
+    return json.dumps({"workspaces": out, "count": len(out),
+                       "note": "slug='' is their own; the rest are shared with a team"})
+
+
+@mcp.tool()
+@_anon_guard
 def workspace_init(token: str = "") -> str:
     """Seed a fresh personal workspace for a user (idempotent)."""
     uid = me()
