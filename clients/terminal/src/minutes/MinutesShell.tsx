@@ -18,18 +18,37 @@ import { ProjectComposer } from "./ProjectComposer";
 import { DeleteCeremony } from "./DeleteCeremony";
 import { loadProjects, saveProjects, type Project } from "./projects";
 import { resolveDocRef } from "../ui-kit/docLinks";
-import { Rail, isHeld } from "./Rail";
+import { Rail } from "./Rail";
+import { meetingPhase } from "../surfaces/meetingModel";
+import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, surface } from "./tokens";
 import type { Page, Sel, View } from "./types";
 
 export function MinutesShell() {
-  const meetings = useLiveMeetings();
+  const realMeetings = useLiveMeetings();
+  // `?mock=1` — three fabricated meetings, one per phase, so the LAYOUT can be judged before the
+  // data exists. Off unless the flag is set; see mockPhases.ts.
+  const mock = mockOn();
+  const mockStart = useRef(Date.now());
+  const meetings = useMemo(() => (mock ? [...MOCK_MEETINGS, ...realMeetings] : realMeetings), [mock, realMeetings]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [view, setView] = useState<View>("meetings");
   const [sel, setSel] = useState<Sel>({ kind: "personal", id: "personal", label: "Personal" });
   const lastSel = useRef<{ meetings: Sel | null; projects: Sel | null }>({ meetings: null, projects: { kind: "personal", id: "personal", label: "Personal" } });
   const [pages, setPages] = useState<Page[]>([]);
+  // `?view=` — a chat's opening `artifacts[]` (the right-sidebar tabs), NOT a URL feature. A chat
+  // is the saved focus state and a deeplink is just its constructor: the meeting says which pages
+  // exist, this says which of them the chat opens with, and from then on the state is the chat's.
+  // App.tsx cleans the URL on landing, so the spec arrives via localStorage; read it here (not
+  // removed yet — a StrictMode double-render would eat it) and spend it on the FIRST room that
+  // opens, which is the room `?meeting=` selected. In the full workbench the same key is read by
+  // Workbench.tsx; only one of the two ever mounts, so the key keeps exactly one reader.
+  const [pendingView] = useState<string | null>(() => {
+    try { return localStorage.getItem(VIEW_KEY); } catch { return null; }
+  });
+  const viewSpent = useRef(false);
   const [docPath, setDocPath] = useState("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   const [docBody, setDocBody] = useState<string | null>(null);
@@ -140,29 +159,44 @@ export function MinutesShell() {
   const select = useCallback(async (s: Sel, projOverride?: Project) => {
     setSel(s); setDocBody(null); setDocNonce((n) => n + 1);
     lastSel.current[s.kind === "meeting" ? "meetings" : "projects"] = s;
+    // The ONE place a room's artifacts land. Every branch below decides what EXISTS and hands it
+    // here; a pending `?view=` then seeds which one opens, exactly once. Focus falls back to the
+    // room's own first page, so an unresolvable link degrades to the default instead of nothing.
+    const openPages = (p: Page[]) => {
+      let all = p, focus: Page | null = null;
+      if (!viewSpent.current && pendingView) {
+        viewSpent.current = true;
+        try { localStorage.removeItem(VIEW_KEY); } catch { /* locked-down storage */ }
+        ({ pages: all, focus } = resolveView(pendingView, p));
+      }
+      const front = focus ?? all[0];
+      setPages(all);
+      setDocPath(front.path); setDocSlug(front.slug);
+    };
     const proj = projOverride ?? (s.kind === "project" ? projects.find((pr) => pr.id === s.id) : undefined);
     await mountSet(proj ? proj.set : ["personal"]);
     if (s.kind === "org") {
-      setPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); setDocPath("README.md"); setDocSlug("_global");
+      openPages([{ path: "README.md", slug: "_global", label: "The organisation" }]);
       // No warm-up turn: the setup opener is CACHED (empty-state greeting in chat.tsx) and the
       // flow grounding rides on the admin's first reply — the first LLM turn already carries an answer.
     }
     else if (s.kind === "meeting") {
       const m = meetings.find((x) => x.id === s.id);
       const native = (m as { native_id?: string } | undefined)?.native_id;
-      const held = m ? isHeld(m) : false;
-      const p: Page[] = held && native
-        ? [{ path: `kg/entities/meeting/${native}.md`, label: "Minutes" }, { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" }, { path: "README.md", label: "Personal page" }]
-        : [{ path: "README.md", label: "Personal page" }];
-      setPages(p); setDocPath(p[0].path); setDocSlug(undefined);
+      // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
+      // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
+      // chat.tsx needs them for its mode chip — but live/post render the same room here.
+      // It is a property of the MEETING, never of the link that opened it: an emailed link is
+      // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
+      openPages(pagesForPhase(m ? meetingPhase(m) : "post", native));
     } else if (proj) {
       const ps: Page[] = proj.set.filter((w) => w !== "_global").map((w) => w === "personal"
         ? { path: "README.md", label: "personal" }
         : { path: "README.md", slug: w, label: w });
       ps.push({ path: "README.md", slug: "_global", label: "_global" });
-      setPages(ps); setDocPath(ps[0].path); setDocSlug(ps[0].slug);
-    } else { setPages([{ path: "README.md", label: "Personal page" }]); setDocPath("README.md"); setDocSlug(undefined); }
-  }, [meetings, projects, mountSet]);
+      openPages(ps);
+    } else { openPages([{ path: "README.md", label: "Personal page" }]); }
+  }, [meetings, projects, mountSet, pendingView]);
 
   const switchView = useCallback((v: View) => {
     if (v === view) return;
@@ -177,12 +211,26 @@ export function MinutesShell() {
 
   useEffect(() => {
     let dead = false;
+    // mock bodies short-circuit the fetch entirely — no request is made for a fabricated page
+    if (mock) {
+      const canned = mockBody(docPath, Date.now() - mockStart.current);
+      if (canned !== null) { setDocBody(canned); return; }
+    }
     setDocBody(null);
     readWorkspaceFile(docPath, docSlug ? { slug: docSlug } : undefined)
       .then((c) => { if (!dead) setDocBody(c); })
       .catch(() => { if (!dead) setDocBody(null); });
     return () => { dead = true; };
-  }, [docPath, docSlug, sel.id, docNonce]);
+  }, [docPath, docSlug, sel.id, docNonce, mock]);
+
+  // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
+  // something you watch rather than something the label claims. Mock-only: the real live feed will
+  // be a stream, not a poll.
+  useEffect(() => {
+    if (!mock || !docPath.endsWith("mock-live.transcript.md")) return;
+    const t = setInterval(() => setDocNonce((n) => n + 1), 2500);
+    return () => clearInterval(t);
+  }, [mock, docPath]);
 
   // Entity badges and wiki links in chat/pages open the document HERE — minutes mode has no tabs,
   // so the pages panel is the one place a document can land. The chip is added to this room's page
@@ -208,6 +256,24 @@ export function MinutesShell() {
     return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntity); window.removeEventListener(OPEN_MEETING_EVENT, onMeeting); };
   }, [meetings, select]);
 
+  // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The full workbench consumes
+  // this key; minutes mode never did, so an emailed meeting link opened the personal page and any
+  // `?view=` riding with it had no room to land in. The list arrives asynchronously, so this waits
+  // for it rather than firing once on mount — and is spent on the first non-empty list either way,
+  // so a ref for a meeting this account cannot see never hijacks a later session.
+  const meetingRefSpent = useRef(false);
+  useEffect(() => {
+    if (meetingRefSpent.current || !meetings.length) return;
+    meetingRefSpent.current = true;
+    let ref: string | null = null;
+    try { ref = localStorage.getItem("vexa.openMeetingRef"); localStorage.removeItem("vexa.openMeetingRef"); }
+    catch { return; }
+    if (!ref) return;
+    const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
+    const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
+    if (m) void select({ kind: "meeting", id: m.id, label: m.title.split(" — ")[0] });
+  }, [meetings, select]);
+
   const session = useMemo(() => {
     if (sel.session) return sel.session;
     if (sel.kind === "personal") return "main";
@@ -216,7 +282,12 @@ export function MinutesShell() {
   }, [sel]);
 
   const activeProj = sel.kind === "project" ? projects.find((pr) => pr.id === sel.id) : undefined;
-  const flavor = sel.kind === "meeting" ? `meeting · ${isHeld(meetings.find((m) => m.id === sel.id) ?? ({} as never)) ? "held" : "upcoming"}`
+  // The header says which phase the room is in. It read isHeld() — the same two-way test the pages
+  // panel just stopped using — so a LIVE meeting announced itself as "upcoming" beside a transcript
+  // that was visibly filling. Three states now, in the meeting's own vocabulary.
+  const PHASE_WORD = { prep: "upcoming", live: "live", post: "held" } as const;
+  const selMeeting = sel.kind === "meeting" ? meetings.find((m) => m.id === sel.id) : undefined;
+  const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
     : sel.kind === "org" ? "project · admin" : sel.kind === "project" ? "project" : "project · yours";
   const mounts = sel.kind === "org" ? "[_global rw · _system]"
     : sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
