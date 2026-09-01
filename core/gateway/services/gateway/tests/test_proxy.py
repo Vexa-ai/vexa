@@ -81,6 +81,52 @@ def test_insufficient_scope_is_403():
     assert "scope" in r.json()["detail"].lower()
 
 
+# --- the auth contract, told to a MACHINE ---------------------------------------------------
+# A human reads the gateway log to find out why a call was denied. An agent cannot, so both
+# denials have to carry their own remedy on the wire.
+
+@pytest.mark.parametrize(
+    "path, headers",
+    [
+        ("/bots/status", {}),                       # _authorize, no key
+        ("/bots/status", {"x-api-key": "nope"}),    # _authorize, bad key
+        ("/auth/me", {}),                           # /auth/me's OWN inlined 401, no key
+        ("/auth/me", {"x-api-key": "nope"}),        # /auth/me's OWN inlined 401, bad key
+    ],
+)
+def test_every_401_names_the_auth_scheme(path, headers):
+    """RFC 7235 requires ``WWW-Authenticate`` on a 401, and a machine caller needs it: without it
+    a 401 does not say whether to retry with a bearer token, an api-key header, or a login flow.
+
+    All FOUR of the gateway's 401 sites are covered here on purpose. ``/auth/me`` is in
+    UNSCOPED_ROUTES and does NOT pass through ``_authorize`` — it spells its own two 401s — so
+    fixing only ``_authorize`` would leave the header present on some 401s and absent on others,
+    which is worse than absent everywhere: a client that learns the scheme once would find it
+    missing on the one route whose entire job is answering "what is this key?"."""
+    client, _ = _client()
+    r = client.get(path, headers=headers)
+    assert r.status_code == 401
+    assert r.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_403_names_required_and_granted_scopes():
+    """The 403 body carries the two lists the caller needs to fix itself. Before this the pair was
+    computed, logged to ``request_denied_scope`` and dropped on the wire — the caller was told it
+    lacked *something* and never what, which for an agent is an unwinnable retry loop.
+
+    ``detail`` stays a STRING and stays byte-identical: the deny-by-default test asserts it
+    verbatim and this file lowercases it, so the new fields are additive to every consumer."""
+    client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))
+    body = client.get("/bots/status", headers=AUTH).json()
+    assert body["detail"] == "Insufficient scope for this endpoint"
+    assert body["required"] == ["bot"]      # what GET /bots/status accepts
+    assert body["granted"] == ["tx"]        # what the presented key actually carries
+    assert "bot" in body["remediation"]
+    # The prefix heuristic is the trap this is here to close: the DB scopes column decides, so the
+    # remediation must send the reader to the identity route rather than to the key string.
+    assert "/auth/me" in body["remediation"]
+
+
 def test_authed_request_passes_body_and_status_verbatim():
     """On success the downstream status + body are returned verbatim."""
     downstream = FakeDownstream(status_code=201, body={"id": 99, "platform": "google_meet"})

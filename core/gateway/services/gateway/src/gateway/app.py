@@ -31,7 +31,7 @@ import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
@@ -274,9 +274,65 @@ def _required_scopes(request: Request) -> Optional[FrozenSet[str]]:
     return ROUTE_SCOPES.get((request.method.upper(), path))
 
 
-def _insufficient_scope_response() -> Response:
+# The one place a 401 is spelled. ``WWW-Authenticate`` is what RFC 7235 requires of a 401 and what
+# a machine caller reads to learn WHICH scheme to retry under; without it an agent that gets a 401
+# can only guess between `Authorization: Bearer`, `x-api-key` and a login redirect. The gateway
+# accepts the key as ``x-api-key`` on its own routes and as ``Authorization: Bearer`` through the
+# MCP transport, so ``Bearer`` is the scheme advertised — it is the one an MCP/HTTP client can act
+# on. Carried on ALL FOUR 401 sites (both of /auth/me's inlined ones and both of _authorize's), so
+# the header is a property of "the gateway said 401", not of one code path.
+_WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
+
+
+def _unauthorized_response(detail: str) -> Response:
     return Response(
-        content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
+        content=json.dumps({"detail": detail}),
+        status_code=401,
+        media_type="application/json",
+        headers=dict(_WWW_AUTHENTICATE),
+    )
+
+
+# Where an agent goes to fix a 403 for itself. Kept as a pointer rather than prose: the body says
+# what is missing, this says where the scope model is written down.
+_SCOPE_DOCS_URL = "https://docs.vexa.ai/authentication"
+
+
+def _insufficient_scope_response(
+    required: Optional[FrozenSet[str]] = None,
+    granted: Optional[Set[str]] = None,
+) -> Response:
+    """403 for a scope denial, told to the caller in terms it can ACT on.
+
+    ``detail`` is unchanged and stays a STRING — it is asserted verbatim by the deny-by-default
+    test and lowercased by test_proxy — so this is additive to every existing consumer. What is new
+    are the two SIBLING fields an agent needs to recover without a human reading the gateway log:
+    ``required`` (what this route accepts) and ``granted`` (what the presented key actually
+    carries). The pair is already computed here; before this it was logged to ``request_denied_scope``
+    and thrown away on the wire, so the caller was told it lacked *something* and never what.
+
+    ``required`` is ``None`` for an UNDECLARED route — a server-side declaration gap, not a caller
+    problem. It renders as ``[]`` and the remediation says so, because telling an agent to mint a
+    key for an empty scope set would send it round a loop it cannot win.
+    """
+    body: Dict[str, Any] = {
+        "detail": "Insufficient scope for this endpoint",
+        "required": sorted(required) if required else [],
+        "granted": sorted(granted or ()),
+    }
+    if required:
+        body["remediation"] = (
+            f"Use an API key carrying one of {sorted(required)}. The DB scopes column is "
+            "authoritative — a key's `vxa_<scope>_` prefix is only a naming hint, so check "
+            f"GET /auth/me rather than the key string. Scope model: {_SCOPE_DOCS_URL}"
+        )
+    else:
+        body["remediation"] = (
+            "This route declares no scopes, so the gateway denies it by default. This is a "
+            f"server-side gap, not a key problem — report it. Scope model: {_SCOPE_DOCS_URL}"
+        )
+    return Response(
+        content=json.dumps(body),
         status_code=403,
         media_type="application/json",
     )
@@ -316,16 +372,19 @@ def create_app(
     @app.get("/auth/me")
     async def auth_me(request: Request):
         api_key = request.headers.get("x-api-key")
+        # /auth/me does NOT go through _authorize (it is UNSCOPED_ROUTES — a browser-only key must
+        # be able to learn that it is a browser-only key), so it spells its own two 401s. Both go
+        # through _unauthorized_response so all four of the gateway's 401 sites carry the same
+        # WWW-Authenticate header; an agent that discovers the retry scheme on one must not find it
+        # absent on another.
         if not api_key:
-            return Response(content=json.dumps({"detail": "Missing API key"}),
-                            status_code=401, media_type="application/json")
+            return _unauthorized_response("Missing API key")
         try:
             user_data = await authorizer.resolve(api_key)
         except AuthUnavailable as e:
             return _auth_unavailable_response(e, span="auth")  # #495: infra down → 503, not 401
         if not user_data:
-            return Response(content=json.dumps({"detail": "Invalid API key"}),
-                            status_code=401, media_type="application/json")
+            return _unauthorized_response("Invalid API key")
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
@@ -345,11 +404,7 @@ def create_app(
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
-            return None, Response(
-                content=json.dumps({"detail": "Missing API key"}),
-                status_code=401,
-                media_type="application/json",
-            )
+            return None, _unauthorized_response("Missing API key")
 
         try:
             user_data = await authorizer.resolve(client_key)
@@ -358,11 +413,7 @@ def create_app(
             # retry), never 401. A valid key must not be reported as invalid because we are slow.
             return None, _auth_unavailable_response(e, span="auth")
         if not user_data:
-            return None, Response(
-                content=json.dumps({"detail": "Invalid API key"}),
-                status_code=401,
-                media_type="application/json",
-            )
+            return None, _unauthorized_response("Invalid API key")
 
         # Bind the resolved user to the trace context so every later line carries user_id.
         user_id = user_data["user_id"]
@@ -389,6 +440,7 @@ def create_app(
         # decides WHICH KEYS reach a route, not which of the owner's objects they may touch. See
         # the strict-xfail on GET /agent/meeting/stream in tests/test_proxy.py.
         required = _required_scopes(request)
+        user_scopes = set(user_data.get("scopes", []))
         if required is None:
             log_event(
                 "request_denied_undeclared_route",
@@ -398,8 +450,7 @@ def create_app(
                 user_id=user_id,
                 fields={"method": method, "path": request.url.path},
             )
-            return None, _insufficient_scope_response()
-        user_scopes = set(user_data.get("scopes", []))
+            return None, _insufficient_scope_response(None, user_scopes)
         if not user_scopes & required:
             log_event(
                 "request_denied_scope",
@@ -407,9 +458,16 @@ def create_app(
                 level="warning",
                 span="auth",
                 user_id=user_id,
-                fields={"method": method, "path": request.url.path, "required": sorted(required)},
+                fields={
+                    "method": method,
+                    "path": request.url.path,
+                    "required": sorted(required),
+                    # The caller is now TOLD what it holds, so the log records the same pair rather
+                    # than half of it — a support hop reads the same two lists the agent saw.
+                    "granted": sorted(user_scopes),
+                },
             )
-            return None, _insufficient_scope_response()
+            return None, _insufficient_scope_response(required, user_scopes)
 
         # USER-facing event: the request was accepted on behalf of this user.
         log_event(
