@@ -105,6 +105,10 @@ edges:
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
+  discord-bot -write-> segments-stream
+  discord-bot -write-> tc-mutable
+  discord-bot -call-> transcription  # audio -> first-party STT via transcriptionServiceUrl (invocation.v1)
+  discord-bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
   meeting-api -write-> bot-commands  # PUBLISH leave/speak
@@ -138,7 +142,7 @@ edges:
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
-  bot, agent-worker deployed-in runtime
+  bot, discord-bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
 flows:

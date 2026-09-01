@@ -95,7 +95,13 @@ _CANCELLED_REASON = "stopped"
 # unsupported platform is a VALIDATION error (422), not a missing-resource (404). Mirrors the POST /bots
 # platform guard (A1/A3): reject a non-enum platform up front, BEFORE the find_active lookup (which would
 # otherwise miss and 404 — drifting from the contract a client must code against).
-_SUPPORTED_PLATFORMS = frozenset({"google_meet", "zoom", "teams", "jitsi", "browser_session"})
+#
+# "discord" is NOT yet in api.v1's own sealed enum (api.v1 is OpenAPI-sealed — DO NOT edit it in
+# place, see bot_spawn/README.md's "Contract decision" note); it is added here, matching the
+# existing "browser_session" precedent (also stop-routable, also absent upstream at api.v1's
+# original freeze) — a hand-synced superset the DELETE route enforces directly, reconciled against
+# invocation.v1's SPAWNABLE_PLATFORMS (which DOES already carry discord) at the POST boundary.
+_SUPPORTED_PLATFORMS = frozenset({"google_meet", "zoom", "teams", "jitsi", "browser_session", "discord"})
 
 
 def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=None) -> APIRouter:

@@ -16,7 +16,8 @@ The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot b
   2c. continue_meeting — reuse a TERMINAL prior meeting row + add a session (P3c),
   3. insert the ``Meeting`` row (status ``requested``) → meeting_id (unless reusing one),
   4. mint the MeetingToken + build the ``invocation.v1`` invocation (BOT_CONFIG),
-  5. spawn the meeting-bot workload over ``runtime.v1`` (``RuntimeClient.create_workload``),
+  5. spawn the platform's bot workload over ``runtime.v1`` (``RuntimeClient.create_workload`` —
+     profile ``meeting-bot`` or ``discord-bot``, resolved from ``platform``),
   6. eager-create the ``MeetingSession`` keyed by the bot's ``connectionId`` (== session_uid),
   7. write the kernel workload id back as ``bot_container_id``,
   8. return the ``api.v1`` ``MeetingResponse`` (now listing its ``sessions``).
@@ -38,7 +39,12 @@ from ..service_authority import (
     ServiceAuthorityUnavailable,
 )
 from .env_flags import env_flag
-from .invocation import build_invocation, build_workload_spec, mint_meeting_token
+from .invocation import (
+    NO_MEETING_URL_PLATFORMS,
+    build_invocation,
+    build_workload_spec,
+    mint_meeting_token,
+)
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
@@ -65,6 +71,7 @@ __all__ = [
     "LOBBY_BUDGET_MS",
     "DEFAULT_LOBBY_BUDGET_S",
     "lobby_budget_ms",
+    "NO_MEETING_URL_PLATFORMS",
 ]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
@@ -120,6 +127,10 @@ _STT_VERDICT_MAX_AGE_S = 60.0
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
 }
+
+# NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all, a different case from the
+# templates above) now lives in invocation.py, imported above, so build_invocation's meetingUrl
+# null-survival check reads the SAME set as the router's URL-required gate below.
 
 # The two Teams meeting-id shapes, and why one template cannot serve both.
 #

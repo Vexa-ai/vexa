@@ -7,8 +7,10 @@ and in-process fakes in tests.
   * **the meeting store** — insert the ``Meeting`` row (status ``requested``), eager-create the
     ``MeetingSession`` keyed by the bot's ``connectionId``, and write the resolved ``bot_container_id``
     back once the kernel reports the workload name.
-  * **the runtime kernel** — spawn the meeting-bot workload over ``runtime.v1`` (``POST /workloads``
-    with a ``WorkloadSpec``), returning the workload id / name. Quota-exceeded surfaces 429.
+  * **the runtime kernel** — spawn the platform's bot workload over ``runtime.v1`` (``POST /workloads``
+    with a ``WorkloadSpec``; profile ``meeting-bot`` or ``discord-bot``, resolved from ``platform`` —
+    see ``invocation.profile_for_platform``), returning the workload id / name. Quota-exceeded
+    surfaces 429.
 
 Each is a ``typing.Protocol`` so the app depends on BEHAVIOR, not a concrete client. ``adapters.py``
 supplies the production implementations; the module's tests supply in-process fakes.
