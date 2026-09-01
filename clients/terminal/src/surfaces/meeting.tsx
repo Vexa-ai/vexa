@@ -825,8 +825,13 @@ function MeetingTab({ params }: TabProps) {
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+        {/* WRAPS. This header was written for the full-width centre pane and its controls are all
+            `flex: none`; rendered in a narrower column (minutes mode puts this same canvas in the
+            resizable pages panel) a single non-wrapping row does not truncate, it OVERLAPS — the
+            bot controls paint across the meeting's own name. Wrapping costs nothing at the width it
+            was designed for and stays legible at every width below it. */}
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
             {header === "live"
               ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
               : header === "reconnecting"
@@ -839,7 +844,9 @@ function MeetingTab({ params }: TabProps) {
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
-          <div style={{ flex: 1 }} />
+          {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
+              collapses to nothing once they have wrapped to their own */}
+          <div style={{ flex: "1 0 0", minWidth: 0 }} />
           {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
           <ModelChips />
