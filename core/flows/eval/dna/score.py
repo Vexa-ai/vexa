@@ -54,34 +54,57 @@ def d_note_shape(rec: dict) -> tuple[float, dict]:
                         "meta_commentary": meta}
 
 
+def _phrases(text: str, n: int) -> set:
+    ws = re.findall(r"[a-z0-9']+", text.lower())
+    return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)}
+
+
 def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
-    """THE COPY-CAP TEST. Build the terms that appear ONLY past the delivered prefix, and ask
-    whether the note used any. A note that cannot cite the back of the meeting was not shown it."""
-    note = (rec.get("note") or "") + " " + str((rec.get("opening_minutes") or {}).get("reply") or "")
+    """THE COPY-CAP TEST — did the product see past the prefix it was handed?
+
+    Split the meeting at the last character actually DELIVERED, then ask whether the note (or the
+    minutes opening) contains a four-word phrase that occurs only after that point.
+
+    Getting this honest took three tries and every failure was the same mistake — treating a common
+    word as evidence. "Any six-letter word absent from the head" scored a perfect 1 on a note that
+    had seen 11% of the meeting: `before`, `decide`, `during` are simply not in the first twelve
+    minutes of a call that opens with greetings. A repetition threshold did not save it (`question`,
+    `start`, `technical` are what every meeting note says), and neither did proper nouns: the
+    delivered prefix carries SPEAKER LABELS, so every participant name is already known, and in a
+    `Speaker: text` rendering the first word of every line reads as capitalised.
+
+    A four-word verbatim phrase does not appear by accident. It is deliberately CONSERVATIVE: a
+    note that covers the tail entirely in paraphrase scores 0. That is the right way to be wrong
+    here -- a false 0 costs a re-read, and the false 1 this check kept producing would have
+    certified a fix that changed nothing. `names_used` is still reported, unscored, to read by eye."""
+    note = (rec.get("note") or "") + "\n" + str((rec.get("opening_minutes") or {}).get("reply") or "")
     if not note.strip():
         return 0.0, {"why": "nothing to check"}
     segs = fx["segments"]
     cap = rec.get("transcript_chars_delivered") or 0
     seen, cut = 0, len(segs)
-    for i, s in enumerate(segs):
-        seen += len(s.get("speaker", "")) + len(s.get("text", "")) + 2
+    for i, sg in enumerate(segs):
+        seen += len(sg.get("speaker", "")) + len(sg.get("text", "")) + 2
         if seen > cap:
             cut = i
             break
-    head = " ".join(s.get("text", "") for s in segs[:cut]).lower()
-    tail = " ".join(s.get("text", "") for s in segs[cut:]).lower()
-    tok = re.compile(r"[a-z][a-z'\-]{5,}")
-    only_tail = {w for w in tok.findall(tail)} - {w for w in tok.findall(head)}
-    nl = note.lower()
-    used = sorted(w for w in only_tail if w in nl)
+
+    def render(a, b):                       # exactly the shape the product delivers
+        return "\n".join(f"{x.get('speaker','?')}: {x.get('text','')}" for x in segs[a:b])
+
+    head, tail = render(0, cut), render(cut, len(segs))
     ev = {"delivered_chars": cap, "full_chars": rec.get("transcript_chars_full"),
           "segments_delivered": cut, "segments_total": len(segs),
-          "tail_only_terms": len(only_tail), "tail_terms_used": used[:12]}
+          "delivered_frac": round(cut / max(1, len(segs)), 3)}
     if cut >= len(segs):
         return 1.0, {**ev, "why": "the whole transcript was delivered"}
-    if not only_tail:
-        return 0.0, {**ev, "why": "tail has no distinctive vocabulary — inconclusive"}
-    return (1.0 if used else 0.0), ev
+
+    tail_only = _phrases(tail, 4) - _phrases(head, 4)
+    hits = sorted(tail_only & _phrases(note, 4))
+    ev.update(tail_only_phrases=len(tail_only), phrases_used=hits[:5])
+    if not tail_only:
+        return 0.0, {**ev, "why": "the tail carries no distinct phrasing — inconclusive"}
+    return (1.0 if hits else 0.0), ev
 
 
 def d_prepare_mail(rec: dict) -> tuple[float, dict]:
@@ -222,12 +245,13 @@ def main() -> int:
         print(f"{date}  score={row['score']:.3f}  " +
               " ".join(f"{k}={v:g}" for k, v in dims.items()), flush=True)
 
-    scored = [r["score"] for r in rows if not r.get("error")]
+    ok = [r for r in rows if not r.get("error")]
+    scored = [r["score"] for r in ok]
     out = {"rev": replay.get("rev"), "run": str(run), "rows": rows,
            "mean_score": round(sum(scored) / len(scored), 3) if scored else 0.0,
            "fixtures_scored": len(scored),
-           "dim_means": {d: round(sum(r["dims"][d] for r in rows if r["dims"][d] >= 0)
-                                  / max(1, sum(1 for r in rows if r["dims"][d] >= 0)), 3)
+           "dim_means": {d: round(sum(r["dims"][d] for r in ok if r["dims"][d] >= 0)
+                                  / max(1, sum(1 for r in ok if r["dims"][d] >= 0)), 3)
                          for d in MECHANICAL}}
     (run / "scores.json").write_text(json.dumps(out, indent=1))
     print("\nmean", out["mean_score"], "over", out["fixtures_scored"], "fixtures")
