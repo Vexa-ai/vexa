@@ -1,13 +1,16 @@
 "use client";
-/** The rail: ONE flat list of CHATS. No Meetings/Projects switcher, no Live/Upcoming/Past buckets —
- *  a meeting is a chat with a meeting ref, and opening it opens the meeting layout. Order is
- *  recency; the only structure is a single filter chip, because auto-created chats (email
- *  deeplinks, `?ask=` presets, flows) can arrive faster than anyone reads them.
+/** The rail: ONE flat list of CHATS, and nothing else.
  *
- *  Beneath the list sits the WORKSPACE inventory — the shared folders themselves. That is not a
- *  chat and never was: projects died, workspaces did not. */
+ *  No Meetings/Projects switcher, no Live/Upcoming/Past buckets — a meeting is a chat with a meeting
+ *  ref, and opening it opens the meeting layout. Order is recency; the only structure is a single
+ *  filter chip, because auto-created chats (email deeplinks, `?ask=` presets, flows) can arrive
+ *  faster than anyone reads them.
+ *
+ *  No workspace chrome either (founder ruling: "remove workspaces, they can do that via MCP if they
+ *  need"). A chat still carries the workspaces it is over — that is data on the chat, and the header
+ *  shows the mount set — but creating, inviting to, resetting and deleting a folder is a job for the
+ *  MCP verbs and the conversation, not for a column of × buttons beside the reading list. */
 import type { CSSProperties } from "react";
-import type { Membership } from "../surfaces/workspaceApi";
 import type { Row } from "./chats";
 import { T, row, surface, type as ty } from "./tokens";
 
@@ -22,8 +25,6 @@ const chatRowS = (on: boolean): CSSProperties => ({
   background: on ? surface.raised : "transparent", border: "none",
   borderLeft: `2px solid ${on ? "var(--accent)" : "transparent"}`, width: "100%", textAlign: "left",
 });
-const lensRow: CSSProperties = { ...ty.lens, display: "flex", alignItems: "center", padding: `2px ${T.rowPadX}px 4px` };
-const wsRow: CSSProperties = { ...ty.chip, display: "flex", alignItems: "baseline", gap: 8, padding: "3px 8px", color: "var(--t2)" };
 const liveDot: CSSProperties = { width: 6, height: 6, borderRadius: "50%", flex: "none", background: "var(--accent)", alignSelf: "center" };
 
 export function Rail(p: {
@@ -31,9 +32,6 @@ export function Rail(p: {
   all: boolean; onAll: (v: boolean) => void;
   selKey: string | null; onSelect: (r: Row) => void;
   onNewChat: () => void; onDeleteChat: (chatId: string) => void;
-  memberships: Membership[]; onNewWorkspace: () => void;
-  onDeleteWorkspace: (workspaceId: string) => void; onResetWorkspace: (target: "personal" | "_global") => void;
-  scaffolded: { global: boolean | null; personal: boolean | null }; onSetupGlobal: () => void; onSetupPersonal: () => void;
 }) {
   const chatRow = (r: Row) => {
     const on = r.key === p.selKey;
@@ -70,43 +68,7 @@ export function Rail(p: {
 
       <div style={{ flex: 1, overflowY: "auto", padding: "10px", display: "flex", flexDirection: "column", gap: 2 }}>
         {p.rows.map(chatRow)}
-        {p.rows.length === 0 && <div style={{ ...ty.chip, padding: "2px 8px", color: "var(--t3)", lineHeight: 1.5 }}>Nothing yet. Meetings arrive by invitation; “+” starts a chat.</div>}
-
-        <h2 style={{ ...lensRow, marginTop: 18 }}>Workspaces<button title="New workspace — a conversation scaffolds it" aria-label="New workspace" onClick={p.onNewWorkspace} style={row.ghostPlus}>+</button></h2>
-        {p.scaffolded.personal === false
-          ? <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <button onClick={p.onSetupPersonal} disabled={p.scaffolded.global === false}
-                title={p.scaffolded.global === false ? "Finish the organisation setup first" : "Run your personal onboarding"}
-                style={{ ...wsRow, flex: 1, textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: p.scaffolded.global === false ? "var(--t3)" : "var(--accent)", cursor: p.scaffolded.global === false ? "default" : "pointer", fontWeight: 600 }}>
-                Set up personal workspace…</button>
-              <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
-                style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 4px", lineHeight: 1, flex: "none" }}>×</button>
-            </div>
-          : <div style={wsRow}>personal<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>you</span>
-              <button title="Reset your personal workspace to the seed" aria-label="Reset personal workspace" onClick={() => p.onResetWorkspace("personal")}
-                style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
-            </div>}
-        {p.memberships.map((m) => (
-          <div key={"ws-" + m.workspace_id} className="vx-ws-row" style={wsRow}>{m.workspace_id}<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>{m.role}</span>
-            {m.role === "owner" && (
-              <button title={`Delete workspace ${m.workspace_id} — removes its data for every member`} aria-label={`Delete workspace ${m.workspace_id}`}
-                onClick={() => p.onDeleteWorkspace(m.workspace_id)}
-                className="vx-ws-del" style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
-            )}
-          </div>
-        ))}
-        {p.scaffolded.global === false
-          ? <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <button onClick={p.onSetupGlobal} title="The organisation tier is not set up — finish this first"
-                style={{ ...wsRow, flex: 1, textAlign: "left", background: "var(--accentbg)", border: "none", borderRadius: 7, color: "var(--accent)", cursor: "pointer", fontWeight: 600 }}>
-                Set up global workspace…</button>
-              <button title="Wipe the organisation tier to the empty seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
-                style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 4px", lineHeight: 1, flex: "none" }}>×</button>
-            </div>
-          : <div style={wsRow}>_global<span style={{ ...ty.meta, marginLeft: "auto", fontSize: 10 }}>everyone · ro</span>
-              <button title="Reset the organisation tier to the seed (admins only)" aria-label="Reset _global" onClick={() => p.onResetWorkspace("_global")}
-                style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>×</button>
-            </div>}
+        {p.rows.length === 0 && <div style={{ ...ty.chip, padding: "2px 8px", color: "var(--t3)", lineHeight: 1.5 }}>Meetings arrive by invitation; “+” starts a chat.</div>}
       </div>
 
       <div style={{ ...ty.meta, flex: "none", padding: "10px", lineHeight: 1.55, borderTop: "1px solid var(--line)" }}>

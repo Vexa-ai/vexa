@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { MeetingMock } from "../meetingModel";
 import {
   CHATS_KEY, PROJECTS_KEY, ORG_CHAT_LABEL, PERSONAL_CHAT_ID,
-  chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows,
+  chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows, whenShort,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
 
@@ -99,8 +99,31 @@ describe("railRows — recency, newest first, live on top", () => {
   });
 
   it("the label of a live row reads 'live' instead of a clock time", () => {
-    expect(railRows([], [LIVE])[0].whenLabel).toBe("live");
-    expect(railRows([], [HELD])[0].whenLabel).not.toBe("live");
+    expect(railRows([], [LIVE], T0)[0].whenLabel).toBe("live");
+    expect(railRows([], [HELD], T0)[0].whenLabel).not.toBe("live");
+  });
+});
+
+describe("whenShort — ONE token, because the rail is 248px wide", () => {
+  it("today is a clock, this week a weekday, further out a date", () => {
+    expect(whenShort(T0 - 3 * 3600000, { now: T0 })).toMatch(/^\d{1,2}:\d{2}( ?[AP]M)?$/);
+    expect(whenShort(T0 - 2 * 86400000, { now: T0 })).toMatch(/^[A-Za-z]{3}$/);
+    expect(whenShort(T0 - 40 * 86400000, { now: T0 })).toMatch(/^\d{1,2} [A-Za-z]{3}$|^[A-Za-z]{3} \d{1,2}$/);
+  });
+
+  it("a different year carries the year, so an old chat is never mistaken for a recent one", () => {
+    expect(whenShort(T0 - 400 * 86400000, { now: T0 })).toMatch(/2[45]/);
+  });
+
+  it("live wins over any timestamp, and an unknown time says nothing", () => {
+    expect(whenShort(T0, { live: true, now: T0 })).toBe("live");
+    expect(whenShort(0, { now: T0 })).toBe("");
+  });
+
+  it("a meeting row is labelled with the MEETING's time, not the chat's last activity", () => {
+    const rows = railRows([chat({ id: "meet-m-post", label: "Blue Light Card", meeting: "m-post", lastActivityAt: T0 })], [HELD], T0);
+    expect(rows[0].whenLabel).toBe(whenShort(Date.parse(at(-1500)), { now: T0 }));
+    expect(rows[0].when).toBe(T0);          // …while the SORT still uses the later of the two
   });
 });
 

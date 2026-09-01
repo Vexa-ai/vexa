@@ -1,25 +1,27 @@
 "use client";
 /** MINUTES — the shell (#1311). Design source: biz drafts/minutes-mock-chat.
  *
- *  A WORKSPACE is a folder — the shared thing, scaffolded by a conversation.
  *  A CHAT is the saved focus state: a label, an optional meeting ref, the workspaces it is over,
  *  and the artifacts it opened with. The rail lists chats and nothing else — projects are gone as a
  *  concept, and a meeting is simply a chat that names one.
+ *
+ *  A WORKSPACE is a folder — the shared thing. It is still what a chat mounts, and the header still
+ *  names the mount set, but this surface no longer MANAGES one (founder ruling: "remove workspaces,
+ *  they can do that via MCP if they need"): creating, inviting, resetting and deleting a folder are
+ *  MCP verbs and conversation, so the setup buttons, the inventory and the delete ceremony are gone
+ *  from here. Personal onboarding still has its own entry — app/OnboardingGate.tsx fires the seed.
+ *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
-import {
-  listSharedMemberships, readActiveSet, setSharedActive, deactivateWorkspace,
-  readWorkspaceFile, createSharedWorkspace, unshareWorkspace, deleteWorkspace, resetWorkspace, type Membership,
-} from "../surfaces/workspaceApi";
+import { readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile } from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
-import { DeleteCeremony } from "./DeleteCeremony";
 import {
   chatForRow, loadChats, loadRailAll, markTouched, meetingTitle, newChat, railRows, removeChat,
-  saveChats, saveRailAll, upsertChat, visibleRows, ORG_CHAT_LABEL, PERSONAL_CHAT_ID,
+  saveChats, saveRailAll, upsertChat, visibleRows, PERSONAL_CHAT_ID,
   type Chat as ChatRec, type Row,
 } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
@@ -40,7 +42,6 @@ export function MinutesShell() {
   const mock = mockOn();
   const mockStart = useRef(Date.now());
   const meetings = useMemo(() => (mock ? [...MOCK_MEETINGS, ...realMeetings] : realMeetings), [mock, realMeetings]);
-  const [memberships, setMemberships] = useState<Membership[]>([]);
   // The stored list. Mock chats are merged for DISPLAY only — they are never written back.
   const [chats, setChats] = useState<ChatRec[]>(() => loadChats());
   const allChats = useMemo(() => (mock ? [...chats, ...MOCK_CHATS] : chats), [mock, chats]);
@@ -77,12 +78,6 @@ export function MinutesShell() {
     setChats((prev) => { const next = fn(prev); if (next !== prev) saveChats(next); return next; });
   }, []);
 
-  // The deletion CEREMONY (typed-name confirm). Two verbs, per the ownership model:
-  //   Delete — an OWNED shared workspace: un-share → private slug → remove. Gone for every member.
-  //   Reset — a STRUCTURAL folder (personal baseline · _global): wipe to seed; the slot survives.
-  // `_system` gets neither: sessions/continuity are never a folder you reset.
-  const [ceremony, setCeremony] = useState<{ name: string; verb: "Delete" | "Reset"; detail: string; run: () => Promise<void> } | null>(null);
-
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
     const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
@@ -113,8 +108,6 @@ export function MinutesShell() {
     try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
     return n;
   });
-
-  useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
   const mountSet = useCallback(async (wanted: string[]) => {
     // Mount every shared workspace in the chat's set; park the rest. personal/_global/_system
@@ -215,21 +208,6 @@ export function MinutesShell() {
     return () => window.removeEventListener(CHAT_TOUCHED_EVENT, onTouched);
   }, [persist]);
 
-  const deleteOwnedWorkspace = async (workspaceId: string) => {
-    try {
-      const { slug } = await unshareWorkspace(workspaceId);
-      await deleteWorkspace(slug);
-    } catch (e) { window.alert(`Could not delete ${workspaceId}: ${e instanceof Error ? e.message : e}`); return; }
-    persist((prev) => prev.map((c) => (c.workspaces.includes(workspaceId) ? { ...c, workspaces: c.workspaces.filter((w) => w !== workspaceId) } : c)));
-    await listSharedMemberships().then(setMemberships).catch(() => undefined);
-    if (sel.workspaces.includes(workspaceId)) setSel(PERSONAL_SEL);
-  };
-  const askDeleteWorkspace = (workspaceId: string) => setCeremony({
-    name: workspaceId, verb: "Delete",
-    detail: "Removes this workspace's data for every member. Irreversible — there is no archive behind this.",
-    run: () => deleteOwnedWorkspace(workspaceId),
-  });
-
   useEffect(() => {
     let dead = false;
     // mock bodies short-circuit the fetch entirely — no request is made for a fabricated page
@@ -307,60 +285,6 @@ export function MinutesShell() {
   const mounts = sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
     : `[${[...new Set([...sel.workspaces, "_global"])].join(" · ")} · _system]`;
 
-  // "+ workspace" is NOT a form and NOT a plain chat: it opens a WORKSPACE SETUP chat whose
-  // whole job is scaffolding one. The workspace is created up front (so the agent has a real rw
-  // mount to seed), then the conversation names it, writes CLAUDE.md + PURPOSE + README, and
-  // settles membership. Founder ruling: the conversation is the wizard.
-  // `.scaffolded` (written by the setup flows as their FINAL act) is the platform's signal that a
-  // structural tier is ready. Absent → the rail offers a Setup button instead of the workspace row.
-  const [scaffolded, setScaffolded] = useState<{ global: boolean | null; personal: boolean | null }>({ global: null, personal: null });
-  const probeScaffolded = useCallback(() => {
-    void readWorkspaceFile(".scaffolded", { slug: "_global" }).then((c) => setScaffolded((x) => ({ ...x, global: c !== null }))).catch(() => undefined);
-    void readWorkspaceFile(".scaffolded").then((c) => setScaffolded((x) => ({ ...x, personal: c !== null }))).catch(() => undefined);
-  }, []);
-  useEffect(() => { probeScaffolded(); const t = setInterval(probeScaffolded, 20000); return () => clearInterval(t); }, [probeScaffolded]);
-
-  const askResetWorkspace = (target: "personal" | "_global") => setCeremony({
-    name: target, verb: "Reset",
-    detail: target === "_global"
-      ? "Wipes the organisation tier back to the empty seed (git history survives). Every member's assistant sees the reset on its next turn; the setup conversation starts from the first question. Admins only."
-      : "Wipes your personal workspace back to the empty seed (git history survives). Your entities, notes and dashboard are removed; onboarding starts over.",
-    run: async () => {
-      try { await resetWorkspace(target); } catch (e) { window.alert(`Could not reset ${target}: ${e instanceof Error ? e.message : e}`); return; }
-      probeScaffolded();
-      setSel(PERSONAL_SEL);
-    },
-  });
-
-  // Setup entry points — the buttons the rail shows while a tier awaits setup.
-  // Setup means a FRESH conversation (founder ruling 2026-08-22) — never reopening a stale thread.
-  // Org-setup sessions are a FAMILY (`org-setup-<ts>`): each setup click mints a new one; the cached
-  // void opener + grounding key on the prefix. Since projects died, the org row is just a chat over
-  // `_global` — the admin's setup conversation sits in the flat list beside everything else.
-  const setupGlobal = () => { addChat(ORG_CHAT_LABEL, ["_global"], { id: `org-setup-${Date.now().toString(36)}` }); };
-  const setupPersonal = () => {
-    addChat("onboarding", ["personal", "_global"]);
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 500);
-  };
-
-  const newWorkspace = async () => {
-    const stamp = new Date().toISOString().slice(5, 16).replace(/[-:T]/g, "");
-    let created: { workspace_id: string } | null = null;
-    try { created = await createSharedWorkspace(`workspace-${stamp}`); } catch { /* surfaced below */ }
-    await listSharedMemberships().then(setMemberships).catch(() => undefined);
-    const id = `wsetup-${Date.now().toString(36)}`;
-    addChat("workspace setup", created ? [created.workspace_id, "_global"] : ["personal", "_global"], { id });
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: id, prompt:
-      "[workspace-scaffold] A NEW SHARED WORKSPACE has just been created for this conversation and is mounted " +
-      `read-write here${created ? ` as \`${created.workspace_id}\`` : ""} — you are seeding it. Ask ONE question at a time: ` +
-      "(1) what it should be called and what will live in it; (2) who belongs — emails, or their organisation. " +
-      "As you learn, WRITE into that workspace and commit: `CLAUDE.md` (what this folder is, its conventions — the map " +
-      "any agent mounting it reads first), `PURPOSE` (one line: what this workspace is for, so writes route here " +
-      "correctly), and `README.md` (its face page: purpose, what to pay attention to, who's in). " +
-      "Rename the workspace to the name they give. Finish by telling them the `#group:` tag to put in calendar " +
-      "invites so its meetings land here." } })), 1400);
-  };
-
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
   // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
   // which workspaces the chat is over, so context and opening prompt arrive together — which is the
@@ -414,10 +338,7 @@ export function MinutesShell() {
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
         selKey={selKey} onSelect={(r) => void openRow(r)}
-        onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat}
-        memberships={memberships} onNewWorkspace={() => void newWorkspace()}
-        onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace}
-        scaffolded={scaffolded} onSetupGlobal={setupGlobal} onSetupPersonal={setupPersonal} />
+        onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
         <Chat params={{ session }} />
@@ -435,9 +356,6 @@ export function MinutesShell() {
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
       </div>
       <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} onOpen={(pg) => { setDocPath(pg.path); setDocSlug(pg.slug); }} body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
-      {ceremony && <DeleteCeremony name={ceremony.name} verb={ceremony.verb} detail={ceremony.detail}
-        onCancel={() => setCeremony(null)}
-        onConfirm={() => { const c = ceremony; setCeremony(null); void c.run(); }} />}
     </div>
   );
 }

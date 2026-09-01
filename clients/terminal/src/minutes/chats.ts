@@ -53,15 +53,21 @@ export function meetingWhen(m: MeetingMock | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** The rail's short time label — the same shape the meeting rows always used.
- *  A held meeting shows a date; anything still ahead of us (or any plain chat) shows the clock too. */
-export function whenShort(ms: number, opts: { live?: boolean; dateOnly?: boolean } = {}): string {
+/** The rail's SHORT time label. Same vocabulary the meeting rows always used — weekday, day+month,
+ *  a clock — but only ever one of them: the rail is 248px wide and a full "Tue, Sep 1 07:04 PM"
+ *  left about 90px for the name, which truncated "Organisation setup" to "Organi…". Coarser the
+ *  further away it is: a clock today, a weekday this week, a date beyond that. */
+export function whenShort(ms: number, opts: { live?: boolean; now?: number } = {}): string {
   if (opts.live) return "live";
   if (!ms) return "";
   try {
-    const d = new Date(ms);
-    const date = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
-    return opts.dateOnly ? date : `${date} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+    const now = opts.now ?? Date.now();
+    const d = new Date(ms), n = new Date(now);
+    if (d.toDateString() === n.toDateString()) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (Math.abs(ms - now) < 6 * 86400000) return d.toLocaleDateString(undefined, { weekday: "short" });
+    return d.getFullYear() === n.getFullYear()
+      ? d.toLocaleDateString(undefined, { day: "numeric", month: "short" })
+      : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "2-digit" });
   } catch { return ""; }
 }
 
@@ -89,8 +95,12 @@ export type Row = {
  *  with ONE lift: a meeting that is running right now goes to the top. (The founder's rule names the
  *  formula and its consequence — "live meetings naturally top" — and the formula alone does not
  *  produce it, because an upcoming meeting's start_time is in the FUTURE and would outrank a live
- *  one. The live lift is what makes the stated consequence true.) No buckets: this is one flat list. */
-export function railRows(chats: Chat[], meetings: MeetingMock[]): Row[] {
+ *  one. The live lift is what makes the stated consequence true.) No buckets: this is one flat list.
+ *
+ *  Sorting and LABELLING part company on one point: a meeting row is labelled with the MEETING's own
+ *  time, never the chat's last activity, because "Blue Light Card · today" would be a plain lie about
+ *  a meeting held on Monday. Reading a row is not the meeting moving. */
+export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now()): Row[] {
   const byId = new Map<string, MeetingMock>();
   for (const m of meetings) byId.set(String(m.id), m);
   const claimed = new Set<string>();
@@ -109,7 +119,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[]): Row[] {
       meetingId: c.meeting ?? null,
       label: c.label || (m ? meetingTitle(m) : "Chat"),
       when,
-      whenLabel: whenShort(when, { live, dateOnly: phase === "post" }),
+      whenLabel: whenShort(m ? meetingWhen(m) : when, { live, now }),
       live, upcoming,
       touched: !!c.touched,
       workspaces: c.workspaces,
@@ -127,7 +137,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[]): Row[] {
       meetingId: id,
       label: meetingTitle(m),
       when,
-      whenLabel: whenShort(when, { live: phase === "live", dateOnly: phase === "post" }),
+      whenLabel: whenShort(when, { live: phase === "live", now }),
       live: phase === "live",
       upcoming: phase === "prep",
       touched: false,

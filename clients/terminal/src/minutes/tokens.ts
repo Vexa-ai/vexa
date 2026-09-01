@@ -7,7 +7,7 @@
 import type { CSSProperties } from "react";
 
 export const T = {
-  railW: 248,
+  railW: 397,        // +60% (founder, 2026-09-01) — 248 left ~90px for a name
   pagesMin: 300,
   pagesMax: 720,
   pagesDefault: 384,
