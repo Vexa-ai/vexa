@@ -12,6 +12,20 @@ set -u
 
 export DISPLAY="${DISPLAY:-:99}"
 
+# Drop to the non-root `vexa` user ONCE (re-execing this whole script) so Chromium runs its namespace
+# sandbox instead of --no-sandbox — removing the "unsupported command-line flag" banner from the
+# recording. Everything below (Xvfb, PulseAudio per-user, the worker) then runs as vexa, so the X
+# display + pulse socket all belong to one uid. REQUIRES the container to allow user namespaces
+# (security_opt: seccomp=unconfined). Guarded on the vexa user existing so the no-image entrypoint.test
+# is unaffected. ESCAPE HATCH: CHROME_NO_SANDBOX=1 stays root + --no-sandbox (getSandboxBrowserArgs
+# re-adds the flag) for hosts that cannot relax seccomp.
+case "${CHROME_NO_SANDBOX:-}" in 1|true|yes|TRUE|YES) : ;; *)
+  if [ "$(id -u)" = "0" ] && id vexa >/dev/null 2>&1; then
+    export HOME=/home/vexa
+    exec setpriv --reuid=vexa --regid=vexa --init-groups "$0" "$@"
+  fi ;;
+esac
+
 echo "[entrypoint] Starting Xvfb on ${DISPLAY}..."
 Xvfb "${DISPLAY}" -screen 0 1920x1080x24 >/tmp/xvfb.log 2>&1 &
 # Give Xvfb a moment to create the socket before anything attaches.

@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
@@ -398,6 +398,11 @@ async def request_bot(
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    # Fresh-meeting stream hygiene: purge tc:meeting:{new_row_id} on a FRESH insert so a new meeting
+    # never inherits a prior generation's transcript (a reused row id after a DB reset would otherwise
+    # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
+    # prod, None in tests/offline). NOT called on continue_meeting — that reuse KEEPS the stream.
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -685,6 +690,23 @@ async def request_bot(
             raise
     meeting_id = row["id"]
 
+    # 3b. Fresh-meeting stream hygiene (see the param doc): a brand-new row must start on an EMPTY
+    # transcript stream. Row ids are monotonic, so tc:meeting:{id} normally doesn't exist yet — but if
+    # the DB id sequence is ever reset/restored without flushing redis, a NEW meeting can be minted on a
+    # row id whose OLD stream still holds a prior generation's session_end, and the terminal shows
+    # "Meeting ended" before the first word. Purge on the FRESH insert only (reused_row is None);
+    # continue_meeting KEEPS the reused row's stream for continuity. Best-effort — a purge failure must
+    # never block the spawn (the collector is the stream's writer and appends after this).
+    if reused_row is None and transcript_stream_purge is not None:
+        try:
+            await transcript_stream_purge(meeting_id)
+        except Exception as _e:  # noqa: BLE001 — best-effort; never fail the spawn on a purge error
+            log_event(
+                "bot_spawn_stream_purge_failed", audience="system", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"meeting_id": meeting_id, "error": str(_e)},
+            )
+
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
@@ -701,6 +723,9 @@ async def request_bot(
     token = mint_meeting_token(
         meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
     )
+    # Recording captures audio always; video only when RECORD_VIDEO is set (default AUDIO-ONLY, so a
+    # plain deployment carries no encode cost). captureModes drives the bot's ffmpeg recorder.
+    record_video = env_flag("RECORD_VIDEO")
     invocation = build_invocation(
         meeting_id=meeting_id,
         platform=platform,
@@ -721,7 +746,7 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
-        capture_modes=(["audio", "video"] if recording_enabled else None),
+        capture_modes=((["audio", "video"] if record_video else ["audio"]) if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
         # record still yields a fixture. Both ride the same upload endpoint below.
         capture_signal_enabled=capture_signal_enabled,
@@ -752,10 +777,20 @@ async def request_bot(
         raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
     # 5. Spawn over runtime.v1.
+    # Recording knobs for the server-side ffmpeg recorder: sourced from the meeting-api process env so a
+    # deployment tunes encode (CPU vs GPU), capture resolution, segment length, and audio source per host.
+    # The bot reads these in RecordingCaptureService (defaults: software libx264 H.264/mp4, 1920x1080,
+    # 15s segments, record_sink.monitor). Only forwarded when set — unset ⇒ the bot's defaults, so
+    # audio-only / no-GPU deployments carry no extra env.
+    video_env: dict[str, str] = {}
+    for _k in ("VIDEO_HWACCEL", "RECORD_VIDEO_CODEC", "RECORD_AUDIO_CODEC", "VIDEO_RESOLUTION", "RECORD_SEGMENT_SECONDS", "RECORD_AUDIO_SOURCE"):
+        if os.getenv(_k):
+            video_env[_k] = os.environ[_k]
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
         callback_url=f"{meeting_api_url}/runtime/callback",
+        extra_env=video_env or None,
     )
     try:
         result = await runtime.create_workload(spec)

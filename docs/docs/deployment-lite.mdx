@@ -36,6 +36,13 @@ keys — and hands them to the terminal, so `http://localhost:3001` opens signed
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
 
+The meeting bot's Chromium runs **sandboxed as a non-root user**, which needs the container to allow
+user namespaces — `make lite` launches it with `--security-opt seccomp=unconfined` for you. If you run
+the image yourself (a custom `docker run`, compose, or Dockge stack), add `security_opt:
+[seccomp=unconfined]` (or `--security-opt seccomp=unconfined`), or bots fail to join with *"No usable
+sandbox"*. To keep the sandbox off instead, set [`CHROME_NO_SANDBOX=1`](/configuration) — the bot then
+runs as root with `--no-sandbox`.
+
 Transcription needs a backend: point `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`
 at a [transcription unit](/deployment#transcription-the-separate-gpu-unit), or run the bundled
 CPU sidecar:

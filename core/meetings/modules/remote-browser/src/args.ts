@@ -29,8 +29,11 @@ export const CDP_DEBUG_ARGS = [
  */
 export function getAuthenticatedBrowserArgs(): string[] {
   return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
+    // NO --no-sandbox here: the meeting bot runs NON-ROOT under seccomp=unconfined, so Chromium's
+    // namespace sandbox works (and the "unsupported command-line flag" banner is gone from recordings).
+    // These args are always merged with getJoinBrowserArgs() (capture-bridge.ts), which owns the
+    // CHROME_NO_SANDBOX=1 escape hatch for deployments that must re-add the flag — so it is not
+    // duplicated here. (--disable-setuid-sandbox likewise stays out: redundant with --no-sandbox.)
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--disable-gpu',
@@ -50,8 +53,7 @@ export function getAuthenticatedBrowserArgs(): string[] {
  */
 export function getBrowserSessionArgs(): string[] {
   return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
+    '--no-sandbox', // (see getAuthenticatedBrowserArgs: --disable-setuid-sandbox dropped as redundant)
     '--disable-blink-features=AutomationControlled',
     '--use-fake-ui-for-media-stream',
     '--start-maximized',

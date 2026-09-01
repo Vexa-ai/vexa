@@ -5,7 +5,7 @@ export interface Participant { name: string; role: string; initials: string }
 /** A calendar-invited human (data.attendees, prep-v3 slice b) — email is the identity key. */
 export interface Attendee { email: string; name?: string; partstat?: string }
 export interface ProposedAction { id: string; label: string; detail: string }
-export interface TranscriptLine { t: string; speaker: string; text: string }
+export interface TranscriptLine { t: string; startSec?: number; segment_id?: string; speaker: string; text: string }
 export interface MeetingMock {
   id: string;
   session_uid?: string;       // set on a LIVE-backend meeting → the tab subscribes to the real Stream

@@ -226,6 +226,29 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 # ── Terminal (Next.js + custom server.mjs) → /app/terminal (supervisord runs `node server.mjs`). ──
 COPY --from=terminal-builder /app/terminal /app/terminal
 
+# ── Non-root user for the meeting bot's browser ───────────────────────────────────────────────────
+# vexa-bot-launch drops privileges to this user so Chromium runs its NAMESPACE sandbox (which needs a
+# non-root euid) instead of --no-sandbox — that removes the "unsupported command-line flag" yellow
+# banner from the recording. REQUIRES the container to permit user namespaces: run it with
+# `security_opt: [seccomp=unconfined]` (or a userns-allowing profile). Groups: pulse-access (system-mode
+# PulseAudio is group-gated) + audio/video for the capture path; the GPU device nodes are world-readable
+# so no render group is needed. -m gives HOME=/home/vexa for Chromium's profile/cache. The gmeet join
+# flow also writes diagnostic checkpoint screenshots to /app/storage/screenshots (hardcoded, 12 sites);
+# Playwright mkdir's the parent, which would fail EACCES under root-owned /app as vexa and ABORT the join
+# — so pre-create it vexa-owned.
+RUN useradd -m -u 1500 -s /usr/sbin/nologin vexa \
+ && for g in pulse-access audio video render; do getent group "$g" >/dev/null 2>&1 && usermod -aG "$g" vexa || true; done \
+ && mkdir -p /app/storage/screenshots && chown -R vexa:vexa /app/storage
+
+# Suppress Chromium's "You are using an unsupported command-line flag" security banner, which otherwise
+# overlays the recording. The bot MUST pass flags Chromium deems security-reducing — above all
+# --disable-blink-features=AutomationControlled, the anti-detection flag (dropping it makes Google Meet
+# flag the bot), so we can't remove our way out of the banner. --test-type would also hide it but
+# correlated with Meet refusing to admit the bot. This managed policy disables the command-line-flag
+# warnings with NO automation signal (Chromium reads /etc/chromium/policies/managed — verified in-binary).
+RUN mkdir -p /etc/chromium/policies/managed \
+ && printf '%s\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/vexa.json
+
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
 COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh /usr/local/bin/
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf

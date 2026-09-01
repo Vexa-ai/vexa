@@ -163,7 +163,7 @@ up: preflight
 	fi; \
 	echo "Starting Vexa Lite ($$IMG)..."; \
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
-	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
+	docker run -d --name $(APP_CONTAINER) --shm-size=2g --security-opt seccomp=unconfined --network $(NETWORK) --restart unless-stopped \
 		--env-file $(ENV_FILE) \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
