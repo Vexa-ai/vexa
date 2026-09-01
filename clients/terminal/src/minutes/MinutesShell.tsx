@@ -96,7 +96,9 @@ export function MinutesShell() {
   const [pagesW, setPagesW] = useState<number>(() => {
     const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
     const cap = maxPagesW(window.innerWidth);
-    return Number.isFinite(n) && n >= T.pagesMin && n <= cap ? n : Math.min(T.pagesDefault, cap);
+    // CLAMP a stored width, never discard it: a width chosen on a wide monitor should come back as
+    // the widest this window allows, not silently reset to the default the next time you open a laptop.
+    return Number.isFinite(n) && n >= T.pagesMin ? Math.min(n, cap) : Math.min(T.pagesDefault, cap);
   });
   const dragging = useRef(false);
   useEffect(() => {
