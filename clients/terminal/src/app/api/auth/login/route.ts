@@ -1,7 +1,14 @@
-/** Direct email login — no SMTP, no magic link. POST {email} → find-or-create the user at admin-api,
+/** Direct email login — DEVELOPMENT ONLY. POST {email} → find-or-create the user at admin-api,
  *  mint an APIToken (scopes bot,tx,browser), set the httpOnly `vexa-token` + `vexa-user-info` cookies.
  *
- *  Mirrors the dashboard's VEXA_ALLOW_DIRECT_LOGIN branch (without importing it). No email is ever sent.
+ *  ⚠ THIS ROUTE IS DEAD IN PRODUCTION, and that is the point of it now. It used to accept any address
+ *  containing "test" on ANY deploy — and, in minutes/meetings mode, any address at all — which made a
+ *  production terminal password-less: whoever could POST here became whoever they named. Production
+ *  sign-in is the emailed MAGIC LINK (`request-link/` → `redeem/`, where control of the mailbox is the
+ *  proof) or OAuth (`[...nextauth]/`). What survives here is local dev tooling and the harnesses that
+ *  drive a dev container; against a NODE_ENV=production container it answers 403 before it reads
+ *  anything. To sign in against a deployed container, ask for a link and redeem it.
+ *
  *  Must never be cached — a cached response would pin one identity for every subsequent login.
  */
 import { NextResponse, type NextRequest } from "next/server";
@@ -23,6 +30,17 @@ function isSecureRequest(): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  // The gate, before anything else is read: outside a development build this route mints nothing.
+  if (process.env.NODE_ENV !== "development") {
+    return NextResponse.json(
+      {
+        error:
+          "Direct email login is disabled here. Request an emailed sign-in link (POST /api/auth/request-link) or use OAuth.",
+      },
+      { status: 403, headers: NO_STORE },
+    );
+  }
+
   let email: unknown;
   try {
     ({ email } = await request.json());
@@ -36,17 +54,6 @@ export async function POST(request: NextRequest) {
   const normalized = email.trim().toLowerCase();
   if (!EMAIL_RE.test(normalized)) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400, headers: NO_STORE });
-  }
-  // Direct email login is a DEBUG path only — real sign-in goes through Google/Microsoft OAuth
-  // (api/auth/[...nextauth]). Restrict it to test accounts so it can't be used as a password-less bypass.
-  // MINUTES local-dev: emailed door links are MAGIC LINKS — the recipient's own address IS the
-  // identity (prod = a signed token). Any address is accepted in this mode; still dev-only.
-  const minutesDev = process.env.NODE_ENV === "development" && ["minutes", "meetings"].includes(process.env.NEXT_PUBLIC_TERMINAL_MODE ?? "");
-  if (!minutesDev && !normalized.includes("test")) {
-    return NextResponse.json(
-      { error: "Direct email login is for test accounts only — use Google or Microsoft sign-in." },
-      { status: 403, headers: NO_STORE },
-    );
   }
 
   const result = await findOrCreateUserToken(normalized);

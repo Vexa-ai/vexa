@@ -1,45 +1,44 @@
 "use client";
 /** Login gate. Polls /api/auth/me on mount; if unauthenticated, renders the sign-in card.
- *  Primary path is OAuth — Google / Microsoft buttons (next-auth/react `signIn`, which works without a
- *  SessionProvider). Enabled providers are discovered from NextAuth's /api/auth/providers so a deploy
- *  with no OAuth creds simply hides the buttons. The direct email form is kept as a DEBUG path (server
- *  restricts it to addresses containing "test"), tucked behind a toggle. Styled to match the terminal
- *  (CSS vars from globals.css); does not redesign the workbench.
+ *
+ *  Two real doors, and no third:
+ *   • OAuth — Google / Microsoft (next-auth/react `signIn`, which works without a SessionProvider).
+ *     Enabled providers are discovered from NextAuth's /api/auth/providers, so a deploy with no
+ *     OAuth creds simply hides the buttons.
+ *   • EMAIL MAGIC LINK — the address goes to /api/auth/request-link, which mails a signed,
+ *     single-use link; clicking it hits /api/auth/redeem, which sets the session cookies and
+ *     drops the visitor exactly where they were headed. The card's job here ends at
+ *     "Check your email" — this component never mints a session itself.
+ *
+ *  What used to be here and is now GONE: a `?as=<recipient>` query parameter that POSTed straight
+ *  to /api/auth/login, and a "debug sign-in" form onto the same route. Both were password-less —
+ *  anyone who could type a URL could become anyone. The emailed link replaces them; the mailbox is
+ *  the proof. /api/auth/login still exists for local dev tooling and is refused in production.
  *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
- *  the one-time "Set up your instance" claim screen — first sign-in becomes the admin — through
- *  whatever auth the deploy actually has: OAuth buttons when configured, otherwise the test-mode
- *  direct entry with an honest banner naming the OAuth upgrade path. */
+ *  the one-time "Set up your instance" claim screen — the first sign-in becomes the admin —
+ *  through whichever door the deploy actually has. */
 import { useEffect, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 
 type Status = "checking" | "out" | "in";
 type Providers = { google: boolean; microsoft: boolean };
 
+/** Where the link should land: whatever deeplink the visitor already had in the URL (`?ask=`,
+ *  `?meeting=`, `?view=`) travels through the mail, so the click is door AND destination. */
+function currentPath(): string {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname + window.location.search;
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
   const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
   const [adminExists, setAdminExists] = useState(true); // fail-safe: plain sign-in until told otherwise
-  const [showDebug, setShowDebug] = useState(false);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // MINUTES magic link: emailed door links carry ?as=<recipient> — the click IS the sign-in
-  // (dev form; prod is a signed token). Runs once; on success the normal me-poll sees the cookie.
-  const [magicTried, setMagicTried] = useState(false);
-  useEffect(() => {
-    if (magicTried) return;
-    const as_ = new URLSearchParams(window.location.search).get("as");
-    if (!as_) { setMagicTried(true); return; }
-    fetch("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: as_ }) })
-      .then(() => { setMagicTried(true); setStatus("checking");
-        const u = new URL(window.location.href); u.searchParams.delete("as");
-        window.history.replaceState(null, "", u.toString());
-        fetch("/api/auth/me", { cache: "no-store" }).then((r) => setStatus(r.ok ? "in" : "out"));
-      })
-      .catch(() => setMagicTried(true));
-  }, [magicTried]);
 
   useEffect(() => {
     let active = true;
@@ -67,16 +66,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     setSubmitting(true);
     setError(null);
     try {
-      const r = await fetch("/api/auth/login", {
+      const r = await fetch("/api/auth/request-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: value }),
+        body: JSON.stringify({ email: value, next: currentPath() }),
       });
-      if (r.ok) { window.location.reload(); return; }
+      if (r.ok) { setSent(value); return; }
       const body = (await r.json().catch(() => ({}))) as { error?: string };
-      setError(body.error || `Login failed (${r.status})`);
+      setError(body.error || `Could not send the link (${r.status})`);
     } catch (err) {
-      setError((err as Error).message || "Login failed");
+      setError((err as Error).message || "Could not send the link");
     } finally {
       setSubmitting(false);
     }
@@ -85,7 +84,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (status === "in") return <>{children}</>;
   if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
 
-  const hasOAuth = providers.google || providers.microsoft;
   const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
 
   return (
@@ -103,92 +101,87 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             {claiming ? "Set up your instance" : "Vexa Terminal"}
           </div>
         </div>
-        {claiming ? (
+
+        {sent ? (
           <>
-            <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-              This Vexa instance has no administrator yet. The first sign-in becomes the admin and can
-              configure models, transcription, and other users.
+            <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>Check your email.</div>
+            <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+              If {sent} can sign in here, a link is on its way. It works once and expires in a few minutes.
             </div>
-            <div
-              style={{
-                alignSelf: "flex-start", fontSize: 11, color: "var(--t2)", border: "1px solid var(--line2)",
-                borderRadius: 20, padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: 6,
-              }}
+            <button
+              onClick={() => { setSent(null); setError(null); }}
+              style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0, alignSelf: "flex-start" }}
             >
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block" }} />
-              First sign-in = administrator
-            </div>
-            {!hasOAuth && (
-              <div
-                style={{
-                  fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)", background: "var(--panel2)",
-                  border: "1px solid var(--line2)", borderRadius: 8, padding: "9px 11px",
-                }}
-              >
-                ⚠ Test mode — no OAuth configured. Sign-in is limited to emails containing &ldquo;test&rdquo;.
-                For real authentication, acquire Google or Microsoft OAuth credentials and add them to this
-                instance&rsquo;s environment (GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET).
-              </div>
-            )}
+              Use a different address
+            </button>
           </>
         ) : (
-          <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
+          <>
+            {claiming ? (
+              <>
+                <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+                  This Vexa instance has no administrator yet. The first sign-in becomes the admin and can
+                  configure models, transcription, and other users.
+                </div>
+                <div
+                  style={{
+                    alignSelf: "flex-start", fontSize: 11, color: "var(--t2)", border: "1px solid var(--line2)",
+                    borderRadius: 20, padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: 6,
+                  }}
+                >
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block" }} />
+                  First sign-in = administrator
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
+            )}
+
+            {providers.google && (
+              <button onClick={() => signIn("google", { callbackUrl: currentPath() })} style={oauthBtn}>
+                <GoogleMark /> Continue with Google
+              </button>
+            )}
+            {providers.microsoft && (
+              <button onClick={() => signIn("microsoft", { callbackUrl: currentPath() })} style={oauthBtn}>
+                <MicrosoftMark /> Continue with Microsoft
+              </button>
+            )}
+
+            <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
+                Or get a sign-in link by email.
+              </div>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                style={{
+                  background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
+                  padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none",
+                }}
+              />
+              {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
+              <button
+                type="submit"
+                disabled={!email.trim() || submitting}
+                style={{
+                  background: email.trim() ? "var(--accent)" : "var(--panel2)",
+                  color: email.trim() ? "var(--on-accent)" : "var(--t3)",
+                  border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
+                  cursor: email.trim() && !submitting ? "pointer" : "default",
+                }}
+              >
+                {submitting ? "Sending…" : "Send me a link"}
+              </button>
+            </form>
+          </>
         )}
 
-        {providers.google && (
-          <button onClick={() => signIn("google", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
-            <GoogleMark /> Continue with Google
-          </button>
-        )}
-        {providers.microsoft && (
-          <button onClick={() => signIn("microsoft", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
-            <MicrosoftMark /> Continue with Microsoft
-          </button>
-        )}
-
-        {hasOAuth && (
-          <button
-            onClick={() => setShowDebug((v) => !v)}
-            style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0, alignSelf: "flex-start" }}
-          >
-            {showDebug ? "Hide debug sign-in" : "Debug sign-in"}
-          </button>
-        )}
-
-        {(!hasOAuth || showDebug) && (
-          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
-              {claiming && !hasOAuth
-                ? "Email — must contain “test” (test mode)."
-                : "Debug login — email must contain “test”."}
-            </div>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you-test@company.com"
-              style={{
-                background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
-                padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none",
-              }}
-            />
-            {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
-            <button
-              type="submit"
-              disabled={!email.trim() || submitting}
-              style={{
-                background: email.trim() ? "var(--accent)" : "var(--panel2)",
-                color: email.trim() ? "var(--on-accent)" : "var(--t3)",
-                border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
-                cursor: email.trim() && !submitting ? "pointer" : "default",
-              }}
-            >
-              {submitting ? "Signing in…" : claiming ? "Sign in as admin" : "Sign in"}
-            </button>
-          </form>
-        )}
-        {claiming && (
+        {claiming && !sent && (
           <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4 }}>
             This claim screen disappears once an admin exists.
           </div>

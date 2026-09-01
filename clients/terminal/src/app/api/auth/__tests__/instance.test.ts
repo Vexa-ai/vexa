@@ -86,6 +86,13 @@ describe("/api/auth/instance — the login surface's claim-screen switch", () =>
 });
 
 describe("first sign-in claims the admin role", () => {
+  // These two drive the claim through the DIRECT login route, which is development-only
+  // (production sign-in is the emailed magic link or OAuth). The claim itself is shared
+  // machinery — findOrCreateUserToken calls it on every door — so exercising it here still
+  // covers the production paths; the route just has to be asked for its dev behaviour.
+  beforeEach(() => { vi.stubEnv("NODE_ENV", "development"); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it("login on a fresh instance POSTs the bootstrap claim with the user's id", async () => {
     const calls = stubAdminApi({ adminExists: false });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
