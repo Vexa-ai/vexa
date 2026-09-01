@@ -44,6 +44,43 @@ def meeting_ref(uid: str, url: str) -> str:
     return str(max(ids)) if ids else native
 
 
+def meeting_start(uid: str, meeting_id, native: str | None = None):
+    """The meeting row's OWN start epoch, or None.
+
+    Used when the event's refs carry no `start` — a meeting created by the terminal or seeded
+    from a fixture rather than admitted from an invite. Falls back to `created_at`, because a
+    row with no start_time still knows when it came into existence, and that is far closer to
+    the meeting's date than the day a worker happened to process it. Never raises: a date we
+    cannot resolve degrades to today, which is the behaviour this replaces.
+    """
+    import datetime
+    try:
+        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return None
+    rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+    row = None
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        if meeting_id is not None and str(m.get("id")) == str(meeting_id):
+            row = m
+            break
+        if native and m.get("native_meeting_id") == native:
+            row = m
+    if not row:
+        return None
+    for key in ("start_time", "created_at"):
+        v = row.get(key)
+        if not v:
+            continue
+        try:
+            return datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def await_start(ctx: StepCtx):
     """Sleep until start − 2 min — time is a column (Wait until), zero cost while parked.
     Reads: refs.start."""

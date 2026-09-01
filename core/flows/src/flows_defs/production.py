@@ -276,7 +276,7 @@ def build(reg: Registry, db) -> None:
             ctx.scratch["shas"] = ag.commit_shas(uid)
             kick = prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(
                 mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
-                date=time.strftime("%Y-%m-%d"),
+                date=_meeting_stamp(ctx, uid),
                 transcript=ctx.refs["transcript"] or "(no speech captured)")
             # ONE agent turn produces everything, including the per-attendee follow-ups when the
             # personal variant is on. No per-attendee agent, no per-attendee session before a
@@ -354,6 +354,38 @@ def build(reg: Registry, db) -> None:
                       lambda m: m.group(1) + ": " + UI_URL + m.group(2), body)
         body = re.sub(r"\[\[([^\]]+)\]\]", r"\1", body)
         return body.strip()
+
+
+    def _meeting_stamp(ctx, uid) -> str:
+        """The stamp that goes into the note's FILENAME — the meeting's own occurrence, never
+        the day a worker happened to process it.
+
+        `date=time.strftime("%Y-%m-%d")` was the processing date, and the note path is
+        `kg/entities/meeting/{date}-{native}.md`. A recurring meeting keeps ONE
+        native_meeting_id across its occurrences, so any two occurrences written on the same
+        day landed on the same path: the second silently overwrote the first, or the agent saw
+        the mismatch, refused to write, and process_meeting timed out after 15 minutes with
+        "agent produced no note". Replay makes this the normal case rather than the edge one —
+        ten recorded meetings replayed this afternoon are ten occurrences processed today.
+
+        So: the meeting's own start (refs.start, else the meeting row's start_time, else its
+        created_at, else now), rendered in the person's timezone, and carrying HHMM so two
+        occurrences on ONE day are two files.
+        """
+        import datetime
+        start = ctx.refs.get("start")
+        if not start:
+            start = mt.meeting_start(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+        if not start:
+            return time.strftime("%Y-%m-%d-%H%M")
+        tz = setting(uid, "timezone")
+        try:
+            import zoneinfo
+            t = datetime.datetime.fromtimestamp(float(start), zoneinfo.ZoneInfo(tz)) if tz \
+                else datetime.datetime.fromtimestamp(float(start), datetime.timezone.utc)
+        except Exception:  # noqa: BLE001
+            t = datetime.datetime.fromtimestamp(float(start), datetime.timezone.utc)
+        return t.strftime("%Y-%m-%d-%H%M")
 
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
     def _followup_mode(ctx) -> str:
