@@ -49,7 +49,9 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
 3. **Write.** Scaffold/refresh entities from what you found: a `person` entity for the user **marked
    `self: true`** holding the FULL profile + each discovered person; a company entity for each org. Also
    **update `_system/identity.md`** so its light reference links to that `self: true` node (the name is
-   already recorded from step 1), and **refresh `README.md` as the workspace dashboard** (every entity you created is linked from it,
+   already recorded from step 1), and **refresh `README.md` as the workspace dashboard** — keeping its opening lines about what this
+   place is FOR (meetings become words, words become memory you own as files) ABOVE any mechanics —
+   (every entity you created is linked from it,
    and entities link each other — person ↔ company ↔ the people around them; a node without an
    inbound link is invisible) so the pinned
    page reflects who the user is and the key people/companies. See shapes below.

@@ -13,7 +13,7 @@
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -31,7 +31,7 @@ import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
-import { proposals, type Proposal } from "./proposals";
+import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
@@ -41,6 +41,15 @@ import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 
 const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"] };
+
+/** Say the chip's line into ONE chat. The settle delay is not cosmetic — the target session must be
+ *  mounted and listening or the ask goes to localStorage and waits — and the session id is carried
+ *  so it can never land in whichever conversation happens to be visible. `say` is the visible form
+ *  for a chip whose words are the user's own; without one the turn arrives hidden, as system kickoffs
+ *  always have. */
+const fireKick = (session: string, prompt: string, say?: string) =>
+  window.setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT,
+    { detail: { hidden: !say, display: say, session, prompt } })), 1200);
 
 export function MinutesShell() {
   const layout = useService(LayoutServiceId);
@@ -98,6 +107,17 @@ export function MinutesShell() {
   // `null` until it answers, and null never offers the chip (proposals.ts fails closed).
   const [scaffolded, setScaffolded] = useState<boolean | null>(null);
   useEffect(() => { void readWorkspaceFile(".scaffolded").then((c) => setScaffolded(c !== null)).catch(() => undefined); }, []);
+  // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
+  // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live) setEmail(((d?.user as { email?: string } | undefined)?.email) ?? null); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, []);
 
   const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
   const selKey = `c:${sel.chatId}`;
@@ -244,41 +264,57 @@ export function MinutesShell() {
     return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
-  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string } = {}) => {
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string } = {}) => {
     const c = newChat(label, workspaces, { id: opts.id, touched: true });
     persist((prev) => upsertChat(prev, c));
     void openChat(c);
-    if (opts.kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: c.id, prompt: opts.kick } })), 1200);
+    if (opts.kick) fireKick(c.id, opts.kick, opts.say);
     return c;
   }, [openChat, persist]);
 
   /** Fire a proposal chip. The founder chose IMMEDIATE, for consistency with the emailed links:
-   *  a click opens or creates the chat and sends the turn — nothing is left in the composer to
-   *  press Enter on.
+   *  a click sends the turn, with nothing left in the composer to press Enter on. And it sends it
+   *  HERE — **a chip acts in the chat it renders in and never mints a row** (founder, 2026-09-01:
+   *  he pressed one inside a chat he had just created and got a second one — "clicking this button
+   *  should not create a new chat, this chat is already new").
    *
-   *  None of this is new machinery. A meeting chip is the rail's own meeting-open path plus the
-   *  same settle-delayed, session-targeted kick `addChat` uses; `review` is the rail's filter chip;
-   *  `setup` is the personal onboarding seed; `group` is a new chat with an opening line. */
+   *  What the click does to the record is `applyProposal`, which is pure and tested; this is the
+   *  wiring only — persist it, re-lay-out if the chat just became a meeting's, say the line into the
+   *  SAME session. A meeting chip therefore REBINDS: the conversation in front takes the meeting's
+   *  ref and title, and the phase pages open beside it exactly as they do from the rail. */
   const runProposal = async (p: Proposal) => {
-    if (p.kind === "review") { toggleAll(true); return; }
-    if (p.kind === "setup") {
-      const c = chatsRef.current.find((x) => x.id === PERSONAL_CHAT_ID);
-      if (c) await openChat(c);
-      setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 400);
+    const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? null;
+    const eff = applyProposal(p, current, meetings);
+    if (!eff) return;
+    // The offer is spent the moment it is taken. A kick is hidden AND settle-delayed, so without
+    // this the row would sit there for another 1.2 seconds, live, offering to do the same thing.
+    setSpent(sel.chatId);
+    if (eff.act === "filter") { toggleAll(true); return; }
+    if (eff.act === "create") { addChat(eff.label, ["personal", "_global"], { kick: eff.kick, say: eff.say }); return; }
+    if (eff.act === "open") {
+      const m = meetings.find((x) => String(x.id) === eff.meetingId);
+      const chatId = m ? await openMeeting(m, { touched: true }) : null;
+      if (!chatId) return;
+      setSpent(chatId);
+      if (eff.kick) fireKick(chatId, eff.kick, eff.say);
       return;
     }
-    if (p.kind === "group") { addChat("Daily meetings", ["personal", "_global"], { kick: p.kick }); return; }
-    const m = meetings.find((x) => String(x.id) === p.meetingId);
-    if (!m) return;
-    const chatId = await openMeeting(m, { touched: true });
-    if (!chatId || !p.kick) return;
-    const kick = p.kick;
-    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: chatId, prompt: kick } })), 1200);
+    // The chat in front, mutated in place. It only needs re-opening when it CHANGED ROOM — a plain
+    // relabel must not throw away the pages panel the reader is looking at.
+    const rebound = eff.chat.meeting !== current?.meeting;
+    persist((prev) => upsertChat(prev, eff.chat));
+    if (rebound) await openChat(eff.chat);
+    else setSel((x) => ({ ...x, label: eff.chat.label }));
+    if (eff.kick) fireKick(eff.chat.id, eff.kick, eff.say);
   };
 
   /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
    *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
-  const chips = useMemo(() => proposals(meetings, allChats, scaffolded), [meetings, allChats, scaffolded]);
+  const chips = useMemo(() => proposals(meetings, allChats, scaffolded, Date.now(), email), [meetings, allChats, scaffolded, email]);
+  /** Which chat has already spent its offer — see `runProposal`. Per chat, because a different
+   *  conversation has not been offered anything yet. */
+  const [spent, setSpent] = useState<string | null>(null);
+  const shownChips = spent === sel.chatId ? [] : chips;
 
   // Deleting a chat drops it from the rail (its agent session stays on the server — the row is the
   // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
@@ -573,7 +609,7 @@ export function MinutesShell() {
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
-        <Chat params={{ session }} emptyExtra={<ProposalChips items={chips} onPick={(p) => void runProposal(p)} />} />
+        <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} />} />
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
           lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no

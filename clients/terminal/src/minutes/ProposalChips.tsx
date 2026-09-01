@@ -2,8 +2,10 @@
 /** The proposal chips — one row, in the void an empty chat leaves between its greeting and the
  *  composer. Presentational only: what to offer is `proposals()`, what a click does is the shell's.
  *
- *  A click FIRES (founder ruling, consistency with the emailed links): the chat opens and the turn
- *  goes, with nothing left in the composer to press Enter on. */
+ *  A click FIRES (founder ruling, consistency with the emailed links): the turn goes, with nothing
+ *  left in the composer to press Enter on. And it fires IN THIS CHAT — a chip never opens a second
+ *  conversation (founder, 2026-09-01: "this chat is already new"). The row is passed empty once a
+ *  chip has been pressed, so the offer cannot be taken twice while its turn is still settling. */
 import type { CSSProperties } from "react";
 import type { Proposal } from "./proposals";
 import { surface, type as ty } from "./tokens";

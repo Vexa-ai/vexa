@@ -10,7 +10,9 @@
 import { describe, expect, it } from "vitest";
 import type { MeetingMock } from "../../surfaces/meetingModel";
 import type { Chat } from "../chats";
-import { GROUP_PROPOSAL, KICK, PREP_WINDOW_MS, proposals } from "../proposals";
+import { applyProposal, GROUP_PROPOSAL, isUnlabeled, KICK, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
+import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../canvas/actions";
+import { ORG_CHAT_ID, PERSONAL_CHAT_ID } from "../chats";
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
 const at = (mins: number) => new Date(NOW + mins * 60000).toISOString();
@@ -140,11 +142,20 @@ describe("rule 4 — the pile the rail is hiding", () => {
 });
 
 describe("rule 5 — the workspace has never been set up", () => {
-  it("offers setup when the marker is absent", () => {
-    const [p] = run([], [touched("main")], false);
+  it("offers setup when the marker is absent, in the person's own words", () => {
+    const [p] = proposals([], [touched("main")], false, NOW, "ada@example.com");
     expect(p.kind).toBe("setup");
-    expect(p.label).toBe("Set up my workspace");
-    expect(p.kick).toBeUndefined();      // the personal setup path writes its own opening turn
+    expect(p.label).toBe("My email is ada@example.com, set up a workspace for me");
+    expect(p.say).toBe(p.label);                      // the chip's words ARE the user's — shown, not hidden
+    expect(p.kick).toContain(ONBOARDING_GROUNDING);   // …and they carry the discovery-loop grounding
+    expect(p.kick?.endsWith(p.label)).toBe(true);
+  });
+
+  it("an unknown address drops the clause rather than printing an empty one", () => {
+    const [p] = run([], [touched("main")], false);
+    expect(p.label).toBe("Set up a workspace for me");
+    expect(p.label).not.toContain("undefined");
+    expect(p.say).toBe(p.label);
   });
 
   it("stays silent when the workspace IS scaffolded", () => {
@@ -196,5 +207,120 @@ describe("the pad", () => {
 
   it("three derived rules leave no room for it", () => {
     expect(kinds(run([LIVE, SOON, HELD], [touched("main")]))).not.toContain("group");
+  });
+});
+
+// ── what a click DOES ────────────────────────────────────────────────────────────────
+
+/** The handler contract. `proposals()` decides what is OFFERED; `applyProposal()` decides what a
+ *  click DOES, and that is the half the founder found broken (2026-09-01): pressing a chip inside a
+ *  chat he had just made produced a SECOND chat — "this chat is already new".
+ *
+ *  So every assertion below is about one thing: the mutation names the chat in front, never a new
+ *  one. Rebind · relabel · fire — never append. */
+describe("applyProposal — a chip acts in the chat it renders in", () => {
+  const NEW = chat({ id: "pchat-1", label: "New chat" });
+  const NAMED = chat({ id: "pchat-2", label: "Q3 planning", touched: true });
+  const catchUp = () => run([LIVE], [touched("main")])[0];
+  const outcome = () => run([HELD], [touched("main")])[0];
+
+  it("the static pad fires IN this chat and names it — no row is minted", () => {
+    const e = applyProposal(GROUP_PROPOSAL, NEW, [], NOW);
+    expect(e).toEqual({ act: "run", chat: { ...NEW, touched: true, lastActivityAt: NOW, label: "Daily meetings" }, kick: KICK.group, say: undefined });
+    expect(e?.act === "run" && e.chat.id).toBe(NEW.id);          // the SAME chat
+    expect(e?.act === "run" && e.chat.meeting).toBeUndefined();  // still a plain chat
+  });
+
+  it("a chat somebody already named keeps its name", () => {
+    const e = applyProposal(GROUP_PROPOSAL, NAMED, [], NOW);
+    expect(e?.act === "run" && e.chat.label).toBe("Q3 planning");
+    expect(e?.act === "run" && e.chat.touched).toBe(true);
+  });
+
+  it("Personal is a name, so the pad does not rewrite it", () => {
+    const home = chat({ id: PERSONAL_CHAT_ID, label: "Personal", touched: true });
+    const e = applyProposal(GROUP_PROPOSAL, home, [], NOW);
+    expect(e).toEqual({ act: "run", chat: { ...home, lastActivityAt: NOW }, kick: KICK.group, say: undefined });
+  });
+
+  it("a meeting chip REBINDS this chat to the meeting — same id, meeting title, tabs dropped", () => {
+    const e = applyProposal(catchUp(), { ...NEW, artifacts: [{ path: "README.md", label: "personal" }], focus: "|README.md" }, [LIVE], NOW);
+    expect(e?.act).toBe("run");
+    if (e?.act !== "run") return;
+    expect(e.chat.id).toBe(NEW.id);              // the chat in front, not `meet-m-live`
+    expect(e.chat.meeting).toBe("m-live");       // …now bound to the meeting
+    expect(e.chat.label).toBe("Standup");
+    expect(e.chat.touched).toBe(true);
+    expect(e.chat.artifacts).toEqual([]);        // so openChat seeds the room's OWN phase pages
+    expect(e.chat.focus).toBeUndefined();
+    expect(e.kick).toBe(KICK["catch-up"]);
+  });
+
+  it("a meeting that already has a chat with history does NOT divert the click into it", () => {
+    const other = chat({ id: "meet-m-post", meeting: "m-post", label: "Blue Light Card", touched: true });
+    const e = applyProposal(outcome(), NEW, [HELD], NOW);
+    expect(e?.act === "run" && e.chat.id).toBe(NEW.id);
+    expect(e?.act === "run" && e.chat.id).not.toBe(other.id);
+  });
+
+  it("a chat already bound to that meeting has nothing to rebind — it is simply asked", () => {
+    const mine = chat({ id: "meet-m-live", meeting: "m-live", label: "Standup" });
+    const e = applyProposal(catchUp(), mine, [LIVE], NOW);
+    expect(e).toEqual({ act: "run", chat: { ...mine, touched: true, lastActivityAt: NOW }, kick: KICK["catch-up"], say: undefined });
+  });
+
+  it("the two structural rows are never rebound — from them a meeting chip opens the meeting's own chat", () => {
+    for (const id of [PERSONAL_CHAT_ID, ORG_CHAT_ID]) {
+      const e = applyProposal(catchUp(), chat({ id, label: "Personal", touched: true }), [LIVE], NOW);
+      expect(e).toEqual({ act: "open", meetingId: "m-live", kick: KICK["catch-up"], say: undefined });
+    }
+  });
+
+  it("nor is a chat that belongs to a DIFFERENT meeting — its id is that meeting's session", () => {
+    const held = chat({ id: "meet-m-post", meeting: "m-post", label: "Blue Light Card" });
+    expect(applyProposal(catchUp(), held, [LIVE], NOW)?.act).toBe("open");
+  });
+
+  it("a chip for a meeting the list has lost does nothing at all", () => {
+    expect(applyProposal(catchUp(), NEW, [], NOW)).toBeNull();
+  });
+
+  it("review flips the filter and names no chat — nothing is touched or relabelled", () => {
+    const review = run([], [touched("main"), untouched("a")])[0];
+    expect(applyProposal(review, NEW, [], NOW)).toEqual({ act: "filter" });
+  });
+
+  it("the setup chip speaks in this chat too, and names an unnamed one", () => {
+    const p = setupProposal("ada@example.com");
+    const e = applyProposal(p, NEW, [], NOW);
+    expect(e?.act).toBe("run");
+    if (e?.act !== "run") return;
+    expect(e.chat.id).toBe(NEW.id);
+    expect(e.chat.label).toBe("Workspace setup");
+    expect(e.say).toBe("My email is ada@example.com, set up a workspace for me");
+    expect(e.kick).toBe(ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + e.say);
+  });
+
+  it("with no chat in front at all — and only then — a chip may make one", () => {
+    expect(applyProposal(GROUP_PROPOSAL, null, [], NOW)).toEqual({ act: "create", label: "Daily meetings", kick: KICK.group, say: undefined });
+  });
+
+  it("NOTHING a live row can offer ever appends a chat", () => {
+    const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], false, NOW, "ada@example.com");
+    expect(offered.length).toBeGreaterThan(0);
+    for (const p of [...offered, GROUP_PROPOSAL]) {
+      const e = applyProposal(p, NEW, [LIVE, SOON, HELD], NOW);
+      expect(e?.act).not.toBe("create");
+      if (e?.act === "run") expect(e.chat.id).toBe(NEW.id);
+    }
+  });
+});
+
+describe("isUnlabeled — which names a chip may replace", () => {
+  it("the placeholders the product itself writes", () => {
+    for (const l of ["New chat", "new chat", "Chat", "", "   "]) expect(isUnlabeled(l)).toBe(true);
+  });
+  it("anything a human or a meeting put there", () => {
+    for (const l of ["Personal", "Standup", "Organisation setup", "Chat with Ada"]) expect(isUnlabeled(l)).toBe(false);
   });
 });

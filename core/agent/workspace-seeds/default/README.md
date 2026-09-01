@@ -1,9 +1,13 @@
 # (unset) — this workspace has not been set up yet
 
-A **workspace** is a folder of durable memory: everything captured here — people, companies,
-meetings, decisions, notes — lives as plain files, and **this README is its dashboard**: the
-at-a-glance view the agent keeps current as a side effect of every write. It is a *view over the
-files*, never a second source of truth.
+**Your meetings become words, and those words become memory you and your team can use.** A bot joins
+your calls; the transcript and the minutes land here; your agent keeps this workspace current so the
+people, companies and decisions in your world are known the next time they come up — during the
+meeting and between them.
+
+Everything is **plain files you own**. A **workspace** is the folder they live in, and **this README
+is its dashboard**: the at-a-glance view the agent keeps current as a side effect of every write. It
+is a *view over the files*, never a second source of truth.
 
 > **First conversation sets this up.** What kind of workspace this becomes is decided by why it
 > exists — the agent follows the matching playbook in [`flows/`](flows/README.md):

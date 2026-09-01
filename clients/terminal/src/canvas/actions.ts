@@ -84,6 +84,11 @@ export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meet
 // Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
 // the conversation is a BRIEFING, and the role question rides inside it.
 export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";
+// MINUTES home: a chat bound to NO meeting. Neither minutes line is true here — "I kept the minutes
+// of your meeting" names a meeting that may not exist, and a founder read it on a brand-new account
+// with none (2026-09-01). So this one says what the place is and asks the one thing it needs, and it
+// stays true whether the account holds a thousand meetings or zero.
+export const MINUTES_HOME_GREETING = "👋 I'm your agent here. Vexa sits in your meetings, turns them into words, and keeps those words as memory you and your team can use — all as plain files in this workspace. To start: **paste a meeting link** and I'll join it, or tell me **who you are and what you're accountable for** — that decides what I pay attention to for you.";
 export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";

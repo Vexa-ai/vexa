@@ -13,8 +13,9 @@
  *
  *  Every chip carries the whole of its own behaviour: which meeting to open (`meetingId`) and the
  *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
+import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { meetingTitle, meetingWhen, railRows, visibleRows, type Chat } from "./chats";
+import { meetingTitle, meetingWhen, railRows, visibleRows, ORG_CHAT_ID, PERSONAL_CHAT_ID, type Chat } from "./chats";
 
 /** What a chip DOES, which is also what the shell switches on. */
 export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup" | "group";
@@ -23,8 +24,11 @@ export type Proposal = {
   id: string;           // stable across renders — the React key, and what a test names
   kind: ProposalKind;
   label: string;        // the chip's whole text
-  meetingId?: string;   // catch-up | prep | outcome — the meeting the chip opens
-  kick?: string;        // the one line fired into the chat on arrival (absent = no turn)
+  meetingId?: string;   // catch-up | prep | outcome — the meeting the chip BINDS THIS CHAT TO
+  kick?: string;        // the one line fired into this chat on click (absent = no turn)
+  say?: string;         // the kick's VISIBLE form — set when the chip's words are the user's own,
+                        // so the turn renders as their message instead of arriving hidden
+  title?: string;       // the name this chat takes if nobody has named it yet (see isUnlabeled)
   count?: number;       // review — how many rows the rail is hiding
 };
 
@@ -49,6 +53,7 @@ export const GROUP_PROPOSAL: Proposal = {
   kind: "group",
   label: "Create a group for daily meetings",
   kick: KICK.group,
+  title: "Daily meetings",
 };
 
 /** A clock, in the reader's own locale. Never a date: the chip only ever names a time inside the
@@ -78,13 +83,15 @@ function startsAt(m: MeetingMock): number {
  *
  *  `scaffolded` is the `.scaffolded` marker probe: `true` set up, `false` not, `null` NOT YET KNOWN.
  *  Null fails closed — a chip that appears a second late is a flicker, and a "set up my workspace"
- *  offered to someone whose workspace is already set up is a lie.
+ *  offered to someone whose workspace is already set up is a lie. `email` is the signed-in address,
+ *  and it only ever reaches rule 5's chip.
  */
 export function proposals(
   meetings: MeetingMock[],
   chats: Chat[],
   scaffolded: boolean | null,
   now: number = Date.now(),
+  email?: string | null,
 ): Proposal[] {
   const out: Proposal[] = [];
 
@@ -128,10 +135,93 @@ export function proposals(
     label: `Review ${hidden} new item${hidden === 1 ? "" : "s"}`,
   });
 
-  // 5 — the workspace has never been scaffolded. No kick: the personal setup path writes its own
-  // opening turn.
-  if (scaffolded === false) out.push({ id: "setup", kind: "setup", label: "Set up my workspace" });
+  // 5 — the workspace has never been scaffolded. The chip is the person's own first sentence.
+  if (scaffolded === false) out.push(setupProposal(email));
 
   if (out.length < 3) out.push(GROUP_PROPOSAL);
   return out.slice(0, 3);
+}
+
+/** Rule 5's chip, written as the person's own opening line. Founder shape (2026-09-01): the button
+ *  IS the first thing they say — "My email is <theirs>, set up a workspace for me" — so clicking it
+ *  starts the setup conversation with an answer already in it rather than with a button press nobody
+ *  can see afterwards. The address comes from the signed-in session and is never typed; without one
+ *  the sentence would read "My email is , …", so it degrades to the plain ask.
+ *
+ *  The kick carries the discovery-loop grounding the composer would otherwise attach to a first
+ *  onboarding reply — the chip skips the composer, so it brings the grounding itself. `say` is what
+ *  the reader sees; the grounding never renders (compactStoredUserText strips it on reload too). */
+export function setupProposal(email?: string | null): Proposal {
+  const say = email ? `My email is ${email}, set up a workspace for me` : "Set up a workspace for me";
+  return { id: "setup", kind: "setup", label: say, say, kick: ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + say, title: "Workspace setup" };
+}
+
+// ── what a click DOES ────────────────────────────────────────────────────────────────
+//
+//  A chip ACTS IN THE CHAT IT RENDERS IN. Founder ruling, 2026-09-01: he pressed one inside a chat
+//  he had just created and got a second one — *"clicking this button should not create a new chat —
+//  this chat is already new."* So nothing below ever appends a row: the record in front is touched,
+//  named and — for a meeting chip — REBOUND to the meeting, keeping its id, which is also its agent
+//  session. `applyProposal` is the whole mutation and it is pure, so the contract is testable at the
+//  boundary that actually broke rather than through a rendered shell.
+
+/** A label nobody chose. The rail's "+" mints "New chat" and a normalised record falls back to
+ *  "Chat"; both are placeholders a chip may replace. Anything else is a name a human picked. */
+export function isUnlabeled(label: string): boolean {
+  const s = (label ?? "").trim();
+  return !s || /^new chat$/i.test(s) || /^chat$/i.test(s);
+}
+
+/** The two seeded rows are STRUCTURAL — chats.ts calls them "the two rows that must always be
+ *  reachable", and `ensureSeeds` restores one that is MISSING, never one that was renamed. They are
+ *  therefore the one place a rebind is refused: turning Personal into a meeting's chat would retire
+ *  the home row for good. From either of them a meeting chip opens the meeting's own chat, which is
+ *  exactly what clicking its rail row does. */
+const STRUCTURAL = new Set<string>([PERSONAL_CHAT_ID, ORG_CHAT_ID]);
+
+export type ProposalEffect =
+  /** review — flip the rail's own filter. Touches no chat, names none, relabels nothing. */
+  | { act: "filter" }
+  /** the chip acts IN `chat` — same id as the one in front, already touched, named and rebound. */
+  | { act: "run"; chat: Chat; kick?: string; say?: string }
+  /** the chat in front may not be rebound (structural, or bound to a DIFFERENT meeting) — open the
+   *  meeting's own chat, as the rail does. */
+  | { act: "open"; meetingId: string; kick?: string; say?: string }
+  /** the degenerate case: nothing is in front at all. */
+  | { act: "create"; label: string; kick?: string; say?: string };
+
+/** A chip plus the chat in front, in — the whole mutation, out. `null` = do nothing.
+ *
+ *  A meeting chip REBINDS: the record keeps its id (so no row appears and the turn lands in the
+ *  session already open), takes the meeting's ref and title, and DROPS its saved tabs so `openChat`
+ *  seeds the room from the meeting's phase pages instead of reopening yesterday's README. A chat
+ *  already bound to that meeting has nothing to rebind and is simply asked.
+ *
+ *  Two chats on one meeting is legal — they are bundles, not the meeting — so a meeting that already
+ *  has a chat with history does NOT divert the click into it. */
+export function applyProposal(
+  p: Proposal,
+  current: Chat | null | undefined,
+  meetings: MeetingMock[],
+  now: number = Date.now(),
+): ProposalEffect | null {
+  if (p.kind === "review") return { act: "filter" };
+  const touch = (c: Chat): Chat => ({ ...c, touched: true, lastActivityAt: now });
+
+  if (p.meetingId) {
+    const m = meetings.find((x) => String(x.id) === p.meetingId);
+    if (!m) return null;                                        // a chip for a meeting the list lost
+    if (current && current.meeting === p.meetingId) return { act: "run", chat: touch(current), kick: p.kick, say: p.say };
+    if (!current || current.meeting || STRUCTURAL.has(current.id))
+      return { act: "open", meetingId: p.meetingId, kick: p.kick, say: p.say };
+    return {
+      act: "run",
+      chat: { ...touch(current), meeting: p.meetingId, label: meetingTitle(m), artifacts: [], focus: undefined },
+      kick: p.kick, say: p.say,
+    };
+  }
+
+  if (!current) return { act: "create", label: p.title ?? "Chat", kick: p.kick, say: p.say };
+  const named = p.title && isUnlabeled(current.label) ? { ...touch(current), label: p.title } : touch(current);
+  return { act: "run", chat: named, kick: p.kick, say: p.say };
 }

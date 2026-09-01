@@ -20,7 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -554,6 +554,21 @@ function routineCreationPrompt(commandText: string): string {
 type ChatProps = Partial<TabProps> & { emptyExtra?: ReactNode };
 
 
+// WHICH greeting is TRUE in this room, and the ONE chooser both the empty state and the cached
+// onboarding seed read — they used to decide separately and could disagree about the same chat.
+//
+// Minutes language is only honest in a chat BOUND TO A MEETING. The old rule asked a different
+// question — "does this account have any held meeting?" — and answered it for every session, so the
+// personal home chat greeted a brand-new account with "I kept the minutes of your meeting"
+// (founder, 2026-09-01: an account with no meetings at all). A meeting the reader has not got is not
+// made real by another meeting existing somewhere, so the account-wide test is gone: a `meet-` room
+// asks about ITS OWN meeting, and everywhere else gets the home greeting.
+function minutesGreeting(session: string): string {
+  if (!session.startsWith("meet-")) return MINUTES_HOME_GREETING;
+  const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+  return held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING;
+}
+
 // MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
 // meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
 function minutesEmptyGreeting(session: string): string {
@@ -562,12 +577,7 @@ function minutesEmptyGreeting(session: string): string {
     return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
   if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
     return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
-  if (session.startsWith("meet-")) {
-    const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-    return strip(held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
-  }
-  const anyHeld = liveMeetingsNow().some((mm) => ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-  return strip(anyHeld ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
+  return strip(minutesGreeting(session));
 }
 
 export function Chat({ params = {}, emptyExtra }: ChatProps) {
@@ -897,18 +907,20 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
+      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
-        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
+        try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      void sendRef.current(prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
+      // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
+      // the user's own sentence renders as their message, and the grounding it carries does not.
+      void sendRef.current(detail?.display || prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
@@ -923,8 +935,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     const t = setTimeout(() => {
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       try {
-        const d = JSON.parse(raw as string) as { prompt: string; hidden?: boolean; ground?: boolean };
-        if (d.prompt) void sendRef.current(d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
+        const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean };
+        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground });
       } catch { /* ignore */ }
     }, 600);
     return () => clearTimeout(t);
@@ -940,15 +952,13 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       updateChatState(key, (s) => (
         s.turns.length
           ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly()
-                ? (liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))) ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING)
-                : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
+          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly() ? minutesGreeting(session) : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
       ));
       onboardingArmedRef.current = true;
     };
     window.addEventListener(ONBOARDING_SEED_EVENT, onSeed);
     return () => window.removeEventListener(ONBOARDING_SEED_EVENT, onSeed);
-  }, [layout, chatKey]);
+  }, [layout, chatKey, session]);
 
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
