@@ -21,6 +21,8 @@
  */
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
+import { Icon } from "../ui-kit";
+import { copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
@@ -45,6 +47,19 @@ const navBtn = (on: boolean): CSSProperties => ({
   lineHeight: 1, color: on ? "var(--t2)" : "var(--line2)", cursor: on ? "pointer" : "default", padding: 0,
 });
 
+/** The doc header's utility group — one size, one shape, `on` for a control that is currently
+ *  holding the view (the source toggle) or has just fired (copy). */
+const iconBtn = (on: boolean): CSSProperties => ({
+  flex: "none", width: 26, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
+  background: on ? surface.raisedHi : "transparent", border: "none", borderRadius: 6,
+  color: on ? "var(--t1)" : "var(--t3)", cursor: "pointer", padding: 0, transition: "color .12s, background .12s",
+});
+const litIcon = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.color = "var(--t1)"; e.currentTarget.style.background = surface.raised; };
+const dimIcon = (on: boolean) => (e: { currentTarget: HTMLElement }) => {
+  e.currentTarget.style.color = on ? "var(--t1)" : "var(--t3)";
+  e.currentTarget.style.background = on ? surface.raisedHi : "transparent";
+};
+
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
 export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
 
@@ -65,10 +80,16 @@ export function PagesPanel(p: {
   const canvas = p.docKind === "meeting" && !p.listing;
   const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
   const [mode, setMode] = useState<"view" | "edit">("view");
+  // RAW is a lens on the view, not a third mode: `</>` shows the markdown the renderer was given,
+  // which is the question it answers ("what is actually in the file?"). Keeping it orthogonal to
+  // `mode` means Edit can be reached from either lens and returns to the one you were in.
+  const [raw, setRaw] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  // a new doc (or fresh content) always lands in VIEW; edit starts from the live body
-  useEffect(() => { setMode("view"); }, [p.docPath, p.docSlug]);
+  // a new doc (or fresh content) always lands in VIEW, rendered — the lens is a per-document choice
+  useEffect(() => { setMode("view"); setRaw(false); }, [p.docPath, p.docSlug]);
+  useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(false), 1400); return () => clearTimeout(t); }, [copied]);
 
   const listing = p.listing ?? null;
   // While a listing is up the breadcrumb addresses the FOLDER, not the last document read.
@@ -81,6 +102,12 @@ export function PagesPanel(p: {
   const slug = listing ? listing.slug : p.docSlug;
   // segment i (0 = the workspace root) addresses the folder made of segments 1..i
   const nav = (i: number) => p.onNavigate?.(slug, crumbs.slice(1, i + 1).join("/"));
+  // The doc header's two halves (founder reference: `2026-09-01-vexa-prd.md  drafts`) — the file's
+  // own name, and where it lives. Read off the DOCUMENT, never off the crumb, so a folder listing
+  // open in front of it cannot rename the document sitting behind it.
+  const docName = p.docPath.split("/").pop() || p.docPath;
+  const docWhere = [p.docSlug ?? "personal", ...p.docPath.split("/").slice(0, -1)].join(" / ");
+  const doc = !canvas && !listing;   // a document is in front — the only state the header describes
   const save = async () => {
     setSaving(true);
     try {
@@ -117,19 +144,51 @@ export function PagesPanel(p: {
           );
         })}
         </div>
-        {!listing && !canvas && p.body !== null && (mode === "view"
-          ? <button onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }} title="Edit"
-              style={{ ...ty.chip, ...chipBase, color: "var(--t2)", background: surface.raised, border: "1px solid transparent", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>Edit</button>
-          : <>
-              <button onClick={() => setMode("view")} title="Cancel"
-                style={{ ...ty.chip, ...chipBase, color: "var(--t3)", background: "transparent", border: "none", padding: "3px 6px", cursor: "pointer" }}>Cancel</button>
-              <button onClick={() => void save()} disabled={saving} title="Save"
-                style={{ ...ty.chip, ...chipBase, color: "#16181d", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
-            </>)}
+        {/* Edit/Cancel/Save used to sit here, competing with the tabs for the same 46px. They are
+            DOCUMENT controls, so they moved down into the doc header's utility group with the rest
+            of them — which leaves this row to do the one job it is named for. */}
         {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
         {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} />}
       </div>
       <div style={{ gridRow: 2, gridColumn: 3, display: "flex", flexDirection: "column", minHeight: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+        {/* WHAT is in front, and what can be done to it — the document's own header row.
+            Filename prominent, location subdued beside it, every utility grouped hard right
+            (founder reference, the desktop app's doc panel). Three rows now stack above the body
+            and each answers a different question: the tabs say what is OPEN, this says what is IN
+            FRONT, the crumb below says where it LIVES and walks you back up.
+            A canvas is exempt — it names its own meeting in its own header, and there is no file
+            here to read as source, copy or edit, so the whole row (not just the group) stands down. */}
+        {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
+          <span data-doc-name title={docName}
+            style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>
+          <span data-doc-where title={docWhere}
+            style={{ ...ty.meta, flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docWhere}</span>
+          <span style={{ flex: "1 1 0%", minWidth: 8 }} />
+          {p.body !== null && (mode === "view"
+            ? <>
+                <button data-doc-act="raw" aria-pressed={raw} onClick={() => setRaw((v) => !v)}
+                  title={raw ? "Show the rendered document" : "Show the markdown source"} aria-label="Toggle markdown source"
+                  style={iconBtn(raw)} onMouseEnter={litIcon} onMouseLeave={dimIcon(raw)}>
+                  <Icon name="code" size={14} />
+                </button>
+                <button data-doc-act="copy" onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}
+                  title={copied ? "Copied" : "Copy contents"} aria-label="Copy contents"
+                  style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
+                  <Icon name={copied ? "check" : "copy"} size={14} />
+                </button>
+                <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }}
+                  title="Edit" aria-label="Edit"
+                  style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
+                  <Icon name="edit" size={14} />
+                </button>
+              </>
+            : <>
+                <button data-doc-act="cancel" onClick={() => setMode("view")} title="Cancel"
+                  style={{ ...ty.chip, flex: "none", color: "var(--t3)", background: "transparent", border: "none", padding: "3px 6px", cursor: "pointer" }}>Cancel</button>
+                <button data-doc-act="save" onClick={() => void save()} disabled={saving} title="Save"
+                  style={{ ...ty.chip, flex: "none", color: "var(--on-accent)", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
+              </>)}
+        </div>}
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
             address: its `path` is a row id, and the canvas names the meeting in its own header. */}
         {!canvas && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
@@ -157,7 +216,11 @@ export function PagesPanel(p: {
                 ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
                 : mode === "edit"
                   ? <MarkdownEditor value={draft} onChange={setDraft} />
-                  : <MdxDoc>{p.body}</MdxDoc>}
+                  : raw
+                    // the bytes, not a second editor — selectable and copyable, never writable,
+                    // so `</>` stays a lens and Edit stays the one way to change a file
+                    ? <pre data-doc-raw style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{p.body}</pre>
+                    : <MdxDoc>{p.body}</MdxDoc>}
         </div>
       </div>
     </>
