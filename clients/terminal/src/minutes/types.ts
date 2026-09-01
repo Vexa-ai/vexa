@@ -8,4 +8,7 @@ export type Sel = {
   label: string;
   workspaces: string[];   // the mount set, which now lives on the chat
 };
-export type Page = { path: string; slug?: string; label: string };
+/** A tab. `kind` absent = a document, which is what every tab was before the transcript stopped
+ *  being a file — so a chat persisted by an older build migrates by meaning nothing. A `meeting`
+ *  tab's `path` is the meeting ROW ID, not a workspace path. */
+export type Page = { kind?: "doc" | "meeting"; path: string; slug?: string; label: string };

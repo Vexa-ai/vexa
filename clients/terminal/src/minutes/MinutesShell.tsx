@@ -79,6 +79,9 @@ export function MinutesShell() {
   });
   const [docPath, setDocPath] = useState("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
+  // What KIND of thing is in front. A meeting tab is not a document: nothing is fetched for it and
+  // the panel renders the meeting canvas instead of a body.
+  const [docKind, setDocKind] = useState<"doc" | "meeting">("doc");
   const [docBody, setDocBody] = useState<string | null>(null);
   const [docNonce, setDocNonce] = useState(0);
   // a folder the breadcrumb navigated to — it takes over the panel body until a file is opened
@@ -184,7 +187,11 @@ export function MinutesShell() {
         // chat.tsx needs them for its mode chip — but live/post render the same room here.
         // It is a property of the MEETING, never of the link that opened it: an emailed link is
         // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
-        return pagesForPhase(m ? meetingPhase(m) : "post", (m as { native_id?: string } | undefined)?.native_id);
+        // A `?mock=1` meeting has no row behind it, so its transcript stays the canned markdown
+        // page; every real meeting gets the canvas, bound to its row id.
+        const fake = mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting);
+        return pagesForPhase(m ? meetingPhase(m) : "post", (m as { native_id?: string } | undefined)?.native_id,
+          fake ? null : c.meeting);
       }
       const shared = c.workspaces.filter((w) => w !== "_global");
       if (!shared.length) return [{ path: "README.md", slug: "_global", label: "The organisation" }];
@@ -213,8 +220,8 @@ export function MinutesShell() {
     });
     setPages(list);
     setListing(null);
-    if (front) { setDocPath(front.path); setDocSlug(front.slug); }
-    setHist(front ? { stack: [{ path: front.path, slug: front.slug, label: front.label }], i: 0 } : { stack: [], i: -1 });
+    if (front) { setDocPath(front.path); setDocSlug(front.slug); setDocKind(front.kind === "meeting" ? "meeting" : "doc"); }
+    setHist(front ? { stack: [{ kind: front.kind, path: front.path, slug: front.slug, label: front.label }], i: 0 } : { stack: [], i: -1 });
     setDocBody(null); setDocNonce((n) => n + 1);
   }, [meetings, mountSet, pendingView]);
 
@@ -288,7 +295,7 @@ export function MinutesShell() {
   useEffect(() => {
     if (!pages.length) return;
     const id = sel.chatId;
-    const focus = artifactKey({ path: docPath, slug: docSlug });
+    const focus = artifactKey({ kind: docKind, path: docPath, slug: docSlug });
     persist((prev) => {
       const i = prev.findIndex((c) => c.id === id);
       if (i < 0) return prev;
@@ -297,10 +304,10 @@ export function MinutesShell() {
         && c.artifacts.every((a, k) => artifactKey(a) === artifactKey(pages[k]) && a.label === pages[k].label);
       if (same) return prev;
       const next = [...prev];
-      next[i] = { ...c, artifacts: pages.map((pg) => ({ path: pg.path, slug: pg.slug, label: pg.label })), focus };
+      next[i] = { ...c, artifacts: pages.map((pg) => ({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label })), focus };
       return next;
     });
-  }, [sel.chatId, pages, docPath, docSlug, persist]);
+  }, [sel.chatId, pages, docPath, docSlug, docKind, persist]);
 
   // The agent should see what the human is reading. chat.tsx builds its context bundle from the
   // layout store's active tab (chatContext.focusTarget maps a `doc` tab to `{kind:"file", ref:
@@ -309,8 +316,12 @@ export function MinutesShell() {
   // shell, so the store keeps exactly one writer. Only `path` reaches the wire today; `tabs` rides
   // along for the server to pick up when it wants the whole open set.
   useEffect(() => {
-    layout.setActiveTab({ kind: "doc", params: { path: docPath, slug: docSlug, tabs: pages.map((pg) => pg.path) } });
-  }, [layout, docPath, docSlug, pages]);
+    // a meeting tab reaches the agent as a MEETING focus (chatContext.focusTarget maps it to
+    // `{kind:"meeting"}`), never as a file path that does not exist.
+    layout.setActiveTab(docKind === "meeting"
+      ? { kind: "meeting", params: { meetingId: docPath } }
+      : { kind: "doc", params: { path: docPath, slug: docSlug, tabs: pages.map((pg) => pg.path) } });
+  }, [layout, docPath, docSlug, docKind, pages]);
   useEffect(() => () => layout.setActiveTab(null), [layout]);
 
   // Open a chat on mount. Without this the shell sat on a HARD-CODED selection until the first
@@ -340,7 +351,7 @@ export function MinutesShell() {
    *  into the panel goes through here (entity link, breadcrumb listing, phase page), which is why
    *  the tab set can be trusted as the record of what has been looked at. */
   const openPage = useCallback((pg: Page) => {
-    const e: Artifact = { path: pg.path, slug: pg.slug, label: pg.label };
+    const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
     // standard history semantics: navigating after going BACK truncates the forward branch, and
     // re-opening the document already in front is not a navigation at all.
     setHist((h) => {
@@ -350,7 +361,8 @@ export function MinutesShell() {
       return { stack, i: stack.length - 1 };
     });
     setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(pg)) ? prev : [...prev, pg]);
-    setDocPath(pg.path); setDocSlug(pg.slug); setListing(null); setDocNonce((n) => n + 1);
+    setDocPath(pg.path); setDocSlug(pg.slug); setDocKind(pg.kind === "meeting" ? "meeting" : "doc");
+    setListing(null); setDocNonce((n) => n + 1);
   }, []);
 
   /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
@@ -360,8 +372,9 @@ export function MinutesShell() {
     if (j < 0 || j >= hist.stack.length) return;
     const e = hist.stack[j];
     setHist({ ...hist, i: j });
-    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(e)) ? prev : [...prev, { path: e.path, slug: e.slug, label: e.label }]);
-    setDocPath(e.path); setDocSlug(e.slug); setListing(null); setDocNonce((n) => n + 1);
+    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(e)) ? prev : [...prev, { kind: e.kind, path: e.path, slug: e.slug, label: e.label }]);
+    setDocPath(e.path); setDocSlug(e.slug); setDocKind(e.kind === "meeting" ? "meeting" : "doc");
+    setListing(null); setDocNonce((n) => n + 1);
   };
   // A folder listing is not a document, so it is not in the stack — but it IS somewhere you went,
   // and the first ‹ should undo it rather than skipping past the doc you were reading.
@@ -379,7 +392,7 @@ export function MinutesShell() {
     if (i < 0) return;
     const next = pages.filter((_, k) => k !== i);
     setPages(next);
-    if (key === artifactKey({ path: docPath, slug: docSlug })) openPage(next[Math.min(i, next.length - 1)]);
+    if (key === artifactKey({ kind: docKind, path: docPath, slug: docSlug })) openPage(next[Math.min(i, next.length - 1)]);
   };
 
   useEffect(() => {
@@ -420,6 +433,8 @@ export function MinutesShell() {
 
   useEffect(() => {
     let dead = false;
+    // a meeting tab has no body to fetch: the canvas fetches its own transcript by row id.
+    if (docKind === "meeting") { setDocBody(null); return; }
     // mock bodies short-circuit the fetch entirely — no request is made for a fabricated page
     if (mock) {
       const canned = mockBody(docPath, Date.now() - mockStart.current);
@@ -430,7 +445,7 @@ export function MinutesShell() {
       .then((c) => { if (!dead) setDocBody(c); })
       .catch(() => { if (!dead) setDocBody(null); });
     return () => { dead = true; };
-  }, [docPath, docSlug, sel.chatId, docNonce, mock]);
+  }, [docPath, docSlug, docKind, sel.chatId, docNonce, mock]);
 
   // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
   // something you watch rather than something the label claims. Mock-only: the real live feed will
@@ -569,7 +584,7 @@ export function MinutesShell() {
       </div>}
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
-        : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug}
+        : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
             onOpen={openPage} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}

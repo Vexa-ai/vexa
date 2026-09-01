@@ -26,17 +26,30 @@ export const VIEW_KEY = "vexa.composedView";
 export const personalPage = (): Page => ({ path: "README.md", label: "Personal page" });
 
 /** The pages a meeting room shows — TWO shapes, keyed on whether a transcript exists.
- *  `native` absent = nothing captured under this row yet, so there is only the personal page. */
-export function pagesForPhase(phase: MeetingPhase, native?: string | null): Page[] {
+ *  `native` absent = nothing captured under this row yet, so there is only the personal page.
+ *
+ *  A TRANSCRIPT IS NOT A FILE (founder ruling 2026-09-01). `kg/entities/meeting/<native>.transcript.md`
+ *  was a dead pointer — nothing writes it — and a document that has to be POLLED to look alive was
+ *  only ever the mock's trick. The real transcript is the meeting canvas the workbench already
+ *  registers: it fetches by row id and streams live segments over the copilot subscription, so it
+ *  is live-aware by construction rather than by a 2.5s timer.
+ *
+ *  `meetingId` is the ROW ID that canvas binds to. Absent = there is no row behind this meeting,
+ *  which today means exactly one thing: a `?mock=1` fixture. Those keep the canned markdown page,
+ *  because a fabricated meeting has nothing for the canvas to fetch. Brief and Minutes are
+ *  documents in both cases — they are real files the agent writes. */
+export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null): Page[] {
   if (!native) return [personalPage()];
   const doc = `kg/entities/meeting/${native}.md`;
-  const script = `kg/entities/meeting/${native}.transcript.md`;
   // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
   if (phase === "prep") return [{ path: doc, label: "Brief" }, personalPage()];
   // live or post: a transcript exists and it leads. The meeting doc is the SAME file either way —
   // it is the brief while the room is running and the minutes once it is not, so only its name moves.
+  const transcript: Page = meetingId
+    ? { kind: "meeting", path: meetingId, label: "Transcript" }
+    : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript" };
   return [
-    { path: script, label: "Transcript" },
+    transcript,
     { path: doc, label: phase === "post" ? "Minutes" : "Brief" },
     personalPage(),
   ];
@@ -75,7 +88,9 @@ export function resolveView(spec: string | null | undefined, phasePages: Page[])
       const path = token.slice(5).trim().replace(/^\/+/, "");
       // a link never walks out of the mount, and never names an absolute host path
       if (!path || path.split("/").includes("..")) continue;
-      const already = pages.find((pg) => pg.path === path && !pg.slug);
+      // `!pg.kind` — a meeting tab's `path` is a row id, and a `file:` token must never resolve
+      // onto it however numerically alike they look.
+      const already = pages.find((pg) => pg.path === path && !pg.slug && !pg.kind);
       if (already) { focus = already; continue; }
       const added: Page = { path, label: (path.split("/").pop() ?? path).replace(/\.md$/i, "") };
       pages.push(added);

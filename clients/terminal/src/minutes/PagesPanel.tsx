@@ -26,6 +26,7 @@ import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
 import { CollapseButton } from "./Collapse";
+import { registry } from "../contributions";
 import { header, surface, type as ty } from "./tokens";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
@@ -52,9 +53,17 @@ export function PagesPanel(p: {
   onClose?: (pg: Page) => void;
   listing?: Listing | null; onNavigate?: (slug: string | undefined, prefix: string) => void;
   canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
+  docKind?: "doc" | "meeting";
   body: string | null; onSaved?: () => void;
   onCollapse?: () => void;
 }) {
+  // THE TRANSCRIPT TAB IS NOT A DOCUMENT. It renders the meeting canvas the workbench registers —
+  // the same component a meetings-list click opens, which fetches by row id and streams live
+  // segments while the bot is in the room. Reached through the tab REGISTRY rather than by
+  // importing the surface, so this panel keeps the dependency direction the registry exists for:
+  // surfaces register, shells render what is registered.
+  const canvas = p.docKind === "meeting" && !p.listing;
+  const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -108,7 +117,7 @@ export function PagesPanel(p: {
           );
         })}
         </div>
-        {!listing && p.body !== null && (mode === "view"
+        {!listing && !canvas && p.body !== null && (mode === "view"
           ? <button onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }} title="Edit"
               style={{ ...ty.chip, ...chipBase, color: "var(--t2)", background: surface.raised, border: "1px solid transparent", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>Edit</button>
           : <>
@@ -121,8 +130,9 @@ export function PagesPanel(p: {
         {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} />}
       </div>
       <div style={{ gridRow: 2, gridColumn: 3, display: "flex", flexDirection: "column", minHeight: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
-        {/* the breadcrumb — the doc's address, and a path you can walk back up */}
-        <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
+        {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
+            address: its `path` is a row id, and the canvas names the meeting in its own header. */}
+        {!canvas && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
           {trail.map((c, i) => (
             <span key={i} style={{ flex: "none" }}>
               {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
@@ -134,15 +144,20 @@ export function PagesPanel(p: {
           ))}
           {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
           <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
-        </div>
-        <div style={{ ...ty.body, flex: 1, overflowY: "auto", padding: mode === "edit" && !listing ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: mode === "edit" && !listing ? "flex" : undefined }}>
-          {listing
-            ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
-            : p.body === null
-              ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
-              : mode === "edit"
-                ? <MarkdownEditor value={draft} onChange={setDraft} />
-                : <MdxDoc>{p.body}</MdxDoc>}
+        </div>}
+        <div style={{ ...ty.body, flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
+          {canvas
+            // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
+            ? (MeetingCanvas
+                ? <MeetingCanvas id={`meeting:${p.docPath}`} params={{ meetingId: p.docPath }} active />
+                : <div style={{ ...ty.body, color: "var(--t3)", padding: "18px 20px" }}>The meeting surface is not registered in this build.</div>)
+            : listing
+              ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
+              : p.body === null
+                ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
+                : mode === "edit"
+                  ? <MarkdownEditor value={draft} onChange={setDraft} />
+                  : <MdxDoc>{p.body}</MdxDoc>}
         </div>
       </div>
     </>

@@ -18,10 +18,15 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
  *  step. `label` is carried rather than recomputed because a phase page's name ("Minutes" vs
  *  "Brief") is a property of the room that produced it, not of the path. */
-export type Artifact = { path: string; slug?: string; label: string };
+export type Artifact = { kind?: "doc" | "meeting"; path: string; slug?: string; label: string };
 
-/** A tab's identity. Path alone is not enough — `README.md` exists in every workspace. */
-export const artifactKey = (a: { path: string; slug?: string }) => `${a.slug ?? ""}|${a.path}`;
+/** A tab's identity. Path alone is not enough — `README.md` exists in every workspace.
+ *
+ *  A `meeting` tab is keyed on a namespace no workspace slug can occupy, so a DOC tab's key is
+ *  byte-for-byte what it always was: the `focus` values already persisted in every chat record keep
+ *  resolving, which is the whole reason `kind` is optional rather than defaulted to a string. */
+export const artifactKey = (a: { kind?: string; path: string; slug?: string }) =>
+  a.kind === "meeting" ? `@meeting|${a.path}` : `${a.slug ?? ""}|${a.path}`;
 
 /** The record. `touched` is the whole filter: it is written at SEND time and at explicit-create
  *  time, never derived by fetching a history — an untouched auto-created chat is exactly the thing
@@ -340,8 +345,12 @@ function normalise(raw: unknown, now: number): Chat[] {
       // tolerant on purpose: an early build stored artifacts as bare path strings, and a stored tab
       // whose shape we no longer understand is dropped rather than allowed to render as nothing.
       artifacts: Array.isArray(r.artifacts)
-        ? (r.artifacts as unknown[]).filter((a): a is Artifact =>
-            !!a && typeof a === "object" && typeof (a as Artifact).path === "string" && typeof (a as Artifact).label === "string")
+        ? (r.artifacts as unknown[])
+            .filter((a): a is Artifact =>
+              !!a && typeof a === "object" && typeof (a as Artifact).path === "string" && typeof (a as Artifact).label === "string")
+            // a `kind` we do not understand degrades to a document rather than to a tab nothing
+            // can render — the same tolerance the artifact list has always had for shape drift.
+            .map((a) => ({ ...a, kind: a.kind === "meeting" ? ("meeting" as const) : undefined }))
         : [],
       focus: typeof r.focus === "string" && r.focus ? r.focus : undefined,
       touched: !!r.touched,
