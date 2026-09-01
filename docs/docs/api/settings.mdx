@@ -1,0 +1,278 @@
+---
+title: "Settings API"
+description: "Read your identity and limits, and configure the per-account settings Vexa stores: model credentials, transcription backend, and webhook delivery."
+---
+
+Vexa's settings are **per API-key owner** — there is one settings blob per account, and the server
+derives whose it is from your key. There is no organization or workspace settings tier.
+
+All requests use the same API-key authentication as the rest of Vexa:
+
+```bash
+-H "X-API-Key: $API_KEY"
+```
+
+Every route on this page accepts a key holding either the `bot` or the `tx` scope. See
+[Authentication](/authentication) for minting and scoping keys.
+
+## Where each setting lives
+
+| You want to change | Where |
+|---|---|
+| Model provider, model names, credentials | [Model configuration](#model-configuration), below |
+| Transcription backend URL and token | [Transcription backend](#transcription-backend), below |
+| Webhook URL, secret, event filter | [Webhook configuration](#webhook-configuration), below |
+| Calendar connections and auto-join | [Calendar API](/api/calendar) |
+| API keys — mint, scope, revoke | [Authentication](/authentication) |
+| A single bot's language, task, or name | per request on [`POST /bots`](/api/meetings#send-a-bot-to-a-meeting) |
+| Ports, storage, STT engine, rate limits | environment variables — [Configuration](/configuration) |
+
+Settings written here are **account-level overrides of the deployment's defaults**, resolved
+field by field: a field you set wins; a field you leave unset falls through to the deployment
+configuration. Clearing a field returns it to the deployment default.
+
+## Identity
+
+```bash GET /auth/me
+curl "$API_BASE/auth/me" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "user_id": 1,
+  "email": "jane@acme.com",
+  "scopes": ["bot", "tx"],
+  "max_concurrent": 3
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `user_id` | The account this key resolves to. |
+| `email` | The account's email address. |
+| `scopes` | The scopes carried by *this key*, not by the account. |
+| `max_concurrent` | How many bots this account may run at once. Changing it is an [admin operation](#account-limits-admin-tier). |
+
+This is the cheapest way to check that a key is live and which scopes it holds. A key with only the
+`browser` scope can call this route and nothing else.
+
+## Model configuration
+
+The account's LLM settings, used by the [agent control plane](/api/agent) and meeting-time
+summarization.
+
+```bash GET /user/models
+curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "mode": "custom",
+  "model": "gpt-4o",
+  "meeting_model": "gpt-4o-mini",
+  "base_url": "https://api.example.com/v1",
+  "api_key_set": true,
+  "api_key": "********1f4c"
+}
+```
+
+The stored credential never leaves in the clear: `api_key` is masked to its last four characters,
+enough to recognize which credential is set, and `api_key_set` states whether one exists at all.
+An unset field reads as `null`.
+
+```bash PUT /user/models
+curl -X PUT "$API_BASE/user/models" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"custom","base_url":"https://api.example.com/v1","api_key":"sk-…"}'
+```
+
+Returns the same masked shape as the read, with **200 OK**.
+
+<ParamField body="mode" type="string">
+  `subscription` or `custom` — which credential terms this account operates under. Any other value
+  returns **422**. See [Model credentials & licensing](/model-credentials-licensing).
+</ParamField>
+<ParamField body="model" type="string">
+  Model name for general agent work.
+</ParamField>
+<ParamField body="meeting_model" type="string">
+  Model name for meeting-time work, when it should differ from `model`.
+</ParamField>
+<ParamField body="base_url" type="string">
+  OpenAI-compatible endpoint. Must be an `http` or `https` URL with a hostname, or the request
+  returns **422**.
+</ParamField>
+<ParamField body="api_key" type="string">
+  Credential for that endpoint. Stored, never echoed in the clear.
+</ParamField>
+
+The update is **partial**: only the fields present in the body change. Sending a field as an empty
+string clears it, and a cleared field falls back to the deployment default. Clearing every field
+removes the account override entirely. String fields longer than 2,048 characters return **422**.
+
+## Transcription backend
+
+The account's override of the deployment's speech-to-text endpoint. Leave it unset to use whatever
+the deployment configures — see [Bring your own STT](/how-to/custom-stt).
+
+```bash GET /user/transcription
+curl "$API_BASE/user/transcription" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "url": "https://stt.example.com",
+  "token_set": true,
+  "token": "********9a2b"
+}
+```
+
+```bash PUT /user/transcription
+curl -X PUT "$API_BASE/user/transcription" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://stt.example.com","token":"…"}'
+```
+
+<ParamField body="url" type="string">
+  Transcription endpoint. Must be an `http` or `https` URL with a hostname.
+</ParamField>
+<ParamField body="token" type="string">
+  Credential for that endpoint. Masked on every read-back, exactly like the model credential.
+</ParamField>
+
+Same partial-update and clearing rules as [model configuration](#model-configuration).
+
+## Webhook configuration
+
+<Warning>
+Webhook **delivery** has never been proven against a real external receiver — see
+[Webhooks](/webhooks) for what is and is not established. The configuration endpoints below are
+the settings surface for it; they store what you send.
+</Warning>
+
+```bash GET /user/webhook
+curl "$API_BASE/user/webhook" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "webhook_url": "https://hooks.example.com/vexa",
+  "webhook_secret_set": true,
+  "webhook_secret": "********c3d1",
+  "webhook_events": {"meeting.completed": true}
+}
+```
+
+```bash PUT /user/webhook
+curl -X PUT "$API_BASE/user/webhook" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "webhook_url": "https://hooks.example.com/vexa",
+    "webhook_secret": "a-long-random-string",
+    "webhook_events": {"meeting.completed": true}
+  }'
+```
+
+<ParamField body="webhook_url" type="string" required>
+  Where Vexa POSTs events. Required on every write — this endpoint replaces the URL, it does not
+  patch it.
+</ParamField>
+<ParamField body="webhook_secret" type="string">
+  HMAC signing secret. Written only when non-empty: sending `""` leaves the stored secret in place
+  rather than clearing it.
+</ParamField>
+<ParamField body="webhook_events" type="object">
+  A `{event_type: boolean}` filter. When you have never set one, **only `meeting.completed`
+  fires**. An explicit `false` suppresses an event; an event you do not mention falls back to that
+  default.
+</ParamField>
+
+The write returns the account record with **200 OK**; the stored secret is omitted from it. Read it
+back with `GET /user/webhook`, where it appears masked.
+
+### Delivery history
+
+```bash GET /user/webhook/deliveries
+curl "$API_BASE/user/webhook/deliveries?limit=50" -H "X-API-Key: $API_KEY"
+```
+
+```json Response — 200
+{
+  "deliveries": [
+    {
+      "event_type": "meeting.completed",
+      "event_id": "e2f1…",
+      "target_host": "hooks.example.com",
+      "outcome": "delivered",
+      "status_code": 200,
+      "attempt": 0,
+      "meeting_id": 812,
+      "created_at": "2026-08-14T15:30:00Z"
+    }
+  ]
+}
+```
+
+Newest first. `limit` accepts 1–500 and defaults to 100; a value outside that range returns **422**.
+Vexa retains the most recent 100 attempts per account — this is a recent-history window, not an
+audit log.
+
+A row carries the target **host only**, never the configured URL or the secret: a webhook URL can
+carry a token in its path or query.
+
+| `outcome` | Meaning |
+|---|---|
+| `delivered` | The receiver accepted it. |
+| `queued` | The attempt failed retryably and is queued for another sweep. |
+| `suppressed` | Your event filter is not subscribed to this event type. |
+| `blocked` | The target was refused before any request left Vexa. |
+| `failed` | The attempt failed and was not queued. |
+
+An empty `deliveries` array means no attempt has been recorded for this account — including when
+the feature has never fired at all.
+
+## Account limits (admin tier)
+
+Concurrency is an account limit, not a self-serve setting: it is changed with the **admin** key on
+the admin API, not with your `X-API-Key`.
+
+```bash PATCH /admin/users/{user_id}
+curl -X PATCH "$ADMIN/admin/users/1" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"max_concurrent_bots": 5}'
+```
+
+Returns the updated account with **200 OK**; an unknown id returns **404**. A body that changes
+nothing returns **422** — the patch requires at least one field. Unrecognized fields are refused
+rather than dropped.
+
+The same patch also accepts a `data` object of platform-billing fields, which the hosted
+deployment's billing integration writes. A self-hosted deployment does not need it.
+
+Creating accounts and minting keys are covered in [Authentication](/authentication).
+
+## What is not configurable through the API
+
+These have no settings endpoint today. They are listed so you can stop looking for one.
+
+| Not available | What exists instead |
+|---|---|
+| Organization or team settings | Settings are per API-key owner only. |
+| Self-serve key management with your `X-API-Key` | Minting and revoking keys requires the admin key ([Authentication](/authentication)). |
+| A default language, task, or bot name for all bots | Set per request on `POST /bots`; calendar connections carry their own `bot_name` ([Calendar API](/api/calendar)). |
+| Notification or email preferences | No such setting is stored. |
+| Reading your own plan, quota usage, or billing state | `GET /auth/me` returns `max_concurrent` only. |
+| Retention or data-deletion policy | Delete individual meetings via the [Meetings API](/api/meetings). |
+
+## Error summary
+
+| Status | Operations | Meaning |
+|---|---|---|
+| `200` | all reads and writes on this page | Request completed. |
+| `401` | all | API key missing, unknown, or revoked. |
+| `403` | all | The key does not carry a scope this route accepts. |
+| `404` | admin patch | No account with that id. |
+| `422` | model, transcription, webhook writes, admin patch | Invalid `mode`, a non-`http(s)` URL, a string over 2,048 characters, an out-of-range `limit`, or an unrecognized field. |
+| `503` | all | Identity resolution is unavailable — the key was not rejected, it could not be checked. |
+
+See the full [error reference](/api/errors).

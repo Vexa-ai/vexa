@@ -1,4 +1,4 @@
-"""L1 — the MCP surface: the /mcp mount exists, exactly the 9 ported tools are exposed,
+"""L1 — the MCP surface: the /mcp mount exists, exactly the 14 tools are exposed,
 and the 4 prompts render."""
 import httpx
 import pytest
@@ -16,6 +16,11 @@ EXPECTED_TOOLS = {
     "get_meeting_transcript",
     "list_recordings",
     "get_recording",
+    "report_issue",
+    "annotate_meeting",
+    "speak_in_meeting",
+    "get_meeting_chat",
+    "search_transcripts",
 }
 
 
@@ -65,3 +70,36 @@ def test_prompts_only_reference_ported_tools():
 def test_unknown_prompt_raises():
     with pytest.raises(ValueError):
         get_prompt_result("vexa.nope")
+
+
+# --- orientation at connect time ---------------------------------------------
+# A client that connects should not have to infer what Vexa is from nine tool descriptions.
+# `instructions` is the MCP field for that, and it shipped empty.
+
+def test_server_ships_instructions():
+    app = create_app("http://gateway.test", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    instructions = app.state.mcp.server.instructions
+    assert instructions, "MCP server must ship `instructions` — a connecting client gets no map without it"
+    # The canonical flow and the identity vocabulary are the two things it exists to say.
+    for expected in ("parse_meeting_link", "request_meeting_bot", "get_meeting_transcript", "native_meeting_id"):
+        assert expected in instructions
+
+
+# --- a tool must refuse an argument it does not declare ----------------------
+# Without additionalProperties, fastapi-mcp DROPS an unknown argument before the HTTP call, so a
+# server-side guard never sees it and the tool answers 200 as if it had been honoured. Verified
+# live: `get_meeting_transcript(limit=2)` returned a transcript with `limit` silently ignored.
+
+def test_every_tool_schema_is_closed():
+    app = create_app("http://gateway.test",
+                     transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    open_schemas = [
+        t.name for t in app.state.mcp.tools
+        if isinstance(getattr(t, "inputSchema", None), dict)
+        and t.inputSchema.get("type") == "object"
+        and t.inputSchema.get("additionalProperties") is not False
+    ]
+    assert not open_schemas, (
+        "these tools accept undeclared arguments and will silently drop them: "
+        f"{open_schemas}"
+    )

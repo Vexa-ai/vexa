@@ -140,7 +140,7 @@
    "unique-id": "admin-api",
    "node-type": "service",
    "name": "admin-api",
-   "description": "identity: token mint/validate, users, webhooks",
+   "description": "identity: token mint/validate, users, webhooks, and per-user calendar connections",
    "metadata": [
     {
      "path": "core/identity/services/admin-api"
@@ -212,7 +212,7 @@
    "unique-id": "meeting-api",
    "node-type": "service",
    "name": "meeting-api",
-   "description": "collector + bot-spawn + recordings + sessions (the hub); optionally asks an external service authority before spawn and at one-minute active boundaries",
+   "description": "collector + bot-spawn + recordings + sessions + calendar import/autojoin (the hub); optionally asks an external service authority before spawn and at one-minute active boundaries",
    "metadata": [
     {
      "path": "core/meetings/services/meeting-api"
@@ -1904,6 +1904,22 @@
    "protocol": "HTTPS"
   },
   {
+   "unique-id": "ma-admin-calendar",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup",
+   "protocol": "HTTPS"
+  },
+  {
    "unique-id": "ma-service-authority",
    "relationship-type": {
     "connects": {
@@ -2094,7 +2110,7 @@
      }
     }
    },
-   "description": "proxy /bots /transcripts /meetings /recordings",
+   "description": "proxy /bots /transcripts /meetings /recordings and per-calendar sync",
    "protocol": "HTTPS"
   },
   {
@@ -2142,7 +2158,7 @@
      }
     }
    },
-   "description": "POST /internal/validate (authz oracle)",
+   "description": "POST /internal/validate (authz oracle) plus user calendar connection CRUD",
    "protocol": "HTTPS"
   },
   {

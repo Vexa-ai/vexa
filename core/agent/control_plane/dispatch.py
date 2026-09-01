@@ -170,6 +170,14 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     elif meeting_model:
         logger.warning("meeting model %r not in VEXA_MODEL_ALLOWLIST — using deployment default",
                        meeting_model)
+    # Reasoning-effort pin for the claude-code harness (Settings → Models "effort"). Empty ⇒ unset ⇒
+    # the CLI's own default (no flag on the argv); an explicit value reaches the worker env and the
+    # harness passes it through as --effort. Backends that validate the OpenAI-compatible
+    # reasoning_effort field (vLLM/LiteLLM groups) reject the CLI's default high when it is outside
+    # their allowlist; the pin overrides that default.
+    effort = (config.get("effort") or "").strip()
+    if effort:
+        env["VEXA_AGENT_EFFORT"] = effort
     if (config.get("mode") or "").strip() != "custom":
         return
     base_url = (config.get("base_url") or "").strip()

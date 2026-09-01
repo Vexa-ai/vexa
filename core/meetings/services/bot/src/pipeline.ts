@@ -6,7 +6,8 @@
  * LocalAgreement confirmation, glow→channel naming) lives in @vexa/gmeet-pipeline, the mixed
  * lane (pyannote cut + hints naming, no diarizer) in @vexa/mixed-pipeline, and the stt.v1
  * round-trip in @vexa/transcribe-whisper. This adapter only:
- *   1. picks the lane on inv.platform (google_meet → gmeet/per-channel; zoom/teams/jitsi → mixed),
+ *   1. picks the lane on inv.platform (google_meet → native per-channel; teams → CSRC virtual
+ *      channels over the shared GMeet window; zoom/jitsi → legacy mixed segmentation),
  *   2. injects the stt port (TranscriptionClient.transcribe) + a TranscriptSink, and
  *   3. RECONCILES the lane's TranscriptSink (segment/draft/finalize — owned by the lane's
  *      transcript.v1 contract) onto the bot's injected TranscriptSink.publish(segment) port.
@@ -16,7 +17,8 @@
  * synthetic PCM → mock transcribe → assert publish got transcript.v1-valid segments).
  *
  * Ported from services/vexa-bot_new/src/pipeline/gmeet-pipeline.ts (the lane wrapper) onto the
- * v0.12 ports; the mixed branch wires @vexa/mixed-pipeline's ChunkedTranscriber for Zoom/Teams.
+ * v0.12 ports; Teams now wires @vexa/mixed-pipeline's CSRC/GMeet lane while Zoom/Jitsi retain
+ * ChunkedTranscriber.
  */
 import {
   createGmeetPipeline,
@@ -26,14 +28,17 @@ import {
 } from '@vexa/gmeet-pipeline';
 import {
   ChunkedTranscriber,
+  TeamsCsrcGmeetPipeline,
   type ChunkSegment,
   type ChunkedTranscriberCallbacks,
   type HintKind,
+  type TeamsCsrcGmeetPipelineOptions,
+  type TeamsCsrcTranscriptSegment,
   type TransportEvent,
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -66,6 +71,22 @@ export type MixedTranscriber =
   Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>
   & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName' | 'recordRosterCoverage'>>;
 export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
+
+/** Teams is still a mixed CAPTURE lane, but its transcription lane is a set of CSRC-owned
+ * virtual channels feeding the shared GMeet window. Keep the construction seam injectable so the
+ * bot adapter is provable without timers or Whisper while the real class stays independently
+ * covered in @vexa/mixed-pipeline. */
+export type TeamsTranscriber = Pick<
+  TeamsCsrcGmeetPipeline,
+  | 'feedMixedAudio'
+  | 'recordTransportEvent'
+  | 'recordHint'
+  | 'recordCaption'
+  | 'recordRosterName'
+  | 'recordRosterCoverage'
+  | 'dispose'
+>;
+export type TeamsTranscriberFactory = (options: TeamsCsrcGmeetPipelineOptions) => TeamsTranscriber;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
  *  orchestrator only sees start/stop; the capture bridge holds the BotPipeline to feedAudio. */
@@ -199,6 +220,25 @@ function chunkToBotSegment(speaker: string, c: ChunkSegment, completed: boolean)
   };
 }
 
+/** A CSRC-owned Teams row -> transcript.v1. `speaker_key` is the stable transport identity,
+ * deliberately independent of the changing Whisper window/segment id, so a late proven name
+ * repaints ordinary upserts without splitting one human into multiple transcript speakers. */
+function teamsToBotSegment(segment: TeamsCsrcTranscriptSegment): TranscriptSegment {
+  return {
+    segment_id: segment.segmentId,
+    speaker: displaySpeaker(segment.speaker),
+    speaker_key: `csrc:${segment.csrc}`,
+    text: segment.text,
+    start: segment.startMs / 1000,
+    end: segment.endMs / 1000,
+    language: segment.language,
+    completed: segment.completed,
+    absolute_start_time: isoFromEpochSeconds(segment.startMs / 1000),
+    absolute_end_time: isoFromEpochSeconds(segment.endMs / 1000),
+    source: 'merged',
+  };
+}
+
 /** Build the gmeet (per-channel) BotPipeline. The lane is lazy — it begins on the first fed
  *  frame (post-admission), so start() is a no-op and stop() disposes (flush every turn → finalize). */
 function createGmeetBotPipeline(
@@ -217,7 +257,55 @@ function createGmeetBotPipeline(
   };
 }
 
-/** Build the mixed (Zoom/Teams) BotPipeline over @vexa/mixed-pipeline's ChunkedTranscriber.
+/** Build the Teams-only CSRC virtual-channel lane. The shared GMeet-compatible buffer owns
+ * cadence, prompt feedback, LocalAgreement and terminal fallback. This adapter owns only the bot
+ * ports: mixed PCM/identity evidence in, transcript.v1 publish/retract out. */
+function createTeamsBotPipeline(
+  transcribe: Transcribe,
+  sink: TranscriptSink,
+  onError?: (e: unknown) => void,
+  createTranscriber: TeamsTranscriberFactory = (options) => new TeamsCsrcGmeetPipeline(options),
+  onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
+  selfName?: string,
+): BotPipeline {
+  const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
+  const reportError = onError ?? ((error: unknown) => console.error(`[bot] pipeline(teams-csrc): ${String(error)}`));
+
+  const transcriber = createTranscriber({
+    transcribe: (pcm, prompt) => transcribe(pcm, prompt),
+    selfName,
+    onSegment: (segment) => {
+      const task = !segment.completed && !segment.text.trim()
+        ? sink.retract?.([segment.segmentId])
+        : sink.publish(teamsToBotSegment(segment));
+      void task?.catch(reportError);
+    },
+    onRejectedOwnership: (segment, intervals) => {
+      try {
+        onObservation?.('teams-csrc-ownership-rejected', { segment, intervals }, segment.endMs);
+      } catch { /* diagnostics never break the transcript lane */ }
+    },
+    onError: reportError,
+  });
+
+  return {
+    async start() { /* lane is ready synchronously and begins on its first routed frame */ },
+    async stop() { await transcriber.dispose(); },
+    feedAudio() { /* Teams supplies one decoded mixed stream */ },
+    feedMixedAudio: (pcm, tsMs) => transcriber.feedMixedAudio(pcm, tsMs),
+    recordHint: (name, tMs, isEnd) => {
+      hintCounters.received++;
+      transcriber.recordHint(name, tMs, isEnd);
+    },
+    recordTransportEvent: (event) => transcriber.recordTransportEvent(event),
+    recordCaptionName: (name, tMs) => transcriber.recordCaption(name, tMs),
+    recordRosterName: (name, tMs) => transcriber.recordRosterName(name, tMs),
+    recordRosterCoverage: (named, participants, tMs) => transcriber.recordRosterCoverage(named, participants, tMs),
+    hintCounters,
+  };
+}
+
+/** Build the legacy mixed (Zoom/Jitsi) BotPipeline over @vexa/mixed-pipeline's ChunkedTranscriber.
  *  ChunkedTranscriber.create is async (it constructs the pyannote segmenter), so the transcriber
  *  is built on the first start()/feed; we lazily await it and queue nothing before it's ready
  *  (frames before create resolves are dropped — the model needs seconds to lock on regardless). */
@@ -336,8 +424,17 @@ export function createTranscribe(inv: Invocation): Transcribe {
 }
 
 /**
- * The composition-root factory: pick the lane on platform and wire stt + sink. Google Meet
- * uses the per-channel (overlap-safe, glow-named) lane; Zoom/Teams/Jitsi use the mixed lane.
+ * The composition-root factory: pick the lane on platform and wire stt + sink. Three engines:
+ *   • PER-CHANNEL (@vexa/gmeet-pipeline) — overlap-safe, name-at-onset. Google Meet (per-<audio>
+ *     channels) AND Zoom (per-WebRTC-track channels, confirmed multi-stream + stable; named
+ *     page-side by the track→name resolver). A track = one speaker, so overlap is separated by the
+ *     tracks themselves — no pyannote, no cluster naming.
+ *   • CSRC/GMeet (createTeamsBotPipeline) — Teams, whose one mixed track carries RTP
+ *     contributing-source (CSRC) virtual channels; each CSRC is a per-speaker channel over the
+ *     shared GMeet window, so Teams gets per-channel overlap safety without per-track streams.
+ *   • MIXED (@vexa/mixed-pipeline) — pyannote cut + time-windowed hint naming. Jitsi only, whose
+ *     per-track topology is NOT yet witnessed live. It flips to per-channel once
+ *     isPerTrackLanePlatform includes it.
  */
 export function createBotPipeline(
   inv: Invocation,
@@ -346,16 +443,26 @@ export function createBotPipeline(
     transcribe?: Transcribe;
     config?: SpeakerStreamManagerConfig;
     onError?: (e: unknown) => void;
-    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects
-     *  an observer (pins what actually reaches the transcriber: name, kind, tMs). */
+    /** Mixed-lane transcriber seam — the real ChunkedTranscriber unless a test injects an observer
+     *  (pins what reaches the transcriber: name, kind, tMs). Only consulted on the mixed lane. */
     createMixedTranscriber?: MixedTranscriberFactory;
+    /** Teams-only CSRC/GMeet lane construction seam. It is separate from the legacy mixed factory
+     * so a test cannot accidentally prove Pyannote while production selects virtual channels. */
+    createTeamsTranscriber?: TeamsTranscriberFactory;
     /** Where the lane's own typed observations go (the turn-spine switch). Wired at the
      *  composition root to the capture-signal recorder's observations sidecar. */
     onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void;
   } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
-  if (isMixedLanePlatform(inv.platform)) {
+  if (inv.platform === 'teams') {
+    return createTeamsBotPipeline(
+      transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
+    );
+  }
+  // Zoom rides the per-channel (gmeet) lane per-track; only Jitsi remains on the legacy mixed
+  // segmenter (Teams returned above via its CSRC/GMeet lane).
+  if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,

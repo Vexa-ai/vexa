@@ -13,7 +13,7 @@ import pytest
 
 from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
-from runtime_kernel.k8s_backend import pod_overrides
+from runtime_kernel.k8s_backend import build_pod, pod_overrides
 from runtime_kernel.profiles import Runnable
 
 
@@ -153,7 +153,7 @@ def test_k8s_strict_emits_per_mount_subpath_readonly():
 
 def test_k8s_pod_overrides_carry_the_per_mount_spec():
     """The Pod spec the worker gets: per-mount subPath volumeMounts against the ONE store PVC."""
-    ov = pod_overrides(_env(source="vexa-agent-workspaces"), image="img:1", container_name="vexa-worker-u1")
+    ov = pod_overrides(_env(source="vexa-agent-workspaces"), container_name="vexa-worker-u1")
     spec = ov["spec"]
     assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "vexa-agent-workspaces"
     c = spec["containers"][0]
@@ -196,10 +196,9 @@ def test_k8s_pod_overrides_tolerations_only_no_pvc_builds_a_valid_spec():
     assert spec["tolerations"] == _TOL
     assert spec["nodeSelector"] == _SEL
     assert "volumes" not in spec                           # no PVC ⇒ no volumes, but scheduling stands
-    # LOAD-BEARING (witnessed live, v0.12.8 staging): `kubectl run --overrides` merges the containers
-    # LIST by replacement, so ANY containers entry here wipes the generated container's image/env/command
-    # and the API server rejects the Pod (`spec.containers[0].image: Required value`) — the spawn dies in
-    # <1s. Scheduling-only overrides must NOT touch the containers list.
+    # The overlay stays MINIMAL: scheduling shapes the Pod, so it never reaches into the containers
+    # list. `build_pod` merges what IS here by container NAME onto the generated container, and an
+    # entry carrying nothing but a name would be pure noise in the submitted manifest.
     assert "containers" not in spec
 
 
@@ -208,7 +207,7 @@ def test_k8s_pod_overrides_merges_pvc_and_scheduling():
     the scheduling constraints — the two seams coexist."""
     ov = pod_overrides(
         _sched_env(tolerations=_TOL, node_selector=_SEL, source="vexa-agent-workspaces"),
-        image="img:1", container_name="vexa-worker-u1",
+        container_name="vexa-worker-u1",
     )
     spec = ov["spec"]
     assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "vexa-agent-workspaces"
@@ -225,7 +224,7 @@ def test_k8s_pod_overrides_empty_scheduling_is_unchanged_from_today():
     returns None — so an untainted cluster sees exactly today's behaviour (no regression)."""
     assert pod_overrides({"RUNTIME_K8S_TOLERATIONS": "[]", "RUNTIME_K8S_NODE_SELECTOR": "{}"},
                          container_name="x") is None
-    ov = pod_overrides(_sched_env(tolerations=[], node_selector={}, source="vexa-agent-workspaces"), image="img:1",
+    ov = pod_overrides(_sched_env(tolerations=[], node_selector={}, source="vexa-agent-workspaces"),
                        container_name="vexa-worker-u1")
     assert "tolerations" not in ov["spec"] and "nodeSelector" not in ov["spec"]
     assert ov["spec"]["volumes"]                           # volumes-only spec, exactly as before #673
@@ -250,7 +249,7 @@ def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
     monkeypatch.setenv("RUNTIME_K8S_NODE_SELECTOR", json.dumps(_SEL))
     overlay = _runtime_scheduling_env()
     # the workload's own spec.env has no scheduling; the overlay supplies it → the override carries it
-    ov = pod_overrides({**_env(source="vexa-agent-workspaces"), **overlay}, image="img:1", container_name="w")
+    ov = pod_overrides({**_env(source="vexa-agent-workspaces"), **overlay}, container_name="w")
     assert ov["spec"]["tolerations"] == _TOL
     assert ov["spec"]["nodeSelector"] == _SEL
 
@@ -285,7 +284,7 @@ def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
     Secret volume mounted read-only at the harness's credential path."""
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS": _SM}
-    spec = pod_overrides(env, image="img:1", container_name="w")["spec"]
+    spec = pod_overrides(env, container_name="w")["spec"]
     assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
     assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex", "readOnly": True} \
         in spec["containers"][0]["volumeMounts"]
@@ -304,23 +303,33 @@ def test_k8s_secret_mounts_malformed_entry_fails_loud():
                        "RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "x"}]'}, container_name="w")
 
 
-def test_k8s_containers_override_is_a_complete_container():
-    """The containers entry REPLACES the generated container under kubectl run's json-merge — proven
-    live 2026-08-23 ('spec.containers[0].image: Required value'). When mounts force the entry it must
-    carry image, env (knob keys excluded) and command in full."""
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar",
-           "RUNTIME_K8S_SECRET_MOUNTS": _SM}
-    c = pod_overrides(env, image="img:1", command=["python", "-m", "worker"],
-                      container_name="w")["spec"]["containers"][0]
+def test_k8s_submitted_container_survives_the_mount_overlay():
+    """The 2026-08-23 regression, asserted at the layer that now owns the merge. A partial containers
+    entry WIPED the generated container under ``kubectl run --overrides`` json-merge
+    ('spec.containers[0].image: Required value', first real agent-worker spawn on k8s). ``build_pod``
+    owns the object and merges the overlay BY CONTAINER NAME, so image, command and env survive while
+    the workspace + credential mounts are added — and the runtime's knobs, which ride overlay_env
+    only, never become container config."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar"}
+    pod = build_pod(
+        name="w", workload_id="w", namespace=None, resources=None,
+        runnable=Runnable(image="img:1", command=["python", "-m", "worker"]),
+        env=env,
+        overlay_env={**env, "RUNTIME_K8S_SECRET_MOUNTS": _SM},
+    )
+    c = pod["spec"]["containers"][0]
     assert c["image"] == "img:1" and c["command"] == ["python", "-m", "worker"]
     env_names = {e["name"] for e in c["env"]}
     assert "FOO" in env_names and "RUNTIME_K8S_SECRET_MOUNTS" not in env_names
+    paths = {vm["mountPath"] for vm in c["volumeMounts"]}
+    assert "/workspaces/u1" in paths and "/root/.codex" in paths
 
 
-def test_k8s_containers_override_without_image_fails_loud():
-    import pytest
-    with pytest.raises(ValueError):
-        pod_overrides(_env(source="vexa-agent-workspaces"), container_name="w")
+def test_k8s_pod_overrides_needs_no_image():
+    """The overlay is minimal by design — ``build_pod`` supplies image/env/command — so a mount-only
+    overlay is built without one (the complete-container workaround this replaced required it)."""
+    c = pod_overrides(_env(source="vexa-agent-workspaces"), container_name="w")["spec"]["containers"][0]
+    assert set(c) == {"name", "volumeMounts"}
 
 
 def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
@@ -329,6 +338,6 @@ def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS":
                '[{"secret": "codex-auth", "mountPath": "/root/.codex/auth.json", "file": "auth.json"}]'}
-    c = pod_overrides(env, image="img:1", container_name="w")["spec"]["containers"][0]
+    c = pod_overrides(env, container_name="w")["spec"]["containers"][0]
     assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex/auth.json",
             "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]

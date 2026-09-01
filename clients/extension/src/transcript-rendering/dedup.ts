@@ -2,7 +2,12 @@ import type { TranscriptSegment } from './types';
 import { parseUTCTimestamp } from './timestamps';
 
 function normalizeText(t: string): string {
-  return (t || '').trim().toLowerCase().replace(/[.,!?;:]+$/g, '').replace(/\s+/g, ' ');
+  let s = (t || '').trim().toLowerCase();
+  // Strip trailing punctuation with a scan: transcript text is model output of
+  // unbounded length, so no backtracking regex may run over its tail.
+  let end = s.length;
+  while (end > 0 && '.,!?;:'.includes(s[end - 1])) end--;
+  return s.slice(0, end).replace(/\s+/g, ' ');
 }
 
 /**

@@ -12,6 +12,10 @@ import logging
 import os
 import socket
 
+# Dependency-free by design (no SQLAlchemy) so this module stays importable in the offline gate
+# venv — see `schema/errors.py`.
+from .schema.errors import SchemaInvariantError
+
 logger = logging.getLogger("admin_api.boot")
 
 # #901: bounded initial-DB-connect retry. On a cold start the Postgres DNS name may not resolve
@@ -32,6 +36,11 @@ _TRANSIENT_OS_ERRORS = (socket.gaierror, ConnectionError, TimeoutError, OSError)
 
 
 def _is_transient_connect_error(exc: BaseException) -> bool:
+    # #1186: a blocked UNIQUE index is a DATA problem, never a connectivity one. Retrying it ten
+    # times just delays the same verdict, so it short-circuits ahead of the OSError chain walk
+    # (the driver error it chains from could otherwise drag an OSError into the __context__).
+    if isinstance(exc, SchemaInvariantError):
+        return False
     seen = set()
     cur: BaseException | None = exc
     while cur is not None and id(cur) not in seen:
@@ -112,6 +121,15 @@ def build_production_app():
         # #901: the first connect here is where a cold-start DNS race surfaces (socket.gaierror);
         # retry with bounded backoff so a not-yet-ready Postgres doesn't exit(3) into the restart
         # loop. After the bound it re-raises loud — a persistently unreachable DB still fails.
+        #
+        # #1186: convergence is also the readiness gate for the schema INVARIANTS. If a UNIQUE
+        # index cannot be created (duplicate rows block it), ensure_schema raises
+        # SchemaInvariantError out of this ASGI-lifespan startup hook; uvicorn aborts startup and
+        # exits(3), so the port never binds, /health never answers, and the compose healthcheck /
+        # k8s startupProbe+readinessProbe never pass. Deliberate: the spawn path documents relying
+        # on uq_meeting_active_user_platform_native as its DB backstop, so a DB where that index is
+        # absent must not be served by a process that assumes it. Not retried (see
+        # _is_transient_connect_error) — it needs an operator, not a backoff.
         await _connect_with_retry(lambda: ensure_schema(app_db.get_engine(), Base))
 
     return app

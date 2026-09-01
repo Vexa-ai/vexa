@@ -31,9 +31,9 @@ describe("agentOnMeeting — cookbook composition over two domain contracts", ()
     const [bot, proc] = calls();
     expect(bot.url).toBe("/api/bots");
     expect(bot.init.method).toBe("POST");
-    expect(bodyOf(bot.init)).toMatchObject({
+    expect(bodyOf(bot.init)).toEqual({
       platform: "google_meet", native_meeting_id: "abc-defg-hij",
-      meeting_url: "https://meet.google.com/abc-defg-hij", bot_name: "Vexa",
+      meeting_url: "https://meet.google.com/abc-defg-hij",
     });
     expect(proc.url).toBe("/api/meeting/process");
     expect(bodyOf(proc.init)).toEqual({ native_id: "abc-defg-hij", platform: "google_meet", on: true });
