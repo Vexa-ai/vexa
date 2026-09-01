@@ -29,8 +29,11 @@ export const CDP_DEBUG_ARGS = [
  */
 export function getAuthenticatedBrowserArgs(): string[] {
   return [
+    // --no-sandbox is required (Chromium runs as root in the container). --disable-setuid-sandbox is
+    // NOT added: it is redundant with --no-sandbox (which disables all sandboxing) and only adds a
+    // second flag name to Chromium's "unsupported command-line flag" banner that overlays the
+    // server-side recording. (--no-sandbox alone may still raise that banner; kill it recording-side.)
     '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--disable-gpu',
@@ -50,8 +53,7 @@ export function getAuthenticatedBrowserArgs(): string[] {
  */
 export function getBrowserSessionArgs(): string[] {
   return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
+    '--no-sandbox', // (see getAuthenticatedBrowserArgs: --disable-setuid-sandbox dropped as redundant)
     '--disable-blink-features=AutomationControlled',
     '--use-fake-ui-for-media-stream',
     '--start-maximized',

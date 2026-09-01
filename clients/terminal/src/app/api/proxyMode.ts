@@ -11,7 +11,7 @@ import { meetingsOnly } from "../mode";
 /** The meeting-domain paths the catch-all forwards to the gateway ROOT (mirrors MEETINGS_DOMAIN there).
  *  `user` covers the identity-domain self-serve configs the gateway exposes at its root
  *  (/user/webhook, /user/calendar) — same authenticated edge, admin-api behind it. */
-export const MEETINGS_DOMAIN = /^(meetings|transcripts|bots|user)(\/|$)/;
+export const MEETINGS_DOMAIN = /^(meetings|transcripts|bots|user|recordings)(\/|$)/;
 
 /** true when this /api/<path> must be refused (meetings mode + a non-meeting-domain path). */
 export function refusedInMeetingsMode(path: string): boolean {

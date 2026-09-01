@@ -322,6 +322,15 @@ services:
       # capture-only bots instead of 503-ing every default POST /bots.
       - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
+      # Recording: one ffmpeg per bot → live HLS/fMP4 (audio always; video when RECORD_VIDEO=true).
+      - RECORD_VIDEO=${RECORD_VIDEO:-false}
+      - RECORD_VIDEO_CODEC=${RECORD_VIDEO_CODEC:-h264}
+      - RECORD_AUDIO_CODEC=${RECORD_AUDIO_CODEC:-aac}
+      - VIDEO_HWACCEL=${VIDEO_HWACCEL:-none}
+      # Combined download (one mp4 remuxed from the DASH), gated + optionally auto-built on completion.
+      - ENABLE_COMBINED_RECORDING=${ENABLE_COMBINED_RECORDING:-false}
+      - AUTO_COMBINED_RECORDING=${AUTO_COMBINED_RECORDING:-false}
+      - RECORDING_COMBINED_AUDIO_CODEC=${RECORDING_COMBINED_AUDIO_CODEC:-}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
       # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
