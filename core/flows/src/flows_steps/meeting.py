@@ -7,7 +7,11 @@ import time
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import FIXTURE_TRANSCRIPT, GATEWAY, http, user_api_key
+# `setting` was USED below and never imported — dispatch_bot raised NameError on its first line
+# of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
+# than against this file. Found while adding the prep step, not by a test: nothing exercises
+# dispatch_bot outside a live meeting.
+from .common import FIXTURE_TRANSCRIPT, GATEWAY, http, setting, user_api_key
 
 FIXTURE_LINES = [
     (0.0, 6.0, "Anna", "Alright, quick sync on the pilot. Two decisions today."),
@@ -18,6 +22,26 @@ FIXTURE_LINES = [
     (38.5, 44.0, "Ben", "Will do — checklist to you by end of day. That's a commitment."),
     (44.5, 50.0, "Anna", "Open question for next time: do we invite risk and compliance to the pilot?"),
 ]
+
+
+def meeting_ref(uid: str, url: str) -> str:
+    """What a terminal deeplink calls this meeting.
+
+    The platform ROW id when the row exists; the NATIVE id when it does not yet — the row is
+    minted at bot dispatch (start − 2 min) and a prepare link is sent long before that. The
+    terminal resolves either against the person's own meeting list, so the earlier link is not a
+    worse link once the row lands. A lookup that fails degrades to the native id rather than
+    raising: a mail with a slightly weaker link beats no mail.
+    """
+    native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    try:
+        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(uid)})
+    except StepError:
+        return native
+    rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+    ids = [int(m["id"]) for m in rows
+           if isinstance(m, dict) and m.get("native_meeting_id") == native and m.get("id") is not None]
+    return str(max(ids)) if ids else native
 
 
 def await_start(ctx: StepCtx):

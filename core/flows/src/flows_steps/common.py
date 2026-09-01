@@ -15,6 +15,23 @@ ADMIN_API = os.environ.get("VEXA_FLOWS_ADMIN_API_URL", "http://localhost:18057")
 ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")
 FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
 
+# Where a person's own terminal lives. Same env name the control MCP already reads, and the same
+# default — one deployment fact, one variable, never two spellings of one host. A mail that says
+# "open it here" and names a host the person cannot reach is worse than a mail with no link.
+UI_URL = os.environ.get("VEXA_UI_URL", "http://localhost:18300").rstrip("/")
+
+
+def ui_link(**params) -> str:
+    """A composed terminal deeplink: ``ui_link(ask="minutes-review", meeting=41)``.
+
+    The params compose (``?ask=`` primes a chat, ``?meeting=`` opens the room) and they survive
+    the sign-in hop, so ONE url is both the door and the destination. Empty values are dropped —
+    a link with ``?meeting=`` and nothing after it reads as a bug to the person who hovers it.
+    """
+    from urllib.parse import urlencode
+    q = urlencode({k: v for k, v in params.items() if v not in (None, "", [])})
+    return f"{UI_URL}/?{q}" if q else f"{UI_URL}/"
+
 
 def db_url() -> str:
     url = os.environ.get("VEXA_FLOWS_DB_URL")
@@ -84,6 +101,11 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
 _SETTING_DEFAULTS = {
     "bot_name": "Vexa",
     "mail_minutes": True, "mail_join": False, "mail_rsvp": True, "timezone": "",
+    # the prepare-for-this-meeting note, the twin of mail_minutes at the other end of the meeting.
+    # ON like its twin — a loop that ships OFF is a loop nobody sees. NOTE: the control MCP owns
+    # the SETTINGS_VOCAB a person actually edits, and it has no `mail_prep` entry yet, so today
+    # this default IS the switch. That entry is the one thing needed to make it turn-off-able.
+    "mail_prep": True,
 }
 
 
