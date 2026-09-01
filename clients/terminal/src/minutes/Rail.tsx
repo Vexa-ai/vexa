@@ -12,6 +12,7 @@
  *  MCP verbs and the conversation, not for a column of × buttons beside the reading list. */
 import type { CSSProperties } from "react";
 import type { Row } from "./chats";
+import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
 import { T, row, surface, type as ty } from "./tokens";
 
@@ -77,6 +78,10 @@ export function Rail(p: {
       <div style={{ ...ty.meta, flex: "none", padding: "10px", lineHeight: 1.55, borderTop: "1px solid var(--line)" }}>
         Every chat, newest first. A meeting is a chat too — opening it opens the meeting.
       </div>
+      {/* the person, under the list of rooms — identity, theme and the way out are properties of
+          WHO is here, not of which chat is in front, so they sit at the foot of the column and
+          fold away with it. */}
+      <AccountBadge />
     </nav>
   );
 }
