@@ -87,8 +87,12 @@ export function PagesPanel(p: {
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  // A failed save reports INLINE, beside the button that failed. It used to be a window.alert(),
+  // which blocks the main thread — so React could not repaint and the button sat frozen on
+  // "Saving…" behind the dialog, reading as a hang on top of the failure.
+  const [saveError, setSaveError] = useState<string | null>(null);
   // a new doc (or fresh content) always lands in VIEW, rendered — the lens is a per-document choice
-  useEffect(() => { setMode("view"); setRaw(false); }, [p.docPath, p.docSlug]);
+  useEffect(() => { setMode("view"); setRaw(false); setSaveError(null); }, [p.docPath, p.docSlug]);
   useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(false), 1400); return () => clearTimeout(t); }, [copied]);
 
   const listing = p.listing ?? null;
@@ -109,12 +113,13 @@ export function PagesPanel(p: {
   const docWhere = [p.docSlug ?? "personal", ...p.docPath.split("/").slice(0, -1)].join(" / ");
   const doc = !canvas && !listing;   // a document is in front — the only state the header describes
   const save = async () => {
-    setSaving(true);
+    setSaving(true); setSaveError(null);
     try {
       await writeWorkspaceFile(p.docPath, draft, { slug: p.docSlug });
       setMode("view"); p.onSaved?.();
     } catch (e) {
-      window.alert(`Could not save: ${e instanceof Error ? e.message : e}`);
+      // Stay in edit mode with the draft intact — the text is the one thing that must not be lost.
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally { setSaving(false); }
   };
 
@@ -176,14 +181,16 @@ export function PagesPanel(p: {
                   style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
                   <Icon name={copied ? "check" : "copy"} size={14} />
                 </button>
-                <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }}
+                <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
                   title="Edit" aria-label="Edit"
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
                   <Icon name="edit" size={14} />
                 </button>
               </>
             : <>
-                <button data-doc-act="cancel" onClick={() => setMode("view")} title="Cancel"
+                {saveError && <span data-doc-act="save-error" role="alert" title={saveError}
+                  style={{ ...ty.meta, flex: "0 1 auto", minWidth: 0, color: "var(--danger)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Could not save: {saveError}</span>}
+                <button data-doc-act="cancel" onClick={() => { setSaveError(null); setMode("view"); }} title="Cancel"
                   style={{ ...ty.chip, flex: "none", color: "var(--t3)", background: "transparent", border: "none", padding: "3px 6px", cursor: "pointer" }}>Cancel</button>
                 <button data-doc-act="save" onClick={() => void save()} disabled={saving} title="Save"
                   style={{ ...ty.chip, flex: "none", color: "var(--on-accent)", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
