@@ -134,6 +134,11 @@ def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
 
 
 
+# The harness continuity store. Kept out of git history at the commit seam as well as by the seed's
+# `.gitignore` — see _commit_mount for why it is dropped from the index rather than excluded by a
+# pathspec.
+_CONTINUITY_DIR = ".claude"
+
 # The platform-write-only subtree of every workspace repo. Agent turns must NEVER modify it
 # (membership/invites live here — see control_plane.workspace_membership). Kept as a bare string so
 # this module stays product-import-free (it is liftable into a standalone brick). The control plane's
@@ -266,11 +271,23 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     # Harness continuity is private runtime plumbing, never workspace knowledge. Not every legacy
     # auxiliary mount carries the seed's `.gitignore`, so enforce the exclusion at the commit seam
     # too (the documented contract already promises `.claude/` never enters git history).
+    #
+    # The exclusion is EXPRESSED TWICE ON PURPOSE, and NOT as an ``add`` pathspec. ``git add -A --
+    # . ':(exclude).claude'`` EXITS 1 whenever `.claude` is also matched by a `.gitignore` ("The
+    # following paths are ignored by one of your .gitignore files") — because an exclude pathspec
+    # still counts as explicitly naming the path. Every SEEDED workspace ships that `.gitignore`,
+    # so the pathspec form failed on exactly the mounts it was written for, ``check=True`` raised,
+    # the caller's ``except CalledProcessError: continue`` swallowed it, and the turn's work was
+    # left STAGED AND NEVER COMMITTED — silently, on every chat turn, for every user. Staging
+    # everything under ``.`` and then dropping `.claude` from the index is rc-0 in both worlds
+    # (with and without a `.gitignore`) and stages `.claude` in neither. ``git rm --cached
+    # --ignore-unmatch`` is the same idiom ``_revert_policy_writes`` already uses above.
     content_pathspec = (".", ":(exclude).claude")
     if not _git(work, "status", "--porcelain", "--", *content_pathspec):
         return None
     env = _commit_env(author)
-    _git(work, "add", "-A", "--", *content_pathspec, env=env)
+    _git(work, "add", "-A", "--", ".", env=env)
+    _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _CONTINUITY_DIR, env=env)
     _git(work, "commit", "-m", (message.splitlines()[0][:72] if message else "agent turn"), env=env)
     return _git(work, "rev-parse", "HEAD", env=env)
 
