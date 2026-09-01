@@ -34,16 +34,6 @@ def parse_ics(ics: str) -> dict | None:
     uid = re.search(r"^UID:(.+)$", ve, re.M)
     summ = re.search(r"^SUMMARY:(.+)$", ve, re.M)
     desc = re.search(r"^DESCRIPTION:(.*)$", ve, re.M)
-    # ATTENDEE -> participants. PRD §16.2 item 1: the growth atom is the invite, and every
-    # attendee on it is an exposed person; the parser used to read ORGANIZER and stop, so the
-    # product could only ever speak to the one person who already knew about it.
-    parts, seen = [], set()
-    for line in re.findall(r"^ATTENDEE[^:]*:(?:mailto:)?(\S+)\s*$", ve, re.I | re.M):
-        a = line.strip().lower().rstrip(";,")
-        if a and "@" in a and a not in seen:
-            seen.add(a)
-            parts.append(a)
-
     group = None
     gm = re.search(r"#group:([\w-]+)", ics)
     if gm:
@@ -68,7 +58,6 @@ def parse_ics(ics: str) -> dict | None:
             "url": url.group(0), "start": start,
             "ics_uid": (uid.group(1).strip() if uid else f"noid-{int(start)}"),
             "title": (summ.group(1).strip() if summ else "Meeting"),
-            "participants": parts,
             "group": group}
 
 

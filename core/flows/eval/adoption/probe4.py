@@ -17,11 +17,16 @@ import simlane
 from probe import login
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "shared"
-VIDEO = sys.argv[2] if len(sys.argv) > 2 else "1Ph5N_vV230"
+# The fixture has to MATCH the meeting it is presented as. The first judged touch caught
+# this: a Kubernetes SIG transcript mailed under an "Animation dailies" title was ignored
+# for the mismatch, so the sample would have measured our fixture, not our product.
+VIDEO = sys.argv[2] if len(sys.argv) > 2 else "dna-2026-03-02"
+TITLE = sys.argv[3] if len(sys.argv) > 3 else "DNA dailies-notes working session"
+TAG = sys.argv[4] if len(sys.argv) > 4 else MODE[:4]
 
-ORG = "sim-spi-coord@rehearsal.test"
-ATTENDEES = ["sim-spi-anim@rehearsal.test", "sim-spi-light@rehearsal.test",
-             "sim-spi-comp@rehearsal.test"]
+ORG = f"sim-{TAG}-coord@rehearsal.test"
+ATTENDEES = [f"sim-{TAG}-eng1@rehearsal.test", f"sim-{TAG}-eng2@rehearsal.test",
+             f"sim-{TAG}-sup1@rehearsal.test"]
 OUTSIDE = ["vendor@outside.example"]          # must NEVER be mailed (domain allow-list)
 
 # the lever, as a flow param on a new active version — meta-software, not code
@@ -36,17 +41,17 @@ me.init()
 me.call("workspace_write", path=".scaffolded",
         content=json.dumps({"ready": True, "at": time.time(), "by": "adoption-sim"}))
 
-native = f"simspi{int(time.time())}"
-seed = me.call("meeting_seed", native_id=native, title="Show A Animation dailies",
+native = f"sim{TAG}{int(time.time())}"
+seed = me.call("meeting_seed", native_id=native, title=TITLE,
                video_id=VIDEO, timeout=300)
 print("seed:", json.dumps(seed)[:300])
 if "meeting_id" not in seed:
     raise SystemExit("seed failed")
 
-sid = f"sim-spi-{native}"
+sid = f"sim-{TAG}-{native}"
 refs = {"organizer": ORG, "url": f"https://meet.google.com/{native}",
         "start": time.time() - 3600, "ics_uid": sid,
-        "title": "Show A Animation dailies", "group": None,
+        "title": TITLE, "group": None,
         "participants": ATTENDEES + OUTSIDE,
         "meeting_id": seed["meeting_id"], "native": native,
         "transcript": seed["transcript"], "uid": uid}

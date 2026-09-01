@@ -29,14 +29,20 @@ import rig
 AGENT_API = os.environ.get("SIM_AGENT_API", "http://127.0.0.1:18500")
 RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r1"))
 
-# how a real subject line maps to the touch kind sim.py reasons about
-KINDS = [
-    ("prepare",            lambda s: s.startswith("Prepare:")),
-    ("minutes",            lambda s: s.startswith("Minutes:")),
-    ("attendee_shared",    lambda s: "what it means for you" in s),
-    ("attendee_personal",  lambda s: "what it means for you" in s),
-    ("accepted",           lambda s: s.startswith("Accepted:")),
-    ("signin",             lambda s: "sign-in code" in s),
+# How a real mail becomes a touch kind sim.py reasons about.
+# SUBJECT ALONE IS NOT ENOUGH: variant A and variant B of the attendee follow-up carry the
+# IDENTICAL subject line, so a subject-only matcher silently sampled one mail as both and would
+# have reported the two variants as indistinguishable. Each kind names the mailbox it is
+# sourced from — the run that produced it — as well as the subject test.
+SOURCES = [
+    ("prepare",           "Prepare:",            ["sim-dnaA-coord@rehearsal.test",
+                                                  "sim-spi-coord@rehearsal.test",
+                                                  "sim-probe1@rehearsal.test"]),
+    ("minutes",           "Minutes:",            ["sim-dnaA-coord@rehearsal.test",
+                                                  "sim-spi-coord@rehearsal.test"]),
+    ("attendee_shared",   "what it means for you", ["sim-dnaA-eng1@rehearsal.test"]),
+    ("attendee_personal", "what it means for you", ["sim-dnaB-eng1@rehearsal.test"]),
+    ("signin",            "sign-in code",        ["sim-dnaA-coord@rehearsal.test"]),
 ]
 
 HISTORY_STATES = {
@@ -67,18 +73,22 @@ ROLE_FOR = {
 }
 
 
-def harvest(addrs: list) -> dict:
-    """kind -> the real mail (subject + verbatim text + links)."""
+def harvest(sources=None) -> dict:
+    """kind -> the NEWEST real mail of that kind, from the mailbox that run wrote to.
+    mailpit returns newest first, so the first match is the most recent product behaviour —
+    which matters, because the body changed under us when `_readable` landed."""
     found = {}
-    for a in addrs:
-        for m in rig.messages_for(a):
-            subj = m.get("Subject") or ""
-            for kind, pred in KINDS:
-                if kind in found or not pred(subj):
+    for kind, needle, addrs in (sources or SOURCES):
+        for a in addrs:
+            if kind in found:
+                break
+            for m in rig.messages_for(a):
+                if needle not in (m.get("Subject") or ""):
                     continue
                 t = rig.full_touch(m)
                 if t["text"].strip():
                     found[kind] = t
+                    break
     return found
 
 
@@ -199,11 +209,7 @@ def converse(person, uid: str, session: str, opening_prompt: str, max_turns: int
 
 def main():
     os.makedirs(RUN, exist_ok=True)
-    addrs = sys.argv[1].split(",") if len(sys.argv) > 1 else [
-        "sim-spi-coord@rehearsal.test", "sim-spi-anim@rehearsal.test",
-        "sim-spi-light@rehearsal.test", "sim-spi-comp@rehearsal.test",
-        "sim-probe1@rehearsal.test", "sim-org-a@rehearsal.test"]
-    touches = harvest(addrs)
+    touches = harvest()
     print("harvested touch kinds:", sorted(touches))
     json.dump(touches, open(f"{RUN}/touches.json", "w"), indent=1)
     if not touches:
