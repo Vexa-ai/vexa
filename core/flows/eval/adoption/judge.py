@@ -14,7 +14,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 import personas
@@ -36,23 +35,32 @@ def ensure_cfg() -> None:
         f.write("{}\n")
 
 
-def _ask(prompt: str, timeout=180) -> str:
+def _ask(prompt: str, timeout=240, tries=2) -> str:
+    """One Haiku answer.
+
+    The prompt is passed INLINE. It used to be written to a temp file and referenced as
+    `@/tmp/<file>` — Claude Code's file-reference syntax — from a working directory that does
+    not contain that path, so the reference could not resolve and 38% of calls came back empty.
+    Empty answers were then dropped from the aggregate, which is the worst possible handling:
+    the rates looked clean and were built on 62% of the sample, with no way to see it."""
     env = dict(os.environ, CLAUDE_CONFIG_DIR=CFG)
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-        f.write(prompt)
-        path = f.name
-    try:
-        p = subprocess.run(
-            ["claude", "-p", f"@{path}", "--model", MODEL, "--output-format", "json"],
-            cwd=CWD, env=env, capture_output=True, text=True, timeout=timeout)
+    for attempt in range(tries):
         try:
-            return json.loads(p.stdout).get("result", "") or ""
-        except Exception:  # noqa: BLE001
-            return p.stdout[:2000]
-    except subprocess.TimeoutExpired:
-        return ""
-    finally:
-        os.unlink(path)
+            r = subprocess.run(
+                ["claude", "-p", prompt, "--model", MODEL, "--output-format", "json"],
+                cwd=CWD, env=env, capture_output=True, text=True, timeout=timeout)
+            try:
+                out = json.loads(r.stdout)
+                if out.get("is_error"):
+                    continue
+                txt = out.get("result", "") or ""
+            except Exception:  # noqa: BLE001
+                txt = r.stdout[:4000]
+            if txt.strip():
+                return txt
+        except subprocess.TimeoutExpired:
+            continue
+    return ""
 
 
 def _json_out(text: str) -> dict | None:

@@ -42,7 +42,6 @@ SOURCES = [
                                                   "sim-spi-coord@rehearsal.test"]),
     ("attendee_shared",   "what it means for you", ["sim-dnaA-eng1@rehearsal.test"]),
     ("attendee_personal", "what it means for you", ["sim-dnaB-eng1@rehearsal.test"]),
-    ("signin",            "sign-in code",        ["sim-dnaA-coord@rehearsal.test"]),
 ]
 
 HISTORY_STATES = {

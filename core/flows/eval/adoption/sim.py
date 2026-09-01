@@ -31,17 +31,34 @@ FULL_THRESHOLD = 0.80       # "full adoption" = this share of the reachable popu
 MAIL_FATIGUE = 3            # mails/day above which the marginal one is much likelier ignored
 
 
+HISTORY_BUCKETS = ["fresh", "one_ignore", "two_ignores"]
+
+
+def bucket(consec_ignored: int) -> str:
+    """The history state the SAMPLE actually measured, not a decay curve fitted to nothing."""
+    return HISTORY_BUCKETS[min(consec_ignored, len(HISTORY_BUCKETS) - 1)]
+
+
 @dataclass
 class Rates:
-    """Measured on the stack. Keyed (persona, touch_kind) -> {open, act_given_open, invite, fwd}.
-    `history_penalty` is the multiplier applied per consecutive prior ignore, also measured."""
+    """Measured on the stack, keyed (persona, touch_kind, history) ->
+    {open, act_given_open, invite, forward}.
+
+    There is no `history_penalty` any more. The first version of this file aggregated the three
+    measured history states together and then re-invented the same effect as an unbounded
+    exponential — an asserted constant standing in front of a measured number, and one that
+    drove every population to extinction (after ten ignored touches it put the open probability
+    at 1%, so no lever could retain anybody). Consecutive ignores now select the bucket that was
+    sampled."""
     table: dict
-    history_penalty: float = 0.72
-    fatigue_penalty: float = 0.65
+    fatigue_penalty: float = 0.65      # ASSUMED, not measured: the marginal mail in a busy day
     default: tuple = (0.35, 0.20, 0.02, 0.02)
 
-    def get(self, persona: str, kind: str):
-        v = self.table.get(f"{persona}|{kind}") or self.table.get(f"*|{kind}")
+    def get(self, persona: str, kind: str, hist: str = "fresh"):
+        v = (self.table.get(f"{persona}|{kind}|{hist}")
+             or self.table.get(f"{persona}|{kind}")
+             or self.table.get(f"*|{kind}|{hist}")
+             or self.table.get(f"*|{kind}"))
         if not v:
             return self.default
         return (v["open"], v["act_given_open"], v.get("invite", 0.0), v.get("forward", 0.0))
@@ -49,8 +66,7 @@ class Rates:
     @staticmethod
     def load(path: str) -> "Rates":
         d = json.load(open(path))
-        return Rates(table=d["table"],
-                     history_penalty=d.get("history_penalty", 0.72),
+        return Rates(table=d.get("table_by_history") or d["table"],
                      fatigue_penalty=d.get("fatigue_penalty", 0.65),
                      default=tuple(d.get("default", (0.35, 0.20, 0.02, 0.02))))
 
@@ -113,7 +129,8 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
     # who could EVER be reached: anyone in a non-external meeting. Nobody else has a path.
     reachable = {a for m in org.meetings if not m.external for a in m.attendees}
 
-    curve, t_full = [], None
+    curve = []
+    crossed: dict = {}
     per_touch_counts: dict = {}
 
     for day in range(1, days + 1):
@@ -131,9 +148,8 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
                 continue
             n_today = st.mails_today.get(pid, 0)
             st.mails_today[pid] = n_today + 1
-            o, a, inv, fwd = rates.get(p.persona, kind)
-            # history: consecutive ignores compound, exactly as a person stops opening
-            o *= rates.history_penalty ** st.consec_ignored.get(pid, 0)
+            o, a, inv, fwd = rates.get(p.persona, kind,
+                                       bucket(st.consec_ignored.get(pid, 0)))
             if n_today >= MAIL_FATIGUE:
                 o *= rates.fatigue_penalty ** (n_today - MAIL_FATIGUE + 1)
             per_touch_counts[kind] = per_touch_counts.get(kind, 0) + 1
@@ -171,8 +187,9 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
         curve.append({"day": day, "active": len(active), "active_share": round(share, 4),
                       "ever_active": len(st.ever_active), "reached": len(st.reached),
                       "invited": len(st.invited)})
-        if t_full is None and share >= full_threshold:
-            t_full = day
+        for thr in (0.25, 0.50, 0.80):
+            if thr not in crossed and share >= thr:
+                crossed[thr] = day
 
     # retention: of those who BECAME active, the share still active 30 / 90 days later
     def retention(after: int) -> float | None:
@@ -191,7 +208,9 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
         "headcount": len(org.people),
         "reachable": len(reachable),
         "days": days,
-        "t_full_days": t_full,
+        "t_full_days": crossed.get(0.80),
+        "t_25_days": crossed.get(0.25),
+        "t_50_days": crossed.get(0.50),
         "full_threshold": full_threshold,
         "peak_active_share": round(max(c["active_share"] for c in curve), 4),
         "steady_state_active_share": steady,
@@ -207,11 +226,13 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
 
 
 def summarize(r: dict) -> str:
-    t = r["t_full_days"]
-    return (f"{r['lever']:<18} n={r['headcount']:<7} "
-            f"T_full({int(r['full_threshold']*100)}%)="
-            f"{(str(t)+'d') if t else '>'+str(r['days'])+'d':<6} "
-            f"peak={r['peak_active_share']*100:5.1f}%  steady={r['steady_state_active_share']*100:5.1f}%  "
+    def d(v):
+        return str(v) if v else ">" + str(r["days"])
+    return (f"{r['lever']:<10} n={r['headcount']:<7} "
+            f"T25={d(r['t_25_days']):<5} T50={d(r['t_50_days']):<5} "
+            f"T80={d(r['t_full_days']):<5} "
+            f"peak={r['peak_active_share']*100:5.1f}%  "
+            f"steady={r['steady_state_active_share']*100:5.1f}%  "
             f"ret30={r['retention_30']}  ret90={r['retention_90']}")
 
 
