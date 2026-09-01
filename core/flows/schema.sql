@@ -37,9 +37,20 @@ CREATE TABLE IF NOT EXISTS mail_thread (
 CREATE TABLE IF NOT EXISTS mail_cursor (
 	id SERIAL NOT NULL, 
 	uid INTEGER NOT NULL, 
+	token TEXT, 
 	PRIMARY KEY (id), 
 	CONSTRAINT cursor_singleton CHECK (id = 1)
 );
+
+CREATE TABLE IF NOT EXISTS mail_seen (
+	source TEXT NOT NULL, 
+	ext_id TEXT NOT NULL, 
+	created TEXT NOT NULL, 
+	seen_at DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (source, ext_id)
+);
+
+CREATE INDEX IF NOT EXISTS mail_seen_window ON mail_seen (source, created);
 
 CREATE TABLE IF NOT EXISTS mail_outbox_sent (
 	subject_uid TEXT NOT NULL, 

@@ -20,6 +20,14 @@ export VEXA_MAIL_SMTP_HOST=127.0.0.1
 export VEXA_MAIL_SMTP_PORT=1025
 export VEXA_MAIL_SMTP_MODE=plain
 
+# ...and its INBOUND half. Mailpit speaks no IMAP and no POP3, so the mailbox poller reads its
+# REST API instead: VEXA_MAIL_INBOX selects the source, VEXA_MAIL_ADDR (above) is the recipient
+# it answers as, and no mail password is needed on this path at all.
+#   imap (default) -> imap.gmail.com, unchanged   |   mailpit -> the double
+export VEXA_MAIL_INBOX=mailpit
+export VEXA_MAILPIT_URL=http://127.0.0.1:8025
+export VEXA_MAILPIT_LOOKBACK_S=300         # re-scan window behind the Created watermark
+
 PY="$FL/.venv/bin/python"
 
 pkill -f 'flows_integrations.flows_api' 2>/dev/null
@@ -33,6 +41,12 @@ echo "flows-api pid=$!"
 
 nohup "$PY" -m flows_worker > "$LOG/flows-worker.log" 2>&1 &
 echo "flows-worker pid=$!"
+
+# The inbound poller is NOT started here: it ADMITS FACTS, so it goes up deliberately, once the
+# rehearsal actually wants the box read. Start it by hand with the env this script exported:
+#   cd "$FL/src" && nohup "$PY" -m flows_integrations.mailbox > "$LOG/flows-mailbox.log" 2>&1 &
+# First boot anchors at the CURRENT tail, so the double's rehearsal history is never replayed;
+# pass an ISO timestamp as argv[1] to rewind deliberately.
 
 sleep 5
 echo "--- flows-api:"
