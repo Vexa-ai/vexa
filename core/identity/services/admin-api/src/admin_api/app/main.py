@@ -233,7 +233,7 @@ class CalendarPatch(BaseModel):
 # (dispatch/bot_spawn only override what is set here).
 MODEL_MODES = ("subscription", "custom")
 _MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
-_TRANSCRIPTION_FIELDS = ("url", "token")
+_TRANSCRIPTION_FIELDS = ("url", "token", "model")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
 # no secrets, admin-gated like the other keys.
@@ -262,6 +262,7 @@ class ModelPrefsUpdate(BaseModel):
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    model: Optional[str] = None
 
 
 def _mask_secret(secret: Optional[str]) -> Optional[str]:
