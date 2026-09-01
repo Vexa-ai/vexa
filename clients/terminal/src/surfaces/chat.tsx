@@ -547,7 +547,10 @@ function routineCreationPrompt(commandText: string): string {
   ].join("\n");
 }
 
-type ChatProps = Partial<TabProps>;
+/** `emptyExtra` — whatever the host wants in the void an empty conversation leaves between its
+ *  greeting and the composer. The chat owns that layout and nothing else: it never decides what
+ *  goes there (the minutes shell derives its proposal chips), so the two stay independent. */
+type ChatProps = Partial<TabProps> & { emptyExtra?: ReactNode };
 
 
 // MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
@@ -566,7 +569,7 @@ function minutesEmptyGreeting(session: string): string {
   return strip(anyHeld ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING);
 }
 
-export function Chat({ params = {} }: ChatProps) {
+export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
@@ -1162,9 +1165,14 @@ export function Chat({ params = {} }: ChatProps) {
               <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>
               <div style={{ fontSize: 14.5, color: "var(--t2)", lineHeight: 1.6, marginTop: 16, maxWidth: 440 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
             </div>
-          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>{loading ? "Loading conversation…" : (minutesOnly()
-          ? minutesEmptyGreeting(session)
-          : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}</div>} />
+          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
+            {loading ? "Loading conversation…" : (minutesOnly()
+              ? minutesEmptyGreeting(session)
+              : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}
+            {/* NOT while the history is still loading: a chip that appears and then vanishes under
+                an arriving conversation is worse than one that arrives a beat late. */}
+            {!loading && emptyExtra}
+          </div>} />
     </AgentWindow>
   );
 }

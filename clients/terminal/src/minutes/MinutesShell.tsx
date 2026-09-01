@@ -13,7 +13,7 @@
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -31,6 +31,8 @@ import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { proposals, type Proposal } from "./proposals";
+import { ProposalChips } from "./ProposalChips";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface } from "./tokens";
 import { useService } from "../platform";
@@ -86,6 +88,12 @@ export function MinutesShell() {
   // chat restores its documents, and starts your walk through them fresh.
   const [hist, setHist] = useState<{ stack: Artifact[]; i: number }>({ stack: [], i: -1 });
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
+  // `.scaffolded` — written by the personal setup flow as its FINAL act, so its ABSENCE is the one
+  // durable signal that this person has never been set up. Read ONCE, on mount: it is the only
+  // input the proposal row needs that is not already in hand, and it costs a single workspace read.
+  // `null` until it answers, and null never offers the chip (proposals.ts fails closed).
+  const [scaffolded, setScaffolded] = useState<boolean | null>(null);
+  useEffect(() => { void readWorkspaceFile(".scaffolded").then((c) => setScaffolded(c !== null)).catch(() => undefined); }, []);
 
   const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
   const selKey = `c:${sel.chatId}`;
@@ -202,19 +210,22 @@ export function MinutesShell() {
   }, [meetings, mountSet, pendingView]);
 
   /** Open a rail row. A row derived from a meeting has no chat yet — first open MATERIALISES one
-   *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used). */
+   *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used).
+   *  Returns the id of the chat that was actually opened: a caller with something to say to it
+   *  (a proposal chip's kick) must address the chat that LANDED, never a reconstructed id. */
   const openRow = useCallback(async (r: Row, opts: { touched?: boolean } = {}) => {
     const existing = r.chatId ? chatsRef.current.find((c) => c.id === r.chatId) : undefined;
     const c = existing ?? chatForRow(chatsRef.current, r, meetings);
     const want = opts.touched ? { ...c, touched: true } : c;
     if (!existing || opts.touched) persist((prev) => upsertChat(prev, want));
     await openChat(want);
+    return want.id;
   }, [meetings, openChat, persist]);
 
   const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean } = {}) => {
     const id = String(m.id);
     const row = railRows(chatsRef.current, [m]).find((r) => r.meetingId === id);
-    if (row) await openRow(row, opts);
+    return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
   const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string } = {}) => {
@@ -224,6 +235,34 @@ export function MinutesShell() {
     if (opts.kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: c.id, prompt: opts.kick } })), 1200);
     return c;
   }, [openChat, persist]);
+
+  /** Fire a proposal chip. The founder chose IMMEDIATE, for consistency with the emailed links:
+   *  a click opens or creates the chat and sends the turn — nothing is left in the composer to
+   *  press Enter on.
+   *
+   *  None of this is new machinery. A meeting chip is the rail's own meeting-open path plus the
+   *  same settle-delayed, session-targeted kick `addChat` uses; `review` is the rail's filter chip;
+   *  `setup` is the personal onboarding seed; `group` is a new chat with an opening line. */
+  const runProposal = async (p: Proposal) => {
+    if (p.kind === "review") { toggleAll(true); return; }
+    if (p.kind === "setup") {
+      const c = chatsRef.current.find((x) => x.id === PERSONAL_CHAT_ID);
+      if (c) await openChat(c);
+      setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 400);
+      return;
+    }
+    if (p.kind === "group") { addChat("Daily meetings", ["personal", "_global"], { kick: p.kick }); return; }
+    const m = meetings.find((x) => String(x.id) === p.meetingId);
+    if (!m) return;
+    const chatId = await openMeeting(m, { touched: true });
+    if (!chatId || !p.kick) return;
+    const kick = p.kick;
+    setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: chatId, prompt: kick } })), 1200);
+  };
+
+  /** Up to three chips, recomputed from the two lists already in hand plus one marker. Pure, so
+   *  the row is decided in the render that draws it — no fetch, no model call, no effect. */
+  const chips = useMemo(() => proposals(meetings, allChats, scaffolded), [meetings, allChats, scaffolded]);
 
   // Deleting a chat drops it from the rail (its agent session stays on the server — the row is the
   // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
@@ -501,7 +540,7 @@ export function MinutesShell() {
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
-        <Chat params={{ session }} />
+        <Chat params={{ session }} emptyExtra={<ProposalChips items={chips} onPick={(p) => void runProposal(p)} />} />
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
           lights up on hover/focus, and arrow keys for anyone not dragging */}
