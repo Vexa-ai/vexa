@@ -23,8 +23,8 @@ import {
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  chatForRow, loadChats, loadRailAll, markTouched, meetingTitle, newChat, railRows, removeChat,
-  saveChats, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
+  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingTitle, newChat, railRows,
+  removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
   type Artifact, type Chat as ChatRec, type Row,
 } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
@@ -33,6 +33,7 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
+import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface } from "./tokens";
 import { useService } from "../platform";
@@ -106,6 +107,14 @@ export function MinutesShell() {
   const persist = useCallback((fn: (prev: ChatRec[]) => ChatRec[]) => {
     setChats((prev) => { const next = fn(prev); if (next !== prev) saveChats(next); return next; });
   }, []);
+
+  // BOTH side columns fold away, independently, and the choice persists per side (founder,
+  // 2026-09-01). Collapse never writes `pagesW`, so reopening the panel restores the width the
+  // reader dragged it to — the two controls share a column and no state.
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => loadCollapsed("left"));
+  const [pagesCollapsed, setPagesCollapsed] = useState<boolean>(() => loadCollapsed("right"));
+  const collapseRail = (v: boolean) => { setRailCollapsed(v); saveCollapsed("left", v); };
+  const collapsePages = (v: boolean) => { setPagesCollapsed(v); saveCollapsed("right", v); };
 
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
@@ -532,10 +541,13 @@ export function MinutesShell() {
   }, [addChat]);
 
   return (
-    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
-      <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
-        selKey={selKey} onSelect={(r) => void openRow(r)}
-        onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat} />
+    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${pagesCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
+      {railCollapsed
+        ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
+        : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
+            selKey={selKey} onSelect={(r) => void openRow(r)}
+            onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat}
+            onCollapse={() => collapseRail(true)} />}
       <ContextBar sel={sel} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
@@ -543,8 +555,9 @@ export function MinutesShell() {
         <Chat params={{ session }} emptyExtra={<ProposalChips items={chips} onPick={(p) => void runProposal(p)} />} />
       </main>
       {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
-          lights up on hover/focus, and arrow keys for anyone not dragging */}
-      <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
+          lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no
+          width to drag, so the separator goes with it. */}
+      {!pagesCollapsed && <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
         onMouseDown={startDrag}
         onKeyDown={(e) => { if (e.key === "ArrowLeft") { e.preventDefault(); nudge(24); } if (e.key === "ArrowRight") { e.preventDefault(); nudge(-24); } }}
         onMouseEnter={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
@@ -553,12 +566,15 @@ export function MinutesShell() {
         onBlur={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
         style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
         <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
-      </div>
-      <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug}
-        onOpen={openPage} onClose={closeTab}
-        listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
-        canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
-        body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
+      </div>}
+      {pagesCollapsed
+        ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
+        : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug}
+            onOpen={openPage} onClose={closeTab}
+            listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
+            canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
+            body={docBody} onSaved={() => setDocNonce((n) => n + 1)}
+            onCollapse={() => collapsePages(true)} />}
     </div>
   );
 }

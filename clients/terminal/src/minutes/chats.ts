@@ -47,6 +47,10 @@ export const CHATS_KEY = "vexa.minutes.chats";
  *  it stays on disk untouched as the backup. */
 export const PROJECTS_KEY = "vexa.minutes.projects";
 export const RAIL_ALL_KEY = "vexa.minutes.railAll";
+/** Which side columns the reader has folded away. One key per side, because the two are independent
+ *  choices and a combined key would make forgetting one of them the default. */
+export const COLLAPSED_KEY = { left: "vexa.minutes.railCollapsed", right: "vexa.minutes.pagesCollapsed" } as const;
+export type Side = keyof typeof COLLAPSED_KEY;
 
 export const ORG_CHAT_ID = "org-setup";
 export const PERSONAL_CHAT_ID = "main";
@@ -380,4 +384,15 @@ export function loadRailAll(): boolean {
 
 export function saveRailAll(all: boolean): void {
   try { localStorage.setItem(RAIL_ALL_KEY, all ? "1" : "0"); } catch { /* ignore */ }
+}
+
+/** Collapsed is the stored EXCEPTION: anything but an explicit "1" means the column is open, so a
+ *  missing key, a cleared profile or locked-down storage all land on the full three-column shell
+ *  rather than on a surface with two sides missing and no memory of why. */
+export function loadCollapsed(side: Side): boolean {
+  try { return localStorage.getItem(COLLAPSED_KEY[side]) === "1"; } catch { return false; }
+}
+
+export function saveCollapsed(side: Side, collapsed: boolean): void {
+  try { localStorage.setItem(COLLAPSED_KEY[side], collapsed ? "1" : "0"); } catch { /* ignore */ }
 }

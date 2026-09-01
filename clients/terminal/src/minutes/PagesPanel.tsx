@@ -25,6 +25,7 @@ import { MdxDoc } from "../ui-kit/MdxDoc";
 import { writeWorkspaceFile } from "../surfaces/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
+import { CollapseButton } from "./Collapse";
 import { header, surface, type as ty } from "./tokens";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
@@ -52,6 +53,7 @@ export function PagesPanel(p: {
   listing?: Listing | null; onNavigate?: (slug: string | undefined, prefix: string) => void;
   canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
   body: string | null; onSaved?: () => void;
+  onCollapse?: () => void;
 }) {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draft, setDraft] = useState("");
@@ -115,6 +117,8 @@ export function PagesPanel(p: {
               <button onClick={() => void save()} disabled={saving} title="Save"
                 style={{ ...ty.chip, ...chipBase, color: "#16181d", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
             </>)}
+        {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
+        {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} />}
       </div>
       <div style={{ gridRow: 2, gridColumn: 3, display: "flex", flexDirection: "column", minHeight: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
         {/* the breadcrumb — the doc's address, and a path you can walk back up */}

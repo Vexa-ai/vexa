@@ -12,6 +12,7 @@
  *  MCP verbs and the conversation, not for a column of × buttons beside the reading list. */
 import type { CSSProperties } from "react";
 import type { Row } from "./chats";
+import { CollapseButton } from "./Collapse";
 import { T, row, surface, type as ty } from "./tokens";
 
 const chipS = (on: boolean): CSSProperties => ({
@@ -32,6 +33,7 @@ export function Rail(p: {
   all: boolean; onAll: (v: boolean) => void;
   selKey: string | null; onSelect: (r: Row) => void;
   onNewChat: () => void; onDeleteChat: (chatId: string) => void;
+  onCollapse?: () => void;
 }) {
   const chatRow = (r: Row) => {
     const on = r.key === p.selKey;
@@ -64,6 +66,7 @@ export function Rail(p: {
         </button>
         <button title="New chat" aria-label="New chat" onClick={p.onNewChat}
           style={{ ...row.ghostPlus, marginLeft: 0, fontSize: 17, color: "var(--t2)" }}>+</button>
+        {p.onCollapse && <CollapseButton side="left" onClick={p.onCollapse} />}
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "10px", display: "flex", flexDirection: "column", gap: 2 }}>
