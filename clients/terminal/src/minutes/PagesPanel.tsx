@@ -31,10 +31,11 @@ import { header, surface, type as ty } from "./tokens";
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
 const SEP = " › ";
 
-/** Tabs shrink among themselves rather than pushing one another off the strip: each is
- *  `min-width: 0` with an ellipsis, so a crowded panel keeps every tab present and clickable and
- *  the untruncated path stays on hover via `title`. */
-const chipBase: CSSProperties = { flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+/** Tabs do NOT shrink. Five of them in a 384px panel had ellipsized to "T..×  M..×  P..×" — every
+ *  tab present, every one unreadable, which is a worse failure than not seeing them all. So each
+ *  keeps a legible width and the STRIP scrolls, the way a browser's does; the full path stays on
+ *  hover via `title`. Nav arrows and the edit control sit outside that scroller and never move. */
+const chipBase: CSSProperties = { flex: "0 0 auto", maxWidth: 150, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const crumbBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer" };
 const navBtn = (on: boolean): CSSProperties => ({
   flex: "none", width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
@@ -88,7 +89,7 @@ export function PagesPanel(p: {
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
         <button data-nav="back" aria-label="Back" title="Back (⌘/Ctrl + [)" disabled={!p.canBack} onClick={p.onBack} style={navBtn(!!p.canBack)}>‹</button>
         <button data-nav="forward" aria-label="Forward" title="Forward (⌘/Ctrl + ])" disabled={!p.canForward} onClick={p.onForward} style={navBtn(!!p.canForward)}>›</button>
-        <span style={{ flex: "1 0 0%" }} />
+        <div style={{ flex: "1 1 0%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflowX: "auto", overflowY: "hidden", paddingLeft: 2 }}>
         {p.pages.map((pg) => {
           const on = tabOn(pg);
           return (
@@ -104,6 +105,7 @@ export function PagesPanel(p: {
             </span>
           );
         })}
+        </div>
         {!listing && p.body !== null && (mode === "view"
           ? <button onClick={() => { setDraft(p.body ?? ""); setMode("edit"); }} title="Edit"
               style={{ ...ty.chip, ...chipBase, color: "var(--t2)", background: surface.raised, border: "1px solid transparent", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>Edit</button>
