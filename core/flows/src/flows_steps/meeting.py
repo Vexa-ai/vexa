@@ -32,10 +32,16 @@ def dispatch_bot(ctx: StepCtx):
     """Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the
     existing meeting). Prior: ensure_user (for the key) · Effect: bot container
     Result: {meeting_id, native, platform}."""
-    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    uid = ctx.prior["ensure_user"]["uid"]
+    key = user_api_key(uid)
+    # transcribe_enabled is NOT passed. It used to be hardcoded False here, against this step's
+    # own docstring, which is why a standup recorded audio and captured no words. The platform
+    # defaults it to True and resolves TRANSCRIBE_ENABLED per deployment — so naming it here
+    # could only ever override a correct decision with a worse one. The name is the person's;
+    # whether we transcribe at all is the deployment's.
     st, body = http("POST", f"{GATEWAY}/bots", {"X-API-Key": key},
-                    {"meeting_url": ctx.refs["url"], "bot_name": "Vexa",
-                     "transcribe_enabled": False})
+                    {"meeting_url": ctx.refs["url"],
+                     "bot_name": setting(uid, "bot_name") or "Vexa"})
     if st == 409:
         st2, existing = http("GET", f"{GATEWAY}/bots", {"X-API-Key": key})
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])

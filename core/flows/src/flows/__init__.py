@@ -7,11 +7,11 @@ from .model import Block, Done, Reaction, Receipt, StepCtx, StepError, Wait
 from .projection import status, waiting
 from .reconciler import escalate, reclaim
 from .registry import EventType, Flow, Registry
-from .signals import cancel, resume, retry
+from .signals import cancel, resume, retry, wake
 
 __all__ = [
     "admit", "Clock", "FakeClock", "SystemClock", "SqliteDB", "postgres_db",
     "claim", "effect_key", "tick", "Block", "Done", "Reaction", "Receipt",
     "StepCtx", "StepError", "Wait", "status", "waiting", "escalate", "reclaim",
-    "EventType", "Flow", "Registry", "cancel", "resume", "retry",
+    "EventType", "Flow", "Registry", "cancel", "resume", "retry", "wake",
 ]

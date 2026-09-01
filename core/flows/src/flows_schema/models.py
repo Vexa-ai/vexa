@@ -70,7 +70,7 @@ class Signal(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
     consumed_at: Mapped[float | None] = mapped_column(Double)
-    __table_args__ = (CheckConstraint("kind IN ('resume','retry','cancel')", name="signal_kind"),)
+    __table_args__ = (CheckConstraint("kind IN ('resume','retry','cancel','wake')", name="signal_kind"),)
 
 
 class MailThread(Base):

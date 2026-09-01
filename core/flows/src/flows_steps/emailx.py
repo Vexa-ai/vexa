@@ -16,13 +16,39 @@ VAULT = os.path.expanduser("~/dev/vexa-secrets/business/vexa-mail.enc.env")
 
 
 def creds() -> tuple[str, str]:
-    if not (os.environ.get("VEXA_MAIL_ADDR") and os.environ.get("VEXA_MAIL_APP_PASSWORD")):
-        out = subprocess.run(["sops", "-d", VAULT], check=True, capture_output=True, text=True).stdout
-        for line in out.splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-    return os.environ["VEXA_MAIL_ADDR"], os.environ["VEXA_MAIL_APP_PASSWORD"]
+    """Address and password, always as a PAIR.
+
+    They used to come from different places: the guard fired when either was missing, the vault
+    was decrypted, and os.environ.setdefault then refused to replace an address that was already
+    set. A rig exporting VEXA_MAIL_ADDR and no password therefore logged into Gmail as
+    vexa@storm.test with the production account's password — Gmail answered 535 and the error
+    read as an expired credential for hours. A half-configured pair is not a configuration.
+    """
+    addr = os.environ.get("VEXA_MAIL_ADDR")
+    pw = os.environ.get("VEXA_MAIL_APP_PASSWORD")
+    if addr and pw:
+        return addr, pw
+    out = subprocess.run(["sops", "-d", VAULT], check=True, capture_output=True, text=True).stdout
+    vault = {}
+    for line in out.splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            vault[k.strip()] = v.strip().strip('"').strip("'")
+    return vault["VEXA_MAIL_ADDR"], vault["VEXA_MAIL_APP_PASSWORD"]
+
+
+def _smtp():
+    """Where mail actually goes.
+
+    Hardcoding smtp.gmail.com meant the mail double this rig runs was never reachable: the invite
+    path could not be rehearsed, only fired at real recipients. When VEXA_MAIL_SMTP_HOST is set we
+    honour it; with nothing set, behaviour is exactly as before.
+    """
+    host = os.environ.get("VEXA_MAIL_SMTP_HOST")
+    if not host:
+        return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
+    port = int(os.environ.get("VEXA_MAIL_SMTP_PORT", "25"))
+    return smtplib.SMTP(host, port, timeout=20), False
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:
@@ -33,8 +59,10 @@ def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) ->
     if in_reply_to:
         m["In-Reply-To"] = m["References"] = in_reply_to
     m.set_content(body)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
-        s.login(addr, pw)
+    conn, needs_login = _smtp()
+    with conn as s:
+        if needs_login:
+            s.login(addr, pw)
         s.send_message(m)
     return m["Message-ID"]
 
@@ -63,7 +91,9 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     cal = MIMEText(ics, "calendar")
     cal.set_param("method", "REPLY")
     msg.attach(cal)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
-        s.login(addr, pw)
+    conn, needs_login = _smtp()
+    with conn as s:
+        if needs_login:
+            s.login(addr, pw)
         s.send_message(msg)
     return msg["Message-ID"]

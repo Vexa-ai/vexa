@@ -57,3 +57,24 @@ def cancel(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | Non
     if rows:
         _record(db, reaction_id, "cancel", actor, reason, clock)
     return bool(rows)
+
+
+def wake(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | None = None) -> bool:
+    """Re-check NOW a reaction that is deliberately sleeping between polls.
+
+    The gap the other three verbs leave: ``resume`` needs 'blocked', ``retry`` needs
+    'failed', and a reaction waiting on a condition is neither -- it sits in 'retrying'
+    with next_run_at far out. An operator who has just satisfied that condition would
+    otherwise have to UPDATE the table by hand.
+
+    Deliberately narrow: it moves the schedule and nothing else. The attempt counter, the
+    receipts and the status all stay as they were, so a wake can never launder a failure
+    into a fresh attempt -- that is what ``retry`` is for."""
+    rows = db.execute(
+        """UPDATE reaction SET next_run_at = :now, updated_at = :now
+           WHERE reaction_id = :rid AND status IN ('retrying','admitted')
+           RETURNING reaction_id""",
+        {"now": clock.now(), "rid": reaction_id})
+    if rows:
+        _record(db, reaction_id, "wake", actor, reason, clock)
+    return bool(rows)

@@ -24,7 +24,7 @@ from flows import Done, Registry, StepCtx, StepError, Wait, EventType
 from flows_steps import agent as ag
 from flows_steps import emailx as mx
 from flows_steps import meeting as mt
-from flows_steps.common import ensure_platform_user, scaffolded, ws_file
+from flows_steps.common import ensure_platform_user, scaffolded, ws_file, setting
 
 INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
@@ -82,11 +82,28 @@ def build(reg: Registry, db) -> None:
         uid = ensure_platform_user(ctx.refs["organizer"])
         return Done({"uid": uid}, provider_ref=uid)
 
+    def _their_clock(uid, epoch):
+        """A time in the person's zone, with the zone attached — never the server's clock."""
+        import datetime
+        tz = setting(uid, "timezone")
+        if tz:
+            try:
+                import zoneinfo
+                t = datetime.datetime.fromtimestamp(epoch, zoneinfo.ZoneInfo(tz))
+                return t.strftime("%H:%M") + " " + (t.tzname() or tz)
+            except Exception:  # noqa: BLE001
+                pass
+        return datetime.datetime.fromtimestamp(
+            epoch, datetime.timezone.utc).strftime("%H:%M") + " UTC"
+
     @reg.step
     def rsvp_accept(ctx: StepCtx):
         """Accept the invitation IN THE ORGANIZER'S CALENDAR — iMIP METHOD:REPLY over SMTP;
         Google flips Vexa to "Yes" in the guest list. Reads: refs.{organizer,ics_uid,start,title}
         Effect: one calendar reply email · Result: {message_id}."""
+        uid = (ctx.prior.get("ensure_user") or {}).get("uid")
+        if uid and not setting(uid, "mail_rsvp"):
+            return Done({"skipped": "mail_rsvp is off for this person"})
         mid = mx.send_rsvp_accept(ctx.refs["organizer"], ics_uid=ctx.refs["ics_uid"],
                                   start_epoch=ctx.refs["start"], title=ctx.refs["title"])
         return Done({"message_id": mid}, provider_ref=mid)
@@ -98,9 +115,11 @@ def build(reg: Registry, db) -> None:
         Reads: refs.{organizer,url,start,title} · Prior: ensure_user · Effect: one email
         Result: {message_id, workspace_ready}."""
         uid = ctx.prior["ensure_user"]["uid"]
+        if not setting(uid, "mail_join"):
+            return Done({"skipped": "mail_join is off for this person"})
         ready = scaffolded(uid)
         body = (f"Vexa accepted the invitation and joins {ctx.refs['url']} at "
-                f"{time.strftime('%H:%M', time.localtime(ctx.refs['start']))}.")
+                f"{_their_clock(uid, ctx.refs['start'])}.")
         if not ready:
             body += ("\n\nOne thing before your minutes can flow: your workspace isn't set up yet — "
                      "answer the setup email that follows (it's a short conversation, not a form).")
@@ -249,6 +268,8 @@ def build(reg: Registry, db) -> None:
         """Send the committed note VERBATIM in the email body (UI-less law) + the feedback ask;
         registers the thread → meet-<id> session. Cannot run before the commit: its input IS
         process_meeting's receipt. Reads: refs.{uid,organizer,title} · Effect: one email."""
+        if not setting(ctx.refs["uid"], "mail_minutes"):
+            return Done({"skipped": "mail_minutes is off for this person"})
         p = ctx.prior["process_meeting"]
         note = ws_file(ctx.refs["uid"], p["note_path"]) or p["summary"]
         body = (note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
