@@ -67,6 +67,13 @@ export function MinutesShell() {
     try { return localStorage.getItem(VIEW_KEY); } catch { return null; }
   });
   const viewSpent = useRef(false);
+  // Is a deeplink about to choose the first room? Read ONCE, here, before the effects that consume
+  // these keys run — otherwise the boot below would race them and steal the room they were opening.
+  const [deeplinkPending] = useState<boolean>(() => {
+    try {
+      return !!localStorage.getItem("vexa.openMeetingRef") || !!localStorage.getItem("vexa.pendingPreset") || !!localStorage.getItem(VIEW_KEY);
+    } catch { return false; }
+  });
   const [docPath, setDocPath] = useState("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   const [docBody, setDocBody] = useState<string | null>(null);
@@ -257,6 +264,17 @@ export function MinutesShell() {
     layout.setActiveTab({ kind: "doc", params: { path: docPath, slug: docSlug, tabs: pages.map((pg) => pg.path) } });
   }, [layout, docPath, docSlug, pages]);
   useEffect(() => () => layout.setActiveTab(null), [layout]);
+
+  // Open a chat on mount. Without this the shell sat on a HARD-CODED selection until the first
+  // click: the header advertised `personal` whatever the chat's real focus set was, and the panel
+  // opened with no tabs at all. A pending deeplink owns the first room, so this yields to one.
+  const booted = useRef(false);
+  useEffect(() => {
+    if (booted.current || deeplinkPending) return;
+    booted.current = true;
+    const c = chatsRef.current.find((x) => x.id === PERSONAL_CHAT_ID) ?? chatsRef.current[0];
+    if (c) void openChat(c);
+  }, [deeplinkPending, openChat]);
 
   // A user-authored send is the whole definition of "touched" — the cheap flag the default filter
   // reads instead of fetching every chat's history. chat.tsx fires this with its session id, which
