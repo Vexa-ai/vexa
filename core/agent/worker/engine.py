@@ -218,7 +218,15 @@ def mounts_preamble(mounts: list[dict]) -> str:
         "- When a workspace states a Purpose (above), let it decide where content belongs — write material"
         " that matches a workspace's purpose into THAT workspace.",
         "- Never write to a READ-ONLY mount.",
-        "Always use ABSOLUTE paths under the mount you intend — do not guess or invent mount paths.",
+        # SCOPED to file operations (2026-09-01). Unqualified, this line reads as a rule about
+        # WRITING, and the model applied it to its reply prose too: asked to reference a workspace,
+        # it pasted `/workspaces/<slug>/README.md` — the founder's "no reference, and when reference
+        # it's not interactive". Reading and writing files needs the absolute path; a sentence
+        # addressed to a human never does.
+        "When you READ OR WRITE a file, always use ABSOLUTE paths under the mount you intend — do"
+        " not guess or invent mount paths. This is about file operations only: in the text of your"
+        " REPLY, reference workspaces and docs by name or workspace-relative path (see § Referencing"
+        " knowledge) — a mount path pasted into a sentence is your filesystem, not the reader's.",
         "",
     ]
     return "\n".join(lines)
