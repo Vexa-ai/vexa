@@ -12,7 +12,8 @@ actually differ — including where an alternative is the better fit.
 works org-wide (IT deploys it once; every meeting can be captured, governed, audited):
 
 - **Vexa** (this project) — Apache-2.0, self-hosted, bot + real-time STT + speaker attribution +
-  the agent/knowledge layer, air-gappable end to end.
+  the agent/knowledge layer, running **inside your perimeter with no egress**: a bundled STT unit
+  (GPU or CPU) means the audio path never calls out.
 - **[Attendee](https://github.com/attendee-labs/attendee)** — a source-available meeting-bot API
   (Django/Postgres/Redis) under the **Elastic License 2.0**, not an open-source license: ELv2 states
   *"You may not provide the software to third parties as a hosted or managed service."* They also run
@@ -34,7 +35,7 @@ attribution, scaling.
 | Capability | **Vexa** | Attendee | Hosted APIs | Local notetakers | DIY |
 |---|:---:|:---:|:---:|:---:|:---:|
 | Self-hosted / data stays in your perimeter | ✅ | ✅ | ❌ | ✅ | ✅ |
-| Fully **air-gapped** (bundled self-hosted GPU STT unit) | ✅ | 🟡 BYO STT wiring | ❌ | 🟡 local models | 🟡 build it |
+| **Self-hosted STT, no egress** (bundled GPU or CPU unit) | ✅ compose · Lite · 🟡 Kubernetes | 🟡 BYO STT wiring | ❌ | 🟡 local models | 🟡 build it |
 | Bot joins **Meet + Teams + Zoom + Jitsi** | ✅ 3 production · 🟡 Jitsi | ✅ | ✅ | ❌ device audio | 🟡 build ×3 |
 | Real-time transcript API, speaker-attributed | ✅ | ✅ | ✅ | 🟡 app-local | 🟡 build it |
 | 99+ languages: auto-detect or forced, per-window segment labels | ✅ | 🟡 provider-dependent | ✅ | 🟡 model-dependent | 🟡 build it |
@@ -86,6 +87,16 @@ tell you how much before you commit, in a form you can check without asking them
 (`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
 validate the id (Groq, vLLM, OpenAI-compatible gateways) work end-to-end, not just backends that
 ignore it. See [Configuration](/configuration#transcription-stt).
+
+*No egress* is the claim we can defend, and it is narrower than "air-gapped". On **Docker Compose
+and Lite** both halves of that STT contract are plumbed and the transcription unit ships in-tree
+with GPU and CPU variants ([`deploy/transcription`](https://github.com/Vexa-ai/vexa/tree/main/deploy/transcription)),
+so the whole audio path can run with nothing leaving your network. On **Kubernetes the chart does
+not yet expose `TRANSCRIPTION_MODEL` as a value** — you set it on the meeting-api and terminal
+Deployments via `extraEnv` until it lands, which the chart's own
+[known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md) state. We have
+not run an install on a genuinely disconnected network, so we do not claim one: what a procurement
+review can hold us to is self-hosted with no egress, not a certified air gap.
 
 ## When to choose what — honestly
 
