@@ -85,6 +85,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
 
   const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
+  // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
+  // an alternative to anything — it is the door. "Or …" would read as if a button were missing.
+  const hasOAuth = providers.google || providers.microsoft;
 
   return (
     <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -150,7 +153,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
             <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
-                Or get a sign-in link by email.
+                {hasOAuth ? "Or get a sign-in link by email." : "Enter your email and we\u2019ll send you a sign-in link."}
               </div>
               <input
                 type="email"
