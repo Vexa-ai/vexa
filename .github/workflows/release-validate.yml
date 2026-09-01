@@ -928,6 +928,48 @@ jobs:
           path: guarantees.md
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
+  # Production readiness — the six-leg coverage as machinery: train value · blast radius · full
+  # functionality (validate legs + API coverage as of docs) · security · compliance · promotion
+  # ceremony. Each leg's receipt must exist, be green, and be bound to the CURRENT candidate map
+  # sha; a re-cut strands every receipt taken against the old bytes and the runner names them.
+  #
+  # ADVISORY ON THIS TRAIN. `continue-on-error: true` keeps a red readiness verdict out of the
+  # release verdict while v0.12.23's receipts are backfilled from reviews that ran by hand, and
+  # NOTHING in this workflow `needs` this job — no existing gate changes behaviour.
+  #
+  # FLIP TO BLOCKING ON THE NEXT TRAIN: delete `continue-on-error`, and add `readiness` to the
+  # `promote` job's `needs`. Leave the rest exactly as it is.
+  readiness:
+    name: production readiness (advisory — blocking next train)
+    needs: resolve
+    if: always() && needs.resolve.result == 'success'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Pin to main for the same reason value-gate and witness-gate do: the manifest, the
+      # receipts and the runner must be the trusted ones, never the dispatched ref's. A train
+      # whose readiness manifest has not merged yet therefore reads as uncovered — which is the
+      # honest answer, not a harness fault.
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Advisory notice
+        run: |
+          {
+            echo "> ⚠️ **Production readiness is ADVISORY on this train and BLOCKING on the next.**"
+            echo "> A red verdict below does not stop this release. It will stop the next one."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Six-leg readiness coverage, bound to the current candidate map
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -o pipefail
+          node release/readiness/check.mjs --phase staging | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
   # The two enforced release gates (D9/D10/D15 — flipped from TO BUILD). They run ONLY on a
   # promote request (the tag-push validate run passes promote:false, so they skip and promote
   # skips with them). On a promote dispatch they are hard `needs` of promote: either reds → the
