@@ -2,10 +2,12 @@
 /** MINUTES — the shell (#1311). Design source: biz drafts/minutes-mock-chat.
  *
  *  A WORKSPACE is a folder — the shared thing, scaffolded by a conversation.
- *  A PROJECT is private — your bundle of workspaces to chat over. Chats live in projects.
+ *  A CHAT is the saved focus state: a label, an optional meeting ref, the workspaces it is over,
+ *  and the artifacts it opened with. The rail lists chats and nothing else — projects are gone as a
+ *  concept, and a meeting is simply a chat that names one.
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -14,29 +16,38 @@ import {
 } from "../surfaces/workspaceApi";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel } from "./PagesPanel";
-import { ProjectComposer } from "./ProjectComposer";
 import { DeleteCeremony } from "./DeleteCeremony";
-import { loadProjects, saveProjects, type Project } from "./projects";
+import {
+  chatForRow, loadChats, loadRailAll, markTouched, meetingTitle, newChat, railRows, removeChat,
+  saveChats, saveRailAll, upsertChat, visibleRows, ORG_CHAT_LABEL, PERSONAL_CHAT_ID,
+  type Chat as ChatRec, type Row,
+} from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
-import { meetingPhase } from "../surfaces/meetingModel";
+import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
-import { MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
+import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, surface } from "./tokens";
-import type { Page, Sel, View } from "./types";
+import type { Page, Sel } from "./types";
+
+const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"] };
 
 export function MinutesShell() {
   const realMeetings = useLiveMeetings();
-  // `?mock=1` — three fabricated meetings, one per phase, so the LAYOUT can be judged before the
-  // data exists. Off unless the flag is set; see mockPhases.ts.
+  // `?mock=1` — three fabricated meetings, one per phase, plus a handful of never-touched
+  // auto-created chats so the rail's FILTER can be judged before the data exists. Off unless the
+  // flag is set; see mockPhases.ts.
   const mock = mockOn();
   const mockStart = useRef(Date.now());
   const meetings = useMemo(() => (mock ? [...MOCK_MEETINGS, ...realMeetings] : realMeetings), [mock, realMeetings]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [projects, setProjects] = useState<Project[]>(() => loadProjects());
-  const [view, setView] = useState<View>("meetings");
-  const [sel, setSel] = useState<Sel>({ kind: "personal", id: "personal", label: "Personal" });
-  const lastSel = useRef<{ meetings: Sel | null; projects: Sel | null }>({ meetings: null, projects: { kind: "personal", id: "personal", label: "Personal" } });
+  // The stored list. Mock chats are merged for DISPLAY only — they are never written back.
+  const [chats, setChats] = useState<ChatRec[]>(() => loadChats());
+  const allChats = useMemo(() => (mock ? [...chats, ...MOCK_CHATS] : chats), [mock, chats]);
+  const chatsRef = useRef(allChats);
+  useEffect(() => { chatsRef.current = allChats; }, [allChats]);
+  const [all, setAll] = useState<boolean>(() => loadRailAll());
+  const [sel, setSel] = useState<Sel>(PERSONAL_SEL);
   const [pages, setPages] = useState<Page[]>([]);
   // `?view=` — a chat's opening `artifacts[]` (the right-sidebar tabs), NOT a URL feature. A chat
   // is the saved focus state and a deeplink is just its constructor: the meeting says which pages
@@ -53,64 +64,24 @@ export function MinutesShell() {
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
   const [docBody, setDocBody] = useState<string | null>(null);
   const [docNonce, setDocNonce] = useState(0);
-  const [composer, setComposer] = useState(false);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    try { return JSON.parse(localStorage.getItem("vexa.minutes.collapsed") || "{}"); } catch { return {}; }
-  });
-  const toggleCollapse = (id: string) => setCollapsed((c) => {
-    const n = { ...c, [id]: !c[id] };
-    try { localStorage.setItem("vexa.minutes.collapsed", JSON.stringify(n)); } catch { /* ignore */ }
-    return n;
-  });
-  // Deleting a chat drops it from the rail (its agent session stays on the server — the row is
-  // the user's index, not the record). Deleting a project is refused while it still holds chats.
-  const deleteChat = (projectId: string, chatId: string) => {
-    setProjects((prev) => { const next = prev.map((pr) => pr.id === projectId ? { ...pr, chats: pr.chats.filter((c) => c.id !== chatId) } : pr); saveProjects(next); return next; });
-    if (sel.session === chatId) void select({ kind: "personal", id: "personal", label: "Personal" });
-  };
-  const deleteProject = (projectId: string) => {
-    setProjects((prev) => {
-      const target = prev.find((pr) => pr.id === projectId);
-      if (!target || target.builtin || target.chats.length) return prev;   // refuse: not empty
-      const next = prev.filter((pr) => pr.id !== projectId); saveProjects(next); return next;
-    });
-    if (sel.kind === "project" && sel.id === projectId) void select({ kind: "personal", id: "personal", label: "Personal" });
-  };
+
+  const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
+  const selKey = `c:${sel.chatId}`;
+  const shownRows = useMemo(() => visibleRows(rows, all, selKey), [rows, all, selKey]);
+  const hiddenCount = useMemo(() => rows.length - visibleRows(rows, false, selKey).length, [rows, selKey]);
+  const toggleAll = (v: boolean) => { setAll(v); saveRailAll(v); };
+
+  /** Persist a change to the stored list. Mock chats live outside it, so a mutation aimed at one is
+   *  a no-op by construction — the mock is a display fixture, not a record. */
+  const persist = useCallback((fn: (prev: ChatRec[]) => ChatRec[]) => {
+    setChats((prev) => { const next = fn(prev); if (next !== prev) saveChats(next); return next; });
+  }, []);
+
   // The deletion CEREMONY (typed-name confirm). Two verbs, per the ownership model:
   //   Delete — an OWNED shared workspace: un-share → private slug → remove. Gone for every member.
   //   Reset — a STRUCTURAL folder (personal baseline · _global): wipe to seed; the slot survives.
   // `_system` gets neither: sessions/continuity are never a folder you reset.
   const [ceremony, setCeremony] = useState<{ name: string; verb: "Delete" | "Reset"; detail: string; run: () => Promise<void> } | null>(null);
-  const deleteOwnedWorkspace = async (workspaceId: string) => {
-    try {
-      const { slug } = await unshareWorkspace(workspaceId);
-      await deleteWorkspace(slug);
-    } catch (e) { window.alert(`Could not delete ${workspaceId}: ${e instanceof Error ? e.message : e}`); return; }
-    setProjects((prev) => {
-      const next = prev
-        .map((pr) => ({ ...pr, set: pr.set.filter((w) => w !== workspaceId) }))
-        .filter((pr) => pr.builtin || pr.set.some((w) => w !== "_global") || pr.id === "org");
-      saveProjects(next); return next;
-    });
-    await listSharedMemberships().then(setMemberships).catch(() => undefined);
-    if (sel.kind === "project" && !projects.find((pr) => pr.id === sel.id)) void select({ kind: "personal", id: "personal", label: "Personal" });
-  };
-  const askDeleteWorkspace = (workspaceId: string) => setCeremony({
-    name: workspaceId, verb: "Delete",
-    detail: "Removes this workspace's data for every member. Irreversible — there is no archive behind this.",
-    run: () => deleteOwnedWorkspace(workspaceId),
-  });
-  const askResetWorkspace = (target: "personal" | "_global") => setCeremony({
-    name: target, verb: "Reset",
-    detail: target === "_global"
-      ? "Wipes the organisation tier back to the empty seed (git history survives). Every member's assistant sees the reset on its next turn; the setup conversation starts from the first question. Admins only."
-      : "Wipes your personal workspace back to the empty seed (git history survives). Your entities, notes and dashboard are removed; onboarding starts over.",
-    run: async () => {
-      try { await resetWorkspace(target); } catch (e) { window.alert(`Could not reset ${target}: ${e instanceof Error ? e.message : e}`); return; }
-      probeScaffolded();
-      void select({ kind: "personal", id: "personal", label: "Personal" });
-    },
-  });
 
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
@@ -146,7 +117,7 @@ export function MinutesShell() {
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
   const mountSet = useCallback(async (wanted: string[]) => {
-    // Mount every shared workspace in the project's set; park the rest. personal/_global/_system
+    // Mount every shared workspace in the chat's set; park the rest. personal/_global/_system
     // ride along by construction. Best-effort — the chat runs regardless.
     try {
       const share = wanted.filter((w) => w !== "personal" && w !== "_global");
@@ -156,32 +127,32 @@ export function MinutesShell() {
     } catch { /* best-effort */ }
   }, []);
 
-  const select = useCallback(async (s: Sel, projOverride?: Project) => {
-    setSel(s); setDocBody(null); setDocNonce((n) => n + 1);
-    lastSel.current[s.kind === "meeting" ? "meetings" : "projects"] = s;
-    // The ONE place a room's artifacts land. Every branch below decides what EXISTS and hands it
-    // here; a pending `?view=` then seeds which one opens, exactly once. Focus falls back to the
-    // room's own first page, so an unresolvable link degrades to the default instead of nothing.
+  /** Open a chat. The ONE place a room's artifacts land: the chat's `meeting` ref decides whether
+   *  this is the meeting layout (prep vs has-transcript, transcript on the right) or a workspace
+   *  room, and a pending `?view=` then seeds which artifact opens, exactly once. */
+  const openChat = useCallback(async (c: ChatRec) => {
+    const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
+    setSel({
+      kind: c.meeting ? "meeting" : "chat",
+      chatId: c.id,
+      meetingId: c.meeting,
+      label: c.label || (m ? meetingTitle(m) : "Chat"),
+      workspaces: c.workspaces,
+    });
+    setDocBody(null); setDocNonce((n) => n + 1);
     const openPages = (p: Page[]) => {
-      let all = p, focus: Page | null = null;
+      let list = p, focus: Page | null = null;
       if (!viewSpent.current && pendingView) {
         viewSpent.current = true;
         try { localStorage.removeItem(VIEW_KEY); } catch { /* locked-down storage */ }
-        ({ pages: all, focus } = resolveView(pendingView, p));
+        ({ pages: list, focus } = resolveView(pendingView, p));
       }
-      const front = focus ?? all[0];
-      setPages(all);
-      setDocPath(front.path); setDocSlug(front.slug);
+      const front = focus ?? list[0];
+      setPages(list);
+      if (front) { setDocPath(front.path); setDocSlug(front.slug); }
     };
-    const proj = projOverride ?? (s.kind === "project" ? projects.find((pr) => pr.id === s.id) : undefined);
-    await mountSet(proj ? proj.set : ["personal"]);
-    if (s.kind === "org") {
-      openPages([{ path: "README.md", slug: "_global", label: "The organisation" }]);
-      // No warm-up turn: the setup opener is CACHED (empty-state greeting in chat.tsx) and the
-      // flow grounding rides on the admin's first reply — the first LLM turn already carries an answer.
-    }
-    else if (s.kind === "meeting") {
-      const m = meetings.find((x) => x.id === s.id);
+    await mountSet(c.workspaces);
+    if (c.meeting) {
       const native = (m as { native_id?: string } | undefined)?.native_id;
       // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
       // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
@@ -189,25 +160,75 @@ export function MinutesShell() {
       // It is a property of the MEETING, never of the link that opened it: an emailed link is
       // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
       openPages(pagesForPhase(m ? meetingPhase(m) : "post", native));
-    } else if (proj) {
-      const ps: Page[] = proj.set.filter((w) => w !== "_global").map((w) => w === "personal"
-        ? { path: "README.md", label: "personal" }
-        : { path: "README.md", slug: w, label: w });
-      ps.push({ path: "README.md", slug: "_global", label: "_global" });
-      openPages(ps);
-    } else { openPages([{ path: "README.md", label: "Personal page" }]); }
-  }, [meetings, projects, mountSet, pendingView]);
+      return;
+    }
+    const shared = c.workspaces.filter((w) => w !== "_global");
+    if (!shared.length) { openPages([{ path: "README.md", slug: "_global", label: "The organisation" }]); return; }
+    const ps: Page[] = shared.map((w) => w === "personal"
+      ? { path: "README.md", label: "personal" }
+      : { path: "README.md", slug: w, label: w });
+    ps.push({ path: "README.md", slug: "_global", label: "_global" });
+    openPages(ps);
+  }, [meetings, mountSet, pendingView]);
 
-  const switchView = useCallback((v: View) => {
-    if (v === view) return;
-    setView(v);
-    const want = lastSel.current[v];
-    if (want) { void select(want); return; }
-    if (v === "meetings") {
-      const first = [...meetings].sort((a, b) => String((b as { start_time?: string }).start_time ?? "").localeCompare(String((a as { start_time?: string }).start_time ?? "")))[0];
-      if (first) void select({ kind: "meeting", id: first.id, label: first.title.split(" — ")[0] });
-    } else void select({ kind: "personal", id: "personal", label: "Personal" });
-  }, [view, meetings, select]);
+  /** Open a rail row. A row derived from a meeting has no chat yet — first open MATERIALISES one
+   *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used). */
+  const openRow = useCallback(async (r: Row, opts: { touched?: boolean } = {}) => {
+    const existing = r.chatId ? chatsRef.current.find((c) => c.id === r.chatId) : undefined;
+    const c = existing ?? chatForRow(chatsRef.current, r, meetings);
+    const want = opts.touched ? { ...c, touched: true } : c;
+    if (!existing || opts.touched) persist((prev) => upsertChat(prev, want));
+    await openChat(want);
+  }, [meetings, openChat, persist]);
+
+  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean } = {}) => {
+    const id = String(m.id);
+    const row = railRows(chatsRef.current, [m]).find((r) => r.meetingId === id);
+    if (row) await openRow(row, opts);
+  }, [openRow]);
+
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string } = {}) => {
+    const c = newChat(label, workspaces, { id: opts.id, touched: true });
+    persist((prev) => upsertChat(prev, c));
+    void openChat(c);
+    if (opts.kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: c.id, prompt: opts.kick } })), 1200);
+    return c;
+  }, [openChat, persist]);
+
+  // Deleting a chat drops it from the rail (its agent session stays on the server — the row is the
+  // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
+  // itself did not go anywhere.
+  const deleteChat = (chatId: string) => {
+    persist((prev) => removeChat(prev, chatId));
+    if (sel.chatId === chatId) setSel(PERSONAL_SEL);
+  };
+
+  // A user-authored send is the whole definition of "touched" — the cheap flag the default filter
+  // reads instead of fetching every chat's history. chat.tsx fires this with its session id, which
+  // IS the chat id.
+  useEffect(() => {
+    const onTouched = (e: Event) => {
+      const id = (e as CustomEvent<{ session?: string }>).detail?.session;
+      if (id) persist((prev) => markTouched(prev, id));
+    };
+    window.addEventListener(CHAT_TOUCHED_EVENT, onTouched);
+    return () => window.removeEventListener(CHAT_TOUCHED_EVENT, onTouched);
+  }, [persist]);
+
+  const deleteOwnedWorkspace = async (workspaceId: string) => {
+    try {
+      const { slug } = await unshareWorkspace(workspaceId);
+      await deleteWorkspace(slug);
+    } catch (e) { window.alert(`Could not delete ${workspaceId}: ${e instanceof Error ? e.message : e}`); return; }
+    persist((prev) => prev.map((c) => (c.workspaces.includes(workspaceId) ? { ...c, workspaces: c.workspaces.filter((w) => w !== workspaceId) } : c)));
+    await listSharedMemberships().then(setMemberships).catch(() => undefined);
+    if (sel.workspaces.includes(workspaceId)) setSel(PERSONAL_SEL);
+  };
+  const askDeleteWorkspace = (workspaceId: string) => setCeremony({
+    name: workspaceId, verb: "Delete",
+    detail: "Removes this workspace's data for every member. Irreversible — there is no archive behind this.",
+    run: () => deleteOwnedWorkspace(workspaceId),
+  });
 
   useEffect(() => {
     let dead = false;
@@ -221,7 +242,7 @@ export function MinutesShell() {
       .then((c) => { if (!dead) setDocBody(c); })
       .catch(() => { if (!dead) setDocBody(null); });
     return () => { dead = true; };
-  }, [docPath, docSlug, sel.id, docNonce, mock]);
+  }, [docPath, docSlug, sel.chatId, docNonce, mock]);
 
   // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
   // something you watch rather than something the label claims. Mock-only: the real live feed will
@@ -249,18 +270,18 @@ export function MinutesShell() {
       if (!ref) return;
       const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
-      if (m) void select({ kind: "meeting", id: m.id, label: m.title.split(" — ")[0] });
+      if (m) void openMeeting(m);
     };
     window.addEventListener(OPEN_ENTITY_EVENT, onEntity);
     window.addEventListener(OPEN_MEETING_EVENT, onMeeting);
     return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntity); window.removeEventListener(OPEN_MEETING_EVENT, onMeeting); };
-  }, [meetings, select]);
+  }, [meetings, openMeeting]);
 
-  // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The full workbench consumes
-  // this key; minutes mode never did, so an emailed meeting link opened the personal page and any
-  // `?view=` riding with it had no room to land in. The list arrives asynchronously, so this waits
-  // for it rather than firing once on mount — and is spent on the first non-empty list either way,
-  // so a ref for a meeting this account cannot see never hijacks a later session.
+  // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The list arrives
+  // asynchronously, so this waits for it rather than firing once on mount — and is spent on the
+  // first non-empty list either way, so a ref for a meeting this account cannot see never hijacks a
+  // later session. A link the USER clicked counts as touching the chat it opens: the alternative is
+  // a row that vanishes behind the filter the moment they navigate away.
   const meetingRefSpent = useRef(false);
   useEffect(() => {
     if (meetingRefSpent.current || !meetings.length) return;
@@ -271,37 +292,20 @@ export function MinutesShell() {
     if (!ref) return;
     const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
     const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
-    if (m) void select({ kind: "meeting", id: m.id, label: m.title.split(" — ")[0] });
-  }, [meetings, select]);
+    if (m) void openMeeting(m, { touched: true });
+  }, [meetings, openMeeting]);
 
-  const session = useMemo(() => {
-    if (sel.session) return sel.session;
-    if (sel.kind === "personal") return "main";
-    if (sel.kind === "org") return "org-setup";
-    return `meet-${sel.id}`;
-  }, [sel]);
+  const session = sel.chatId;
 
-  const activeProj = sel.kind === "project" ? projects.find((pr) => pr.id === sel.id) : undefined;
-  // The header says which phase the room is in. It read isHeld() — the same two-way test the pages
-  // panel just stopped using — so a LIVE meeting announced itself as "upcoming" beside a transcript
-  // that was visibly filling. Three states now, in the meeting's own vocabulary.
+  // The header says which phase the room is in. It read isHeld() — a two-way test — so a LIVE
+  // meeting announced itself as "upcoming" beside a transcript that was visibly filling. Three
+  // states now, in the meeting's own vocabulary.
   const PHASE_WORD = { prep: "upcoming", live: "live", post: "held" } as const;
-  const selMeeting = sel.kind === "meeting" ? meetings.find((m) => m.id === sel.id) : undefined;
+  const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
-    : sel.kind === "org" ? "project · admin" : sel.kind === "project" ? "project" : "project · yours";
-  const mounts = sel.kind === "org" ? "[_global rw · _system]"
-    : sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
-    : activeProj ? `[${activeProj.set.join(" · ")} · _system]` : "[_global · personal · _system]";
-
-  const addChat = (projectId: string, label: string, kick?: string, projOverride?: Project) => {
-    const id = `pchat-${Date.now().toString(36)}`;
-    // FUNCTIONAL update — addChat may run in the same tick as project creation, and a stale
-    // closure here silently deleted the just-created project (the "project not created" bug).
-    setProjects((prev) => { const next = prev.map((pr) => pr.id === projectId ? { ...pr, chats: [...pr.chats, { id, label }] } : pr); saveProjects(next); return next; });
-    const known = projOverride ?? projects.find((pr) => pr.id === projectId);
-    void select({ kind: "project", id: projectId, label: known?.name ?? "Project", session: id, chatLabel: label }, known);
-    if (kick) setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt: kick } })), 1200);
-  };
+    : sel.workspaces.filter((w) => w !== "_global").length === 0 ? "chat · admin" : "chat";
+  const mounts = sel.kind === "meeting" ? "[_global · personal · _system] + meeting"
+    : `[${[...new Set([...sel.workspaces, "_global"])].join(" · ")} · _system]`;
 
   // "+ workspace" is NOT a form and NOT a plain chat: it opens a WORKSPACE SETUP chat whose
   // whole job is scaffolding one. The workspace is created up front (so the agent has a real rw
@@ -316,24 +320,26 @@ export function MinutesShell() {
   }, []);
   useEffect(() => { probeScaffolded(); const t = setInterval(probeScaffolded, 20000); return () => clearInterval(t); }, [probeScaffolded]);
 
+  const askResetWorkspace = (target: "personal" | "_global") => setCeremony({
+    name: target, verb: "Reset",
+    detail: target === "_global"
+      ? "Wipes the organisation tier back to the empty seed (git history survives). Every member's assistant sees the reset on its next turn; the setup conversation starts from the first question. Admins only."
+      : "Wipes your personal workspace back to the empty seed (git history survives). Your entities, notes and dashboard are removed; onboarding starts over.",
+    run: async () => {
+      try { await resetWorkspace(target); } catch (e) { window.alert(`Could not reset ${target}: ${e instanceof Error ? e.message : e}`); return; }
+      probeScaffolded();
+      setSel(PERSONAL_SEL);
+    },
+  });
+
   // Setup entry points — the buttons the rail shows while a tier awaits setup.
   // Setup means a FRESH conversation (founder ruling 2026-08-22) — never reopening a stale thread.
   // Org-setup sessions are a FAMILY (`org-setup-<ts>`): each setup click mints a new one; the cached
-  // void opener + grounding key on the prefix.
-  const setupGlobal = () => {
-    const chatId = `org-setup-${Date.now().toString(36)}`;
-    const orgProj: Project = { id: "org", name: "Organisation", set: ["_global"], chats: [{ id: chatId, label: "setup" }] };
-    let proj: Project = orgProj;
-    setProjects((prev) => {
-      const existing = prev.find((pr) => pr.id === "org");
-      proj = existing ? { ...existing, chats: [...existing.chats, { id: chatId, label: "setup" }] } : orgProj;
-      const next = existing ? prev.map((pr) => (pr.id === "org" ? proj : pr)) : [...prev, orgProj];
-      saveProjects(next); return next;
-    });
-    void select({ kind: "project", id: "org", label: "Organisation", session: chatId, chatLabel: "setup" }, proj);
-  };
+  // void opener + grounding key on the prefix. Since projects died, the org row is just a chat over
+  // `_global` — the admin's setup conversation sits in the flat list beside everything else.
+  const setupGlobal = () => { addChat(ORG_CHAT_LABEL, ["_global"], { id: `org-setup-${Date.now().toString(36)}` }); };
   const setupPersonal = () => {
-    addChat("personal", "onboarding");
+    addChat("onboarding", ["personal", "_global"]);
     setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 500);
   };
 
@@ -343,14 +349,7 @@ export function MinutesShell() {
     try { created = await createSharedWorkspace(`workspace-${stamp}`); } catch { /* surfaced below */ }
     await listSharedMemberships().then(setMemberships).catch(() => undefined);
     const id = `wsetup-${Date.now().toString(36)}`;
-    const projId = created ? `proj-ws-${created.workspace_id}` : "personal";
-    if (created) {
-      const proj: Project = { id: projId, name: "workspace setup", set: [created.workspace_id, "_global"], chats: [{ id, label: "scaffold" }] };
-      setProjects((prev) => { const next = [...prev.filter((pr) => pr.builtin !== "org"), proj, ...prev.filter((pr) => pr.builtin === "org")]; saveProjects(next); return next; });
-      void select({ kind: "project", id: projId, label: proj.name, session: id, chatLabel: "scaffold" }, proj);
-    } else {
-      addChat("personal", "workspace setup");
-    }
+    addChat("workspace setup", created ? [created.workspace_id, "_global"] : ["personal", "_global"], { id });
     setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, session: id, prompt:
       "[workspace-scaffold] A NEW SHARED WORKSPACE has just been created for this conversation and is mounted " +
       `read-write here${created ? ` as \`${created.workspace_id}\`` : ""} — you are seeding it. Ask ONE question at a time: ` +
@@ -366,6 +365,8 @@ export function MinutesShell() {
   // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
   // which workspaces the chat is over, so context and opening prompt arrive together — which is the
   // whole point of the link. Editing the file changes every future click; nothing is rebuilt.
+  // The chat is created TOUCHED: today nothing distinguishes a link the user clicked from one a
+  // flow injected, and the safe reading of an ambiguous case is "the human meant to be here".
   const presetFired = useRef(false);
   useEffect(() => {
     if (presetFired.current) return;
@@ -401,31 +402,21 @@ export function MinutesShell() {
         .replace(/\{\{\s*today\s*\}\}/g, new Date().toISOString().slice(0, 10))
         .trim();
       if (!prompt) return;
-      const projId = `ask-${name}`;
-      const chatId = `askchat-${Date.now().toString(36)}`;
-      let proj: Project = { id: projId, name: label, set: mounts, chats: [{ id: chatId, label }] };
-      setProjects((prev) => {
-        const existing = prev.find((pr) => pr.id === projId);
-        proj = existing ? { ...existing, set: mounts, chats: [...existing.chats, { id: chatId, label }] } : proj;
-        const next = existing ? prev.map((pr) => (pr.id === projId ? proj : pr)) : [...prev, proj];
-        saveProjects(next); return next;
-      });
-      void select({ kind: "project", id: projId, label, session: chatId, chatLabel: label }, proj);
-      // NOT dispatching OPEN_MEETING_EVENT: its handler calls select({kind:"meeting"}), which would
-      // replace the project selection made above and take the preset's mounts with it. The ref
-      // reaches the agent through the {{meeting}} substitution, and it can open the meeting itself.
+      // NOT dispatching OPEN_MEETING_EVENT: its handler would replace the selection made here and
+      // take the preset's mounts with it. The ref reaches the agent through the {{meeting}}
+      // substitution, and it can open the meeting itself.
       // same settle delay the other seeded conversations use — the chat must be mounted to hear it
-      setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
-        detail: { hidden: true, session: chatId, prompt },
-      })), 1400);
+      addChat(label, mounts, { id: `askchat-${Date.now().toString(36)}`, kick: prompt });
     })();
-  }, [select]);
+  }, [addChat]);
 
   return (
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
-      <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}
-        onSelect={(s) => void select(s)} onNewChat={(pid) => addChat(pid, "new chat")} onNewProject={() => setComposer(true)} onNewWorkspace={() => void newWorkspace()}
-        collapsed={collapsed} onToggleCollapse={toggleCollapse} onDeleteChat={deleteChat} onDeleteProject={deleteProject} onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace}
+      <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
+        selKey={selKey} onSelect={(r) => void openRow(r)}
+        onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat}
+        memberships={memberships} onNewWorkspace={() => void newWorkspace()}
+        onDeleteWorkspace={askDeleteWorkspace} onResetWorkspace={askResetWorkspace}
         scaffolded={scaffolded} onSetupGlobal={setupGlobal} onSetupPersonal={setupPersonal} />
       <ContextBar sel={sel} flavor={flavor} mounts={mounts} />
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center }}>
@@ -447,14 +438,6 @@ export function MinutesShell() {
       {ceremony && <DeleteCeremony name={ceremony.name} verb={ceremony.verb} detail={ceremony.detail}
         onCancel={() => setCeremony(null)}
         onConfirm={() => { const c = ceremony; setCeremony(null); void c.run(); }} />}
-      {composer && <ProjectComposer memberships={memberships}
-        onCancel={() => setComposer(false)}
-        onCreate={(name, set) => {
-          const id = `proj-${Date.now().toString(36)}`;
-          setProjects((prev) => { const next = [...prev.filter((pr) => pr.builtin !== "org"), { id, name, set, chats: [] as { id: string; label: string }[] }, ...prev.filter((pr) => pr.builtin === "org")]; saveProjects(next); return next; });
-          setComposer(false);
-          addChat(id, "first chat", undefined, { id, name, set, chats: [] });
-        }} />}
     </div>
   );
 }

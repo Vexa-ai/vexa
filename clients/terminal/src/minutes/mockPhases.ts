@@ -10,6 +10,7 @@
  *  `?mock=1`; nothing imports it unless that flag is set. Delete this file to remove the mock.
  */
 import type { MeetingMock } from "../surfaces/meetingModel";
+import type { Chat } from "./chats";
 
 export const MOCK_FLAG = "vexa.minutes.mock";
 
@@ -136,3 +137,17 @@ export function mockBody(path: string, elapsedMs: number): string | null {
   if (path === "README.md") return "# Personal\n\nYour own page. Meetings you are in write here.\n";
   return null;
 }
+
+/** Auto-created chats nobody has written in — the thing the rail's default filter exists to hide.
+ *  An email deeplink, an `?ask=` preset and a flow each leave one of these behind; with three of
+ *  them sitting in the mock the chip has something real to do. Display-only: the shell merges these
+ *  for rendering and never writes them back, so `?mock=1` cannot pollute a real chat list. */
+const ago = (mins: number) => Date.now() - mins * 60000;
+const autoChat = (id: string, label: string, mins: number, workspaces: string[] = ["_global", "personal"]): Chat =>
+  ({ id, label, workspaces, artifacts: [], touched: false, createdAt: ago(mins), lastActivityAt: ago(mins) });
+
+export const MOCK_CHATS: Chat[] = [
+  autoChat("mock-ask-digest", "Weekly digest", 180),
+  autoChat("mock-ask-followup", "Follow up · Acme pricing", 1200),
+  autoChat("mock-flow-intake", "Meeting intake", 5000, ["personal", "_global"]),
+];

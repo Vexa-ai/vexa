@@ -18,7 +18,7 @@ import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -954,6 +954,9 @@ export function Chat({ params = {} }: ChatProps) {
     const v = value.trim();
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || uploading) return;
+    // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
+    // only writer. Fired before the busy/queue branches, because queueing is still authorship.
+    window.dispatchEvent(new CustomEvent(CHAT_TOUCHED_EVENT, { detail: { session } }));
     if (busy) {
       if (!v || hasAttachments) return;   // queue plain text only; attachments wait for idle
       const qid = `q-${Date.now().toString(36)}`;

@@ -1,10 +1,11 @@
-/** The shell's selection model: which project, which chat — the two things the screen follows. */
+/** The shell's selection model. The rail is ONE flat list of chats, so a selection is always a chat;
+ *  `kind` only records whether that chat is ABOUT a meeting — which is the single fact the room
+ *  layout keys off (prep vs has-transcript pages, transcript on the right). */
 export type Sel = {
-  kind: "personal" | "org" | "meeting" | "project";
-  id: string;            // project id, or meeting row id
+  kind: "chat" | "meeting";
+  chatId: string;         // the chat record's id — also the rail's selection key and the agent session
+  meetingId?: string;     // set iff kind === "meeting"
   label: string;
-  session?: string;      // explicit agent session (project chats); derived from kind otherwise
-  chatLabel?: string;
+  workspaces: string[];   // the mount set, which now lives on the chat
 };
 export type Page = { path: string; slug?: string; label: string };
-export type View = "meetings" | "projects";

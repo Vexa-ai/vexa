@@ -57,6 +57,11 @@ function postMeetingTurn(prompt: string, session: string): void {
 
 export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
 
+/** A user-authored send. The minutes rail listens: a chat nobody has written in is exactly what
+ *  its default filter hides, and this is the cheap write that makes `touched` true — no history
+ *  fetch, no heuristic. `detail.session` IS the chat id. */
+export const CHAT_TOUCHED_EVENT = "vexa:terminal:chat-touched";
+
 // Clicking an entity link in chat (a [[wikilink]] or a kg/entities/*.md path) dispatches this; the
 // workbench resolves it to a file and opens the doc (revealing the center if in chat-only mode).
 export const OPEN_ENTITY_EVENT = "vexa:terminal:open-entity";
