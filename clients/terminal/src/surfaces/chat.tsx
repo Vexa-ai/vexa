@@ -11,6 +11,7 @@ import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
@@ -848,8 +849,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
           onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
-          onTool: (tool, args) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool, args)] })),
-          onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
+          onTool: (tool, args) => {
+            const op = toolOp(tool, args);
+            // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
+            // chip in the reply that names this new file resolves to "not found" — which is the
+            // whole reason a turn's own chips were dead on arrival.
+            if (op.wrote) invalidateDocLinkCaches();
+            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, op] }));
+          },
+          onCommit: (sha) => { invalidateDocLinkCaches(); patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })); },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
           onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),

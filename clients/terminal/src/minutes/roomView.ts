@@ -16,7 +16,42 @@
  *  Both are pure functions on purpose: the shell wires them, the tests read them directly.
  */
 import type { MeetingPhase } from "../surfaces/meetingModel";
+import { entitySlug, normalizeDocPath } from "../ui-kit/docLinks";
 import type { Page } from "./types";
+
+/** The tab a clicked LINK lands on — the whole of what the shell's open-entity listener decides.
+ *
+ *  It always returns one, and that is the point: the listener used to `return` when the resolver
+ *  came back empty, which is exactly the case a reader meets most (an entity the reply names before
+ *  anything writes its doc). The click did nothing at all, and the chip carried every visual cue of
+ *  being clickable. An unresolved title now opens its CANONICAL path instead, where the panel says
+ *  the page is not there yet — a real answer rather than a silence. */
+export function pageForDocRef(
+  detail: { path?: string; wikilink?: string; slug?: string; docPath?: string },
+  resolved?: { path: string; slug?: string } | null,
+): Page | null {
+  const named = (p: string) => (p.split("/").pop() ?? p).replace(/\.md$/i, "");
+  if (resolved) return { path: resolved.path, slug: resolved.slug, label: named(resolved.path) };
+  if (detail.path) {
+    const path = normalizeDocPath(detail.path, detail.docPath);
+    return path ? { path, slug: detail.slug, label: named(path) } : null;
+  }
+  if (detail.wikilink) {
+    const slug = entitySlug(detail.wikilink);
+    // no type is knowable for a title nothing has written — `kg/entities/<slug>.md` is the
+    // shape without the guess, and the chip's own title stays the tab's name.
+    return slug ? { path: `kg/entities/${slug}.md`, slug: detail.slug, label: detail.wikilink } : null;
+  }
+  return null;
+}
+
+/** The doc tab a MEETING ref falls back to when no row in the list matches it — a meeting this
+ *  account cannot see, or one the list has not caught up with. The canvas needs a row id to fetch
+ *  anything, so there is nothing to render; its notes page is addressable regardless. */
+export function pageForMeetingRef(ref: string): Page {
+  const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
+  return { path: `kg/entities/meeting/${native}.md`, label: native };
+}
 
 /** Where App.tsx stashes a `?view=` spec — the URL is cleaned on landing, so the value travels here.
  *  What it carries is a chat's opening `artifacts[]`, not a route. */

@@ -6,8 +6,17 @@ import { normalizeDocPath, resolveDocRef, entitySlug, invalidateDocLinkCaches } 
 
 const trees: Record<string, string[]> = {};
 let active: { slug: string }[] = [];
+let treeReads = 0;
+/** Fires AFTER each tree read has captured its answer — lets a test land a write between the two
+ *  passes resolveDocRef makes, which is exactly what an agent turn does. */
+let onTreeRead: (() => void) | null = null;
 vi.mock("../../surfaces/workspaceApi", () => ({
-  listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => trees[opts?.slug ?? ""] ?? []),
+  listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => {
+    const answer = trees[opts?.slug ?? ""] ?? [];
+    treeReads++;
+    onTreeRead?.();
+    return answer;
+  }),
   readActiveSet: vi.fn(async () => ({ subject: "u", active })),
 }));
 
@@ -15,6 +24,8 @@ beforeEach(() => {
   invalidateDocLinkCaches();
   for (const k of Object.keys(trees)) delete trees[k];
   active = [];
+  treeReads = 0;
+  onTreeRead = null;
 });
 
 describe("normalizeDocPath", () => {
@@ -56,6 +67,18 @@ describe("resolveDocRef — wikilinks", () => {
   });
   it("returns undefined when no mounted workspace has the entity (renders the muted chip)", async () => {
     expect(await resolveDocRef({ wikilink: "Nobody" }, {})).toBeUndefined();
+  });
+
+  /** The defect the founder hit: these trees are cached for a minute, and the agent WRITES an
+   *  entity doc during the very turn whose reply names it. Every chip in that reply resolved to
+   *  "not found" against a tree read before the write — and a not-found chip did nothing at all
+   *  when clicked. A miss must therefore cost one fresh read before it is believed. */
+  it("re-reads the trees before declaring a title missing — the doc was written mid-turn", async () => {
+    trees[""] = [];
+    onTreeRead = () => { trees[""] = ["kg/entities/company/openvdb-foundation.md"]; };
+    const r = await resolveDocRef({ wikilink: "OpenVDB Foundation" }, {});
+    expect(r).toEqual({ path: "kg/entities/company/openvdb-foundation.md", slug: undefined, type: "company" });
+    expect(treeReads).toBeGreaterThan(1);   // it did not trust the cached miss
   });
 });
 

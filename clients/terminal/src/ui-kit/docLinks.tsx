@@ -83,10 +83,26 @@ function activeSlugs(): Promise<string[]> {
   activeSlugsCache = { at: Date.now(), p };
   return p;
 }
-/** Drop the caches (e.g. right after activating/attaching a workspace) so resolution sees it. */
+/** Drop the caches (e.g. right after activating/attaching a workspace, or when a chat turn commits)
+ *  so resolution sees it. */
 export function invalidateDocLinkCaches(): void {
   treeCache.clear();
   activeSlugsCache = null;
+  lastMissRefresh = 0;
+}
+
+/** A wikilink that misses is USUALLY a stale tree, not a missing entity: the agent WRITES the entity
+ *  doc during the very turn whose reply names it, and these caches can be a minute old by then — so
+ *  every chip in that reply rendered "not found", and a not-found chip used to be unclickable. Drop
+ *  the caches once and look again before calling a title unresolvable. Throttled, because a reply
+ *  that names five new entities must not refetch every workspace tree five times. */
+let lastMissRefresh = 0;
+const MISS_REFRESH_MS = 5_000;
+function refreshOnMiss(): boolean {
+  if (Date.now() - lastMissRefresh < MISS_REFRESH_MS) return false;
+  invalidateDocLinkCaches();          // resets lastMissRefresh — so stamp it after
+  lastMissRefresh = Date.now();
+  return true;
 }
 
 // ── the resolver ──────────────────────────────────────────────────────────────────
@@ -153,10 +169,16 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
   }
   if (ref.wikilink) {
     const re = wikilinkMatcher(ref.wikilink);
-    for (const ws of await searchOrder()) {
-      const hit = (await workspaceTree(ws)).find((p) => re.test(p));
-      if (hit) return { path: hit, slug: ws, type: re.exec(hit)?.[1] };
-    }
+    const look = async (): Promise<ResolvedDoc | undefined> => {
+      for (const ws of await searchOrder()) {
+        const hit = (await workspaceTree(ws)).find((p) => re.test(p));
+        if (hit) return { path: hit, slug: ws, type: re.exec(hit)?.[1] };
+      }
+      return undefined;
+    };
+    // A miss is far likelier to be a stale tree than a missing entity (see refreshOnMiss) — so
+    // never declare a title unresolvable on cached data alone.
+    return (await look()) ?? (refreshOnMiss() ? await look() : undefined);
   }
   return undefined;
 }
@@ -197,12 +219,18 @@ export function Wikilink({ title }: { title: string }) {
   const missing = target === null;
   const c = (target?.type && ENTITY_CHIP[target.type]) || DEFAULT_ENTITY_CHIP;
   if (missing) {
+    // MUTED, NOT DEAD (founder, 2026-09-01). The dashed chip says honestly that no doc carries this
+    // title yet — but it still OPENS, landing on the page's empty state, because a chip that eats
+    // its own click is indistinguishable from a broken app. Everything the reader can see says
+    // "clickable"; only the handler disagreed.
     return (
-      <span title={`No entity doc found for “${title}” in the mounted workspaces`}
+      <span role="link" onClick={() => openEntity({ wikilink: title })}
+        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-          background: "var(--panel2)", border: "1px dashed var(--line)", borderRadius: 999,
-          padding: "0.5px 9px 0.5px 7px", color: "var(--t3)", fontSize: "0.92em",
-          fontWeight: 500, whiteSpace: "nowrap", lineHeight: 1.45 }}>
+          background: "var(--panel2)", border: `1px dashed ${hover ? "var(--line2)" : "var(--line)"}`, borderRadius: 999,
+          padding: "0.5px 9px 0.5px 7px", color: hover ? "var(--t2)" : "var(--t3)", fontSize: "0.92em",
+          fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
         <Icon name="link" size={11} style={{ opacity: 0.5 }} />
         {title}
       </span>

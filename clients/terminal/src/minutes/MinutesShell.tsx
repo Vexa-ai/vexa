@@ -30,7 +30,7 @@ import {
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -352,6 +352,9 @@ export function MinutesShell() {
    *  the tab set can be trusted as the record of what has been looked at. */
   const openPage = useCallback((pg: Page) => {
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
+    // A folded-away panel is the other way a link click "does nothing": the tab opens into a 22px
+    // column nobody can see. Asking for a document unfolds the column it lands in.
+    setPagesCollapsed(false); saveCollapsed("right", false);
     // standard history semantics: navigating after going BACK truncates the forward branch, and
     // re-opening the document already in front is not a navigation at all.
     setHist((h) => {
@@ -463,15 +466,18 @@ export function MinutesShell() {
     const onEntity = async (e: Event) => {
       const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string }>).detail || {};
       const r = await resolveDocRef(d, { path: d.docPath, slug: d.slug }).catch(() => null);
-      if (!r) return;
-      openPage({ path: r.path, slug: r.slug, label: (r.path.split("/").pop() ?? r.path).replace(/\.md$/, "") });
+      // NEVER A DEAD CLICK: an unresolved link opens its canonical path anyway, so the panel
+      // answers with the empty state instead of the click vanishing (pageForDocRef).
+      const pg = pageForDocRef(d, r);
+      if (pg) openPage(pg);
     };
     const onMeeting = (e: Event) => {
       const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
       if (!ref) return;
       const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
-      if (m) void openMeeting(m);
+      // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing.
+      if (m) void openMeeting(m); else openPage(pageForMeetingRef(ref));
     };
     window.addEventListener(OPEN_ENTITY_EVENT, onEntity);
     window.addEventListener(OPEN_MEETING_EVENT, onMeeting);
