@@ -141,6 +141,9 @@ export class RecordingService {
       channels: this.channels,
       duration_seconds: durationSeconds,
       file_size_bytes: fileStats.size,
+      // The recorder's true start (wall clock) — the server uses it as first_chunk_at so the transcript
+      // anchors to the recording's real t=0 (same clock the transcript is stamped with).
+      start_time_utc: this.startTime > 0 ? new Date(this.startTime).toISOString() : undefined,
     });
 
     // Build multipart body
@@ -226,14 +229,20 @@ export class RecordingService {
     chunkSeq: number,
     isFinal: boolean,
     format: string = 'webm',
+    // media_type keeps audio/video chunks from colliding server-side (chunk_storage_key puts it in
+    // the path). Default 'audio' preserves the exact prior wire — the server treats an explicit
+    // 'audio' identically to an absent value.
+    mediaType: string = 'audio',
   ): Promise<void> {
     const uploadTimeoutMs = 30_000;
     const durationSeconds = this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : undefined;
+    const isVideo = mediaType.startsWith('video');
 
     const boundary = `----VexaRecordingChunk${Date.now()}${chunkSeq}`;
     const metadata = JSON.stringify({
       meeting_id: this.meetingId,
       session_uid: this.sessionUid,
+      media_type: mediaType,
       format: format,
       sample_rate: this.sampleRate,
       channels: this.channels,
@@ -241,6 +250,7 @@ export class RecordingService {
       file_size_bytes: chunkData.length,
       chunk_seq: chunkSeq,
       is_final: isFinal,
+      start_time_utc: this.startTime > 0 ? new Date(this.startTime).toISOString() : undefined,
     });
 
     const parts: Buffer[] = [];
@@ -249,7 +259,8 @@ export class RecordingService {
     parts.push(Buffer.from('\r\n'));
     parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunk_seq"\r\n\r\n${chunkSeq}\r\n`));
     parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="is_final"\r\n\r\n${isFinal ? 'true' : 'false'}\r\n`));
-    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.${chunkSeq}.${format}"\r\nContent-Type: audio/${format}\r\n\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media_type"\r\n\r\n${mediaType}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.${chunkSeq}.${format}"\r\nContent-Type: ${isVideo ? 'video' : 'audio'}/${format}\r\n\r\n`));
     parts.push(chunkData);
     parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
 
@@ -306,6 +317,34 @@ export class RecordingService {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
+  }
+
+  /**
+   * Upload ONE MPEG-DASH file (init/segment/manifest.mpd) to the recordings DASH endpoint, stored
+   * VERBATIM at ``.../dash/<relpath>`` so the manifest's relative URIs resolve. ``isFinal`` on the
+   * manifest flips the recording COMPLETED. Reuses the shared multipart sender (retry + backoff).
+   */
+  async uploadHlsFile(
+    callbackUrl: string, token: string, fileData: Buffer, relpath: string, isFinal: boolean,
+    startedAt?: string, hasVideo?: boolean,
+  ): Promise<void> {
+    const boundary = `----VexaHls${Date.now()}${relpath.replace(/[^\w]/g, '')}`;
+    // started_at = the recorder's true t=0 (ffmpeg start, absolute). The server anchors the recording's
+    // first_chunk_at to it so the player maps transcript timestamps onto the video without the ~1-segment
+    // lag that the first-playlist receive-time would introduce. has_video tells the player whether to
+    // render a video element (A+V) or an audio-only control.
+    const metadata = JSON.stringify({ session_uid: this.sessionUid, relpath, is_final: isFinal, started_at: startedAt, has_video: hasVideo });
+    const parts: Buffer[] = [];
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n`));
+    parts.push(Buffer.from(metadata));
+    parts.push(Buffer.from('\r\n'));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="session_uid"\r\n\r\n${this.sessionUid}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="relpath"\r\n\r\n${relpath}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="is_final"\r\n\r\n${isFinal ? 'true' : 'false'}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${relpath}"\r\nContent-Type: application/octet-stream\r\n\r\n`));
+    parts.push(fileData);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+    await this._sendUpload(callbackUrl, token, boundary, Buffer.concat(parts), 30_000);
   }
 
   private _sendUpload(callbackUrl: string, token: string, boundary: string, body: Buffer, timeoutMs: number): Promise<void> {

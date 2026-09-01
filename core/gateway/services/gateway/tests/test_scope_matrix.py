@@ -66,6 +66,7 @@ CASES = [
     ("GET", "/recordings", "/recordings"),
     ("GET", "/recordings/5", "/recordings/{recording_id}"),
     ("GET", "/recordings/5/master", "/recordings/{recording_id}/master"),
+    ("GET", "/recordings/5/hls/index.m3u8", "/recordings/{recording_id}/hls/{path:path}"),
     ("GET", "/recordings/5/media/9/raw", "/recordings/{recording_id}/media/{media_file_id}/raw"),
     ("GET", "/recordings/5/media/9/download",
      "/recordings/{recording_id}/media/{media_file_id}/download"),

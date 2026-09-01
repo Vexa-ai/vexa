@@ -81,7 +81,12 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "post": (
         "The meeting \"{title}\" ({platform}/{native}) has ended{failed}. Its {source} is below — "
         "answer from it. Default moves: recap what was decided, extract action items with owners, "
-        "and draft follow-ups on request. Don't paste the transcript back verbatim.\n\n"
+        "and draft follow-ups on request. Don't paste the transcript back verbatim. When you write or "
+        "update this meeting's note under kg/entities/meeting/, add a markdown link to THIS session's "
+        "recording & transcript to the note's YAML frontmatter `recording:` field — "
+        "`recording: [▶ Recording & transcript](/?meeting={meeting_id})`. If you are CONTINUING an existing "
+        "note (an earlier session of this same meeting), KEEP the earlier links in that field and ADD this "
+        "one after them — a meeting can have several recorded sessions.\n\n"
         "<transcript>\n{transcript}\n</transcript>\n\n"
     ),
     # Ambient terminal-state digest (context bundle): one steering sentence AFTER the

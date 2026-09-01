@@ -21,6 +21,7 @@ import {
   Card, CardGroup, DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
   Wikilink, isInternalHref, type DocNavigate,
 } from "./docLinks";
+import { OPEN_MEETING_EVENT } from "../canvas/actions";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
@@ -99,6 +100,14 @@ const htmlComponents = {
   h1: h(1), h2: h(2), h3: h(3), h4: h(4),
   p: ({ children }: { children?: ReactNode }) => <p style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{children}</p>,
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+    // Meeting deep-link (`?meeting=<id>`, relative or absolute) → open the meeting canvas (transcript +
+    // recording) in-app, no reload. The same URL also cold-opens the meeting via App.tsx (portable).
+    const mref = href?.match(/[?&]meeting=([^&#]+)/);
+    if (mref) {
+      const ref = decodeURIComponent(mref[1]);
+      return <span role="link" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }))}
+        style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>;
+    }
     // Workspace-internal link (no scheme, not an anchor) → navigate the doc pane in place
     // (or open a tab outside a doc pane), same path the Wikilink chip uses. Relative hrefs
     // resolve against the linking doc's directory. External links open a browser tab.

@@ -12,7 +12,7 @@ server-side `requested`/`stopping` states.
 ## The machine
 ```
 <new>              → joining
-joining            → awaiting_admission · active · failed
+joining            → awaiting_admission · active · needs_help · failed
 awaiting_admission → active · needs_help · failed
 needs_help         → active · failed
 active             → completed · failed
