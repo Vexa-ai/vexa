@@ -102,6 +102,20 @@ describe("workspace proxy — meetings-only mode keeps refusing WRITES while REA
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // DELETE is a WRITE and must refuse like PUT. It called the bare refusedResponse(), whose default
+  // parameter is "GET" — so the refusal returned null and deleting a workspace stayed reachable in
+  // the one mode that exists to make writes unreachable.
+  it("refuses DELETE with 404 and never reaches the upstream", async () => {
+    process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const res = await deleteRoute(makeReq("DELETE"), ctx("wsA"));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe("not_found");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("still allows the composed deep-link READ (GET) in the same mode", async () => {
     process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ content: "# doc" }), { status: 200 })));

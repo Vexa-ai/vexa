@@ -108,9 +108,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ seg: string
 
 /** DELETE — removing one of the caller's own workspaces (a Minutes room's final step). Same
  *  authenticated edge as the reads/writes; the backend refuses the baseline, so the seed slot
- *  cannot be deleted through here either. */
+ *  cannot be deleted through here either.
+ *
+ *  A WRITE, so meetings-only mode refuses it exactly like POST and PUT — and it must pass its OWN
+ *  method to refusedResponse(). The default parameter is "GET", so the bare refusedResponse() this
+ *  handler used to call read as a READ and returned null: deletion stayed open in a mode whose
+ *  whole point is that no write is reachable. */
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
-  const refused = refusedResponse();
+  const refused = refusedResponse("DELETE");
   if (refused) return refused;
   const { seg } = await ctx.params;
   try {
