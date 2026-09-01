@@ -25,7 +25,7 @@ import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   chatForRow, loadChats, loadRailAll, markTouched, meetingTitle, newChat, railRows, removeChat,
   saveChats, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
-  type Chat as ChatRec, type Row,
+  type Artifact, type Chat as ChatRec, type Row,
 } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
@@ -74,6 +74,10 @@ export function MinutesShell() {
   // a folder the breadcrumb navigated to — it takes over the panel body until a file is opened
   const [listing, setListing] = useState<Listing | null>(null);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  // Where this chat has BEEN. Session-level and per-chat: reading order is a property of the sitting,
+  // not of the conversation, so unlike `artifacts[]` it is deliberately NOT persisted — reopening a
+  // chat restores its documents, and starts your walk through them fresh.
+  const [hist, setHist] = useState<{ stack: Artifact[]; i: number }>({ stack: [], i: -1 });
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
 
   const rows = useMemo(() => railRows(allChats, meetings), [allChats, meetings]);
@@ -184,6 +188,7 @@ export function MinutesShell() {
     setPages(list);
     setListing(null);
     if (front) { setDocPath(front.path); setDocSlug(front.slug); }
+    setHist(front ? { stack: [{ path: front.path, slug: front.slug, label: front.label }], i: 0 } : { stack: [], i: -1 });
     setDocBody(null); setDocNonce((n) => n + 1);
   }, [meetings, mountSet, pendingView]);
 
@@ -266,10 +271,36 @@ export function MinutesShell() {
   /** Open a document as a TAB: already open → just focus it; new → append and focus. Every route
    *  into the panel goes through here (entity link, breadcrumb listing, phase page), which is why
    *  the tab set can be trusted as the record of what has been looked at. */
-  const openPage = (pg: Page) => {
+  const openPage = useCallback((pg: Page) => {
+    const e: Artifact = { path: pg.path, slug: pg.slug, label: pg.label };
+    // standard history semantics: navigating after going BACK truncates the forward branch, and
+    // re-opening the document already in front is not a navigation at all.
+    setHist((h) => {
+      const cur = h.stack[h.i];
+      if (cur && artifactKey(cur) === artifactKey(e)) return h;
+      const stack = [...h.stack.slice(0, h.i + 1), e];
+      return { stack, i: stack.length - 1 };
+    });
     setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(pg)) ? prev : [...prev, pg]);
     setDocPath(pg.path); setDocSlug(pg.slug); setListing(null); setDocNonce((n) => n + 1);
+  }, []);
+
+  /** Walk the stack without disturbing it. A document closed since it was visited is REOPENED as a
+   *  tab — going back to somewhere you have been should never fail because you tidied up. */
+  const step = (delta: number) => {
+    const j = hist.i + delta;
+    if (j < 0 || j >= hist.stack.length) return;
+    const e = hist.stack[j];
+    setHist({ ...hist, i: j });
+    setPages((prev) => prev.some((x) => artifactKey(x) === artifactKey(e)) ? prev : [...prev, { path: e.path, slug: e.slug, label: e.label }]);
+    setDocPath(e.path); setDocSlug(e.slug); setListing(null); setDocNonce((n) => n + 1);
   };
+  // A folder listing is not a document, so it is not in the stack — but it IS somewhere you went,
+  // and the first ‹ should undo it rather than skipping past the doc you were reading.
+  const canBack = !!listing || hist.i > 0;
+  const canForward = !listing && hist.i >= 0 && hist.i < hist.stack.length - 1;
+  const goBack = () => { if (listing) { setListing(null); return; } step(-1); };
+  const goForward = () => step(1);
 
   /** Close a tab. The last one never closes — an empty panel is not a state worth reaching — and
    *  closing the tab in front hands focus to its neighbour rather than to nothing. */
@@ -280,11 +311,18 @@ export function MinutesShell() {
     if (i < 0) return;
     const next = pages.filter((_, k) => k !== i);
     setPages(next);
-    if (key === artifactKey({ path: docPath, slug: docSlug })) {
-      const to = next[Math.min(i, next.length - 1)];
-      setDocPath(to.path); setDocSlug(to.slug); setListing(null); setDocNonce((n) => n + 1);
-    }
+    if (key === artifactKey({ path: docPath, slug: docSlug })) openPage(next[Math.min(i, next.length - 1)]);
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key === "[") { e.preventDefault(); goBack(); }
+      if (e.key === "]") { e.preventDefault(); goForward(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   /** The breadcrumb navigates. `listWorkspaceTree` returns every path in a workspace, so a folder
    *  is just that list cut at one prefix: the names with no further slash are files, the first
@@ -343,9 +381,7 @@ export function MinutesShell() {
       const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string }>).detail || {};
       const r = await resolveDocRef(d, { path: d.docPath, slug: d.slug }).catch(() => null);
       if (!r) return;
-      const label = (r.path.split("/").pop() ?? r.path).replace(/\.md$/, "");
-      setPages((prev) => prev.some((pg) => pg.path === r.path && pg.slug === r.slug) ? prev : [...prev, { path: r.path, slug: r.slug, label }]);
-      setDocPath(r.path); setDocSlug(r.slug); setListing(null); setDocNonce((n) => n + 1);
+      openPage({ path: r.path, slug: r.slug, label: (r.path.split("/").pop() ?? r.path).replace(/\.md$/, "") });
     };
     const onMeeting = (e: Event) => {
       const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
@@ -357,7 +393,7 @@ export function MinutesShell() {
     window.addEventListener(OPEN_ENTITY_EVENT, onEntity);
     window.addEventListener(OPEN_MEETING_EVENT, onMeeting);
     return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntity); window.removeEventListener(OPEN_MEETING_EVENT, onMeeting); };
-  }, [meetings, openMeeting]);
+  }, [meetings, openMeeting, openPage]);
 
   // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The list arrives
   // asynchronously, so this waits for it rather than firing once on mount — and is spent on the
@@ -462,6 +498,7 @@ export function MinutesShell() {
       <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug}
         onOpen={openPage} onClose={closeTab}
         listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
+        canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
         body={docBody} onSaved={() => setDocNonce((n) => n + 1)} />
     </div>
   );

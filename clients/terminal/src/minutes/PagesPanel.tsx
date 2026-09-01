@@ -1,17 +1,24 @@
 "use client";
-/** The room's pages — the context made visible. Header shares the shell's one header row:
- *  a NAVIGABLE BREADCRUMB of the open doc (workspace › folders › file) with a View/Edit toggle at
- *  the right (Codex-style, founder ruling 2026-08-22) — docs are EDITABLE in place; Save writes
- *  through the mount-authorized API and commits.
+/** The room's pages — the context made visible.
  *
  *  TABS, not chips (founder ruling 2026-09-01). Anything opened here — a phase page, an entity
  *  link, a `?view=` deeplink, a file clicked out of a folder listing — ADDS a tab, and tabs close.
  *  The tab strip is not this component's state: it is the CHAT's `artifacts[]`, so the set survives
- *  leaving the chat and the agent's context bundle can name what the human is reading.
+ *  leaving the chat and the agent's context bundle can name what the human is reading. The header
+ *  row (the shell's shared 46px band) is theirs, with the View/Edit toggle at the right
+ *  (Codex-style, founder ruling 2026-08-22) — docs are EDITABLE in place; Save writes through the
+ *  mount-authorized API and commits.
  *
- *  The breadcrumb NAVIGATES. Clicking a folder segment lists that folder; clicking a name in the
- *  listing opens it as a tab. Plain names, no icons — the panel is for reading, not for file
- *  management. */
+ *  The BREADCRUMB moved out of that row, onto its own strip at the top of the body.
+ *  3875079b6 taught the header to sacrifice the crumb before the chips, and that was right while
+ *  the crumb was decoration: you starve what nobody clicks. Making it NAVIGABLE inverted the
+ *  premise — a squeezed crumb is now a broken control, and with close buttons on every tab the two
+ *  were fighting over 46px hard enough that the tab strip painted over the crumb and swallowed its
+ *  clicks (caught by the harness, not by the eye). Two rows, no contest, and the crumb gets the
+ *  full width it needs to be a path you can walk: clicking a segment lists that folder, clicking a
+ *  name in the listing opens it as a tab. Plain names, no icons — this panel is for reading, not
+ *  file management.
+ */
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -24,25 +31,16 @@ import { header, surface, type as ty } from "./tokens";
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
 const SEP = " › ";
 
-/** ── The header row yields in a fixed ORDER ──────────────────────────────────────────────────
- *  The tabs are what the user ACTS on; the breadcrumb is only orientation. So every item in the
- *  row is `min-width: 0` and shrinkable, and the order in which they give way is set by
- *  flex-shrink factors separated by orders of magnitude — flexbox splits the squeeze by
- *  (shrink × basis), so each rung is effectively exhausted before the next one moves at all:
- *
- *      crumb trail (×10000) ▸ crumb separator (×100) ▸ file name (×1) ▸▸ tabs (×1, but the
- *      whole crumb outranks them by CRUMB_SHRINK)
- *
- *  At the 384px default the crumb absorbs the entire overflow on its own and the tabs keep their
- *  exact natural widths (measured: they lose < 0.001px, far under Chrome's 1/64px layout unit).
- *  Only below ~364px — where the tabs no longer fit by themselves — do the labels begin to
- *  ellipsize, which keeps every tab present and clickable rather than pushing one off the panel.
- *  The untruncated path stays available on hover via `title`.
- *  NB: these are plain integers on purpose — CSS numbers have no exponent syntax, so `1e4` would
- *  make the whole `flex` declaration invalid and silently drop the ordering. */
-const CRUMB_SHRINK = 1000000;
+/** Tabs shrink among themselves rather than pushing one another off the strip: each is
+ *  `min-width: 0` with an ellipsis, so a crowded panel keeps every tab present and clickable and
+ *  the untruncated path stays on hover via `title`. */
 const chipBase: CSSProperties = { flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const crumbBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer" };
+const navBtn = (on: boolean): CSSProperties => ({
+  flex: "none", width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
+  background: "transparent", border: "none", borderRadius: 6, fontFamily: "var(--sans)", fontSize: 17,
+  lineHeight: 1, color: on ? "var(--t2)" : "var(--line2)", cursor: on ? "pointer" : "default", padding: 0,
+});
 
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
 export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
@@ -51,6 +49,7 @@ export function PagesPanel(p: {
   pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
   onClose?: (pg: Page) => void;
   listing?: Listing | null; onNavigate?: (slug: string | undefined, prefix: string) => void;
+  canBack?: boolean; canForward?: boolean; onBack?: () => void; onForward?: () => void;
   body: string | null; onSaved?: () => void;
 }) {
   const [mode, setMode] = useState<"view" | "edit">("view");
@@ -85,29 +84,10 @@ export function PagesPanel(p: {
   return (
     <>
       <div style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", minWidth: 0, overflowX: "auto", borderLeft: "1px solid var(--line)" }}>
-        {/* breadcrumb — the doc's address, the first thing in this row to give way, and a way back
-            up the tree: every segment is a button that lists that folder. */}
-        <span title={fullPath} style={{ display: "flex", alignItems: "center", flex: `0 ${CRUMB_SHRINK} auto`, minWidth: 0, overflow: "hidden", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)" }}>
-          {trail.length > 0 && (
-            <>
-              <span style={{ flex: "0 10000 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {trail.map((c, i) => (
-                  <span key={i}>
-                    {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
-                    <button style={crumbBtn} title={i === 0 ? `List ${c}` : `List ${crumbs.slice(1, i + 1).join("/")}`}
-                      onClick={() => nav(i)}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "inherit"; }}>{c}</button>
-                  </span>
-                ))}
-              </span>
-              <span style={{ flex: "0 100 auto", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", opacity: 0.6 }}>{SEP}</span>
-            </>
-          )}
-          {listing
-            ? <button style={{ ...crumbBtn, flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--t1)", fontWeight: 600, cursor: "default" }}>{leaf}</button>
-            : <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>}
-        </span>
+        {/* where you have BEEN, at the panel's left edge — the reading order of a document surface
+            starts here (Obsidian, and the old terminal, both put them exactly there). */}
+        <button data-nav="back" aria-label="Back" title="Back (⌘/Ctrl + [)" disabled={!p.canBack} onClick={p.onBack} style={navBtn(!!p.canBack)}>‹</button>
+        <button data-nav="forward" aria-label="Forward" title="Forward (⌘/Ctrl + ])" disabled={!p.canForward} onClick={p.onForward} style={navBtn(!!p.canForward)}>›</button>
         <span style={{ flex: "1 0 0%" }} />
         {p.pages.map((pg) => {
           const on = tabOn(pg);
@@ -134,14 +114,30 @@ export function PagesPanel(p: {
                 style={{ ...ty.chip, ...chipBase, color: "#16181d", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
             </>)}
       </div>
-      <div style={{ ...ty.body, gridRow: 2, gridColumn: 3, overflowY: "auto", padding: mode === "edit" && !listing ? 0 : "18px 20px 40px", background: surface.pages, borderLeft: "1px solid var(--line)", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: mode === "edit" && !listing ? "flex" : undefined }}>
-        {listing
-          ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
-          : p.body === null
-            ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
-            : mode === "edit"
-              ? <MarkdownEditor value={draft} onChange={setDraft} />
-              : <MdxDoc>{p.body}</MdxDoc>}
+      <div style={{ gridRow: 2, gridColumn: 3, display: "flex", flexDirection: "column", minHeight: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+        {/* the breadcrumb — the doc's address, and a path you can walk back up */}
+        <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
+          {trail.map((c, i) => (
+            <span key={i} style={{ flex: "none" }}>
+              {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
+              <button style={crumbBtn} title={i === 0 ? `List ${c}` : `List ${crumbs.slice(1, i + 1).join("/")}`}
+                onClick={() => nav(i)}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "inherit"; }}>{c}</button>
+            </span>
+          ))}
+          {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
+          <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
+        </div>
+        <div style={{ ...ty.body, flex: 1, overflowY: "auto", padding: mode === "edit" && !listing ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: mode === "edit" && !listing ? "flex" : undefined }}>
+          {listing
+            ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
+            : p.body === null
+              ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
+              : mode === "edit"
+                ? <MarkdownEditor value={draft} onChange={setDraft} />
+                : <MdxDoc>{p.body}</MdxDoc>}
+        </div>
       </div>
     </>
   );
