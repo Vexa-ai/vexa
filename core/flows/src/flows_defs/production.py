@@ -8,10 +8,18 @@
                           writes `.scaffolded`; silence is chased with nudges
   3. onboard_group      — same conversation pattern for the #group workspace, chased by email
   4. post_meeting       — gated on `.scaffolded` → agent processes through the workspace →
-                          summary + action points VERBATIM by email, asking for feedback
+                          summary + action points VERBATIM by email, asking for feedback, AND
+                          one link into the minutes terminal already primed on this meeting
   5. email_chat         — every threaded reply becomes an agent turn (feedback processed, the
                           workspace updated) and the agent's answer goes back by email: the
-                          standing conversation. UI-less: email is the entire surface.
+                          standing conversation
+  6. meeting_prep       — a NEW upcoming meeting → one short "prepare?" note carrying the same
+                          shape of link, primed on the prep ask instead of the review ask
+
+The 2026-08-23 line "UI-less: email is the entire surface" is retired. Email is the DOOR: every
+mail out of here carries at most one link, into a chat that is already about the thing the mail
+is about, and the sign-in hop preserves it. What travels the wire is a NOTIFICATION (flows_steps
+.notify) — the recipes no longer name SMTP.
 
 Laws (from the live witness): steps never sleep · all state in refs/receipts · replies by thread."""
 from __future__ import annotations
@@ -22,14 +30,16 @@ from pathlib import Path
 from flows import Done, Registry, StepCtx, StepError, Wait, EventType
 
 from flows_steps import agent as ag
-from flows_steps import emailx as mx
+from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
-from flows_steps.common import ensure_platform_user, scaffolded, ws_file, setting
+from flows_steps.common import ensure_platform_user, scaffolded, ui_link, ws_file, setting
+from flows_steps.notify import notify
 
 INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
+UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
 
 NUDGE_EVERY_S = 15 * 60
@@ -112,7 +122,7 @@ def build(reg: Registry, db) -> None:
     def ack_by_email(ctx: StepCtx):
         """Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when
         onboarding is pending. Registers the mail as a THREAD ANCHOR (replies become conversation).
-        Reads: refs.{organizer,url,start,title} · Prior: ensure_user · Effect: one email
+        Reads: refs.{organizer,url,start,title} · Prior: ensure_user · Effect: one notification
         Result: {message_id, workspace_ready}."""
         uid = ctx.prior["ensure_user"]["uid"]
         if not setting(uid, "mail_join"):
@@ -123,7 +133,7 @@ def build(reg: Registry, db) -> None:
         if not ready:
             body += ("\n\nOne thing before your minutes can flow: your workspace isn't set up yet — "
                      "answer the setup email that follows (it's a short conversation, not a form).")
-        mid = mx.send(ctx.refs["organizer"], f"Vexa will join: {ctx.refs['title']}", body)
+        mid = notify(ctx.refs["organizer"], f"Vexa will join: {ctx.refs['title']}", body)
         # the ack is a thread anchor too: replying to the meeting confirmation is a conversation
         mx.register_thread(db, mid, uid, "main" if ready else "onboarding")
         return Done({"message_id": mid, "workspace_ready": ready}, provider_ref=mid)
@@ -144,6 +154,20 @@ def build(reg: Registry, db) -> None:
             spawned["group"] = ctx.emit(ONB_GROUP.name, f"onbg-{g}",
                                         {"group": g, "organizer": ctx.refs["organizer"], "uid": uid})
         return Done(spawned)
+
+    @reg.step
+    def emit_prep(ctx: StepCtx):
+        """EMIT meeting.upcoming — the fact the prepare flow reacts to.
+
+        THE ADMIT: on this deployment an invite IS the meeting-created event. Nothing else
+        publishes one — mailbox.py admits only invite.received and mail.reply, and a meeting made
+        any other way (the terminal, the control MCP's bot_schedule, calendar sync) reaches the
+        platform's meetings table without telling flows. So the fact is emitted from inside
+        invite_intake, before await_start parks: a second producer can admit the same event type
+        later without touching this step. Prior: ensure_user."""
+        ctx.emit(UPCOMING.name, f"prep-{ctx.refs['ics_uid']}",
+                 {**ctx.refs, "uid": ctx.prior["ensure_user"]["uid"]})
+        return Done({})
 
     reg.step(mt.await_start)
     reg.step(mt.dispatch_bot)
@@ -189,9 +213,9 @@ def build(reg: Registry, db) -> None:
                 ctx.scratch["sent_hash"] = h                    # seen globally — don't resend
                 reply = None
             if reply is not None:
-                mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
-                              subject_line(ctx), reply,
-                              in_reply_to=ctx.scratch.get("thread"))
+                mid = notify(ctx.refs.get("person") or ctx.refs["organizer"],
+                             subject_line(ctx), reply,
+                             in_reply_to=ctx.scratch.get("thread"))
                 mx.register_thread(db, mid, uid, session)
                 ctx.scratch["thread"] = ctx.scratch.get("thread") or mid
                 ctx.scratch["sent_hash"] = h
@@ -200,10 +224,10 @@ def build(reg: Registry, db) -> None:
                            {"u": uid, "s": session, "h": h, "t": ctx.clock_now})
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             elif ctx.clock_now - ctx.scratch.get("last_mail_at", ctx.clock_now) > NUDGE_EVERY_S:
-                mid = mx.send(ctx.refs.get("person") or ctx.refs["organizer"],
-                              "Still there? " + subject_line(ctx),
-                              "Reply whenever — your minutes wait for this thread.",
-                              in_reply_to=ctx.scratch.get("thread"))
+                mid = notify(ctx.refs.get("person") or ctx.refs["organizer"],
+                             "Still there? " + subject_line(ctx),
+                             "Reply whenever — your minutes wait for this thread.",
+                             in_reply_to=ctx.scratch.get("thread"))
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             return Wait(seconds=10)
         _drive.__name__ = f"drive_{prefix}"
@@ -226,16 +250,16 @@ def build(reg: Registry, db) -> None:
         """THE QUEUE GATE: minutes wait for workspace readiness — `.scaffolded` for the owner
         (+ the group marker when refs.group). Not ready → nudge email on a cadence (params:
         nudge_every_s) then Wait(60); unbounded on purpose: late, never lost.
-        Reads: refs.{uid,organizer,group?} · Effect: nudge emails · Result: {ready}."""
+        Reads: refs.{uid,organizer,group?} · Effect: nudge notifications · Result: {ready}."""
         uid = ctx.refs["uid"]
         ok = scaffolded(uid) and (not ctx.refs.get("group")
                                   or ws_file(uid, f".scaffolded-group-{ctx.refs['group']}") is not None)
         if ok:
             return Done({"ready": True})
         if ctx.clock_now - ctx.scratch.get("nudged_at", 0) > NUDGE_EVERY_S:
-            mx.send(ctx.refs["organizer"], "Your minutes are waiting",
-                    "The meeting is recorded. Finish the setup conversation and the minutes arrive "
-                    "right after — just reply to that thread.")
+            notify(ctx.refs["organizer"], "Your minutes are waiting",
+                   "The meeting is recorded. Finish the setup conversation and the minutes arrive "
+                   "right after — just reply to that thread.")
             ctx.scratch["nudged_at"] = ctx.clock_now
         return Wait(seconds=60)
 
@@ -265,19 +289,57 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def email_minutes(ctx: StepCtx):
-        """Send the committed note VERBATIM in the email body (UI-less law) + the feedback ask;
-        registers the thread → meet-<id> session. Cannot run before the commit: its input IS
-        process_meeting's receipt. Reads: refs.{uid,organizer,title} · Effect: one email."""
+        """Send the committed note VERBATIM in the body + the feedback ask + ONE link into the
+        minutes terminal, already primed on this meeting. Cannot run before the commit: its input
+        IS process_meeting's receipt.
+
+        The link is `?ask=minutes-review&meeting=<row-id>` on VEXA_UI_URL. Both params compose and
+        both survive the sign-in hop, so a signed-out reader clicks once, gets a magic link, and
+        lands in a chat that already holds the meeting — the reply-by-email door stays open beside
+        it, unchanged. The preset body is admin-owned (`_global/asks/minutes-review.md`) and
+        substitutes {{meeting}}: the URL never carries prompt text, so nobody who can send mail can
+        drive somebody else's agent.
+
+        Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
         p = ctx.prior["process_meeting"]
         note = ws_file(ctx.refs["uid"], p["note_path"]) or p["summary"]
         body = (note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
                 "Reply to this email with corrections or questions — I'll update the workspace "
-                "and answer here.")
-        mid = mx.send(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body)
+                "and answer here. Or open it and talk it through:")
+        link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
+        mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
-        return Done({"message_id": mid}, provider_ref=mid)
+        return Done({"message_id": mid, "link": link}, provider_ref=mid)
+
+    # ── before the meeting ────────────────────────────────────────────────────
+    @reg.step
+    def prepare_meeting(ctx: StepCtx):
+        """The front door of the loop whose back door is email_minutes: one short note asking
+        whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`.
+
+        Five lines, plain text, one link — a prepare mail that has to be read twice has already
+        failed. Honours mail_prep exactly as email_minutes honours mail_minutes.
+        Reads: refs.{organizer|person, title, start, uid?, meeting_id?, url?}
+        Effect: one notification · Result: {message_id, meeting_ref}."""
+        to = ctx.refs.get("person") or ctx.refs["organizer"]
+        uid = str(ctx.refs.get("uid") or (ctx.prior.get("ensure_user") or {}).get("uid")
+                  or ensure_platform_user(to))
+        if not setting(uid, "mail_prep"):
+            return Done({"skipped": "mail_prep is off for this person"})
+        ref = str(ctx.refs.get("meeting_id") or "")
+        if not ref and ctx.refs.get("url"):
+            ref = mt.meeting_ref(uid, ctx.refs["url"])
+        if not ref:
+            raise StepError("nothing to link to — refs carry neither meeting_id nor url",
+                            retryable=False)
+        title = ctx.refs.get("title") or "your meeting"
+        body = (f"{title} — {_their_clock(uid, ctx.refs['start'])}.\n"
+                "Want to walk in ready? Open the chat and I'll pull together what we already know.")
+        mid = notify(to, f"Prepare: {title}", body, link=ui_link(ask="prep", meeting=ref))
+        mx.register_thread(db, mid, uid, f"meet-{ref}")
+        return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 
     # ── the standing email conversation ───────────────────────────────────────
     @reg.step
@@ -316,12 +378,12 @@ def build(reg: Registry, db) -> None:
     def email_reply(ctx: StepCtx):
         """Mail the agent's reply on the same thread; register Message-ID; record the content
         hash in mail_outbox_sent (send-once across reactions and restarts).
-        Prior: feedback_turn · Effect: one email."""
+        Prior: feedback_turn · Effect: one notification."""
         ft = ctx.prior["feedback_turn"]
         if not ft.get("reply"):
             return Done({"coalesced": True})                    # content already mailed by a sibling
-        mid = mx.send(ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
-                      ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
+        mid = notify(ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
+                     ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
         mx.register_thread(db, mid, ctx.refs["uid"], ctx.refs["session"])
         db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
                       VALUES (:u,:s,:h,:t) ON CONFLICT DO NOTHING""",
@@ -332,11 +394,14 @@ def build(reg: Registry, db) -> None:
     s = reg.steps
     reg.flow(name="invite_intake", version=1, on=INVITE,
              steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["spawn_onboardings"],
+                    s["emit_prep"],
                     s["await_start"], s["dispatch_bot"], s["run_meeting"], s["emit_completed"]])
     reg.flow(name="onboard_person", version=1, on=ONB_PERSON,
              steps=[s["open_person"], s["drive_person"]])
     reg.flow(name="onboard_group", version=1, on=ONB_GROUP,
              steps=[s["open_group"], s["drive_group"]])
+    reg.flow(name="meeting_prep", version=1, on=UPCOMING,
+             steps=[s["prepare_meeting"]])
     reg.flow(name="post_meeting", version=1, on=COMPLETED,
              steps=[s["require_workspace"], s["process_meeting"], s["email_minutes"]])
     reg.flow(name="email_chat", version=1, on=MAIL_REPLY,

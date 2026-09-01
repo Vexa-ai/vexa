@@ -5,6 +5,8 @@
   POST /flows                       submit {name, on_event, steps:[names], params?, activate?}
                                     — validated against the deployed vocabulary AT SUBMISSION;
                                     auto-versioned; live in the worker within ~10 s
+  POST /events                      admit ONE fact {event_type, source_event_id, refs} — the
+                                    intake for producers that are not the mailbox
   POST /flows/{name}/{v}/activate   · POST /flows/{name}/{v}/retire
   GET  /reactions[?status=…]        the operator projection
   POST /reactions/{id}/{retry|resume|cancel}    the signal verbs (audited rows)
@@ -24,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, cancel, postgres_db, resume, retry, wake  # noqa: E402
+from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, retry, wake  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_steps.common import db_url  # noqa: E402
 
@@ -87,6 +89,41 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
                 "p": json.dumps(sub.params), "st": status, "by": x_actor, "t": clock.now()})
     return {"name": sub.name, "version": version, "status": status,
             "live_within_s": 10 if status == "active" else None}
+
+
+class EventSubmission(BaseModel):
+    """A fact. Not a command — the caller says what HAPPENED and the registry decides what
+    reacts. `source_event_id` is the caller's own identifier for the occurrence and is the whole
+    idempotency story: the same id twice creates nothing the second time."""
+    event_type: str = Field(min_length=1, max_length=120)
+    source_event_id: str = Field(min_length=1, max_length=200)
+    refs: dict = Field(default_factory=dict)
+
+
+@app.post("/events", status_code=202, dependencies=[Depends(auth)])
+def admit_event(ev: EventSubmission):
+    """THE FACT INTAKE for producers that are not the mailbox.
+
+    mailbox.py admits exactly two event types, both read off an IMAP inbox: invite.received and
+    mail.reply. Everything else that happens to a person — a meeting scheduled from the terminal,
+    a bot booked over the control MCP, a calendar sync — reaches the platform's own tables and
+    never reaches flows, so no flow can react to it. This endpoint is that missing edge, and
+    deliberately the smallest possible one: one fact, admitted through the SAME `admit()` the
+    worker's emit uses, with the same per-(fact, flow) dedup key.
+
+    An event type no flow reacts to is a 400 carrying the list that would have worked — a fact
+    accepted into silence looks exactly like a fact that worked, and this is the endpoint where
+    that mistake would be made. It never accepts code, and it never names a step: what the fact
+    causes is the registry's business (the n8n line we do not cross)."""
+    vocab.refresh_from_db(db)          # a DB-submitted flow may be the only reactor
+    if not vocab.match(ev.event_type):
+        raise HTTPException(status_code=400, detail={
+            "no_flow_reacts_to": ev.event_type,
+            "reactable_event_types": sorted({f.on.name for f in vocab.flows.values()})})
+    n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
+              event_type=ev.event_type, subject_refs=ev.refs)
+    return {"event_type": ev.event_type, "source_event_id": ev.source_event_id,
+            "reactions_created": n, "duplicate": n == 0}
 
 
 @app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
