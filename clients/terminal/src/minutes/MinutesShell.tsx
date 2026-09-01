@@ -291,6 +291,65 @@ export function MinutesShell() {
       "invites so its meetings land here." } })), 1400);
   };
 
+  // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
+  // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
+  // which workspaces the chat is over, so context and opening prompt arrive together — which is the
+  // whole point of the link. Editing the file changes every future click; nothing is rebuilt.
+  const presetFired = useRef(false);
+  useEffect(() => {
+    if (presetFired.current) return;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem("vexa.pendingPreset"); } catch { /* ignore */ }
+    if (!raw) return;
+    presetFired.current = true;
+    try { localStorage.removeItem("vexa.pendingPreset"); } catch { /* ignore */ }
+    let intent: { ask?: string; ws?: string; meeting?: string };
+    try { intent = JSON.parse(raw) as typeof intent; } catch { return; }
+    const name = (intent.ask || "").trim();
+    // a NAME, and only a name — no slashes, no dots, nothing that walks out of asks/
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) return;
+    void (async () => {
+      const body = await readWorkspaceFile(`asks/${name}.md`, { slug: "_global" }).catch(() => null);
+      // an unknown preset opens nothing. Never fall back to text from the URL.
+      if (!body || !body.trim()) return;
+      // optional frontmatter: `mounts:` (comma-separated) and `label:`
+      let text = body, mounts: string[] = [], label = name.replace(/[-_]/g, " ");
+      const fm = /^---\n([\s\S]*?)\n---\n?/.exec(body);
+      if (fm) {
+        text = body.slice(fm[0].length);
+        const m = /^mounts:\s*(.+)$/m.exec(fm[1]);
+        if (m) mounts = m[1].split(",").map((x) => x.trim()).filter(Boolean);
+        const l = /^label:\s*(.+)$/m.exec(fm[1]);
+        if (l) label = l[1].trim();
+      }
+      if (intent.ws) mounts = [intent.ws, ...mounts.filter((x) => x !== intent.ws)];
+      if (!mounts.length) mounts = ["_global", "personal"];
+      const prompt = text
+        .replace(/\{\{\s*meeting\s*\}\}/g, intent.meeting || "the meeting in view")
+        .replace(/\{\{\s*ws\s*\}\}/g, mounts[0] || "")
+        .replace(/\{\{\s*today\s*\}\}/g, new Date().toISOString().slice(0, 10))
+        .trim();
+      if (!prompt) return;
+      const projId = `ask-${name}`;
+      const chatId = `askchat-${Date.now().toString(36)}`;
+      let proj: Project = { id: projId, name: label, set: mounts, chats: [{ id: chatId, label }] };
+      setProjects((prev) => {
+        const existing = prev.find((pr) => pr.id === projId);
+        proj = existing ? { ...existing, set: mounts, chats: [...existing.chats, { id: chatId, label }] } : proj;
+        const next = existing ? prev.map((pr) => (pr.id === projId ? proj : pr)) : [...prev, proj];
+        saveProjects(next); return next;
+      });
+      void select({ kind: "project", id: projId, label, session: chatId, chatLabel: label }, proj);
+      // NOT dispatching OPEN_MEETING_EVENT: its handler calls select({kind:"meeting"}), which would
+      // replace the project selection made above and take the preset's mounts with it. The ref
+      // reaches the agent through the {{meeting}} substitution, and it can open the meeting itself.
+      // same settle delay the other seeded conversations use — the chat must be mounted to hear it
+      setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+        detail: { hidden: true, session: chatId, prompt },
+      })), 1400);
+    })();
+  }, [select]);
+
   return (
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${T.railW}px minmax(0, 1fr) ${pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
       <Rail view={view} onView={switchView} meetings={meetings} memberships={memberships} projects={projects} sel={sel}

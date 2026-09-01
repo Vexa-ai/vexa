@@ -40,6 +40,7 @@ function InviteGate({ children }: { children: ReactNode }) {
   const assign = params.get("assign");     // ?assign=<uid> — MINUTES: choose a group for an unbound meeting
   const setup = params.get("setup");       // ?setup=global — MINUTES: the admin org-tier conversation
   const view = params.get("view");         // ?view=meeting:<ref>,file:<path>,readme — a COMPOSED layout
+  const ask = params.get("ask");           // ?ask=<preset> — MINUTES: open a chat already primed
 
   // MINUTES `?setup=global`: stash the intent; the workbench fires the admin conversation once
   // the chat is mounted. Re-runnable on purpose — amending the org tier is the same conversation.
@@ -68,6 +69,20 @@ function InviteGate({ children }: { children: ReactNode }) {
     try { localStorage.setItem("vexa.composedView", view); } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [view, invite, tshare]);
+
+  // A `?ask=<preset>` deep-link — the link an extract email actually carries. It names a preset;
+  // the preset BODY lives in `_global/asks/<name>.md`, which only an admin can write. The URL never
+  // carries prompt text: a link that could would let anyone who can send mail drive the recipient's
+  // agent. `ws` and `meeting` ride along as refs the preset may substitute.
+  useEffect(() => {
+    if (!ask) return;
+    try {
+      localStorage.setItem("vexa.pendingPreset", JSON.stringify({
+        ask, ws: params.get("ws") || "", meeting: params.get("meeting") || "",
+      }));
+    } catch { /* locked-down storage */ }
+    if (!invite && !tshare) window.location.replace(window.location.pathname);
+  }, [ask, invite, tshare]);
 
   // A `?meeting=` deep-link: stash the ref for the workbench first-view resolver, then clean the URL
   // (reload so the stash is in place before the grid mounts) — unless an invite/tshare owns the reload.
