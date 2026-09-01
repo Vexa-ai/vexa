@@ -281,6 +281,8 @@ SETTINGS_VOCAB = {
                      "a note each time the notetaker joins a call"),
     "mail_rsvp":    (True, "on/off",
                      "replying yes in the calendar when Vexa is invited to a meeting"),
+    "mail_prep":    (True, "on/off",
+                     "the day-before prepare email for upcoming meetings"),
     "timezone":     ("", "text",
                      "their IANA zone, e.g. Europe/Lisbon — every time is stated in it"),
 }
