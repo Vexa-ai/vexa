@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
@@ -398,6 +398,11 @@ async def request_bot(
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    # Fresh-meeting stream hygiene: purge tc:meeting:{new_row_id} on a FRESH insert so a new meeting
+    # never inherits a prior generation's transcript (a reused row id after a DB reset would otherwise
+    # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
+    # prod, None in tests/offline). NOT called on continue_meeting — that reuse KEEPS the stream.
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -684,6 +689,23 @@ async def request_bot(
             )
             raise
     meeting_id = row["id"]
+
+    # 3b. Fresh-meeting stream hygiene (see the param doc): a brand-new row must start on an EMPTY
+    # transcript stream. Row ids are monotonic, so tc:meeting:{id} normally doesn't exist yet — but if
+    # the DB id sequence is ever reset/restored without flushing redis, a NEW meeting can be minted on a
+    # row id whose OLD stream still holds a prior generation's session_end, and the terminal shows
+    # "Meeting ended" before the first word. Purge on the FRESH insert only (reused_row is None);
+    # continue_meeting KEEPS the reused row's stream for continuity. Best-effort — a purge failure must
+    # never block the spawn (the collector is the stream's writer and appends after this).
+    if reused_row is None and transcript_stream_purge is not None:
+        try:
+            await transcript_stream_purge(meeting_id)
+        except Exception as _e:  # noqa: BLE001 — best-effort; never fail the spawn on a purge error
+            log_event(
+                "bot_spawn_stream_purge_failed", audience="system", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"meeting_id": meeting_id, "error": str(_e)},
+            )
 
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")

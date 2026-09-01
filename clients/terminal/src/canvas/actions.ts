@@ -61,6 +61,10 @@ export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
 // workbench resolves it to a file and opens the doc (revealing the center if in chat-only mode).
 export const OPEN_ENTITY_EVENT = "vexa:terminal:open-entity";
 
+// A `vexa-meeting:<platform>/<native>` link in a meeting note dispatches this; the workbench resolves
+// the native id → the meeting row and opens its canvas (transcript + recording). Detail: { ref }.
+export const OPEN_MEETING_EVENT = "vexa:terminal:open-meeting";
+
 // ASCII sentinel prefixed to the onboarding grounding (robust against bundler/linter normalization). The
 // agent ignores the bracketed tag; the chat uses it to recognize an onboarding turn (filter a pure
 // kickoff, compact the grounding off a real reply, keep it out of the session title).
