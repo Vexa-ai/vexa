@@ -39,6 +39,12 @@ check(authArgs.includes('--disable-blink-features=AutomationControlled'),
 check(!authArgs.includes('--incognito'),
   'authenticated args must NOT be incognito (wipes stored cookies)');
 check(authArgs.includes('--no-sandbox'), 'authenticated args must include --no-sandbox (container)');
+// --use-file-for-fake-video-capture is owned by the join lane (@vexa/join, browser-args.ts),
+// which resolves it from BOT_FAKE_VIDEO_FILE. Setting it here as well places it TWICE on the
+// launched command line, since capture-bridge composes both arrays — a duplicate that is
+// invisible in either source file and only shows on a running bot's /proc/<pid>/cmdline.
+check(!authArgs.some((a) => a.startsWith('--use-file-for-fake-video-capture')),
+  'authenticated args must NOT set --use-file-for-fake-video-capture (owned by the join lane)');
 
 const sessionArgs = getBrowserSessionArgs();
 for (const bad of FORBIDDEN) {
