@@ -325,3 +325,16 @@ test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
     "sha256:65f6904b98abb110f591c5082f12319955723e2a6e2c777f26aac9709548f00a",
   );
 });
+
+test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.26/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "91e5d99e0b1c801902a2da3b7f4f5b4f78a23339a30ca87311cee81f4639477f",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.26");
+  assert.equal(map.candidate_tag, "v0.12.26-rc.1");
+  assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:d0d0444e04932a911866b8e9c4e6629a7830339bafb0c76117186479f62cbffa");
+});
