@@ -63,8 +63,20 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None) -> bool:
     try:
         flow = registry.get(r.flow, r.flow_version)
     except KeyError:
-        _fail(db, r, clock, f"unknown flow {r.flow}@{r.flow_version} — retired by deploy?")
-        return True
+        # Two DIFFERENT causes wear this one KeyError, and they need opposite handling.
+        # BEHIND us: a redeploy retired the version — a real, typed, permanent failure.
+        # AHEAD of us: the version was submitted through flows-api seconds ago and this
+        # worker has not refreshed yet. Admission stamps the new version IMMEDIATELY, while
+        # the worker only reloads every ~10s, so every reaction admitted inside that window
+        # used to fail PERMANENTLY — the liquid layer racing its own admission. Refresh once
+        # and look again; only a version still unknown afterwards is actually gone.
+        try:
+            registry.refresh_from_db(db)
+            flow = registry.get(r.flow, r.flow_version)
+        except Exception:  # noqa: BLE001
+            _fail(db, r, clock,
+                  f"unknown flow {r.flow}@{r.flow_version} — retired by deploy?")
+            return True
     if r.step not in registry.steps or r.step not in flow.steps:
         _fail(db, r, clock, f"unknown step {r.step!r} in {r.flow}@{r.flow_version} — renamed by deploy?")
         return True

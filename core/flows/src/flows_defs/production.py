@@ -32,7 +32,8 @@ from flows import Done, Registry, StepCtx, StepError, Wait, EventType
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
 from flows_steps import meeting as mt
-from flows_steps.common import ensure_platform_user, scaffolded, ui_link, ws_file, setting
+from flows_steps.common import (UI_URL, ensure_platform_user, scaffolded,
+                                setting, ui_link, ws_file)
 from flows_steps.notify import notify
 
 INVITE = EventType("invite.received")
@@ -273,11 +274,27 @@ def build(reg: Registry, db) -> None:
         uid = ctx.refs["uid"]
         if "baseline" not in ctx.scratch:
             ctx.scratch["shas"] = ag.commit_shas(uid)
+            kick = prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(
+                mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
+                date=time.strftime("%Y-%m-%d"),
+                transcript=ctx.refs["transcript"] or "(no speech captured)")
+            # ONE agent turn produces everything, including the per-attendee follow-ups when the
+            # personal variant is on. No per-attendee agent, no per-attendee session before a
+            # click — the button composes the chat when it is pressed, as the organizer's does.
+            if _followup_mode(ctx) == "personal":
+                who = _attendees(ctx)
+                if who:
+                    kick += (
+                        "\n\nALSO, in this same turn, write the file "
+                        f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md. For each address "
+                        f"below write a section `## <address>` followed by at most three lines "
+                        "addressed to that person: what THEY committed to, what was asked of "
+                        "them, or what they asked — from the transcript, in their words where "
+                        "possible. If the meeting held nothing for that person, write the "
+                        "meeting's single decision instead. No greeting, no sign-off, no "
+                        "meta-commentary.\n" + "\n".join(who))
             ctx.scratch["baseline"] = ag.dispatch_turn(
-                uid, f"meet-{ctx.refs['meeting_id']}",
-                prompt_for(ctx, "process-meeting.md", PROCESS_KICKOFF).format(mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
-                                       date=time.strftime("%Y-%m-%d"),
-                                       transcript=ctx.refs["transcript"] or "(no speech captured)"))
+                uid, f"meet-{ctx.refs['meeting_id']}", kick)
             return Wait(seconds=12)
         reply = ag.collect_reply(uid, f"meet-{ctx.refs['meeting_id']}", ctx.scratch["baseline"])
         sha, path = ag.latest_meeting_note(uid, ctx.scratch["shas"])
@@ -304,7 +321,8 @@ def build(reg: Registry, db) -> None:
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
         p = ctx.prior["process_meeting"]
-        note = ws_file(ctx.refs["uid"], p["note_path"]) or p["summary"]
+        note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
+                         or p["summary"])
         body = (note + f"\n\n—\nRecorded by Vexa · commit {p['sha']}\n"
                 "Reply to this email with corrections or questions — I'll update the workspace "
                 "and answer here. Or open it and talk it through:")
@@ -312,6 +330,105 @@ def build(reg: Registry, db) -> None:
         mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
+
+
+
+    def _readable(note: str) -> str:
+        """The note as a PERSON meets it in a mail.
+
+        The note is a WORKSPACE artifact: YAML frontmatter, wikilinks, workspace-relative
+        links. Mailing it verbatim put `type: meeting / id: ... / tags: [...]` at the top of
+        the first thing an attendee ever sees from us, and shipped
+        `[Recording](/?meeting=27)` — a RELATIVE url, which is a dead link in every mail
+        client there is. Neither is a rendering preference; both are the workspace leaking
+        through the product surface, and the attendee mail is where it costs the most.
+        """
+        import re
+        body = note or ""
+        if body.lstrip().startswith("---"):
+            rest = body.lstrip()[3:]
+            end = rest.find("\n---")
+            if end != -1:
+                body = rest[end + 4:]
+        body = re.sub(r"\[([^\]]+)\]\((/[^)]*)\)",
+                      lambda m: m.group(1) + ": " + UI_URL + m.group(2), body)
+        body = re.sub(r"\[\[([^\]]+)\]\]", r"\1", body)
+        return body.strip()
+
+    # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
+    def _followup_mode(ctx) -> str:
+        """off | shared | personal.
+
+        `shared` (default ON) is Marvin's own rule read across to SPI — creator-controlled
+        sharing, default on, with a per-meeting opt-out (`refs.share is False`). Default OFF and
+        this loop is dead on day one; that one value IS the coefficient.
+        `personal` is the same single agent run writing a per-person line for each attendee.
+        """
+        if ctx.refs.get("share") is False:
+            return "off"
+        return str((ctx.flow.param("attendee_followup") if ctx.flow else None) or "shared")
+
+    def _attendees(ctx) -> list:
+        """Inside-domain attendees, minus the organizer. PRD §16.2: outside the domain, NEVER —
+        so an unset allow-list means the organizer's own domain, not everyone."""
+        import os
+        org = (ctx.refs.get("organizer") or "").lower()
+        raw = ctx.refs.get("participants") or []
+        allow = (ctx.flow.param("attendee_domains") if ctx.flow else None) or \
+            [d for d in os.environ.get("VEXA_FLOWS_ATTENDEE_DOMAINS", "").split(",") if d] or \
+            ([org.split("@")[-1]] if "@" in org else [])
+        allow = {d.strip().lower().lstrip("@") for d in allow if d}
+        out = []
+        for a in raw:
+            a = str(a).strip().lower()
+            if "@" not in a or a == org or a in out:
+                continue
+            if a.split("@")[-1] in allow:
+                out.append(a)
+        return out
+
+    @reg.step
+    def email_attendees(ctx: StepCtx):
+        """Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the click
+        composes. Cannot run before the note: its input is process_meeting's receipt.
+
+        Two variants, both ONE agent turn per meeting:
+          shared    the note's essentials, the same body to everyone (the cheap baseline)
+          personal  the per-person block the same turn already wrote to
+                    mail_outbox/attendees-<id>.md
+
+        Reads: refs.{participants, organizer, title, meeting_id, share?} · Effect: N notifications
+        Result: {sent, mode, skipped}."""
+        mode = _followup_mode(ctx)
+        who = _attendees(ctx)
+        if mode == "off" or not who:
+            return Done({"sent": 0, "mode": mode,
+                         "skipped": "opted out" if mode == "off" else "no inside-domain attendee"})
+        p = ctx.prior["process_meeting"]
+        note = _readable(ws_file(ctx.refs["uid"], p["note_path"])
+                         or p["summary"] or "")
+        blocks = {}
+        if mode == "personal":
+            raw = ws_file(ctx.refs["uid"], f"mail_outbox/attendees-{ctx.refs['meeting_id']}.md")
+            for chunk in (raw or "").split("## ")[1:]:
+                head, _, rest = chunk.partition("\n")
+                blocks[head.strip().lower()] = rest.strip()
+        link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
+        subject = f"{ctx.refs['title']} — what it means for you"
+        sent = []
+        for a in who:
+            body = blocks.get(a) if mode == "personal" else None
+            if not body:
+                body = note.strip()
+            body += ("\n\n—\nRecorded by Vexa in " + ctx.refs["title"] +
+                     ". Open it and ask anything about the meeting:")
+            try:
+                mid = notify(a, subject, body, link=link)
+                sent.append(a)
+            except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
+                ctx.scratch.setdefault("failed", []).append(f"{a}: {type(e).__name__}")
+        return Done({"sent": len(sent), "mode": mode, "to": sent,
+                     "failed": ctx.scratch.get("failed", [])})
 
     # ── before the meeting ────────────────────────────────────────────────────
     @reg.step
@@ -403,6 +520,7 @@ def build(reg: Registry, db) -> None:
     reg.flow(name="meeting_prep", version=1, on=UPCOMING,
              steps=[s["prepare_meeting"]])
     reg.flow(name="post_meeting", version=1, on=COMPLETED,
-             steps=[s["require_workspace"], s["process_meeting"], s["email_minutes"]])
+             steps=[s["require_workspace"], s["process_meeting"], s["email_minutes"],
+                    s["email_attendees"]])
     reg.flow(name="email_chat", version=1, on=MAIL_REPLY,
              steps=[s["feedback_turn"], s["email_reply"]])
