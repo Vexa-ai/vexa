@@ -10,6 +10,9 @@ is Mailpit, so nothing can reach a real person.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -512,6 +515,105 @@ def _tokens() -> dict:
         return {}
 
 
+# ── DELEGATED TOKENS ────────────────────────────────────────────────────────────────────────────
+# agent-api mints one of these per dispatch for the worker it spawns, instead of handing the worker a
+# durable user credential out of mcp-tokens.json. We verify it STATELESSLY with a shared HMAC secret:
+# no lookup, no registration, nothing to keep in sync — the token carries its own subject, scope and
+# expiry, and dies on its own. The only shared state is a small denylist for "kill this one NOW".
+#
+# The signing side is core/agent/shared/delegation.py in the minutes-ui repo; the format is frozen
+# between the two and documented there. This is a deliberate duplicate rather than an import: the rig
+# is a single standalone file run from a different repo, and a verifier that cannot be read next to
+# the thing it protects is a verifier nobody audits.
+DELEGATION_SECRET = os.environ.get("VEXA_MCP_DELEGATION_SECRET", "")
+DELEGATION_PREFIX = "vxd_"
+DELEGATION_AUDIENCE = "vexa-mcp"
+REVOKED_FILE = HOME / ".storm/mcp-delegation-revoked.json"
+
+# The authenticated caller's delegation scope for THIS request, or None for every other auth path.
+# Same contextvar discipline as CURRENT/CALL_TOKEN: set once where identity is decided, read where a
+# verb needs it, never threaded through signatures.
+CALL_SCOPE = contextvars.ContextVar("vexa_call_scope", default=None)
+
+
+class _DelegationRefused(Exception):
+    """A delegated token was offered and is not acceptable. ``reason`` is safe to hand a caller."""
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason, self.detail = reason, detail
+
+
+def _is_delegation_token(tok: str) -> bool:
+    return isinstance(tok, str) and tok.startswith(DELEGATION_PREFIX)
+
+
+def _revoked_jtis() -> set:
+    """The denylist — token ids struck off before their exp. Read per call so revoking is immediate
+    (no restart); a missing/among-friends-unparseable file means NOTHING is revoked, which is the
+    correct default: the file's absence must not lock everyone out."""
+    try:
+        data = json.loads(REVOKED_FILE.read_text())
+    except Exception:
+        return set()
+    if isinstance(data, dict):
+        data = data.get("revoked", [])
+    return {str(x) for x in data} if isinstance(data, list) else set()
+
+
+def _verify_delegation(tok: str) -> dict:
+    """Verify a delegated token → its claims. Raises _DelegationRefused naming the failure.
+
+    An UNSET secret refuses everything: a zero-length HMAC key verifies for anyone who knows the
+    format, so "delegation is not configured here" must mean nobody gets in, never everybody."""
+    if not DELEGATION_SECRET:
+        raise _DelegationRefused("delegation_not_configured",
+                                 "this server was not started with a delegation secret")
+    parts = tok[len(DELEGATION_PREFIX):].split(".")
+    if len(parts) != 3:
+        raise _DelegationRefused("malformed", "a delegation token has three parts")
+    body = parts[0] + "." + parts[1]
+    expect = hmac.new(DELEGATION_SECRET.encode(), body.encode("ascii"), hashlib.sha256).digest()
+    def _unb64(t):
+        return base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
+    # SIGNATURE FIRST — until it verifies, the payload is attacker-controlled text, so reading exp or
+    # jti out of it before this point would let a forged token steer its own check.
+    try:
+        got = _unb64(parts[2])
+    except Exception:
+        raise _DelegationRefused("malformed", "signature is not base64url")
+    if not hmac.compare_digest(expect, got):
+        raise _DelegationRefused("bad_signature", "this token was not signed by our agent-api")
+    try:
+        claims = json.loads(_unb64(parts[1]))
+        assert isinstance(claims, dict)
+    except Exception:
+        raise _DelegationRefused("malformed", "payload is not a JSON object")
+    if claims.get("aud") != DELEGATION_AUDIENCE:
+        raise _DelegationRefused("bad_audience", "this token was minted for a different service")
+    if not claims.get("sub"):
+        raise _DelegationRefused("malformed", "token names no subject")
+    exp = claims.get("exp")
+    if not isinstance(exp, int) or time.time() >= exp:
+        raise _DelegationRefused("expired", "this delegation has expired; the dispatch mints a new one")
+    if claims.get("jti") in _revoked_jtis():
+        raise _DelegationRefused("revoked", "this delegation was revoked")
+    return claims
+
+
+def _scope_allows(scope, slug: str) -> bool:
+    """May this delegation touch workspace ``slug``? "*" is the HUMAN regime (a person is in the loop,
+    so the grant is everything already theirs); a list is the AUTONOMOUS isolation set. This is a
+    CEILING on the dispatch, never a grant — the uid's own ownership checks still run underneath.
+    Absent/broken scope fails CLOSED."""
+    if not isinstance(scope, dict):
+        return False
+    ws = scope.get("workspaces")
+    if ws == "*":
+        return True
+    return isinstance(ws, list) and str(slug) in {str(w) for w in ws}
+
+
 def _subject():
     """Who is calling, or None. THE single place identity is decided.
 
@@ -532,6 +634,15 @@ def _subject():
         rec = vexa_oauth.resolve_token(tok, CANONICAL) or _tokens().get(tok)
         if rec:
             return rec["uid"]
+        # A DELEGATED token works as an argument for the same reason a durable one does: it cannot be
+        # guessed. Its scope rides along so the guard can enforce it on this call.
+        if _is_delegation_token(tok):
+            try:
+                claims = _verify_delegation(tok)
+            except _DelegationRefused:
+                return None
+            CALL_SCOPE.set(claims.get("scope"))
+            return str(claims["sub"])
     return None
 
 
@@ -575,6 +686,21 @@ def _anon_guard(fn):
         # mark_scaffolded's nested company_context() came back anonymous and the emptiness was
         # reported as "no validated claims").
         CALL_TOKEN.set((kw.get("token") if RIG_MODE else None) or CALL_TOKEN.get())
+        # SCOPE, enforced once for every workspace-touching verb rather than in each of the twelve.
+        # An EMPTY slug means "their own workspace" and is always in scope — the uid decides it, not
+        # the caller. A NAMED slug on a scoped (autonomous) delegation must be in the isolation set.
+        slug = (kw.get("slug") or "").strip()
+        scope = CALL_SCOPE.get()
+        if slug and scope is not None and not _scope_allows(scope, slug):
+            return json.dumps({
+                "refused": "out_of_scope",
+                "workspace": slug,
+                "why": "this session was dispatched with access to a named set of workspaces and "
+                       "that is not one of them",
+                "tell_your_person": "plainly, that you cannot reach that workspace from here — do "
+                                    "not retry it, and do not describe its contents.",
+                "tool": fn.__name__,
+            })
         try:
             return fn(*a, **kw)
         except _Anonymous:
@@ -1037,7 +1163,44 @@ working.</p>""", "Connected")
             _tok = _raw[7:].strip() if _raw[:7].lower() == "bearer " else ""
             bridge_subject = (vexa_oauth.resolve_token(_tok, CANONICAL) if _tok else None) \
                 or (_tokens().get(_tok) if _tok else None)
+            # A DELEGATED token is a first-class bearer on this dialect too — same verification, same
+            # scope. Considered only where the two lookups above already came up empty.
+            _bridge_scope = None
+            if not bridge_subject and _tok and _is_delegation_token(_tok):
+                try:
+                    _dc = _verify_delegation(_tok)
+                    bridge_subject = {"uid": str(_dc["sub"]), "email": None}
+                    _bridge_scope = _dc.get("scope")
+                    print(f"[delegated] AUTH ok (do-bridge) uid={_dc['sub']} "
+                          f"regime={(_dc.get('scope') or {}).get('regime')} jti={_dc.get('jti')} "
+                          f"tool={scope['path'][4:].strip('/')}", flush=True)
+                except _DelegationRefused as e:
+                    _bridge_refusal = e
+                    print(f"[delegated] AUTH refused (do-bridge) reason={e.reason} "
+                          f"tool={scope['path'][4:].strip('/')}", flush=True)
+                    # REFUSE, never degrade. A caller holding a dead delegation that gets a 200 back
+                    # cannot tell it has stopped acting as its person: it reads the anonymous body as
+                    # "my person has nothing waiting" and says so, confidently and wrongly.
+                    _b = json.dumps({
+                        "error": "invalid_delegation",
+                        "reason": _bridge_refusal.reason,
+                        "detail": _bridge_refusal.detail,
+                        "remediation": "a delegation token is minted per dispatch and is "
+                                       "short-lived; a new turn gets a fresh one. Do not retry "
+                                       "this token, and do not continue anonymously as if you "
+                                       "were still them.",
+                    }).encode()
+                    await send({"type": "http.response.start", "status": 401, "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"www-authenticate", b'Bearer realm="vexa", error="invalid_token"'),
+                        (b"content-length", str(len(_b)).encode()),
+                    ]})
+                    await send({"type": "http.response.body", "body": _b})
+                    return
             CURRENT.set(bridge_subject["uid"] if bridge_subject else None)
+            # Always SET (never leave stale): contextvars are not guaranteed to be per-request here,
+            # so an unscoped caller must actively clear what a scoped one left behind.
+            CALL_SCOPE.set(_bridge_scope)
             # every tool as a URL, for agents that can only GET. Args come from the query
             # string; values that parse as JSON become numbers/bools/objects, the rest stay
             # strings; a `json` parameter merges in whole structured arguments.
@@ -1140,7 +1303,12 @@ working.</p>""", "Connected")
             _q = dict(_up.parse_qsl((scope.get("query_string") or b"").decode()))
             _c = _q.get("c") or ""
             if _c:
-                if _c in _tokens():
+                if _is_delegation_token(_c):
+                    # The rig's own dialect for clients that cannot set a header. It is verified on
+                    # the delegated branch below like any bearer; it is NOT a setup code and must not
+                    # fall through to the "code we no longer know" refusal.
+                    tok = _c
+                elif _c in _tokens():
                     tok = _c
                 else:
                     _rec = _logins().get(_c)
@@ -1184,6 +1352,41 @@ working.</p>""", "Connected")
         sub = {"uid": oa["uid"], "email": oa.get("email")} if oa else (
             _tokens().get(tok) if tok else None)
 
+        # DELEGATED: a per-dispatch token agent-api minted for a worker it spawned. Considered ONLY
+        # where the code above already concluded the bearer is not one of ours, so no existing path
+        # changes shape. A delegated token that FAILS is refused by NAME rather than falling into the
+        # generic "not recognised" 401 — the caller is a machine that can act on the difference
+        # between "expired, get a fresh dispatch" and "revoked, stop".
+        delegation_refusal = None
+        if tok and not sub and _is_delegation_token(tok):
+            try:
+                _claims = _verify_delegation(tok)
+                sub = {"uid": str(_claims["sub"]), "email": None,
+                       "delegated": True, "scope": _claims.get("scope")}
+                _sc = _claims.get("scope") or {}
+                print(f"[delegated] AUTH ok uid={_claims['sub']} regime={_sc.get('regime')} "
+                      f"workspaces={_sc.get('workspaces')} jti={_claims.get('jti')} "
+                      f"exp_in={int(_claims['exp'] - time.time())}s path={path}", flush=True)
+            except _DelegationRefused as e:
+                delegation_refusal = e
+                print(f"[delegated] AUTH refused reason={e.reason} path={path}", flush=True)
+
+        if delegation_refusal is not None:
+            body = json.dumps({
+                "error": "invalid_delegation",
+                "reason": delegation_refusal.reason,
+                "detail": delegation_refusal.detail,
+                "remediation": "a delegation token is minted per dispatch and is short-lived; a new "
+                               "turn gets a fresh one. Do not retry this token.",
+            }).encode()
+            await send({"type": "http.response.start", "status": 401, "headers": [
+                (b"content-type", b"application/json"),
+                (b"www-authenticate", b'Bearer realm="vexa", error="invalid_token"'),
+                (b"content-length", str(len(body)).encode()),
+            ]})
+            await send({"type": "http.response.body", "body": body})
+            return
+
         if not sub and not public:
             base = CANONICAL.rsplit("/mcp", 1)[0]
             meta = f"{base}/.well-known/oauth-protected-resource"
@@ -1224,6 +1427,9 @@ working.</p>""", "Connected")
         # A bearer token wins; otherwise fall back to an account this very conversation
         # created through start_onboarding.
         CURRENT.set(sub["uid"] if sub else SESSION_BIND.get(sid))
+        # Only a delegated session carries a scope; every other auth path leaves it None, which the
+        # guard reads as "unscoped" and lets through exactly as before.
+        CALL_SCOPE.set((sub or {}).get("scope"))
         return await self.app(scope, receive, send)
 
 

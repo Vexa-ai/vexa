@@ -15,7 +15,8 @@ up_port() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 start_ctl() {
   tmux kill-session -t stormctl 2>/dev/null
   tmux new-session -d -s stormctl -c /tmp \
-    "$V/python -u /home/dima/.storm/vexa_control_mcp.py 2>&1 | tee $LOG/control-mcp.log"
+    "VEXA_MCP_DELEGATION_SECRET=\"\$(cat \"\$HOME/.storm/delegation-secret\" 2>/dev/null)\" \
+     $V/python -u /home/dima/.storm/vexa_control_mcp.py 2>&1 | tee $LOG/control-mcp.log"
 }
 start_api() {
   tmux kill-session -t stormapi 2>/dev/null
