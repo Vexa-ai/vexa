@@ -256,17 +256,15 @@ def _seed_ws(root, subject, marker="SEED"):
 
 
 def test_dispatcher_worker_env_carries_the_baseline_plus_system_tier(tmp_path):
-    """No activated extras, no _global configured → VEXA_MOUNTS is the three-tier stack degraded to the
-    private baseline + the always-present PRIVATE SYSTEM tier (AMENDMENT 4). The active portion is exactly
-    today's single-workspace behavior; _system is appended (create-if-absent, read-write)."""
+    """No activated extras still produces the complete global + private + system stack."""
     settings = load_settings(workspaces_dir=str(tmp_path / "workspaces"))
     rt = _FakeRuntime()
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     mounts = json.loads(env["VEXA_MOUNTS"])
-    assert [m["role"] for m in mounts] == ["private", "system"]  # no _global (unconfigured)
-    assert mounts[0]["primary"] is True and mounts[0]["path"].endswith("/u_jane")
+    assert [m["role"] for m in mounts] == ["global", "private", "system"]
+    assert mounts[1]["primary"] is True and mounts[1]["path"].endswith("/u_jane")
     sysm = mounts[-1]
     assert sysm["slug"] == "_system" and sysm["write"] is True and sysm["primary"] is False
 
@@ -362,6 +360,24 @@ def test_dispatcher_model_config_overrides_deployment_models():
     assert env["VEXA_AGENT_MODEL"] == "my-model"
     assert env["VEXA_LLM_MODEL"] == "my-model"          # completion default follows the chat model
     assert env["VEXA_MEETING_MODEL"] == "my-meeting"
+
+
+def test_dispatcher_model_config_stamps_reasoning_effort():
+    """Settings → Models effort pin reaches the worker env as VEXA_AGENT_EFFORT (the claude-code
+    harness passes it through as --effort). Absent ⇒ no env key ⇒ the CLI's own default."""
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"model": "my-model", "effort": "medium"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_EFFORT"] == "medium"
+    # no effort configured ⇒ no env key at all (unset must mean "don't touch the CLI default")
+    rt2 = _FakeRuntime()
+    d2 = dispatch.Dispatcher(load_settings(), rt2, _FakeIdentity(),
+                           model_config=_FakeModelConfig({"model": "my-model"}))
+    d2.dispatch(VALID_INV)
+    _, _profile2, env2 = rt2.spawned[0]
+    assert "VEXA_AGENT_EFFORT" not in env2
 
 
 def test_dispatcher_model_config_custom_mode_stamps_both_call_shapes():

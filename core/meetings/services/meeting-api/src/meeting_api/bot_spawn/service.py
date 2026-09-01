@@ -24,8 +24,10 @@ The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot b
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from typing import Any, Awaitable, Callable, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
@@ -43,23 +45,61 @@ from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
+    MeetingStopped,
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
     TranscriptionNotConfigured,
+    _stopped_reopen_detail,
 )
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
-__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting", "LOBBY_BUDGET_MS"]
+__all__ = [
+    "request_bot",
+    "construct_meeting_url",
+    "apply_join_passcode",
+    "resolve_teams_base_host",
+    "DuplicateMeeting",
+    "MeetingStopped",
+    "LOBBY_BUDGET_MS",
+    "DEFAULT_LOBBY_BUDGET_S",
+    "lobby_budget_ms",
+]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
 # .waitingRoomTimeout``): how long the bot may sit in a lobby, silently polling, before it gives up
 # and reports its own ``awaiting_admission_timeout``. It is a DEADLINE WE WROTE, so every window the
 # control plane measures a not-yet-admitted bot against must outlast it — the reconcile sweep derives
-# its pre-active grace from this constant (``lifecycle.reconcile.default_preactive_grace``) rather
+# its pre-active grace from this budget (``lifecycle.reconcile.default_preactive_grace``) rather
 # than carrying a second, independently-drifting number (#862).
-LOBBY_BUDGET_MS = 600_000
+#
+# 15 minutes by default (#1208): an auto-joined bot is dispatched BEFORE the scheduled start
+# (``AUTO_JOIN_LEAD_S``), so it reaches the lobby before a human host is there to admit it — the
+# budget has to cover the human's lateness, not just the click. The prior 10-minute budget is
+# exactly the ~10.4-minute banding the admission-timeout failure class shows in prod (#267): bots
+# were dying ON the deadline we handed them, which is a budget too small, not a join defect.
+DEFAULT_LOBBY_BUDGET_S = 900
+LOBBY_BUDGET_MS = DEFAULT_LOBBY_BUDGET_S * 1000
+
+
+def lobby_budget_ms() -> int:
+    """The lobby budget (ms) this deployment issues — ``VEXA_LOBBY_BUDGET_S``, default 900.
+
+    Read at CALL time, never frozen at import, so every window derived from it (the reconcile
+    sweep's pre-active grace) sees the same value the spawn path issues even when the env is set
+    after import. Unparseable or non-positive values fall back to the default rather than issuing a
+    deadline of zero — a bot given a zero budget gives up before it has knocked."""
+    raw = os.getenv("VEXA_LOBBY_BUDGET_S")
+    if raw is None or not raw.strip():
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    if seconds <= 0:
+        return DEFAULT_LOBBY_BUDGET_S * 1000
+    return int(seconds * 1000)
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
@@ -75,10 +115,75 @@ _STT_VERDICT_MAX_AGE_S = 60.0
 # one), so constructing a URL from the bare id would silently join the public room of that name —
 # the wrong meeting, on someone else's deployment. jitsi callers pass an explicit ``meeting_url``
 # (same passthrough zoom uses); the UI, MCP, and calendar paths all carry it.
+#
+# Teams is NOT one template: see ``_teams_url`` — its two id shapes join over two different paths.
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
-    "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
 }
+
+# The two Teams meeting-id shapes, and why one template cannot serve both.
+#
+#   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
+#     link. It joins at ``/l/meetup-join/<thread>`` and carries no separate passcode: the deep
+#     link's own query string is the credential, so a caller holding this id holds the whole URL.
+#   * SHORT id — the 10–15 digit meeting id Teams prints next to "Meeting ID / Passcode" and
+#     hands out as ``…/meet/<id>?p=<passcode>``. It joins at ``/meet/<id>``, and the passcode is
+#     a SEPARATE value by construction — this is the ONLY shape for which a bare id plus its own
+#     ``passcode`` field is a complete address.
+#
+# Only the SHORT shape is matched: it is the one that needs a different path from the one every
+# Teams id used to get, and its 10–15 digit range mirrors the SSOT parsers that produce these ids
+# (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
+# stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
+# ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
+# passcode to go (#892).
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
+
+#: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
+#: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``
+#: ``TEAMS_HOST_SUFFIXES``): world-wide, personal, the GCC-High/DoD clouds, and the
+#: cloud.microsoft rename. A host is accepted when it equals a suffix or is a subdomain of one.
+#:
+#: The caller names the host through the api.v1 ``teams_base_host`` field (the MCP link parser
+#: fills it from the link it parsed) and the bot's browser then navigates it — so this is an
+#: ALLOWLIST, not a passthrough. An arbitrary host here is the same SSRF surface
+#: ``_validate_meeting_url`` guards on the URL path, and it would also aim an anonymous join at a
+#: look-alike page. ``teams.microsoft.com`` is the default when the caller names nothing.
+_TEAMS_HOST_SUFFIXES = (
+    "teams.microsoft.com",
+    "teams.live.com",
+    "teams.microsoft.us",
+    "teams.cloud.microsoft",
+)
+_TEAMS_DEFAULT_HOST = "teams.microsoft.com"
+
+
+def resolve_teams_base_host(teams_base_host: Optional[str]) -> Optional[str]:
+    """The Teams host to build a constructed URL on, or ``None`` when the caller named a host
+    that is not a Teams web client (the caller's error — the router turns it into a 422).
+
+    Absent/blank resolves to the world-wide default, so every existing caller keeps today's host.
+    """
+    host = (teams_base_host or "").strip().lower().rstrip("/")
+    if not host:
+        return _TEAMS_DEFAULT_HOST
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in _TEAMS_HOST_SUFFIXES):
+        return host
+    return None
+
+
+def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
+    """The join URL for a Teams id, chosen by the id's SHAPE (see ``_TEAMS_SHORT_ID`` above).
+
+    An id matching neither shape keeps the classic ``/l/meetup-join/`` path: that is what every
+    such id resolved to before this rule existed, and shape does not predict joinability here
+    (a bare-numeric id outside the 10–15 range has transcribed real meetings), so an unrecognized
+    id is left on its established path rather than rerouted on a guess.
+    """
+    host = resolve_teams_base_host(teams_base_host) or _TEAMS_DEFAULT_HOST
+    if _TEAMS_SHORT_ID.match(native_meeting_id):
+        return f"https://{host}/meet/{native_meeting_id}"
+    return f"https://{host}/l/meetup-join/{native_meeting_id}"
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
@@ -130,11 +235,53 @@ def _capture_signal_from_context(ctx: dict) -> bool:
     return ctx.get("capture_signal") is not False
 
 
-def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str]:
+def construct_meeting_url(
+    platform: str,
+    native_meeting_id: str,
+    *,
+    teams_base_host: Optional[str] = None,
+) -> Optional[str]:
     """Best-effort meeting URL for ``(platform, native_id)`` (zoom needs more than the id →
-    None; the caller may pass an explicit ``meeting_url`` instead)."""
+    None; the caller may pass an explicit ``meeting_url`` instead).
+
+    PASSCODE-FREE by contract. This is the URL that gets PERSISTED as
+    ``data.constructed_meeting_url`` and read back on every ``MeetingResponse``, so a credential
+    must never reach it. The passcode is applied separately, to the invocation URL alone
+    (``apply_join_passcode``) — the split is what lets the bot receive a joinable address while
+    ordinary meeting readback stays clean (#892 A4).
+    """
+    if platform == "teams":
+        return _teams_url(native_meeting_id, teams_base_host)
     tmpl = _URL_TEMPLATES.get(platform)
     return tmpl.format(native_meeting_id=native_meeting_id) if tmpl else None
+
+
+def apply_join_passcode(platform: str, url: Optional[str], passcode: Optional[str]) -> Optional[str]:
+    """The URL the BOT navigates: ``url`` with the caller's separate ``passcode`` carried on it.
+
+    Only Teams short links (``…/meet/<id>``) take a passcode through the URL — that is where Teams
+    itself puts it (``?p=``), and a bare short id plus a separate passcode is otherwise not a
+    complete address. Every other platform reaches its passcode a different way and is returned
+    unchanged: zoom and jitsi type theirs into a page (``join/src/zoom/join.ts``,
+    ``join/src/jitsi/password.ts``) off the invocation's own ``passcode`` field, and a Teams thread
+    id's ``/l/meetup-join/`` deep link carries its credential in the URL the caller already holds.
+
+    A ``p`` the URL already carries WINS — a caller who pasted a full link is holding the
+    authoritative one, and a stale separate ``passcode`` must not overwrite it.
+    """
+    if platform != "teams" or not url or not passcode:
+        return url
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if not re.match(r"^/meet/[^/]+/?$", parsed.path or ""):
+        return url
+    query = parse_qsl(parsed.query or "", keep_blank_values=True)
+    if any(k == "p" and v for k, v in query):
+        return url
+    query.append(("p", passcode))
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
@@ -167,6 +314,61 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     }
 
 
+def _stopped_spawn_detail(meeting_id: Any) -> str:
+    """The 409 a spawn fenced by a racing stop answers with. Outward-facing: it says the stop won
+    and names the one action that works."""
+    return (
+        f"meeting {meeting_id} was stopped while the bot was being started, so no bot was "
+        f"started — POST /bots again to start a new one"
+    )
+
+
+async def _stop_requested_on(repo: MeetingRepo, meeting_id: Any) -> bool:
+    """This row's CURRENT user-stop flag, read fresh from the store.
+
+    Deliberately not served from the row dict the spawn already holds: the whole point is to see a
+    write that landed after it. Best-effort against a repo that predates ``get_meeting`` — an older
+    ``MeetingRepo`` implementation simply keeps the pre-fence behaviour, backstopped by the
+    post-spawn interlock, rather than raising AttributeError through a spawn."""
+    getter = getattr(repo, "get_meeting", None)
+    if getter is None:
+        return False
+    try:
+        row = await getter(meeting_id)
+    except Exception:  # noqa: BLE001 — a read failure must never fail a spawn; the interlock backstops
+        return False
+    return bool(((row or {}).get("data") or {}).get("stop_requested"))
+
+
+async def _terminalize_as_stopped(
+    repo: MeetingRepo, meeting_id: Any, status: Optional[str], *,
+    fenced_before_spawn: bool = False,
+) -> None:
+    """Land a stop-fenced row on its truthful terminal: ``failed`` / ``stopped``.
+
+    ``failed`` and not ``completed`` because the bot never reached the meeting, and ``completed`` is
+    reachable only from ACTIVE — writing it here would launder a never-admitted bot into a served
+    visit, which is precisely #807. The reason is the user's (``stopped``), so
+    ``lifecycle.occurrence`` reads the row as USER_STOPPED and the calendar never re-dispatches the
+    occurrence. Best-effort: the reconcile sweep is the backstop, and a failure here must not mask
+    the 409 the caller is about to receive."""
+    try:
+        await repo.fail_meeting(
+            meeting_id=meeting_id,
+            reason=(
+                "stopped by the user before the bot workload was created"
+                if fenced_before_spawn
+                else "stopped by the user while the bot workload was being created"
+            ),
+            failure_stage=status if status in ("requested", "joining", "awaiting_admission") else "requested",
+            completion_reason="stopped",
+            data={"stop_requested": True},
+        )
+    except Exception as e:  # noqa: BLE001 — reconcile backstops; never mask the stop verdict
+        log_event("bot_spawn_stop_terminalize_failed", audience="system", level="error",
+                  span="bots.create", meeting_id=str(meeting_id), fields={"error": str(e)})
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -178,6 +380,7 @@ async def request_bot(
     bot_name: Optional[str] = None,
     passcode: Optional[str] = None,
     meeting_url: Optional[str] = None,
+    teams_base_host: Optional[str] = None,
     language: Optional[str] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
@@ -214,7 +417,14 @@ async def request_bot(
     """
     authority = authority or AllowAllServiceAuthority()
     # 1. URL.
-    constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
+    constructed_url = meeting_url or construct_meeting_url(
+        platform, native_meeting_id, teams_base_host=teams_base_host
+    )
+    # The address the BOT gets, which is not the address we STORE: the passcode rides on the join
+    # URL (Teams' own `?p=`) and stays off `data.constructed_meeting_url`, which every
+    # MeetingResponse reads back. Both derive from the same constructed URL, so they address the
+    # same meeting — they differ only in carrying the credential (#892 A1/A4).
+    join_url = apply_join_passcode(platform, constructed_url, passcode)
 
     # 1b. Resolve the transcription backend and gate BEFORE any DB write (C1, reorder not
     #     duplicate): the old router gate refused pre-insert; resolving here keeps that property —
@@ -315,7 +525,31 @@ async def request_bot(
     reused_row: Optional[dict] = None
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
-        if latest and latest.get("status") in _TERMINAL_STATUSES:
+        latest_data = (latest or {}).get("data") or {}
+        deletion = latest_data.get("artifact_deletion") or {}
+        recording_delete = any(
+            r.get("deletion_pending") for r in (latest_data.get("recordings") or [])
+            if isinstance(r, dict)
+        )
+        # A row whose artifacts are deleted, or being deleted, is not reusable: reopening it in place
+        # would attach a new run to a record the owner has erased. Such a request falls through to the
+        # fresh-insert path and gets a NEW row, which is what "deleted" has to mean.
+        if (
+            latest and latest.get("status") in _TERMINAL_STATUSES
+            and not deletion and not recording_delete
+        ):
+            # F4 — a row the USER STOPPED is never reopened. `continue_meeting` reopens a terminal
+            # row IN PLACE (clearing its terminal attribution) with none of the guarded-create path's
+            # protections, so it was the one way back into a run the user had ended: on stage rev
+            # 193 it resurrected 26313 to `requested` with `stop_requested` still true, and the row
+            # then read as a live meeting nobody had asked for. The 409 names the path that works —
+            # a stopped meeting is finished, and a new run is a new POST /bots.
+            if (latest.get("data") or {}).get("stop_requested"):
+                log_event(
+                    "bot_spawn_continue_refused_stopped", audience="user", level="warning",
+                    span="bots.create", user_id=user_id, meeting_id=str(latest["id"]),
+                )
+                raise MeetingStopped(_stopped_reopen_detail(latest["id"]))
             reused_row = latest
 
     # 2+2b+3. Dedup + max-bots cap + INSERT, made ATOMIC (ROB1/ROB2). Replaces the old read-check-
@@ -427,8 +661,12 @@ async def request_bot(
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
-        # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
-        # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS).
+        # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
+        # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
+        # the API response edge the treatment splits (collector.projection): `webhook_secret` is
+        # never served to anyone (SENSITIVE_OMIT_KEYS); `webhook_url`/`webhook_events` are served to
+        # the OWNER — the v0.10 REST contract reads them back off the meeting row — and stripped for
+        # a share/workspace reader (OWNER_ONLY_KEYS).
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:
@@ -488,7 +726,7 @@ async def request_bot(
     invocation = build_invocation(
         meeting_id=meeting_id,
         platform=platform,
-        meeting_url=constructed_url,
+        meeting_url=join_url,
         bot_name=bot_name or (os.getenv("DEFAULT_BOT_NAME") or f"VexaBot-{uuid.uuid4().hex[:6]}"),
         passcode=passcode,
         token=token,
@@ -519,8 +757,21 @@ async def request_bot(
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
-        automatic_leave=automatic_leave or {"waitingRoomTimeout": LOBBY_BUDGET_MS},
+        automatic_leave=automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()},
     )
+
+    # 4b. THE SPAWN FENCE (F2, stage rev 193 row 26313). Re-read this row's user-stop flag from the
+    #     store — NOT from the snapshot above — immediately before the workload is created. A DELETE
+    #     that landed while the token was minted and the invocation built has already committed
+    #     `stop_requested`; creating the pod now would put a bot in a meeting the user has already
+    #     said no to, and the stop's own direct teardown cannot reach a workload that does not exist
+    #     yet. Refusing HERE means the common case creates no pod at all.
+    if await _stop_requested_on(repo, meeting_id):
+        await _terminalize_as_stopped(repo, meeting_id, row.get("status"), fenced_before_spawn=True)
+        log_event("bot_spawn_fenced_by_stop", audience="user", level="warning",
+                  span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                  fields={"phase": "before_workload_create"})
+        raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
     # 5. Spawn over runtime.v1.
     spec = build_workload_spec(
@@ -594,22 +845,42 @@ async def request_bot(
             f"post-spawn DB write failed; workload {workload_id} torn down"
         ) from e
 
-    # Reconcile a stop that RACED the spawn (the spawn/stop design-gap fix): if a DELETE marked this
-    # meeting stopping/terminal while the workload was being created, tear the just-spawned workload down
-    # now — otherwise it boots, joins, and never receives the (already-published) leave command → orphan.
-    # The stop's own direct teardown can't target a workload whose id wasn't written yet; this closes that
-    # window (DELETE arriving before set_bot_container).
-    raced_status = await repo.get_status_by_session(session_uid=connection_id)
-    if raced_status in ("stopping", "completed", "failed"):
+    # THE INTERLOCK — the half of the fence that has no TOCTOU hole (F2).
+    #
+    # The pre-spawn fence above narrows the window; it cannot close it, because a DELETE can always
+    # land between that read and `create_workload`. What closes it is the ORDER the two paths write
+    # and read in, which is a plain flag-then-check interlock:
+    #
+    #     spawn:  write bot_container_id (committed, above)  →  read stop_requested (here)
+    #     stop:   write stop_requested   (committed)         →  read bot_container_id (stop_router)
+    #
+    # Each side PUBLISHES its own fact before READING the other's, so at least one of the two reads
+    # must observe the other's write, whatever the interleaving — there is no schedule in which the
+    # stop misses the container AND the spawn misses the flag. Either the stop tears the workload
+    # down directly, or this does. (The hole on rev 193 was that neither half held: the stop read a
+    # row snapshot taken BEFORE its own write, so it saw `bot_container_id=None`; and this check read
+    # only STATUS, which a stop against a PRE-ACTIVE row deliberately does not change (#807) and
+    # which a stop against a session-less row cannot change at all. Both sides looked, both missed.)
+    raced = await repo.get_lifecycle_state_by_session(session_uid=connection_id)
+    raced_status = (raced or {}).get("status")
+    raced_stop = bool(((raced or {}).get("data") or {}).get("stop_requested"))
+    if raced_stop or raced_status in ("stopping", "completed", "failed"):
         try:
             await runtime.delete_workload(workload_id)
             log_event("bot_spawn_raced_stop_torn_down", audience="system", level="warning",
                       span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
-                      fields={"workload_id": workload_id, "raced_status": raced_status})
+                      fields={"workload_id": workload_id, "raced_status": raced_status,
+                              "stop_requested": raced_stop})
         except Exception as teardown_err:  # noqa: BLE001 — teardown is best-effort, never masks the spawn
             log_event("bot_spawn_raced_stop_teardown_failed", audience="system", level="error",
                       span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
                       fields={"workload_id": workload_id, "error": str(teardown_err)})
+        if raced_stop:
+            # The run is over before it began, and the row must SAY SO now rather than sit
+            # non-terminal until a reaper guesses. Truthfully: `failed` (the FSM's only legal
+            # pre-active terminal) with the user's own reason.
+            await _terminalize_as_stopped(repo, meeting_id, raced_status)
+            raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
     # The response lists the meeting's sessions (P3c) — all session_uids that ran against this row.
     sessions = await repo.list_sessions(meeting_id=meeting_id)

@@ -14,7 +14,18 @@ import { track, endpointLabel } from "@/app/analytics";
 import { noteAuthFailure } from "@/app/session";
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly detail: string, public readonly url: string) {
+  /** `detail` is the FLATTENED operator string (what goes in the message / the console). `body` is
+   *  the parsed failure body as it came off the wire, kept because some failures are STRUCTURED and
+   *  flattening them destroys the only thing the user needs: a `403
+   *  {"detail":{"code":"service_not_allowed","reason":"insufficient_balance"}}` is a paywall, and
+   *  once it is a string it is indistinguishable from a permissions fault (see
+   *  `surfaces/serviceDenial.ts`). Undefined when the body was absent or not JSON. */
+  constructor(
+    public readonly status: number,
+    public readonly detail: string,
+    public readonly url: string,
+    public readonly body?: unknown,
+  ) {
     super(`${url} → ${status || "network"}${detail ? `: ${detail}` : ""}`);
     this.name = "ApiError";
   }
@@ -93,15 +104,25 @@ export async function getJson<T = unknown>(url: string, init?: RequestInit): Pro
     // An auth-shaped refusal is reported to the session watcher BEFORE the throw, so the login gate
     // can confirm and take over the screen even if this particular caller swallows the error.
     noteAuthFailure(r.status, url);
-    let detail = "";
-    try {
-      const b = (await r.json()) as { detail?: unknown; error?: unknown };
-      const d = b?.detail ?? b?.error;
-      detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
-    } catch {
-      /* body wasn't JSON — the status alone is the signal */
-    }
-    throw new ApiError(r.status, detail, url);
+    throw await readApiFailure(r, url);
   }
   return (await r.json()) as T;
+}
+
+/** Turn a non-ok `Response` into the typed `ApiError`. Reads the body ONCE and keeps it both ways:
+ *  flattened into `detail` for the operator channel, and intact on `body` for the presenters that
+ *  need the structure (the service-authority denial mapping). Shared so the surfaces that call
+ *  `fetch` directly — the join/bot-spawn edges — produce the same error object `getJson` does. */
+export async function readApiFailure(r: Response, url: string = r.url): Promise<ApiError> {
+  let detail = "";
+  let body: unknown;
+  try {
+    body = (await r.json()) as unknown;
+    const b = body as { detail?: unknown; error?: unknown } | null;
+    const d = b?.detail ?? b?.error;
+    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
+  } catch {
+    /* body wasn't JSON — the status alone is the signal */
+  }
+  return new ApiError(r.status, detail, url, body);
 }

@@ -108,6 +108,42 @@
    ]
   },
   {
+   "key": "RUNTIME_BOT_CPU",
+   "class": "defaulted",
+   "default": "(unset — the meeting-bot class declares no cpu, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005). Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value is fatal at boot",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_BOT_MEMORY_MB",
+   "class": "defaulted",
+   "default": "(unset — the meeting-bot class declares no memory, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: memory (MiB) every SPAWNED meeting-bot Pod declares, as BOTH request and limit. A HARD ceiling — a bot exceeding it is OOM-killed mid-meeting — so size it for real meetings, not for the smallest node. Unset/empty ⇒ no memory declared; a non-numeric value is fatal at boot (#1005)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_AGENT_WORKER_CPU",
+   "class": "defaulted",
+   "default": "(unset — the agent-worker class declares no cpu, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: CPU cores every SPAWNED agent-worker Pod declares, as BOTH request and limit. Sized INDEPENDENTLY of the meeting bot — a code harness is not a browser — so an operator can right-size each class alone (#1005). Unset/empty ⇒ no cpu declared; a non-numeric value is fatal at boot",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_AGENT_WORKER_MEMORY_MB",
+   "class": "defaulted",
+   "default": "(unset — the agent-worker class declares no memory, preserving runtime.v1's optional resources)",
+   "description": "k8s backend: memory (MiB) every SPAWNED agent-worker Pod declares, as BOTH request and limit. Unset/empty ⇒ no memory declared; a non-numeric value is fatal at boot (#1005)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",
@@ -210,6 +246,16 @@
    ]
   },
   {
+   "key": "HOST_CODEX_CREDENTIALS",
+   "class": "capability",
+   "capability": "model_inference",
+   "secret": true,
+   "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned codex-runner workers at /root/.codex/auth.json",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "ANTHROPIC_API_KEY",
    "class": "capability",
    "capability": "model_inference",
@@ -236,6 +282,26 @@
    "capability": "model_inference",
    "secret": true,
    "description": "provider-agnostic llm-module credential path, brokered into spawned workers (CompletionPort adapters)",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "OPENAI_API_KEY",
+   "class": "capability",
+   "capability": "model_inference",
+   "secret": true,
+   "description": "OpenAI API credential brokered into Codex harness workers as an alternative to subscription auth",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "CODEX_API_KEY",
+   "class": "capability",
+   "capability": "model_inference",
+   "secret": true,
+   "description": "Codex-specific API credential brokered into Codex harness workers as an alternative to subscription auth",
    "targets": [
     "compose"
    ]
@@ -318,6 +384,24 @@
    ]
   },
   {
+   "key": "VEXA_CODEX_MODEL",
+   "class": "defaulted",
+   "default": "(subscription account default)",
+   "description": "optional model override for the codex harness; empty avoids inheriting a Claude runner model pin",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "VEXA_MIDTURN_INJECT",
+   "class": "defaulted",
+   "default": "0",
+   "description": "enable same-turn user-message steering for harnesses that support it",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "VEXA_AGENT_SRC_MOUNT",
    "class": "defaulted",
    "default": "(unset — the worker runs its baked-in source)",
@@ -351,7 +435,7 @@
    "when_unconfigured": "a runtime.v1 create with profile=agent fails loud at spawn time (no worker image derivable)"
   },
   "model_inference": {
-   "description": "spawned agent-workers get WORKING model-provider credentials brokered in — either the mounted claude subscription file (HOST_CLAUDE_CREDENTIALS) or an API-style key (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / VEXA_LLM_API_KEY)",
+   "description": "spawned agent-workers get model-provider credentials brokered in — a mounted Claude/Codex subscription file or an API-style key",
    "mode": "any",
    "when_unconfigured": "agent dispatches spawn but every turn fails inside the worker ('Model inference failed: Not logged in' / provider 401) — configure ONE credential path",
    "probe": {

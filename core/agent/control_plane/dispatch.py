@@ -92,31 +92,25 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
-      1. ``_global``  GLOBAL SYSTEM  — platform-owned, READ-ONLY, ALWAYS mounted (when configured +
-                      present; absent → skipped + logged). Behaviour/skills/tools. Agents never write it.
+      1. ``_global``  GLOBAL SYSTEM  — platform-owned and ALWAYS mounted. Missing configuration fails
+                      the dispatch closed; a worker never runs without organisation context.
       2. active set   NORMAL private + shared workspaces — READ-WRITE (the additive set, WP-A2.1).
       3. ``_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Create-if-absent (thin
                       template). Chats migrate here in a later WP.
 
-    Order: ``[_global?, *active, _system]``. ``_global`` (RO) and ``_system`` (RW) are ALWAYS present
-    (barring an unconfigured/absent _global); the normal active workspaces sit between them. Both system
-    tiers fail SOFT into the active set so a dispatch never dies on system-mount resolution — but a
-    system-tier failure is LOGGED loudly (it degrades the model's base behaviour / private memory)."""
+    Order: ``[_global, *active, _system]``. The normal active workspaces sit between the system tiers.
+    ``_global`` fails CLOSED because organisation context is a hard invariant; ``_system`` remains
+    fail-soft so a private-memory storage fault cannot suppress the user's turn."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
-    # Tier 1 — GLOBAL SYSTEM (read-only), when configured + present. Absent → skip (the stack still runs).
-    try:
-        g = global_mount(settings, settings.workspaces_dir)
-        if g is not None:
-            # The org tier is READ-ONLY for everyone — except the named admin subjects, whose
-            # setup conversation is the ONE sanctioned writer of _global.
-            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
-            if str(subject) in admins:
-                g = {**g, "write": True}
-            stack.append(g)
-    except Exception:  # noqa: BLE001 — a bad _global must never break a dispatch; run without it
-        logger.warning("global-system (_global) mount resolution failed — running the turn without it")
+    # Tier 1 — GLOBAL SYSTEM. Fail before spawn rather than silently run an under-grounded agent.
+    # Admin subjects receive the one sanctioned read-write setup mount.
+    g = global_mount(settings, settings.workspaces_dir)
+    admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
+    if str(subject) in admins:
+        g = {**g, "write": True}
+    stack.append(g)
 
     # Tier 2 — the NORMAL active set (private baseline + activated extras).
     stack.extend(active)
@@ -185,6 +179,14 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     elif meeting_model:
         logger.warning("meeting model %r not in VEXA_MODEL_ALLOWLIST — using deployment default",
                        meeting_model)
+    # Reasoning-effort pin for the claude-code harness (Settings → Models "effort"). Empty ⇒ unset ⇒
+    # the CLI's own default (no flag on the argv); an explicit value reaches the worker env and the
+    # harness passes it through as --effort. Backends that validate the OpenAI-compatible
+    # reasoning_effort field (vLLM/LiteLLM groups) reject the CLI's default high when it is outside
+    # their allowlist; the pin overrides that default.
+    effort = (config.get("effort") or "").strip()
+    if effort:
+        env["VEXA_AGENT_EFFORT"] = effort
     if (config.get("mode") or "").strip() != "custom":
         return
     base_url = (config.get("base_url") or "").strip()
@@ -297,6 +299,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:
         env["VEXA_MEETING_MODEL"] = settings.meeting_model
+    if settings.post_meeting_dev_email:
+        env["VEXA_POST_MEETING_DEV_EMAIL"] = settings.post_meeting_dev_email
     # llm-module dials (non-secret): completion provider + deployment-default model + the optional
     # operator model gate. The SECRETS (VEXA_LLM_API_KEY/BASE_URL) are brokered by the runtime.
     if settings.llm_provider:

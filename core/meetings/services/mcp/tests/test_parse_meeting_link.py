@@ -65,7 +65,11 @@ class TestTeamsPersonal:
         assert r.platform == "teams"
         assert r.native_meeting_id == "9361792952021"
         assert r.passcode == "abc12345"
-        assert r.teams_base_host is None
+        # The host rides along, like every other short-link parse. A personal meeting id lives on
+        # teams.live.com and the id alone does not say so, so whoever rebuilds the join URL from
+        # (id, passcode) — bot_spawn's construct_meeting_url — would default to the world-wide
+        # enterprise host and send the bot to a different Teams (#892).
+        assert r.teams_base_host == "teams.live.com"
         assert r.meeting_url is None
 
     def test_no_passcode_warns(self):

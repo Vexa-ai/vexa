@@ -24,7 +24,7 @@ services:
       - ../../core/agent/shared:/app/shared
       # dev: live seeds (the baked copy predates flows/), and _global writable so /api/workspace/reset
       # can reseed it (prod: k8s bakes _global differently; the endpoint stays allowlist-gated)
-      - ../../core/agent/workspace-seeds:/app/workspace-seeds
+      - ../../behavior/workspaces:/app/workspace-seeds
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:/workspaces/_global
 
   admin-api:

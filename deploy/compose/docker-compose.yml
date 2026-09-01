@@ -157,6 +157,10 @@ services:
       # volumes: block below and .env.example. The docker backend derives the worker's credential
       # bind from this when HOST_CLAUDE_CREDENTIALS is unset.
       - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
+      - HOST_CODEX_CREDENTIALS=${HOST_CODEX_CREDENTIALS:-}
+      - VEXA_MIDTURN_INJECT=${VEXA_MIDTURN_INJECT:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
       # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
       # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
@@ -195,6 +199,7 @@ services:
       # probe exists to catch.
       - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
+      - ${HOST_CODEX_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-codex-credentials:ro
       # The _global org tier: bound at the SAME path inside this container so the control plane's
       # exists()-check and the worker's host-side bind agree on one path string.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global}:ro
@@ -275,8 +280,8 @@ services:
       # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
-      # READ-ONLY into every worker (behaviour/skills/tools). Empty = no _global mount (mount-when-present);
-      # REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
+      # into every worker (behaviour/skills/tools). This path is required for agent dispatch; REF pins it
+      # to a branch/tag/sha for safe rollout, empty = HEAD.
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
@@ -343,7 +348,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
-      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-}
+      # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
+      # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
+      - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
       # The background sweeps' internal lookups: auto-join fetches per-user spawn context
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
@@ -481,6 +488,24 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
+      # report_issue ticket sink. Unset (the default) → the tool answers 503 "not configured"
+      # and nothing else changes; set the URL to let calling agents file tickets to your webhook.
+      #
+      # POINT THIS AT A DEDICATED TICKETS REPO, NEVER AN OPERATIONAL ONE. Ticket bodies are
+      # third-party text: agent- and customer-submitted, data and never instruction. An
+      # operational repo's issues are read as work signal by planning and automation loops, so
+      # filing untrusted text there injects it straight into those loops. A dedicated (private)
+      # tickets repo enforces at the storage layer what the handler only promises. The token
+      # should be fine-grained, SINGLE-REPO, `issues: write` only, and supplied from a secret
+      # store (k8s `secretKeyRef` / an env file), never inlined here.
+      #
+      # VEXA_TICKET_SINK_FORMAT: `raw` (default) POSTs the ticket JSON to an opaque webhook.
+      # `github` maps it to POST /repos/{owner}/{repo}/issues so an issue tracker IS the sink.
+      - VEXA_TICKET_SINK_URL=${VEXA_TICKET_SINK_URL:-}
+      - VEXA_TICKET_SINK_TOKEN=${VEXA_TICKET_SINK_TOKEN:-}
+      - VEXA_TICKET_SINK_FORMAT=${VEXA_TICKET_SINK_FORMAT:-}
+      - VEXA_TICKET_SINK_LABELS=${VEXA_TICKET_SINK_LABELS:-}
+      - VEXA_TICKET_FINGERPRINT_SALT=${VEXA_TICKET_FINGERPRINT_SALT:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
       interval: 10s
@@ -509,6 +534,10 @@ services:
         # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
         # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
         # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
+        # Bot display name baked into the bundle. Leave commented: the terminal then omits bot_name and
+        # meeting-api's DEFAULT_BOT_NAME (above) names the bot at runtime, renameable with a restart.
+        # Uncomment + REBUILD only to pin a name into the image, which then wins over DEFAULT_BOT_NAME:
+        # NEXT_PUBLIC_DEFAULT_BOT_NAME: ${TERMINAL_BOT_NAME:-}
         # Runtime node_modules flavor (clients/terminal/Dockerfile): prod (default, pruned) or
         # dev (full tree). Set TERMINAL_RUNTIME_DEPS=dev in .env on hosts that run the terminal
         # under the hot overlay's NODE_ENV=development — dev-mode Next needs the dev toolchain at

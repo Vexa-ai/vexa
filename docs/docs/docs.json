@@ -33,7 +33,19 @@
           "how-to/custom-stt",
           "how-to/recordings",
           "n8n",
+          "obsidian",
           "interactive-bots"
+        ]
+      },
+      {
+        "group": "Workflows",
+        "pages": [
+          "flows/overview",
+          "flows/authoring",
+          "flows/vocabulary",
+          "flows/examples",
+          "flows/developing",
+          "flows/operations"
         ]
       },
       {
@@ -73,6 +85,7 @@
       {
         "group": "Architecture",
         "pages": [
+          "architecture/evaluation",
           "architecture/modules",
           "architecture/execution",
           "architecture/dispatch",
@@ -87,6 +100,9 @@
         "group": "API reference",
         "pages": [
           "api/meetings",
+          "api/calendar",
+          "api/settings",
+          "webhooks",
           "api/agent",
           "api/errors"
         ]
@@ -102,6 +118,8 @@
           "model-credentials-licensing",
           "security-compliance",
           "troubleshooting",
+          "troubleshooting/completion-reasons",
+          "support",
           "sdks",
           "vexa-mcp",
           "changelog"
@@ -148,6 +166,10 @@
     {
       "source": "/websocket",
       "destination": "/how-to/stream-transcript"
+    },
+    {
+      "source": "/settings",
+      "destination": "/api/settings"
     },
     {
       "source": "/self-hosted-management",
@@ -381,6 +403,18 @@
     {
       "source": "/cookbook/share-transcript-url.md",
       "destination": "/chatgpt-transcript-share-links.md"
+    },
+    {
+      "source": "/feedback",
+      "destination": "/support"
+    },
+    {
+      "source": "/contact",
+      "destination": "/support"
+    },
+    {
+      "source": "/tell-us",
+      "destination": "/support"
     }
   ]
 }

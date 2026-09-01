@@ -13,8 +13,10 @@ works org-wide (IT deploys it once; every meeting can be captured, governed, aud
 
 - **Vexa** (this project) — Apache-2.0, self-hosted, bot + real-time STT + speaker attribution +
   the agent/knowledge layer, air-gappable end to end.
-- **[Attendee](https://github.com/attendee-labs/attendee)** — the other credible open-source
-  meeting-bot API (Django/Postgres/Redis). A solid, conventional capture API you build on.
+- **[Attendee](https://github.com/attendee-labs/attendee)** — a source-available meeting-bot API
+  (Django/Postgres/Redis) under the **Elastic License 2.0**, not an open-source license: ELv2 states
+  *"You may not provide the software to third parties as a hosted or managed service."* They also run
+  a hosted cloud. Good software; the licence is the difference.
 - **Hosted bot APIs** (e.g. Recall.ai) — mature and convenient, but your meetings transit their
   cloud; nothing to self-host.
 
@@ -33,14 +35,52 @@ attribution, scaling.
 |---|:---:|:---:|:---:|:---:|:---:|
 | Self-hosted / data stays in your perimeter | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Fully **air-gapped** (bundled self-hosted GPU STT unit) | ✅ | 🟡 BYO STT wiring | ❌ | 🟡 local models | 🟡 build it |
-| Bot joins **Meet + Teams + Zoom + Jitsi** | ✅ | ✅ | ✅ | ❌ device audio | 🟡 build ×3 |
+| Bot joins **Meet + Teams + Zoom + Jitsi** | ✅ 3 production · 🟡 Jitsi | ✅ | ✅ | ❌ device audio | 🟡 build ×3 |
 | Real-time transcript API, speaker-attributed | ✅ | ✅ | ✅ | 🟡 app-local | 🟡 build it |
 | 99+ languages: auto-detect or forced, per-window segment labels | ✅ | 🟡 provider-dependent | ✅ | 🟡 model-dependent | 🟡 build it |
 | **Bring your own models** (STT + LLM endpoints) | ✅ | 🟡 STT providers | ❌ | ✅ | ✅ |
 | Kubernetes / OpenShift scale-out (Helm, a Pod per workload) | ✅ | 🟡 compose-first | n/a | ❌ | 🟡 build it |
 | Knowledge layer: transcripts → git Markdown workspace + sandboxed agents | ✅ | ❌ | ❌ | 🟡 app notes | ❌ |
 | Architecture built for AI-assisted maintenance ([one-concern modules, sealed contracts, golden fixtures](/architecture/modules)) | ✅ | 🟡 conventional | n/a | ❌ | — |
-| License | Apache-2.0 | Apache-2.0 | proprietary | varies | — |
+| **Operability**: how much there is to run, and a one-command journey probe that says whether it works | ✅ 3 shapes · `make probe` | 🟡 one Django image, no journey probe | ✅ nothing to run | 🟡 per-seat install | ❌ all yours |
+| **Evidence an evaluator can check** without asking us | ✅ [sealed contracts, CI gates, CALM model, audit artifacts](/architecture/evaluation) | 🟡 source readable, no published gates | ❌ vendor attestation | ❌ | — |
+| License | **Apache-2.0** (OSI open source) | Elastic License 2.0 (source-available) | proprietary | varies | — |
+| **May you resell or embed it in a service you sell?** | ✅ no licence restriction | ❌ ELv2 forbids providing it as a hosted or managed service | ❌ vendor terms | ❌ | ✅ |
+
+*Jitsi* is built and offline-proven, but not yet transcript-proven: live-room acceptance is open
+([#570](https://github.com/Vexa-ai/vexa/issues/570)) and [#883](https://github.com/Vexa-ai/vexa/issues/883)
+reports a witness run on self-hosted Jitsi where audio recorded but the transcript came back empty.
+Meet, Teams and Zoom are production. See [Status](/roadmap/status#capability-truth-table).
+
+*Operability* is the row most often argued with a number and no source, so here are ours. The
+control plane is GPU-free and ships in three sizes: **Lite** (one app container, 13 supervised
+programs inside it, plus two sidecars), **compose** (11 services by default, with Postgres, Valkey
+and MinIO), and **Helm** (7 Deployments and 2 StatefulSets, requesting **1.55 vCPU / 4 GiB** in
+total before a meeting runs — 1.15 vCPU / 3 GiB if you bring your own datastores). Those counts are
+commands, not claims: `docker compose config --services` and `helm template` produce them on a clean
+clone. `make probe` then runs the whole journey — spawn → join → transcribe → live-view → stop — in
+nine stages with a per-stage verdict, against any of the three. What we do **not** ship: a backup or
+DR procedure, an automated upgrade path, or a published hardware minimum for Lite and Kubernetes.
+Those are real operator costs and they are enumerated, with the rest, on
+[Architecture review](/architecture/evaluation#3-what-running-it-costs).
+
+**Or pay none of it.** The [hosted service](/how-to/send-a-bot) is one authenticated `POST /bots` —
+nothing to install, nothing to operate, no figure in this paragraph applies. Self-host when the
+audio must stay inside your perimeter, or when you want the agent plane, which the hosted service
+does not run.
+
+Three operability figures circulate in this field, and we went looking for the source of each
+without finding one. Recall.ai publishes that a self-hosted solution
+[requires 45-48% more time to operate](https://www.recall.ai/recall-ai-vs-attendee).
+Attendee's README publishes that self-hosting
+[reduces costs by 10x compared to closed source vendors](https://github.com/attendee-labs/attendee#readme).
+Skribby publishes that Vexa
+[requires significant DevOps expertise to set up](https://skribby.io/blog/meeting-bot-api-comparison-2026).
+No source accompanies any of the three. We are not answering them with a percentage of our own — we
+have not run that study, and what is above is an inventory of what there is to run, not a
+measurement of your hours.
+Self-hosting is work. The question worth asking any vendor, this one included, is whether they will
+tell you how much before you commit, in a form you can check without asking them.
 
 *Bring your own models* covers both halves of the STT contract: the endpoint
 (`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
@@ -51,7 +91,8 @@ ignore it. See [Configuration](/configuration#transcription-stt).
 
 - **Choose Attendee** if you want *only* a capture API with the most conventional stack possible,
   you're happy wiring your own transcription provider, and the knowledge/agent layer is something
-  you'd rather build yourself. It's good software and the comparison keeps us honest.
+  you'd rather build yourself — and you are **not** reselling it or embedding it in a service you
+  offer to others, which ELv2 does not permit. It's good software and the comparison keeps us honest.
 - **Choose a hosted API** if your compliance posture allows a vendor cloud and you want zero
   operations. That's a real trade — it's just not the one this project exists for.
 - **Choose a local notetaker** for personal note-taking on your own laptop with no IT involvement.
@@ -60,6 +101,12 @@ ignore it. See [Configuration](/configuration#transcription-stt).
   from one Linux box to an OpenShift cluster inside your walls — and, when you want it, the
   [agent layer](/core/agents) that compounds those transcripts into a knowledge base your team owns.
 
+**Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
+account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
+required. Self-hosted: `make all` prints a key when the stack comes up.
+
 The deeper positioning discussion — why capture sits upstream of every "chat with your docs" tool —
 is in [Concepts](/concepts). For the regulated-enterprise posture (air-gap, procurement artifacts,
-OSPS Baseline), see [Security & compliance](/security-compliance).
+OSPS Baseline), see [Security & compliance](/security-compliance). If you are the one who has to
+sign off on the dependency — where audio goes, what it costs to run, how it fails, what is *not*
+certified — that is [Architecture review](/architecture/evaluation).

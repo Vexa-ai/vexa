@@ -279,18 +279,27 @@ def create_app(
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
 
+    # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
+    # uses this same port to delete objects before its transcript/JSONB finalization.
+    if storage is None:
+        storage = _recordings_fakes().InMemoryStorage()
+
+    async def _delete_recording_objects(recording: dict) -> list[str]:
+        from .recordings.deletion import delete_recording_objects
+
+        return await delete_recording_objects(storage, recording)
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
     app.include_router(_build_collector_router(transcript_store, redis,
                                             calendar_sync_now=calendar_sync_now,
-                                            calendar_sync_status=calendar_sync_status))
+                                            calendar_sync_status=calendar_sync_status,
+                                            artifact_object_deleter=_delete_recording_objects))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
-    if storage is None:
-        storage = _recordings_fakes().InMemoryStorage()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
@@ -443,7 +452,18 @@ def _mount_lifecycle(
         connection_id = body.get("connection_id")
         if connection_id:
             existing = sink.store.get(connection_id)
-            if existing is None or existing.status is None:
+            # A TERMINAL event also re-reads the row, even for a record this process already
+            # advanced. The user-stop flag is written to the DB by the stop path and NEVER through
+            # this FSM, so an in-process record that has seen `joining` has no way to know a DELETE
+            # landed — and it is exactly at the terminal edge that the difference is written down
+            # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
+            # `stop_requested=true` on the row). One extra read per meeting, at its last event.
+            terminal_event = body.get("status") in ("completed", "failed")
+            if (
+                existing is None
+                or existing.status is None
+                or (terminal_event and not existing.stop_requested)
+            ):
                 try:
                     persisted = await meeting_repo.get_lifecycle_state_by_session(
                         session_uid=connection_id

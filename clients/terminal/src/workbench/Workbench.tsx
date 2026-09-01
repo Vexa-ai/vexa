@@ -26,6 +26,7 @@ import { Chat } from "../surfaces/chat";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
+import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
 import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly, minutesOnly } from "../app/mode";
@@ -455,6 +456,29 @@ export function Workbench() {
   }, []);
 
   const firstViewDone = useRef(false);
+  // The meeting id carried by the URL (`/meetings/<id>`), captured at FIRST RENDER — before any effect
+  // (including the URL-sync effect below) can rewrite the address bar. This is the durable reference:
+  // a hard reload, a pasted link, or a brand-new session all arrive here.
+  const routeMeetingId = useRef<string | null>(
+    typeof window === "undefined" ? null : meetingIdFromPath(window.location.pathname),
+  );
+
+  // ── URL SYNC — the open meeting is reflected in the address bar, so what's on screen is always
+  // referenceable. `replaceState` (not push): in-app navigation keeps its own history (Escape /
+  // Alt+Left via layout.goBack), and we never want a stack of dockview states in the browser's.
+  // Only the two shapes we own (`/`, `/meetings/<id>`) are ever rewritten; query + hash are preserved
+  // so an in-flight ?invite= / ?tshare= round-trip is untouched.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mid = activeTab?.kind === "meeting" ? String((activeTab.params as { meetingId?: unknown })?.meetingId ?? "") : "";
+    const cur = window.location.pathname;
+    if (!isOwnedPath(cur)) return;
+    const next = mid ? meetingPath(mid) : "/";
+    if (next === cur) return;
+    try { window.history.replaceState(window.history.state, "", next + window.location.search + window.location.hash); }
+    catch { /* history unavailable (sandboxed frame) — the in-app path still works */ }
+  }, [activeTab]);
+
   const resolveFirstView = async (fresh: boolean) => {
     // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
     // directly. Explicit navigation wins over the plan below.
@@ -524,7 +548,10 @@ export function Workbench() {
     };
     const openMeeting = (mid: string, reveal: boolean) => {
       if (reveal && !meetOnly) layout.setActiveList("meetings");
-      layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
+      // A meeting reached by URL is just "Meeting" until the row resolves; one reached by a share link
+      // is labelled as such. Either way the tab id is the same, so it de-dupes with a restored tab.
+      const title = mid === routeMeetingId.current && !sharedMeetingId ? "Meeting" : "Shared meeting";
+      layout.openTab({ id: `meeting:${mid}`, title, kind: "meeting", params: { meetingId: mid } });
     };
     // `forceKnowledge` = land ON the Knowledge section unconditionally (an accepted invite is explicit —
     // the shared workspace's tree must show, even for a returning user whose saved rail was Meetings/etc).
@@ -536,7 +563,7 @@ export function Workbench() {
       layout.openTab({ id: slug ? `doc:${slug}:README.md` : "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md", slug } });
     };
 
-    const plan = firstViewPlan({ sharedMeetingId, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
+    const plan = firstViewPlan({ sharedMeetingId, routeMeetingId: routeMeetingId.current, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
     switch (plan.kind) {
       case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug, !!acceptedSlug); break;  // README pinned last → focused
       case "meeting":               openMeeting(plan.meetingId, true); break;

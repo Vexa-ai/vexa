@@ -20,7 +20,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING } from "../canvas/actions";
+import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -946,13 +946,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
   const onboardingArmedRef = useRef(false);
   useEffect(() => {
-    const onSeed = () => {
+    const onSeed = (event: Event) => {
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       const key = chatKey;
+      const kind = (event as CustomEvent<{ kind?: OnboardingSeedKind }>).detail?.kind ?? "contextual";
+      // Minutes mode greets per SESSION (a meeting chat briefs or recaps; a home chat says what the
+      // place is) — except an explicit PERSONAL seed, which is never meeting prep whatever the mode.
+      const greeting = minutesOnly() && kind !== "personal"
+        ? minutesGreeting(session)
+        : onboardingGreeting(
+            kind,
+            minutesOnly(),
+            liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))),
+          );
       updateChatState(key, (s) => (
         s.turns.length
           ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: (minutesOnly() ? minutesGreeting(session) : ONBOARDING_GREETING), ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
+          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: greeting, ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
       ));
       onboardingArmedRef.current = true;
     };

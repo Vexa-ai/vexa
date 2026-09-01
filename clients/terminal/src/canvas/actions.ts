@@ -90,6 +90,13 @@ export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me
 // stays true whether the account holds a thousand meetings or zero.
 export const MINUTES_HOME_GREETING = "👋 I'm your agent here. Vexa sits in your meetings, turns them into words, and keeps those words as memory you and your team can use — all as plain files in this workspace. To start: **paste a meeting link** and I'll join it, or tell me **who you are and what you're accountable for** — that decides what I pay attention to for you.";
 export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
+export type OnboardingSeedKind = "contextual" | "personal";
+
+/** Pick the cached first-run greeting. An explicit Personal-workspace setup is never meeting prep. */
+export function onboardingGreeting(kind: OnboardingSeedKind, minutes: boolean, hasFinishedMeeting: boolean): string {
+  if (kind === "personal" || !minutes) return ONBOARDING_GREETING;
+  return hasFinishedMeeting ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING;
+}
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
 // ORG (_global) setup: the first agent message is DETERMINISTIC given the seed, so it is CACHED —

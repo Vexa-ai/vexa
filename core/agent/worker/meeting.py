@@ -438,6 +438,7 @@ def serve_meeting(
     cursor_key: str | None = None,
     on_proc_note: Callable[[dict], None] | None = None,
     on_envelope: Callable[[dict], None] | None = None,
+    on_doc_committed: Callable[[dict], None] | None = None,
     proc_params: dict | None = None,
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
@@ -564,7 +565,18 @@ def serve_meeting(
                             end_marker["cursor"] = str(last)
                         stream.xadd(proc_stream, end_marker)
                     if doc_turn is not None:  # post-meeting WRITE: author/update the kg meeting entity
-                        _emit_turn(stream, out_topic, lambda: doc_turn(cards), "meeting-doc")
+                        doc_events = _emit_turn(
+                            stream, out_topic, lambda: doc_turn(cards), "meeting-doc",
+                        )
+                        commits = [event for event in doc_events if event.get("type") == "commit"]
+                        if commits and on_doc_committed is not None:
+                            # The notification boundary is AFTER the governed commit receipt. A failed
+                            # notifier raises so the worker/runtime reports failure; it is never silently
+                            # swallowed. The receipt gives the sink a stable commit-derived identity.
+                            on_doc_committed({
+                                "commit_sha": commits[-1]["sha"],
+                                "cards": tuple(cards),
+                            })
                     return  # meeting ended → reap
                 for seg_index, seg in enumerate(payload.get("segments", [])):
                     sid = seg.get("segment_id") or f"{entry_id}:{seg_index}"
@@ -617,10 +629,15 @@ def _accumulate_card(cards: list[dict], seen_titles: set[str], card: dict) -> No
     cards.append(card)
 
 
-def _emit_turn(stream: _Stream, out_topic: str, turn: Callable[[], Iterator[dict]], tid: str) -> None:
+def _emit_turn(
+    stream: _Stream, out_topic: str, turn: Callable[[], Iterator[dict]], tid: str,
+) -> list[dict]:
+    emitted: list[dict] = []
     for ev in turn():
+        emitted.append(ev)
         stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
     stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
+    return emitted
 
 
 def _emit_beat(stream: _Stream, out_topic: str, card_turn, segments: list[dict], n: int) -> None:

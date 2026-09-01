@@ -111,6 +111,7 @@ def build_argv(
     model: Optional[str] = None,
     mcp_config: Optional[str] = None,
     stdin_mode: bool = False,
+    effort: Optional[str] = None,
 ) -> list[str]:
     """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
 
@@ -119,6 +120,11 @@ def build_argv(
     does the git commit). `--mcp-config <file>` + `--strict-mcp-config` attach EXACTLY the unit's
     granted MCP tools (the toolbelt) and nothing else. The container sandbox is the other
     enforcement layer.
+
+    `effort` — when set — pins the session's reasoning effort (`--effort low|medium|high|xhigh`).
+    Backends that validate the OpenAI-compatible `reasoning_effort` field (e.g. vLLM/LiteLLM model
+    groups) reject the CLI's default `high` when it is outside their allowlist; an explicit value
+    overrides that default. Unset ⇒ no flag ⇒ the CLI's own behaviour, unchanged.
     """
     if stdin_mode:
         # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
@@ -136,6 +142,8 @@ def build_argv(
         argv += ["--resume", session]
     if model:
         argv += ["--model", model]
+    if effort:
+        argv += ["--effort", effort]
     return argv
 
 
@@ -289,13 +297,14 @@ class ClaudeCodeHarness:
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
+        effort = os.environ.get("VEXA_AGENT_EFFORT") or None
         if midturn_enabled() and self._exec is _exec_subprocess:
             argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, stdin_mode=True)
+                              mcp_config=mcp_config, stdin_mode=True, effort=effort)
             yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt))
         else:
             argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config)
+                              mcp_config=mcp_config, effort=effort)
             yield from parse_stream_json(self._exec(argv, str(work)))
 
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
@@ -316,3 +325,9 @@ class ClaudeCodeHarness:
 
     def preflight(self) -> Optional[str]:
         return preflight_provider_guard()
+
+    def midturn_enabled(self) -> bool:
+        return midturn_enabled()
+
+    def inject_user_message(self, text: str) -> bool:
+        return inject_user_message(text)

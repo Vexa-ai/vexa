@@ -9,8 +9,8 @@ active set (the ``_global`` read-only base and the ``_system`` per-user private 
         never write it (the mount is ``write=False`` → the runtime binds it ``:ro``). A LIVE MOUNT, not a
         seed: updating the one _global repo propagates to all agents next turn. Source = an env-configured
         path (``GLOBAL_SYSTEM_WORKSPACE_PATH``, config.v1-declared). Mount HEAD; a pinned ref is supported
-        via ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main). ABSENT (unconfigured, or the
-        configured path does not exist) → SKIP the mount and log; the stack degrades to _system + active.
+        via ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main). Missing configuration fails
+        closed: no worker may run without the organisation tier.
 
   2. ``/workspaces/_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Chats/sessions,
         settings, routines, membership/attachment records, credential refs. Private, never shareable.
@@ -18,7 +18,7 @@ active set (the ``_global`` read-only base and the ``_system`` per-user private 
         here in a LATER WP — this WP only establishes the mount.
 
 The normal active set (WP-A2.1: the subject's private baseline + activated extras) sits BETWEEN these as
-the middle tier; ``dispatch.build_mount_set`` composes the full stack ``[_global?, *active, _system]``.
+the middle tier; ``dispatch.build_mount_set`` composes the full stack ``[_global, *active, _system]``.
 
 Pure + path-driven so the mount stack is unit-tested offline (no docker/kubectl): both builders take a
 ``workspaces_dir`` root + settings-like knobs and return the ``{slug, path, role, write, primary}`` mount
@@ -66,9 +66,8 @@ _IDENTITY_STUB = (
 )
 
 
-def global_mount(settings, root: str) -> Optional[dict]:
-    """The GLOBAL SYSTEM tier (``_global``) — READ-ONLY, mounted into every worker when configured and
-    present. Returns the mount dict, or None (SKIP + log) when the knob is unset or the path is absent.
+def global_mount(settings, root: str) -> dict:
+    """The mandatory GLOBAL SYSTEM tier (``_global``), mounted into every worker.
 
     Source is the platform-operated _global repo/dir named by ``settings.global_system_workspace_path``
     (env ``GLOBAL_SYSTEM_WORKSPACE_PATH``). ``path`` is that source bound at ``<root>/_global`` — an
@@ -77,11 +76,9 @@ def global_mount(settings, root: str) -> Optional[dict]:
     to check out on materialization (default: whatever the repo's HEAD is)."""
     src = (getattr(settings, "global_system_workspace_path", "") or "").strip()
     if not src:
-        logger.info("no GLOBAL_SYSTEM_WORKSPACE_PATH configured — skipping the _global system mount")
-        return None
+        raise RuntimeError("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH is required: every agent stack includes _global")
     if not Path(src).exists():
-        logger.warning("GLOBAL_SYSTEM_WORKSPACE_PATH=%s does not exist — skipping the _global system mount", src)
-        return None
+        raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH does not exist: {src}")
     ref = (getattr(settings, "global_system_workspace_ref", "") or "").strip() or None
     return {
         "slug": GLOBAL_SLUG,

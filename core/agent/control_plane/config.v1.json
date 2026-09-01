@@ -66,42 +66,51 @@
     {
       "key": "VEXA_MOUNTS",
       "class": "defaulted",
-      "default": "(unset — derived per dispatch: the private baseline only)",
-      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec — a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
+      "default": "(unset \u2014 derived per dispatch: the private baseline only)",
+      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec \u2014 a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
       "targets": []
     },
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
       "class": "defaulted",
-      "default": "(unset — no _global mount; the stack degrades to the active set + _system)",
-      "description": "host path / repo dir of the platform-owned GLOBAL SYSTEM workspace (_global) mounted READ-ONLY into EVERY worker — behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Absent → the _global tier is skipped",
-      "targets": ["compose", "helm"]
+      "default": "(required for agent dispatch)",
+      "description": "host path / repo dir of the mandatory GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Missing or invalid configuration fails dispatch closed",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_GLOBAL_ADMIN_SUBJECTS",
       "class": "defaulted",
-      "default": "(unset — nobody writes _global)",
-      "description": "comma-separated user ids whose workers mount _global READ-WRITE — the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
-      "targets": ["compose", "helm"]
+      "default": "(unset \u2014 nobody writes _global)",
+      "description": "comma-separated user ids whose workers mount _global READ-WRITE \u2014 the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
       "class": "defaulted",
-      "default": "(unset — mount HEAD/main)",
+      "default": "(unset \u2014 mount HEAD/main)",
       "description": "pin the _global mount to a ref (branch/tag/sha) for safe rollout of a global behaviour change; empty = mount HEAD (AMENDMENT 4, Q17)",
-      "targets": ["compose", "helm"]
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_PRINCIPAL_NAME",
       "class": "defaulted",
-      "default": "(unset — defaults to the dispatch subject)",
+      "default": "(unset \u2014 defaults to the dispatch subject)",
       "description": "the authenticated human principal's name the dispatch stamps for per-mount commit attribution (D4: git author = principal, committer = platform). Runtime-injected per dispatch",
       "targets": []
     },
     {
       "key": "VEXA_PRINCIPAL_EMAIL",
       "class": "defaulted",
-      "default": "(unset — defaults to <subject>@vexa.local)",
+      "default": "(unset \u2014 defaults to <subject>@vexa.local)",
       "description": "the authenticated human principal's email for per-mount commit attribution (D4). Runtime-injected per dispatch",
       "targets": []
     },
@@ -127,7 +136,7 @@
       "key": "VEXA_WS_WRITE_LOCK_TIMEOUT_S",
       "class": "defaulted",
       "default": "30",
-      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError — bounded so a wedged holder can never stall a workspace forever",
+      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError \u2014 bounded so a wedged holder can never stall a workspace forever",
       "targets": []
     },
     {
@@ -156,6 +165,15 @@
       "class": "defaulted",
       "default": "(subscription/provider default)",
       "description": "the claude model alias/name for chat + workspace turns"
+    },
+    {
+      "key": "VEXA_RUNNER",
+      "class": "defaulted",
+      "default": "claude-code",
+      "description": "agent harness stamped onto dispatched workspace turns; codex selects Codex app-server",
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_MEETING_MODEL",
@@ -198,10 +216,17 @@
       "targets": []
     },
     {
+      "key": "VEXA_POST_MEETING_DEV_EMAIL",
+      "class": "defaulted",
+      "default": "(unset \u2014 development email delivery disabled)",
+      "description": "development-only JSON object validated by worker/post_meeting/config.v1.json: recipient, terminal_url, smtp and sender; normally targets Mailpit",
+      "targets": []
+    },
+    {
       "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
       "class": "defaulted",
       "default": "900",
-      "description": "chat worker warm-serve window after its last turn (s) — a follow-up inside it lands on the warm worker",
+      "description": "chat worker warm-serve window after its last turn (s) \u2014 a follow-up inside it lands on the warm worker",
       "targets": []
     },
     {
@@ -262,6 +287,16 @@
       "class": "defaulted",
       "default": "(unset \u2014 only the legacy single-file mirror is available)",
       "description": "DOCKER-HOST path of the claude config DIRECTORY (~/.claude), mirror-mounted READ-ONLY at /var/lib/vexa/host-claude. Settings \u2192 Models \"Test\" (control_plane.config_test) resolves .credentials.json inside it PER CALL. Same credential as HOST_CLAUDE_CREDENTIALS in the shape that survives a refresh: the CLI replaces the file via rename(2) (NEW inode) and a single-FILE bind stays pinned to the original inode, so this surface reported an already-refreshed token as expired for 32h (dogfood, 2026-08-31). Set it to the parent of HOST_CLAUDE_CREDENTIALS",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "HOST_CODEX_CREDENTIALS",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "Path to a codex subscription auth.json delivered into every spawned worker \u2014 compose bind-mounts it; on k8s/helm the runtime mounts it from a Secret (RUNTIME_K8S_SECRET_MOUNTS) and this key is set on agent-api purely so the model-credential capability reads configured (same surfacing-only semantics as HOST_CLAUDE_CREDENTIALS)",
       "targets": [
         "compose"
       ]
@@ -352,7 +387,7 @@
       "key": "TRANSCRIPTION_SERVICE_URL",
       "class": "defaulted",
       "default": "(unset)",
-      "description": "Settings→Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty → the test reports 'no backend configured'",
+      "description": "Settings\u2192Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty \u2192 the test reports 'no backend configured'",
       "targets": [
         "compose"
       ]
@@ -361,7 +396,7 @@
       "key": "TRANSCRIPTION_SERVICE_TOKEN",
       "class": "defaulted",
       "default": "(unset)",
-      "description": "SECRET — the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings→Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
+      "description": "SECRET \u2014 the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings\u2192Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
       "targets": [
         "compose"
       ]

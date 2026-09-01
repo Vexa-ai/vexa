@@ -124,6 +124,22 @@ With the index already present and committed, the admin-api boot's `ensure_schem
 `uq_meeting_active_user_platform_native` in the existing-index set (matched by name) and **no-ops** —
 the swallow/poison hazard never triggers because there is nothing left to build.
 
+## If you skipped steps 1–3 (#1186)
+
+This runbook exists because `ensure_schema` used to **swallow** a failed unique-index create. It no
+longer does: as of #1186 a UNIQUE index that cannot be built raises `SchemaInvariantError` out of
+the admin-api startup hook, so the process exits(3), `/health` never answers, and the compose
+healthcheck / k8s startup+readiness probes never pass.
+
+That is the intended behaviour — the spawn path documents this index as its DB backstop, so a DB
+where it is absent must not be served by a process that assumes it exists. Verified in production
+2026-08-17: the index had **never** existed, blocked by 4 stale duplicate rows, silently
+re-attempted and re-swallowed on every restart, with the lone WARNING log-rotating away inside a
+day.
+
+**Recovery is steps 1–3 above**, run against the DB the failing pod points at, then restart. The
+raised message names the index, the table, the underlying Postgres error, and points back here.
+
 ## Rollback
 
 `DROP INDEX CONCURRENTLY IF EXISTS uq_meeting_active_user_platform_native;` then revert the SSOT

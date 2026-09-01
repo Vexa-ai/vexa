@@ -145,6 +145,36 @@ def test_message_landing_during_the_entrypoint_turn_is_consumed_not_lost():
     assert accepted[1]["nonce"] == "n2"
 
 
+def test_midturn_message_uses_the_active_harness_steering_seam():
+    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello"})})])
+
+    class SteeringHarness:
+        def __init__(self):
+            self.injected = []
+
+        def midturn_enabled(self):
+            return True
+
+        def inject_user_message(self, text):
+            self.injected.append(text)
+            return True
+
+    harness = SteeringHarness()
+
+    def active_turn(prompt):
+        s.entries.append(("6-0", {"turn": json.dumps({"prompt": "steer me", "nonce": "n2"})}))
+        yield {"type": "message-delta", "text": "working"}
+        yield {"type": "done", "reply": "done", "sessionId": "s1", "ok": True}
+
+    serve(s, out_topic="o", in_topic="i", turn=active_turn,
+          start={"entrypoint": {"inline": "hello"}}, idle_ms=10, harness=harness)
+    assert harness.injected == ["steer me"]
+    assert any(event["type"] == "turn-accepted" and event.get("injected") is True
+               and event.get("nonce") == "n2" for event in s.events())
+    assert any(event["type"] == "user-injected" and event["text"] == "steer me"
+               for event in s.events())
+
+
 # ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────
 
 from worker.worker import meeting_card_turn, parse_cards, parse_notes, serve_meeting  # noqa: E402
@@ -488,7 +518,7 @@ def test_serve_meeting_upserts_workspace_file_from_proc_notes(tmp_path):
 
 from worker.worker import persist_envelope, load_meeting_schema, validate_envelope  # noqa: E402
 
-_SEED_DIR = pathlib.Path(__file__).resolve().parents[1] / "workspace-seeds" / "default"
+_SEED_DIR = pathlib.Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default"
 
 
 def _fold_events(events):
@@ -680,6 +710,26 @@ def test_mounts_preamble_declares_the_three_tiers_verbatim():
     assert "PRIVATE baseline" in txt
     # the routing policy names both system tiers explicitly
     assert "`_global`" in txt and "`_system`" in txt
+
+
+def test_global_context_is_loaded_proactively_from_the_global_mount(tmp_path):
+    """A sibling _global mount is not auto-loaded by either harness, so the engine must put its
+    authoritative entry files into every turn without waiting for the user to name the tier."""
+    from worker import worker
+    global_dir = tmp_path / "_global"
+    global_dir.mkdir()
+    (global_dir / "CLAUDE.md").write_text("Always use the organisation's shared terminology.")
+    (global_dir / "README.md").write_text("Our company is Acme Central Bank.")
+
+    txt = worker.global_context_preamble([
+        {"slug": "_global", "path": str(global_dir), "role": "global", "write": False},
+        {"slug": "personal", "path": str(tmp_path / "personal"), "role": "private", "write": True},
+    ])
+
+    assert "Organisation context (mandatory; loaded from `_global`)" in txt
+    assert "Always use the organisation's shared terminology." in txt
+    assert "Our company is Acme Central Bank." in txt
+    assert "including while working in Personal" in txt
 
 
 def test_read_only_global_mount_is_never_committed(tmp_path, monkeypatch):
@@ -1130,7 +1180,7 @@ def test_seed_claude_md_defers_copilot_steering_to_meeting_md():
     deployment default (the seed no longer ships agents/ — absent means defaults). CLAUDE.md is
     auto-loaded as project memory on every turn, so copilot steering here would be a second,
     conflicting source."""
-    seed = pathlib.Path(__file__).resolve().parents[1] / "workspace-seeds" / "default" / "CLAUDE.md"
+    seed = pathlib.Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default" / "CLAUDE.md"
     text = seed.read_text()
     lower = text.lower()
     # Names meeting.md as the governing source, with an exclusivity word ("exclusive"/"only source").

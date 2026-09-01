@@ -19,6 +19,7 @@ from urllib.parse import quote
 import requests_unixsocket
 
 from .backend import WorkloadHandle
+from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
 
@@ -196,7 +197,19 @@ class DockerBackend:
             )
         return target
 
-    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+    def start(
+        self,
+        workload_id: str,
+        runnable: Runnable,
+        env: dict[str, str],
+        resources: Optional[Resources] = None,
+    ) -> WorkloadHandle:
+        """``resources`` is accepted and NOT enforced here — the enforcement boundary is k8s-only,
+        and this backend claims no parity with it. Compose/Lite have no admission controller
+        demanding a declared request+limit, and translating the intent into ``HostConfig.Memory``
+        would introduce an OOM-kill ceiling on live meeting bots that run unbounded today: a
+        behaviour change on the most-used substrate, bought for no admission benefit. A deployment
+        that wants Docker enforcement adds it as its own change, with its own live evidence."""
         if not runnable.image:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)
@@ -235,6 +248,9 @@ class DockerBackend:
         creds = host_claude_credentials(os.environ)
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
+        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS")
+        if codex_creds:
+            binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
         # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
         # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
@@ -245,6 +261,11 @@ class DockerBackend:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
+        if dev_src:
+            # The worker image normally imports its baked packages from /app. Put the whole hot
+            # agent source tree first or the bind above is decorative: `python -m worker` otherwise
+            # resolves /app/worker and silently runs stale code.
+            spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
         for key in (
             # llm-module dials (provider-agnostic): completion endpoint/credential/model + the
             # harness runner selection. Dispatch-stamped values win (`key not in spawn_env`).
@@ -255,6 +276,11 @@ class DockerBackend:
             "VEXA_LLM_MAX_TOKENS",
             "VEXA_MODEL_ALLOWLIST",
             "VEXA_RUNNER",
+            "VEXA_MIDTURN_INJECT",
+            "VEXA_CODEX_MODEL",
+            # codex harness API-key auth (subscription auth is the read-only bind above)
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
             # claude-code harness credentials (that adapter's concern only)
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
@@ -274,6 +300,10 @@ class DockerBackend:
             "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
             "HostConfig": host_config,
         }
+        if dev_src:
+            # `python -m worker` prepends its cwd to sys.path ahead of PYTHONPATH. Start inside the
+            # mounted tree as well, or /app/worker still wins despite the PYTHONPATH above.
+            payload["WorkingDir"] = "/app/src/agent_api"
         if runnable.command:
             payload["Cmd"] = list(runnable.command)
 

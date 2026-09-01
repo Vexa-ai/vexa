@@ -196,9 +196,29 @@ class WebhookUpdate(BaseModel):
 
 class CalendarUpdate(BaseModel):
     """The user's calendar-sync self-serve config: a secret ICS feed URL (``null`` disconnects)
-    + the GLOBAL auto-join default stamped onto every imported meeting."""
+    + the GLOBAL auto-join defaults used by imported meetings."""
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
+    bot_name: Optional[str] = None
+
+
+class CalendarCreate(BaseModel):
+    name: str
+    ics_url: str
+    auto_join: bool = True
+    bot_name: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class CalendarPatch(BaseModel):
+    name: Optional[str] = None
+    ics_url: Optional[str] = None
+    auto_join: Optional[bool] = None
+    bot_name: Optional[str] = None
+    enabled: Optional[bool] = None
+
+    model_config = {"extra": "forbid"}
 
 
 # ── model + transcription config (per-user prefs and the platform-wide defaults) ──
@@ -216,7 +236,8 @@ MODEL_MODES = ("subscription", "custom")
 # Load-bearing for self-hosted vLLM/Qwen, which returns NO valid JSON unless thinking is disabled
 # via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
 # could only be configured deployment-wide, never through BYOT.
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "extra_body")
+# effort: the claude-code reasoning-effort pin (low|medium|high|xhigh) — see ModelPrefsUpdate.
+_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "extra_body", "effort")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -240,6 +261,7 @@ class ModelPrefsUpdate(BaseModel):
     meeting_model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -512,6 +534,83 @@ def create_app() -> FastAPI:
         }
 
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
+    from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,
+                            masked_connection, new_connection, store_connections,
+                            validate_bot_name, validate_ics_url)
+
+    async def _save_calendar_connections(user: User, db: AsyncSession,
+                                         connections: list[dict]) -> None:
+        from sqlalchemy.orm import attributes
+        user.data = store_connections(dict(user.data or {}), connections)
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+
+    @app.get("/user/calendars")
+    async def list_user_calendars(user: User = Depends(get_current_user)):
+        connections = connections_from_data(dict(user.data or {}), user.id)
+        return {"calendars": [masked_connection(c) for c in connections]}
+
+    @app.post("/user/calendars", status_code=status.HTTP_201_CREATED)
+    async def create_user_calendar(calendar: CalendarCreate,
+                                   user: User = Depends(get_current_user_for_update),
+                                   db: AsyncSession = Depends(get_db)):
+        connections = connections_from_data(dict(user.data or {}), user.id,
+                                            include_deleted=True)
+        if len([c for c in connections if not c.get("deleted")]) >= MAX_CALENDAR_CONNECTIONS:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"at most {MAX_CALENDAR_CONNECTIONS} calendars can be connected")
+        data = dict(user.data or {})
+        created = new_connection(
+            name=calendar.name,
+            ics_url=calendar.ics_url,
+            auto_join=calendar.auto_join,
+            bot_name=calendar.bot_name or data.get("calendar_bot_name") or "Vexa",
+        )
+        connections.append(created)
+        await _save_calendar_connections(user, db, connections)
+        return masked_connection(created)
+
+    @app.patch("/user/calendars/{calendar_id}")
+    async def update_user_calendar(calendar_id: str, patch: CalendarPatch,
+                                   user: User = Depends(get_current_user_for_update),
+                                   db: AsyncSession = Depends(get_db)):
+        connections = connections_from_data(dict(user.data or {}), user.id,
+                                            include_deleted=True)
+        target = next((c for c in connections if c["id"] == calendar_id and not c.get("deleted")), None)
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="calendar not found")
+        if patch.name is not None:
+            name = patch.name.strip()
+            if not name or len(name) > 100:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid name")
+            target["name"] = name
+        if patch.ics_url is not None:
+            target["ics_url"] = validate_ics_url(patch.ics_url)
+        if patch.auto_join is not None:
+            target["auto_join"] = bool(patch.auto_join)
+        if patch.bot_name is not None:
+            target["bot_name"] = validate_bot_name(patch.bot_name)
+        if patch.enabled is not None:
+            target["enabled"] = bool(patch.enabled)
+        await _save_calendar_connections(user, db, connections)
+        return masked_connection(target)
+
+    @app.delete("/user/calendars/{calendar_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_user_calendar(calendar_id: str,
+                                   user: User = Depends(get_current_user_for_update),
+                                   db: AsyncSession = Depends(get_db)):
+        connections = connections_from_data(dict(user.data or {}), user.id,
+                                            include_deleted=True)
+        target = next((c for c in connections if c["id"] == calendar_id and not c.get("deleted")), None)
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="calendar not found")
+        target.pop("ics_url", None)
+        target["enabled"] = False
+        target["deleted"] = True
+        await _save_calendar_connections(user, db, connections)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.put("/user/calendar")
     async def set_user_calendar(calendar_update: CalendarUpdate,
                                 user: User = Depends(get_current_user_for_update),
@@ -519,56 +618,58 @@ def create_app() -> FastAPI:
         """Set/clear the caller's secret ICS feed URL (+ the global auto-join default for
         imported meetings). ``ics_url: null`` disconnects the calendar. The URL is a SECRET
         (Google/Outlook secret-address feeds) — it is stored, never echoed in the clear."""
-        from urllib.parse import urlparse
-
-        from sqlalchemy.orm import attributes
         data = dict(user.data or {})
+        updated_bot_name = None
+        if "bot_name" in calendar_update.model_fields_set:
+            bot_name = (calendar_update.bot_name or "").strip()
+            if not bot_name:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="bot_name is required")
+            if len(bot_name) > 100:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="bot_name too long")
+            data["calendar_bot_name"] = bot_name
+            updated_bot_name = bot_name
+            from sqlalchemy.orm import attributes
+            user.data = data
+            attributes.flag_modified(user, "data")
+        connections = connections_from_data(data, user.id, include_deleted=True)
+        current = next((c for c in connections if not c.get("deleted")), None)
+        if updated_bot_name is not None and current is not None:
+            current["bot_name"] = updated_bot_name
         if "ics_url" in calendar_update.model_fields_set:
             url = (calendar_update.ics_url or "").strip()
             if url:
-                if len(url) > 2048:
-                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                        detail="ics_url too long")
-                parsed = urlparse(url)
-                if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                        detail="ics_url must be an http(s) URL")
-                # Catch the #1 paste mistake up front: Google Calendar's EMBED page (HTML, not a
-                # feed). The real feed is Settings -> Integrate calendar -> 'Secret address in
-                # iCal format' (ends in .ics). Content-level checks happen at fetch time.
-                if "/calendar/embed" in (parsed.path or "").lower():
-                    raise HTTPException(
-                        status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=("that's the calendar's embed page, not its feed - in Google "
-                                "Calendar open Settings -> Integrate calendar and copy the "
-                                "'Secret address in iCal format' (ends in .ics)"))
-                data["calendar_ics_url"] = url
+                if current is None:
+                    current = new_connection(name="Calendar", ics_url=url,
+                                             auto_join=calendar_update.auto_join
+                                             if calendar_update.auto_join is not None else True,
+                                             bot_name=data.get("calendar_bot_name") or "Vexa")
+                    connections.append(current)
+                else:
+                    current["ics_url"] = validate_ics_url(url)
             else:
-                data.pop("calendar_ics_url", None)
-        if calendar_update.auto_join is not None:
-            data["calendar_auto_join"] = bool(calendar_update.auto_join)
-        user.data = data
-        attributes.flag_modified(user, "data")
-        db.add(user)
-        await db.commit()
+                if current is not None:
+                    current.pop("ics_url", None)
+                    current["enabled"] = False
+                    current["deleted"] = True
+        if calendar_update.auto_join is not None and current is not None:
+            current["auto_join"] = bool(calendar_update.auto_join)
+        await _save_calendar_connections(user, db, connections)
         return await get_user_calendar(user)  # the masked read-back shape
 
     @app.get("/user/calendar")
     async def get_user_calendar(user: User = Depends(get_current_user)):
         """Read back the caller's calendar config. The ICS URL is a secret — masked to its host
         + last 4 chars, enough to recognize WHICH feed is connected without disclosing it."""
-        from urllib.parse import urlparse
-
         data = user.data if isinstance(user.data, dict) else {}
-        url = data.get("calendar_ics_url")
-        masked = None
-        if url:
-            host = urlparse(url).hostname or ""
-            masked = f"{host}/…{url[-4:]}"
+        current = next(iter(connections_from_data(data, user.id)), None)
+        masked = masked_connection(current) if current else None
         return {
-            "ics_url_set": bool(url),
-            "ics_url_masked": masked,
-            "auto_join": data.get("calendar_auto_join", True),
+            "ics_url_set": bool(masked and masked["ics_url_set"]),
+            "ics_url_masked": masked["ics_url_masked"] if masked else None,
+            "auto_join": masked["auto_join"] if masked else True,
+            "bot_name": data.get("calendar_bot_name") or "Vexa",
         }
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
@@ -604,6 +705,7 @@ def create_app() -> FastAPI:
             "model": prefs.get("model"),
             "meeting_model": prefs.get("meeting_model"),
             "base_url": prefs.get("base_url"),
+            "effort": prefs.get("effort"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
@@ -809,19 +911,16 @@ def create_app() -> FastAPI:
     @app.get("/internal/calendar-configs", include_in_schema=False)
     async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
-        rows = (await db.execute(
-            select(User).where(User.data["calendar_ics_url"].astext.isnot(None))
-        )).scalars().all()
+        from sqlalchemy import or_
+        from .calendars import internal_connections
+        rows = (await db.execute(select(User).where(or_(
+            User.data["calendar_ics_url"].astext.isnot(None),
+            User.data["calendar_connections"].astext.isnot(None),
+        )))).scalars().all()
         configs = []
         for u in rows:
             data = u.data if isinstance(u.data, dict) else {}
-            url = data.get("calendar_ics_url")
-            if url:
-                configs.append({
-                    "user_id": u.id,
-                    "ics_url": url,
-                    "auto_join": data.get("calendar_auto_join", True),
-                })
+            configs.extend(internal_connections(data, u.id))
         return {"configs": configs}
 
     # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
@@ -836,7 +935,10 @@ def create_app() -> FastAPI:
         _check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
-        resp: dict = {"max_concurrent": user.max_concurrent_bots}
+        resp: dict = {
+            "max_concurrent": user.max_concurrent_bots,
+            "bot_name": data.get("calendar_bot_name") or "Vexa",
+        }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here

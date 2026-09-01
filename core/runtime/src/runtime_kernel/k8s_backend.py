@@ -1,7 +1,12 @@
 """K8sBackend — runs a workload as a real Kubernetes Pod (the cluster substrate). Uses the kubectl CLI
 via subprocess (no client lib), matching the DockerBackend approach. Implements the same Backend port,
 so the kernel's runtime.v1 lifecycle is identical to process/docker. A workload is a bare Pod with
-restart=Never; the kernel owns restart policy, so the Pod must not resurrect itself."""
+restart=Never; the kernel owns restart policy, so the Pod must not resurrect itself.
+
+The spawn submits a COMPLETE Pod manifest (``build_pod`` → ``kubectl create -f -``). Owning the whole
+object is what lets a container carry CPU/memory requests and limits — the declaration a namespace
+ResourceQuota admits on — WITHOUT a partial ``kubectl run --overrides`` containers entry, whose JSON
+merge replaces the generated container wholesale and strips its image, env and command."""
 from __future__ import annotations
 
 import json
@@ -10,11 +15,17 @@ import subprocess
 from typing import Optional
 
 from .backend import WorkloadHandle
+from .models import Resources
 from .mounts import k8s_volume_mounts
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
+
+# The extended-resource name a GPU request carries. Kubernetes requires extended resources on the
+# LIMITS side; the request is set equal to the limit automatically, and a requests-side entry that
+# differs is rejected — so runtime.v1's single `gpu` count maps to limits only.
+GPU_RESOURCE = "nvidia.com/gpu"
 
 # The runtime's OWN scheduling constraints, serialized as JSON by the chart from
 # global.tolerations / global.nodeSelector (see deployment-runtime.yaml). A spawned workload is a bare
@@ -24,6 +35,11 @@ WORKLOAD_ID_LABEL = "runtime.workload_id"
 # the runtime itself is allowed to run.
 TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
 NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
+# File-shaped credentials for spawned workloads (the twin of dispatch's MODEL_AUTH_ENV_ALLOWLIST,
+# which covers env-shaped ones): some harnesses read a credential FILE (codex: ~/.codex/auth.json),
+# and a bare `kubectl run` Pod inherits no mounts. JSON array of {"secret": <name>, "mountPath": <dir>}.
+# Mounted read-only — a token refresh cannot persist, so keep the Secret fresh operator-side.
+SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, mountPath}
 
 
 def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
@@ -51,11 +67,12 @@ def _runtime_scheduling_env() -> dict[str, str]:
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
     an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
-    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV)
+            if os.environ.get(k)}
 
 
-def _kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    r = subprocess.run(["kubectl", *args], capture_output=True, text=True)
+def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
+    r = subprocess.run(["kubectl", *args], capture_output=True, text=True, input=stdin)
     if check and r.returncode != 0:
         raise RuntimeError(f"kubectl {' '.join(args)} failed: {r.stderr.strip()}")
     return r
@@ -73,7 +90,7 @@ def _stop_grace_sec() -> int:
 
 
 def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
-    """The ``kubectl run --overrides`` spec for a spawned Pod, built from the SAME env. It carries two
+    """The env-derived OVERLAY ``build_pod`` merges onto a spawned Pod's spec. It carries two
     independent seams:
 
       * the workspace store mount set (WP-A1.1): the store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE`` = the
@@ -82,22 +99,46 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
         so the bare ``kubectl run`` Pod — which inherits none of the runtime Deployment's scheduling —
         lands where the runtime itself is allowed to run instead of stranding Pending on a tainted pool.
 
-    The spec is built whenever EITHER seam is present; returns None only when neither is (no override
-    needed). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace PVC,
-    so a volumes-only early return would silently drop its tolerations and re-create the bug. Pure/
-    env-driven → unit-tested offline (no kubectl)."""
+    The overlay is built whenever EITHER seam is present; returns None only when neither is (nothing
+    to merge). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace
+    PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
+    Pure/env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
+    # credential files go to AGENT WORKERS only (a dispatch env carries VEXA_UNIT_ID); a meeting
+    # bot never needs a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
+    for i, sm in enumerate(secret_mounts or ()):
+        if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
+            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
+        name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
+        volumes.append({"name": name, "secret": {"secretName": sm["secret"]}})
+        mount = {"name": name, "mountPath": sm["mountPath"], "readOnly": True}
+        if sm.get("file"):
+            # single-FILE mount (subPath): the surrounding directory stays writable — required by
+            # harnesses that treat their config dir as state (codex: sqlite under ~/.codex);
+            # mountPath is then the file's full path and `file` is the Secret key
+            mount["subPath"] = sm["file"]
+        volume_mounts.append(mount)
     if not volumes and not tolerations and not node_selector:
         return None
-    # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
-    # strategic), so a containers entry here wipes the generated container — image, env, command —
-    # and the API server rejects the Pod (`spec.containers[0].image: Required value`), killing the
-    # spawn instantly. Emit ``containers`` ONLY when volumeMounts force it (the workspace-store
-    # seam); pod-level fields (tolerations/nodeSelector) merge fine without touching the list.
+    # ``containers`` is emitted ONLY when volumeMounts force it (the workspace-store seam);
+    # pod-level fields (tolerations/nodeSelector) shape the Pod without touching the list. Keeping
+    # the overlay minimal is what lets ``build_pod`` merge it BY CONTAINER NAME onto the generated
+    # container instead of replacing it.
+    #
+    # Why the merge has to be OURS (the failure this minimal shape is only safe against because
+    # ``build_pod`` exists): ``kubectl run --overrides`` merges the containers LIST by replacement
+    # (json-merge, not strategic), so a partial containers entry under that path wipes the generated
+    # container — image, env, command — and the API server rejects the Pod
+    # (`spec.containers[0].image: Required value`), killing the spawn instantly. Proven live
+    # 2026-08-23: the volumeMounts-only entry here was rejected by the API server on the first real
+    # agent-worker spawn on k8s (bots never mount, so the M2 bot proof never exercised it). The
+    # answer was briefly to emit the COMPLETE container here; owning the whole Pod object in
+    # ``build_pod`` replaced that workaround and let the overlay go back to being minimal.
     spec: dict = {}
     if volume_mounts:
         spec["containers"] = [{"name": container_name, "volumeMounts": volume_mounts}]
@@ -108,6 +149,110 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     if node_selector:
         spec["nodeSelector"] = node_selector
     return {"spec": spec}
+
+
+def resource_requirements(resources: Optional[Resources]) -> Optional[dict]:
+    """Map runtime.v1 ``Resources`` to a container's ``resources`` block.
+
+    v1 carries ONE value per dimension, so cpu/memory set BOTH the request and the limit — the
+    minimum non-breaking contract for a namespace whose ResourceQuota requires each container to
+    declare both, and Guaranteed QoS for the workload. The sealed contract does not model separate
+    request/limit semantics and this mapping does not invent them.
+
+    ``0`` is schema-legal but meaningless as a Kubernetes quantity (a zero request is not "unset" to
+    a quota), so it is treated as unset. All-unset ⇒ None: no ``resources`` key is emitted at all
+    and the spawn is byte-identical to the pre-sizing behaviour."""
+    if resources is None:
+        return None
+    requests: dict[str, str] = {}
+    limits: dict[str, str] = {}
+    if resources.cpu:
+        # millicores: the canonical k8s CPU quantity, and exact for the fractional values v1 allows
+        # (0.5 → "500m") where a bare float would serialize as an unstable "0.5".
+        quantity = f"{round(resources.cpu * 1000)}m"
+        requests["cpu"] = limits["cpu"] = quantity
+    if resources.memoryMb:
+        quantity = f"{resources.memoryMb}Mi"
+        requests["memory"] = limits["memory"] = quantity
+    if resources.gpu:
+        limits[GPU_RESOURCE] = str(resources.gpu)          # extended resource: limits side only
+    block: dict[str, dict[str, str]] = {}
+    if requests:
+        block["requests"] = requests
+    if limits:
+        block["limits"] = limits
+    return block or None
+
+
+def build_pod(
+    *,
+    name: str,
+    workload_id: str,
+    runnable: Runnable,
+    env: dict[str, str],
+    namespace: Optional[str],
+    resources: Optional[Resources],
+    overlay_env: Optional[dict[str, str]] = None,
+) -> dict:
+    """The COMPLETE Pod object a spawn submits — every field the workload needs, in one manifest.
+
+    Why a whole object rather than ``kubectl run --overrides``: that flag merges the container LIST
+    by REPLACEMENT (JSON merge patch), so any partial ``containers`` entry erases the generated
+    container's image/env/command and the API server rejects the Pod outright. Owning the object
+    makes the merge OURS and deterministic — the overlay's per-container fields are merged BY
+    CONTAINER NAME onto the generated container, so resources, workspace volumeMounts, image,
+    command, env, labels and scheduling all coexist instead of clobbering each other.
+
+    ``env`` is the container's env VERBATIM; ``overlay_env`` (default: ``env``) is the wider env the
+    pod-shaping overlay is derived from. They differ because the runtime's own scheduling knobs live
+    in its process env, not in the workload's — and must shape the Pod without being injected into
+    the workload's container as config.
+
+    Pure and env-driven ⇒ the whole manifest is asserted offline, with no cluster and no kubectl.
+    (``kubectl run --dry-run=client`` is NOT a viable generator here: v1.34 performs API discovery
+    before generating and exits 1 with no output when no server is reachable.)"""
+    container: dict = {
+        "name": name,
+        "image": runnable.image,
+        "env": [{"name": k, "value": v} for k, v in env.items()],
+    }
+    if runnable.command:
+        # Explicit argv REPLACES the image ENTRYPOINT. Absent ⇒ the image's own entrypoint boots,
+        # which is what the shipped meeting-bot image requires (#675).
+        container["command"] = list(runnable.command)
+    requirements = resource_requirements(resources)
+    if requirements:
+        container["resources"] = requirements
+
+    metadata: dict = {
+        "name": name,
+        # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
+        # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
+        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id},
+    }
+    if namespace:
+        metadata["namespace"] = namespace
+
+    # restart=Never: the kernel owns restart policy, so the Pod must not resurrect itself.
+    pod: dict = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": metadata,
+        "spec": {"containers": [container], "restartPolicy": "Never"},
+    }
+
+    overlay_source = env if overlay_env is None else overlay_env
+    overlay = (pod_overrides(overlay_source, container_name=name) or {}).get("spec", {})
+    for key in ("volumes", "tolerations", "nodeSelector"):
+        if overlay.get(key):
+            pod["spec"][key] = overlay[key]
+    for overlay_container in overlay.get("containers", []):
+        if overlay_container.get("name") != name:
+            continue                                       # merge BY NAME — never by position
+        for key, value in overlay_container.items():
+            if key != "name":
+                container[key] = value
+    return pod
 
 
 class K8sBackend:
@@ -123,30 +268,34 @@ class K8sBackend:
     def _ns_args(self) -> list[str]:
         return ["-n", self._ns] if self._ns else []
 
-    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+    def start(
+        self,
+        workload_id: str,
+        runnable: Runnable,
+        env: dict[str, str],
+        resources: Optional[Resources] = None,
+    ) -> WorkloadHandle:
+        """Submit the workload's complete Pod manifest. ``resources`` (the kernel's effective sizing:
+        the spec's own, else the profile's chart-configured default) becomes the container's
+        requests+limits, which is what a namespace ResourceQuota admits on."""
         if not runnable.image:
             raise ValueError("k8s backend requires an image")
         name = self._pname(workload_id)
-        args = [
-            "run", name, f"--image={runnable.image}", "--restart=Never",
-            # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
-            # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-            f"--labels={MANAGED_LABEL}=true,{WORKLOAD_ID_LABEL}={workload_id}",
-            *self._ns_args(),
-        ]
-        for k, v in env.items():
-            args += [f"--env={k}={v}"]
-        # The --overrides spec carries the workspace mount set (WP-A1.1: the store PVC bound per-mount,
-        # container name = Pod name for a `run` Pod) AND the runtime's own scheduling constraints. The
-        # latter live in the runtime's PROCESS env (the chart sets them on the runtime Deployment), not
-        # in the per-workload spec.env, so overlay them here; the workload's own --env (above) is left
-        # untouched — scheduling shapes the Pod, it is not container config.
-        overrides = pod_overrides({**env, **_runtime_scheduling_env()}, container_name=name)
-        if overrides:
-            args += ["--overrides", json.dumps(overrides)]
-        if runnable.command:
-            args += ["--command", "--", *runnable.command]
-        _kubectl(*args)
+        # The workspace mount set and the runtime's OWN scheduling constraints both shape the Pod.
+        # The latter live in the runtime's PROCESS env (the chart sets them on the runtime
+        # Deployment), not in the per-workload spec.env — which is built per-workload by different
+        # producers (meeting-api for a bot, agent-api for a worker) — so they ride overlay_env: they
+        # shape the Pod without becoming container config the workload never asked for.
+        pod = build_pod(
+            name=name,
+            workload_id=workload_id,
+            runnable=runnable,
+            env=env,
+            namespace=self._ns,
+            resources=resources,
+            overlay_env={**env, **_runtime_scheduling_env()},
+        )
+        _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(pod))
         return WorkloadHandle(id=workload_id, impl=name)
 
     def find(self, workload_id: str) -> Optional[WorkloadHandle]:

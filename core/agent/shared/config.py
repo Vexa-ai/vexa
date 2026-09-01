@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
-    # A host path / repo dir; empty = no _global mount (the stack degrades to _system + the active set).
+    # A host path / repo dir. Dispatch fails closed while empty or invalid: _global is mandatory.
     # A live MOUNT (updating this ONE repo propagates to all agents next turn), not a copy-once seed.
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
     meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
+    # Development-only, schema-validated JSON for post-meeting delivery to an SMTP sink such as
+    # Mailpit. Empty keeps the adapter disabled. Production delivery uses a separate EmailSink.
+    post_meeting_dev_email: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.

@@ -185,6 +185,54 @@ def kg_links_preamble() -> str:
     )
 
 
+_GLOBAL_CONTEXT_FILES = ("CLAUDE.md", "PURPOSE", "README.md")
+_GLOBAL_CONTEXT_MAX_CHARS = 48_000
+
+
+def global_context_preamble(mounts: list[dict]) -> str:
+    """Load the organisation tier into the turn, rather than merely telling the model it exists.
+
+    Agent harnesses auto-load instructions from the current working directory, but ``_global`` is a
+    sibling mount. Without this bridge the model consults it only when a user explicitly says
+    "global", which makes Personal onboarding ask for organisation facts already known centrally.
+    Read the small authoritative entry files on every turn so live _global edits take effect on the
+    next message. The cap bounds prompt growth while keeping the beginning of each authored file.
+    """
+    mount = next((m for m in mounts if m.get("role") == "global" or m.get("slug") == "_global"), None)
+    if not mount:
+        return ""
+    root = Path(str(mount["path"]))
+    remaining = _GLOBAL_CONTEXT_MAX_CHARS
+    sections: list[str] = []
+    for name in _GLOBAL_CONTEXT_FILES:
+        path = root / name
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not content.strip() or remaining <= 0:
+            continue
+        excerpt = content[:remaining]
+        remaining -= len(excerpt)
+        sections.append(f"### `{path}`\n\n{excerpt.rstrip()}")
+    if not sections:
+        return (
+            "## Organisation context (mandatory)\n\n"
+            f"Before reasoning, read `{root}/CLAUDE.md`, `{root}/PURPOSE`, and `{root}/README.md` "
+            "when present. Use organisation facts proactively; do not ask the user for facts already "
+            "recorded in `_global`.\n\n"
+        )
+    return (
+        "## Organisation context (mandatory; loaded from `_global`)\n\n"
+        "This is the shared organisational ground for every turn. Apply its instructions and use its "
+        "facts proactively, including while working in Personal. Before asking for a company, employer, "
+        "organisation, terminology, policy, or objective, answer from this context when it already settles "
+        "the question. Personal context identifies the person; it does not erase organisation context.\n\n"
+        + "\n\n".join(sections)
+        + "\n\n"
+    )
+
+
 def mounts_preamble(mounts: list[dict]) -> str:
     """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
     paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
@@ -370,6 +418,7 @@ def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
     mcp_config: str | None = None,
+    harness: HarnessPort | None = None,
 ) -> Iterator[dict]:
     """One governed agent turn over the mounted workspace SET: resume from the session file, DECLARE the
     active mounts to the model, drive ``run_harness_turn`` (which commits EACH changed mount, authored by
@@ -382,7 +431,7 @@ def run_turn_over_workspace(
     # `worker.worker.harness_factory` reaches this call site (the harness was one module historically).
     import worker.worker as _w
     factory = getattr(_w, "harness_factory", harness_from_env)
-    harness: HarnessPort = factory()
+    harness = harness or factory()
     chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
     if session and session_continuity:
@@ -398,7 +447,7 @@ def run_turn_over_workspace(
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + prompt
+    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + global_context_preamble(mounts) + prompt
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
@@ -430,7 +479,8 @@ def start_prompt(start: dict) -> str | None:
 
 # ── the harness loop (redis + the turn injected) ─────────────────────────────────────────────────
 
-def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int) -> None:
+def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
+          harness: HarnessPort | None = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -444,15 +494,13 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     in-topic message carries a ``nonce`` the ack echoes so the watchdog can match ITS delivery.
     """
     # Mid-turn injection (VEXA_MIDTURN_INJECT=1): between output events, drain the in-topic and hand
-    # arriving user messages to the RUNNING harness turn via the adapter's stdin mailbox — the reply
-    # continues in the same turn (better responsiveness than queue-until-turn-end). A message the
-    # mailbox can't take (no active stdin) is left IN the stream for the between-turns loop.
+    # arriving user messages to the RUNNING harness through its runner-neutral steering seam. Claude
+    # writes stream-json to its open stdin; Codex sends turn/steer to app-server. A message the active
+    # runner cannot take is left IN the stream for the between-turns loop.
     def _drain_inject(cursor: list) -> None:
-        try:
-            from llm import claude_code as _cc
-        except Exception:  # noqa: BLE001
-            return
-        if not _cc.midturn_enabled():
+        enabled = getattr(harness, "midturn_enabled", lambda: False)
+        inject = getattr(harness, "inject_user_message", lambda _text: False)
+        if not enabled():
             return
         try:
             resp = stream.xread({in_topic: cursor[0]}, count=8, block=None)
@@ -464,7 +512,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 text = msg.get("prompt", "")
                 if msg.get("type") == "stop" or not text:
                     return  # leave stop (and everything after) for the outer loop
-                if not _cc.inject_user_message(text):
+                if not inject(text):
                     return  # no active stdin — leave queued
                 cursor[0] = entry_id
                 # satisfy the dispatcher's warm-delivery watchdog: the injected message WAS taken
@@ -588,6 +636,53 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
                 work, cards, native=native, meeting_id=native, session_uid=session_uid,
                 platform=platform, date=date, title=title, model=cfg.model,
             )
+        on_doc_committed = None
+        dev_email = (os.environ.get("VEXA_POST_MEETING_DEV_EMAIL") or "").strip()
+        if dev_email:
+            # Explicit development adapter only. The structured env is schema-validated at worker
+            # boot; a future production delivery service fills the same EmailSink port rather than
+            # teaching the meeting loop SMTP or recipient policy.
+            from worker.post_meeting import (
+                DevSmtpEmailSink,
+                MeetingCompletion,
+                PostMeetingFault,
+                PostMeetingNotifier,
+                WorkspaceArtifactReader,
+                parse_dev_notification_config,
+                require_personal_recipient,
+                require_personal_workspace,
+            )
+            notification = parse_dev_notification_config(dev_email)
+            if doc_turn is None:
+                raise PostMeetingFault(
+                    source="config", kind="meeting-doc-disabled",
+                    detail="VEXA_POST_MEETING_DEV_EMAIL requires agents/meeting.md write_meeting_doc=true",
+                )
+            require_personal_workspace(
+                work,
+                store_root=Path(os.environ.get("VEXA_WORKSPACE_MOUNT_TARGET", "/workspaces")),
+                subject=os.environ["VEXA_OWNER"],
+            )
+            require_personal_recipient(
+                notification.recipient,
+                principal_email=os.environ.get("VEXA_PRINCIPAL_EMAIL", ""),
+            )
+            notifier = PostMeetingNotifier(
+                WorkspaceArtifactReader(work),
+                DevSmtpEmailSink(notification.smtp, sender=notification.sender),
+                terminal_url=notification.terminal_url,
+            )
+
+            def on_doc_committed(commit: dict) -> None:
+                receipt = notifier.notify(MeetingCompletion(
+                    subject=os.environ["VEXA_OWNER"], meeting_id=row_id, native_id=native,
+                    platform=platform, title=title, recipient=notification.recipient,
+                    commit_sha=str(commit["commit_sha"]),
+                ))
+                log.info(
+                    "post-meeting notification sent subject=%s meeting=%s commit=%s artifact=%s",
+                    os.environ["VEXA_OWNER"], row_id, receipt.commit_sha, receipt.artifact_path,
+                )
         serve_meeting(
             client, transcript_stream=transcript_stream, out_topic=out_topic,
             card_turn=lambda segs: meeting_card_turn(
@@ -609,6 +704,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             cursor_key=f"proc:meeting:{row_id}:cursor",
             on_proc_note=on_proc_note,
             on_envelope=on_envelope,
+            on_doc_committed=on_doc_committed,
             # Provenance stamped on every processed-notes entry: what pipeline/provider/model
             # produced this cleaned view — persisted verbatim into the durable view's `params`
             # (meeting.data processed views) by the meeting-api db-writer (reproducibility).
@@ -634,9 +730,18 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             chat_tools = chat_tools + mcp_tools
             log.info("agent-api worker: vexa MCP attached for owner=%s (delegated, scoped, short-lived)",
                      os.environ.get("VEXA_OWNER"))
+        # One harness instance owns the whole warm worker lifetime. That makes the steering handle
+        # instance-scoped (Codex JSON-RPC process / Claude stdin) instead of a vendor-global mailbox.
+        import worker.worker as _w
+        chat_harness: HarnessPort = getattr(_w, "harness_factory", harness_from_env)()
+        harness_warning = chat_harness.preflight()
+        if harness_warning:
+            log.warning("agent-api worker: %s", harness_warning)
         serve(
             client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model, allowed_tools=chat_tools,
-                                                        session=session, mcp_config=mcp_cfg),
+            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
+                                                        allowed_tools=chat_tools, session=session,
+                                                        mcp_config=mcp_cfg, harness=chat_harness),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
+            harness=chat_harness,
         )

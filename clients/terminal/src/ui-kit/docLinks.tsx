@@ -62,6 +62,7 @@ export function normalizeDocPath(href: string, docPath?: string): string {
 // ── per-workspace caches (short TTL — agents create entities while docs are open) ──
 const CACHE_TTL_MS = 60_000;
 const HOME = "";  // map key for "no slug" (the user's own workspace)
+const GLOBAL = "_global";  // mandatory first tier of every agent/runtime mount stack
 const treeCache = new Map<string, { at: number; p: Promise<string[]> }>();
 function workspaceTree(slug?: string): Promise<string[]> {
   const key = slug ?? HOME;
@@ -213,11 +214,17 @@ const wikilinkMatcher = (title: string) => {
 };
 
 /** Search order (ADR-0028: reads are slug-addressed; the ACTIVE SET is the source of truth):
- *  the doc's own workspace, then every active mount in order, then the legacy no-slug read
- *  (= the seed-slot storage dir) strictly last — it can hold a DEACTIVATED workspace's tree. */
+ *  the doc's own workspace, then the MANDATORY organisation tier, then every normal active mount
+ *  in order, then the legacy no-slug read (= the seed-slot storage dir) strictly last — it can hold
+ *  a DEACTIVATED workspace's tree.
+ *
+ *  `_global` is added HERE rather than read from the server: GET /workspace/active intentionally
+ *  describes only the mutable middle tier, so this mirrors dispatch.build_mount_set()'s real
+ *  `[_global, *active, _system]` stack. Without it an organisation entity resolves to nothing. */
 async function searchOrder(meta: DocMeta): Promise<(string | undefined)[]> {
   return [...new Set<string | undefined>([
     ...(meta.slug !== undefined ? [meta.slug] : []),
+    GLOBAL,
     ...(await activeSlugs()),
     undefined,
   ])];

@@ -84,6 +84,24 @@ class Meeting(Base):
         Index("ix_meeting_transcript_viewers_gin",
               text("(data -> 'transcript_viewers') jsonb_path_ops"), postgresql_using="gin"),
         Index("ix_meeting_workspace_created_at", text("(data ->> 'workspace_id')"), "created_at"),
+        # #1222: the list_view sort is (non-terminal pin, MEETING EVENT time, id) — see
+        # collector/adapters.py list_meetings — so the owner/workspace union branches need THAT
+        # key index-walkable, not created_at. `meeting_event_time()` is the IMMUTABLE SQL wrapper
+        # for COALESCE(data.scheduled_at, start_time, created_at); the admin-api schema sync
+        # creates it (_sync_functions) before any index DDL, so a metadata.create_all from THIS
+        # mirror alone (no function in the DB) cannot build these two — run the admin-api sync or
+        # MIGRATION-0005 first. The expressions must stay verbatim-equal to the query's ORDER BY
+        # or the planner won't substitute the index.
+        Index("ix_meeting_user_event_order", "user_id",
+              text("(status IN ('active', 'awaiting_admission', 'joining', 'requested', "
+                   "'scheduled', 'stopping'))"),
+              text("meeting_event_time(data, start_time, created_at)"),
+              "id"),
+        Index("ix_meeting_workspace_event_order", text("(data ->> 'workspace_id')"),
+              text("(status IN ('active', 'awaiting_admission', 'joining', 'requested', "
+                   "'scheduled', 'stopping'))"),
+              text("meeting_event_time(data, start_time, created_at)"),
+              "id"),
         # ROB1/ROB2 DB-level backstop: at most ONE ACTIVE (non-terminal) meeting per
         # (user, platform, native_meeting_id). A unique PARTIAL index — terminal rows
         # (completed/failed) are NOT covered, so continue_meeting can reopen a prior terminal row and
