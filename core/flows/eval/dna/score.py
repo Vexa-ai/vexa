@@ -54,16 +54,26 @@ def d_note_shape(rec: dict) -> tuple[float, dict]:
                         "meta_commentary": meta}
 
 
-def _phrases(text: str, n: int) -> set:
+def _phrases(text: str, n: int = 6) -> set:
+    """Every n-word window that carries at least one long content word.
+
+    Without the content-word filter this leaked: a six-word window of pure function words
+    ("do you want to …") matches between any two English texts and certified a note as having read
+    a part of the meeting it was never shown."""
     ws = re.findall(r"[a-z0-9']+", text.lower())
-    return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)}
+    out = set()
+    for i in range(len(ws) - n + 1):
+        win = ws[i:i + n]
+        if any(len(w) >= 6 for w in win):
+            out.add(" ".join(win))
+    return out
 
 
 def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
     """THE COPY-CAP TEST — did the product see past the prefix it was handed?
 
     Split the meeting at the last character actually DELIVERED, then ask whether the note (or the
-    minutes opening) contains a four-word phrase that occurs only after that point.
+    minutes opening) contains a six-word phrase that occurs only after that point.
 
     Getting this honest took three tries and every failure was the same mistake — treating a common
     word as evidence. "Any six-letter word absent from the head" scored a perfect 1 on a note that
@@ -73,7 +83,9 @@ def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
     delivered prefix carries SPEAKER LABELS, so every participant name is already known, and in a
     `Speaker: text` rendering the first word of every line reads as capitalised.
 
-    A four-word verbatim phrase does not appear by accident. It is deliberately CONSERVATIVE: a
+    A six-word verbatim phrase carrying a real content word does not appear by accident. Four
+    words was not enough: "do you want to" matched, and certified a note that had seen 15% of its
+    meeting as having read the rest. It is deliberately CONSERVATIVE: a
     note that covers the tail entirely in paraphrase scores 0. That is the right way to be wrong
     here -- a false 0 costs a re-read, and the false 1 this check kept producing would have
     certified a fix that changed nothing. `names_used` is still reported, unscored, to read by eye."""
@@ -99,8 +111,8 @@ def d_transcript_depth(rec: dict, fx: dict) -> tuple[float, dict]:
     if cut >= len(segs):
         return 1.0, {**ev, "why": "the whole transcript was delivered"}
 
-    tail_only = _phrases(tail, 4) - _phrases(head, 4)
-    hits = sorted(tail_only & _phrases(note, 4))
+    tail_only = _phrases(tail) - _phrases(head)
+    hits = sorted(tail_only & _phrases(note))
     ev.update(tail_only_phrases=len(tail_only), phrases_used=hits[:5])
     if not tail_only:
         return 0.0, {**ev, "why": "the tail carries no distinct phrasing — inconclusive"}
