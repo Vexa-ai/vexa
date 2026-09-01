@@ -45,10 +45,10 @@ Entity shapes live in [`kg/templates/`](kg/templates/README.md) — skeletons, n
   this session's after them. The client renders the frontmatter markdown link and opens the canvas from it.
 
 **Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
-`[[wikilinks]]` as clickable entity chips and workspace file paths (backticked or as markdown
-links) as clickable links, in chat and in docs alike. A plain-text mention of a known entity is
-a dead end for the reader. Don't `[[link]]` things that have no entity doc — create the entity
-first, or use plain text.
+`[[wikilinks]]` as clickable entity chips, workspace file paths (backticked or as markdown
+links) as clickable links, and a workspace's slug as a chip opening its README — in chat and in
+docs alike. A plain-text mention of a known entity is a dead end for the reader. Don't `[[link]]`
+things that have no entity doc — create the entity first, or use plain text.
 
 ## `kg/` is an Open Knowledge Format bundle (OKF v0.1)
 
@@ -82,8 +82,19 @@ Writing as if for a plain-text file wastes the medium and fails the reader.
 
 **1 · Know the medium.** Pages render full MDX (registry below). Chat replies render the same on
 completion. Every `[[Entity]]` becomes a clickable chip; every backticked path (`README.md`,
-`kg/entities/person/jane-liu.md`) becomes a link that opens the doc. Nothing you name should be
-unclickable.
+`kg/entities/person/jane-liu.md`) becomes a link that opens the doc; every **workspace slug**
+(`vexa-team-3183d1`, `personal`) becomes a chip that opens that workspace's README. Nothing you
+name should be unclickable.
+
+Three ways to waste it, all of them silent:
+
+- **A bare absolute path.** Write `README.md`, never `/workspaces/<slug>/README.md`. The absolute
+  form is your filesystem showing through — it means nothing to the reader and breaks when the
+  mount moves. Name a workspace by its slug and let the client open its README for you.
+- **A name in bold with nothing behind it.** Bold is emphasis, not a reference. If you are telling
+  someone about a workspace, a person or a doc, reference it; if it has no doc, say so plainly.
+- **A reference inside a code fence, or a backticked `[[wikilink]]`.** A fence is literal text and
+  renders dead. References go in prose or in inline code, never in a fence.
 
 **2 · Choose the form by what the reader DOES with it.** Enumerable facts → a table. A sequence →
 `<Steps>`. Navigation → `<CardGroup>`. Provenance, freshness, caveats → ONE small `<Note>`, never a

@@ -13,7 +13,7 @@
  *      tooltip instead of a click that does nothing.
  */
 "use client";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { Icon } from "./index";
 
@@ -73,21 +73,81 @@ function workspaceTree(slug?: string): Promise<string[]> {
   treeCache.set(key, { at: Date.now(), p });
   return p;
 }
-let activeSlugsCache: { at: number; p: Promise<string[]> } | null = null;
-function activeSlugs(): Promise<string[]> {
-  if (activeSlugsCache && Date.now() - activeSlugsCache.at < CACHE_TTL_MS) return activeSlugsCache.p;
+/** The mount table, cached WHOLE rather than as a list of slugs: every mount reports the worker
+ *  path it is mounted at, plus the `subject` whose private baseline this client addresses with NO
+ *  slug. That table is what turns an absolute path the agent quoted into {workspace, relative} —
+ *  read off the server's own answer instead of guessed from the directory layout. */
+export interface Mount { slug: string; path: string; primary: boolean }
+interface MountedSet { subject?: string; mounts: Mount[] }
+const EMPTY_MOUNTS: MountedSet = { mounts: [] };
+let mountedCache: { at: number; p: Promise<MountedSet> } | null = null;
+function mountedSet(): Promise<MountedSet> {
+  if (mountedCache && Date.now() - mountedCache.at < CACHE_TTL_MS) return mountedCache.p;
   const p = import("../surfaces/workspaceApi")
     .then((api) => api.readActiveSet())
-    .then((s) => s.active.map((m) => m.slug))
-    .catch(() => [] as string[]);
-  activeSlugsCache = { at: Date.now(), p };
+    .then((s) => ({
+      subject: s.subject,
+      mounts: s.active.map((m) => ({ slug: m.slug, path: m.path ?? "", primary: Boolean(m.primary) })),
+    }))
+    .catch(() => EMPTY_MOUNTS);
+  mountedCache = { at: Date.now(), p };
   return p;
 }
+
+/** Is this mount the one this client reads with NO slug — the private baseline in the seed slot?
+ *  It does NOT announce itself by name: the server calls it `seed`, so matching on the slug alone
+ *  sends every home read to a workspace called "seed" that no slug-addressed endpoint serves. The
+ *  authoritative marks are `primary` and the mount path being `<root>/<subject>`. */
+const isHomeMount = (m: Mount, subject?: string): boolean =>
+  m.primary || m.slug === subject || (!!subject && m.path.endsWith(`/${subject}`));
+
+/** The workspaces to search, in mount order, with the baseline as `undefined` (a no-slug read). */
+function activeSlugs(): Promise<(string | undefined)[]> {
+  return mountedSet().then((s) => s.mounts.map((m) => (isHomeMount(m, s.subject) ? undefined : m.slug)));
+}
+
+// ── the known-workspace set (a SYNCHRONOUS snapshot, for the transform layer) ─────
+// Recognizing a workspace NAME in a reply has to happen while rewriting a string, which cannot
+// await. So the mount table is mirrored into a snapshot the transform reads directly, and the
+// renderer primes it once and recompiles when it lands. Empty snapshot ⇒ no workspace chips —
+// never a guess.
+let mountedSnapshot: MountedSet = EMPTY_MOUNTS;
+/** The mounted workspaces as last read. Synchronous; empty until primeKnownWorkspaces resolves. */
+export function knownWorkspaces(): Mount[] { return mountedSnapshot.mounts; }
+/** Fill the snapshot (idempotent, shares the mount-table cache). */
+export async function primeKnownWorkspaces(): Promise<void> { mountedSnapshot = await mountedSet(); }
+
+/** `_global` is the org tier every subject reads; `personal` is this client's own LABEL for the
+ *  private baseline (slug `undefined` — see PagesPanel's `slug ?? "personal"`). Neither appears in
+ *  the mount table under those names, and both are things a reply legitimately names. */
+const ORG_TIER = "_global";
+const PERSONAL = "personal";
+
+/** Resolve a token a reply used to NAME a workspace → the workspace it means, or undefined.
+ *
+ *  A CLOSED set: the mounted slugs, plus `_global` and `personal`. Never a fuzzy match on
+ *  slug-shaped words — a chip that opens nothing is the defect being fixed here, not a smaller
+ *  version of it. (founder, 2026-09-01: "workspace reference must be a link to its readme".) */
+export function lookupWorkspace(token: string): { slug?: string; label: string } | undefined {
+  const t = token.trim();
+  if (!t) return undefined;
+  if (t === PERSONAL) return { slug: undefined, label: t };
+  if (t === ORG_TIER) return { slug: ORG_TIER, label: t };
+  const hit = mountedSnapshot.mounts.find((m) => m.slug === t);
+  if (!hit) return undefined;
+  return { slug: isHomeMount(hit, mountedSnapshot.subject) ? undefined : hit.slug, label: t };
+}
+
+/** Is this token distinctive enough to chip when it appears as BARE prose (no bold, no backticks)?
+ *  Slugs carry a `-` or `_` by construction, so requiring one keeps ordinary English out: a reply
+ *  saying "personal notes" must not sprout a workspace chip. Emphasised mentions (bold or inline
+ *  code) are deliberate and skip this test. */
+export const isDistinctiveWorkspaceToken = (t: string): boolean => /[-_]/.test(t);
 /** Drop the caches (e.g. right after activating/attaching a workspace, or when a chat turn commits)
  *  so resolution sees it. */
 export function invalidateDocLinkCaches(): void {
   treeCache.clear();
-  activeSlugsCache = null;
+  mountedCache = null;
   lastMissRefresh = 0;
 }
 
@@ -110,15 +170,39 @@ export interface DocRef { path?: string; wikilink?: string }
 export interface DocMeta { path?: string; slug?: string }
 export interface ResolvedDoc { path: string; slug?: string; type?: string }
 
-/** Map a WORKER-VISIBLE absolute path to a workspace ref. The agent is instructed to quote
- *  its mount paths VERBATIM in chat (engine.py mounts_preamble: "Always use ABSOLUTE
- *  paths"), so chat links arrive as `<root>/<subject>/kg/...` (home) or
- *  `<root>/.attached/<subject>/<slug>/kg/...` (an attached workspace). */
-function fromWorkerPath(p: string): { path: string; slug?: string } | undefined {
+/** A worker-visible ABSOLUTE mount path, as the agent quotes it in chat (engine.py
+ *  mounts_preamble: "Always use ABSOLUTE paths"). Three layouts reach the client:
+ *    `<root>/<subject>/<rel>`                   the private baseline    → home (no slug)
+ *    `<root>/<slug>/<rel>`                      a shared / extra mount  → that slug
+ *    `<root>/.attached/<subject>/<slug>/<rel>`  the legacy attached one → that slug
+ *  Used by the transform layer to decide what becomes a chip, and by fromWorkerPath to split it. */
+export const WORKER_PATH = /^\/(?:[\w.-]+\/)*?workspaces\/[\w.-]+\/[\w./ -]+$/;
+
+/** Map a WORKER-VISIBLE absolute path to a workspace ref.
+ *
+ *  ANY file under a mount is addressable — not only `kg/` ones. Restricting the home mount to a
+ *  `kg/` tail is what made the founder's `/workspaces/vexa-team-3183d1/README.md` resolve to
+ *  nothing: the README is the workspace's dashboard and sits at the mount root, so the one path
+ *  the agent quotes most often was the one shape this could not translate. */
+async function fromWorkerPath(p: string): Promise<{ path: string; slug?: string } | undefined> {
   if (!p.startsWith("/")) return undefined;
   const att = p.match(/\/\.attached\/[^/]+\/([^/]+)\/(.+)$/);
   if (att) return { slug: att[1], path: att[2] };
-  const kg = p.match(/\/(kg\/.+)$/);  // home mount — only the kg/ tail is workspace-addressable
+  // The ACTIVE SET is authoritative: every mount reports the worker path it is mounted at, so the
+  // split is READ off the server's table rather than inferred. Longest prefix wins (a mount can
+  // nest inside another's directory).
+  const { subject, mounts } = await mountedSet();
+  for (const m of [...mounts].sort((a, b) => b.path.length - a.path.length)) {
+    if (m.path && p.startsWith(`${m.path}/`)) {
+      return { slug: isHomeMount(m, subject) ? undefined : m.slug, path: p.slice(m.path.length + 1) };
+    }
+  }
+  // Not in the table (mounted since the cache was filled, or a path from another session): fall
+  // back to the LAYOUT — `<root>/workspaces/<workspace-dir>/<rel>`. A dot-prefixed segment is
+  // platform plumbing (`.system`, `.attached`), never a workspace, so it is not a slug candidate.
+  const mount = p.match(/^\/(?:[\w.-]+\/)*?workspaces\/([\w-][\w.-]*)\/(.+)$/);
+  if (mount) return { slug: mount[1] === subject ? undefined : mount[1], path: mount[2] };
+  const kg = p.match(/\/(kg\/.+)$/);  // unknown root — only the kg/ tail is workspace-addressable
   if (kg) return { path: kg[1] };
   return undefined;
 }
@@ -128,27 +212,47 @@ const wikilinkMatcher = (title: string) => {
   return new RegExp(`(?:^|/)kg/entities/([^/]+)/${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.md$`);
 };
 
+/** Search order (ADR-0028: reads are slug-addressed; the ACTIVE SET is the source of truth):
+ *  the doc's own workspace, then every active mount in order, then the legacy no-slug read
+ *  (= the seed-slot storage dir) strictly last — it can hold a DEACTIVATED workspace's tree. */
+async function searchOrder(meta: DocMeta): Promise<(string | undefined)[]> {
+  return [...new Set<string | undefined>([
+    ...(meta.slug !== undefined ? [meta.slug] : []),
+    ...(await activeSlugs()),
+    undefined,
+  ])];
+}
+
+/** Does this path name a doc that ACTUALLY EXISTS in some mounted workspace?
+ *
+ *  The gate on turning a BARE relative path in inline code (`kg/entities/company/x.md`) into a
+ *  chip. resolveDocRef deliberately never fails a path — it opens the "(not found)" tab, which is
+ *  the right answer for something the reader deliberately clicked. It is the wrong answer for a
+ *  guess made by a regex: `package.json` must stay plain monospace, not become a chip that lands
+ *  on an empty page. Cheap — it reads the same cached trees resolveDocRef does. */
+export async function docPathExists(path: string, meta: DocMeta = {}): Promise<boolean> {
+  const worker = await fromWorkerPath(path);
+  const root = worker ? worker.path : normalizeDocPath(path, meta.path);
+  const sibling = !worker && meta.path ? normalizeDocPath(`./${path.replace(/^\.\//, "")}`, meta.path) : null;
+  for (const ws of await searchOrder(meta)) {
+    const tree = await workspaceTree(ws);
+    if (tree.includes(root) || (sibling && tree.includes(sibling))) return true;
+  }
+  return false;
+}
+
 /** Resolve any doc link to a concrete { path, slug } target, or undefined when a
  *  [[wikilink]] matches no entity doc in any mounted workspace. */
 export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<ResolvedDoc | undefined> {
-  // Search order (ADR-0028: reads are slug-addressed; the ACTIVE SET is the source of truth):
-  // the doc's own workspace, then every active mount in order, then the legacy no-slug read
-  // (= the seed-slot storage dir) strictly last — it can hold a DEACTIVATED workspace's tree.
-  const searchOrder = async (): Promise<(string | undefined)[]> =>
-    [...new Set<string | undefined>([
-      ...(meta.slug !== undefined ? [meta.slug] : []),
-      ...(await activeSlugs()),
-      undefined,
-    ])];
   if (ref.path) {
     // A worker-visible ABSOLUTE path (quoted verbatim by the agent in chat) carries its own
     // workspace: translate to {slug, relative} and verify against THAT workspace's tree.
-    const worker = fromWorkerPath(ref.path);
+    const worker = await fromWorkerPath(ref.path);
     if (worker) {
       const tree = await workspaceTree(worker.slug);
       if (tree.includes(worker.path)) return { path: worker.path, slug: worker.slug };
       // attached-store slug didn't resolve — try the rest of the search order before giving up
-      for (const ws of await searchOrder()) {
+      for (const ws of await searchOrder(meta)) {
         if (ws !== worker.slug && (await workspaceTree(ws)).includes(worker.path)) return { path: worker.path, slug: ws };
       }
       return { path: worker.path, slug: worker.slug };
@@ -157,7 +261,7 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
     // meaning a sibling) — pick whichever actually exists, searching workspaces in order.
     const root = normalizeDocPath(ref.path, meta.path);
     const sibling = meta.path ? normalizeDocPath(`./${ref.path.replace(/^\.\//, "")}`, meta.path) : null;
-    const order = await searchOrder();
+    const order = await searchOrder(meta);
     for (const ws of order) {
       const tree = await workspaceTree(ws);
       if (tree.includes(root)) return { path: root, slug: ws };
@@ -170,7 +274,7 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
   if (ref.wikilink) {
     const re = wikilinkMatcher(ref.wikilink);
     const look = async (): Promise<ResolvedDoc | undefined> => {
-      for (const ws of await searchOrder()) {
+      for (const ws of await searchOrder(meta)) {
         const hit = (await workspaceTree(ws)).find((p) => re.test(p));
         if (hit) return { path: hit, slug: ws, type: re.exec(hit)?.[1] };
       }
@@ -246,6 +350,73 @@ export function Wikilink({ title }: { title: string }) {
         fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
       <Icon name={c.icon} size={11} style={{ opacity: 0.8 }} />
       {title}
+    </span>
+  );
+}
+
+/** DocPath — the [[wikilink]] chip's twin for FILES: a doc path the agent named in prose or in
+ *  inline code, rendered as monospace that OPENS the doc.
+ *
+ *  The founder asked the agent to "reference workspace with its readme"; the reply printed the
+ *  workspace in bold and `/workspaces/vexa-team-3183d1/README.md` as inline code, and neither was
+ *  clickable — "no reference, and when reference it's not interactive". CLAUDE.md has promised the
+ *  agent for months that "every backticked path becomes a link that opens the doc"; only the
+ *  plain-markdown FALLBACK renderer kept that promise. This is the primary renderer keeping it.
+ *
+ *  Two spellings, two confidence levels:
+ *   - an ABSOLUTE mount path is unambiguous — always live. If it resolves to nothing it still
+ *     opens, landing on the honest empty state, exactly as a missing [[wikilink]] does;
+ *   - a BARE workspace-relative path is a GUESS made by a regex, so it must earn its chip: it goes
+ *     live only once it is found in a mounted tree. A miss stays plain monospace, which is why
+ *     `package.json` in a reply never becomes a chip that lands nowhere. */
+export function DocPath({ path }: { path: string }) {
+  const meta = useContext(DocMetaContext);
+  const openEntity = useOpenEntity();
+  const [hover, setHover] = useState(false);
+  const absolute = WORKER_PATH.test(path);
+  const [live, setLive] = useState(absolute);
+  useEffect(() => {
+    if (absolute) { setLive(true); return; }
+    let on = true;
+    void docPathExists(path, meta).then((ok) => { if (on) setLive(ok); });
+    return () => { on = false; };
+  }, [path, absolute, meta.path, meta.slug]);
+  const base: CSSProperties = {
+    fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)",
+    border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px",
+  };
+  if (!live) return <code style={{ ...base, color: "var(--t1)" }}>{path}</code>;
+  return (
+    <code role="link" title={`Open ${path}`} onClick={() => openEntity({ path })}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ ...base, borderColor: hover ? "var(--blue)" : "var(--line)", color: "var(--blue)",
+        cursor: "pointer", textDecoration: hover ? "underline" : "none" }}>{path}</code>
+  );
+}
+
+/** WorkspaceRef — a workspace NAMED in a reply, rendered as a chip that opens its README.
+ *
+ *  The founder's reply said "you already have a shared team workspace mounted — **vexa-team-3183d1**"
+ *  in plain bold: the one noun the whole sentence was about, and it went nowhere. His rule:
+ *  "workspace reference must be a link to its readme." A workspace's README is its dashboard (see
+ *  the seed CLAUDE.md § The README is this workspace's dashboard), so that is the door this opens.
+ *  An unwritten README still opens — the honest empty state, same contract as every other chip. */
+export function WorkspaceRef({ token }: { token: string }) {
+  const [hover, setHover] = useState(false);
+  const openEntity = useOpenEntity();
+  const ws = lookupWorkspace(token);
+  if (!ws) return <>{token}</>;    // the snapshot moved under us — plain text, never a dead chip
+  return (
+    <span role="link" onClick={() => openEntity({ path: "README.md", slug: ws.slug })}
+      title={`Open the ${ws.label} workspace README`}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
+        background: hover ? "var(--violetbg)" : "var(--panel2)",
+        border: `1px solid ${hover ? "var(--violet)" : "var(--line)"}`, borderRadius: 999,
+        padding: "0.5px 9px 0.5px 7px", color: "var(--violet)", fontSize: "0.92em",
+        fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
+      <Icon name="folder" size={11} style={{ opacity: 0.8 }} />
+      {ws.label}
     </span>
   );
 }

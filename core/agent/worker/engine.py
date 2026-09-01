@@ -155,7 +155,15 @@ def kg_links_preamble() -> str:
     ``[[Title]]`` as a clickable entity chip and workspace file paths as links (the terminal resolves
     both across every mounted workspace — clients/terminal/src/ui-kit/docLinks.tsx). A plain-text
     mention of a known entity is a dead end, so this rule ships on EVERY turn, not just multi-mount
-    ones — old workspaces whose seeded CLAUDE.md predates it get the behaviour too."""
+    ones — old workspaces whose seeded CLAUDE.md predates it get the behaviour too.
+
+    The WORKSPACE rule (founder, 2026-09-01) is here for a reason worth stating: asked to "reference
+    workspace with its readme", a reply named the workspace in bold and pasted
+    ``/workspaces/vexa-team-3183d1/README.md`` as inline code — "no reference, and when reference
+    it's not interactive". The renderer now recognizes all three spellings, but a pasted absolute
+    path is still the worst of them: it is the worker's private filesystem showing through, it means
+    nothing to the reader, and it breaks the moment the mount moves. Name the workspace; the client
+    turns the name into the door to its README."""
     return (
         "## Referencing knowledge (always)\n\n"
         "Your replies render in a client that turns entity references into clickable chips:\n"
@@ -164,6 +172,14 @@ def kg_links_preamble() -> str:
         " in chat replies AND in workspace docs alike. Never mention a known entity as plain text.\n"
         "- Reference other workspace files by their path in backticks (e.g. `kg/dashboards/plan.md`)"
         " or a markdown link — both are clickable.\n"
+        "- Name a WORKSPACE by its slug (e.g. `vexa-team-3183d1`) or link its README"
+        " (`<slug>/README.md`) — the client makes the name open that README, which is the"
+        " workspace's dashboard. Never introduce a workspace in bold with nothing behind it.\n"
+        "- Write paths workspace-RELATIVE (`README.md`, `kg/entities/person/jane-liu.md`). Never"
+        " paste the absolute mount path you see on disk (`/workspaces/…`) — it is your filesystem,"
+        " not the reader's, and it says nothing they can use.\n"
+        "- Put the reference OUTSIDE code fences and never backtick a `[[wikilink]]` — a fenced"
+        " block is literal text and renders dead.\n"
         "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
         " 'not found' chips) — create the entity first, or use plain text.\n\n"
     )

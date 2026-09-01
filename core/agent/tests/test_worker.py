@@ -638,6 +638,20 @@ def test_kg_links_preamble_ships_the_wikilink_rule():
     assert "[[Title]]" in txt and "kg/entities/" in txt and "chat replies AND in workspace docs" in txt
 
 
+def test_kg_links_preamble_names_workspaces_instead_of_pasting_mount_paths():
+    """Asked to "reference workspace with its readme", a reply named the workspace in bold and
+    pasted ``/workspaces/vexa-team-3183d1/README.md`` as inline code — neither clickable (founder,
+    2026-09-01). The renderer now recognizes both spellings, but the ABSOLUTE path is the worker's
+    own filesystem leaking into a reply: it tells the reader nothing and dies when the mount moves.
+    So the rule ships every turn — name the workspace, and write paths workspace-relative."""
+    from worker import worker
+    txt = worker.kg_links_preamble()
+    assert "README.md" in txt                                    # a workspace is referenced BY its readme
+    assert "/workspaces/" in txt                                 # ...and the absolute form is called out to avoid
+    assert "workspace-RELATIVE" in txt or "workspace-relative" in txt
+    assert "fences" in txt or "fence" in txt                     # a reference inside a fence renders dead
+
+
 def test_mounts_preamble_declares_each_mount_or_stays_empty():
     from worker import worker
     # single mount → no preamble (nothing to disambiguate)
