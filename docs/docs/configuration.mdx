@@ -125,6 +125,41 @@ terminal's `build.args` in compose) and rebuild the image — a rename then cost
 which is why the runtime variable is the better knob. Direct `joinMeeting` callers read
 `DEFAULT_BOT_NAME` too and fall back to `Vexa Join Layer`.
 
+## Bot video tile (a still card)
+
+A bot has nothing to film, so by default its camera is off and its fake video feed is `/dev/null`
+— other participants see the name above and nothing else. Two knobs let it broadcast a **still
+card** instead: its identity, and whatever notice you owe the room, such as the fact that the
+meeting is being recorded.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOT_FAKE_VIDEO_FILE` | `/dev/null` | Absolute in-container path to the file played as the camera feed. Chromium accepts **only** `.y4m` and `.mjpeg`. Mount the file into the bot's container — a path that resolves on the host but not inside it silently yields no video. |
+| `BOT_CAMERA_ENABLED` | `false` | Keep the camera on in the lobby instead of switching it off. Accepts `1` or `true`. Only meaningful together with `BOT_FAKE_VIDEO_FILE`: a camera on with no file broadcasts nothing. |
+
+Both default to today's behaviour, so a deployment that sets neither is unaffected.
+
+**One frame is enough.** Chromium rewinds the file at EOF, so a single-frame file shows
+permanently:
+
+```bash
+ffmpeg -i card.png -vframes 1 -r 1 -vf scale=1280:720 -pix_fmt yuv420p card.y4m
+```
+
+Prefer Y4M over MJPEG for a still: MJPEG plays at a fixed 30 fps, whereas a Y4M declares its own
+rate in its header (the `F` tag, set by `-r` above) and Chromium honours it. Outgoing encode is
+paid in CPU, and CPU is what caps bots per host — so a low frame rate buys concurrency. The
+trade-off is sharpness: at 1 fps a 720p source is relayed to participants at a lower resolution by
+WebRTC adaptation, which is fine for a legible card and poor for anything detailed.
+
+The colour space produced by the command above (`C420jpeg`) is accepted as-is; the
+`C420mpeg2` → `C420` rewrite that circulates online is not needed here.
+
+Note the microphone side effect: broadcasting a file makes the browser use fake capture devices,
+which replaces the microphone with a synthetic tone. It reaches neither the meeting (the bot mutes
+itself) nor the recording (which taps remote participant audio, not the mic), but a deployment
+relying on the bot's own microphone for anything else should know.
+
 ## Database & storage
 
 | Variable | Default | Purpose |
