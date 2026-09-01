@@ -8,12 +8,21 @@ import type { CSSProperties } from "react";
 
 export const T = {
   railW: 397,        // +60% (founder, 2026-09-01) — 248 left ~90px for a name
-  pagesMin: 300,
-  pagesMax: 720,
+  pagesMin: 240,     // was 300; safe since 3875079b6 made the pages chips ellipsize below 364
+  pagesMax: 1600,    // an absolute ceiling only — the real limit is the viewport fraction below
+  pagesFrac: 0.6,    // "read a transcript wide" (founder, 2026-09-01): 60% of the viewport
+  chatMin: 280,      // …but the conversation never vanishes behind the document
   pagesDefault: 384,
   headerH: 46,
   rowPadX: 8,
 } as const;
+
+/** The widest the pages panel may go on a given viewport. 60% of it — unless that would squeeze the
+ *  conversation below `chatMin`, which on a 1440px screen it does: there the cap lands near 53%.
+ *  Both bounds are real, and this is the one place they meet, so the drag, the arrow keys and the
+ *  stored width cannot disagree about them. */
+export const maxPagesW = (vw: number): number =>
+  Math.max(T.pagesMin, Math.min(T.pagesMax, Math.round(vw * T.pagesFrac), vw - T.railW - T.chatMin));
 
 /** Surfaces — one ladder, deepest first. */
 export const surface = {

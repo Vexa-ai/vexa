@@ -16,6 +16,7 @@ import {
   chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows, whenShort,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
+import { T, maxPagesW } from "../../minutes/tokens";
 
 const T0 = Date.UTC(2026, 8, 1, 12, 0, 0);          // a fixed "now" — nothing here reads the clock
 const at = (mins: number) => new Date(T0 + mins * 60000).toISOString();
@@ -166,6 +167,26 @@ describe("visibleRows — one chip: touched + live/upcoming, or everything", () 
     const key = rows.find((r) => r.label === "Blue Light Card")!.key;
     expect(labels(visibleRows(rows, false, key))).toContain("Blue Light Card");
     expect(labels(visibleRows(rows, false, null))).not.toContain("Blue Light Card");
+  });
+});
+
+describe("maxPagesW — the pages panel's range, one place both bounds meet", () => {
+  it("wants 60% of the viewport", () => {
+    expect(maxPagesW(2560)).toBe(1536);
+  });
+
+  it("but never squeezes the conversation below its floor — 1440px caps below 60%", () => {
+    expect(maxPagesW(1440)).toBe(1440 - T.railW - T.chatMin);
+    expect(maxPagesW(1440)).toBeLessThan(1440 * 0.6);
+  });
+
+  it("never returns less than the minimum, however small the window", () => {
+    expect(maxPagesW(600)).toBe(T.pagesMin);
+    expect(maxPagesW(320)).toBe(T.pagesMin);
+  });
+
+  it("respects the absolute ceiling on a very wide screen", () => {
+    expect(maxPagesW(6000)).toBe(T.pagesMax);
   });
 });
 

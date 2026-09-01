@@ -29,7 +29,7 @@ import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
-import { T, surface } from "./tokens";
+import { T, maxPagesW, surface } from "./tokens";
 import type { Page, Sel } from "./types";
 
 const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"] };
@@ -81,16 +81,16 @@ export function MinutesShell() {
   // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
   const [pagesW, setPagesW] = useState<number>(() => {
     const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
-    return Number.isFinite(n) && n >= T.pagesMin && n <= T.pagesMax ? n : T.pagesDefault;
+    const cap = maxPagesW(window.innerWidth);
+    return Number.isFinite(n) && n >= T.pagesMin && n <= cap ? n : Math.min(T.pagesDefault, cap);
   });
   const dragging = useRef(false);
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (!dragging.current) return;
       e.preventDefault();
-      const room = window.innerWidth - T.railW - 420;   // never squeeze the conversation below ~420
-      const w = Math.min(Math.min(T.pagesMax, room), Math.max(T.pagesMin, window.innerWidth - e.clientX));
-      setPagesW(w);
+      const cap = maxPagesW(window.innerWidth);
+      setPagesW(Math.min(cap, Math.max(T.pagesMin, window.innerWidth - e.clientX)));
     };
     const up = () => {
       if (!dragging.current) return;
@@ -102,9 +102,14 @@ export function MinutesShell() {
     window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, []);
+  useEffect(() => {
+    const onResize = () => setPagesW((w) => Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w)));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const startDrag = () => { dragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; };
   const nudge = (d: number) => setPagesW((w) => {
-    const n = Math.min(T.pagesMax, Math.max(T.pagesMin, w + d));
+    const n = Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w + d));
     try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
     return n;
   });
