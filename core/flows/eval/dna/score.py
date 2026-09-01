@@ -177,10 +177,22 @@ SCHEMA = ("Reply with ONLY a JSON object, no prose, no code fence, with exactly 
           "(count), owners_correct, open_items_correct, attributions_wrong (count), overall.")
 
 
+def truth_is_empty(truth: str) -> bool:
+    """A sidecar whose decided/committed/open are all `[]` states nothing to be judged against."""
+    return all(re.search(rf"^{k}:\s*\[\s*\]", truth, re.M) for k in ("decided", "committed", "open"))
+
+
 def judge(rec: dict, truth: str, model: str) -> dict:
     note = rec.get("note")
     if not note:
         return {"skipped": "no note"}
+    if truth_is_empty(truth):
+        # Judging a note against an empty sidecar returns a uniformly near-zero column that READS
+        # like a quality verdict and is actually a measurement of the sidecar. Every recalled item
+        # scores as invented, because the truth contains nothing to recall.
+        return {"skipped": "truth sidecar is an empty stub — nothing to judge against",
+                "next": "fill decided/committed/open (a human, or the plan's first-pass LLM "
+                        "extraction tagged unvalidated) before this column means anything"}
     prompt = (
         "You are scoring a meeting note against a truth sidecar. Be strict and literal: an item is "
         "recalled only if the truth contains it, invented only if the truth contradicts or omits it.\n\n"
