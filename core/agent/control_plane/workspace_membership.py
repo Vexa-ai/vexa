@@ -296,6 +296,31 @@ def require_role(root: Path, workspace_id: str, subject: str, min_role: str) -> 
     return role
 
 
+def list_memberships(root: Path, subject: str) -> list[dict]:
+    """Every shareable workspace on this host whose AUTHORITATIVE ``policy/members.json`` names
+    ``subject``, in the row shape the index returns (``workspace_id``/``role``/``added_at``).
+
+    The RECOVERY read for the derived index (Q6). Grants are written to BOTH stores, but only the git
+    file is authoritative — so a listing that consults ONLY the mirror reports "no shared workspaces"
+    whenever the internal edge to the identity service is unreachable, losing a grant the system
+    demonstrably holds. Reserved slugs and the dot-namespace are skipped exactly as ``assert_shareable``
+    refuses them, so the SYSTEM/seed workspaces never surface as memberships."""
+    root = Path(root)
+    if not root.exists():
+        return []
+    out: list[dict] = []
+    for child in sorted(c for c in root.iterdir() if c.is_dir()):
+        slug = child.name
+        if slug.startswith(".") or slug in RESERVED_SLUGS:
+            continue
+        for member in _read_json_list(child, MEMBERS_FILE):
+            if member.get("subject") == subject:
+                out.append({"workspace_id": slug, "role": member.get("role"),
+                            "added_at": member.get("added_at")})
+                break
+    return out
+
+
 # ── membership writes (both stores) ─────────────────────────────────────────────────────────────
 def _commit(commit_fn: Optional[CommitFn], ws: Path, message: str) -> None:
     if commit_fn is not None:

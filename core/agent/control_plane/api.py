@@ -2341,12 +2341,28 @@ def create_app(
 
     @app.get("/api/workspace/shared")
     def ws_shared_list(request: Request):
-        """The "workspaces shared with me" listing from the index (users.data.memberships[])."""
+        """The "workspaces shared with me" listing, reconciled across BOTH membership stores.
+
+        ``users.data.memberships[]`` (the index) is the fast, cross-host read; ``policy/members.json``
+        is the authoritative one (Q6). Reading ONLY the mirror made every grant on this host invisible
+        whenever the internal edge to admin-api was unreachable — the route answered 200 with an empty
+        list, so a 403 on that hop rendered in the UI as "you have no shared workspaces" rather than as
+        an error. It is now a UNION, never a subtraction: an index row with no local dir is a workspace
+        that lives on another host and must still be listed, so the git store only ever ADDS rows the
+        index is missing. ``index_degraded`` says out loud when the mirror could not be read."""
         subject = subject_of(request)
+        degraded = False
         try:
-            return {"memberships": mindex.list(subject)}
-        except Exception:
-            return {"memberships": []}
+            rows = list(mindex.list(subject) or [])
+        except Exception as exc:  # noqa: BLE001 — the authoritative store still answers; never 500 this
+            logger.warning("membership index list failed for subject=%s: %s — serving policy/members.json",
+                           subject, exc)
+            rows, degraded = [], True
+        seen = {r.get("workspace_id") for r in rows}
+        for row in membership_mod.list_memberships(wsr.root, subject):
+            if row["workspace_id"] not in seen:
+                rows.append(row)
+        return {"memberships": rows, "index_degraded": degraded}
 
     # ── Settings → Models "Test" buttons (on-demand credential tests, fail-loud surface) ────────
     # Both test the caller's EFFECTIVE config — the same user > global > env resolution the
