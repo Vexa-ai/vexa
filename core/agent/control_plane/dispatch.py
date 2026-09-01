@@ -20,6 +20,7 @@ from typing import Optional
 
 import contracts
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
+from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
@@ -39,9 +40,12 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
     Deterministic (primary first), generalizes to N mounts. A subject with no activated extras yields
     exactly the private baseline — identical to today's single-workspace behavior.
 
-    ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index (the dispatcher resolves it
-    once and passes the data in). When present, the SHARED workspaces the subject is a member of are
-    appended after their private set, WRITABLE per the member's role (contributor/owner → rw, viewer → ro).
+    ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index rows (the dispatcher
+    resolves them once and passes the data in); ``None`` = Lane A off (no index wired) — no shared mounts.
+    When non-None (an empty list included), the rows are UNIONed with the authoritative
+    ``policy/members.json`` scan, so a dead or incomplete index cannot silently drop a locally-held grant
+    from the mount set; the SHARED workspaces the subject is a member of are then appended after their
+    private set, WRITABLE per the member's role (contributor/owner → rw, viewer → ro).
     NOTE: concurrent shared writes are not yet serialized (Lane W) — sequential attributed writes work
     (author = principal, via the per-mount commit path); true concurrency-safety lands with the writer.
 
@@ -64,12 +68,16 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
              "purpose": read_purpose(m.path)}
             for m in mounts
         ]
-    if not memberships:
+    if memberships is None:
         return private
     # Lane A: append the shared workspaces the subject is a member of — WRITABLE per role (contributor/owner
-    # write; viewer read-only). A shared-mount hiccup must never break the dispatch → fall soft.
+    # write; viewer read-only). The passed rows are the INDEX's view and may be incomplete (the lost-write
+    # incident) — union in the authoritative policy/members.json scan, which only ever ADDS candidates;
+    # shared_active_mounts still re-checks the role authoritatively per workspace. A shared-mount hiccup
+    # must never break the dispatch → fall soft.
+    rows, _ = reconciled_memberships(root, subject, lambda _subject: memberships)
     try:
-        shared = shared_active_mounts(root, subject, memberships)
+        shared = shared_active_mounts(root, subject, rows)
     except Exception:  # noqa: BLE001
         logger.warning("shared-mount resolution failed for subject=%s — mounting private workspaces only", subject)
         shared = []
@@ -458,13 +466,13 @@ class Dispatcher:
         )
         # Lane A: resolve the subject's shared memberships once (fail soft — a membership-index hiccup must
         # never break a dispatch; the private stack still mounts). Passed as data into the mount builder.
+        # Enumeration reconciles BOTH stores (index ∪ policy/members.json) so a dead or incomplete index
+        # cannot silently drop a shared workspace from the mount set — the reconciler never raises and
+        # logs the degraded leg out loud. None (no index wired) still means Lane A off.
         memberships = None
         if self._membership_index is not None:
-            try:
-                memberships = self._membership_index.list(identity["subject"])
-            except Exception:  # noqa: BLE001
-                logger.warning("membership-index lookup failed for subject=%s — dispatching private mounts only",
-                               identity["subject"])
+            memberships, _ = reconciled_memberships(
+                self._settings.workspaces_dir, identity["subject"], self._membership_index.list)
         # Settings → Models: resolve the subject's effective model config (fail soft — a down
         # identity service must never block a turn; the deployment env defaults still dispatch).
         # NOTE: /api/chat gates message-triggers upstream (credential preflight) — this path stays

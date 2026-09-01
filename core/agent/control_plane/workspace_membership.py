@@ -321,6 +321,35 @@ def list_memberships(root: Path, subject: str) -> list[dict]:
     return out
 
 
+def reconciled_memberships(root: Path, subject: str,
+                           index_list: Callable[[str], list]) -> tuple[list[dict], bool]:
+    """The membership ENUMERATION for consumers that turn grants into MOUNTS (the active-set route, the
+    dispatch mount builder): the derived index UNIONed with the authoritative ``list_memberships`` scan.
+    Returns ``(rows, index_degraded)``.
+
+    Same reconciliation contract as the shared-workspace listing (Q6): a UNION, never a subtraction — an
+    index row with no local dir is a workspace on another host and must still be enumerated, so the git
+    store only ever ADDS rows the index is missing. NEVER raises: a dead index leg flips
+    ``index_degraded`` (the git rows still answer), a dead git leg still serves the index rows — so an
+    unreachable or incomplete index cannot silently drop a locally-held grant from the enumeration.
+    Consumers keep re-checking the role authoritatively per workspace (``is_member``); this feeds
+    CANDIDATES, never access."""
+    degraded = False
+    try:
+        rows = list(index_list(subject) or [])
+    except Exception as exc:  # noqa: BLE001 — the authoritative store still answers
+        log.warning("membership index list failed for subject=%s: %s — enumerating from policy/members.json only",
+                    subject, exc)
+        rows, degraded = [], True
+    seen = {r.get("workspace_id") for r in rows if isinstance(r, dict)}
+    try:
+        rows += [row for row in list_memberships(root, subject) if row["workspace_id"] not in seen]
+    except Exception as exc:  # noqa: BLE001 — enumeration must never break a mount path; the index rows still serve
+        log.warning("authoritative membership scan failed for subject=%s: %s — serving the index rows only",
+                    subject, exc)
+    return rows, degraded
+
+
 # ── membership writes (both stores) ─────────────────────────────────────────────────────────────
 def _commit(commit_fn: Optional[CommitFn], ws: Path, message: str) -> None:
     if commit_fn is not None:

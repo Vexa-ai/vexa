@@ -1649,11 +1649,15 @@ def create_app(
             mounts = active_workspaces(wsr.root, subject)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
-        # Lane A: append the SHARED workspaces the subject is a member of. The index (users.data.memberships[])
-        # only ENUMERATES candidates; shared_active_mounts re-checks the role authoritatively per workspace.
-        # A failing index costs the "shared" section of the set, never the subject's own private mounts.
+        # Lane A: append the SHARED workspaces the subject is a member of. Enumeration reconciles BOTH
+        # membership stores (index ∪ policy/members.json — the same union as the shared listing) so a dead
+        # or incomplete index cannot silently drop a locally-held grant from the mount set;
+        # shared_active_mounts still re-checks the role authoritatively per workspace. A resolution failure
+        # costs the "shared" section of the set, never the subject's own private mounts — and
+        # ``index_degraded`` says out loud when the mirror could not be read.
+        rows, index_degraded = membership_mod.reconciled_memberships(wsr.root, subject, mindex.list)
         try:
-            mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+            mounts = mounts + shared_active_mounts(wsr.root, subject, rows)
         except Exception:  # noqa: BLE001 — a shared-mount resolution hiccup must not break the active-set read
             logger.warning("shared-mount resolution failed for subject=%s — returning private mounts only", subject)
         return {
@@ -1663,6 +1667,7 @@ def create_app(
                  "path": m.path, "write": m.write, "primary": m.primary, "name": m.name}
                 for m in mounts
             ],
+            "index_degraded": index_degraded,
         }
 
     @app.post("/api/workspace/activate")
