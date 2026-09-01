@@ -2105,12 +2105,16 @@ def meeting_seed(native_id: str, title: str, video_id: str) -> str:
         ["docker", "inspect", "vexa-dogfood-postgres-1", "--format",
          "{{range .Config.Env}}{{println .}}{{end}}"], capture_output=True, text=True,
         check=True).stdout.split("POSTGRES_PASSWORD=")[1].split("\n")[0].strip()
+    # The statements go in on STDIN, not in argv. As `-c <sql>` this died with
+    # `OSError: [Errno 7] Argument list too long` on any meeting whose segments are wordy enough —
+    # a 400-row chunk of a real hour-long transcript clears the kernel's argv limit. It failed as an
+    # OSError raised before the tool call, so the caller saw only "Error executing tool".
     chunk, loaded = 400, 0
     for i in range(0, len(rows), chunk):
-        sql = "; ".join(rows[i:i + chunk])
-        r = subprocess.run(["docker", "exec", "-e", f"PGPASSWORD={pw}",
+        sql = ";\n".join(rows[i:i + chunk]) + ";\n"
+        r = subprocess.run(["docker", "exec", "-i", "-e", f"PGPASSWORD={pw}",
                             "vexa-dogfood-postgres-1", "psql", "-U", "postgres", "-d", "vexa",
-                            "-q", "-c", sql], capture_output=True, text=True)
+                            "-q", "-f", "-"], input=sql, capture_output=True, text=True)
         if r.returncode == 0:
             loaded += len(rows[i:i + chunk])
         else:
