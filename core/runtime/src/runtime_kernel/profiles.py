@@ -142,6 +142,10 @@ def default_registry() -> ProfileRegistry:
             "BOT_SPEAKER_CONFIRM_THRESHOLD",
             "BOT_SPEAKER_MAX_BUFFER_SEC",
             "BOT_SPEAKER_IDLE_TIMEOUT_SEC",
+            # CSRC transport-sensor inactivity window (capture-bridge resolves and guards it) —
+            # without this forwarding, an operator's override on the runtime container would
+            # silently never reach the spawned bot process.
+            "VEXA_CSRC_INACTIVE_MS",
         )
         if os.environ.get(key, "").strip()
     }
