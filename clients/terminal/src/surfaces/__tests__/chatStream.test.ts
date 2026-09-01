@@ -202,6 +202,28 @@ describe("streamChatTurn — cold start & resume", () => {
   });
 
   it("surfaces a 4xx as terminal (a real client error — does not retry forever)", async () => {
+    // Was written with a 401 as its stand-in 4xx; a 401 now has its own vocabulary (below), so the
+    // "names the status, stops retrying" property is pinned on a status that really is about THIS
+    // request rather than about the session.
+    const fetchImpl = vi.fn().mockResolvedValueOnce({ ok: false, status: 422, body: null } as unknown as Response);
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.error).toContain("422");
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);  // 4xx is terminal — no resume loop
+  });
+
+  it("a 401 is the SESSION, not this request — and still terminal", async () => {
+    // 2026-09-01: a revoked login token used to reach the user as a status code, or (via the SSE
+    // error event, which is the path /api/chat actually takes) as the gateway's raw JSON body under
+    // a generic "something went wrong". Behaviour of the auth-vs-not split lives in
+    // src/app/__tests__/sessionExpiry.test.tsx; this pins that the resume contract is unchanged.
     const fetchImpl = vi.fn().mockResolvedValueOnce({ ok: false, status: 401, body: null } as unknown as Response);
     const { state, cb } = recorder();
 
@@ -211,9 +233,10 @@ describe("streamChatTurn — cold start & resume", () => {
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
     );
 
-    expect(state.error).toContain("401");
+    expect(state.error).toBe("Your session ended — sign in again.");
+    expect(state.error).not.toContain("401");
     expect(result.terminal).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);  // 4xx is terminal — no resume loop
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("stops resuming when the caller aborts", async () => {

@@ -17,9 +17,20 @@
  *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
  *  the one-time "Set up your instance" claim screen — the first sign-in becomes the admin —
- *  through whichever door the deploy actually has. */
-import { useEffect, useState, type FormEvent } from "react";
+ *  through whichever door the deploy actually has.
+ *
+ *  A SESSION THAT DIES MID-USE (2026-09-01). The mount probe used to be the only probe there was:
+ *  once this gate said "in" it never asked again, so a session revoked server-side left the entire
+ *  shell rendered over an app where every request 401'd — and the user's only report of it was a
+ *  chat turn ending in a generic "something went wrong". The gate now LISTENS: the HTTP chokepoints
+ *  raise a session-suspect signal on any 401/403 (see @/app/session), this component re-probes
+ *  /api/auth/me — which really validates the token now — and only a genuine 401 takes the screen.
+ *  The probe is the authority precisely because a 403 is usually resource-scoped and means nothing
+ *  about the session; suspicion never signs anybody out on its own. */
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
+import { onSessionSuspect } from "./session";
+import { SESSION_ENDED_HEADLINE } from "../surfaces/apiClient";
 
 type Status = "checking" | "out" | "in";
 type Providers = { google: boolean; microsoft: boolean };
@@ -31,6 +42,10 @@ function currentPath(): string {
   return window.location.pathname + window.location.search;
 }
 
+/** Don't re-probe more than once every few seconds: a dead session makes EVERY in-flight surface
+ *  401 at once, and one answer settles all of them. */
+const REPROBE_COOLDOWN_MS = 3000;
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
   const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
@@ -39,6 +54,38 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The session died while the app was open (as opposed to arriving signed-out). Drives the
+  // "your session ended" card, whose one button reveals the sign-in card below it.
+  const [ended, setEnded] = useState(false);
+  // Where the user WAS when it died, captured at that moment so the emailed link / OAuth callback
+  // brings them back to the same deeplink.
+  const [returnTo, setReturnTo] = useState<string | null>(null);
+  const probing = useRef(false);
+  const lastProbe = useRef(0);
+
+  /** Confirm a suspicion. Only a real 401 from /api/auth/me takes the screen — a 403 on one
+   *  resource, or an unreachable oracle, leaves the session alone. */
+  const confirmSession = useCallback(async () => {
+    if (probing.current) return;
+    const now = Date.now();
+    if (now - lastProbe.current < REPROBE_COOLDOWN_MS) return;
+    probing.current = true;
+    lastProbe.current = now;
+    try {
+      const r = await fetch("/api/auth/me", { cache: "no-store" });
+      if (r.status === 401) {
+        setReturnTo((prev) => prev ?? currentPath());
+        setEnded(true);
+        setStatus("out");
+      }
+    } catch {
+      /* the probe itself couldn't run — that's a network fault, not a dead session */
+    } finally {
+      probing.current = false;
+    }
+  }, []);
+
+  useEffect(() => onSessionSuspect(() => { void confirmSession(); }), [confirmSession]);
 
   useEffect(() => {
     let active = true;
@@ -59,6 +106,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, []);
 
+  /** Where the door should put them: the deeplink they were on when the session died, else where
+   *  they are now. Captured rather than re-read so a dead session returns to the SAME place. */
+  const destination = () => returnTo ?? currentPath();
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const value = email.trim();
@@ -69,7 +120,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       const r = await fetch("/api/auth/request-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: value, next: currentPath() }),
+        body: JSON.stringify({ email: value, next: destination() }),
       });
       if (r.ok) { setSent(value); return; }
       const body = (await r.json().catch(() => ({}))) as { error?: string };
@@ -83,6 +134,41 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (status === "in") return <>{children}</>;
   if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+
+  // The session died under a running app. Say THAT — not a status code, and not a console pointer —
+  // and offer exactly one thing to do about it. The button reveals the sign-in card below, which
+  // carries `destination()` so the round trip lands back on the same deeplink.
+  if (ended) {
+    return (
+      <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div
+          data-testid="session-ended"
+          style={{
+            width: 340, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 12,
+            padding: 24, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>{SESSION_ENDED_HEADLINE}</div>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+            This device was signed out. Signing in again brings you back to where you were.
+          </div>
+          <button
+            onClick={() => setEnded(false)}
+            style={{
+              background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
+              padding: "9px 10px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            Sign in again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
   // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
@@ -141,12 +227,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             )}
 
             {providers.google && (
-              <button onClick={() => signIn("google", { callbackUrl: currentPath() })} style={oauthBtn}>
+              <button onClick={() => signIn("google", { callbackUrl: destination() })} style={oauthBtn}>
                 <GoogleMark /> Continue with Google
               </button>
             )}
             {providers.microsoft && (
-              <button onClick={() => signIn("microsoft", { callbackUrl: currentPath() })} style={oauthBtn}>
+              <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} style={oauthBtn}>
                 <MicrosoftMark /> Continue with Microsoft
               </button>
             )}

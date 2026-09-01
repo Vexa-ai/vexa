@@ -11,6 +11,9 @@
  *
  *  Extracted from Chat.send so the robustness logic is unit-testable against a faked fetch/SSE. */
 
+import { noteAuthFailure, isAuthStatus } from "@/app/session";
+import { SESSION_ENDED_HEADLINE } from "./apiClient";
+
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
   type: string;
@@ -20,6 +23,10 @@ export type ChatStreamEvent = {
   ok?: boolean;
   reply?: string;
   message?: string;
+  /** `error` events only — the upstream HTTP status the proxy folded into the stream. /api/chat
+   *  answers 200 with an `error` event even when the gateway refused with a 401, so this field is
+   *  the ONLY place the auth status survives into the client. */
+  status?: number;
 };
 
 /** The live phase of a turn, surfaced so the pane is VERBOSE about what's happening instead of going
@@ -181,7 +188,14 @@ export async function streamChatTurn(
     if (!r.ok) {
       // 4xx is a real client/terminal error — surface it, don't retry for the whole hard cap. A 5xx
       // (transient gateway/upstream) is resumable → reconnect from the cursor.
-      if (r.status < 500) { terminal = true; cb.onError(`Chat request failed (${r.status})`); return "terminal"; }
+      if (r.status < 500) {
+        terminal = true;
+        // An auth-shaped refusal is the SESSION, not this turn: tell the watcher and say so plainly
+        // instead of leaving a status code in the transcript.
+        noteAuthFailure(r.status, "/api/chat");
+        cb.onError(isAuthStatus(r.status) ? SESSION_ENDED_HEADLINE : `Chat request failed (${r.status})`);
+        return "terminal";
+      }
       return "closed";
     }
     const reader = r.body?.getReader();
@@ -246,10 +260,22 @@ export async function streamChatTurn(
             break;
           // A hard upstream error the proxy folded into the stream: the turn genuinely failed — surface
           // it (do NOT treat as a cold-start close to resume).
+          //
+          // ⚠ /api/chat answers 200 and folds the gateway's refusal into THIS event, so a revoked
+          // session arrives here — carrying `status: 401` and, as `message`, the gateway's raw JSON
+          // body. That body is payload-shaped, so the presenter could not read it as prose and the
+          // turn died under "Something went wrong — details are in the browser console." That was
+          // the founder's whole symptom. An auth status is now read off the event, reported to the
+          // session watcher, and rendered as the session sentence.
           case "error":
-          case "stream-error":
-            terminal = true; sawVisibleOutput = true; cb.onError(ev.message || "Chat request failed.");
+          case "stream-error": {
+            terminal = true;
+            sawVisibleOutput = true;
+            const authFailed = typeof ev.status === "number" && isAuthStatus(ev.status);
+            if (authFailed) noteAuthFailure(ev.status as number, "/api/chat");
+            cb.onError(authFailed ? SESSION_ENDED_HEADLINE : (ev.message || "Chat request failed."));
             break;
+          }
           default:
             break;
         }

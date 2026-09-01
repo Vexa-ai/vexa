@@ -11,6 +11,7 @@
  *  track() call no-ops unless a measurement id was configured. NOTE: this captures only WEB-CLIENT calls
  *  — the authoritative cross-caller API-usage signal is the gateway's per-request logs. */
 import { track, endpointLabel } from "@/app/analytics";
+import { noteAuthFailure } from "@/app/session";
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly detail: string, public readonly url: string) {
@@ -26,6 +27,9 @@ export interface PresentedError { headline: string; detail: string }
 
 const NETWORK_HEADLINE = "Couldn't reach the Vexa server — check that the stack is running.";
 const GENERIC_HEADLINE = "Something went wrong — details are in the browser console.";
+/** The one sentence a dead session gets, wherever it surfaces. Shared with the login gate's card so
+ *  the backstop headline and the full signed-out state say the same thing. */
+export const SESSION_ENDED_HEADLINE = "Your session ended — sign in again.";
 
 // A fetch()-level network failure surfaces as one of these engine-specific messages.
 const NETWORK_MESSAGE = /failed to fetch|networkerror|load failed|network request failed/i;
@@ -48,7 +52,11 @@ export function presentError(e: unknown): PresentedError {
     console.warn("api failure", detail);
     if (e.status === 0) return { headline: NETWORK_HEADLINE, detail };
     if (e.status === 502 || e.status === 504) return { headline: "The Vexa server can't reach a backend service right now.", detail };
-    if (e.status === 401) return { headline: "Your API key was rejected — sign in again.", detail };
+    // 401 is the session, not the request: the credential this tab holds is no longer accepted, so
+    // the honest headline names the SESSION. The login gate normally replaces the whole surface
+    // with the signed-out card before this is read (see @/app/session) — this copy is the backstop
+    // for anything that renders in the gap.
+    if (e.status === 401) return { headline: SESSION_ENDED_HEADLINE, detail };
     if (e.status === 403) return { headline: "Your key doesn't have access to this.", detail };
     if (e.status === 429) return { headline: "Rate limit hit — try again in a moment.", detail };
     // Remaining 4xx/5xx: a prose `detail` is the backend's own user-facing reason — pass it
@@ -82,6 +90,9 @@ export async function getJson<T = unknown>(url: string, init?: RequestInit): Pro
   }
   usage(r.status, r.ok);
   if (!r.ok) {
+    // An auth-shaped refusal is reported to the session watcher BEFORE the throw, so the login gate
+    // can confirm and take over the screen even if this particular caller swallows the error.
+    noteAuthFailure(r.status, url);
     let detail = "";
     try {
       const b = (await r.json()) as { detail?: unknown; error?: unknown };

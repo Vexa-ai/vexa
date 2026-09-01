@@ -250,12 +250,87 @@ export function terminalLoginTokenCap(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 3;
 }
 
-/** BEST-EFFORT: after a login mint, bound the user's `terminal-login` tokens to the newest N.
- *  Lists the user's tokens, keeps only those named `terminal-login`, sorts oldest→newest, and
- *  revokes everything beyond the newest cap. NEVER touches differently-named (self-serve) tokens.
- *  Every failure (list error, a 404 on a concurrently-deleted token) is logged and swallowed — a
- *  prune problem must never turn a successful sign-in into a failure (mirrors bootstrapAdminClaim /
- *  provisionUserWorkspace above). */
+/** A token last active inside this window is treated as a LIVE SESSION and is spared even when it
+ *  sits past the cap. Configurable, default 48 hours. */
+export function terminalLoginRecentUseWindowMs(): number {
+  const raw = parseFloat(process.env.VEXA_TERMINAL_LOGIN_RECENT_USE_HOURS || "");
+  const hours = Number.isFinite(raw) && raw > 0 ? raw : 48;
+  return hours * 3600_000;
+}
+
+/** The CEILING: how far live-session protection may push the count above the cap before the prune
+ *  stops honouring it. Without this the recent-use exemption is unbounded — every token in a
+ *  same-day sign-in burst is by definition recent, so nothing would ever be revoked and a looping
+ *  harness could mint indefinitely (which is the accumulation #638 existed to stop). Past the
+ *  ceiling the least-recently-used tokens go regardless; an actively-used session is the LAST
+ *  candidate in that ordering, so it survives unless there are `max` sessions more active than it.
+ *  Default cap × 5. */
+export function terminalLoginTokenMax(): number {
+  const raw = parseInt(process.env.VEXA_TERMINAL_LOGIN_TOKEN_MAX || "", 10);
+  const cap = terminalLoginTokenCap();
+  if (Number.isFinite(raw) && raw > 0) return Math.max(raw, cap);
+  return cap * 5;
+}
+
+/** admin-api serialises datetimes NAIVE-UTC — `2026-09-01T16:33:46.315228`, no zone designator
+ *  (`datetime.utcnow()` straight through Pydantic). `Date.parse` reads a zone-less DATE-TIME form
+ *  as LOCAL time, so on any host whose TZ is not UTC the value lands hours off. That skew cancels
+ *  in a relative sort (every value is shifted the same way) but NOT in the absolute
+ *  recent-use window below, which compares against a real `Date.now()`. Stamp the zone when the
+ *  string doesn't carry one. Returns NaN for absent/unparseable input. */
+export function parseAdminTimestamp(raw: string | null | undefined): number {
+  if (typeof raw !== "string" || !raw.trim()) return NaN;
+  const s = raw.trim();
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
+  return Date.parse(zoned ? s : `${s}Z`);
+}
+
+/** When a token was last ACTIVE: its last authenticated request, or — if it has never been used —
+ *  the moment it was issued. A freshly minted token is therefore active by construction, which is
+ *  what keeps the sign-in that just happened from pruning itself. */
+function lastActiveAt(t: AdminTokenInfo): number {
+  const used = parseAdminTimestamp(t.last_used_at);
+  if (Number.isFinite(used)) return used;
+  const made = parseAdminTimestamp(t.created_at);
+  return Number.isFinite(made) ? made : 0;
+}
+
+/** BEST-EFFORT: after a login mint, bound the user's `terminal-login` tokens — by LAST USE, never
+ *  by issue age.
+ *
+ *  ⚠ THE BUG THIS REPLACES (2026-09-01). The previous policy sorted by `created_at` and revoked the
+ *  OLDEST-ISSUED tokens over the cap. That makes the longest-lived session the first casualty of
+ *  everybody else's sign-ins: while agents redeemed magic links against this deploy all day, each
+ *  redeem minted a token, and the founder's months-old browser session was every single time the
+ *  oldest one. His tab was revoked repeatedly — every API call 401ing under a UI that still
+ *  rendered. Issue age is exactly backwards as a proxy for "who needs this least".
+ *
+ *  THE POLICY NOW, in order:
+ *   1. Rank the login tokens by LAST ACTIVITY (`last_used_at`, falling back to `created_at` for a
+ *      token that has never authenticated anything) — least-recently-used first. This alone fixes
+ *      the founder: a tab making requests is always at the newest end of that order, so it never
+ *      lands in the eviction slice at all.
+ *   2. Everything past the cap, taken from the least-recently-used end, is a candidate.
+ *   3. A candidate last active inside the recent-use window is SPARED — the case where the tab has
+ *      been idle for a few hours while somebody else signs in repeatedly. A live session outranks
+ *      the cap; the cap exists to stop unbounded accumulation, not to evict somebody mid-sentence.
+ *   4. …but only up to the CEILING. Past `terminalLoginTokenMax()` the exemption stops applying and
+ *      the least-recently-used go anyway, because every token in a same-day burst is "recent" and
+ *      an unconditional exemption would mean nothing is ever revoked. Note what the ordering buys
+ *      here: even under ceiling pressure the ACTIVE session is the last thing considered.
+ *
+ *  The deliberate trade this leaves: between the cap and the ceiling, a burst of sign-ins inside one
+ *  window does exceed the cap. That set drains on its own — the first sign-in after those tokens go
+ *  quiet revokes them. An over-cap set that converges is worth strictly more than the alternative,
+ *  which is what broke the founder.
+ *
+ *  admin-api stamps `last_used_at` on every `POST /internal/validate`, which is the same oracle
+ *  every proxied terminal request and `/api/auth/me` goes through — so "used" here means genuine
+ *  traffic, and no new write path was needed to learn it.
+ *
+ *  NEVER touches differently-named (self-serve) tokens. Every failure (list error, a 404 on a
+ *  concurrently-deleted token) is logged and swallowed — a prune problem must never turn a
+ *  successful sign-in into a failure (mirrors bootstrapAdminClaim / provisionUserWorkspace above). */
 async function pruneLoginTokens(userId: string | number): Promise<void> {
   try {
     const listed = await listUserTokens(userId);
@@ -264,17 +339,30 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
       return;
     }
     const cap = terminalLoginTokenCap();
+    const max = terminalLoginTokenMax();
+    const windowMs = terminalLoginRecentUseWindowMs();
+    const now = Date.now();
+
     const loginTokens = listed.data
       .filter((t) => t.name === TERMINAL_LOGIN_TOKEN_NAME)
-      // oldest first: prefer created_at, fall back to numeric id
+      // LEAST-RECENTLY-ACTIVE first; ties (and unparseable timestamps) fall back to numeric id,
+      // which is monotonic in admin-api, so the order is always total and deterministic.
       .sort((a, b) => {
-        const ta = a.created_at ? Date.parse(a.created_at) : NaN;
-        const tb = b.created_at ? Date.parse(b.created_at) : NaN;
-        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+        const da = lastActiveAt(a);
+        const db = lastActiveAt(b);
+        if (da !== db) return da - db;
         return Number(a.id) - Number(b.id);
       });
 
-    const overflow = loginTokens.slice(0, Math.max(0, loginTokens.length - cap));
+    const candidates = loginTokens.slice(0, Math.max(0, loginTokens.length - cap));
+    // How many of the candidates the ceiling forces out no matter how recently they were used —
+    // taken from the least-recently-used end, so an active session is the last one reached.
+    const forced = Math.max(0, loginTokens.length - max);
+    const overflow = candidates.filter(
+      (t, i) => i < forced || now - lastActiveAt(t) >= windowMs,
+    );
+    const spared = candidates.filter((t) => !overflow.includes(t));
+
     for (const tok of overflow) {
       const revoked = await revokeToken(tok.id);
       if (!revoked.ok) {
@@ -282,7 +370,10 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
       }
     }
     if (overflow.length) {
-      console.info(`[terminal-auth] login-token prune: user ${userId} over cap ${cap}, revoked ${overflow.length} oldest login token(s)`);
+      console.info(`[terminal-auth] login-token prune: user ${userId} over cap ${cap}, revoked ${overflow.length} least-recently-used login token(s)`);
+    }
+    if (spared.length) {
+      console.info(`[terminal-auth] login-token prune: user ${userId} kept ${spared.length} over-cap login token(s) active within ${Math.round(windowMs / 3600_000)}h (live sessions outrank the cap, up to max ${max})`);
     }
   } catch (err) {
     console.warn("[terminal-auth] login-token prune failed (sign-in continues):", (err as Error).message);
