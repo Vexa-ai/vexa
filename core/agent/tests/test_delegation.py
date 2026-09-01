@@ -247,7 +247,10 @@ def test_the_config_lands_where_the_post_turn_commit_cannot_sweep_it_up(tmp_path
     from worker.engine import mcp_delegation_config
     path, _ = mcp_delegation_config(tmp_path)
     assert Path(path).parent.name == ".claude"
-    seed = Path(__file__).resolve().parents[1] / "workspace-seeds" / "default" / ".gitignore"
+    # The seeds moved out of core/agent in 5aa8226aa (founder ruling: BEHAVIOR is a top-level peer
+    # of the machinery) — machinery is what compiles into the runtime, behavior is what it loads.
+    # The container path is unchanged; only this repo-relative lookup had to follow the move.
+    seed = Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default" / ".gitignore"
     assert ".claude/" in seed.read_text()
 
 
