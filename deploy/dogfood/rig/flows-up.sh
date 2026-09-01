@@ -2,7 +2,9 @@
 # Bring up the flows half of the storm hot loop on bbb.
 # Processes (not containers) so edits in the worktree are live on restart.
 set -u
-FL=/home/dima/dev/vexa-flows1315/core/flows
+# Same VEXA_FLOWS_SRC the rig and the control server read — one name for the flows checkout,
+# defaulted to what this host has always used so an unconfigured run is unchanged.
+FL="${VEXA_FLOWS_SRC:-/home/dima/dev/vexa-flows1315/core/flows}"
 LOG=/tmp/storm-logs
 mkdir -p "$LOG"
 

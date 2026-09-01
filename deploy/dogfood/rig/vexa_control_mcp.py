@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import pathlib
+import re
 import subprocess
 import time
 import urllib.error
@@ -24,7 +25,12 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 
-FL = "/home/dima/dev/vexa-flows1315/core/flows"
+# The flows ENGINE is imported in-process by exactly one tool (fact_emit); every other flows
+# surface here goes over HTTP to FLOWS_API. So the engine's source tree is a deployment input,
+# not a constant. VEXA_FLOWS_SRC names it. The default is the path this rig has always used, so
+# an unconfigured rig behaves exactly as before; when the tree is absent the server still starts
+# and fact_emit alone reports itself unavailable, by name, naming the variable to set.
+FL = os.environ.get("VEXA_FLOWS_SRC", "/home/dima/dev/vexa-flows1315/core/flows")
 GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 AGENT_API = os.environ.get("VEXA_AGENT_API_URL", "http://localhost:18500")
 ADMIN_API = os.environ.get("VEXA_ADMIN_API_URL", "http://localhost:18457")
@@ -32,6 +38,24 @@ FLOWS_API = os.environ.get("VEXA_FLOWS_API_URL", "http://localhost:18200")
 FLOWS_KEY = os.environ.get("VEXA_FLOWS_API_KEY", "changeme")
 MAILPIT = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 HOME = pathlib.Path.home()
+
+
+def _flows_src() -> str | None:
+    """The importable src/ of the flows engine, or None when this host does not carry it."""
+    src = os.path.join(FL, "src")
+    return src if os.path.isdir(src) else None
+
+
+def _flows_unavailable(tool: str, detail: str = "") -> str:
+    """One tool, named, is off — and the server is fine. An agent has to be able to tell those
+    apart: a traceback out of an import reads as "Vexa is broken" when the truth is "this
+    deployment does not carry the flows engine"."""
+    return json.dumps({
+        "unavailable": tool,
+        "reason": detail or f"the flows engine source is not at {FL}/src on this host",
+        "fix": "point VEXA_FLOWS_SRC at the flows checkout's core/flows directory, then restart",
+        "scope": "this tool only — every other tool on this server is unaffected",
+    })
 
 
 def _admin_key() -> str:
@@ -755,7 +779,9 @@ THE MAIN VERBS
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
 - deeplink(...) mints links that open the Vexa terminal in a composed state
-  (file beside transcript, lifecycle presets pre/during/post meeting).
+  (file beside transcript, lifecycle presets pre/during/post meeting), and
+  deeplink(target='ask', name=...) opens a fresh chat already holding an admin-written
+  preset — the link names the preset, it never carries the words.
 
 REGISTER — the person is not the operator: never show tokens, endpoints, paths, or tool
 names. A remote path is NEVER text (clients render it as a broken local link) — hand the
@@ -1661,12 +1687,26 @@ def fact_emit(event_type: str, source_event_id: str, subject_refs: dict,
     invite.received wants: organizer, url, start (epoch), ics_uid, title, group|null."""
     me()   # account-scoped: this touches shared state
     import sys
-    sys.path.insert(0, FL + "/src")
-    os.environ.setdefault("VEXA_FLOWS_DB_URL", (HOME / ".storm/dburl").read_text().strip())
-    from flows import Registry, admit
-    from flows.clock import SystemClock
-    from flows.db import postgres_db
-    from flows_defs import production
+    src = _flows_src()
+    if src is None:
+        return _flows_unavailable("fact_emit")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    if not os.environ.get("VEXA_FLOWS_DB_URL"):
+        dburl = HOME / ".storm/dburl"
+        if not dburl.exists():
+            return _flows_unavailable(
+                "fact_emit",
+                "VEXA_FLOWS_DB_URL is unset and there is no ~/.storm/dburl to read it from")
+        os.environ["VEXA_FLOWS_DB_URL"] = dburl.read_text().strip()
+    try:
+        from flows import Registry, admit
+        from flows.clock import SystemClock
+        from flows.db import postgres_db
+        from flows_defs import production
+    except ImportError as e:
+        return _flows_unavailable(
+            "fact_emit", f"the flows engine at {src} did not import: {type(e).__name__}: {e}")
     db = postgres_db(os.environ["VEXA_FLOWS_DB_URL"])
     reg = Registry()
     production.build(reg, db)
@@ -2979,22 +3019,77 @@ def auth_claim(handle: str) -> str:
     return json.dumps(out)
 
 
+# A preset NAME and only a name — the narrow, lowercase reading of the same test the terminal
+# applies before it will resolve one, so everything mintable here is openable there. The preset
+# BODY lives in the admin-written _global/asks/<name>.md and never in the URL: a link that could
+# carry prompt text would let anyone who can send a link drive the recipient's agent.
+_ASK_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# A meeting ref on an ask link is substituted into the preset's {{meeting}}, so it lands INSIDE
+# the prompt the reader's agent opens holding. Anything free-form there is prompt text through a
+# second door, which is exactly what the name rule above exists to shut. Two shapes only.
+_ASK_MEETING = re.compile(r"^(?:\d{1,12}|[a-z][a-z0-9_-]{0,31}/[A-Za-z0-9._-]{1,128})$")
+
+
 @mcp.tool()
 @_anon_guard
-def deeplink(target: str, ref: str = "", token: str = "") -> str:
+def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: str = "",
+             token: str = "") -> str:
     """A link that opens the Vexa terminal in a specific state — hand it to your person
     whenever you talk about a thing they might want to SEE.
 
-    target: 'meeting' (ref = a meeting link or platform/native), 'meetings' (the list),
+    WHICH LINK TO HAND
+    - they should DO something in a fresh chat — review the minutes, prep the call, answer a
+      standing question → target='ask', name=<preset>, optionally meeting=<row id> and
+      ws=<workspace slug>. You choose WHICH preset; you never choose what it says.
+    - they should LOOK at one meeting → target='meeting', ref=<row id | link | platform/native>.
+    - they should see two things at once → 'view', or 'pre_meeting'/'during_meeting'/
+      'post_meeting' for the lifecycle shapes.
+    - they should read one file → target='workspace_file', ref=<path>.
+    - the whole list → 'meetings'. The org-level setup conversation → 'setup_global'.
+
+    target: 'ask' (name = a preset in _global/asks/; meeting and ws are refs the preset may
+    substitute), 'meeting' (ref = a meeting link or platform/native), 'meetings' (the list),
     'workspace_file' (ref = path), 'setup_global' (the org-level setup conversation),
     'view' (ref = pane spec 'file:<path>,meeting:<platform/native>,readme' — first pane
     left, the rest split beside it: YOU compose what the person sees), or the lifecycle
     presets 'pre_meeting' / 'during_meeting' / 'post_meeting' (ref = platform/native,
-    optionally 'platform/native|<doc path>' to put a specific file beside the meeting)."""
+    optionally 'platform/native|<doc path>' to put a specific file beside the meeting).
+
+    NEVER put prompt text in a link. name= is a preset NAME; the words behind it are a file
+    only an admin can write, and that is the whole security of the ask link."""
     me()
     import urllib.parse as _up
     em = _caller_email()
     as_q = f"as={_up.quote(em)}" if em else ""
+    if target == "ask":
+        nm = name.strip()
+        if not _ASK_NAME.match(nm):
+            return json.dumps({"error": "ask needs name=<preset>: a NAME only, matching "
+                                        "^[a-z0-9][a-z0-9_-]{0,63}$. The preset's words live in "
+                                        "_global/asks/<name>.md, which only an admin can write — "
+                                        "a link never carries prompt text."})
+        q = {"ask": nm}
+        w = ws.strip()
+        if w:
+            if not _ASK_NAME.match(w):
+                return json.dumps({"error": "ws must be a workspace slug matching "
+                                            "^[a-z0-9][a-z0-9_-]{0,63}$"})
+            q["ws"] = w
+        mr = meeting.strip()
+        if mr:
+            if not _ASK_MEETING.match(mr):
+                return json.dumps({"error": "meeting must be a row id (digits) or platform/native — "
+                                            "it is substituted into the preset's {{meeting}}, "
+                                            "so free text there is prompt text by another door."})
+            q["meeting"] = mr
+        return json.dumps({
+            "url": f"{UI_BASE}/?{_up.urlencode(q)}",
+            "opens": "a fresh chat already holding that preset, over the workspaces the preset "
+                     "names — context and opening prompt arrive together",
+            "the_words_are_not_in_the_link": f"they are in _global/asks/{nm}.md; editing that "
+                                             f"file changes every future click, and nothing is "
+                                             f"rebuilt",
+        })
     if target == "meeting":
         if ref.strip().isdigit():
             return json.dumps({"url": _ui_meeting_url("", "", row_id=ref.strip()),
@@ -3038,7 +3133,7 @@ def deeplink(target: str, ref: str = "", token: str = "") -> str:
         q = f"?setup=global" + (f"&{as_q}" if as_q else "")
         return json.dumps({"url": f"{UI_BASE}/{q}",
                            "opens": "the org-level setup conversation"})
-    return json.dumps({"error": "target must be meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "
+    return json.dumps({"error": "target must be ask | meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "
                                 "setup_global"})
 
 
