@@ -211,3 +211,110 @@ describe("the deploy key is the primary credential", () => {
     expect(container.querySelector('[data-attach="addat"]')).toBeNull();
   });
 });
+
+
+/** THE 2026-09-02 INCIDENT. A founder pasted a GitHub PAT into the Repository field of this dialog.
+ *  It was sent; git was asked to clone it; git answered `fatal: repository '<the token>' does not
+ *  exist`, and that string was rendered in the card below and echoed to the browser console.
+ *
+ *  The fix is not a nicer error. It is that the value never leaves the tab — so what these assert is
+ *  the ABSENCE of a request, not the presence of a message. */
+describe("a token pasted into the Repository field", () => {
+  const PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+  it("is named as a token the moment it is typed, and Attach is refused", async () => {
+    const { container } = open();
+    await screen.findByRole("option", { name: "acme-kg" });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: PAT } });
+
+    const issue = container.querySelector('[data-attach="repo-issue"]');
+    expect(issue?.textContent).toBe(
+      "That looks like a token, not a repository. Paste the repository URL here; " +
+      "a saved token goes in the token card.");
+    expect((container.querySelector('[data-attach="submit"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("is NEVER SENT — no attach call is made, by either lane", async () => {
+    open();
+    await submit(PAT, "acme-kg");
+    expect(api.attachSharedWorkspace).not.toHaveBeenCalled();
+    expect(api.swapWorkspace).not.toHaveBeenCalled();
+
+    cleanup();
+    open();
+    await submit(PAT);                       // the desk lane too
+    expect(api.swapWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("is not left sitting in the DOM after the refusal", async () => {
+    const { container } = open();
+    await submit(PAT, "acme-kg");
+    const field = container.querySelector('[data-attach="repo"]') as HTMLInputElement;
+    // The field keeps what the person typed — clearing it under them would be the wrong lesson, and
+    // they must be able to see what they pasted to know to revoke it. What must not happen is the
+    // value travelling: nothing is sent, and the card never renders it.
+    expect(field.value).toBe(PAT);
+    expect(container.querySelector('[data-attach="result"]')).toBeNull();
+    expect(container.querySelector('[data-attach="detail"]')).toBeNull();
+  });
+
+  it("a repository that is merely malformed is refused on submit without a scolding keystroke", async () => {
+    const { container } = open();
+    await screen.findByRole("option", { name: "acme-kg" });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "g" } });
+    expect(container.querySelector('[data-attach="repo-issue"]')).toBeNull();  // no shouting at "g"
+
+    fireEvent.click(screen.getByText("Attach"));
+    await waitFor(() => {
+      const el = container.querySelector('[data-attach="repo-issue"]');
+      if (!el) throw new Error("no issue yet");
+      expect(el.textContent).toContain("That is not a repository.");
+    });
+    expect(api.swapWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("normalizes what it does send — the canonical URL, not the raw keystrokes", async () => {
+    vi.mocked(api.swapWorkspace).mockResolvedValue({
+      subject: "u1", active: "seed", repo: "https://github.com/acme/kg.git", ref: "main",
+      swapped: true, cloned: true, parked: "seed-prev", nested: false,
+    });
+    open();
+    await submit("  acme/kg  ");
+    await screen.findByText("Cloned https://github.com/acme/kg.git into Personal");
+    expect(vi.mocked(api.swapWorkspace).mock.calls[0][0]).toBe("https://github.com/acme/kg.git");
+  });
+});
+
+/** P15 in the one place a secret was actually seen. The server scrubs its own text now; the card is
+ *  the second line, because a client cannot know which failure will hand it a string containing one. */
+describe("the error card never renders a credential", () => {
+  it("masks a token inside a clone error while keeping the deploy key intact", async () => {
+    const PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+    vi.mocked(api.attachSharedWorkspace).mockRejectedValue(new ApiError(
+      502,
+      `git clone failed: fatal: could not read Username for 'https://${PAT}@github.com'\n\n${REFUSAL}`,
+      "/api/workspace/shared/acme-kg/attach",
+    ));
+    const { container } = open();
+    await submit("git@github.com:acme/kg.git", "acme-kg");
+    const pre = await waitFor(() => {
+      const el = container.querySelector('[data-attach="detail"]');
+      if (!el) throw new Error("no verbatim block yet");
+      return el;
+    });
+    expect(pre.textContent).not.toContain(PAT);
+    expect(pre.textContent).toContain("«redacted»");
+    expect(pre.textContent).toContain(PUBKEY);            // the answer survives the scrubbing
+    expect(container.innerHTML).not.toContain(PAT);
+  });
+});
+
+/** F80 — the lede. "Your workspace is already on GitHub" told the person a fact about themselves that
+ *  may be false; this says what the control does. */
+describe("the lede", () => {
+  it("describes the action, not an assumption about the person", async () => {
+    open();
+    expect(screen.getByText(/Point a workspace at a repository you have/)).toBeTruthy();
+    expect(screen.queryByText(/Your workspace is already on GitHub/)).toBeNull();
+  });
+});

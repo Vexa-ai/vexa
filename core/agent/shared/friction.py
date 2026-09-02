@@ -51,6 +51,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from shared.git_redaction import redact
+
 # ── the vocabulary ───────────────────────────────────────────────────────────────────────────────
 
 #: Who filed it. Two values, and the difference is load-bearing in the dump: an agent's report is
@@ -83,7 +85,12 @@ MAX_ERROR = 600
 
 
 def _clip(v, n: int = MAX_TEXT) -> str:
-    return str(v or "").strip()[:n]
+    """Trim ONE free-text field — and scrub it. Every string a person or an agent writes into a
+    friction report passes through here, and a friction record is DURABLE BY DESIGN (this file's own
+    docstring: "nothing here expires"). A credential pasted into "what went wrong" would therefore
+    outlive the session, the fix and the rotation. Shape-based, so it does not depend on anybody
+    having recognised the value as a secret first — which on 2026-09-02 nobody did."""
+    return redact(str(v or "").strip())[:n]
 
 
 def _one_of(v, allowed, default: str) -> str:

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
 from shared.gitenv import scrubbed_git_env
 
@@ -67,7 +68,10 @@ class RemoteSyncError(RuntimeError):
 
 
 def _redacted(text: str, token: Optional[str]) -> str:
-    return text.replace(token, "***") if token else text
+    """SHAPE-BASED (git_redaction), with the known token as belt to the braces. The previous version
+    was the replace() alone, which redacts nothing whenever the credential reached us by a route the
+    caller did not classify as a credential — which is precisely when it matters."""
+    return redact(text, token)
 
 
 def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True,
@@ -195,9 +199,9 @@ def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
         if pushed.returncode != 0:
             err = (pushed.stderr or "").strip()
             if "non-fast-forward" in err or "fetch first" in err or "rejected" in err:
-                raise RemoteSyncError(
-                    f"push rejected — the remote has commits this workspace doesn't. Pull first (no force push): {err}")
-            raise RemoteSyncError(f"git push failed: {err}")
+                raise RemoteSyncError(_redacted(
+                    f"push rejected — the remote has commits this workspace doesn't. Pull first (no force push): {err}", None))
+            raise RemoteSyncError(_redacted(f"git push failed: {err}", None))
         head_sha = _git(wsp, "rev-parse", "HEAD", ssh_env=ssh_env).stdout.strip()
     else:
         head_sha = _push_with_pat(wsp, url, branch, token)

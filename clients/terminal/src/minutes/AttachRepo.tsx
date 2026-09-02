@@ -15,6 +15,14 @@
  *  and nothing of theirs ever travels here. The saved PAT stays a fallback for `https://` remotes and
  *  is entered once in the account menu's GitHub token card — never re-asked per repo.
  *
+ *  THE REPOSITORY FIELD IS VALIDATED BEFORE IT IS SENT (2026-09-02). Saying "the credential is not a
+ *  token box" is not the same as making it impossible to put one in the wrong box, and a founder put a
+ *  PAT in THIS field. It was sent, git was told to clone it, and git's answer — `fatal: repository
+ *  '<the token>' does not exist` — came back into the card below. So `checkRepo` runs on every
+ *  keystroke and on submit: a credential-shaped value never leaves the tab, and the card says which
+ *  box it belongs in. The server refuses it too (422, before any git process exists); this is the
+ *  first line, and the point of the first line is that the value does not travel.
+ *
  *  THE RESULT STATES A STATE. `cloned` · `restored` · `already attached` are three different facts
  *  about where a group's data now is, and "done" is not one of them. On failure the server has already
  *  composed the fix — a 502 whose detail carries the public key and the "say `done` when added"
@@ -24,6 +32,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { ApiError, presentError } from "../surfaces/apiClient";
+import { redactSecrets } from "../surfaces/redactSecrets";
+import { checkRepo } from "../surfaces/repoRef";
 import {
   attachSharedWorkspace, ensureDeployKey, listSharedMemberships, readDeployKey, swapWorkspace,
   type DeployKey, type Membership, type SwapResult,
@@ -80,6 +90,7 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
   const [targets, setTargets] = useState<AttachTarget[]>([{ value: DESK_TARGET, label: "Personal" }]);
   const [target, setTarget] = useState<string>(p.workspaceId ?? DESK_TARGET);
   const [repo, setRepo] = useState("");
+  const [repoIssue, setRepoIssue] = useState<string | null>(null);
   const [ref, setRef] = useState("main");
   const [key, setKey] = useState<DeployKey | null>(null);
   const [keyNote, setKeyNote] = useState<string | null>(null);
@@ -126,7 +137,11 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
   }, [p.onClose]);
 
   const fail = useCallback((e: unknown) => {
-    setError({ headline: presentError(e).headline, verbatim: e instanceof ApiError ? e.detail : "" });
+    // `verbatim` exists to carry the deploy-key answer through unparaphrased; that same channel is
+    // how a credential would reach the screen, so it is scrubbed. The public key survives — it is not
+    // a secret and the scrubber leaves git object ids and key material alone (see redactSecrets).
+    setError({ headline: presentError(e).headline,
+               verbatim: e instanceof ApiError ? redactSecrets(e.detail) : "" });
   }, []);
 
   const makeKey = async () => {
@@ -139,12 +154,21 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
 
   const attach = async () => {
     if (busy || !repo.trim()) return;
+    // The value is checked HERE as well as on every keystroke, because a paste that never fires a
+    // change handler, an autofill, or a stale `repoIssue` must not be the thing standing between a
+    // credential and the wire.
+    const checked = checkRepo(repo);
+    if (!checked.ok) {
+      setRepoIssue(checked.sentence);
+      setToken("");
+      return;
+    }
     // P15: a one-off token is read once, handed to the call, and gone from this component before the
     // request is even in flight — it is never re-rendered, never re-sent and never logged.
     const oneOff = token.trim() || undefined;
     setToken(""); setTokenOpen(false);
     setBusy(true); setError(null);
-    const url = repo.trim();
+    const url = checked.url;          // the canonical form, not the raw keystrokes
     const branch = ref.trim() || "main";
     try {
       const state = target
@@ -171,8 +195,8 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
           </button>
         </div>
         <div style={{ ...ty.meta, lineHeight: 1.5, marginBottom: 12 }}>
-          Your workspace is already on GitHub. Point one of your workspaces at it — the tree that is
-          there now is parked, not destroyed, so this is reversible.
+          Point a workspace at a repository you have. The tree that is there now is parked, not
+          destroyed.
         </div>
 
         {error && (
@@ -204,7 +228,22 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
             <div style={{ marginBottom: 10 }}>
               <label htmlFor="attach-repo" style={labelS}>Repository</label>
               <input id="attach-repo" data-attach="repo" autoFocus value={repo} disabled={busy}
-                onChange={(e) => setRepo(e.target.value)} placeholder="git@github.com:acme/kg.git" style={fieldS} />
+                aria-invalid={repoIssue ? true : undefined}
+                aria-describedby={repoIssue ? "attach-repo-issue" : undefined}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setRepo(v);
+                  // A token is called out the moment it appears, before there is anything to submit.
+                  // Everything else is only judged once the person has typed enough to be judged —
+                  // shouting "not a repository" at `g` is noise that teaches people to ignore it.
+                  const c = checkRepo(v);
+                  setRepoIssue(!v.trim() ? null : c.ok ? null : c.kind === "token" ? c.sentence : null);
+                }}
+                placeholder="git@github.com:acme/kg.git" style={{ ...fieldS, borderColor: repoIssue ? "var(--danger)" : "var(--line)" }} />
+              {repoIssue && (
+                <div id="attach-repo-issue" data-attach="repo-issue" role="alert"
+                  style={{ ...ty.meta, color: "var(--danger)", marginTop: 5, lineHeight: 1.45 }}>{repoIssue}</div>
+              )}
             </div>
 
             <div style={{ marginBottom: 12 }}>
@@ -264,8 +303,8 @@ export function AttachRepo(p: { workspaceId?: string; onClose: () => void; onAtt
               </div>
             </div>
 
-            <button data-attach="submit" onClick={() => void attach()} disabled={busy || !repo.trim()}
-              style={{ ...btnS, background: "var(--accent)", color: "var(--on-accent)", border: "none", opacity: busy || !repo.trim() ? 0.5 : 1 }}>
+            <button data-attach="submit" onClick={() => void attach()} disabled={busy || !repo.trim() || !!repoIssue}
+              style={{ ...btnS, background: "var(--accent)", color: "var(--on-accent)", border: "none", opacity: busy || !repo.trim() || repoIssue ? 0.5 : 1 }}>
               {busy ? "Loading…" : "Attach"}
             </button>
           </>

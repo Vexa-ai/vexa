@@ -29,6 +29,7 @@ from control_plane.workspace_attach import (
 )
 from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
+from tests import gitserve
 
 
 class _FakeRuntime:
@@ -202,12 +203,12 @@ def test_a_workspace_id_can_never_traverse(tmp_path, bad):
 
 # ── the routes: who may do it ──────────────────────────────────────────────────────────────────────
 
-def test_route_attaches_for_a_contributor_and_refuses_a_viewer(tmp_path):
+def test_route_attaches_for_a_contributor_and_refuses_a_viewer(tmp_path, monkeypatch):
     idx = m.InMemoryMembershipIndex()
     _shared_ws(tmp_path, "grp-r1", owner="u_owner")
     m.grant_membership(tmp_path, "grp-r1", "u_writer", "contributor", index=idx, added_by="u_owner", commit_fn=m.policy_commit)
     m.grant_membership(tmp_path, "grp-r1", "u_reader", "viewer", index=idx, added_by="u_owner", commit_fn=m.policy_commit)
-    repo = _existing_repo(tmp_path)
+    repo = gitserve.serve(tmp_path, gitserve.bare_repo(tmp_path, "kg"), monkeypatch)
     c = _client(tmp_path, idx)
 
     refused = c.post("/api/workspace/shared/grp-r1/attach", json={"repo": repo},
@@ -227,10 +228,10 @@ def test_route_attaches_for_a_contributor_and_refuses_a_viewer(tmp_path):
     assert (tmp_path / "grp-r1" / "README.md").exists()
 
 
-def test_route_attached_view_states_the_home_and_the_credential_kind_only(tmp_path):
+def test_route_attached_view_states_the_home_and_the_credential_kind_only(tmp_path, monkeypatch):
     idx = m.InMemoryMembershipIndex()
     _shared_ws(tmp_path, "grp-r2", owner="u_owner")
-    repo = _existing_repo(tmp_path)
+    repo = gitserve.serve(tmp_path, gitserve.bare_repo(tmp_path, "kg"), monkeypatch)
     c = _client(tmp_path, idx)
     c.post("/api/workspace/shared/grp-r2/attach", json={"repo": repo}, headers={"X-User-Id": "u_owner"})
 
@@ -240,30 +241,33 @@ def test_route_attached_view_states_the_home_and_the_credential_kind_only(tmp_pa
     assert view["workspace_id"] == "grp-r2"
     assert view["slots"][view["active"]]["repo"] == repo
     assert view["home"]["remote"] == "origin"
-    assert view["home"]["url"].rstrip(".git") == repo.rstrip(".git")
+    # the DISPLAY url drops any userinfo (workspace_publish._display_url treats it as a
+    # credential), so compare what identifies the repository: host and path.
+    assert view["home"]["url"].endswith("/acme/kg")
     assert view["credential"].startswith("origin ")
     assert "ghp_" not in got.text and "PRIVATE KEY" not in got.text
 
     assert c.get("/api/workspace/shared/grp-r2/attached", headers={"X-User-Id": "u_nobody"}).status_code == 403
 
 
-def test_push_pull_and_status_address_a_shared_workspace_by_id(tmp_path):
+def test_push_pull_and_status_address_a_shared_workspace_by_id(tmp_path, monkeypatch):
     """The sync routes already took a ``slug``; these prove it resolves a GROUP workspace, and that a
     pull — which rewrites the tree — is refused for a viewer even though a read of the same workspace is not."""
     idx = m.InMemoryMembershipIndex()
     _shared_ws(tmp_path, "grp-r3", owner="u_owner")
     m.grant_membership(tmp_path, "grp-r3", "u_reader", "viewer", index=idx, added_by="u_owner", commit_fn=m.policy_commit)
-    repo = _existing_repo(tmp_path, "syncme")
+    bare = gitserve.bare_repo(tmp_path, "syncme")
+    repo = gitserve.serve(tmp_path, bare, monkeypatch, repo="syncme")
     c = _client(tmp_path, idx)
     c.post("/api/workspace/shared/grp-r3/attach", json={"repo": repo}, headers={"X-User-Id": "u_owner"})
 
     st = c.get("/api/workspace/git-remote-status?slug=grp-r3", headers={"X-User-Id": "u_owner"})
     assert st.status_code == 200 and st.json()["has_home"]
-    assert st.json()["url"].rstrip(".git") == repo.rstrip(".git")
+    assert st.json()["url"].endswith("/acme/syncme")   # display url drops userinfo + .git
 
     # a new commit lands on the home; the group pulls it
     other = tmp_path / "collab"
-    subprocess.run(["git", "clone", "-q", repo, str(other)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
     _git(other, "config", "user.email", "t@t"); _git(other, "config", "user.name", "t")
     (other / "NEW.md").write_text("added elsewhere\n")
     _git(other, "add", "-A"); _git(other, "commit", "-q", "-m", "elsewhere"); _git(other, "push", "-q", "origin", "main")
@@ -282,7 +286,7 @@ def test_push_pull_and_status_address_a_shared_workspace_by_id(tmp_path):
     pushed = c.post("/api/workspace/push", json={"slug": "grp-r3", "token": "x"},
                     headers={"X-User-Id": "u_owner"})
     assert pushed.status_code == 200, pushed.text
-    assert _git(tmp_path / "syncme.git", "log", "--oneline", "-1").endswith("ours")
+    assert _git(bare, "log", "--oneline", "-1").endswith("ours")
 
 
 def test_deploy_key_route_hands_out_the_public_half_only(tmp_path):
@@ -327,12 +331,12 @@ def test_a_private_repo_with_no_credential_answers_with_the_key_to_add(tmp_path,
     assert (tmp_path / "grp-r5" / "CLAUDE.md").exists(), "the group's tree must be untouched by a failed attach"
 
 
-def test_the_desk_lane_answers_the_same_way(tmp_path):
+def test_the_desk_lane_answers_the_same_way(tmp_path, monkeypatch):
     """The person's OWN workspace loads a repo through ``/api/workspace/swap``, and it must resolve the
     same credential — otherwise an ssh:// repo works for a group and silently does not for a desk, and
     the MCP verb (which carries no token, ever) could only load public repos onto a desk."""
     c = _client(tmp_path)
-    repo = _existing_repo(tmp_path, "mine")
+    repo = gitserve.serve(tmp_path, gitserve.bare_repo(tmp_path, "mine"), monkeypatch, repo="mine")
 
     ok = c.post("/api/workspace/swap", json={"repo": repo, "ref": "main"}, headers={"X-User-Id": "u_solo"})
     assert ok.status_code == 200, ok.text

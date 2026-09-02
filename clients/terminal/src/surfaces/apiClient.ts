@@ -12,6 +12,7 @@
  *  — the authoritative cross-caller API-usage signal is the gateway's per-request logs. */
 import { track, endpointLabel } from "@/app/analytics";
 import { noteAuthFailure } from "@/app/session";
+import { redactSecrets } from "./redactSecrets";
 
 export class ApiError extends Error {
   /** `detail` is the FLATTENED operator string (what goes in the message / the console). `body` is
@@ -59,7 +60,12 @@ function isProse(detail: string): boolean {
  *  observable channel keeps the full string — presentation never mutates the error). */
 export function presentError(e: unknown): PresentedError {
   if (e instanceof ApiError) {
-    const detail = e.message;
+    // P15 AT THE PRESENTER. `detail` is rendered by every surface AND echoed to the console, and on
+    // 2026-09-02 it carried a GitHub PAT (git's "repository '<the token>' does not exist", from a
+    // token pasted into the attach dialog's repository field). The server scrubs its own text now;
+    // this is the second line, because a client cannot know which backend, proxy or fetch failure
+    // will hand it a string containing a secret.
+    const detail = redactSecrets(e.message);
     console.warn("api failure", detail);
     if (e.status === 0) return { headline: NETWORK_HEADLINE, detail };
     if (e.status === 502 || e.status === 504) return { headline: "The Vexa server can't reach a backend service right now.", detail };
@@ -72,16 +78,16 @@ export function presentError(e: unknown): PresentedError {
     if (e.status === 429) return { headline: "Rate limit hit — try again in a moment.", detail };
     // Remaining 4xx/5xx: a prose `detail` is the backend's own user-facing reason — pass it
     // through VERBATIM (e.g. a typed transcription 503). A payload-shaped detail stays operator-only.
-    if (isProse(e.detail)) return { headline: e.detail.trim(), detail };
+    if (isProse(e.detail)) return { headline: redactSecrets(e.detail).trim(), detail };
     return { headline: `The request failed (${e.status}).`, detail };
   }
   if (e instanceof Error) {
-    const detail = e.message || String(e);
+    const detail = redactSecrets(e.message || String(e));
     console.warn("api failure", detail);
     if (NETWORK_MESSAGE.test(detail)) return { headline: NETWORK_HEADLINE, detail };
     return isProse(detail) ? { headline: detail.trim(), detail } : { headline: GENERIC_HEADLINE, detail };
   }
-  const detail = String(e);
+  const detail = redactSecrets(e);
   console.warn("api failure", detail);
   return { headline: GENERIC_HEADLINE, detail };
 }

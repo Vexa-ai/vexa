@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from control_plane.api import create_app
+from tests import gitserve
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
 
@@ -1057,12 +1058,11 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
 
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
-    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
-    (origin / "MARK").write_text("CUSTOM\n"); (origin / "CLAUDE.md").write_text("CUSTOM ROOT\n")
-    run("add", "-A"); run("commit", "-q", "-m", "x")
+    # A bare filesystem path is NO LONGER a repository reference (control_plane.repo_ref) — that is
+    # what let a caller name another user's directory in the shared store. The same local repo is
+    # served over git's real ssh transport instead, so the URL shape is one a person could type.
+    bare = gitserve.bare_repo(tmp_path, "custom", **{"MARK": "CUSTOM\n", "CLAUDE.md": "CUSTOM ROOT\n"})
+    origin_url = gitserve.serve(tmp_path, bare, monkeypatch, repo="custom")
 
     workspaces = tmp_path / "ws"
     c = TestClient(create_app(
@@ -1072,7 +1072,7 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     h = {"X-User-Id": "u_jane"}
     c.post("/api/workspace/init", headers=h)                      # seed the active workspace first
 
-    r = c.post("/api/workspace/swap", headers=h, json={"repo": str(origin)})
+    r = c.post("/api/workspace/swap", headers=h, json={"repo": origin_url})
     assert r.status_code == 200
     body = r.json()
     assert body["swapped"] is True and body["cloned"] is True and body["parked"] == "seed"
@@ -1096,10 +1096,10 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
 
     seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
-    origin = tmp_path / "origin"; origin.mkdir()
-    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
-    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
-    (origin / "CLAUDE.md").write_text("SHARED ROOT\n"); run("add", "-A"); run("commit", "-q", "-m", "x")
+    # served over ssh rather than named by path — a bare path is no longer a repository (repo_ref)
+    origin_url = gitserve.serve(
+        tmp_path, gitserve.bare_repo(tmp_path, "extra", **{"CLAUDE.md": "SHARED ROOT\n"}),
+        monkeypatch, repo="extra")
 
     workspaces = tmp_path / "ws"
     c = TestClient(create_app(
@@ -1109,7 +1109,7 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
     h = {"X-User-Id": "u_jane"}
     c.post("/api/workspace/init", headers=h)
 
-    r = c.post("/api/workspace/activate", headers=h, json={"repo": str(origin)})
+    r = c.post("/api/workspace/activate", headers=h, json={"repo": origin_url})
     assert r.status_code == 200
     body = r.json()
     assert body["changed"] is True and body["cloned"] is True

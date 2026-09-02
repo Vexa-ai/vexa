@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.git_redaction import redact
+from control_plane.repo_ref import RepoRefError, assert_not_credential
 from shared.gitenv import scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 
@@ -165,11 +167,9 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
     dest.parent.mkdir(parents=True, exist_ok=True)
     # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
     # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud.
+    assert_not_credential(repo_url)   # never hand a secret to a subprocess (see repo_ref)
     env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
     url = _authenticated_url(repo_url, token)
-
-    def redact(text: str) -> str:
-        return text.replace(token, "***") if token else text
 
     try:
         subprocess.run(["git", "clone", "--quiet", url, str(dest)],
@@ -181,7 +181,10 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
             subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ref],
                            check=True, capture_output=True, text=True, env=env)
     except subprocess.CalledProcessError as exc:
-        raise CloneError(redact((exc.stderr or str(exc)).strip())) from None
+        # SHAPE-BASED redaction, not "replace the token we were given": the credential that leaked on
+        # 2026-09-02 arrived as the repo ARGUMENT, so `token` was None and the old replace() was a no-op
+        # over a message containing the secret. See git_redaction.
+        raise CloneError(redact((exc.stderr or str(exc)).strip(), token)) from None
 
 
 def _safe_subject_dir(root: Path, subject: str) -> Path:
@@ -319,6 +322,7 @@ def swap_workspace(
     ``slug`` targets a parked slot DIRECTLY (overriding the repo→slug derivation) — the way to swap back
     to a slot that carries no repo URL (the seed, or a ``SEED_BACKUP_SLOT`` backup). A parked tree is
     restored (no re-clone); an unknown slug with no repo to clone raises ``KeyError``."""
+    assert_not_credential(repo_url)   # a secret must never reach git (repo_ref)
     rootp = Path(root)
     active_dir = _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
@@ -660,6 +664,7 @@ def activate_workspace(
     private baseline is always active and needs no activation — activating its slug is a no-op.
 
     A clone failure raises ``CloneError`` (token-redacted, P15) WITHOUT mutating the active set."""
+    assert_not_credential(repo_url)   # a secret must never reach git (repo_ref)
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
@@ -1032,6 +1037,7 @@ def attach_repo_at(
 
     ``carry`` names a directory to copy from the parked tree into the new one before it goes live —
     the shared lane passes ``policy/`` so a repo attach cannot delete the member list."""
+    assert_not_credential(repo_url)   # a secret must never reach git (repo_ref)
     active_dir = Path(active_dir)
     store = Path(store)
     state = _plain_state(store)

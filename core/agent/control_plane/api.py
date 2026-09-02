@@ -75,6 +75,8 @@ from control_plane import git_credentials as git_creds
 from control_plane import dispatch as dispatch_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import workspace_credentials as wcreds
+from control_plane import repo_ref
+from shared.git_redaction import redact as redact_secrets
 from control_plane import global_layer
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
@@ -1962,6 +1964,24 @@ def create_app(
             return membership_mod._ws_dir(wsr.root, target)
         raise HTTPException(status_code=404, detail="workspace not found")
 
+    def _repo(raw: "Optional[str]") -> "Optional[str]":
+        """The value a PERSON typed into "Repository", normalized — or a 422 they can act on.
+
+        It runs before a subprocess exists, which is the whole point: on 2026-09-02 a PAT pasted into
+        that field was handed straight to ``git clone``, and git's "repository '<the token>' does not
+        exist" put the secret in the error card, the response body and the browser console. A
+        validator that runs after the clone has not protected anything.
+
+        422 rather than 400 because the field is well-formed JSON and semantically wrong — and the
+        detail is the sentence itself, which the terminal's presenter shows verbatim."""
+        try:
+            return repo_ref.normalize(raw)
+        except repo_ref.RepoRefError as exc:
+            # LOG THE KIND, NEVER THE VALUE. "someone pasted a token" is the operational signal; the
+            # token is the thing we are refusing to have anywhere at all.
+            logger.warning("repository field refused (kind=%s)", exc.kind)
+            raise HTTPException(status_code=422, detail=exc.sentence)
+
     def _require_shared_write(subject: str, slug: Optional[str]) -> None:
         """A no-op for the caller's OWN workspaces; for a SHARED one, refuse anyone below contributor.
         (``_manage_dir`` resolves a workspace a viewer may READ — that is the right gate for status and
@@ -2765,13 +2785,16 @@ def create_app(
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
+        repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=repo or "", subject=subject,
                                       explicit_token=body.token) as cred:
-                result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                result = swap_workspace(wsr.root, subject, repo, body.ref or "main",
                                         slug=body.slug or None, fresh=body.fresh, token=cred.token,
                                         clone=_clone_fn(cred))
+        except repo_ref.RepoRefError as exc:
+            raise HTTPException(status_code=422, detail=exc.sentence)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
@@ -2779,7 +2802,7 @@ def create_app(
         except CloneError as exc:
             # Already token-redacted (P15). A private repo we hold no credential for lands here — and
             # the answer is the workspace's public key to add, not a prompt for a secret.
-            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
+            raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, None, repo or "")
         return {
             "subject": result.subject,
             "active": result.active_slug,
@@ -2827,19 +2850,22 @@ def create_app(
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
         subject = subject_of(request)
+        repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=repo or "", subject=subject,
                                       explicit_token=body.token) as cred:
-                result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                result = activate_workspace(wsr.root, subject, repo, body.ref or "main",
                                             slug=body.slug or None, token=cred.token,
                                             clone=_clone_fn(cred))
+        except repo_ref.RepoRefError as exc:
+            raise HTTPException(status_code=422, detail=exc.sentence)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
-            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
+            raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, None, repo or "")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
                 "cloned": result.cloned, "nested": result.nested}
 
@@ -2967,7 +2993,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RemoteSyncError as exc:
-            raise _credential_refusal(str(exc), subject, body.slug, home.url or "")  # token-redacted (P15)
+            raise _credential_refusal(redact_secrets(exc), subject, body.slug, home.url or "")  # P15
         return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha}
 
     @app.post("/api/workspace/pull")
@@ -2989,7 +3015,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RemoteSyncError as exc:
-            raise _credential_refusal(str(exc), subject, body.slug, home.url or "")  # token-redacted (P15)
+            raise _credential_refusal(redact_secrets(exc), subject, body.slug, home.url or "")  # P15
         return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha,
                 "updated": r.updated, "behind_before": r.behind_before}
 
@@ -3252,7 +3278,7 @@ def create_app(
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
         except MembershipError as exc:
             raise _member_error(exc)
-        repo = (body.repo or "").strip() or None
+        repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(workspace_id=workspace_id)
         try:
             with wcreds.for_workspace(wsr.root, key=key, repo_url=repo or "", subject=subject,
@@ -3260,12 +3286,14 @@ def create_app(
                 clone = _clone_fn(cred)
                 result = attach_shared_workspace(wsr.root, workspace_id, repo, body.ref or "main",
                                                  slug=body.slug or None, token=cred.token, clone=clone)
+        except repo_ref.RepoRefError as exc:
+            raise HTTPException(status_code=422, detail=exc.sentence)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid workspace id")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:   # message already token-redacted (P15)
-            raise _credential_refusal(f"git clone failed: {exc}", subject, workspace_id, repo or "")
+            raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, workspace_id, repo or "")
         return {
             "workspace_id": workspace_id, "active": result.active_slug, "repo": result.repo,
             "ref": result.ref, "attached": result.swapped, "cloned": result.cloned,
