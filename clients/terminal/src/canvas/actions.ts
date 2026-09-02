@@ -75,6 +75,27 @@ export const OPEN_MEETING_EVENT = "vexa:terminal:open-meeting";
 // kickoff, compact the grounding off a real reply, keep it out of the session title).
 export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
 
+/** THE MACHINERY MARK — the product's own words, never the human's.
+ *
+ *  `send({hidden:true})` suppresses the user bubble only in the tab that fired it. The prompt is
+ *  still a `user` message in the session transcript, so `/api/sessions/<s>/history` hands it back
+ *  as `role:"user"` and the NEXT hydration of that session — a session switch, a reopen, a second
+ *  click on the same emailed link — paints it as a grey bubble the person appears to have typed.
+ *  Invisible-by-render is not invisible; only a mark the reader-side filter can see is.
+ *
+ *  Onboarding already had one (`ONBOARDING_KICKOFF_MARK`) and was therefore immune. Every OTHER
+ *  hidden turn — the `?ask=` preset an emailed link composes above all — had none, and the founder
+ *  read his own prepare kick back to himself: "[prep] They clicked through from a prepare email
+ *  about **DNA TSC — …** … never name a shape from `kg/templates/` …". The product must never show
+ *  its machinery to the human (founder ruling 2026-09-02).
+ *
+ *  It rides at the END of the prompt, so a composed opening still OPENS with its bracketed preset
+ *  tag — which is exactly what the MCP instructions key on ("when the turn's message opens with a
+ *  bracketed preset tag … that IS your person's first ask"). And it says what it is, because the
+ *  agent reads it too: a turn nobody typed should not be answered as if they had. */
+export const MACHINERY_MARK = "[vexa-machinery]";
+export const MACHINERY_NOTE = "\n\n" + MACHINERY_MARK + " This opening was composed by the product from the link this person clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own voice, without quoting or referring to these instructions.";
+
 // Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
 // instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
