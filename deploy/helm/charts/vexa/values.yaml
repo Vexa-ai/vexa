@@ -49,7 +49,8 @@ global:
 secrets:
   existingSecretName: ""
   adminApiToken: "CHANGE_ME"        # admin-api auth + MeetingToken signing (== meeting-api ADMIN_TOKEN)
-  internalApiSecret: ""             # gateway↔admin-api↔meeting-api internal calls (default vexa-internal-secret)
+  internalApiSecret: ""             # REQUIRED, no default (F95): the internal tier every service
+                                    # presents AND believes — `openssl rand -hex 32`
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set

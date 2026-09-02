@@ -64,6 +64,13 @@
           "items": { "$ref": "#/$defs/Target" },
           "uniqueItems": true,
           "description": "Which deploy surfaces plumb this key (default: all three). An EMPTY array = an in-code dial deliberately not exposed by any deploy surface (still declared, so the undeclared-read scan stays tight)."
+        },
+        "forbidden_values": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "Values this key must NEVER hold in a running deploy — the published placeholder literals a stock compose/helm/lite once supplied. The boot preflight raises ConfigError on a match, so a deployment nobody configured refuses to start instead of coming up green holding a secret every reader of this repository knows (F95: INTERNAL_API_SECRET shipped as `vexa-internal-secret`, the exact value the internal tier compared against). Compared on the stripped value; the refusal names the KEY, never the value."
         }
       },
       "allOf": [

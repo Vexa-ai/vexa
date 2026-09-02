@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import urllib.request
 from typing import Optional
 
@@ -14,6 +15,20 @@ AGENT_API = os.environ.get("VEXA_FLOWS_AGENT_API_URL", "http://localhost:18100")
 ADMIN_API = os.environ.get("VEXA_FLOWS_ADMIN_API_URL", "http://localhost:18057")
 ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")
 FIXTURE_TRANSCRIPT = os.environ.get("VEXA_FLOWS_FIXTURE_TRANSCRIPT", "") == "1"   # declared double
+
+
+#: The ONE name for the internal-tier secret — the compose/helm secret key, the name admin-api,
+#: gateway, meeting-api and agent-api read. Flows had a THIRD spelling of its own, which is exactly
+#: how the published literal `vexa-internal-secret` came to sit on this file's refusal list and on
+#: nobody else's (F95): one secret with three names has three refusal lists and they drift.
+INTERNAL_SECRET_ENV = "INTERNAL_API_SECRET"
+#: Read when the canonical name is absent, with a deprecation warning. Removed next release.
+INTERNAL_SECRET_ENV_DEPRECATED = ("VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET")
+#: Placeholder literals a stock deploy surface once supplied. Every one of these is PUBLISHED in the
+#: OSS repository, so a deployment holding one is not configured — it is open, wearing a configured
+#: face. Same list as the services' config.v1 `forbidden_values`.
+INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme",
+                                "change-me", "CHANGE-ME", "default", "secret")
 
 
 def require_internal_secret() -> str:
@@ -27,18 +42,33 @@ def require_internal_secret() -> str:
     Deliberately the SAME REFUSAL as `flows_api._require_api_key`, down to the wording: a weak
     default makes an unconfigured deployment look configured and fails no test, so there is no
     default and no fallback. The value lives in a mode-600 file under `~/.storm/`, exported by the
-    lane's start script as `VEXA_INTERNAL_SECRET`; it never appears in this repository, in a log,
-    or in an error message — including the ones below, which name the VARIABLE and never the value.
+    lane's start script; it never appears in this repository, in a log, or in an error message —
+    including the ones below, which name the VARIABLE and never the value.
+
+    TWO things changed with F95. The variable is now `INTERNAL_API_SECRET`, the one name every other
+    service uses (the old spellings still work for one release and say so); and the placeholder list
+    carries the literals the deploy surfaces actually shipped, not four generic ones — the refusal
+    that missed `vexa-internal-secret` was a refusal list written from imagination rather than from
+    the compose file it was defending against.
     """
-    key = (os.environ.get("VEXA_INTERNAL_SECRET") or "").strip()
+    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
+    if not key:
+        for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
+            key = (os.environ.get(legacy) or "").strip()
+            if key:
+                print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
+                      f"one name the whole internal tier uses. Honoured this release, removed next.",
+                      file=sys.stderr)
+                break
     if not key:
         raise RuntimeError(
-            "VEXA_INTERNAL_SECRET is unset — flows refuses to start rather than run with no "
+            f"{INTERNAL_SECRET_ENV} is unset — flows refuses to start rather than run with no "
             "internal-tier identity. Mint one into a mode-600 file (the ~/.storm/dburl pattern) "
             "and export it from the lane's start script; never put the value in the repo.")
-    if key in ("changeme", "change-me", "default", "secret"):
+    if key in INTERNAL_SECRET_PLACEHOLDERS:
         raise RuntimeError(
-            f"VEXA_INTERNAL_SECRET is the placeholder {key!r} — refusing to start.")
+            f"{INTERNAL_SECRET_ENV} is the placeholder {key!r} — refusing to start. That literal is "
+            "published in this repository, so it authenticates nobody and everybody.")
     return key
 
 # Where a person's own terminal lives. Same env name the control MCP already reads, and the same

@@ -209,6 +209,22 @@ def test_non_member_is_refused_shared_tree_and_file(tmp_path):
     assert file.status_code == 403          # ...nor read its files by slug
 
 
+def test_non_member_is_refused_a_shared_WRITE_by_slug(tmp_path):
+    """F96 — the write side, stated where the read side already is.
+
+    The rig's `workspace_write` bypassed this entirely: it wrote by `docker exec` into the volume,
+    and a volume has no membership. Now that it forwards here on the caller's identity, THIS is the
+    check that stops a stranger overwriting a shared workspace's files, so it is asserted rather
+    than assumed."""
+    _grant(tmp_path, "wsA", owner="owner1")          # stranger is NOT a member
+    client = _client(tmp_path, index=m.InMemoryMembershipIndex())
+
+    r = client.put("/api/workspace/file", headers=_h("stranger"),
+                   json={"path": "README.md", "content": "mine now", "slug": "wsA"})
+
+    assert r.status_code == 403
+
+
 # ── the full share flow: create shared ws (bootstrap) → mint → accept → appears for the new member ──
 def test_share_flow_create_mint_accept(tmp_path, monkeypatch):
     # a minimal seed template so create_shared_workspace_dir can seed the new ws

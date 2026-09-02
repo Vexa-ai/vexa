@@ -763,12 +763,16 @@ def _flows_key() -> str:
 
 
 def _internal_secret() -> str:
-    key = (os.environ.get("VEXA_INTERNAL_SECRET")
+    # ONE name (F95): INTERNAL_API_SECRET, the compose/helm secret key. The two prefixed spellings
+    # are read after it so a shell mid-upgrade still works; this file papering over the drift in one
+    # place is what let it survive everywhere else.
+    key = (os.environ.get("INTERNAL_API_SECRET")
+           or os.environ.get("VEXA_INTERNAL_SECRET")
            or os.environ.get("VEXA_INTERNAL_API_SECRET") or "").strip()
     if key:
         return key
     f = pathlib.Path.home() / ".storm/internal-secret"
     if f.is_file():
         return f.read_text().strip()
-    raise DoorRefused("no internal secret: set VEXA_INTERNAL_SECRET or place "
+    raise DoorRefused("no internal secret: set INTERNAL_API_SECRET or place "
                       "~/.storm/internal-secret (mode 600)")

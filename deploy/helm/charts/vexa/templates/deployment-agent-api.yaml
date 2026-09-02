@@ -80,6 +80,15 @@ spec:
               value: {{ .Values.agentApi.globalAdminSubjects | default "" | quote }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
+            # The internal tier agent-api both presents (Lane M) and BELIEVES (_internal_caller,
+            # meeting-room gate 0). The chart never set it here at all, so every helm deploy ran
+            # agent-api with an empty secret; it is required-explicit now and the boot refuses
+            # without it (F95).
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
             - name: VEXA_DISPATCH_SIGNING_KEY
               valueFrom:
                 secretKeyRef:

@@ -6,14 +6,16 @@ never land in a log line, a repr, or a golden. The control plane reads these onc
 """
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """The agent-api boot config. Every field arrives by ``VEXA_*`` env (12-factor)."""
 
-    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore")
+    # ``populate_by_name`` so a field carrying an explicit ``validation_alias`` (below) is still
+    # constructible by its FIELD name — every test builds Settings that way.
+    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore", populate_by_name=True)
 
     # ── Where this service lives ─────────────────────────────────────────────
     agent_api_port: int = Field(default=8100, ge=1, le=65535)
@@ -121,8 +123,21 @@ class Settings(BaseSettings):
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
-    # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
-    internal_api_secret: SecretStr = SecretStr("")
+    # THE internal-tier shared secret. agent-api both PRESENTS it (Lane M: the admin-api
+    # membership-index edge) and BELIEVES it — ``_internal_caller`` compares this value, and gate 0
+    # of the meeting room is by that code's own statement the trust boundary on who is in the room.
+    #
+    # ONE NAME, and the alias says which. The secret had three spellings across the estate
+    # (``INTERNAL_API_SECRET`` in compose/helm and in admin-api/gateway/meeting-api,
+    # ``VEXA_INTERNAL_API_SECRET`` here and in the terminal, ``VEXA_INTERNAL_SECRET`` in flows), and
+    # that drift is precisely what let the published placeholder ``vexa-internal-secret`` sit on one
+    # refusal list and not the others (F95). The canonical name is the compose/helm secret KEY —
+    # ``INTERNAL_API_SECRET`` — and it wins; the prefixed spelling is read only when the canonical
+    # one is absent, and ``_build_production_app`` logs a deprecation warning when it is.
+    internal_api_secret: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("INTERNAL_API_SECRET", "VEXA_INTERNAL_API_SECRET"),
+    )
     # admin-api's ADMIN token (``X-Admin-API-Key`` / its ``ADMIN_API_TOKEN``). Needed ONLY to resolve
     # a meeting participant's ADDRESS to a subject for the post-meeting room, because the one route
     # that answers that question — ``GET /admin/users/email/{email}`` — sits behind the admin token

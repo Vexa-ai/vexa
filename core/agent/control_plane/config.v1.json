@@ -314,12 +314,40 @@
       ]
     },
     {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "THE internal-tier shared secret — one name across every service (the compose/helm secret key). agent-api both PRESENTS it (Lane M: X-Internal-Secret on the admin-api membership-index edge) and BELIEVES it: `_internal_caller` compares this value, and gate 0 of the meeting room is by the code's own statement the trust boundary on who is in the room. Unset it used to mean `_internal_caller` simply returned False; the boot now refuses instead, because a half-configured internal tier is not a degrade an operator can see. Read through an alias so the deprecated VEXA_-prefixed spelling still works for one release (shared/config.py).",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
-      "default": "(unset)",
-      "description": "Lane M: X-Internal-Secret for the admin-api membership-index internal edge (same value the gateway uses)",
-      "targets": [
-        "compose"
+      "default": "(unset — DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
+      "secret": true,
+      "description": "DEPRECATED spelling of INTERNAL_API_SECRET. One secret had three names (INTERNAL_API_SECRET in compose/helm and in admin-api/gateway/meeting-api, VEXA_INTERNAL_API_SECRET here and in the terminal, VEXA_INTERNAL_SECRET in flows) and the drift is what let a placeholder survive on one spelling's refusal list and not the others (F95). No deploy surface sets it on agent-api any more; it is still READ so an operator mid-upgrade is warned rather than 401ed. Delete once the terminal reads the canonical name too.",
+      "targets": [],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
       ]
     },
     {
