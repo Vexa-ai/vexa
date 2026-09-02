@@ -550,10 +550,14 @@ services:
         # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
         NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
         # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/app/mode.ts).
-        # "meetings" = meetings-only terminal: only the meetings list + meeting/canvas tabs + the
-        # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
-        # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
-        # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
+        # "meetings" = meetings-only terminal; "minutes" = the minutes terminal; empty = the full
+        # default. WIRED, not commented out (F67): while this line was a comment the ONLY way to
+        # build a non-default variant was a direct `docker build --build-arg`, so `docker compose
+        # build terminal` silently produced the default one — which is exactly what shipped under a
+        # `-minutes` tag on 2026-09-02. Set TERMINAL_MODE in .env (or in the environment) and
+        # rebuild; the resulting image carries `ai.vexa.terminal.mode`, and the swap guard reads
+        # that label rather than trusting the tag.
+        NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-}
         # Bot display name baked into the bundle. Leave commented: the terminal then omits bot_name and
         # meeting-api's DEFAULT_BOT_NAME (above) names the bot at runtime, renameable with a restart.
         # Uncomment + REBUILD only to pin a name into the image, which then wins over DEFAULT_BOT_NAME:

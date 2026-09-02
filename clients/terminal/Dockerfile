@@ -65,6 +65,18 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOST=0.0.0.0 \
     NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
+# F67 — THE VARIANT, AS A FACT ON THE IMAGE. The minutes terminal and the default terminal come out
+# of this one Dockerfile and differ only by the build arg above. Both build, both pass the suite,
+# both start, and the tag is whatever the builder typed — so on 2026-09-02 a `docker compose build`
+# produced the DEFAULT variant under a `-minutes` name, twice, and it was caught only by grepping
+# three UI strings out of the client chunks. `Desk` and `wsLinks` were present in both, so a smaller
+# check would have passed.
+#
+# A LABEL rather than only the ENV: it survives `docker save`/`load` and a registry round-trip, it is
+# readable without starting the container, and it cannot be shadowed at `docker run -e` time the way
+# an env var can. "default" is spelled out because an empty string reads as "nobody set this", and
+# the swap guard has to tell the default variant from a broken read.
+LABEL ai.vexa.terminal.mode="${NEXT_PUBLIC_TERMINAL_MODE:-default}"
 WORKDIR /app
 COPY package.json package-lock.json ./
 # node_modules from the RUNTIME_DEPS-selected stage (prod = pruned + typescript; dev = full tree).

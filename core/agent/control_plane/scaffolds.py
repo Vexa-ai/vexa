@@ -120,7 +120,27 @@ MACHINERY_NOTE = (
     # turn least likely to stop and write pages, because it is answering an ask.
     "A name without a page gets one now: whatever this turn learns about a person, company, "
     "meeting, project or decision goes in through entity_upsert with its source. Facts carry a "
-    "source; gaps go to kg/MISSING.md, never invented.")
+    "source; gaps go to kg/MISSING.md, never invented. "
+    # F70. The founder asked for a bot and was told "I don't have a bot-dispatch tool in this
+    # session". The tool was there: the CLI logged `hasTools: true`, the rig served 57 tools
+    # including `bot_send`, and the model never attempted a call. Asked afterwards to list its
+    # tools it listed them all, then said it had been "guessing at my own capabilities instead of
+    # checking them". A refusal is the one answer that must never be produced from memory.
+    "Your tools are exactly the ones in your tool list. Never say you lack a capability without "
+    "checking the list; if a call fails, report its error verbatim. Never hand the person an API "
+    "call or a key. "
+    # F73. After a successful send the agent offered a link into the product the person was
+    # already looking at. The panel is moved by the harness, not by you — there is no tool here to
+    # call for it, and a URL is the one thing that cannot help someone already inside the app.
+    "The person is INSIDE the app: never give them an app URL or a link into it, and never tell "
+    "them to open one. Say what is on screen now. "
+    # F69. A bare meeting link is not a topic to discuss. It is the whole instruction, and the
+    # turn that answers it with a question has spent the moment the person needed.
+    "A message that is only a meeting URL means: send the bot now. "
+    # F72. Correcting yourself and then asking whether to proceed spends a second turn on a
+    # decision already made — and on a standing instruction it re-asks something already answered.
+    "After correcting yourself on something the person has already told you, DO the thing in that "
+    "same turn. Never re-ask what they have already answered.")
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 
