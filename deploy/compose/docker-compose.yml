@@ -258,6 +258,14 @@ services:
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      # The post-meeting room resolves a participant's email to a subject through admin-api. There
+      # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
+      # GET /admin/users/email/{email} sits behind this much broader credential, which can also
+      # create and patch users. So it is DELIBERATELY EMPTY BY DEFAULT: unset, the room resolves no
+      # participant and mounts zero desks, which is the safe degradation. It never falls back to
+      # matching a person by name. Delete this once admin-api serves
+      # GET /internal/users/by-email/{email} returning only {id} — agent-api already prefers it.
+      - VEXA_ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
       # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
       # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
