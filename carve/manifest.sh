@@ -22,6 +22,11 @@ export CARVE_INCLUDE=(
   deploy/transcription
   clients/terminal
   clients/slim
+  # packages/transcript-rendering: shared transcript state library (published as
+  # @vexaai/transcript-rendering, dist/ tracked). core/meetings/modules/mixed-pipeline's
+  # eval-ui serves its dist at runtime and its test suite lstat()s the path — absent from
+  # the carve, `pnpm test` fails in vexa-core (v0.12.26 train, run 33667209852).
+  packages
   docs/docs
   package.json
   pnpm-workspace.yaml
