@@ -1987,6 +1987,41 @@ def reactions_list(status: str = "", token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
+def timeline(since: str = "", until: str = "", limit: int = 20, token: str = "") -> str:
+    """WHAT HAS HAPPENED TO YOU AND WHAT IS COMING — your own events, in order (PRD decision 31).
+
+    Invites that arrived, meetings scheduled and held, reports delivered, mail sent, replies
+    handled, and anything that failed — merged from the flows engine's own facts and receipts with
+    your meetings table, scoped to you as organizer or attendee. Every time is in YOUR zone, and
+    `now` is stated first so a relative answer ("this morning", "in an hour") has something to be
+    relative to.
+
+    since / until: epoch seconds or ISO-8601. Empty means 14 days back and 30 days forward, so the
+    answer covers both halves of the question — what just happened, and what is next.
+
+    Read-only. It never sends, schedules or cancels anything.\n\n    If you have not called whats_waiting() yet this session, call it first."""
+    uid = me()
+    q = urllib.parse.urlencode({k: v for k, v in
+                                {"subject": uid, "since": since, "until": until,
+                                 "limit": max(1, min(int(limit or 20), 200)),
+                                 "format": "text"}.items() if v != ""})
+    st, body = _http("GET", f"{FLOWS_API}/timeline?{q}", _fkey())
+    if st != 200 or not isinstance(body, dict):
+        return json.dumps({"error": "the timeline is not available", "status": st,
+                           "detail": str(body)[:300],
+                           "note": "the flows route answers this; every other tool is unaffected"})
+    # A THIN FORWARD, on purpose (PRD §3.3). The zone lookup and the rendering happen in the owning
+    # service, where the person's `.settings.json` is already read — not here, and not a second
+    # time in the dispatch preamble, which asks the same route for `format=preamble`. One renderer
+    # is why a chat and a machinery note cannot disagree about when a meeting was.
+    text = body.get("text")
+    if isinstance(text, str) and text.strip():
+        return text[:12000]
+    return _capped({"status": st, "result": body}, 12000)
+
+
+@mcp.tool()
+@_anon_guard
 def reaction_signal(reaction_id: str, verb: str, token: str = "") -> str:
     """Steer one reaction. Every signal is an audited row, never shell surgery on the table.
 
@@ -2129,7 +2164,7 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
 @mcp.tool()
 @_anon_guard
 def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str = "",
-                  token: str = "") -> str:
+                  dates: dict | None = None, token: str = "") -> str:
     """Record what you just learned about a person, company, meeting, project or decision.
 
     ONE call does the whole thing: it creates `kg/entities/<kind>/<slug>.md` with frontmatter if the
@@ -2151,13 +2186,19 @@ def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str
       own message. REQUIRED. A fact with no source is refused, not written — if you do not have one,
       the gap belongs in `kg/MISSING.md`, never on the page.
     - `slug` — a shared workspace, omitted means this person's own desk.
+    - `dates` — WHEN, for a meeting: `{"scheduled_at": ..., "held_at": ..., "report_delivered_at":
+      ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and
+      `report_delivered_at` the moment its write-up reached them. These are the fields the desk
+      README's `Now` section and `timeline` both read, so a meeting that ran and has no write-up
+      shows up as an open commitment without anyone writing a sentence about it. Any other key is
+      dropped. A call with only `dates` is legal and needs no facts.
     """
     uid = me()
     if isinstance(facts, str):
         facts = [facts]
     st, body = _http("POST", f"{AGENT_API}/api/workspace/entity", {"X-User-Id": uid},
                      {"kind": kind, "name": name, "facts": list(facts or []),
-                      "source": source, "slug": slug or ""})
+                      "source": source, "slug": slug or "", "dates": dates or {}})
     if st == 422:
         detail = (body or {}).get("detail") if isinstance(body, dict) else str(body)
         return json.dumps({"refused": detail,

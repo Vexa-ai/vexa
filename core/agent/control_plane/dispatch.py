@@ -520,6 +520,16 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env.pop("VEXA_MCP_URL", None)
             logger.exception("mcp delegation mint refused for subject=%s regime=%s — worker runs "
                              "WITHOUT the vexa MCP", subject, regime)
+    # Temporal awareness (PRD decision 31 §1): the worker builds its own `now / last / next` block
+    # from flows-api's read-only timeline route, so it needs that route's address and a key. Passed
+    # through from THIS process's environment rather than from settings, and only when it is there:
+    # a deployment that has minted no timeline key gets no block, which is the correct default —
+    # `VEXA_FLOWS_API_KEY` is the OPERATOR key (it submits and activates flows), and putting it in
+    # a worker container to read a list of times would widen its reach by one container per turn.
+    # Mint `VEXA_FLOWS_TIMELINE_KEY` instead; `flows_api._timeline_key` accepts only that route.
+    for _var in ("VEXA_FLOWS_API_URL", "VEXA_FLOWS_TIMELINE_KEY"):
+        if os.environ.get(_var):
+            env[_var] = os.environ[_var]
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:

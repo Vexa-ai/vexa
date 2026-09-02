@@ -467,6 +467,64 @@
       "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
       "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker writes it into its gitignored .claude/mcp.json as an Authorization header. Runtime-injected per dispatch, never a deploy surface",
       "targets": []
+    },
+    {
+      "key": "VEXA_OWNER",
+      "class": "defaulted",
+      "default": "(unset \u2014 derived per dispatch: the subject the dispatch acts for)",
+      "description": "the PERSON this dispatch acts for \u2014 the quota and credential-brokerage axis, and the subject the worker's timeline preamble is scoped to (PRD decision 31). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no timeline block)",
+      "description": "flows-api's base url, for the WORKER's read-only timeline route (GET /timeline?format=preamble). Unset \u21d2 the dispatch carries no temporal block and the turn behaves exactly as it did before decision 31",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_TIMELINE_KEY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no timeline block)",
+      "secret": true,
+      "description": "the READ-ONLY key that opens flows-api's GET /timeline and nothing else (flows_api._timeline_key). This is the one to set: VEXA_FLOWS_API_KEY is the OPERATOR key and would let every worker container submit and activate flows",
+      "targets": []
+    },
+    {
+      "key": "VEXA_FLOWS_API_KEY",
+      "class": "defaulted",
+      "default": "(unset)",
+      "secret": true,
+      "description": "flows-api's OPERATOR key. Read here only as a fallback credential for the timeline preamble; prefer VEXA_FLOWS_TIMELINE_KEY, which cannot configure the machine",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_CACHE_S",
+      "class": "defaulted",
+      "default": "60",
+      "description": "how long a subject's rendered timeline block is reused across dispatches \u2014 fresh enough that a meeting that just ended is in the next turn, cheap enough that three messages in a row cost one round-trip",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_TIMEOUT_S",
+      "class": "defaulted",
+      "default": "3",
+      "description": "how long the worker waits for the timeline route before giving up on the block for this turn (a failure is cached like an answer)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_BACK",
+      "class": "defaulted",
+      "default": "5",
+      "description": "how many past events the per-dispatch timeline block states (decision 31 \u00a71: a handful of lines)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TIMELINE_AHEAD",
+      "class": "defaulted",
+      "default": "5",
+      "description": "how many scheduled meetings the per-dispatch timeline block states",
+      "targets": []
     }
   ],
   "capabilities": {
