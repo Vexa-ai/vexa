@@ -200,7 +200,7 @@ export function refusalCopy(r: ScaffoldRefusal): { title: string; body: string }
  *  same rule that folded "prepare" and "DNA TSC" into one chat. */
 export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {}): {
   id: string; label: string; meeting?: string; workspaces: string[];
-  artifacts: Artifact[]; focus?: string; scaffoldKind: string;
+  artifacts: Artifact[]; focus?: string; scaffold: { kind: string; id: string };
 } {
   // `native` is an INPUT, not something this function can know. `meeting:note` resolves to
   // `kg/entities/meeting/<native>.md`, and the scaffold carries the ROW id — the two are different
@@ -219,7 +219,10 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
   const artifacts = artifactsFromTokens(s.tabs, ctx);
   const focusArt = s.focus ? artifactsFromTokens([s.focus], ctx)[0] : undefined;
   return {
-    scaffoldKind: s.kind,
+    // KIND AND RECORD ID TOGETHER (F37). The chat record carries the pair or carries nothing, so
+    // "an admin-setup chat with no scaffold behind it" — the shape that let a PLANTED row render
+    // the pre-scaffold admin card — is not constructible. This is the only place the pair is made.
+    scaffold: { kind: s.kind, id: s.id },
     id: s.meeting ? meetingChatId(s.meeting) : `scaffold-${s.id}`,
     // A meeting chat carries NO label of its own: the rail names it from the meeting, so the row
     // follows the meeting's title instead of freezing whatever the scaffold called it.

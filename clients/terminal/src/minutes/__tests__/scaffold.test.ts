@@ -227,14 +227,27 @@ describe("the scaffold kind reaches the chat", () => {
 
   it("carries `admin-setup` even though the chat mounts a desk beside _global", () => {
     const chat = scaffoldToChat(parseScaffold(base)!);
-    expect(chat.scaffoldKind).toBe("admin-setup");
+    expect(chat.scaffold.kind).toBe("admin-setup");
     // the arithmetic the old rule used would have called this an ordinary chat
     expect(chat.workspaces.filter((w) => w !== "_global").length).toBeGreaterThan(0);
   });
 
   it("carries the kind for every other arrival too, so nothing has to special-case one", () => {
     for (const kind of ["post-meeting", "prep", "invite-offer", "catch-up", "group-setup"]) {
-      expect(scaffoldToChat(parseScaffold({ ...base, kind })!).scaffoldKind).toBe(kind);
+      expect(scaffoldToChat(parseScaffold({ ...base, kind })!).scaffold.kind).toBe(kind);
     }
+  });
+
+  /** F37 — the kind NEVER travels alone. The founder saw an `admin-setup`-flavoured row that had no
+   *  scaffold behind it (the rail had PLANTED it), so the header fell through to a pre-scaffold
+   *  branch and offered a research step that does not exist: "I explain this as stale code."
+   *  Pairing the id with the kind is what makes that shape unconstructible rather than merely
+   *  never rendered — there is no way to say "admin-setup" without naming the record it came from. */
+  it("the record ID travels with the kind — the pair is one field, never two", () => {
+    const chat = scaffoldToChat(parseScaffold(base)!);
+    expect(chat.scaffold).toEqual({ kind: "admin-setup", id: "S1" });
+    // the type says `scaffold: { kind, id }`, not `scaffoldKind?: string`: a kind with no id is
+    // not a value this function can return.
+    expect(Object.keys(chat.scaffold).sort()).toEqual(["id", "kind"]);
   });
 });

@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { COMPANY_LAYER_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
 import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import {
@@ -24,16 +24,15 @@ import {
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, newChat, railRows,
-  readRailOwner, resetChats, writeRailOwner,
-  removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey, PERSONAL_CHAT_ID,
-  ensureSeeds,
+  chatForRow, loadChats, loadCollapsed, loadRailAll, markTouched, meetingChatId, meetingTitle, nameChat, nameFromTurn,
+  newChat, railRows, readRailOwner, resetChats, writeRailOwner,
+  removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
-import { artifactsFromTokens, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -43,7 +42,16 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 
-const PERSONAL_SEL: Sel = { kind: "chat", chatId: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"] };
+/** A record → the selection that shows it. There is no default selection any more: the shell opens
+ *  on a chat that EXISTS, or on a draft it just minted (see `firstOpen`). It used to open on a
+ *  hard-coded "Personal" row — an id the rail planted — and that row is exactly what F34 deletes. */
+const selOf = (c: ChatRec): Sel => ({
+  kind: c.meeting ? "meeting" : "chat",
+  chatId: c.id,
+  meetingId: c.meeting,
+  label: c.label,
+  workspaces: c.workspaces,
+});
 
 /** Say the chip's line into ONE chat. The settle delay is not cosmetic — the target session must be
  *  mounted and listening or the ask goes to localStorage and waits — and the session id is carried
@@ -67,22 +75,53 @@ export function MinutesShell() {
   const mock = mockOn();
   const mockStart = useRef(Date.now());
   const meetings = useMemo(() => (mock ? [...MOCK_MEETINGS, ...realMeetings] : realMeetings), [mock, realMeetings]);
-  // The stored list. Mock chats are merged for DISPLAY only — they are never written back.
+  // THE STORED LIST, AND NOTHING IS ADDED TO IT (founder ruling 2026-09-02, F34).
+  //
+  //  The rail used to PLANT two rows — "Personal" and "Organisation setup" — and a company-layer
+  //  hint decided when to plant them. The founder opened his rail, found three chats he had never
+  //  made, and asked the only question that matters: *"where is it coming from? i did not create
+  //  this chat, and i do not like this text."* So the seeding is gone, and with it the hint that
+  //  existed ONLY to time it (`companyLayerHint`, `COMPANY_LAYER_EVENT`, and both writers) — a
+  //  cache nothing reads is the stale-code shape this same session ruled on.
+  //
+  //  The flicker that hint was introduced to fix is now fixed CORRECTLY: the rail renders nothing
+  //  until it knows what exists, rather than planting rows to fill the gap. An empty rail for a
+  //  moment is honest; a row nobody made is not, and it outlives the moment.
+  //
+  //  Mock chats are merged for DISPLAY only — they are never written back.
   const [chats, setChats] = useState<ChatRec[]>(() => loadChats());
-  // The structural rows (Personal, Organisation setup) are withheld on first render while the
-  // company layer is unknown — see chats.ts `companyLayerHint`. SetupGate answers that question a
-  // moment later and announces it here, which is when they may appear. Derived, never stored, so
-  // this adds rows and never removes anyone's.
-  useEffect(() => {
-    const on = () => setChats((prev) => ensureSeeds(prev));
-    window.addEventListener(COMPANY_LAYER_EVENT, on);
-    return () => window.removeEventListener(COMPANY_LAYER_EVENT, on);
-  }, []);
   const allChats = useMemo(() => (mock ? [...chats, ...MOCK_CHATS] : chats), [mock, chats]);
   const chatsRef = useRef(allChats);
   useEffect(() => { chatsRef.current = allChats; }, [allChats]);
   const [all, setAll] = useState<boolean>(() => loadRailAll());
-  const [sel, setSel] = useState<Sel>(PERSONAL_SEL);
+
+  // ── WHERE THE SHELL OPENS, and the DRAFT (founder ruling 2026-09-02, F35) ──────────────────
+  //
+  //  `+` DOES NOT WRITE A RECORD. The founder pressed it, never typed, and the row was still there
+  //  after a reload — twice over: *"this chat was created with + but never used, it just should not
+  //  exist."* So a new chat is EPHEMERAL until it has a human turn: it lives in `draft` below,
+  //  storage is not touched, and leaving it, deleting it or closing the tab takes it with it
+  //  because it was never anywhere else. The first human turn promotes it — one write, in the same
+  //  moment it takes its name (F38), rather than a record now and a name later.
+  //
+  //  Deliberately NOT "write it and sweep it up later": a cleanup pass is a second writer of the
+  //  same surface, and this workspace has measured what that costs. There is nothing to clean up
+  //  when nothing was written.
+  //
+  //  The draft is NOT in `allChats`, so it is not a rail row either: the rail lists only chats a
+  //  person opened or a scaffold composed, which is the other half of F34.
+  //
+  //  All three are decided in the FIRST RENDER so it already names a real session — the shell used
+  //  to sit on a hard-coded selection until an effect ran, and the header advertised `personal`
+  //  whatever the chat's real mount set was.
+  const [firstOpen] = useState<ChatRec>(() =>
+    [...chats].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0]
+    ?? newChat("New chat", ["personal", "_global"], { touched: false }));
+  const [draft, setDraft] = useState<ChatRec | null>(() =>
+    (chats.some((c) => c.id === firstOpen.id) ? null : firstOpen));
+  const draftRef = useRef<ChatRec | null>(draft);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  const [sel, setSel] = useState<Sel>(() => selOf(firstOpen));
   const [pages, setPages] = useState<Page[]>([]);
   // `?view=` — a chat's opening `artifacts[]` (the right-sidebar tabs), NOT a URL feature. A chat
   // is the saved focus state and a deeplink is just its constructor: the meeting says which pages
@@ -147,8 +186,12 @@ export function MinutesShell() {
     const owner = readRailOwner();
     if (owner === email) return;
     if (owner !== null) {
+      // A rail that belongs to somebody else is dropped whole, and what replaces it is a DRAFT —
+      // not a planted row. The new reader has opened nothing, so they have nothing.
+      const d = newChat("New chat", ["personal", "_global"], { touched: false });
       setChats(resetChats());
-      setSel(PERSONAL_SEL);
+      setDraft(d);
+      setSel(selOf(d));
       setPages([]);
     }
     writeRailOwner(email);
@@ -249,7 +292,11 @@ export function MinutesShell() {
           fake ? null : c.meeting);
       }
       const shared = c.workspaces.filter((w) => w !== "_global");
-      if (!shared.length) return [{ path: "README.md", slug: "_global", label: "The organisation" }];
+      // The workspace's OWN NAME, never a friendly stand-in. This tab read "The organisation" —
+      // part of the pre-scaffold admin surface the founder called stale code (F37), and a label the
+      // record never said. A tab is named by the scaffold or preset that opened it; a tab the room
+      // fell back to is named by the workspace it is in.
+      if (!shared.length) return [{ path: "README.md", slug: "_global", label: "_global" }];
       const ps: Page[] = shared.map((w) => w === "personal"
         ? { path: "README.md", label: "personal" }
         : { path: "README.md", slug: w, label: w });
@@ -278,6 +325,9 @@ export function MinutesShell() {
     if (front) { setDocPath(front.path); setDocSlug(front.slug); setDocKind(front.kind === "meeting" ? "meeting" : "doc"); }
     setHist(front ? { stack: [{ kind: front.kind, path: front.path, slug: front.slug, label: front.label }], i: 0 } : { stack: [], i: -1 });
     setDocBody(null); setDocNonce((n) => n + 1);
+    // A new conversation is a fresh desk: nothing in it has been chosen by the reader yet, so an
+    // artifact this chat writes may take the front (F41).
+    readerChoseFocus.current = false;
   }, [meetings, mountSet, pendingView]);
 
   /** Open a rail row. A row derived from a meeting has no chat yet — first open MATERIALISES one
@@ -307,8 +357,8 @@ export function MinutesShell() {
     return row ? await openRow(row, opts) : null;
   }, [openRow]);
 
-  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string; artifacts?: Artifact[]; focus?: string; scaffoldId?: string } = {}) => {
-    const base = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting });
+  const addChat = useCallback((label: string, workspaces: string[], opts: { id?: string; kick?: string; say?: string; meeting?: string; artifacts?: Artifact[]; focus?: string; scaffold?: { kind: string; id: string }; scaffoldId?: string } = {}) => {
+    const base = newChat(label, workspaces, { id: opts.id, touched: true, meeting: opts.meeting, scaffold: opts.scaffold });
     // A preset's declared tabs ARE the chat's opening artifacts — see openRow. A chat born from a
     // link is the one case where the record is written before a human has touched the panel.
     const c = opts.artifacts?.length ? { ...base, artifacts: opts.artifacts, focus: opts.focus } : base;
@@ -317,6 +367,28 @@ export function MinutesShell() {
     if (opts.kick) fireKick(c.id, opts.kick, opts.say, opts.scaffoldId);
     return c;
   }, [openChat, persist]);
+
+  /** `+` — open a chat that IS NOT A RECORD YET (F35). Nothing is written; the rail gains no row
+   *  (the draft is not in `allChats`); the panel opens on the room's own pages exactly as it would
+   *  for a stored chat. It becomes real at the first human turn and not one moment earlier. */
+  const startDraft = useCallback(() => {
+    const c = newChat("New chat", ["personal", "_global"], { touched: false });
+    setDraft(c);
+    void openChat(c);
+  }, [openChat]);
+
+  /** The draft's ONE promotion path: a human turn happened in it, so it becomes a record — named by
+   *  that same turn (F38), in one write rather than a record now and a name afterwards. */
+  const promoteDraft = useCallback((d: ChatRec, text: string) => {
+    persist((prev) => upsertChat(prev, { ...nameChat(d, text), touched: true, lastActivityAt: Date.now() }));
+    setDraft((cur) => (cur && cur.id === d.id ? null : cur));
+  }, [persist]);
+
+  // LEAVING AN UNTOUCHED DRAFT LEAVES NOTHING BEHIND. There is no record to remove and no cleanup
+  // pass to run — dropping the component state that held it IS the whole of "it never existed".
+  useEffect(() => {
+    setDraft((d) => (d && d.id !== sel.chatId ? null : d));
+  }, [sel.chatId]);
 
   /** Fire a proposal chip. The founder chose IMMEDIATE, for consistency with the emailed links:
    *  a click sends the turn, with nothing left in the composer to press Enter on. And it sends it
@@ -329,7 +401,10 @@ export function MinutesShell() {
    *  SAME session. A meeting chip therefore REBINDS: the conversation in front takes the meeting's
    *  ref and title, and the phase pages open beside it exactly as they do from the rail. */
   const runProposal = async (p: Proposal) => {
-    const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? null;
+    // …including inside a DRAFT: the chat in front is the draft when there is one, so a chip
+    // PROMOTES it rather than minting a second row beside it. That is the founder's 2026-09-01
+    // ruling ("this chat is already new") applied to F35's unwritten chat.
+    const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? draftRef.current ?? null;
     const eff = applyProposal(p, current, meetings);
     if (!eff) return;
     // The offer is spent the moment it is taken. A kick is hidden AND settle-delayed, so without
@@ -349,6 +424,7 @@ export function MinutesShell() {
     // relabel must not throw away the pages panel the reader is looking at.
     const rebound = eff.chat.meeting !== current?.meeting;
     persist((prev) => upsertChat(prev, eff.chat));
+    setDraft((d) => (d && d.id === eff.chat.id ? null : d));
     if (rebound) await openChat(eff.chat);
     else setSel((x) => ({ ...x, label: eff.chat.label }));
     if (eff.kick) fireKick(eff.chat.id, eff.kick, eff.say);
@@ -367,7 +443,13 @@ export function MinutesShell() {
   // itself did not go anywhere.
   const deleteChat = (chatId: string) => {
     persist((prev) => removeChat(prev, chatId));
-    if (sel.chatId === chatId) setSel(PERSONAL_SEL);
+    if (sel.chatId !== chatId) return;
+    // There is no home row to fall back to any more (F34 deleted it), so the shell lands on the
+    // most recent chat that still exists — or, when none does, on a fresh draft: a composer with
+    // nothing written anywhere.
+    const next = chatsRef.current.filter((c) => c.id !== chatId)
+      .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0];
+    if (next) void openChat(next); else startDraft();
   };
 
   // The tab strip IS the chat's `artifacts[]`, and this effect is its ONE writer. Persisting here
@@ -406,32 +488,55 @@ export function MinutesShell() {
   }, [layout, docPath, docSlug, docKind, pages]);
   useEffect(() => () => layout.setActiveTab(null), [layout]);
 
-  // Open a chat on mount. Without this the shell sat on a HARD-CODED selection until the first
-  // click: the header advertised `personal` whatever the chat's real focus set was, and the panel
-  // opened with no tabs at all. A pending deeplink owns the first room, so this yields to one.
+  // Lay out the chat `firstOpen` already selected — the selection is decided in the first render,
+  // this is only the panel catching up (it needs an await on the mount set). A pending deeplink
+  // owns the first room, so this yields to one.
   const booted = useRef(false);
   useEffect(() => {
     if (booted.current || deeplinkPending) return;
     booted.current = true;
-    const c = chatsRef.current.find((x) => x.id === PERSONAL_CHAT_ID) ?? chatsRef.current[0];
-    if (c) void openChat(c);
-  }, [deeplinkPending, openChat]);
+    void openChat(firstOpen);
+  }, [deeplinkPending, openChat, firstOpen]);
 
   // A user-authored send is the whole definition of "touched" — the cheap flag the default filter
   // reads instead of fetching every chat's history. chat.tsx fires this with its session id, which
   // IS the chat id.
   useEffect(() => {
     const onTouched = (e: Event) => {
-      const id = (e as CustomEvent<{ session?: string }>).detail?.session;
-      if (id) persist((prev) => markTouched(prev, id));
+      const d = (e as CustomEvent<{ session?: string; text?: string }>).detail;
+      const id = d?.session;
+      if (!id) return;
+      const text = d?.text ?? "";
+      const draftNow = draftRef.current;
+      const before = draftNow?.id === id ? draftNow : chatsRef.current.find((c) => c.id === id);
+      // A DRAFT's first human turn is the moment it becomes a record — F35's one write, carrying
+      // F38's name. Until this fires the chat exists only in this component.
+      if (draftNow && draftNow.id === id) promoteDraft(draftNow, text);
+      // An already-stored chat still wearing a placeholder name takes its name from this turn too —
+      // the naming rule is about the FIRST HUMAN TURN, not about how the record came to exist.
+      else persist((prev) => nameFromTurn(markTouched(prev, id), id, text));
+      // The header names the chat in front, so it takes the new name in the SAME beat the rail
+      // does — `nameChat` is asked rather than re-implemented, so the three refusals (a scaffold's
+      // own title, a meeting's title, a name a human chose) hold here too by construction.
+      const after = before && nameChat(before, text);
+      if (before && after && after.label !== before.label) {
+        setSel((x) => (x.chatId === id ? { ...x, label: after.label } : x));
+      }
     };
     window.addEventListener(CHAT_TOUCHED_EVENT, onTouched);
     return () => window.removeEventListener(CHAT_TOUCHED_EVENT, onTouched);
-  }, [persist]);
+  }, [persist, promoteDraft]);
 
   /** Open a document as a TAB: already open → just focus it; new → append and focus. Every route
    *  into the panel goes through here (entity link, breadcrumb listing, phase page), which is why
    *  the tab set can be trusted as the record of what has been looked at. */
+  /** HAS THE READER CHOSEN WHAT IS IN FRONT? Set by the panel's own tab clicks and by clicking a
+   *  link in the conversation — a person's deliberate move — and read by the artifact listener,
+   *  which appends but never moves them once they have. Decision 18's rule ("a second arrival must
+   *  not tidy their desk out from under them") one level down: it is about a re-click there and
+   *  about the agent's own writes here, and it is the same rule. */
+  const readerChoseFocus = useRef(false);
+
   const openPage = useCallback((pg: Page) => {
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
     // A folded-away panel is the other way a link click "does nothing": the tab opens into a 22px
@@ -513,6 +618,9 @@ export function MinutesShell() {
     const id = sel.chatId, next = fn(sel.workspaces);
     setSel((x) => ({ ...x, workspaces: next }));
     persist((prev) => prev.map((c) => (c.id === id ? { ...c, workspaces: next } : c)));
+    // A DRAFT is not in the stored list, so the mount set has to land on the record that IS in
+    // front — otherwise it would be right for this sitting and lost the moment the draft promotes.
+    setDraft((d) => (d && d.id === id ? { ...d, workspaces: next } : d));
     void mountSet(next);
   };
 
@@ -571,10 +679,47 @@ export function MinutesShell() {
       // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing.
       if (m) void openMeeting(m); else openPage(pageForMeetingRef(ref));
     };
-    window.addEventListener(OPEN_ENTITY_EVENT, onEntity);
-    window.addEventListener(OPEN_MEETING_EVENT, onMeeting);
-    return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntity); window.removeEventListener(OPEN_MEETING_EVENT, onMeeting); };
+    // A CLICK IS THE READER CHOOSING. Both of these arrive from something the person pressed in
+    // the conversation, so from here on an artifact appends behind them rather than in front.
+    const chose = (fn: (e: Event) => void) => (e: Event) => { readerChoseFocus.current = true; fn(e); };
+    const onEntityClick = chose((e) => { void onEntity(e); });
+    const onMeetingClick = chose(onMeeting);
+    window.addEventListener(OPEN_ENTITY_EVENT, onEntityClick);
+    window.addEventListener(OPEN_MEETING_EVENT, onMeetingClick);
+    return () => { window.removeEventListener(OPEN_ENTITY_EVENT, onEntityClick); window.removeEventListener(OPEN_MEETING_EVENT, onMeetingClick); };
   }, [meetings, openMeeting, openPage]);
+
+  // ── F41: A FILE THE TURN WROTE BECOMES A TAB ────────────────────────────────────────────────
+  //
+  //  The founder created a shared workspace, the agent wrote its README, and the right panel stayed
+  //  on `_global/README.md` — the one document the turn had just made was the one thing not on
+  //  screen.
+  //
+  //  Three rules, and the third is the one worth stating:
+  //    · the tab goes on the CHAT RECORD, not on panel-local state. Layout is a function of the
+  //      chat's state (decision 18), so a reload shows the same tabs — which is why this appends to
+  //      `pages` and lets the artifacts effect, the record's ONE writer, persist it.
+  //    · it comes to the FRONT only when the event says `focus: true`.
+  //    · …and never over a focus the READER chose. A person who has opened something is reading it;
+  //      an agent's write appears in the strip and waits. The tab still appears — being appended is
+  //      not conditional on anything.
+  //  Appending is idempotent by artifact key, so the same file written twice in a turn is one tab.
+  //  The decision itself is `artifactTabEffect` — pure, in roomView.ts, tested there. This is the
+  //  wiring: read the tabs in hand, apply it, and either bring the page forward through the ONE
+  //  route into the panel (`openPage`, which also unfolds a collapsed column and pushes history) or
+  //  append it quietly behind the reader.
+  const pagesRef = useRef(pages);
+  useEffect(() => { pagesRef.current = pages; }, [pages]);
+  useEffect(() => {
+    const onArtifact = (e: Event) => {
+      const detail = (e as CustomEvent<{ workspace?: string; path?: string; focus?: boolean }>).detail || {};
+      const eff = artifactTabEffect(detail, pagesRef.current, readerChoseFocus.current);
+      if (!eff) return;
+      if (eff.focus) openPage(eff.focus); else setPages(eff.pages);
+    };
+    window.addEventListener(ARTIFACT_EVENT, onArtifact);
+    return () => window.removeEventListener(ARTIFACT_EVENT, onArtifact);
+  }, [openPage]);
 
   // `?meeting=<ref>` — App.tsx stashed the ref before cleaning the URL. The list arrives
   // asynchronously, so this waits for it rather than firing once on mount — and is spent on the
@@ -606,10 +751,16 @@ export function MinutesShell() {
   // moment the company-setup conversation legitimately mounted the admin's own desk beside
   // `_global` (the two-scaffold ruling: the first chat writes both layers). The instance's most
   // consequential conversation then announced itself as an ordinary "chat · personal".
-  const selChat = allChats.find((c) => c.id === sel.chatId);
+  const selChat = allChats.find((c) => c.id === sel.chatId) ?? (draft?.id === sel.chatId ? draft : undefined);
+  // ⚠ THE MOUNT-ARITHMETIC FALLBACK IS DELETED, not merely unreachable (F37). It read
+  // `workspaces.filter(w => w !== "_global").length === 0 ? "chat · admin" : "chat"`, and it is how
+  // a PLANTED "Organisation setup" row — a row with no scaffold record behind it — rendered as
+  // `CHAT · ADMIN` and fell through to the pre-scaffold admin card that offered a research step
+  // which does not exist. Founder: *"I explain this as stale code."* Now the record is the only
+  // authority, and `Chat.scaffold` pairs the kind with the record's id so an admin-flavoured chat
+  // with no scaffold behind it cannot be written in the first place.
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
-    : selChat?.scaffoldKind === "admin-setup" ? "chat · admin"
-    : sel.workspaces.filter((w) => w !== "_global").length === 0 ? "chat · admin" : "chat";
+    : selChat?.scaffold?.kind === "admin-setup" ? "chat · admin" : "chat";
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
   // body in `_global/asks/<name>.md` and open a fresh chat already holding it. The preset also says
@@ -643,6 +794,10 @@ export function MinutesShell() {
       artifacts: fresh ? rec.artifacts : undefined,
       focus: fresh ? rec.focus : undefined,
       kick: sc.openingText,
+      // The record travels ONTO the chat — kind and id together (F37). It never used to: the kind
+      // was computed here and dropped on the floor, which is why the header could only fall back to
+      // mount arithmetic and why a planted row could wear the admin flavour without a record.
+      scaffold: rec.scaffold,
       scaffoldId: sc.kind === "hand-link" ? undefined : sc.id,
     });
   }, [addChat]);
@@ -667,13 +822,13 @@ export function MinutesShell() {
     // loaded yet when an emailed link lands, and the preset path's 8s wait exists only because it
     // had to hunt for that id. One record, and it is complete.
     scaffoldFired.current = true;
-    setPresetInFlight(true);        // the scaffold OWNS the opening, like a preset
+    // (The scaffold used to CLAIM the opening here — `setPresetInFlight(true)` — so the cached
+    // greeting would stand down. There is no greeting left to race: F36 deleted it.)
     try { localStorage.removeItem("vexa.pendingScaffold"); } catch { /* ignore */ }
     void (async () => {
       const got = await fetchScaffold(id);
       if (!got.ok) {
         console.error("scaffold " + id + " did not open:", got.refusal.reason, got.refusal.detail);
-        setPresetInFlight(false);
         setScaffoldRefusal(got.refusal);
         return;
       }
@@ -691,11 +846,10 @@ export function MinutesShell() {
     const name = (intent.ask || "").trim();
     // a NAME, and only a name — no slashes, no dots, nothing that walks out of asks/
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) { presetFired.current = true; return; }
-    // THE PRESET OWNS THE OPENING, and it claims that synchronously — before any await, and
-    // before the onboarding seed fires at +600ms. A brand-new attendee who clicked a minutes link
-    // used to get the cached PHASE greeting ("I'm booked for your meeting") on a meeting that had
-    // already happened, because the preset was still in flight and nothing said so.
-    setPresetInFlight(true);
+    // (The preset used to CLAIM the opening here, synchronously, so the cached greeting fired at
+    // +600ms would stand down — a brand-new attendee who clicked a minutes link otherwise got "I'm
+    // booked for your meeting" about a meeting that had already happened. F36 deleted the greeting,
+    // so there is nothing left to claim it from.)
     // A preset ABOUT a meeting waits for the meeting list: substituting before it lands is what
     // put a Zoom number where the meeting's NAME belongs. A preset with no ref waits for nothing.
     if (intent.meeting && !meetingsLoaded && !presetWaited) {
@@ -715,8 +869,9 @@ export function MinutesShell() {
       // the greeting this preset had suppressed.
       if (!body || !body.trim()) {
         console.error("preset asks/" + name + ".md is missing or empty — the emailed link opened nothing");
-        setPresetInFlight(false);
-        window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT));
+        // The opening is handed back to the COMPOSER: there is no cached greeting to fall back to
+        // any more (F36 deleted the seed). An empty composer is what an unresolved link honestly
+        // leaves behind.
         return;
       }
       // Optional frontmatter: `mounts:` and `label:`, plus `tabs:`/`focus:` — the preset's own
@@ -773,7 +928,7 @@ export function MinutesShell() {
         .replace(/\{\{\s*ws\s*\}\}/g, mounts[0] || "")
         .replace(/\{\{\s*today\s*\}\}/g, new Date().toISOString().slice(0, 10))
         .trim();
-      if (!prompt) { setPresetInFlight(false); return; }
+      if (!prompt) return;
       // ONE consumer for a link that carries BOTH `?ask=` and `?meeting=`. There used to be two:
       // this effect opened an askchat and selected it, the `?meeting=` effect then opened the
       // meeting's own chat over the top, and the kick fired 1.2s later into a session no longer
@@ -824,7 +979,7 @@ export function MinutesShell() {
         ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
         : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
             selKey={selKey} onSelect={(r) => void openRow(r)}
-            onNewChat={() => addChat("New chat", ["personal", "_global"])} onDeleteChat={deleteChat}
+            onNewChat={startDraft} onDeleteChat={deleteChat}
             onCollapse={() => collapseRail(true)} />}
       <ContextBar sel={sel} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
@@ -871,7 +1026,7 @@ export function MinutesShell() {
       {pagesCollapsed
         ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
         : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
-            onOpen={openPage} onClose={closeTab}
+            onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
             listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
             canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
             body={docBody} onSaved={() => setDocNonce((n) => n + 1)}

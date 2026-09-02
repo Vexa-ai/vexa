@@ -13,7 +13,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -82,8 +82,20 @@ export async function POST(request: NextRequest) {
   cookieStore.set(AUTH_COOKIE, token, opts);
   cookieStore.set(USER_INFO_COOKIE, JSON.stringify({ id: user.id, email: user.email, name: user.name || user.email.split("@")[0] }), opts);
 
+  // THE ARRIVAL (F42) — the same record the magic-link door mints, handed back rather than
+  // redirected to, because this door answers a fetch() and its caller owns the navigation. A failed
+  // mint is logged and omitted: the sign-in itself is not held hostage to it, and a caller with no
+  // `url` lands where it always did.
+  const minted = await mintFirstVisitScaffold(user.email, user.id);
+  if (!minted.ok || !minted.data?.url) {
+    console.error(`[terminal-auth] first-visit scaffold mint failed for ${user.email}: ${minted.ok ? "no url" : minted.error}`);
+  }
   return NextResponse.json(
-    { success: true, user: { id: user.id, email: user.email, name: user.name ?? user.email } },
+    {
+      success: true,
+      user: { id: user.id, email: user.email, name: user.name ?? user.email },
+      ...(minted.ok && minted.data?.url ? { url: minted.data.url } : {}),
+    },
     { headers: NO_STORE },
   );
 }

@@ -238,9 +238,29 @@ export async function instanceState(): Promise<InstanceState> {
  */
 export interface MintedScaffold { id: string; url: string }
 
-export async function mintAdminSetupScaffold(
+/** WHICH ARRIVAL THIS IS. Two so far, and they are the same mechanism with different records:
+ *
+ *  · `admin-setup` — the first admin claimed the instance and the company layer is not written yet.
+ *  · `first-visit` — anybody signing in with no `?s=` of their own, including an admin whose company
+ *    layer is already `completed`. That last case is a rule, not an oversight (founder ruling
+ *    2026-09-02, F42): offering the setup conversation again to an instance that IS set up says the
+ *    product does not know its own state.
+ *
+ *  The opening PRESET is named per kind and the body lives in `_global/asks/<opening>.md`, so what
+ *  either arrival says is admin-editable and no prompt text is ever composed here. */
+export type ArrivalKind = "admin-setup" | "first-visit";
+
+const ARRIVAL_OPENING: Record<ArrivalKind, string> = {
+  "admin-setup": "setup-global",
+  "first-visit": "first-visit",
+};
+
+/** Mint ONE arrival scaffold. The two callers below differ only in the record they ask for. */
+async function mintArrivalScaffold(
+  kind: ArrivalKind,
   email: string,
   userId: string | number,
+  provenance: { flow: string; step: string },
 ): Promise<AdminResult<MintedScaffold>> {
   const url = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
   const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
@@ -251,15 +271,16 @@ export async function mintAdminSetupScaffold(
     const res = await fetch(`${url}/internal/scaffolds`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
-      // `workspaces` is deliberately ABSENT, not `[]`: the server derives `_global` + this admin's
-      // own desk from the address, which is exactly the two-scaffold mount set the setup preset
-      // needs — and deriving it there keeps one rule in one place rather than two that drift.
-      // `tabs`/`focus` likewise come from the preset's own frontmatter.
+      // `workspaces` is deliberately ABSENT, not `[]`: the server derives the mount set from the
+      // address — `_global` + the admin's own desk for a claim, and for a first visit the
+      // workspaces already shared with that address plus the meetings it is invited to. Deriving it
+      // there keeps one rule in one place rather than two that drift, and it is the half a client
+      // could not compute anyway. `tabs`/`focus` likewise come from the preset's own frontmatter.
       body: JSON.stringify({
         who: email,
-        kind: "admin-setup",
-        opening: "setup-global",
-        provenance: { flow: "admin-claim", step: "claim-admin", minted_by: String(userId) },
+        kind,
+        opening: ARRIVAL_OPENING[kind],
+        provenance: { ...provenance, minted_by: String(userId) },
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(10000),
@@ -274,6 +295,30 @@ export async function mintAdminSetupScaffold(
     return { ok: false, status: 0, error: e.name === "TimeoutError" ? "scaffold mint timed out" : e.message };
   }
 }
+
+/** The admin claim's arrival — the setup conversation. */
+export const mintAdminSetupScaffold = (email: string, userId: string | number) =>
+  mintArrivalScaffold("admin-setup", email, userId, { flow: "admin-claim", step: "claim-admin" });
+
+/** AN ORDINARY SIGN-IN'S ARRIVAL (F42, founder ruling 2026-09-02).
+ *
+ *  Signed in as a new user, the founder got a seeded "Personal" chat on the generic greeting, an
+ *  ADMIN-ONLY "Organisation setup" card offered to a plain member, and his empty desk's README
+ *  template rendered as a page — *"(unset) — this workspace has not been set up yet…"*. His words:
+ *  *"i logged as new user, that's what i see - not happy about that."*
+ *
+ *  Every one of those was the product composing a landing out of whatever happened to be lying
+ *  around, which is the exact failure the scaffold exists to end: a sign-in that carries no `?s=`
+ *  now MINTS its own arrival, so a first visit is a record — who it is for, which workspaces are
+ *  already shared with that address, which meetings it is invited to — rather than a guess.
+ *
+ *  ⚠ A FAILED MINT MUST NOT COST SOMEBODY THEIR SIGN-IN. It is logged and the visitor lands on `/`
+ *  as before. That is the OPPOSITE trade from the admin claim, and deliberately so: there, the role
+ *  had already changed by the time the mint ran, so a silent failure would have left a person who IS
+ *  the administrator with no way into the conversation that says so — it had to be surfaced. Here
+ *  nothing has changed except that they are signed in, which is what they asked for. */
+export const mintFirstVisitScaffold = (email: string, userId: string | number) =>
+  mintArrivalScaffold("first-visit", email, userId, { flow: "sign-in", step: "first-visit" });
 
 /** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
  *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.

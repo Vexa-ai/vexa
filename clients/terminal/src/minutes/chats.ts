@@ -42,13 +42,26 @@ export type Chat = {
   workspaces: string[];       // the mount set — what a PROJECT used to own
   artifacts: Artifact[];      // the open tabs (seeded by the room's phase pages and by `?view=`)
   focus?: string;             // artifactKey() of the tab in front
-  // The SCAFFOLD KIND this chat was opened from (`admin-setup`, `post-meeting`, …), when it came
-  // from one. It is what the chat IS, and things that depend on that — the header's flavour, today —
-  // read it instead of inferring. The old inference was mount arithmetic: "no workspace besides
-  // `_global` means admin", which broke the moment the setup conversation legitimately mounted the
-  // admin's own desk as well (the two-scaffold ruling). A chat's nature is not a function of how
-  // many folders it happens to have open.
-  scaffoldKind?: string;
+  /** THE SCAFFOLD THIS CHAT WAS COMPOSED FROM — the kind AND the record's id, in ONE field.
+   *
+   *  It is what the chat IS, and things that depend on that — the header's flavour, today — read it
+   *  instead of inferring. The old inference was mount arithmetic: "no workspace besides `_global`
+   *  means admin", which broke the moment the setup conversation legitimately mounted the admin's
+   *  own desk as well (the two-scaffold ruling). A chat's nature is not a function of how many
+   *  folders it happens to have open.
+   *
+   *  ONE object rather than two optional fields, and that is the whole of F37 (founder, 2026-09-02:
+   *  *"I explain this as stale code"*). He was looking at an `admin-setup`-flavoured row that had NO
+   *  scaffold record behind it — a PLANTED row carrying the admin kind — so the render fell through
+   *  to the pre-scaffold branch and offered him a research step that does not exist. Pairing the id
+   *  with the kind makes that shape impossible to WRITE, not merely never rendered: there is no way
+   *  to say "admin-setup" without naming the record it came from. `normalise` drops a half-record
+   *  for the same reason.
+   *
+   *  Persisted, so it survives a reload. Without that the flavour would be right on the turn the
+   *  scaffold opened the chat and wrong on every load after it — the sort of half-fix that reads as
+   *  fixed. */
+  scaffold?: { kind: string; id: string };
   touched?: boolean;          // a user wrote in it, or a user made it by hand
   createdAt: number;
   lastActivityAt: number;
@@ -88,23 +101,26 @@ export function writeRailOwner(identity: string): void {
   try { localStorage.setItem(RAIL_OWNER_KEY, identity); } catch { /* ignore */ }
 }
 
-/** Drop the stored rail and hand back a fresh one (seeds only) — used when the reader is not the
- *  person whose rail is in storage. Nothing is lost that matters: meeting rows are DERIVED from the
- *  meetings list and come back on their own, and every chat's session lives on the server. */
-export function resetChats(now = Date.now()): Chat[] {
+/** Drop the stored rail and hand back an EMPTY one — used when the reader is not the person whose
+ *  rail is in storage. Empty, not "the seeds", because the rail plants nothing at all now (F34):
+ *  a reader who has opened no chat has no chats. Nothing is lost that matters — meeting rows are
+ *  DERIVED from the meetings list and come back on their own, and every chat's session lives on
+ *  the server. */
+export function resetChats(): Chat[] {
   try { localStorage.removeItem(CHATS_KEY); } catch { /* ignore */ }
-  const fresh = ensureSeeds([], now);
-  saveChats(fresh);
-  return fresh;
+  saveChats([]);
+  return [];
 }
 /** Which side columns the reader has folded away. One key per side, because the two are independent
  *  choices and a combined key would make forgetting one of them the default. */
 export const COLLAPSED_KEY = { left: "vexa.minutes.railCollapsed", right: "vexa.minutes.pagesCollapsed" } as const;
 export type Side = keyof typeof COLLAPSED_KEY;
 
+/** THE TWO IDS THE RAIL USED TO PLANT. Nothing constructs them any longer — they are exported for
+ *  exactly one reason, which is to be named by `pruneStale` below, whose whole job is removing the
+ *  rows they identify from readers who already have them. */
 export const ORG_CHAT_ID = "org-setup";
 export const PERSONAL_CHAT_ID = "main";
-export const ORG_CHAT_LABEL = "Organisation setup";
 
 /** A meeting's own chat has a DERIVED id, so materialising the row lands on the same agent session
  *  the shell has always used for that meeting (`meet-<id>`). Second and later chats on the same
@@ -275,7 +291,57 @@ export function chatForRow(chats: Chat[], row: Row, meetings: MeetingMock[], now
   };
 }
 
-export function newChat(label: string, workspaces: string[], opts: { id?: string; touched?: boolean; meeting?: string; now?: number } = {}): Chat {
+/** A label NOBODY CHOSE. The `+` button mints "New chat" and a normalised record falls back to
+ *  "Chat"; both are placeholders, and both may be replaced by the person's own first sentence.
+ *  Anything else is a name a human or a scaffold picked, and is never overwritten. */
+export function isPlaceholderLabel(label: string): boolean {
+  const t = (label ?? "").trim();
+  return !t || /^new chat$/i.test(t) || /^chat$/i.test(t);
+}
+
+/** How long a rail row's name may be. The rail is 248px wide; past this the row truncates anyway,
+ *  so cutting here means the ellipsis lands on a word boundary instead of mid-glyph. */
+export const CHAT_TITLE_MAX = 48;
+
+/** The person's first sentence, as a rail row's name: one line, trimmed, cut with an ellipsis. */
+export function titleFromTurn(text: string): string {
+  const one = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!one) return "";
+  return one.length > CHAT_TITLE_MAX ? one.slice(0, CHAT_TITLE_MAX - 1).trimEnd() + "…" : one;
+}
+
+/** NAME A CHAT FROM ITS FIRST HUMAN TURN (founder ruling 2026-09-02, F38).
+ *
+ *  He worked a `+` chat for many turns — created a shared workspace in it, asked for research — and
+ *  the rail still read "New chat". A conversation that has had a dozen turns and no name is a row
+ *  nobody can find again.
+ *
+ *  Three refusals, and each of them is a rule rather than a guard:
+ *
+ *  · **A SCAFFOLDED CHAT KEEPS ITS OWN TITLE.** The record already named it, deliberately; letting
+ *    a first turn overwrite that would swap a considered name for whatever the person typed first.
+ *    (This is the same rule agent-api applies to the session title — `_title` comes from the
+ *    scaffold's header when there is one — so the two halves agree by construction rather than by
+ *    coincidence.)
+ *  · **A MEETING CHAT IS NAMED BY ITS MEETING.** `railRows` reads the meeting's title so the row
+ *    follows a rename; freezing a sentence onto it here would undo that.
+ *  · **ONLY A PLACEHOLDER IS REPLACED.** A name a human or a preset chose stands.
+ *
+ *  And the caller's rule, which cannot be expressed here: the text MUST be a HUMAN turn. Never an
+ *  agent turn, never a composed opening — an opening is machinery, and titling a row with the first
+ *  48 characters of an instruction block is the same defect as painting it as the person's message. */
+export function nameChat(c: Chat, text: string): Chat {
+  if (c.scaffold || c.meeting || !isPlaceholderLabel(c.label)) return c;
+  const t = titleFromTurn(text);
+  return t ? { ...c, label: t } : c;
+}
+
+/** `nameChat` over the stored list — the array-in/array-out shape every other mutation here has. */
+export function nameFromTurn(chats: Chat[], chatId: string, text: string): Chat[] {
+  return chats.map((c) => (c.id === chatId ? nameChat(c, text) : c));
+}
+
+export function newChat(label: string, workspaces: string[], opts: { id?: string; touched?: boolean; meeting?: string; scaffold?: { kind: string; id: string }; now?: number } = {}): Chat {
   const now = opts.now ?? Date.now();
   return {
     id: opts.id ?? `pchat-${now.toString(36)}`,
@@ -283,6 +349,9 @@ export function newChat(label: string, workspaces: string[], opts: { id?: string
     meeting: opts.meeting,
     workspaces,
     artifacts: [],
+    scaffold: opts.scaffold,
+    // `touched: false` is the DRAFT (F35): a chat the `+` button opened and nobody has written in.
+    // The shell holds it in component state and never saves it; this only mints the record.
     touched: opts.touched ?? true,
     createdAt: now,
     lastActivityAt: now,
@@ -310,7 +379,7 @@ function flatLabel(p: LegacyProject, label: string): string {
   const chat = (label || "chat").trim();
   if (isPersonalProject(p)) return chat;
   const name = (p.name || p.id || "Project").trim();
-  if (isOrgProject(p)) return /^setup$/i.test(chat) ? ORG_CHAT_LABEL : `Organisation · ${chat}`;
+  if (isOrgProject(p)) return `Organisation · ${chat}`;
   if (chat.toLowerCase() === name.toLowerCase()) return chat;
   return `${name} · ${chat}`;
 }
@@ -326,12 +395,10 @@ export function migrateProjects(projects: LegacyProject[], now = Date.now()): Ch
   let i = 0;
   for (const p of projects ?? []) {
     const set = (p.set && p.set.length ? p.set : isOrgProject(p) ? ["_global"] : ["personal", "_global"]).slice();
-    if (isPersonalProject(p)) {
-      // the personal project's "main" row was BUILT IN — it never appeared in `chats[]`, so it has
-      // to be reconstructed here or the user's oldest conversation would vanish in the flattening.
-      out.push({ id: PERSONAL_CHAT_ID, label: "Personal", workspaces: set, artifacts: [], touched: true, createdAt: now - i, lastActivityAt: now - i });
-      i++;
-    }
+    // The personal project's built-in "main" row USED to be reconstructed here. It is not any
+    // more (F34): it was a row nobody made, and `pruneStale` deletes exactly that id on the very
+    // next line of `loadChats` — code that writes a row its own caller then removes is the stale
+    // shape this commit is about.
     for (const c of p.chats ?? []) {
       if (!c || !c.id) continue;
       out.push({
@@ -360,69 +427,46 @@ function dedupe(chats: Chat[]): Chat[] {
   return out;
 }
 
-/** THE COMPANY-LAYER HINT — a render-time cache, never the authority.
+/** THE 2026-09-02 PRUNE — a migration, run on every load, idempotent by construction.
  *
- *  `loadChats` is synchronous (it reads localStorage during the first render) and the gate lives on
- *  the server, so the rail cannot await a probe before deciding what rows exist. SetupGate — which
- *  polls `/api/global/state` anyway — writes the answer here, and this reads it.
+ *  The founder opened his rail and found four chats, three of which he had never made: **Personal**
+ *  and **Organisation setup**, both PLANTED by the seeding this commit deletes, and a **New chat**
+ *  he had made with `+` and never typed a word into. *"where is it coming from? i did not create
+ *  this chat … this chat was created with + but never used, it just should not exist."*
  *
- *  It is a HINT and the distinction is load-bearing: the server refuses every gated request on its
- *  own (agent-api 403s a non-admin on a gated instance, the flows engine parks, the operator verbs
- *  refuse), so being wrong here costs a row in a list, never access to anything. It therefore FAILS
- *  OPEN — an unwritten or unreadable hint seeds the normal rail, because the cost of guessing
- *  "missing" wrongly is hiding a real user's own chat from them. */
-const LAYER_HINT_KEY = "vexa.companyLayer.v1";
-
-export function setCompanyLayerHint(state: "missing" | "completed"): void {
-  try { localStorage.setItem(LAYER_HINT_KEY, state); } catch { /* locked-down storage */ }
+ *  Deleting the seeding stops NEW plants and does nothing whatever about the rows already sitting
+ *  in his localStorage — and "clear your site data" is not a fix to hand a founder. So the load
+ *  path prunes two shapes:
+ *
+ *    · **the two planted ids, by id.** They were written `touched: true` on purpose — an untouched
+ *      structural row would have hidden behind the rail's own filter and taken admin with it — so a
+ *      generic "drop the untouched ones" rule does not catch them and never could have.
+ *    · **any chat with no human turn and no scaffold record.** `touched` is written at send time
+ *      and at nothing else; a scaffold record means the chat was composed for an arrival. Neither
+ *      of the two = nobody ever meant this row to exist. That is the `+` chat.
+ *
+ *  IDEMPOTENT: pruning an already-pruned list removes nothing, which is why this needs no marker
+ *  key to keep in sync with — the same reasoning that makes `loadChats` trigger its project
+ *  migration on an ABSENT key rather than on a second stored flag.
+ *
+ *  ⚠ One consequence, and it is deliberate: an untouched chat MATERIALISED by opening a meeting row
+ *  is pruned too. Nothing the rail shows is lost — `railRows` derives a row for every meeting that
+ *  has no chat, so the row comes straight back and opening it materialises the chat again. What
+ *  goes is the saved tab set of a conversation nobody ever wrote in, which is precisely the "leaves
+ *  nothing behind" the ruling asks for. */
+export function pruneStale(chats: Chat[]): Chat[] {
+  const planted = new Set<string>([PERSONAL_CHAT_ID, ORG_CHAT_ID]);
+  return chats.filter((c) => !planted.has(c.id) && (!!c.touched || !!c.scaffold));
 }
 
-/** THREE-valued, and the third value is the whole correction.
- *
- *  ⚠ The first version read `=== "missing"` and treated everything else — including an ABSENT
- *  hint — as "the layer is fine, seed the rows". That defeats itself on the exact case it exists
- *  for: a first admin on a fresh browser has no hint yet, because the poll that writes it has not
- *  returned when the rail renders. Verified live on a cleared browser: the admin got the Personal
- *  row, the generic "paste a meeting link" greeting and the personal README template — the
- *  founder's original complaint, reproduced by the fix meant to prevent it.
- *
- *  So `null` (unknown) is its own answer and it does NOT seed. The rows are restored by the
- *  re-seed below the moment the probe says "completed", which is under a second later — and they
- *  are derived, not stored, so nothing has to be un-hidden. Being briefly rowless costs a second;
- *  guessing wrong the other way costs the first impression this whole gate exists to protect. */
-export function companyLayerHint(): "missing" | "completed" | null {
-  try {
-    const v = localStorage.getItem(LAYER_HINT_KEY);
-    return v === "missing" || v === "completed" ? v : null;
-  } catch { return null; }
-}
-
-/** The two rows that must always be reachable: your own chat, and the `_global` admin setup — which
- *  after the flattening is just another chat row. Both are structural, never spam, so both count as
- *  touched (an untouched org-setup row would hide behind the filter and take admin with it).
- *
- *  ── EXCEPT BEFORE THE INSTANCE IS SET UP (founder ruling 2026-09-02) ──────────────────────────
- *  On a fresh instance the admin is the only person who can be here, and the only thing that can
- *  usefully happen is writing the company layer. The founder clicked through his own first claim
- *  and got a "Personal" row seeded on the generic greeting — "paste a meeting link" — beside a
- *  second "Organisation setup" row, on an instance that could not join a meeting or send a mail:
- *  "this is what I get from the first admin click — it should want to setup global here."
- *  So while the layer is missing there are NO seed rows. The setup conversation the preset opens is
- *  the only chat, and it is the whole screen. They come back the moment the instance opens — these
- *  rows are derived, not stored, so nothing has to be un-hidden later. */
-export function seedChats(now = Date.now()): Chat[] {
-  if (companyLayerHint() !== "completed") return [];
-  return [
-    { id: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"], artifacts: [], touched: true, createdAt: now, lastActivityAt: now },
-    { id: ORG_CHAT_ID, label: ORG_CHAT_LABEL, workspaces: ["_global"], artifacts: [], touched: true, createdAt: now - 1, lastActivityAt: now - 1 },
-  ];
-}
-
-/** Whatever we load, these two exist — unless the instance has not been set up yet. */
-export function ensureSeeds(chats: Chat[], now = Date.now()): Chat[] {
-  const out = [...chats];
-  for (const s of seedChats(now)) if (!out.some((c) => c.id === s.id)) out.push(s);
-  return out;
+/** The stored `scaffold` field, or nothing. Exported-adjacent on purpose: it is the ONE place the
+ *  pair is admitted, so "an admin-setup chat with no scaffold" has exactly one door and it is shut. */
+function scaffoldRecord(raw: unknown): { kind: string; id: string } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as { kind?: unknown; id?: unknown };
+  return typeof r.kind === "string" && r.kind && typeof r.id === "string" && r.id
+    ? { kind: r.kind, id: r.id }
+    : undefined;
 }
 
 function normalise(raw: unknown, now: number): Chat[] {
@@ -451,9 +495,11 @@ function normalise(raw: unknown, now: number): Chat[] {
             .map((a) => ({ ...a, kind: a.kind === "meeting" ? ("meeting" as const) : undefined }))
         : [],
       focus: typeof r.focus === "string" && r.focus ? r.focus : undefined,
-      // Survives a reload. Without this the flavour would be right on the turn the scaffold opened
-      // the chat and wrong on every load after it — the sort of half-fix that reads as fixed.
-      scaffoldKind: typeof r.scaffoldKind === "string" && r.scaffoldKind ? r.scaffoldKind : undefined,
+      // ALL OR NOTHING (F37). A kind with no record id is the stale shape this commit deleted, and
+      // re-admitting one here would let a row stored before it resurrect the pre-scaffold admin
+      // render on the next load. A half-record is dropped, never repaired — including the bare
+      // `scaffoldKind` string an older build wrote, which by construction had no id beside it.
+      scaffold: scaffoldRecord(r.scaffold),
       touched: !!r.touched,
       createdAt: Number.isFinite(r.createdAt) ? Number(r.createdAt) : now,
       lastActivityAt: Number.isFinite(r.lastActivityAt) ? Number(r.lastActivityAt) : Number(r.createdAt) || now,
@@ -475,11 +521,11 @@ export function loadChats(now = Date.now()): Chat[] {
   if (stored != null) {
     let parsed: unknown = null;
     try { parsed = JSON.parse(stored); } catch { /* corrupt → fall through to seeds */ }
-    return ensureSeeds(normalise(parsed, now), now);
+    return pruneStale(normalise(parsed, now));
   }
   let legacy: LegacyProject[] = [];
   try { legacy = JSON.parse(localStorage.getItem(PROJECTS_KEY) || "[]") as LegacyProject[]; } catch { legacy = []; }
-  const migrated = ensureSeeds(migrateProjects(Array.isArray(legacy) ? legacy : [], now), now);
+  const migrated = pruneStale(migrateProjects(Array.isArray(legacy) ? legacy : [], now));
   saveChats(migrated);
   return migrated;
 }

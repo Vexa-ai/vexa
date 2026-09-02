@@ -12,13 +12,14 @@
  *       httpOnly `vexa-token` / `vexa-user-info` cookies — so every downstream consumer
  *       (server.mjs's WS proxy, api/proxyAuth.ts, /api/auth/me, the minutes dev seams that read
  *       `id` out of the info cookie) sees a session identical to any other,
- *    3. 302 to `next`, which `safeNext` has already reduced to a site-relative path.
+ *    3. 302 to `next`, which `safeNext` has already reduced to a site-relative path — or, when the
+ *       link named no destination of its own, to a freshly minted FIRST-VISIT scaffold (F42).
  *
  *  A refused link answers with a small HTML page, not a JSON 401 — the visitor arrived by clicking
  *  a mail, and a raw error body is a dead end for them.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
 import { redeemMagicToken, safeNext, verifyMagicToken } from "../magicToken";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +58,33 @@ function page(title: string, detail: string, status: number, cta = "Ask for a ne
 <h1>${esc(title)}</h1><p>${esc(detail)}</p><a href="/">${esc(cta)}</a>
 </div></body></html>`;
   return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
+}
+
+/** WHERE A SIGN-IN LANDS (F42, founder ruling 2026-09-02).
+ *
+ *  A link that named a destination keeps it — an invite, a meeting page, a scaffold someone already
+ *  minted for this person (`?s=`). Everything else used to land on `/`, and `/` was the product
+ *  composing a landing out of whatever was lying around: a seeded "Personal" chat on the generic
+ *  greeting, an admin-only setup card offered to a plain member, an empty desk's README template
+ *  rendered as a page of `(unset)`. *"i logged as new user, that's what i see - not happy about
+ *  that."*
+ *
+ *  So a sign-in with nowhere to go MINTS ITS OWN ARRIVAL. The record — which workspaces are already
+ *  shared with this address, which meetings it is invited to — is derived server-side; nothing about
+ *  it is guessed here.
+ *
+ *  A FAILED MINT COSTS NOTHING BUT THE ARRIVAL: it is logged and the visitor lands on `/` exactly as
+ *  before. The opposite trade from the admin claim, where the role had already changed and a silent
+ *  failure would strand the new administrator — here the only thing that has happened is that they
+ *  are signed in, which is what they came for. */
+async function arrival(target: string, email: string, userId: string | number): Promise<string> {
+  // `?s=` inside the destination means an arrival already exists for this click — minting a second
+  // would open a conversation over the one they were sent.
+  if (target !== "/" || /[?&]s=/.test(target)) return target;
+  const minted = await mintFirstVisitScaffold(email, userId);
+  if (minted.ok && minted.data?.url) return minted.data.url;
+  console.error(`[terminal-auth] first-visit scaffold mint failed for ${email}: ${minted.ok ? "no url" : minted.error}`);
+  return target;
 }
 
 export async function GET(request: NextRequest) {
@@ -126,7 +154,7 @@ export async function GET(request: NextRequest) {
   }
 
   const { user, token: apiToken } = result;
-  const res = new NextResponse(null, { status: 302, headers: { Location: target, ...NO_STORE } });
+  const res = new NextResponse(null, { status: 302, headers: { Location: await arrival(target, user.email, user.id), ...NO_STORE } });
   const opts = { httpOnly: true, secure: isSecureRequest(), sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30, path: "/" };
   res.cookies.set(AUTH_COOKIE, apiToken, opts);
   res.cookies.set(

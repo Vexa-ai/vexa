@@ -5,14 +5,15 @@
  *  or a real clock. That is the whole reason the rule lives in a function instead of in JSX.
  *
  *  Covered: each of the five rules alone · the priority order when they collide · the three-chip
- *  cap · the ONE static pad · the two ways a rule declines to fire (unknown scaffolding, a meeting
- *  already written about). */
+ *  cap · the two ways a rule declines to fire (unknown scaffolding, a meeting already written
+ *  about) · and, since 2026-09-02, that NOTHING is padded in behind them (F36 — the standing
+ *  "Create a group for daily meetings" suggestion is deleted; a button is a scaffolded intent, not
+ *  a default, and an empty row is the honest answer for an account with nothing to say about). */
 import { describe, expect, it } from "vitest";
 import type { MeetingMock } from "../../surfaces/meetingModel";
 import type { Chat } from "../chats";
-import { applyProposal, GROUP_PROPOSAL, isUnlabeled, KICK, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
+import { applyProposal, isUnlabeled, KICK, PREP_WINDOW_MS, proposals, setupProposal } from "../proposals";
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../canvas/actions";
-import { ORG_CHAT_ID, PERSONAL_CHAT_ID } from "../chats";
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
 const at = (mins: number) => new Date(NOW + mins * 60000).toISOString();
@@ -189,24 +190,32 @@ describe("priority + the cap", () => {
   });
 });
 
-describe("the pad", () => {
-  it("an account with nothing to say about still gets one chip", () => {
-    const ps = run([], [touched("main")]);
-    expect(ps).toEqual([GROUP_PROPOSAL]);
-    expect(ps[0].kick).toBe(KICK.group);
+describe("F36 — nothing is padded in behind the rules", () => {
+  it("an account with nothing to say about is offered NOTHING", () => {
+    // It used to be offered "Create a group for daily meetings" — a standing suggestion that
+    // appeared because the row looked short. The founder met it under a chat he had never created.
+    expect(run([], [touched("main")])).toEqual([]);
   });
 
-  it("two rules firing are padded to three", () => {
-    const ps = run([LIVE], [touched("main"), untouched("a")]);
-    expect(kinds(ps)).toEqual(["catch-up", "review", "group"]);
+  it("two rules firing stay two — the row is not filled up", () => {
+    expect(kinds(run([LIVE], [touched("main"), untouched("a")]))).toEqual(["catch-up", "review"]);
   });
 
-  it("ONE static, never two — the pad never fills the row on its own", () => {
-    expect(kinds(run([], [touched("main")])).filter((k) => k === "group")).toHaveLength(1);
+  it("every chip that IS offered comes from live state, never from a constant", () => {
+    // the whole offered set, over a rich account: each kind is produced by a rule that read
+    // something real (a meeting's phase, the rail's hidden count, the `.scaffolded` marker).
+    const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], false, NOW, "ada@example.com");
+    for (const p of ps) expect(["catch-up", "prep", "outcome", "review", "setup"]).toContain(p.kind);
   });
 
-  it("three derived rules leave no room for it", () => {
-    expect(kinds(run([LIVE, SOON, HELD], [touched("main")]))).not.toContain("group");
+  it("the deleted suggestion is not reachable under any state", () => {
+    for (const c of [[], [touched("main")], [untouched("a")]]) {
+      for (const m of [[], [LIVE], [HELD], [LIVE, SOON, HELD]]) {
+        for (const sc of [true, false, null] as const) {
+          expect(labels(proposals(m, c, sc, NOW))).not.toContain("Create a group for daily meetings");
+        }
+      }
+    }
   });
 });
 
@@ -224,23 +233,18 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
   const catchUp = () => run([LIVE], [touched("main")])[0];
   const outcome = () => run([HELD], [touched("main")])[0];
 
-  it("the static pad fires IN this chat and names it — no row is minted", () => {
-    const e = applyProposal(GROUP_PROPOSAL, NEW, [], NOW);
-    expect(e).toEqual({ act: "run", chat: { ...NEW, touched: true, lastActivityAt: NOW, label: "Daily meetings" }, kick: KICK.group, say: undefined });
+  it("a non-meeting chip fires IN this chat and names it — no row is minted", () => {
+    const p = setupProposal("ada@example.com");
+    const e = applyProposal(p, NEW, [], NOW);
     expect(e?.act === "run" && e.chat.id).toBe(NEW.id);          // the SAME chat
+    expect(e?.act === "run" && e.chat.label).toBe("Workspace setup");
     expect(e?.act === "run" && e.chat.meeting).toBeUndefined();  // still a plain chat
   });
 
   it("a chat somebody already named keeps its name", () => {
-    const e = applyProposal(GROUP_PROPOSAL, NAMED, [], NOW);
+    const e = applyProposal(setupProposal(null), NAMED, [], NOW);
     expect(e?.act === "run" && e.chat.label).toBe("Q3 planning");
     expect(e?.act === "run" && e.chat.touched).toBe(true);
-  });
-
-  it("Personal is a name, so the pad does not rewrite it", () => {
-    const home = chat({ id: PERSONAL_CHAT_ID, label: "Personal", touched: true });
-    const e = applyProposal(GROUP_PROPOSAL, home, [], NOW);
-    expect(e).toEqual({ act: "run", chat: { ...home, lastActivityAt: NOW }, kick: KICK.group, say: undefined });
   });
 
   it("a meeting chip REBINDS this chat to the meeting — same id, meeting title, tabs dropped", () => {
@@ -269,12 +273,10 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
     expect(e).toEqual({ act: "run", chat: { ...mine, touched: true, lastActivityAt: NOW }, kick: KICK["catch-up"], say: undefined });
   });
 
-  it("the two structural rows are never rebound — from them a meeting chip opens the meeting's own chat", () => {
-    for (const id of [PERSONAL_CHAT_ID, ORG_CHAT_ID]) {
-      const e = applyProposal(catchUp(), chat({ id, label: "Personal", touched: true }), [LIVE], NOW);
-      expect(e).toEqual({ act: "open", meetingId: "m-live", kick: KICK["catch-up"], say: undefined });
-    }
-  });
+  // (The two SEEDED rows — `main` and `org-setup` — used to be exempt from rebinding, because
+  // turning "Personal" into a meeting's chat would have retired the home row for good. F34 deleted
+  // the seeding and `pruneStale` deletes the rows, so there is nothing left to exempt; the rule
+  // that survives is the one below, about a chat bound to a DIFFERENT meeting.)
 
   it("nor is a chat that belongs to a DIFFERENT meeting — its id is that meeting's session", () => {
     const held = chat({ id: "meet-m-post", meeting: "m-post", label: "Blue Light Card" });
@@ -302,13 +304,14 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
   });
 
   it("with no chat in front at all — and only then — a chip may make one", () => {
-    expect(applyProposal(GROUP_PROPOSAL, null, [], NOW)).toEqual({ act: "create", label: "Daily meetings", kick: KICK.group, say: undefined });
+    const p = setupProposal(null);
+    expect(applyProposal(p, null, [], NOW)).toEqual({ act: "create", label: "Workspace setup", kick: p.kick, say: p.say });
   });
 
   it("NOTHING a live row can offer ever appends a chat", () => {
     const offered = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], false, NOW, "ada@example.com");
     expect(offered.length).toBeGreaterThan(0);
-    for (const p of [...offered, GROUP_PROPOSAL]) {
+    for (const p of [...offered, setupProposal("ada@example.com")]) {
       const e = applyProposal(p, NEW, [LIVE, SOON, HELD], NOW);
       expect(e?.act).not.toBe("create");
       if (e?.act === "run") expect(e.chat.id).toBe(NEW.id);

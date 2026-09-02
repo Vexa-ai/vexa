@@ -13,7 +13,7 @@ import { type AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
@@ -26,6 +26,25 @@ function isSecureRequest(): boolean {
     (process.env.TERMINAL_URL || "").startsWith("https://") ||
     process.env.NODE_ENV === "production"
   );
+}
+
+/** The one-shot hand-off from `signIn` to `redirect` (F42). Short-lived and httpOnly: it carries a
+ *  URL for the next hop of THIS sign-in and nothing else, and it is consumed the moment it is read
+ *  so a second navigation cannot land on a spent arrival. */
+const ARRIVAL_COOKIE = "vexa-arrival";
+
+async function readArrival(): Promise<string | null> {
+  try {
+    const store = await cookies();
+    const url = store.get(ARRIVAL_COOKIE)?.value;
+    if (!url) return null;
+    store.delete(ARRIVAL_COOKIE);
+    return url;
+  } catch {
+    // Reading (or clearing) cookies is not always permitted in every context this callback runs in.
+    // A missing arrival is not a failure — it lands where it always did.
+    return null;
+  }
 }
 
 export const authOptions: AuthOptions = {
@@ -101,11 +120,41 @@ export const authOptions: AuthOptions = {
       cookieStore.set(AUTH_COOKIE, result.token, opts);
       const displayName = user.name || result.user.name || result.user.email.split("@")[0];
       cookieStore.set(USER_INFO_COOKIE, JSON.stringify({ email: result.user.email, name: displayName }), opts);
+
+      // THE ARRIVAL (F42) — the third door mints one too. This callback answers a boolean and has no
+      // say in where NextAuth then sends the browser, so the minted path is handed to `redirect`
+      // below through a one-shot cookie rather than through a second sign-in mechanism.
+      //
+      // A FAILED MINT IS NOT A FAILED SIGN-IN: it is logged, no cookie is written, and `redirect`
+      // lands them exactly where it always did. Returning `false` here would refuse an authenticated
+      // person over a missing conversation, which is not the trade — see mintFirstVisitScaffold.
+      try {
+        const minted = await mintFirstVisitScaffold(result.user.email, result.user.id);
+        if (minted.ok && minted.data?.url) {
+          cookieStore.set(ARRIVAL_COOKIE, minted.data.url, { ...opts, httpOnly: true, maxAge: 120 });
+        } else {
+          // eslint-disable-next-line no-console
+          console.error(`[terminal-auth] first-visit scaffold mint failed for ${result.user.email}: ${minted.ok ? "no url" : minted.error}`);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[terminal-auth] first-visit scaffold mint threw for ${result.user.email}: ${(e as Error).message}`);
+      }
       return true;
     },
     // Land back on the workbench, HONORING a same-origin callbackUrl so an invite link's ?invite=<token>
     // survives the OAuth round-trip (InviteRedeemer then redeems it post-auth). Off-origin URLs → baseUrl.
+    //
+    // …and when the round-trip named NO destination of its own, land on the arrival `signIn` just
+    // minted (F42). A callbackUrl that says something — an invite, a meeting, a `?s=` somebody
+    // already minted for this person — always wins: minting a second arrival over the one they were
+    // sent would open a conversation on top of the one they clicked.
     async redirect({ url, baseUrl }) {
+      const named = url !== baseUrl && url !== `${baseUrl}/` && url !== "/";
+      if (!named) {
+        const arrival = await readArrival();
+        if (arrival) return arrival;
+      }
       if (url.startsWith("/")) return `${baseUrl}${url}`;
       if (url.startsWith(baseUrl)) return url;
       return baseUrl;

@@ -12,8 +12,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MeetingMock } from "../meetingModel";
 import {
-  CHATS_KEY, PROJECTS_KEY, ORG_CHAT_LABEL, PERSONAL_CHAT_ID,
-  artifactKey, chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, railRows, visibleRows, whenShort,
+  CHATS_KEY, PROJECTS_KEY, ORG_CHAT_ID, PERSONAL_CHAT_ID,
+  artifactKey, chatForRow, loadChats, markTouched, meetingChatId, migrateProjects, pruneStale, railRows,
+  visibleRows, whenShort,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
 import { T, maxPagesW } from "../../minutes/tokens";
@@ -60,7 +61,7 @@ describe("railRows — stored chats UNION live meetings", () => {
   });
 
   it("a chat over no meeting is an ordinary row, and keeps its own workspaces", () => {
-    const rows = railRows([chat({ id: "org-setup", label: ORG_CHAT_LABEL, workspaces: ["_global"] })], []);
+    const rows = railRows([chat({ id: "c-org", label: "Organisation · setup", workspaces: ["_global"] })], []);
     expect(rows[0].meetingId).toBeNull();
     expect(rows[0].workspaces).toEqual(["_global"]);
   });
@@ -219,8 +220,11 @@ describe("migrateProjects — the project registry flattens, one way", () => {
   ];
 
   it("every project chat becomes a flat chat", () => {
+    // …and ONLY the registry's own chats: the personal project's built-in "main" row used to be
+    // reconstructed here, and is not any more (F34) — it was a row nobody made, and `pruneStale`
+    // deletes that id on the very next line of `loadChats`.
     expect(migrateProjects(legacy, T0).map((c) => c.id))
-      .toEqual([PERSONAL_CHAT_ID, "pchat-a", "org-setup", "pchat-b", "pchat-c"]);
+      .toEqual(["pchat-a", "org-setup", "pchat-b", "pchat-c"]);
   });
 
   it("each chat inherits its project's set as its own workspaces", () => {
@@ -233,13 +237,10 @@ describe("migrateProjects — the project registry flattens, one way", () => {
     const out = migrateProjects(legacy, T0);
     expect(out.find((c) => c.id === "pchat-b")?.label).toBe("Acme · pricing");
     expect(out.find((c) => c.id === "pchat-a")?.label).toBe("onboarding");     // Personal needs no qualifier
-    expect(out.find((c) => c.id === "org-setup")?.label).toBe(ORG_CHAT_LABEL);
   });
 
-  it("the Personal project's built-in 'main' row is reconstructed — it was never in chats[]", () => {
-    const out = migrateProjects(legacy, T0);
-    expect(out[0].id).toBe(PERSONAL_CHAT_ID);
-    expect(out[0].workspaces).toEqual(["personal"]);
+  it("plants no 'main' row of its own (F34)", () => {
+    expect(migrateProjects(legacy, T0).some((c) => c.id === PERSONAL_CHAT_ID)).toBe(false);
   });
 
   it("migrated chats are touched — the old UI could not tell hand-made from auto-created", () => {
@@ -248,7 +249,7 @@ describe("migrateProjects — the project registry flattens, one way", () => {
 
   it("the registry's own order survives as the rail's newest-first order", () => {
     expect(labels(railRows(migrateProjects(legacy, T0), [])))
-      .toEqual(["Personal", "onboarding", ORG_CHAT_LABEL, "Acme · pricing", "Acme · security"]);
+      .toEqual(["onboarding", "Organisation · setup", "Acme · pricing", "Acme · security"]);
   });
 
   it("a project with no set, and duplicate ids, do not produce broken rows", () => {
@@ -275,7 +276,9 @@ describe("artifacts — the open tabs ARE the chat record", () => {
     localStorage.clear();
     const tabs = [{ path: "kg/entities/meeting/m1.md", label: "Minutes" }, { path: "README.md", slug: "_global", label: "_global" }];
     localStorage.setItem(CHATS_KEY, JSON.stringify([
-      { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: artifactKey(tabs[1]), createdAt: T0, lastActivityAt: T0 },
+      // touched, because the load path prunes a chat nobody wrote in (F35) — a saved tab set only
+      // exists on a chat somebody actually worked in.
+      { id: "c1", label: "Acme", workspaces: ["personal", "_global"], artifacts: tabs, focus: artifactKey(tabs[1]), touched: true, createdAt: T0, lastActivityAt: T0 },
     ]));
     const c = loadChats(T0).find((x) => x.id === "c1")!;
     expect(c.artifacts).toEqual(tabs);
@@ -285,14 +288,35 @@ describe("artifacts — the open tabs ARE the chat record", () => {
   it("tolerates the earlier build's bare-string artifacts instead of rendering junk tabs", () => {
     localStorage.clear();
     localStorage.setItem(CHATS_KEY, JSON.stringify([
-      { id: "c1", label: "Acme", workspaces: ["personal"], artifacts: ["README.md", null, 7], createdAt: T0, lastActivityAt: T0 },
+      { id: "c1", label: "Acme", workspaces: ["personal"], artifacts: ["README.md", null, 7], touched: true, createdAt: T0, lastActivityAt: T0 },
     ]));
     expect(loadChats(T0).find((x) => x.id === "c1")!.artifacts).toEqual([]);
   });
 
   it("a chat with no artifacts is the signal to fall back to the room's own pages", () => {
     localStorage.clear();
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      { id: "c1", label: "Acme", workspaces: ["personal"], artifacts: [], touched: true, createdAt: T0, lastActivityAt: T0 },
+    ]));
     expect(loadChats(T0).every((c) => c.artifacts.length === 0)).toBe(true);
+  });
+
+  it("a stored `scaffold` is ALL OR NOTHING — a kind with no record id is dropped (F37)", () => {
+    localStorage.clear();
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      { id: "good", label: "Setup", workspaces: ["_global"], artifacts: [], touched: true,
+        scaffold: { kind: "admin-setup", id: "S1" }, createdAt: T0, lastActivityAt: T0 },
+      { id: "half", label: "Setup", workspaces: ["_global"], artifacts: [], touched: true,
+        scaffold: { kind: "admin-setup" }, createdAt: T0, lastActivityAt: T0 },
+      // the shape an older build wrote: a bare kind, with no record anywhere. It is exactly what
+      // let a PLANTED row wear the admin flavour, so it is not re-admitted.
+      { id: "legacy", label: "Setup", workspaces: ["_global"], artifacts: [], touched: true,
+        scaffoldKind: "admin-setup", createdAt: T0, lastActivityAt: T0 },
+    ]));
+    const out = loadChats(T0);
+    expect(out.find((c) => c.id === "good")?.scaffold).toEqual({ kind: "admin-setup", id: "S1" });
+    expect(out.find((c) => c.id === "half")?.scaffold).toBeUndefined();
+    expect(out.find((c) => c.id === "legacy")?.scaffold).toBeUndefined();
   });
 });
 
@@ -324,36 +348,91 @@ describe("loadChats — migrate exactly once, and never write the old key", () =
     expect(loadChats(T0).map((c) => c.id)).not.toContain("pchat-b");
   });
 
-  // ── the structural rows are conditional now (founder ruling 2026-09-02) ─────────────────────
-  // They used to be unconditional, and on a fresh instance that put a "Personal" row seeded with
-  // "paste a meeting link" in front of an admin whose instance could not join a meeting or send a
-  // mail. They exist once the company layer is KNOWN to be written, and not before.
-  const layerReady = () => localStorage.setItem("vexa.companyLayer.v1", "completed");
+  // ── THE RAIL PLANTS NOTHING (founder ruling 2026-09-02, F34) ────────────────────────────────
+  //
+  //  Two rows used to be seeded — "Personal" and "Organisation setup" — and a cached company-layer
+  //  hint decided when. The founder opened his rail, found three chats he had never made and asked
+  //  the only question that matters: "where is it coming from? i did not create this chat, and i do
+  //  not like this text." So there is no seeding, no hint, and no timing question left to get wrong.
 
-  it("the two structural rows exist once the instance is set up, touched so the filter cannot hide admin", () => {
-    layerReady();
-    const out = loadChats(T0);
-    const org = out.find((c) => c.label === ORG_CHAT_LABEL);
-    expect(out.find((c) => c.id === PERSONAL_CHAT_ID)?.touched).toBe(true);
-    expect(org?.touched).toBe(true);
-    expect(org?.workspaces).toEqual(["_global"]);
-  });
-
-  it("withholds them while the company layer is missing — the setup conversation is the only chat", () => {
+  it("a fresh browser gets an EMPTY rail — nothing is planted, whatever the instance's state", () => {
+    expect(loadChats(T0)).toEqual([]);
+    // and it stays empty however the old hint would have read: there is no longer a value that
+    // could make a row appear.
+    localStorage.setItem("vexa.companyLayer.v1", "completed");
+    expect(loadChats(T0)).toEqual([]);
     localStorage.setItem("vexa.companyLayer.v1", "missing");
     expect(loadChats(T0)).toEqual([]);
   });
 
-  it("withholds them while the answer is UNKNOWN, which is the first render of a fresh browser", () => {
-    // The case the first version of this fix got wrong: the hint is written by a poll that has not
-    // returned when the rail first renders, so "absent" must not read as "fine, seed them". Being
-    // briefly rowless costs a second; guessing wrong costs the first impression.
+  it("a corrupt stored list reads as an empty rail instead of throwing", () => {
+    localStorage.setItem(CHATS_KEY, "{not json");
     expect(loadChats(T0)).toEqual([]);
   });
+});
 
-  it("a corrupt stored list falls back to the seeds instead of throwing", () => {
-    layerReady();
-    localStorage.setItem(CHATS_KEY, "{not json");
-    expect(loadChats(T0).map((c) => c.id)).toEqual([PERSONAL_CHAT_ID, "org-setup"]);
+/** F35 — THE PRUNE. Deleting the seeding stops new plants and does nothing about the rows already
+ *  in the founder's localStorage, and "clear your site data" is not a fix to hand a founder. So the
+ *  load path removes what should never have been written:
+ *
+ *    · the two PLANTED ids, by id — they were stored `touched: true` deliberately, so a generic
+ *      "drop the untouched ones" rule does not catch them and never could have;
+ *    · every chat with no human turn and no scaffold record — the `+` chats. He had two: one from
+ *      12:05 and one from 12:19, neither typed in.
+ *
+ *  And the thing that must NOT happen: his real "setup global" chat, which has turns, survives. */
+describe("pruneStale — the 2026-09-02 migration", () => {
+  const planted = (id: string, label: string): Chat =>
+    chat({ id, label, touched: true, createdAt: T0, lastActivityAt: T0 });
+  /** What a `+` chat looks like once it has been persisted by the build that did persist them. */
+  const plusChat = (id: string): Chat => chat({ id, label: "New chat", touched: false });
+  /** His real one: a chat with turns, artifacts and a name he did not choose from a menu. */
+  const REAL: Chat = chat({
+    id: "askchat-mtjwoie7", label: "setup global", touched: true,
+    workspaces: ["_global", "personal"],
+    artifacts: [{ path: "README.md", slug: "_global", label: "README" }, { path: "CHARTER.md", slug: "_global", label: "CHARTER" }],
+    focus: "_global|README.md",
+  });
+  /** A scaffolded arrival nobody has replied to yet — composed FOR someone, so it stays. */
+  const SCAFFOLDED: Chat = chat({
+    id: "scaffold-S1", label: "Setup", touched: false, scaffold: { kind: "admin-setup", id: "S1" },
+  });
+
+  it("drops the two planted ids even though both are stored as touched", () => {
+    const out = pruneStale([planted(PERSONAL_CHAT_ID, "Personal"), planted(ORG_CHAT_ID, "Organisation setup"), REAL]);
+    expect(out.map((c) => c.id)).toEqual([REAL.id]);
+  });
+
+  it("drops a `+` chat — no human turn and no scaffold behind it", () => {
+    expect(pruneStale([plusChat("pchat-1205"), plusChat("pchat-1219"), REAL]).map((c) => c.id)).toEqual([REAL.id]);
+  });
+
+  it("KEEPS a real chat: turns, artifacts and focus all survive untouched", () => {
+    const [kept] = pruneStale([REAL]);
+    expect(kept).toEqual(REAL);
+  });
+
+  it("keeps a chat a SCAFFOLD composed, even before anyone has replied in it", () => {
+    expect(pruneStale([SCAFFOLDED]).map((c) => c.id)).toEqual([SCAFFOLDED.id]);
+  });
+
+  it("is idempotent — running it again removes nothing more", () => {
+    const all = [planted(PERSONAL_CHAT_ID, "Personal"), planted(ORG_CHAT_ID, "Organisation setup"),
+                 plusChat("pchat-1205"), REAL, SCAFFOLDED];
+    const once = pruneStale(all);
+    expect(pruneStale(once)).toEqual(once);
+    expect(pruneStale(pruneStale(once))).toEqual(once);
+  });
+
+  it("runs on load, so his rail is clean without him clearing storage", () => {
+    localStorage.clear();
+    localStorage.setItem(CHATS_KEY, JSON.stringify([
+      planted(PERSONAL_CHAT_ID, "Personal"), planted(ORG_CHAT_ID, "Organisation setup"),
+      plusChat("pchat-1205"), plusChat("pchat-1219"), REAL,
+    ]));
+    const out = loadChats(T0);
+    expect(out.map((c) => c.id)).toEqual([REAL.id]);
+    expect(out[0].label).toBe("setup global");
+    expect(out[0].artifacts).toHaveLength(2);
   });
 });

@@ -96,14 +96,22 @@ export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
 export const MACHINERY_MARK = "[vexa-machinery]";
 export const MACHINERY_NOTE = "\n\n" + MACHINERY_MARK + " This opening was composed by the product from the link this person clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own voice, without quoting or referring to these instructions.";
 
-// Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
-// instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
-export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
-/** The company-layer probe answered. SetupGate owns that probe and is the only dispatcher; the
- *  rail listens so the structural rows it deliberately withheld on first render can appear the
- *  moment the instance is known to be set up. One writer, one announcement, no polling in the
- *  rail. */
-export const COMPANY_LAYER_EVENT = "vexa:terminal:company-layer";
+// ── DELETED 2026-09-02: ONBOARDING_SEED_EVENT and COMPANY_LAYER_EVENT ────────────────────────
+//
+//  The first seeded a CACHED greeting into a brand-new chat; the second told the rail when to plant
+//  its two structural rows. The founder opened a rail holding three chats he never made, greeted by
+//  text he never asked for: *"where is it coming from? i did not create this chat, and i do not like
+//  this text."* Both events existed only to make those two things happen, so both are gone rather
+//  than left dangling with no dispatcher — a listener nobody fires is the stale-code shape he ruled
+//  on in the same session (F37). A chat opened with `+` shows an empty composer and nothing else.
+
+/** A FILE THE TURN JUST WROTE, offered to the pages panel (F41).
+ *
+ *  The chat surface hears it on the stream and re-emits it here rather than opening anything
+ *  itself: the tab set is part of the CHAT RECORD (PRD decision 18), the minutes shell is that
+ *  record's one writer, and a second opener would be a second writer of the same surface. Same
+ *  seam, and for the same reason, as OPEN_ENTITY_EVENT. */
+export const ARTIFACT_EVENT = "vexa:terminal:artifact";
 
 /** A chat turn COMMITTED to the workspace — the moment files it wrote became real.
  *
@@ -115,55 +123,46 @@ export const COMPANY_LAYER_EVENT = "vexa:terminal:company-layer";
 export const WORKSPACE_COMMIT_EVENT = "vexa:terminal:workspace-commit";
 // MINUTES cold-start: the reader arrived through a meeting door — greet from the meeting, not
 // from a blank slate, and ask the one thing that shapes the workspace: their role.
-/** A `?ask=` preset OWNS the opening of the chat it lands in.
- *
- *  The cached phase greeting and an emailed preset are two writers of one first turn, and the
- *  greeting always won: it is instant, the preset has to fetch `_global/asks/<name>.md` first. A
- *  brand-new attendee who clicked "what it means for you" therefore got "I'm booked for your
- *  meeting" about a meeting that had already happened, and the preset never spoke.
- *
- *  Module state, not storage, on purpose: it is true for exactly ONE page load, and a preset that
- *  fails to resolve clears it and re-fires the seed so the greeting still happens. */
-let presetInFlight = false;
-export const setPresetInFlight = (v: boolean) => { presetInFlight = v; };
-export const presetOwnsOpening = () => presetInFlight;
+// ── DELETED 2026-09-02 (F36): presetInFlight / setPresetInFlight / presetOwnsOpening ─────────
+//
+//  A `?ask=` preset and the cached phase greeting were two writers of one first turn, and the
+//  greeting always won — it was instant, the preset had to fetch `_global/asks/<name>.md` first. So
+//  a preset claimed the opening synchronously and the seed listener stood down when it saw the flag.
+//
+//  There is no second writer any more: the greeting is deleted, and a chat with no preset simply
+//  opens empty. A flag with no reader is a flag that goes stale in silence, so it goes with the
+//  listener that read it rather than staying as a call every arrival still has to remember to make.
 
 export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meeting — they're in this workspace, with the full transcript. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
 // Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
 // the conversation is a BRIEFING, and the role question rides inside it.
 export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";
-// MINUTES home: a chat bound to NO meeting. Neither minutes line is true here — "I kept the minutes
-// of your meeting" names a meeting that may not exist, and a founder read it on a brand-new account
-// with none (2026-09-01). So this one says what the place is and asks the one thing it needs, and it
-// stays true whether the account holds a thousand meetings or zero.
-export const MINUTES_HOME_GREETING = "👋 I'm your agent here. Vexa sits in your meetings, turns them into words, and keeps those words as memory you and your team can use — all as plain files in this workspace. To start: **paste a meeting link** and I'll join it, or tell me **who you are and what you're accountable for** — that decides what I pay attention to for you.";
-export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
-export type OnboardingSeedKind = "contextual" | "personal";
-
-/** Pick the cached first-run greeting. An explicit Personal-workspace setup is never meeting prep. */
-export function onboardingGreeting(kind: OnboardingSeedKind, minutes: boolean, hasFinishedMeeting: boolean): string {
-  if (kind === "personal" || !minutes) return ONBOARDING_GREETING;
-  return hasFinishedMeeting ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING;
-}
+// ── DELETED 2026-09-02 (F36): MINUTES_HOME_GREETING, ONBOARDING_GREETING, onboardingGreeting() ──
+//
+//  The home greeting opened every chat that was not about a meeting — "I'm your agent here … paste a
+//  meeting link … tell me who you are and what you're accountable for". The founder met it in a chat
+//  he had never created and said plainly that he did not like the text. It was a DEFAULT: nothing in
+//  anyone's state produced it, it simply filled a blank page.
+//
+//  The two lines below survive because a MEETING produces them — the room is about something, and
+//  what it says is true of that thing. Everything that greeted a chat about nothing is gone, and so
+//  is the chooser that picked between them, because the seed that called it is gone too.
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
-// ORG (_global) setup: the first agent message is DETERMINISTIC given the seed, so it is CACHED —
-// rendered instantly as the empty-state greeting, no LLM turn. The admin's first reply carries the
-// grounding below (compactStoredUserText strips it on reload), so processing starts from one answer.
-// The opener is ONE profound question standing in the void — not a paragraph. The subline is the
-// only context it needs.
-export const GLOBAL_SETUP_GREETING = "What organisation are you?";
-export const GLOBAL_SETUP_GREETING_SUB =
-  "Just the name is enough — I'll research the rest and bring it back for your sign-off.";
-export const GLOBAL_SETUP_GROUNDING = ONBOARDING_KICKOFF_MARK + [
-  "You are the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow",
-  "it exactly — ONE autonomous pass: research and WRITE every item the public record can answer, then ask",
-  "only the residual admin-only questions together. Org voice, `(unset)` discipline. Your mount of",
-  "/workspaces/_global is READ-WRITE — you",
-  "are its one sanctioned writer; commit each answer there. Your opener (asking the organisation's name)",
-  "was already displayed from cache — do NOT re-greet; the admin's reply to it follows. If _global",
-  "already holds answers, continue from the first unset item — never re-ask what is recorded.",
-].join("\n");
+// ── DELETED 2026-09-02 (F36/F37): the PRE-SCAFFOLD org-setup path ────────────────────────────
+//
+//  `GLOBAL_SETUP_GREETING` ("What organisation are you?"), its subline ("Just the name is enough —
+//  I'll research the rest and bring it back for your sign-off") and `GLOBAL_SETUP_GROUNDING` were
+//  the admin onboarding as it worked BEFORE scaffolds: the client cached the opener and attached the
+//  flow grounding to the admin's first reply, keyed on a session id — `org-setup` — that only the
+//  rail's own seeding ever produced.
+//
+//  The founder saw that card in a chat he never made, promising a research step that does not exist:
+//  *"I explain this as stale code."* The admin conversation is a SCAFFOLD now (`kind: "admin-setup"`,
+//  minted by /api/auth/claim-admin, opening text substituted server-side), and a scaffolded chat is
+//  titled and opened by its record. So this whole path is deleted rather than left unreachable —
+//  with the seeding gone, nothing could construct an `org-setup` session to reach it anyway, and a
+//  branch that can only be entered by a bug is a bug waiting for its second chance.
 
 export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
   "Read these workspace files before answering (use the Read tool): flows/personal.md, CLAUDE.md",

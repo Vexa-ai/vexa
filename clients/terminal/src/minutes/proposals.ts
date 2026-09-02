@@ -15,10 +15,10 @@
  *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { meetingTitle, meetingWhen, railRows, visibleRows, ORG_CHAT_ID, PERSONAL_CHAT_ID, type Chat } from "./chats";
+import { isPlaceholderLabel, meetingTitle, meetingWhen, railRows, visibleRows, type Chat } from "./chats";
 
 /** What a chip DOES, which is also what the shell switches on. */
-export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup" | "group";
+export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup";
 
 export type Proposal = {
   id: string;           // stable across renders — the React key, and what a test names
@@ -42,19 +42,18 @@ export const KICK = {
   "catch-up": "Catch me up on this meeting so far — read the transcript first.",
   prep: "Help me prepare for this meeting — read what exists and brief me.",
   outcome: "Tell me what came out of this meeting — decisions, owners, open items. Read the transcript first.",
-  group: "Create a shared workspace for my daily meetings and help me invite the team.",
 } as const;
 
-/** The garnish. A standing suggestion, not a derived one: it says what the product can do when the
- *  account is too new to have anything to say about. The conversation does the work — the workspace
- *  verbs exist, so this needs no wizard. */
-export const GROUP_PROPOSAL: Proposal = {
-  id: "group",
-  kind: "group",
-  label: "Create a group for daily meetings",
-  kick: KICK.group,
-  title: "Daily meetings",
-};
+// ── DELETED 2026-09-02 (F36): GROUP_PROPOSAL, "Create a group for daily meetings" ─────────────
+//
+//  The garnish — a STANDING suggestion that padded the row to three whenever fewer rules fired. It
+//  was the button the founder found sitting under a chat he had never created, and it is the exact
+//  shape his ruling names: **buttons are scaffolded intents, not defaults.** A chip that comes from
+//  a scaffold or from live state (a meeting running now, a workspace with no `.scaffolded` marker)
+//  says something true about this account; one that appears because the row looked short says
+//  nothing, and reads as the product asking to be used. So the pad is gone with it: fewer than three
+//  chips is a correct answer, and none at all is the correct answer for an account with nothing to
+//  say about.
 
 /** A clock, in the reader's own locale. Never a date: the chip only ever names a time inside the
  *  next two hours. */
@@ -79,7 +78,10 @@ function startsAt(m: MeetingMock): number {
  *  3. the newest held meeting nobody wrote in  → what came out of it
  *  4. rows the rail's filter is hiding         → review them (flip the chip, create nothing)
  *  5. the personal workspace never set up      → set it up
- *  …then pad to a row with the standing suggestion.
+ *
+ *  …and NOTHING is padded in behind them (F36). Every rule above reads live state; a chip that
+ *  appeared only because the row had space left was a default, and defaults are what the founder
+ *  ruled out. An empty row is the honest answer when nothing is true.
  *
  *  `scaffolded` is the `.scaffolded` marker probe: `true` set up, `false` not, `null` NOT YET KNOWN.
  *  Null fails closed — a chip that appears a second late is a flicker, and a "set up my workspace"
@@ -138,7 +140,6 @@ export function proposals(
   // 5 — the workspace has never been scaffolded. The chip is the person's own first sentence.
   if (scaffolded === false) out.push(setupProposal(email));
 
-  if (out.length < 3) out.push(GROUP_PROPOSAL);
   return out.slice(0, 3);
 }
 
@@ -165,19 +166,17 @@ export function setupProposal(email?: string | null): Proposal {
 //  session. `applyProposal` is the whole mutation and it is pure, so the contract is testable at the
 //  boundary that actually broke rather than through a rendered shell.
 
-/** A label nobody chose. The rail's "+" mints "New chat" and a normalised record falls back to
- *  "Chat"; both are placeholders a chip may replace. Anything else is a name a human picked. */
-export function isUnlabeled(label: string): boolean {
-  const s = (label ?? "").trim();
-  return !s || /^new chat$/i.test(s) || /^chat$/i.test(s);
-}
+/** A label nobody chose. One definition, in chats.ts, because the rail's naming rule (F38) and this
+ *  one are the same question — "may this name be replaced?" — and two copies of it would drift. */
+export const isUnlabeled = isPlaceholderLabel;
 
-/** The two seeded rows are STRUCTURAL — chats.ts calls them "the two rows that must always be
- *  reachable", and `ensureSeeds` restores one that is MISSING, never one that was renamed. They are
- *  therefore the one place a rebind is refused: turning Personal into a meeting's chat would retire
- *  the home row for good. From either of them a meeting chip opens the meeting's own chat, which is
- *  exactly what clicking its rail row does. */
-const STRUCTURAL = new Set<string>([PERSONAL_CHAT_ID, ORG_CHAT_ID]);
+// ── DELETED 2026-09-02 (F34): the STRUCTURAL set ──────────────────────────────────────────────
+//
+//  It named the two SEEDED rows (`main`, `org-setup`) as the one place a meeting chip refused to
+//  rebind, because turning "Personal" into a meeting's chat would have retired the home row for
+//  good. Neither row is planted any more and `pruneStale` deletes both from anyone who still has
+//  them, so the refusal has nothing left to refuse. The rule it protected survives where it is
+//  still true: a chat already bound to a DIFFERENT meeting is not rebound either.
 
 export type ProposalEffect =
   /** review — flip the rail's own filter. Touches no chat, names none, relabels nothing. */
@@ -212,7 +211,7 @@ export function applyProposal(
     const m = meetings.find((x) => String(x.id) === p.meetingId);
     if (!m) return null;                                        // a chip for a meeting the list lost
     if (current && current.meeting === p.meetingId) return { act: "run", chat: touch(current), kick: p.kick, say: p.say };
-    if (!current || current.meeting || STRUCTURAL.has(current.id))
+    if (!current || current.meeting)
       return { act: "open", meetingId: p.meetingId, kick: p.kick, say: p.say };
     return {
       act: "run",

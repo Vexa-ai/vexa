@@ -122,6 +122,51 @@ export function artifactsFromTokens(
   return out;
 }
 
+/** THE TAB A WRITTEN FILE LANDS ON (F41) — the `artifact` stream event, resolved to a Page.
+ *
+ *  `workspace` is "" when the write went to the caller's own desk. That is not a missing value: the
+ *  server's record resolved it and said "no slug", exactly as `personal/…` tokens resolve above, so
+ *  it becomes `slug: undefined` rather than a guess at which workspace was meant.
+ *
+ *  Pure and here rather than inline in the shell for the same reason every other token resolver is:
+ *  what a path means is a contract with the server, and a contract is worth a test. */
+export function pageForArtifact(ev: { workspace?: string; path?: string }): Page | null {
+  const path = (ev.path ?? "").trim();
+  // A path that walks out of the mount is refused, as everywhere else here — a write we cannot
+  // name honestly opens no tab rather than a tab pointing somewhere it should not.
+  if (!path || path.split("/").includes("..")) return null;
+  const slug = (ev.workspace ?? "").trim();
+  return { path, slug: slug || undefined, label: (path.split("/").pop() ?? path).replace(/\.md$/i, "") };
+}
+
+/** WHAT AN `artifact` EVENT DOES TO THE OPEN TABS (F41) — the whole decision, as a pure function.
+ *
+ *  Three rules, and the third is the one worth having a test for:
+ *    · the tab is APPENDED, idempotently by artifact key — the same file written twice in a turn is
+ *      one tab, not two;
+ *    · it comes to the FRONT only when the event says `focus: true`;
+ *    · …and never over a focus the READER chose. Someone who has opened a document is reading it,
+ *      and an agent's write appears in the strip and waits its turn. This is PRD decision 18's rule
+ *      one level down — "a second arrival must not tidy their desk out from under them" — and it is
+ *      the same rule whether the second arrival is a re-clicked link or the agent's own write.
+ *
+ *  `focus` in the result is the page to bring forward, or null for "append only". The caller decides
+ *  nothing; it wires this. */
+export function artifactTabEffect(
+  ev: { workspace?: string; path?: string; focus?: boolean },
+  pages: Page[],
+  readerChoseFocus: boolean,
+): { pages: Page[]; focus: Page | null } | null {
+  const pg = pageForArtifact(ev);
+  if (!pg) return null;
+  const key = artifactKey(pg);
+  const already = pages.find((x) => artifactKey(x) === key);
+  return {
+    pages: already ? pages : [...pages, pg],
+    focus: ev.focus === true && !readerChoseFocus ? (already ?? pg) : null,
+  };
+}
+
 /** Where App.tsx stashes a `?view=` spec — the URL is cleaned on landing, so the value travels here.
  *  What it carries is a chat's opening `artifacts[]`, not a route. */
 export const VIEW_KEY = "vexa.composedView";

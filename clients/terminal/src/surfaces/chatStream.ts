@@ -27,7 +27,39 @@ export type ChatStreamEvent = {
    *  answers 200 with an `error` event even when the gateway refused with a 401, so this field is
    *  the ONLY place the auth status survives into the client. */
   status?: number;
+  /** `artifact` events only — a file a tool WROTE, and whether it should come to the front.
+   *  `workspace` is "" when the write landed on the caller's own desk: the server's record resolves
+   *  that, and the stream deliberately does not guess, so an empty string means "no slug" rather
+   *  than "unknown". */
+  workspace?: string;
+  path?: string;
+  focus?: boolean;
 };
+
+/** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
+ *
+ *  `message-delta` carries two different things depending on how the worker's model backend is
+ *  running: with partial streaming it is a TOKEN, and without it, a whole assistant text block.
+ *  Plain concatenation is right for the first and wrong for the second, and the founder read the
+ *  result on screen: `"created here.I'll set up a shared workspace…"` — two separate narrations run
+ *  together into a sentence that reads as one and parses as neither.
+ *
+ *  The boundary that is actually observable from the stream is a TOOL CALL: an assistant message
+ *  ends when the model reaches for a tool, and text arriving after the tool result is a NEW message.
+ *  So `afterTool` is armed by a tool-call and spent by the next delta. Tokens inside one block never
+ *  have a tool call between them, so nothing is ever broken mid-sentence.
+ *
+ *  Paragraphs rather than folding the narration under the step line: those interim texts ARE the
+ *  agent saying what it is about to do, and a person watching a turn in flight is reading exactly
+ *  them. Collapsing them by default would hide the only running commentary there is — to fix a
+ *  problem that is a missing blank line.
+ *
+ *  Pure, and exported, because the rule is one line of string handling that is impossible to see
+ *  wrong by reading it and trivial to see wrong in a test. */
+export function joinInterim(prev: string, next: string, afterTool: boolean): string {
+  if (!afterTool || !prev.trim() || prev.endsWith("\n")) return prev + next;
+  return prev + "\n\n" + next;
+}
 
 /** The live phase of a turn, surfaced so the pane is VERBOSE about what's happening instead of going
  *  silently stale: `connecting` (cold-starting the worker, no output yet) · `working` (output seen, but
@@ -56,6 +88,10 @@ export type ChatStreamCallbacks = {
   onStatus?: (phase: ChatPhase | null) => void;
   /** a chunk was consumed — a hook for autoscroll */
   onProgress?: () => void;
+  /** A FILE THE TURN JUST WROTE (F41). Emitted after the matching `tool-result` and only on
+   *  success — a failed write says nothing. Optional so existing callers/tests need not implement
+   *  it. */
+  onArtifact?: (a: { workspace: string; path: string; focus: boolean }) => void;
 };
 
 export type ChatStreamRequest = {
@@ -255,6 +291,14 @@ export async function streamChatTurn(
             break;
           case "tool-call":
             sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args);
+            break;
+          // A SUCCESSFUL WRITE TO A MOUNTED WORKSPACE (F41). The founder created a shared workspace,
+          // the agent wrote its README, and the right panel stayed on `_global/README.md` — the one
+          // document the turn had just made was the one thing not on screen. The event is
+          // advisory-only here: this reader forwards it and the shell decides, because the tab set
+          // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
+          case "artifact":
+            if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true });
             break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);

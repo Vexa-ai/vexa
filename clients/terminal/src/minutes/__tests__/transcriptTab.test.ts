@@ -68,9 +68,13 @@ describe("artifactKey — a row id and a workspace path never key alike", () => 
 describe("stored chats migrate for free", () => {
   beforeEach(() => localStorage.clear());
 
+  //  is not decoration: the load path PRUNES a chat with no human turn and no
+  // scaffold behind it (F35, 2026-09-02), so an untouched fixture would not survive to be read and
+  // the assertion below would pass for the wrong reason. A chat whose tabs are worth migrating is
+  // by definition one somebody worked in.
   const stored = (artifacts: unknown[]) => {
     localStorage.setItem(CHATS_KEY, JSON.stringify([
-      { id: "c1", label: "c1", workspaces: ["personal"], artifacts, createdAt: 1, lastActivityAt: 1 },
+      { id: "c1", label: "c1", workspaces: ["personal"], artifacts, touched: true, createdAt: 1, lastActivityAt: 1 },
     ]));
     return loadChats().find((c) => c.id === "c1")?.artifacts ?? [];
   };

@@ -27,6 +27,9 @@ vi.mock("next/headers", () => ({
 
 import { POST as claimAdmin } from "../claim-admin/route";
 
+/** Every scaffold-mint body agent-api saw — which record was asked for is the whole of F42. */
+const minted: Record<string, unknown>[] = [];
+
 /** admin-api double: the validate oracle, the instance probe, and the bootstrap-admin write. */
 function stubAdminApi(opts: {
   validate?: { status: number; body?: unknown };
@@ -35,8 +38,10 @@ function stubAdminApi(opts: {
   bootstrap?: { status: number; body?: unknown };
   mint?: { status: number; body?: unknown };
   mintThrows?: boolean;
+  globalSetup?: "completed" | "missing";
 }) {
   const calls: string[] = [];
+  minted.length = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
     calls.push(`${init?.method || "GET"} ${u}`);
@@ -46,13 +51,14 @@ function stubAdminApi(opts: {
     }
     if (u.includes("/internal/instance")) {
       if (opts.instanceFails) throw new Error("ECONNREFUSED");
-      return new Response(JSON.stringify({ admin_exists: opts.adminExists ?? false, global_setup: "missing" }), { status: 200 });
+      return new Response(JSON.stringify({ admin_exists: opts.adminExists ?? false, global_setup: opts.globalSetup ?? "missing" }), { status: 200 });
     }
     if (u.includes("/internal/bootstrap-admin")) {
       const b = opts.bootstrap ?? { status: 200, body: { claimed: true } };
       return new Response(JSON.stringify(b.body ?? {}), { status: b.status });
     }
     if (u.includes("/internal/scaffolds")) {
+      minted.push(JSON.parse(String(init?.body ?? "{}")));
       if (opts.mintThrows) throw new Error("ECONNREFUSED");
       const m = opts.mint ?? { status: 201, body: { id: "SCAF1", url: "https://app.test/?s=SCAF1" } };
       return new Response(JSON.stringify(m.body ?? {}), { status: m.status });
@@ -228,5 +234,39 @@ describe("the setup conversation is minted, not stashed", () => {
     const res = await claimAdmin();
     expect(res.status).toBe(409);
     expect(spy.mock.calls.some(([u]) => String(u).includes("/internal/scaffolds"))).toBe(false);
+  });
+});
+
+/** F42 — WHICH CONVERSATION A CLAIM ARRIVES IN. Founder ruling 2026-09-02.
+ *
+ *  This route exists for the LATE claim: an instance that acquired its admin after the fact. Such an
+ *  instance may already have its company layer written — and offering the setup conversation to it
+ *  says the product does not know its own state. The founder read exactly that as the product being
+ *  wrong about him: an admin-only "Organisation setup" card in front of somebody who needed nothing
+ *  of the sort. */
+describe("F42 — the arrival depends on whether the instance is already set up", () => {
+  it("company layer MISSING → the setup conversation", async () => {
+    stubAdminApi({ globalSetup: "missing" });
+    await claimAdmin();
+    expect(minted.map((m) => m.kind)).toEqual(["admin-setup"]);
+    expect(minted[0].opening).toBe("setup-global");
+  });
+
+  it("company layer COMPLETED → an ordinary first visit, not setup again", async () => {
+    stubAdminApi({ globalSetup: "completed" });
+    const res = await claimAdmin();
+    expect(res.status).toBe(200);
+    expect(minted.map((m) => m.kind)).toEqual(["first-visit"]);
+    expect(minted[0].opening).toBe("first-visit");
+  });
+
+  it("either way the client composes NOTHING — no workspaces, no tabs, no prompt text", async () => {
+    for (const globalSetup of ["missing", "completed"] as const) {
+      stubAdminApi({ globalSetup });
+      await claimAdmin();
+      for (const forbidden of ["workspaces", "tabs", "focus", "prompt", "opening_text"]) {
+        expect(minted[0]).not.toHaveProperty(forbidden);
+      }
+    }
   });
 });

@@ -15,12 +15,12 @@ import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
-import { streamChatTurn, type ChatPhase } from "./chatStream";
+import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
-import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, onboardingGreeting, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, MINUTES_HOME_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP, presetOwnsOpening, GLOBAL_SETUP_GREETING, GLOBAL_SETUP_GREETING_SUB, GLOBAL_SETUP_GROUNDING, type OnboardingSeedKind } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -554,30 +554,28 @@ function routineCreationPrompt(commandText: string): string {
 type ChatProps = Partial<TabProps> & { emptyExtra?: ReactNode };
 
 
-// WHICH greeting is TRUE in this room, and the ONE chooser both the empty state and the cached
-// onboarding seed read — they used to decide separately and could disagree about the same chat.
-//
-// Minutes language is only honest in a chat BOUND TO A MEETING. The old rule asked a different
-// question — "does this account have any held meeting?" — and answered it for every session, so the
-// personal home chat greeted a brand-new account with "I kept the minutes of your meeting"
-// (founder, 2026-09-01: an account with no meetings at all). A meeting the reader has not got is not
-// made real by another meeting existing somewhere, so the account-wide test is gone: a `meet-` room
-// asks about ITS OWN meeting, and everywhere else gets the home greeting.
-function minutesGreeting(session: string): string {
-  if (!session.startsWith("meet-")) return MINUTES_HOME_GREETING;
-  const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-  return held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING;
-}
-
-// MINUTES empty-state greeting — per SESSION, because the chat's room decides its voice:
-// meeting chats brief or recap, the org chat sets up the tier, room threads state their scope.
+/** WHICH greeting is TRUE in this room — and in every room but one, the answer is NONE.
+ *
+ *  ── F36, founder ruling 2026-09-02 ────────────────────────────────────────────────────────────
+ *  A chat opened with `+` shows an EMPTY COMPOSER AND NOTHING ELSE. Two lines are deleted here,
+ *  not made unreachable:
+ *    · "A fresh thread in this project. Ask across everything its workspaces hold …" — the
+ *      empty-state of a plain chat, which he met in a chat he had never created;
+ *    · "👋 I'm your agent here … paste a meeting link …" — the home greeting, which greeted a chat
+ *      that was about nothing.
+ *  Both were DEFAULTS: nothing in anyone's state produced them, they filled a blank page. His words
+ *  on finding them: *"i do not like this text."*
+ *
+ *  What survives is the pair a MEETING produces, because the room is about something and the line
+ *  is true of that thing. Minutes language is only honest in a chat BOUND TO A MEETING: the old
+ *  rule asked "does this account have any held meeting?" and answered it for every session, so the
+ *  home chat greeted a brand-new account with "I kept the minutes of your meeting" (founder,
+ *  2026-09-01, on an account with no meetings at all). A `meet-` room asks about ITS OWN meeting;
+ *  everywhere else says nothing at all. */
 function minutesEmptyGreeting(session: string): string {
-  const strip = (t: string) => t.replace("👋 ", "").replace(/\*\*/g, "");
-  if (session.startsWith("org-setup"))
-    return `${GLOBAL_SETUP_GREETING} ${GLOBAL_SETUP_GREETING_SUB}`;
-  if (session.startsWith("room-") || session.startsWith("chat-") || session.startsWith("pchat-"))
-    return "A fresh thread in this project. Ask across everything its workspaces hold — I'll say where anything I write lands.";
-  return strip(minutesGreeting(session));
+  if (!session.startsWith("meet-")) return "";
+  const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
+  return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
 }
 
 export function Chat({ params = {}, emptyExtra }: ChatProps) {
@@ -884,6 +882,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     const context = !ground ? undefined : buildChatContext({
       activeList, activeTab, focus: wireFocus ?? null, includeSchedule,
     });
+    // F40 — a tool call ENDS an assistant message, so the next interim text is a new paragraph.
+    // The rule itself is `joinInterim` in chatStream.ts, where it is documented and tested; this is
+    // only the flag it reads. See there for why the boundary is a tool call and not a delta count.
+    let breakBeforeNextDelta = false;
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
@@ -891,8 +893,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
-          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
+          onDelta: (text) => patchAgentTurn(key, agentId, (t) => {
+            const joined = joinInterim(t.text ?? "", text, breakBeforeNextDelta);
+            breakBeforeNextDelta = false;
+            return { ...t, status: null, text: joined };
+          }),
+          // A FILE THIS TURN WROTE. Re-emitted for the shell, which owns the chat record's tabs —
+          // this surface never opens a document itself (F41).
+          onArtifact: (a) => window.dispatchEvent(new CustomEvent(ARTIFACT_EVENT, { detail: a })),
           onTool: (tool, args) => {
+            breakBeforeNextDelta = true;      // F40 — the assistant message ended here
             const op = toolOp(tool, args);
             // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
             // chip in the reply that names this new file resolves to "not found" — which is the
@@ -984,37 +994,17 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     return () => clearTimeout(t);
   }, [session]);
 
-  // Onboarding seeds a CACHED greeting (instant, no LLM) and arms the chat — the user's next reply carries
-  // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
-  const onboardingArmedRef = useRef(false);
-  useEffect(() => {
-    const onSeed = (event: Event) => {
-      // A `?ask=` preset outranks the cached phase greeting: it is what the person clicked, it
-      // knows which meeting they clicked about, and it arrives late only because it is fetched.
-      // Without this the greeting seeded first and the preset's answer read as a reply to it.
-      if (presetOwnsOpening()) return;
-      if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      const key = chatKey;
-      const kind = (event as CustomEvent<{ kind?: OnboardingSeedKind }>).detail?.kind ?? "contextual";
-      // Minutes mode greets per SESSION (a meeting chat briefs or recaps; a home chat says what the
-      // place is) — except an explicit PERSONAL seed, which is never meeting prep whatever the mode.
-      const greeting = minutesOnly() && kind !== "personal"
-        ? minutesGreeting(session)
-        : onboardingGreeting(
-            kind,
-            minutesOnly(),
-            liveMeetingsNow().some((m) => ["completed","stopped","failed"].includes(String((m as { live_status?: string }).live_status))),
-          );
-      updateChatState(key, (s) => (
-        s.turns.length
-          ? { ...s, loaded: true, loading: false }
-          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: greeting, ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
-      ));
-      onboardingArmedRef.current = true;
-    };
-    window.addEventListener(ONBOARDING_SEED_EVENT, onSeed);
-    return () => window.removeEventListener(ONBOARDING_SEED_EVENT, onSeed);
-  }, [layout, chatKey, session]);
+  // ── DELETED 2026-09-02 (F36): the cached onboarding greeting ────────────────────────────────
+  //
+  //  This listener wrote a canned agent turn into an empty chat the moment OnboardingGate fired its
+  //  seed — instantly, with no model round-trip — and armed the chat so the person's first reply
+  //  carried the discovery-loop grounding. It is what put "I'm your agent here … paste a meeting
+  //  link" in front of the founder in a chat he had never made.
+  //
+  //  A first turn nobody typed is machinery speaking as the product, and the founder's ruling is
+  //  that a new chat says nothing. The grounding it used to arm still reaches the agent — the setup
+  //  proposal chip carries it in its own kick (minutes/proposals.ts), which is a chip the person
+  //  actually pressed rather than a greeting they were handed.
 
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
@@ -1040,7 +1030,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     if ((!v && !hasAttachments) || uploading) return;
     // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
     // only writer. Fired before the busy/queue branches, because queueing is still authorship.
-    window.dispatchEvent(new CustomEvent(CHAT_TOUCHED_EVENT, { detail: { session } }));
+    //
+    // The TEXT rides along (F38). The rail names a chat from its first human turn, and this is the
+    // only place in the client that knows a turn is a human's: an agent turn never reaches here,
+    // and a composed opening arrives through the ask-chat path, not through the composer. So the
+    // name is taken from a message the person typed, by construction rather than by a check.
+    window.dispatchEvent(new CustomEvent(CHAT_TOUCHED_EVENT, { detail: { session, text: v } }));
     if (busy) {
       if (!v || hasAttachments) return;   // queue plain text only; attachments wait for idle
       const qid = `q-${Date.now().toString(36)}`;
@@ -1073,16 +1068,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
       clearAttachments();
     }
-    // First onboarding reply: prepend the (hidden) discovery-loop grounding so the agent researches from
-    // this one answer. compactStoredUserText strips it back off on reload; the user only ever sees `displayText`.
-    if (onboardingArmedRef.current && !hasAttachments) {
-      onboardingArmedRef.current = false;
-      prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
-    // Org-setup first reply: the greeting was cached (no LLM turn) — attach the flow grounding here.
-    if (session.startsWith("org-setup") && turns.length === 0) {
-      prompt = GLOBAL_SETUP_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
-    }
+    // ── DELETED 2026-09-02 (F36/F37): the two grounding arms ────────────────────────────────
+    //
+    //  The first attached the discovery-loop grounding to whatever reply followed the cached
+    //  greeting; the second attached the org-setup flow grounding to the first turn of an
+    //  `org-setup` session. Both are gone with the paths that armed them: the greeting is deleted,
+    //  and the `org-setup` session id was minted by the rail's seeding and by nothing else, so the
+    //  branch is now unreachable — which, per the founder's stale-code ruling, means it is deleted
+    //  rather than left as a trap for the next person who wonders why it never fires. The admin
+    //  conversation is a SCAFFOLD (`kind: "admin-setup"`), opened and grounded from its record.
     void send(displayText, prompt, referenceSource);
     setValue("");
   };
@@ -1232,14 +1226,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
 
   return (
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
+      {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
+          research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
+          admin onboarding, reachable only from an `org-setup` session the rail's own seeding
+          planted, and it promised the reader a research step that does not exist. The founder met
+          it in a chat he never made — *"I explain this as stale code."*
+          What is left renders the meeting greeting when there IS a meeting, and otherwise renders
+          nothing but whatever the host put in `emptyExtra`. */}
       <ChatConversation turns={turns} busy={busy || loading} empty={
-        !loading && minutesOnly() && session.startsWith("org-setup")
-          // The org-setup opener is ONE profound question standing in the void — centered, spare.
-          ? <div style={{ minHeight: "calc(100vh - 260px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", maxWidth: 520, margin: "0 auto", padding: "0 22px" }}>
-              <div style={{ fontSize: 34, fontWeight: 500, color: "var(--t1)", letterSpacing: "-0.02em", lineHeight: 1.25 }}>{GLOBAL_SETUP_GREETING}</div>
-              <div style={{ fontSize: 14.5, color: "var(--t2)", lineHeight: 1.6, marginTop: 16, maxWidth: 440 }}>{GLOBAL_SETUP_GREETING_SUB}</div>
-            </div>
-          : <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
+        <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)
               : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}

@@ -28,7 +28,7 @@
  */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, validateAuthToken } from "../adminApi";
+import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, mintFirstVisitScaffold, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -80,13 +80,23 @@ export async function POST() {
   // while the chat itself existed only in one browser's storage. So the claim mints the record for
   // that conversation and hands back the url to follow. Same order as everywhere else in this gate:
   // the durable thing first, the navigation second.
-  const scaffold = await mintAdminSetupScaffold(who.email, who.userId);
+  // WHICH CONVERSATION THEY ARRIVE IN depends on whether the instance is already set up (F42,
+  // founder ruling 2026-09-02). A claim on an instance whose company layer is `completed` — an
+  // instance that acquired its admin late, which is exactly the dead end this route exists to open
+  // — gets an ORDINARY FIRST VISIT, not the setup conversation. Offering setup again to an instance
+  // that is set up says the product does not know its own state, and the founder read that as the
+  // product being wrong about him rather than about itself. `state` was read above, before the
+  // claim, and the company layer is not something claiming a role changes.
+  const setUpAlready = state.global_setup === "completed";
+  const scaffold = setUpAlready
+    ? await mintFirstVisitScaffold(who.email, who.userId)
+    : await mintAdminSetupScaffold(who.email, who.userId);
   if (!scaffold.ok || !scaffold.data?.url) {
     // The role IS claimed — that write already happened and is not undone by this. Say both facts,
     // because a caller told only "failed" would reasonably retry the claim, and a caller told only
     // "success" would navigate to a conversation that does not exist. `/` is the honest fallback:
     // the corner card is still there and still says what is missing.
-    console.error(`[terminal-auth] admin-setup scaffold mint failed for ${who.email}: ${scaffold.error}`);
+    console.error(`[terminal-auth] ${setUpAlready ? "first-visit" : "admin-setup"} scaffold mint failed for ${who.email}: ${scaffold.error}`);
     return NextResponse.json(
       {
         success: true,

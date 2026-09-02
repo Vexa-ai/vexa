@@ -5,9 +5,15 @@
  *  opened on the ordinary greeting ("I'm your agent here… paste a meeting link") on an instance
  *  that could not join a meeting, could not send a mail, and served nobody.
  *
- *  This gate is what fired that greeting, so this is where the rule is pinned. Two halves, and the
- *  second is the one that rots quietly:
- *    • while the company layer is missing, NOTHING happens here — no workspace init, no seed;
+ *  ── AND LATER THE SAME DAY, THE GREETING ITSELF WENT (F36) ─────────────────────────────────────
+ *  Suppressing it on a fresh instance was the narrow fix; the founder's next screenshots made the
+ *  general one — a new chat shows an empty composer and nothing else, on every instance. So this
+ *  gate no longer greets at all, and the first assertion below is that NO chat event of any kind
+ *  leaves it. What it still does is the half that is not a message: materialise the workspace, once,
+ *  behind a durable per-user flag.
+ *
+ *  Two halves remain, and the second is the one that rots quietly:
+ *    • while the company layer is missing, NOTHING happens here — no workspace init;
  *    • the durable onboarded flag is NOT set either, so the personal onboarding is DEFERRED to the
  *      first load after the instance opens rather than silently spent on a load that suppressed it.
  */
@@ -16,7 +22,6 @@ import { cleanup, render } from "@testing-library/react";
 import React from "react";
 
 import { OnboardingGate, shouldSeedOnboarding, __resetOnboardingBootstrap } from "../OnboardingGate";
-import { ONBOARDING_SEED_EVENT } from "../../canvas/actions";
 
 const EMAIL = "admin@acme.test";
 const FLAG = `vexa.terminal.onboarded.${EMAIL}`;
@@ -71,21 +76,32 @@ function stub(globalSetup: "completed" | "missing" | "throw") {
  *  test that cannot pass for the wrong reason. */
 const settle = () => new Promise((r) => setTimeout(r, 1000));
 
+/** F36 — the gate never speaks. Asserted by listening for EVERY `vexa:terminal:*` event rather
+ *  than for the one that used to carry the greeting: naming the deleted event would make this test
+ *  a spelling check on a constant that no longer exists, and would pass just as happily if a
+ *  greeting came back under a new name. */
+function listenForChatEvents(): { fired: string[]; stop: () => void } {
+  const fired: string[] = [];
+  const names = ["vexa:terminal:onboarding-seed", "vexa:terminal:company-layer", "vexa:terminal:ask-chat"];
+  const on = (e: Event) => { fired.push(e.type); };
+  for (const n of names) window.addEventListener(n, on);
+  return { fired, stop: () => { for (const n of names) window.removeEventListener(n, on); } };
+}
+
 describe("OnboardingGate on an instance whose company layer is MISSING", () => {
   it("fires no greeting, materialises no workspace, and spends no onboarding", async () => {
-    const seeds = vi.fn();
-    window.addEventListener(ONBOARDING_SEED_EVENT, seeds);
+    const heard = listenForChatEvents();
     const calls = stub("missing");
     render(<OnboardingGate><div data-testid="workbench" /></OnboardingGate>);
     await settle();
 
-    expect(seeds).not.toHaveBeenCalled();
+    expect(heard.fired).toEqual([]);
     // `initWorkspace` is the other half of "what exists on first render" — no personal workspace
     // is materialised while the instance serves nobody.
     expect(calls.some((c) => c.includes("/api/workspace"))).toBe(false);
     // …and the ONE fact that makes this a deferral rather than a loss.
     expect(localStorage.getItem(FLAG)).toBeNull();
-    window.removeEventListener(ONBOARDING_SEED_EVENT, seeds);
+    heard.stop();
   });
 
   it("still renders the children — it suppresses the seed, it is not a second gate", async () => {
@@ -97,27 +113,28 @@ describe("OnboardingGate on an instance whose company layer is MISSING", () => {
 });
 
 describe("OnboardingGate once the instance is open", () => {
-  it("seeds the greeting and marks the user onboarded", async () => {
-    const seeds = vi.fn();
-    window.addEventListener(ONBOARDING_SEED_EVENT, seeds);
-    stub("completed");
+  it("materialises the workspace and marks the user onboarded — and STILL says nothing (F36)", async () => {
+    const heard = listenForChatEvents();
+    const calls = stub("completed");
     render(<OnboardingGate><div data-testid="workbench" /></OnboardingGate>);
     await settle();
 
-    expect(seeds).toHaveBeenCalled();
+    expect(calls.some((c) => c.includes("/api/workspace"))).toBe(true);
     expect(localStorage.getItem(FLAG)).toBe("1");
-    window.removeEventListener(ONBOARDING_SEED_EVENT, seeds);
+    // the half that was deleted: a greeting nobody typed, written into whatever chat was in front.
+    expect(heard.fired).toEqual([]);
+    heard.stop();
   });
 
   it("an unreachable state probe does not cost a new user their onboarding", async () => {
-    const seeds = vi.fn();
-    window.addEventListener(ONBOARDING_SEED_EVENT, seeds);
-    stub("throw");
+    const calls = stub("throw");
     render(<OnboardingGate><div data-testid="workbench" /></OnboardingGate>);
     await settle();
 
-    expect(seeds).toHaveBeenCalled();
-    window.removeEventListener(ONBOARDING_SEED_EVENT, seeds);
+    // fail OPEN: the workspace is still materialised and the flag still spent, because failing
+    // closed on a blip kills onboarding for an ordinary new user permanently.
+    expect(calls.some((c) => c.includes("/api/workspace"))).toBe(true);
+    expect(localStorage.getItem(FLAG)).toBe("1");
   });
 
   it("an already-onboarded user never reaches the probe at all", async () => {
