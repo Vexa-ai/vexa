@@ -601,7 +601,14 @@ export function MinutesShell() {
   // states now, in the meeting's own vocabulary.
   const PHASE_WORD = { prep: "upcoming", live: "live", post: "held" } as const;
   const selMeeting = sel.kind === "meeting" ? meetings.find((m) => String(m.id) === sel.meetingId) : undefined;
+  // THE CHAT SAYS WHAT IT IS; the header does not deduce it. This read `workspaces.filter(w => w !==
+  // "_global").length === 0 ? "chat · admin" : "chat"` — mount arithmetic — and it was wrong the
+  // moment the company-setup conversation legitimately mounted the admin's own desk beside
+  // `_global` (the two-scaffold ruling: the first chat writes both layers). The instance's most
+  // consequential conversation then announced itself as an ordinary "chat · personal".
+  const selChat = allChats.find((c) => c.id === sel.chatId);
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
+    : selChat?.scaffoldKind === "admin-setup" ? "chat · admin"
     : sel.workspaces.filter((w) => w !== "_global").length === 0 ? "chat · admin" : "chat";
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED

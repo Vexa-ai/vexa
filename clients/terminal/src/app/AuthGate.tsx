@@ -490,9 +490,19 @@ function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignO
     try {
       const r = await fetch("/api/auth/claim-admin", { method: "POST" });
       if (r.ok) {
-        // Reload rather than flip a flag: the claim changes what every probe on this page would
-        // answer, and a fresh load is the only way to be sure nothing is left holding the old answer.
-        window.location.reload();
+        // FOLLOW THE URL THE SERVER MINTED. The claim creates the admin-setup scaffold and hands
+        // back `/?s=<id>` — the setup conversation as a server record rather than a key in this
+        // browser's storage, which is what made it vanish when the storage was cleared or a second
+        // browser was used. A full navigation, not a flip: the claim changes what every probe on
+        // this page would answer, so nothing may be left holding the old answer.
+        const body = (await r.json().catch(() => ({}))) as { url?: string; scaffold_error?: string };
+        if (body.scaffold_error) {
+          // The role IS claimed and that is not undone. Only the conversation is missing, so say
+          // exactly that instead of a generic failure the person would answer by re-claiming.
+          setError(body.scaffold_error);
+          return;
+        }
+        window.location.assign(body.url || "/");
         return;
       }
       const body = (await r.json().catch(() => ({}))) as { error?: string; reload?: boolean };

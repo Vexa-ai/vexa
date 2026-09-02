@@ -28,7 +28,7 @@
  */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, claimAdminRole, instanceState, validateAuthToken } from "../adminApi";
+import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -74,8 +74,36 @@ export async function POST() {
   // reload puts them on the correct screen — but it is not the same event, so it is not reported
   // as one.
   console.info(`[terminal-auth] admin claim by user ${who.userId} (${who.email}): claimed=${claimed.claimed}`);
+
+  // THE ROLE IS NOT THE POINT — THE CONVERSATION IS. Claiming admin without a way back into the
+  // setup conversation is what the localStorage hand-off got wrong: the marker said "handed off"
+  // while the chat itself existed only in one browser's storage. So the claim mints the record for
+  // that conversation and hands back the url to follow. Same order as everywhere else in this gate:
+  // the durable thing first, the navigation second.
+  const scaffold = await mintAdminSetupScaffold(who.email, who.userId);
+  if (!scaffold.ok || !scaffold.data?.url) {
+    // The role IS claimed — that write already happened and is not undone by this. Say both facts,
+    // because a caller told only "failed" would reasonably retry the claim, and a caller told only
+    // "success" would navigate to a conversation that does not exist. `/` is the honest fallback:
+    // the corner card is still there and still says what is missing.
+    console.error(`[terminal-auth] admin-setup scaffold mint failed for ${who.email}: ${scaffold.error}`);
+    return NextResponse.json(
+      {
+        success: true,
+        claimed: claimed.claimed,
+        email: who.email,
+        url: "/",
+        scaffold_error: "You are this instance's administrator, but the setup conversation could not be opened. Reload to try again.",
+      },
+      { headers: NO_STORE },
+    );
+  }
+
+  // The url is absolute (agent-api composes it from VEXA_UI_URL). The client follows it as given —
+  // it is the one place the link is built, and rebuilding it here would be the second spelling of a
+  // rule that already exists.
   return NextResponse.json(
-    { success: true, claimed: claimed.claimed, email: who.email },
+    { success: true, claimed: claimed.claimed, email: who.email, url: scaffold.data.url, scaffold: scaffold.data.id },
     { headers: NO_STORE },
   );
 }

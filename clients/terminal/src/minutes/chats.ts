@@ -42,6 +42,13 @@ export type Chat = {
   workspaces: string[];       // the mount set — what a PROJECT used to own
   artifacts: Artifact[];      // the open tabs (seeded by the room's phase pages and by `?view=`)
   focus?: string;             // artifactKey() of the tab in front
+  // The SCAFFOLD KIND this chat was opened from (`admin-setup`, `post-meeting`, …), when it came
+  // from one. It is what the chat IS, and things that depend on that — the header's flavour, today —
+  // read it instead of inferring. The old inference was mount arithmetic: "no workspace besides
+  // `_global` means admin", which broke the moment the setup conversation legitimately mounted the
+  // admin's own desk as well (the two-scaffold ruling). A chat's nature is not a function of how
+  // many folders it happens to have open.
+  scaffoldKind?: string;
   touched?: boolean;          // a user wrote in it, or a user made it by hand
   createdAt: number;
   lastActivityAt: number;
@@ -444,6 +451,9 @@ function normalise(raw: unknown, now: number): Chat[] {
             .map((a) => ({ ...a, kind: a.kind === "meeting" ? ("meeting" as const) : undefined }))
         : [],
       focus: typeof r.focus === "string" && r.focus ? r.focus : undefined,
+      // Survives a reload. Without this the flavour would be right on the turn the scaffold opened
+      // the chat and wrong on every load after it — the sort of half-fix that reads as fixed.
+      scaffoldKind: typeof r.scaffoldKind === "string" && r.scaffoldKind ? r.scaffoldKind : undefined,
       touched: !!r.touched,
       createdAt: Number.isFinite(r.createdAt) ? Number(r.createdAt) : now,
       lastActivityAt: Number.isFinite(r.lastActivityAt) ? Number(r.lastActivityAt) : Number(r.createdAt) || now,

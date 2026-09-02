@@ -33,6 +33,8 @@ function stubAdminApi(opts: {
   adminExists?: boolean;
   instanceFails?: boolean;
   bootstrap?: { status: number; body?: unknown };
+  mint?: { status: number; body?: unknown };
+  mintThrows?: boolean;
 }) {
   const calls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -50,6 +52,11 @@ function stubAdminApi(opts: {
       const b = opts.bootstrap ?? { status: 200, body: { claimed: true } };
       return new Response(JSON.stringify(b.body ?? {}), { status: b.status });
     }
+    if (u.includes("/internal/scaffolds")) {
+      if (opts.mintThrows) throw new Error("ECONNREFUSED");
+      const m = opts.mint ?? { status: 201, body: { id: "SCAF1", url: "https://app.test/?s=SCAF1" } };
+      return new Response(JSON.stringify(m.body ?? {}), { status: m.status });
+    }
     return new Response("nope", { status: 500 });
   }));
   return calls;
@@ -61,6 +68,7 @@ beforeEach(() => {
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-key");
   vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");
   vi.stubEnv("VEXA_ADMIN_EMAILS", "");
+  vi.stubEnv("AGENT_API_URL", "http://agent.test");
 });
 
 afterEach(() => {
@@ -78,7 +86,10 @@ describe("the happy path", () => {
 
     const res = await claimAdmin();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, claimed: true, email: "dmitry@vexa.ai" });
+    expect(await res.json()).toEqual({
+      success: true, claimed: true, email: "dmitry@vexa.ai",
+      url: "https://app.test/?s=SCAF1", scaffold: "SCAF1",
+    });
 
     expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(true);
     const write = spy.mock.calls.find(([u]) => String(u).includes("/internal/bootstrap-admin"));
@@ -146,5 +157,76 @@ describe("it can never transfer the role", () => {
     const res = await claimAdmin();
     expect(res.status).toBe(500);
     expect((await res.json()).error).toContain("Could not claim this instance");
+  });
+});
+
+
+/** THE CONVERSATION, NOT JUST THE ROLE (F26).
+ *
+ *  The hand-off used to live in `localStorage`: clear it, or open the instance in a second browser,
+ *  and the admin landed in a Personal chat on the generic greeting while the setup marker already
+ *  said "handoff", so nothing re-opened the conversation. Verified live 2026-09-02. The claim now
+ *  mints the admin-setup scaffold — the conversation as a SERVER record — and hands back the url. */
+describe("the setup conversation is minted, not stashed", () => {
+  it("mints an admin-setup scaffold for the ORACLE's address, with no prompt text and no mount list", async () => {
+    stubAdminApi({});
+    const spy = vi.mocked(globalThis.fetch);
+    await claimAdmin();
+
+    const mint = spy.mock.calls.find(([u]) => String(u).includes("/internal/scaffolds"));
+    expect(mint).toBeDefined();
+    const body = JSON.parse(String((mint![1] as RequestInit).body));
+    expect(body).toEqual({
+      who: "dmitry@vexa.ai",
+      kind: "admin-setup",
+      opening: "setup-global",
+      provenance: { flow: "admin-claim", step: "claim-admin", minted_by: "11" },
+    });
+    // `workspaces`, `tabs` and `focus` are ABSENT, not empty: the server derives `_global` + this
+    // admin's own desk from the address and takes the tabs from the preset's frontmatter. Sending
+    // them here would be a second spelling of a rule that already has one.
+    expect("workspaces" in body).toBe(false);
+    expect("tabs" in body).toBe(false);
+    // And nothing carries prompt text — the record behind the url is as text-free as the url.
+    expect(JSON.stringify(body)).not.toMatch(/\[setup-global\]/);
+  });
+
+  it("mints on the INTERNAL tier, which a browser can never reach", async () => {
+    stubAdminApi({});
+    const spy = vi.mocked(globalThis.fetch);
+    await claimAdmin();
+    const mint = spy.mock.calls.find(([u]) => String(u).includes("/internal/scaffolds"));
+    const headers = (mint![1] as RequestInit).headers as Record<string, string>;
+    expect(headers["X-Internal-Secret"]).toBe("internal-secret");
+  });
+
+  it("a failed mint still reports the role as claimed — and says the conversation is what is missing", async () => {
+    // The role write already happened and is not undone by this. A caller told only "failed" would
+    // reasonably re-claim; one told only "success" would navigate to a chat that does not exist.
+    stubAdminApi({ mint: { status: 503 } });
+    const res = await claimAdmin();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.claimed).toBe(true);
+    expect(body.url).toBe("/");
+    expect(body.scaffold_error).toMatch(/administrator, but the setup conversation could not be opened/);
+  });
+
+  it("an unreachable agent-api is the same story, not a crash", async () => {
+    stubAdminApi({ mintThrows: true });
+    const res = await claimAdmin();
+    expect(res.status).toBe(200);
+    expect((await res.json()).scaffold_error).toBeTruthy();
+  });
+
+  it("does not mint when the claim itself was refused", async () => {
+    // An instance that already has an admin gets 409 and no scaffold: minting one for somebody who
+    // is not the administrator would compose a stranger's first turn over the company layer.
+    stubAdminApi({ adminExists: true });
+    const spy = vi.mocked(globalThis.fetch);
+    const res = await claimAdmin();
+    expect(res.status).toBe(409);
+    expect(spy.mock.calls.some(([u]) => String(u).includes("/internal/scaffolds"))).toBe(false);
   });
 });
