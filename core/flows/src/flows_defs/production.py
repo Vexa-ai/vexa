@@ -147,13 +147,21 @@ def build(reg: Registry, db) -> None:
         Prior: ensure_user · Result: {person?, group?} (reactions created)."""
         uid = ctx.prior["ensure_user"]["uid"]
         spawned = {}
+        # PROVENANCE SURVIVES DERIVATION. The other emits spread `{**ctx.refs, …}` and so carry
+        # `admitted_by` forward without thinking about it; this one builds a fresh dict, so the
+        # onboarding reaction was the one place in the chain that could not say who caused it.
+        # "Who invited the mailbox to that meeting" has to stay answerable one hop from the
+        # answer, not only at the hop that happened to keep the parent's refs.
+        by = ctx.refs.get("admitted_by")
         if not scaffolded(uid):
             spawned["person"] = ctx.emit(ONB_PERSON.name, f"onbp-{ctx.refs['organizer']}",
-                                         {"person": ctx.refs["organizer"], "uid": uid})
+                                         {"person": ctx.refs["organizer"], "uid": uid,
+                                          "admitted_by": by})
         g = ctx.refs.get("group")
         if g and ws_file(uid, f".scaffolded-group-{g}") is None:
             spawned["group"] = ctx.emit(ONB_GROUP.name, f"onbg-{g}",
-                                        {"group": g, "organizer": ctx.refs["organizer"], "uid": uid})
+                                        {"group": g, "organizer": ctx.refs["organizer"],
+                                         "uid": uid, "admitted_by": by})
         return Done(spawned)
 
     @reg.step
