@@ -478,6 +478,27 @@ def build(reg: Registry, db) -> None:
         second = f"{who} These notes are visible to the people who were in the meeting."
         return first + "\n" + second + "\n\n"
 
+
+    def _mailbox_line() -> str:
+        """The one line that makes a second invite possible, naming the mailbox THIS deployment
+        actually watches.
+
+        Two things were wrong before it. The mail never mentioned that Vexa could be in a meeting
+        of the reader's own, so the second-invite funnel had nothing at stage 1 — measured 0/4
+        offered in the mail. And the chat preset that does make the offer had the address baked
+        into it as a literal, which is only correct for the deployment it was written on: the
+        mailbox is `VEXA_MAIL_ADDR`, a deployment fact, and a preset in `_global` cannot read it.
+        The flow can, so the address travels in the artifact that knows it.
+
+        PLACEHOLDER WORDING — the founder has not chosen these words.
+        """
+        import os
+        box = os.environ.get("VEXA_MAIL_ADDR", "").strip()
+        if not box:
+            return ""
+        return ("\nWant Vexa in a meeting of your own? Forward its calendar invite to "
+                f"{box}.\n")
+
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
     def _followup_mode(ctx) -> str:
         """off | shared | personal.
@@ -552,12 +573,22 @@ def build(reg: Registry, db) -> None:
                     token = mt.mint_transcript_share(ctx.refs["uid"], platform, native, a)
                 except Exception:  # noqa: BLE001 — a mail with a weaker link beats no mail
                     token = None
-            link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"], tshare=token)
+            # Which preset the button composes. `minutes-review-invite` is `minutes-review`
+            # plus the SECOND ASK — the offer that Vexa can be in the meetings this person runs,
+            # and the instruction to ACT on a yes in the same turn (bot_schedule when a url and
+            # time are known, else the one-line forward). The offer is the whole second-invite
+            # funnel: measured at revolution 3 it was never made, in the mail or in the chat, so
+            # nobody could ask for it and it could never happen.
+            # A PARAM so the offer is one value to turn off, and so the founder's wording can
+            # replace the placeholder without touching a step.
+            ask = str((ctx.flow.param("attendee_ask") if ctx.flow else None)
+                      or "minutes-review-invite")
+            link = ui_link(ask=ask, meeting=ctx.refs["meeting_id"], tshare=token)
             body = blocks.get(a) if mode == "personal" else None
             if not body:
                 body = note.strip()
             body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + body
-            body += "\n\n—\nOpen it and ask anything about the meeting:"
+            body += "\n\n—\n" + _mailbox_line() + "Open it and ask anything about the meeting:"
             try:
                 mid = notify(a, subject, body, link=link)
                 sent.append(a)
