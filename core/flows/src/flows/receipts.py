@@ -35,6 +35,23 @@ def confirm(db: DB, key: str, result: dict, provider_ref: Optional[str], clock: 
         {"k": key, "res": dumps(result), "pref": provider_ref, "now": clock.now()})
 
 
+def fail(db: DB, key: str, reason: str, clock: Clock) -> None:
+    """The terminal branch's half of the receipt — the state NOTHING used to write.
+
+    `flows_timeline` turns `state = 'failed'` into a `reaction.failed` event and says why:
+    "the one thing an agent must not do is talk about a report it never delivered". Only
+    `reserve` and `confirm` existed, so `_RECEIPT_STATUS["failed"]` and the branch reading it were
+    unreachable and a permanently failed `email_minutes` rendered as `in_flight` for ever.
+
+    ONLY A RESERVED RECEIPT IS FAILED. An effect that HAPPENED stays confirmed whatever the
+    reaction does afterwards — the receipt records the world, not the row's mood — and
+    `confirmed_at` is left alone so "when did this land" keeps meaning that."""
+    db.execute(
+        """UPDATE effect_receipt SET state = 'failed', result = :res
+           WHERE effect_key = :k AND state = 'reserved'""",
+        {"k": key, "res": dumps({"error": str(reason)[:500]})})
+
+
 def prior(db: DB, reaction_id: str) -> dict[str, dict]:
     """Confirmed results of earlier steps, keyed by step name — a later step's inputs."""
     rows = db.execute(

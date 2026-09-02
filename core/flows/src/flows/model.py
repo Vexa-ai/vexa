@@ -63,11 +63,18 @@ class StepError(Exception):
         self.retryable = retryable
 
 
+def _no_checkpoint() -> None:
+    """The default `checkpoint`: a step called OUTSIDE the loop — which every unit test does — has
+    no lease to renew and no row to save into, and must still run unchanged."""
+    return None
+
+
 @dataclass
 class StepCtx:
     """Everything a step sees: the reaction's refs, its effect key, prior step results,
-    a DURABLE scratch dict (persisted after every step — survives worker restarts), and
-    emit() to publish a new fact (sub-flow composition)."""
+    a DURABLE scratch dict (persisted after every step — survives worker restarts),
+    emit() to publish a new fact (sub-flow composition), and checkpoint() for the steps whose
+    body outlives one lease."""
     reaction: Reaction
     effect_key: str
     prior: dict[str, dict]
@@ -75,6 +82,7 @@ class StepCtx:
     scratch: dict = field(default_factory=dict)
     emit: Any = None                      # (event_type, source_id, refs) -> int reactions created
     flow: Any = None                      # the governing Flow (params via ctx.flow.param(key))
+    checkpoint: Any = _no_checkpoint      # renew the lease + persist scratch, MID-step
 
     @property
     def reaction_id(self) -> str:

@@ -185,6 +185,12 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
             "mailbox": mailbox_address(), **(values or {})}
     for key, val in fill.items():
         token = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")
-        subject = token.sub(str(val), subject)
-        body = token.sub(str(val), body)
+        # A FUNCTION, NOT A STRING. `re.sub`'s replacement is escape-processed: a value containing
+        # `\1` or `\g` is read as a group reference and a value ending in a backslash raises
+        # `re.error` — and these values carry the ICS `SUMMARY`, which a human types into a
+        # calendar. One backslash in a meeting title raised out of `email_attendees`' try block
+        # and took the whole room's fan-out with it, forever, since the retry hit the same title.
+        # A lambda replacement is substituted literally; `_m` is the match nobody needs.
+        subject = token.sub(lambda _m, v=val: str(v), subject)
+        body = token.sub(lambda _m, v=val: str(v), body)
     return subject, body

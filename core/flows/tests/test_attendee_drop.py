@@ -226,15 +226,26 @@ def test_the_organiser_is_dropped_on_even_when_their_minutes_mail_was_off(monkey
         store.of("anna@bank.test")
 
 
-def test_the_organiser_is_dropped_on_even_when_the_fan_out_mailed_nobody(monkeypatch):
-    """A meeting with no inside-domain attendee still happened to its organiser."""
+def test_the_whole_room_is_dropped_on_even_when_the_fan_out_mailed_nobody(monkeypatch):
+    """A meeting with no mail still happened — to the organiser AND to everyone in the room.
+
+    THIS ASSERTION WAS INVERTED UNTIL 2026-09-02 (R-B20). It read
+    `out.result["to"] == ["anna@bank.test"]` and pinned the defect: the drop built its room from
+    `email_attendees`' `drops`, so switching the attendee MAIL off — or simply having every
+    attendee outside the organiser's domain, which is PRD §16.2's default — also switched off the
+    attendee DESK DROP. A guard on the mail door was closing the desk door, and the test said that
+    was correct. Decision 20 puts the meeting entity in every attendee's workspace, creating it if
+    absent; decision 22a adds that the organiser's always receives it. The mail allow-list governs
+    the mail. What `drops` still governs is the LINK, and only that (see the test below)."""
     store = Store()
     reg = _rig(monkeypatch, store)
     prior = dict(PRIOR, email_attendees={"sent": 0, "drops": [], "skipped": "opted out"})
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
 
-    assert out.result["to"] == ["anna@bank.test"]
-    assert store.of("ben@bank.test") is None
+    assert out.result["to"] == EVERYONE
+    assert store.of("ben@bank.test") is not None
+    # ...and with no mail, nobody was handed a share capability, so nobody's copy carries a button
+    assert "Open the meeting:" not in store.of("ben@bank.test")
 
 
 def test_no_report_means_no_drop_at_all(monkeypatch):

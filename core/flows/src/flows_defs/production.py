@@ -147,6 +147,22 @@ def _meeting_stamp(ctx, uid) -> str:
     depending on where the process was, which is the one thing a filename must never do.
     """
     import datetime
+    # COMPUTED ONCE PER REACTION, then stashed. Three moments ask for this stamp — the scaffold's
+    # mint (`_scaffold_refs`), the drop's own `day`, and `_note_path` inside the drop — and two of
+    # its three inputs can CHANGE between them: `mt.meeting_start` is an HTTP call that can fail
+    # and later succeed, and the last fallback below is the wall clock, which moves. A run that
+    # minted the mail's link at 19:47 and wrote the desk file at 19:52 named two different files;
+    # the Minutes tab opened the one nothing wrote and read "No page here yet". That is F58, and
+    # it re-opened on this second route after the `[:10]` slice was fixed on the first.
+    #
+    # `ctx.scratch` is the right home rather than a module global: it is per-reaction, it is
+    # persisted, and it therefore survives the worker restart between `email_minutes` and
+    # `drop_to_attendees` that a module global would not. Keyed by `uid` because the zone is that
+    # person's. `getattr` because unit tests hand this function a ctx that is only `refs`.
+    scratch = getattr(ctx, "scratch", None)
+    key = f"_meeting_stamp:{uid}"
+    if isinstance(scratch, dict) and scratch.get(key):
+        return str(scratch[key])
     start = ctx.refs.get("start")
     if not start:
         start = mt.meeting_start(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
@@ -161,8 +177,22 @@ def _meeting_stamp(ctx, uid) -> str:
     if not start:
         # Still deterministic and still not the server's clock: a meeting with no knowable
         # start is stamped in the same zone as one that has it.
-        return datetime.datetime.now(zone).strftime("%Y-%m-%d-%H%M")
-    return datetime.datetime.fromtimestamp(float(start), zone).strftime("%Y-%m-%d-%H%M")
+        stamp = datetime.datetime.now(zone).strftime("%Y-%m-%d-%H%M")
+    else:
+        stamp = datetime.datetime.fromtimestamp(float(start), zone).strftime("%Y-%m-%d-%H%M")
+    if isinstance(scratch, dict):
+        scratch[key] = stamp
+    return stamp
+
+# HOW MANY TIMES THE ATTENDEE FAN-OUT RETRIES AN UNREACHABLE ADDRESS before it goes on without
+# them. The step's own ceiling, deliberately not the engine's `MAX_ATTEMPTS`: what is being bounded
+# here is one person's mail server, not the health of the reaction, and the two must be able to
+# move independently. Below the ceiling a failure is retryable (a transient SMTP 421 is the case
+# this exists for); at it the step COMPLETES with the address named in `failed`, because the steps
+# after it — the desk drop that reaches the whole room — must not be held hostage by one bad
+# address in a twenty-person invite.
+ATTENDEE_MAIL_ATTEMPTS = 3
+
 
 def _note_path(ctx, uid, title) -> str:
     """THE ONE RECIPE for where a meeting's record lands on a desk:
@@ -954,6 +984,10 @@ def build(reg: Registry, db) -> None:
         # What each person was actually told, recorded as they are told it — in scratch, so a
         # retry that skips an already-mailed attendee still carries their entry forward.
         drops = list(ctx.scratch.setdefault("drops", []))
+        # THIS RUN's failures, keyed by address so a retry replaces the previous verdict instead
+        # of appending a second copy of it. The old list appended blindly, so an address that
+        # failed three times appeared three times in the receipt.
+        failures: dict[str, str] = {}
         for a in who:
             if a in sent:
                 continue
@@ -1019,10 +1053,33 @@ def build(reg: Registry, db) -> None:
                 drops.append({"to": a, "link": link})
                 ctx.scratch["drops"] = drops
             except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
-                ctx.scratch.setdefault("failed", []).append(f"{a}: {type(e).__name__}")
+                failures[a] = f"{a}: {type(e).__name__}: {e}"[:240]
+            # ONE HEARTBEAT PER PERSON. Everything above costs a share mint, a scaffold mint and
+            # an SMTP round trip, so a full room runs past the 90 s lease; without this the
+            # reclaimer hands the reaction to a second worker that starts from an empty `sent`
+            # and mails the whole room again, with a second share token each. `checkpoint` both
+            # renews the lease and persists what has been done — see `flows/loop.py`.
+            ctx.checkpoint()
+        failed = [failures[a] for a in sorted(failures)]
+        ctx.scratch["failed"] = failed
+        # A FAILED SEND IS RETRIED, not forgotten. It used to be neither: the address entered
+        # neither `sent` nor `drops`, the step returned `Done`, and one transient SMTP 421
+        # removed a person from a meeting they had attended — permanently and silently, because
+        # `Done` is what "the report went out" looks like from every consumer.
+        #
+        # ...and it is retried a BOUNDED number of times, then given up on OUT LOUD. Raising
+        # until the engine's own ceiling would fail the whole reaction, and `drop_to_attendees`
+        # runs after this step: one dead address in a twenty-person invite would then cost the
+        # other nineteen the record on their desk. The ceiling keeps both promises.
+        attempt = int(getattr(ctx.reaction, "attempt", 1) or 1)
+        if failed and attempt < ATTENDEE_MAIL_ATTEMPTS:
+            raise StepError(
+                f"could not mail {len(failed)} of {len(who)} attendee(s) for meeting {mid} "
+                f"(attempt {attempt} of {ATTENDEE_MAIL_ATTEMPTS}): " + " · ".join(failed)
+                + f". Mailed: {', '.join(sent) or 'nobody'}.", retryable=True)
         return Done({"sent": len(sent), "followup": "on", "to": sent, "meeting_id": mid,
                      "drops": drops,               # what drop_to_attendees writes, per person
-                     "failed": ctx.scratch.get("failed", [])})
+                     "failed": failed})
 
     # ── the drop — one meeting entity into each attendee's own workspace (PRD decision 20) ──
     def _yaml(value: str) -> str:
@@ -1056,7 +1113,7 @@ def build(reg: Registry, db) -> None:
         (F58). An id that does not match the file it is in is worse than no id: every consumer
         that resolves one from the other silently misses."""
         roster = ", ".join(_yaml(a) for a in participants)
-        return "\n".join([
+        lines = [
             "---",
             "type: meeting",
             f"id: {entity_id}",
@@ -1073,11 +1130,15 @@ def build(reg: Registry, db) -> None:
             "",
             (report or "").strip(),
             "",
-            "---",
-            "",
-            f"Open the meeting: {link}",
-            "",
-        ])
+        ]
+        # NO LINK, NO LINE. Since the drop room is the invite rather than the mailing list, a
+        # person who was not mailed has no share capability of their own — and a trailer reading
+        # "Open the meeting: " with nothing after it is a broken affordance, while somebody
+        # else's link would be the one thing a share token exists to prevent. They get the
+        # artefact, in full, and no button.
+        if str(link or "").strip():
+            lines += ["---", "", f"Open the meeting: {link}", ""]
+        return "\n".join(lines)
 
     def _index_entry(current: str, title: str, filename: str, day: str) -> str:
         """`kg/entities/meeting/index.md` with this meeting listed once.
@@ -1192,7 +1253,20 @@ def build(reg: Registry, db) -> None:
                              provenance={"flow": "post_meeting", "step": "drop_to_attendees",
                                          "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                          "minted_by": str(uid)})
-        room = [{"to": organizer, "link": organiser_link}] + list(att.get("drops") or [])
+        # THE ROOM IS THE INVITE, NOT THE MAILING LIST. This used to be
+        # `[organiser] + att["drops"]`, and `drops` is empty whenever the attendee MAIL was
+        # switched off (`attendee_followup`) or every attendee is outside the organiser's domain
+        # (PRD §16.2's allow-list, which governs mail and nothing else). A preference about mail
+        # was therefore silently a preference about whose desk the meeting reached — while
+        # `room_order` had already MOUNTED those same desks to write the report. Decision 20 says
+        # the drop goes into every attendee's workspace, creating it if absent; decision 22a says
+        # the organiser's always does. `drops` now supplies one thing only: that person's own
+        # share link, where they were mailed one.
+        links = {str((d or {}).get("to") or "").strip().lower(): str((d or {}).get("link") or "")
+                 for d in (att.get("drops") or [])}
+        room = [{"to": organizer, "link": organiser_link}]
+        room += [{"to": a, "link": links.get(a, "")}
+                 for a in roster if a != organizer.lower()]
         entity_id = filename[:-3] if filename.endswith(".md") else filename
         body = _drop_entity(title=title, day=day, entity_id=entity_id, date_prose=date_prose,
                             organizer=organizer, participants=roster, report=report, link="")
@@ -1218,6 +1292,7 @@ def build(reg: Registry, db) -> None:
                 failed.append(f"{a}: {type(e).__name__}: {e}"[:240])
             ctx.scratch["dropped"] = done
             ctx.scratch["drop_failed"] = failed
+            ctx.checkpoint()      # same shape as the fan-out above: N round trips, one lease
         if done:
             return Done({"dropped": len(done), "to": done, "failed": failed,
                          "entity": entity_path, "meeting_id": mid,

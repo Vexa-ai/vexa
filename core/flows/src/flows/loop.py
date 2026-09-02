@@ -145,6 +145,28 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None) -> b
     def _save_scratch() -> None:
         db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
                    {"s": dumps(ctx.scratch), "rid": r.reaction_id})
+
+    def _checkpoint() -> None:
+        """MID-STEP: persist what has been done and push the lease out again.
+
+        A step is normally shorter than `LEASE_S` and needs none of this. The attendee fan-out is
+        not: it mints a transcript share, mints a scaffold and sends an SMTP message PER PERSON,
+        so a 20-person room at ~4 s each runs past 90 s. What happened then was silent and
+        expensive — `reclaim` returned the still-running reaction to the queue, a second worker
+        claimed it, and because scratch is only written when the step RETURNS that worker began
+        from an empty `sent` list: everybody already mailed was mailed a second time, with a
+        second share token each.
+
+        Both halves matter and they fail differently. Renewing the lease is what stops the second
+        worker existing; saving scratch is what makes the second worker harmless if it does (a
+        crash, a redeploy, a lease that expired anyway). One call buys both, so a step cannot take
+        the cheap half by accident."""
+        _save_scratch()
+        db.execute(
+            "UPDATE reaction SET lease_until = :lease, updated_at = :now WHERE reaction_id = :rid",
+            {"lease": clock.now() + LEASE_S, "now": clock.now(), "rid": r.reaction_id})
+
+    ctx.checkpoint = _checkpoint
     try:
         out = registry.steps[r.step](ctx)
         _save_scratch()
@@ -210,6 +232,11 @@ def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bo
                WHERE reaction_id = :rid""",
             {"due": clock.now() + backoff, "why": why, "now": clock.now(), "rid": r.reaction_id})
     else:
+        # THE STEP'S OWN RECEIPT IS PART OF THE TERMINAL STATE, and nothing used to say so: only
+        # the `reaction` row was marked, the receipt stayed `reserved`, and `flows_timeline`
+        # renders `reserved` as `in_flight`. A permanently failed `email_minutes` therefore read
+        # as a report still on its way — the exact claim that module exists to make impossible.
+        receipts.fail(db, effect_key(r), why, clock)
         db.execute(
             """UPDATE reaction SET status = 'failed', reason = :why,
                       lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
