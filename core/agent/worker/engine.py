@@ -449,13 +449,42 @@ WRITEBACK_MARK = "[vexa-phase:writeback]"
 # ran for 58 seconds and created nothing. The workspace is mounted either way; the file is the
 # floor, the tool is the fast path, and the SHAPE has to be stated because the two paths must
 # produce the same page (`shared/entities.py` is the other spelling of it).
-_ENTITY_FILE_SHAPE = (
-    "If `entity_upsert` is not available to you, write the page yourself — the workspace is "
-    "mounted. `kg/entities/<kind>/<slug>.md`, kind one of person/company/meeting/project/decision, "
-    "slug kebab-case of the name. A new page opens with frontmatter `type`, `id`, `title`, "
-    "`aliases: []`, `created: <today>`, `sources: [<source>]`, then `# <Name>`. New or existing, "
-    "append `## <today>` and one `- <fact> — source: <source>` line per fact. Never rewrite what is "
-    "already on the page.\n\n")
+def entity_file_shape() -> str:
+    """What to write when `entity_upsert` is not there — the SAME card the tool renders.
+
+    ⚠ THIS TEXT TAUGHT THE FLAT PAGE. It was written when a page WAS a title and a stack of dated
+    bullets, and it kept saying so after decision 24.6 changed the shape: measured on the offline
+    A/B, every page the fallback produced came out flat — a heading, a date, a paragraph — while the
+    tool path rendered cards. A fallback that produces a different shape is not a fallback, it is a
+    second format nobody asked for, and the sections here are GENERATED from `CARD_SECTIONS` so this
+    cannot go stale a second time."""
+    from shared.entities import CARD_SECTIONS
+
+    per_kind = "; ".join(f"{k} → " + " / ".join(v) for k, v in CARD_SECTIONS.items())
+    return (
+        "If `entity_upsert` is not available to you, write the page yourself — the workspace is "
+        "mounted — and write THE SAME CARD it would have written, never a dated log.\n"
+        "`kg/entities/<kind>/<slug>.md`, kind one of person/company/meeting/project/decision, slug "
+        "kebab-case of the name. Frontmatter `type`, `id`, `title`, `aliases: []`, "
+        "`created: <today>`, `sources: [<source>]`; then `# <Name>`; then ONE plain line saying what "
+        "it is; then these sections for its kind, each with `- ` bullets, each bullet ending "
+        "` — source: <source>`:\n"
+        f"  {per_kind}\n"
+        "then `## Connected` with `- [[Other Name]] — <relation>` for everything it touches (and add "
+        "the matching line on the other page when that page exists), `## Sources`, `## Open "
+        "questions`, and `## Timeline` LAST with `### <today>` over anything that is genuinely a "
+        "dated event. Put each fact in its section: a page that is all Timeline is the shape we are "
+        "moving away from. Never rewrite what is already on the page.\n"
+        # Measured: with no `entity_upsert` the model writes the whole file by hand, and on one DNA
+        # fixture it spent the entire budget on two lavish pages where the other fixture got eleven.
+        # Padding is also the counter-rule broken — a section filled to look complete is a section
+        # carrying something nobody said. An empty heading is the honest answer and it costs nothing.
+        "Keep each page SHORT: one or two bullets a section, only what this turn actually said or "
+        "read, and leave a section empty when the turn learned nothing for it. Never pad a page to "
+        "look complete — every page you do not write is a name nobody can look up.\n\n")
+
+
+_ENTITY_FILE_SHAPE = entity_file_shape()
 
 # ⚠ THE FIRST VERSION OF THIS ASKED FOR JUDGEMENT AND GOT HESITATION — the exact thing the founder
 # named. Told to record "what this turn learned about a person, company, meeting, project or
@@ -483,11 +512,22 @@ def writeback_prompt(candidates: list[str]) -> str:
         "here reaches them. Do not address them, do not summarise the turn, do not ask anything.\n\n"
         "These names came up in the turn you just finished and NONE of them has a page yet:\n\n"
         + named + "\n\n"
-        "Give each one a page, in the order listed, with `entity_upsert(kind, name, facts, source)` "
-        "— one call per name, starting immediately, no preamble and no re-reading. `kind` is one of "
-        "person, company, meeting, project, decision. `facts` are what THIS turn actually said or "
-        "read about them — one short sentence each, and one sentence is enough to start a page. "
-        "`source` is where you read it: the meeting, the mail, the file, the person's message.\n\n"
+        "Give each one a page, in the order listed, with `entity_upsert(kind, name, ...)` — one call "
+        "per name, starting immediately, no preamble and no re-reading. `kind` is one of person, "
+        "company, meeting, project, decision.\n\n"
+        # Decision 24.6. The founder's word for a page written as a stack of dated bullets was
+        # "flat", and the tool grew `summary`/`fields`/`section` so it need not be. The phase is
+        # where most pages are born, so if the phase does not use them nothing else will.
+        "WRITE A CARD, NOT A LOG. Give each page a `summary` — one plain line saying what it is — "
+        "and put each fact in its section with `fields` (the tool description lists the fields for "
+        "each kind: a person has `role`, `company`, `cares_about`, `relationship`; a company has "
+        "`what`, `people`, `relationship`). A person's employer passed as `company` links the two "
+        "pages in BOTH directions, which is the whole point of writing it there rather than in a "
+        "sentence. Use `facts` only for something that is genuinely a dated event; it goes to the "
+        "page's Timeline, and a page that is all Timeline is the shape we are moving away from.\n\n"
+        "`source` is required and is where you read it: the meeting, the mail, the file, the "
+        "person's message. What you would have to guess goes in `open_questions`, as the question. "
+        "One sentence of fact is enough to start a page.\n\n"
         "Do not judge whether a name is important enough or whether it is covered somewhere else. A "
         "meeting note is NOT a substitute for a page — it records an occasion, a page records a "
         "subject, and the point is that the next turn can find the subject.\n\n"

@@ -2163,14 +2163,33 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
 
 @mcp.tool()
 @_anon_guard
-def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str = "",
-                  dates: dict | None = None, token: str = "") -> str:
+def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "", slug: str = "",
+                  dates: dict | None = None, summary: str = "", fields: dict | None = None,
+                  section: str = "", connections: list | None = None,
+                  open_questions: list[str] | None = None, token: str = "") -> str:
     """Record what you just learned about a person, company, meeting, project or decision.
 
-    ONE call does the whole thing: it creates `kg/entities/<kind>/<slug>.md` with frontmatter if the
-    page does not exist, or appends a dated entry if it does. You never have to check first, never
-    have to invent the shape, never have to merge by hand. Call it on a maybe — repeating a fact the
-    page already carries writes nothing.
+    ONE call does the whole thing: it creates `kg/entities/<kind>/<slug>.md` if the page does not
+    exist and updates it in place if it does. You never have to check first, never have to invent
+    the shape, never have to merge by hand. Call it on a maybe — repeating a fact the page already
+    carries writes nothing.
+
+    THE PAGE IS A CARD, not a log: a one-line summary, then the sections below for its kind, then
+    `## Connected` (links both ways), `## Sources`, `## Open questions`, and `## Timeline` last for
+    anything dated. File each fact into its section with `fields` — that is what makes a page worth
+    opening. A fact passed in `facts` with no `section` lands in the Timeline, which is fine for a
+    log line and wrong for what someone does.
+
+    SECTIONS AND FIELDS, by kind:
+      - person: Role and organisation · What they care about · How we relate  (fields: cares_about, company, relationship, role)
+      - company: What it is · People · Our relationship  (fields: people, relationship, what)
+      - meeting: When and who · Decided · Committed  (fields: committed, decided, participants, when, who)
+      - project: What it is · Who · Status  (fields: status, what, who)
+      - decision: What was decided · Why · What it changes  (fields: changes, what, why)
+
+    - `fields` — `{"role": "Chairs the TSC", "company": "[[Sony Pictures Imageworks]]"}`. Each key
+      above files into its section. A field that names another entity also draws the link BOTH ways:
+      giving a person a `company` adds them to that company's page too.
 
     Use it the moment a turn learns anything durable: a name and who they are, a company and what
     they do, what a meeting decided, who owns what, a decision and why it went that way. A name
@@ -2181,7 +2200,14 @@ def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str
       Imageworks"). It becomes the title `[[wikilinks]]` resolve to.
     - `facts` — one short sentence each, only what was SAID or READ. Write other entities inside a
       fact as `[[Their Name]]`; the result tells you which of those have no page yet, and those are
-      your next calls.
+      your next calls. Pass `section="<one of the section names above>"` to file them, or leave it
+      and they go to the Timeline.
+    - `summary` — the single line under the title, in plain words. Set once; it is not overwritten,
+      so give it when you create the page.
+    - `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`. Chips on this
+      page and the reciprocal chip on theirs, when their page exists.
+    - `open_questions` — what you would need to know, written AS the question. This is where a gap
+      goes; it never goes on the page as a guess.
     - `source` — where it came from, in a few words: the meeting, the mail, the file, the person's
       own message. REQUIRED. A fact with no source is refused, not written — if you do not have one,
       the gap belongs in `kg/MISSING.md`, never on the page.
@@ -2198,7 +2224,10 @@ def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str
         facts = [facts]
     st, body = _http("POST", f"{AGENT_API}/api/workspace/entity", {"X-User-Id": uid},
                      {"kind": kind, "name": name, "facts": list(facts or []),
-                      "source": source, "slug": slug or "", "dates": dates or {}})
+                      "source": source, "slug": slug or "", "dates": dates or {},
+                      "summary": summary, "fields": fields or {}, "section": section,
+                      "connections": connections or [],
+                      "open_questions": open_questions or []})
     if st == 422:
         detail = (body or {}).get("detail") if isinstance(body, dict) else str(body)
         return json.dumps({"refused": detail,
@@ -2213,6 +2242,8 @@ def entity_upsert(kind: str, name: str, facts: list[str], source: str, slug: str
         out["paste_this_link"] = f"[[{name}]]"
         out["never_show_the_path"] = ("the path is an argument for tools; in your reply write "
                                       "[[" + str(name) + "]] and nothing slashed")
+    if out.get("filed"):
+        out["next"] = out.get("next") or ""
     if out.get("links_missing"):
         out["next"] = ("these names have no page yet and will render as inert 'not found' chips — "
                        "upsert each one now, with its own source: "

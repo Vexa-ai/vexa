@@ -39,7 +39,11 @@ MISSING_PATH = "kg/MISSING.md"
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
-_DATED_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$", re.M)
+# `## 2026-09-02` was the whole page before decision 24.6; `### 2026-09-02` under `## Timeline`
+# is where the same entry lives now. BOTH are read, because "when was this page last actually
+# learned about" has to keep answering across a migration that happens one page at a time —
+# and the desk README orders its cards on this answer.
+_DATED_HEADING = re.compile(r"^#{2,3}\s+(\d{4}-\d{2}-\d{2})\s*$", re.M)
 _BULLET = re.compile(r"^\s*[-*]\s+(.+?)\s*$", re.M)
 
 # The index is mounted into EVERY dispatch, so it is a prompt-budget line item, not a report.
@@ -276,43 +280,325 @@ def _dated(dates) -> dict:
     return out
 
 
-def upsert_entity(root, kind: str, name: str, facts, source: str, *,
-                  today: str | None = None, aliases=(), mounts=None, dates=None) -> dict:
-    """Create ``kg/entities/<kind>/<slug>.md`` with frontmatter and a first dated entry, or append a
-    dated entry to the page already there. Returns what happened, in the caller's words.
+# ── the card (PRD decision 24.6) ─────────────────────────────────────────────────────────────────
+#
+# Founder, 2026-09-02, on a page this tool had just made — a title, a date, one bullet:
+# *"where is this format coming from? this is flat — not what we want."*
+#
+# It was flat because the writer only ever knew how to APPEND. A page assembled by appending is a
+# log with a heading, and a log answers "what happened on the 2nd", which is not the question anyone
+# opens a person's page to ask. The templates in `kg/templates/` have always described the right
+# thing — a summary, sections for what it is and how it relates, the web of links — and nothing
+# rendered them, so the shape lived in a file the agent was told to copy by hand and therefore did
+# not. This module now renders that shape, and the log moves to `## Timeline` where a log belongs.
+#
+# The templates stay the human-readable statement of the shape; these maps are the executable one,
+# and `test_card_shape_matches_the_templates` is what keeps them from drifting apart.
 
-    Idempotent on identical facts: a fact already on the page (by ``_normalise``) is dropped, and a
-    call whose every fact is already there writes nothing and reports ``changed: False``. That is
-    what makes the forced write-back phase safe to run on EVERY turn — a turn that learned nothing
-    new costs one no-op, not a duplicated paragraph.
+CARD_SECTIONS = {
+    "person":   ("Role and organisation", "What they care about", "How we relate"),
+    "company":  ("What it is", "People", "Our relationship"),
+    "meeting":  ("When and who", "Decided", "Committed"),
+    "project":  ("What it is", "Who", "Status"),
+    "decision": ("What was decided", "Why", "What it changes"),
+}
 
-    ``mounts`` is the turn's mount set (``[{path, id?}]``) and it turns on PRD decision 26.3's write
-    rule: a ``[[Name]]`` in a fact whose page lives in ANOTHER mounted workspace is rewritten to the
-    id form ``[[ws:<workspace-id>/<entity-id>]]`` before it is stored, so the link survives that
-    workspace being renamed. The home workspace always wins — a name with a page HERE is left alone,
-    because the reader's own desk is the page they meant. Omitting ``mounts`` is the single-workspace
-    behaviour, byte-identical to before.
+# Every card ends the same way, whatever it is about: who it touches, where it came from, what we
+# still do not know, and the log. The order is deliberate — the reader wants the web before the
+# provenance, and the provenance before the history.
+TAIL_SECTIONS = ("Connected", "Sources", "Open questions", "Timeline")
 
-    ``dates`` records WHEN, in frontmatter, for the keys in ``DATE_FIELDS`` — `scheduled_at`,
-    `held_at`, `report_delivered_at`, `due_at`. It is how the desk README's `Now` section and the
-    timeline stay in agreement (decision 31 §3): both read these fields, neither parses prose. A
-    dates-only call is a real change and is reported as one, but it appends NO dated entry — the
-    page's body is the record of what was learned, and "the report went out" is not a new fact
-    about the meeting, it is a property of it.
+# THE FIELD → SECTION MAP. This is what lets the model file a fact in place instead of dropping it
+# at the bottom: it passes `fields={"role": "Chairs the TSC"}` and the sentence lands under *Role
+# and organisation*, on this kind of page, without the model knowing the section names at all. The
+# tool description is generated from this map (`tool_sections_text`), so the two cannot disagree.
+FIELD_SECTION = {
+    "person":   {"role": "Role and organisation", "company": "Role and organisation",
+                 "cares_about": "What they care about", "relationship": "How we relate"},
+    "company":  {"what": "What it is", "people": "People", "relationship": "Our relationship"},
+    "meeting":  {"when": "When and who", "who": "When and who", "participants": "When and who",
+                 "decided": "Decided", "committed": "Committed"},
+    "project":  {"what": "What it is", "who": "Who", "status": "Status"},
+    "decision": {"what": "What was decided", "why": "Why", "changes": "What it changes"},
+}
 
-    ``due_at`` is the newest of the four and it exists to close the last prose seam (coordinator
-    ruling, 2026-09-02). A dated commitment — "circulate the charter by the 20th" — used to reach
-    the desk README because a regex found an ISO string under a heading that happened to be called
-    `## Committed`. It now reaches it because THIS call filed it, with a source. The difference is
-    not tidiness: a scraped date cannot be corrected (rewriting the sentence does not move it, and
-    nothing knows the commitment was met), while a filed one is a field the next turn can set."""
+# A label is worth writing only when the section does not already say what the line is. Under
+# *People* a bullet reading "Person: [[Jane]]" says "person" twice; under *Role and organisation*
+# "Company: [[Acme]]" earns its label because the section holds two different kinds of line.
+FIELD_LABEL = {"role": "Role", "company": "Company", "cares_about": "Cares about",
+               "relationship": "Relationship"}
+
+# WHICH FIELDS ARE ALSO EDGES, and what the edge says from each end. Naming a person's `company` is
+# the commonest way a graph gets half-built: their page links out, the company's page never learns
+# it has an employee, and the web only works in the direction somebody happened to be writing.
+# `(from this page, from the other page)`.
+FIELD_LINKS = {
+    "person":   {"company": ("works at", "works here")},
+    "company":  {"people": ("works here", "works at")},
+    "meeting":  {"participants": ("attendee", "attended"), "who": ("attendee", "attended")},
+    "project":  {"who": ("works on this", "works on")},
+    "decision": {},
+}
+
+_RECIPROCAL = {"works at": "works here", "works here": "works at",
+               "attendee": "attended", "attended": "attendee",
+               "owns": "owned by", "owned by": "owns",
+               "part of": "includes", "includes": "part of",
+               "decided in": "decided", "decided": "decided in"}
+
+_H2 = re.compile(r"^##\s+(.+?)\s*$")
+_H3 = re.compile(r"^###\s+(.+?)\s*$")
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def sections_for(kind: str) -> tuple:
+    return CARD_SECTIONS.get(kind, ())
+
+
+def tool_sections_text() -> str:
+    """The sections, per kind, as the tool description states them.
+
+    Generated rather than written out, because a tool description that lists sections the renderer
+    does not have is worse than one that lists none: the model files a fact into a heading that then
+    silently becomes an 'extra' section nobody reads."""
+    lines = []
+    for kind in KINDS:
+        fields = ", ".join(sorted(FIELD_SECTION.get(kind, {})))
+        lines.append(f"- {kind}: " + " · ".join(CARD_SECTIONS[kind]) + f"  (fields: {fields})")
+    return "\n".join(lines)
+
+
+class Card:
+    """A parsed entity page. Parse → render is the ONLY write path, which is what makes migration
+    free: a flat page parses into a card with everything in `timeline`, and rendering it produces
+    the shape. There is no separate migration routine to forget to run."""
+
+    __slots__ = ("title", "summary", "sections", "order", "timeline", "was_flat")
+
+    def __init__(self):
+        self.title = ""
+        self.summary = ""
+        self.sections: dict = {}
+        self.order: list = []
+        self.timeline: list = []          # [(date | "", [lines])]
+        self.was_flat = False
+
+    def section(self, name: str) -> list:
+        if name not in self.sections:
+            self.sections[name] = []
+            self.order.append(name)
+        return self.sections[name]
+
+    def add(self, name: str, line: str) -> bool:
+        """Append a bullet unless the page already carries that fact. Returns whether it landed."""
+        line = line.strip()
+        if not line:
+            return False
+        want = _normalise(_SOURCE_SUFFIX.sub("", line.lstrip("-* ")))
+        for existing in self.sections.get(name, ()):
+            if _normalise(_SOURCE_SUFFIX.sub("", existing.lstrip("-* "))) == want:
+                return False
+        self.section(name).append(line if line.startswith("-") else f"- {line}")
+        return True
+
+    def add_timeline(self, day: str, line: str) -> bool:
+        for _d, lines in self.timeline:
+            for existing in lines:
+                if _normalise(_SOURCE_SUFFIX.sub("", existing.lstrip("-* "))) == \
+                        _normalise(_SOURCE_SUFFIX.sub("", line.lstrip("-* "))):
+                    return False
+        for d, lines in self.timeline:
+            if d == day:
+                lines.append(line if line.startswith("-") else f"- {line}")
+                return True
+        self.timeline.append((day, [line if line.startswith("-") else f"- {line}"]))
+        return True
+
+
+def parse_card(body: str) -> Card:
+    """Read any page — a card, a flat log, or something a human wrote — into one representation.
+
+    A top-level `## 2026-09-02` is the OLD FLAT SHAPE and becomes a timeline entry. That single line
+    is the whole of the migration the founder asked for, and it is here rather than in a one-shot
+    script because a page can be flat for two reasons: this tool wrote it before today, or a person
+    typed it. Both want the same treatment, on touch, forever."""
+    card = Card()
+    mode = "head"            # head → summary lines · section → a named section · timeline
+    current = ""
+    summary: list = []
+    for raw in (body or "").splitlines():
+        line = raw.rstrip()
+        if line.startswith("# ") and not card.title:
+            card.title = line[2:].strip()
+            continue
+        m2 = _H2.match(line)
+        if m2:
+            head = m2.group(1).strip()
+            if _ISO_DAY.match(head):                       # the old flat shape
+                card.was_flat = True
+                mode, current = "timeline", head
+                card.timeline.append((head, []))
+                continue
+            if head.lower() == "timeline":
+                mode, current = "timeline", ""
+                continue
+            mode, current = "section", head
+            card.section(head)
+            continue
+        if mode == "timeline":
+            m3 = _H3.match(line)
+            if m3:
+                current = m3.group(1).strip()
+                card.timeline.append((current, []))
+                continue
+            if not line.strip():
+                continue
+            if not card.timeline:
+                card.timeline.append(("", []))
+            card.timeline[-1][1].append(line)
+            continue
+        if mode == "section":
+            if line.strip():
+                card.sections[current].append(line)
+            continue
+        if line.strip():
+            summary.append(line.strip())
+    card.summary = " ".join(summary).strip()
+    if not card.sections and not card.timeline:
+        card.was_flat = True                              # a bare page is as flat as a logged one
+    return card
+
+
+def render_card(card: Card, kind: str, fm: list) -> str:
+    """The card, in one order, every time. Empty kind-sections are KEPT — they are the shape, and a
+    heading with nothing under it is how the next turn knows where the fact it just learned goes.
+    Empty tail sections are dropped: nobody needs a `## Timeline` that has never had an entry."""
+    out = [f"# {card.title}".rstrip(), ""]
+    if card.summary:
+        out += [card.summary, ""]
+    named = list(CARD_SECTIONS.get(kind, ()))
+    for head in named:
+        out += [f"## {head}", ""] + list(card.sections.get(head, ())) + [""]
+    # Anything a human added that is neither the card nor the tail is kept, in the order it was
+    # written. A renderer that silently drops the section somebody typed is a renderer nobody keeps.
+    for head in card.order:
+        if head in named or head in TAIL_SECTIONS:
+            continue
+        out += [f"## {head}", ""] + list(card.sections.get(head, ())) + [""]
+    for head in ("Connected", "Sources", "Open questions"):
+        lines = card.sections.get(head) or []
+        if lines:
+            out += [f"## {head}", ""] + list(lines) + [""]
+    if card.timeline:
+        out += ["## Timeline", ""]
+        for day, lines in card.timeline:
+            if not lines:
+                continue
+            if day:
+                out += [f"### {day}", ""]
+            out += list(lines) + [""]
+    text = "\n".join(out).rstrip("\n") + "\n"
+    return "---\n" + "\n".join(fm) + "\n---\n\n" + text
+
+
+def find_entity(root, name: str) -> "tuple[str, str] | None":
+    """`(kind, relative path)` of an existing page for this name, anywhere under `kg/entities/`."""
+    slug = slugify(name)
+    if not slug:
+        return None
+    base = Path(root) / ENTITIES_DIR
+    for kind in KINDS:
+        if (base / kind / f"{slug}.md").exists():
+            return kind, f"{ENTITIES_DIR}/{kind}/{slug}.md"
+    return None
+
+
+def _chip(name: str, relation: str) -> str:
+    rel = (relation or "").strip()
+    return f"- [[{name}]] — {rel}" if rel else f"- [[{name}]]"
+
+
+def link_back(root, target_name: str, from_name: str, relation: str) -> "str | None":
+    """Put the reciprocal chip on the OTHER page, and return its path if anything changed.
+
+    Only onto a page that already exists. Minting one from a name with no facts behind it is the
+    invention decision 24.5 forbids — the caller gets it back in `links_missing` instead, and the
+    edge completes the moment that page is written for a real reason."""
+    hit = find_entity(root, target_name)
+    if not hit:
+        return None
+    kind, rel = hit
+    path = Path(root) / rel
+    text = path.read_text(encoding="utf-8", errors="replace")
+    fm, body = split_frontmatter(text)
+    card = parse_card(body)
+    if not card.title:
+        card.title = _fm_get(fm, "title") or target_name
+    if not card.add("Connected", _chip(from_name, relation)):
+        return None
+    path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    return rel
+
+
+def _as_lines(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
+                  today: str | None = None, aliases=(), mounts=None, dates=None,
+                  summary: str = "", fields=None, section: str = "",
+                  connections=(), open_questions=()) -> dict:
+    """Create or update ``kg/entities/<kind>/<slug>.md`` AS A CARD (PRD decision 24.6).
+
+    The page is always parsed and re-rendered, never appended to, and that one decision carries the
+    migration: a flat page — the shape the founder rejected, a title and a stack of dated bullets —
+    parses into a card whose entries are all in `Timeline`, and rendering it produces the sections.
+    Nothing has to remember to migrate anything.
+
+    WHERE A FACT GOES:
+      * ``fields`` — ``{"role": "Chairs the TSC"}`` — lands in the section this kind maps that field
+        to (``FIELD_SECTION``), which is how the model files in place without knowing the headings.
+        A field that is also an edge (``FIELD_LINKS``) additionally writes a ``## Connected`` chip
+        HERE and the reciprocal chip on the other page.
+      * ``facts`` — plain sentences — land in ``section=`` when it names one of this kind's
+        sections, and in ``## Timeline`` under today when it does not. Timeline is the log; it is
+        the fallback on purpose, so an unfiled fact is still kept and still dated.
+      * ``connections`` — ``["Acme"]`` or ``[{"name": "Acme", "relation": "works at"}]`` — chips,
+        both ways.
+      * ``open_questions`` — the gaps, on the page, where the next turn can see them.
+      * ``summary`` — the one line under the title. Set only when the page has none: the first
+        sentence written about something is usually the person's own, and a tool that rewrites it
+        every turn is a tool people stop letting near their pages.
+
+    Idempotent on identical facts: a bullet already on the page (by ``_normalise``, ignoring its
+    source clause) is dropped, and a call whose every fact is already there writes nothing and
+    reports ``changed: False``. That is what makes the forced write-back phase safe on EVERY turn.
+
+    ``mounts`` turns on PRD decision 26.3's write rule: a ``[[Name]]`` whose page lives in ANOTHER
+    mounted workspace is rewritten to ``[[ws:<workspace-id>/<entity-id>]]`` before it is stored, so
+    the link survives that workspace being renamed. The home workspace always wins.
+
+    ``dates`` records WHEN in frontmatter for the keys in ``DATE_FIELDS`` — how the desk README's
+    `Now` section and the timeline stay in agreement (decision 31 §3): both read these fields,
+    neither parses prose. A dates-only call is a real change and writes no entry: "the report went
+    out" is a property of the meeting, not a new fact about it.
+    """
     root = Path(root)
     src = str(source or "").strip()
+    kind = (kind or "").strip().lower()
     facts = [str(f).strip() for f in (facts or []) if str(f).strip()]
+    fields = {k: v for k, v in (fields or {}).items() if _as_lines(v)}
+    connections = list(connections or [])
+    open_questions = _as_lines(open_questions)
     stamps = _dated(dates)
-    if not facts and not stamps:
+    body_input = bool(facts or fields or connections or open_questions or summary)
+    if not body_input and not stamps:
         raise EntityRefused("nothing to record — pass the facts this turn learned, or say nothing new")
-    if not src and facts:
+    if not src and body_input:
         raise EntityRefused(
             "every fact needs a source: what was said or read that this came from (the meeting, the "
             "mail, the file, the person's own words). A page carries only what was said or read — "
@@ -326,59 +612,123 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
 
     # THE REWRITE HAPPENS BEFORE IDEMPOTENCY IS TESTED, and the order is load-bearing: a fact
     # re-stated next turn arrives as `[[Olga Avramenko]]` and is already stored as
-    # `[[ws:k4m…/olga-avramenko]]`, so comparing the raw forms would append it a second time. Both
-    # sides are normalised through the SAME rewritten text.
-    linked = wikilinks(facts)                       # the names as the caller wrote them (for the report)
-    facts, rewritten = _rewrite_links(root, facts, name=name, mounts=mounts)
-    fresh = [f for f in facts if _normalise(f) not in existing_facts(raw)]
+    # `[[ws:k4m…/olga-avramenko]]`, so comparing the raw forms would append it a second time.
+    field_lines = {f: _as_lines(v) for f, v in fields.items()}
+    flat = list(facts) + [v for vals in field_lines.values() for v in vals] + open_questions
+    linked = wikilinks(flat)                        # the names as the caller wrote them
+    rewritten_all, cursor = [], 0
+    rewritten_flat, rewrites = _rewrite_links(root, flat, name=name, mounts=mounts)
+    rewritten_all = rewrites
+    facts = rewritten_flat[cursor:cursor + len(facts)]
+    cursor += len(facts)
+    for f in list(field_lines):
+        n = len(field_lines[f])
+        field_lines[f] = rewritten_flat[cursor:cursor + n]
+        cursor += n
+    open_questions = rewritten_flat[cursor:cursor + len(open_questions)]
+
     resolved, unresolved = resolve_links(root, linked)
-    if rewritten:
-        # A name that resolved in ANOTHER mounted workspace is resolved, not missing — reporting it
-        # as missing is what would send the write-back phase off to create a duplicate page here.
-        crossed = {title for title, _ref in rewritten}
+    if rewritten_all:
+        crossed = {title for title, _ref in rewritten_all}
         resolved += [n for n in unresolved if n in crossed]
         unresolved = [n for n in unresolved if n not in crossed]
     day = _today(today)
 
-    new_stamps = {k: v for k, v in stamps.items() if _fm_get(fm, k) != v}
-    if existed and not fresh and not new_stamps:
-        return {"path": rel, "created": False, "changed": False, "facts_written": 0,
-                "already_recorded": len(facts), "links_resolved": resolved,
-                "links_missing": unresolved, "links_rewritten": rewritten,
-                "kind": kind, "name": name, "dates": {}}
+    card = parse_card(body)
+    migrated = existed and card.was_flat
+    if not card.title:
+        card.title = name
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
               f"aliases: {_render_list(aliases)}", f"created: {day}",
               f"sources: {_render_list([s_ for s_ in [src] if s_])}"]
-        body = f"\n# {name}\n"
     else:
-        # A page that predates this module (or one a human wrote) may carry none of these keys.
-        # Fill what is missing; never overwrite a title or a created date somebody else set.
-        if _fm_get(fm, "type") is None:
-            fm = _fm_set(fm, "type", kind)
-        if _fm_get(fm, "id") is None:
-            fm = _fm_set(fm, "id", slugify(name))
-        if _fm_get(fm, "title") is None:
-            fm = _fm_set(fm, "title", name)
-        if _fm_get(fm, "created") is None:
-            fm = _fm_set(fm, "created", day)
+        for key, value in (("type", kind), ("id", slugify(name)), ("title", name), ("created", day)):
+            if _fm_get(fm, key) is None:
+                fm = _fm_set(fm, key, value)
         fm = _fm_set(fm, "aliases", _render_list(_list_field(_fm_get(fm, "aliases")) + list(aliases)))
         if src:
             fm = _fm_set(fm, "sources", _render_list(_list_field(_fm_get(fm, "sources")) + [src]))
-
+    new_stamps = {k: v for k, v in stamps.items() if _fm_get(fm, k) != v}
     for key, value in new_stamps.items():
         fm = _fm_set(fm, key, value)
-    written = fresh if existed else facts
-    if written:
-        entry = [f"\n## {day}\n"] + [f"- {f} — source: {src}" for f in written] + [""]
-        body = body.rstrip("\n") + "\n" + "\n".join(entry)
+
+    # ── the body ─────────────────────────────────────────────────────────────────────────────────
+    written, filed = 0, {}
+    if summary and not card.summary:
+        card.summary = summary.strip()
+        written += 1
+
+    valid = set(CARD_SECTIONS.get(kind, ()))
+    edges = dict(FIELD_LINKS.get(kind, {}))
+    for field, values in field_lines.items():
+        head = FIELD_SECTION.get(kind, {}).get(field)
+        label = FIELD_LABEL.get(field)
+        for value in values:
+            line = f"{label}: {value}" if label else value
+            target = head if head in valid else None
+            landed = card.add(target, f"{line} — source: {src}") if target \
+                else card.add_timeline(day, f"{line} — source: {src}")
+            if landed:
+                written += 1
+                filed[target or "Timeline"] = filed.get(target or "Timeline", 0) + 1
+        if field in edges:
+            here, there = edges[field]
+            for value in values:
+                for target_name in (wikilinks([value]) or [value]):
+                    if card.add("Connected", _chip(target_name, here)):
+                        written += 1
+                    connections.append({"name": target_name, "relation": here, "reverse": there})
+
+    default = section.strip() if section.strip() in valid else ""
+    for f in facts:
+        landed = card.add(default, f"{f} — source: {src}") if default \
+            else card.add_timeline(day, f"{f} — source: {src}")
+        if landed:
+            written += 1
+            filed[default or "Timeline"] = filed.get(default or "Timeline", 0) + 1
+
+    for q in open_questions:
+        if card.add("Open questions", q):
+            written += 1
+
+    # `## Sources` is RENDERED FROM frontmatter, never parsed back, so the two can never disagree
+    # about where a page came from. One store, one reader.
+    card.sections["Sources"] = [f"- {s}" for s in _list_field(_fm_get(fm, "sources"))]
+
+    back_links, seen_edges = [], set()
+    for c in connections:
+        target_name = c["name"] if isinstance(c, dict) else str(c)
+        here = (c.get("relation") if isinstance(c, dict) else "") or ""
+        there = (c.get("reverse") if isinstance(c, dict) else "") or \
+            _RECIPROCAL.get(here.lower(), "") or kind
+        if not isinstance(c, dict) or "reverse" not in c:
+            if card.add("Connected", _chip(target_name, here)):
+                written += 1
+        key = (slugify(target_name), there)
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        hit = link_back(root, target_name, card.title, there)
+        if hit:
+            back_links.append(hit)
+
+    if existed and not written and not new_stamps and not migrated:
+        return {"path": rel, "created": False, "changed": False, "facts_written": 0,
+                "already_recorded": len(facts), "links_resolved": resolved,
+                "links_missing": unresolved, "links_rewritten": rewritten_all,
+                "kind": kind, "name": name, "dates": {}, "back_links": back_links,
+                "migrated": False, "filed": {}}
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("---\n" + "\n".join(fm) + "\n---\n" + body.lstrip("\n"), encoding="utf-8")
-    return {"path": rel, "created": not existed, "changed": True, "facts_written": len(written),
-            "already_recorded": len(facts) - len(written), "links_resolved": resolved,
-            "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind,
-            "name": name, "date": day, "dates": new_stamps}
+    path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
+            "already_recorded": max(0, len(facts) - sum(filed.values())),
+            "links_resolved": resolved, "links_missing": unresolved,
+            "links_rewritten": rewritten_all, "kind": kind, "name": name, "date": day,
+            "dates": new_stamps, "back_links": back_links, "migrated": bool(migrated),
+            "filed": filed, "sections": list(CARD_SECTIONS.get(kind, ()))}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────
