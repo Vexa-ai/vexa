@@ -84,22 +84,72 @@ curl -X POST "$API_BASE/agent/workspace/init" -H "X-API-Key: $API_KEY"
 # → 201 { "workspace": "...", "seeded": true, "already_initialized": false }
 ```
 
-## Attach your own git repo
+## Load a workspace you already have
 
-Swap in an external git repo as the active workspace — the current one is **parked**, not lost:
+Most teams already keep their knowledge in a git repo. You do not have to move it: point a workspace at
+it and that repo **becomes** the workspace — the agent reads and writes it in place, and `push` / `pull`
+keep it in step with the remote. Whatever was in the workspace before is **parked**, never destroyed, and
+can be swapped back to at any time (a swap-back restores the parked tree with no re-clone, so work done
+while it was detached survives).
+
+**In minutes mode**, this is one action: the `+` beside the chat's workspace chips → **Attach existing
+repo…**, or the same item in the account menu at the foot of the chat list. Pick the target (your own
+workspace, or any group you can write to), paste the repository URL, choose the branch, and attach.
+
+**In conversation**, just ask — the agent has the same verb:
+
+> *"Load the ASWF DNA workspace from github.com/aswf/dna into this group."*
+
+```
+workspace_attach(workspace="<group-slug>", repo="git@github.com:aswf/dna.git", ref="main")
+workspace_pull(workspace="<group-slug>")     # bring in what changed upstream (fast-forward only)
+workspace_push(workspace="<group-slug>")     # send our work back (never a force push)
+```
+
+**Over the API** — your own workspace, and a shared one:
 
 ```bash
+# your own workspace
 curl -X POST "$API_BASE/agent/workspace/swap" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"repo":"https://github.com/acme/knowledge.git","ref":"main","token":"<git-token>"}'
+  -d '{"repo":"https://github.com/acme/knowledge.git","ref":"main"}'
+
+# a shared (group) workspace — contributor or owner only
+curl -X POST "$API_BASE/agent/workspace/shared/<workspace_id>/attach" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"repo":"git@github.com:acme/knowledge.git","ref":"main"}'
+
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/shared/<workspace_id>/attached"
+# → { "active": "...", "slots": {...}, "home": {...}, "credential": "origin git@…, deploy key set" }
 ```
 
-Omit `repo` to swap back to the seed workspace. Check what's attached:
+Omit `repo` (and pass `"slug":"seed"`) to swap back. A repo with no `CLAUDE.md` is not refused — it is
+nested under `kg/<repo-name>/` inside a governed workspace, so an ordinary docs repo loads unchanged.
+The group's member list travels across the swap and is deliberately kept **untracked** in the attached
+clone, so attaching never locks anybody out and your member list is never pushed to your repository.
+
+### Private repos: add a key, don't paste a token
+
+A private repo needs a credential, and Vexa's first answer is not to ask you for one. Every workspace can
+mint its own **ed25519 deploy key**: you add the *public* half to your repository, and nothing of yours
+travels to us. The private half is generated server-side, sealed at rest, and exists on disk only for the
+length of one git operation.
 
 ```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/attached"
-# → { "active": {...}, "parked": [...] }
+curl -X POST "$API_BASE/agent/workspace/<workspace_id>/deploy-key" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"repo":"git@github.com:acme/knowledge.git"}'
+# → { "public_key": "ssh-ed25519 AAAA… vexa-workspace-ws-…",
+#     "add_at": "https://github.com/acme/knowledge/settings/keys",
+#     "add_as": "a deploy key with WRITE access", "then": "say `done` when added" }
 ```
+
+Add it there with **write** access, then attach again with an `ssh://` or `git@…` URL. If you attach
+before adding it, the failure answers with exactly that key and that sentence rather than a box asking
+for a secret — in chat, tell the agent `done` once you have added it and it will retry. Use the deploy
+key for anything private; the [saved GitHub token](/core/workspaces#reusable-github-token) remains the
+fallback for `https://` remotes, and is entered in the terminal (account menu → **GitHub token**) and
+never in a chat.
 
 ## Next
 

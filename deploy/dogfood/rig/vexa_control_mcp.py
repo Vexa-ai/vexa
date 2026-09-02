@@ -2056,7 +2056,14 @@ def workspace_tree(slug: str = "", token: str = "") -> str:
     uid = me()
     q = f"?slug={slug}" if slug else ""
     st, body = _http("GET", f"{AGENT_API}/api/workspace/tree{q}", {"X-User-Id": uid})
-    return _capped({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body}, 8000)
+    # A CAPABILITY line, never key material: whether this workspace was loaded from a repository, and
+    # whether a credential for it exists at all. It is what lets you answer "can we push this back?"
+    # without going looking — and the only shape a credential ever takes in front of a model.
+    home = None
+    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
+        home = f"{sbody.get('remote')} {sbody.get('url')} on {sbody.get('branch')}"
+    return _capped({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body, "git_home": home or "no git home — this workspace was not loaded from a repository"}, 8000)
 
 
 @mcp.tool()
@@ -2145,6 +2152,136 @@ def workspace_new(name: str, purpose: str = "", token: str = "") -> str:
         "Point a meeting's write-up at it",
         "See what is in it — workspace_tree(slug)",
     ]
+    return json.dumps(out)
+
+
+# ---------------------------------------------------------------- loading an EXISTING workspace
+#
+# "we have github sync setup, how can i do it with vexa minutes? i want to load workspaces that are
+# already there" — and, one message later, the question that actually decides the design: "how do we
+# want to manage the secrets?"
+#
+# The answer these tools implement is that WE DO NOT TAKE ONE. A tool here has no credential
+# parameter, and refuses one that arrives smuggled inside a URL, because a secret typed into a chat is
+# in the transcript, in the model's context and in whatever the transcript syncs to — forever, and
+# revocable only by the person noticing. Instead the server holds a per-workspace DEPLOY KEY and hands
+# out its PUBLIC half; the person adds it to their own repository and comes back and says `done`. The
+# saved PAT stays a fallback for https remotes and is entered in the terminal, never here.
+
+_CREDENTIAL_REFUSAL = (
+    "I will not take a token in chat — anything pasted here stays in this transcript. "
+    "Give me the repository URL on its own and I will show you a key to add to it instead."
+)
+
+
+def _refuse_credentials(*values) -> str:
+    """The refusal, or "" when nothing credential-shaped was passed. Same detector the API uses."""
+    tokenish = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
+    for v in values:
+        text = str(v or "")
+        if any(t in text for t in tokenish):
+            return _CREDENTIAL_REFUSAL
+        # https://user:password@host — a credential wearing a URL
+        if "://" in text:
+            userinfo = text.split("://", 1)[1].split("/", 1)[0]
+            if ":" in userinfo and "@" in userinfo:
+                return _CREDENTIAL_REFUSAL
+    return ""
+
+
+def _deploy_key_state(uid: str, workspace: str, repo: str) -> dict:
+    """The ONE next action when a git op is refused for want of a credential: our public key, where it
+    goes, and the state the person reports back. Never a place to paste a secret."""
+    st, body = _http("POST", f"{AGENT_API}/api/workspace/{workspace or 'personal'}/deploy-key",
+                     {"X-User-Id": uid}, {"repo": repo})
+    if st != 200 or not isinstance(body, dict):
+        return {"error": "could not prepare a deploy key for this workspace", "status": st}
+    return {
+        "add_this_key_to_the_repo": body.get("public_key"),
+        "add_it_at": body.get("add_at") or "the repository's Settings → Deploy keys",
+        "add_it_as": body.get("add_as"),
+        "then": "say `done` when added",
+        "tell_your_person": body.get("message"),
+        "do_not": "ask them for a token, and never accept one in this chat",
+    }
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_attach(workspace: str = "", repo: str = "", ref: str = "main", token: str = "") -> str:
+    """LOAD AN EXISTING repository as a workspace — "load the ASWF DNA workspace from github.com/... into
+    this group", "we already keep this on GitHub, use that one".
+
+    `workspace` is the group's slug (workspaces() lists them); empty means their own personal workspace.
+    `repo` is the repository URL — an `ssh://`/`git@` URL uses this workspace's deploy key, an `https://`
+    URL uses their saved token if they have one. `ref` is the branch.
+
+    NEVER put a credential in any argument. There is no parameter for one and a URL carrying one is
+    refused: if the repo is private and we have no credential yet, the result hands you a PUBLIC KEY —
+    tell them to add it to that repository as a deploy key with write access, and to say `done` when
+    they have. Then call this again.
+
+    What is already there is not destroyed: the workspace's current contents are parked and can be
+    swapped back to. If the repo is not a Vexa-shaped workspace it is nested under `kg/` inside one."""
+    refusal = _refuse_credentials(repo, ref, workspace, token)
+    if refusal:
+        return json.dumps({"refused": refusal, "next": "call again with just the repository URL"})
+    uid = me()
+    if not repo:
+        return json.dumps({"error": "which repository?", "ask": "the repo URL, e.g. git@github.com:acme/kg.git"})
+    if workspace:
+        st, body = _http("POST", f"{AGENT_API}/api/workspace/shared/{workspace}/attach",
+                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+    else:
+        st, body = _http("POST", f"{AGENT_API}/api/workspace/swap",
+                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+    if st == 403:
+        return json.dumps({"error": "they can read that workspace but not replace it",
+                           "tell_your_person": "an owner or contributor has to load a repo into a group workspace"})
+    if st not in (200, 201):
+        detail = str((body or {}).get("detail") if isinstance(body, dict) else body)[:600]
+        out = {"error": "could not load that repository", "status": st, "detail": detail}
+        if "deploy key" in detail or "ssh-ed25519" in detail or st == 502:
+            out.update(_deploy_key_state(uid, workspace, repo))
+        return json.dumps(out)
+    b = body or {}
+    state = b.get("state") or ("cloned" if b.get("cloned") else "attached")
+    return json.dumps({
+        "workspace": workspace or "personal", "repo": b.get("repo"), "ref": b.get("ref"),
+        "state": state, "parked": b.get("parked"), "nested": b.get("nested"),
+        "tell_your_person": (f"Loaded {repo} — it is the workspace now. What was here before is parked "
+                             f"and can be brought back."
+                             if state == "cloned" else
+                             f"That repository was already here; {state}."),
+        "next_options": ["See what arrived — workspace_tree(slug)",
+                         "Bring in later changes — workspace_pull(workspace)",
+                         "Send our work back — workspace_push(workspace)"],
+    })
+
+
+@mcp.tool()
+@_anon_guard
+def workspace_push(workspace: str = "", token: str = "") -> str:
+    """Send this workspace's commits back to the repository it came from (fast-forward only — never a
+    force push). `workspace` is a group's slug; empty means their own.
+
+    No credential argument, and none is accepted: the workspace's deploy key or their saved token is
+    resolved server-side. If neither exists the result carries a public key to add — say that, and ask
+    them to say `done` when it is added."""
+    refusal = _refuse_credentials(workspace, token)
+    if refusal:
+        return json.dumps({"refused": refusal})
+    uid = me()
+    st, body = _http("POST", f"{AGENT_API}/api/workspace/push", {"X-User-Id": uid},
+                     {"slug": workspace or None})
+    if st in (200, 201):
+        b = body or {}
+        return json.dumps({"pushed": b.get("branch"), "to": b.get("url"), "head": (b.get("head_sha") or "")[:8],
+                           "tell_your_person": f"Pushed to {b.get('url')} on {b.get('branch')}."})
+    detail = str((body or {}).get("detail") if isinstance(body, dict) else body)[:600]
+    out = {"error": "could not push", "status": st, "detail": detail}
+    if st in (400, 502):
+        out.update(_deploy_key_state(uid, workspace, ""))
     return json.dumps(out)
 
 
@@ -3931,12 +4068,45 @@ def settings(key: str = "", value: str = "", token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def workspace_pull(token: str = "") -> str:
-    """Mirror the cloud personal workspace down to the local directory (local regime).
-    Returns every personal file with its url; fetch each with workspace_read and write it
-    under local_path, preserving relative paths. Flow outputs (meeting write-ups) land
-    cloud-first even in local mode — this is how they reach the person's disk."""
+def workspace_pull(workspace: str = "", token: str = "") -> str:
+    """Bring the outside IN to a workspace — by whichever route that workspace has.
+
+    A workspace LOADED FROM A REPOSITORY (workspace_attach) has a git home, and this fetches and
+    fast-forwards it: their teammates' commits arrive. A divergence is reported, never merged or forced.
+    `workspace` is a group's slug; empty means their own.
+
+    A workspace with NO git home falls back to the LOCAL-REGIME mirror this tool has always been:
+    every personal file with its url, to fetch with workspace_read and write under local_path.
+
+    No credential argument, and none is accepted — the deploy key or saved token is resolved
+    server-side, and a missing one comes back as a key to add, not a box to fill."""
+    refusal = _refuse_credentials(workspace, token)
+    if refusal:
+        return json.dumps({"refused": refusal})
     uid = me()
+    q = f"?slug={workspace}" if workspace else ""
+    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
+        st, body = _http("POST", f"{AGENT_API}/api/workspace/pull", {"X-User-Id": uid},
+                         {"slug": workspace or None})
+        if st in (200, 201):
+            b = body or {}
+            return json.dumps({
+                "from": b.get("url"), "branch": b.get("branch"), "updated": b.get("updated"),
+                "was_behind": b.get("behind_before"),
+                "tell_your_person": (f"Pulled {b.get('behind_before')} new commit(s) from {b.get('url')}."
+                                     if b.get("updated") else "Already up to date with the repository."),
+            })
+        detail = str((body or {}).get("detail") if isinstance(body, dict) else body)[:600]
+        out = {"error": "could not pull", "status": st, "detail": detail}
+        if st in (400, 502) and "fast-forward" not in detail:
+            out.update(_deploy_key_state(uid, workspace, sbody.get("url") or ""))
+        return json.dumps(out)
+    if workspace:
+        return json.dumps({"no_home": workspace,
+                           "tell_your_person": "That workspace was not loaded from a repository, so there "
+                                               "is nothing to pull from.",
+                           "next": "workspace_attach(workspace, repo) loads one"})
     reg = _regime(uid)
     st, body = _http("GET", f"{AGENT_API}/api/workspace/tree", {"X-User-Id": uid})
     files = (body or {}).get("files", []) if isinstance(body, dict) else []
