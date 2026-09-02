@@ -245,15 +245,33 @@ def inject_user_message(text: str) -> bool:
             return False
 
 
-def _reap(proc, grace: float = 5.0) -> None:
+def _reap_grace() -> float:
+    """How long a finished-with stdout is given to bring the CLI down on its own, before it is
+    killed. Tunable only so a test can prove the kill path in a fraction of a second."""
+    try:
+        return float(os.environ.get("VEXA_HARNESS_REAP_GRACE_SEC", "5"))
+    except ValueError:
+        return 5.0
+
+
+def _reap(proc, grace: "float | None" = None) -> None:
     """Wait for the CLI, then KILL it if it will not go.
 
     ⚠ `finally: proc.wait()` alone is a HANG waiting to happen, and it became reachable the moment a
     caller could stop consuming early (the write-back phase's budget closes the generator, which
     raises GeneratorExit at the yield and runs this finally while the CLI is still mid-turn). A bare
     wait there blocks the worker forever on a process nobody is reading any more — the budget would
-    have produced the exact stall it exists to prevent. On the normal path the CLI has already
-    exited by the time stdout hits EOF, so the grace period costs nothing."""
+    have produced a permanent stall in place of the temporary one it exists to remove.
+
+    ⚠ AND CLOSING STDOUT IS NOT ENOUGH, which is the version of this that looked fine. A child that
+    keeps writing dies of SIGPIPE the moment the pipe closes, so the first test of this passed with
+    the kill path deleted. A child that has stopped writing — which is what the CLI is doing for
+    most of a turn, waiting on a model — never notices, and waits out the whole budget's worth of
+    nothing. The kill is for that one, and the test now uses a child that sleeps.
+
+    On the normal path the CLI has already exited by the time stdout hits EOF, so the grace costs
+    nothing."""
+    grace = _reap_grace() if grace is None else grace
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:

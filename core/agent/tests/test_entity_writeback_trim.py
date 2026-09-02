@@ -200,3 +200,77 @@ def test_a_turn_that_names_nobody_new_runs_no_model_call(tmp_path, monkeypatch):
           start={"entrypoint": {"inline": "how is the build?"}}, idle_ms=1, writeback=writeback)
     assert calls == []
     assert [e["type"] for e in events(s)][-1] == "turn-complete"
+
+
+# ── the budget over a REAL subprocess ────────────────────────────────────────────────────────────
+
+def test_a_phase_over_budget_leaves_no_child_process(tmp_path, monkeypatch):
+    """The budget must KILL the CLI, not merely stop reading it.
+
+    This is the whole point of the trim and it is the one part that cannot be proved with a fake: a
+    budget that stops consuming while the process keeps running leaves the worker exactly as busy as
+    it was, which is the stall (F45/F46) the budget exists to remove. Worse, the first shape of
+    `_exec_subprocess` would have HUNG here — `finally: proc.wait()` on a process nobody is reading
+    blocks forever — so the budget would have produced a permanent stall instead of a temporary one.
+
+    Runs the real chain two generator levels deep: `parse_stream_json(_exec_subprocess(...))` under
+    `bounded()`. Closing the outer cascades GeneratorExit down to the subprocess's `finally`.
+
+    ⚠ THE CHILD SLEEPS AFTER ITS LAST LINE, and that detail is the test. The first version looped
+    forever writing, so closing the pipe killed it with SIGPIPE and the test passed with the kill
+    path deleted — it was measuring the operating system. A CLI waiting on a model writes nothing
+    for tens of seconds at a time, notices no closed pipe, and is exactly the case the kill exists
+    for. With the kill removed this test HANGS on `proc.wait()`, which is the failure it names.
+    """
+    import os
+    import subprocess as sp
+
+    from llm import claude_code as cc
+
+    seen = []
+
+    class _Recorder:
+        TimeoutExpired = sp.TimeoutExpired
+        PIPE, STDOUT = sp.PIPE, sp.STDOUT
+
+        @staticmethod
+        def Popen(*a, **kw):
+            proc = sp.Popen(*a, **kw)
+            seen.append(proc)
+            return proc
+
+    monkeypatch.setattr(cc, "subprocess", _Recorder)
+
+    monkeypatch.setenv("VEXA_HARNESS_REAP_GRACE_SEC", "0.3")
+    # A CLI that emits its lines and then goes quiet, the way the real one does while it waits on a
+    # model. It never exits on its own and it never notices a closed pipe.
+    line = ('{"type":"assistant","message":{"content":[{"type":"tool_use",'
+            '"name":"mcp__vexa__entity_upsert","id":"c","input":{}}]}}')
+    argv = ["sh", "-c", f"echo '{line}'; echo '{line}'; echo '{line}'; sleep 300"]
+
+    events = cc.parse_stream_json(cc._exec_subprocess(argv, str(tmp_path)))
+    out = list(engine.bounded(events, max_tool_calls=2, max_seconds=10))
+
+    assert sum(1 for e in out if e["type"] == "tool-call") == 2
+    assert out[-1]["type"] == "writeback-truncated"
+    assert len(seen) == 1
+    proc = seen[0]
+    assert proc.poll() is not None, "the CLI is still running after the budget stopped reading it"
+    with pytest.raises(ProcessLookupError):
+        os.kill(proc.pid, 0)
+
+
+def test_a_phase_inside_its_budget_is_waited_for_not_killed(tmp_path, monkeypatch):
+    """The reap must not truncate a normal turn: a CLI that finishes on its own is waited for, and
+    every line it wrote arrives."""
+    import subprocess as sp
+
+    from llm import claude_code as cc
+
+    line = ('{"type":"assistant","message":{"content":[{"type":"tool_use",'
+            '"name":"Read","id":"c","input":{}}]}}')
+    argv = ["sh", "-c", f"for i in 1 2 3; do echo '{line}'; done"]
+    out = list(engine.bounded(cc.parse_stream_json(cc._exec_subprocess(argv, str(tmp_path))),
+                              max_tool_calls=99, max_seconds=10))
+    assert sum(1 for e in out if e["type"] == "tool-call") == 3
+    assert not any(e["type"] == "writeback-truncated" for e in out)
