@@ -59,7 +59,15 @@ def test_a_tampered_envelope_is_refused(tmp_path):
     ss.put(tmp_path, "k", "value-to-protect")
     f = tmp_path / ".secrets" / "k.enc"
     version, salt, ct, mac = f.read_text().split(".")
-    flipped = ct[:-1] + ("A" if ct[-1] != "A" else "B")
+    # TAMPER IN THE MIDDLE, never the last character. Base64 without padding encodes the final byte
+    # in the high bits of its last character, so the low bits of that character are DISCARDED on
+    # decode: 16 of the 64 alphabet symbols decode to the identical ciphertext, the MAC still
+    # validates, and the test passed or failed by luck — ~25% flaky, which reads as an infrastructure
+    # hiccup rather than as a test that is not testing anything. A character in the middle changes a
+    # whole byte, so the envelope is genuinely different every time.
+    i = len(ct) // 2
+    flipped = ct[:i] + ("A" if ct[i] != "A" else "B") + ct[i + 1:]
+    assert flipped != ct
     f.write_text(".".join((version, salt, flipped, mac)))
     assert ss.get(tmp_path, "k") is None, "the MAC must be checked before anything is decrypted"
 
