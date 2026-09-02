@@ -971,6 +971,10 @@ THE MAIN VERBS
 - transcript_search(q) — any phrase across every meeting ever.
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
+- ALREADY HAVE ONE ON GITHUB? workspace_attach(workspace, repo) makes that repo the
+  workspace; workspace_pull/workspace_push keep it in step. NEVER take a token in chat:
+  if it is private you are handed a public key -> they add it to the repo as a deploy
+  key with write access -> they say `done` -> attach again.
 - deeplink(...) mints links that open the Vexa terminal in a composed state
   (file beside transcript, lifecycle presets pre/during/post meeting), and
   deeplink(target='ask', name=...) opens a fresh chat already holding an admin-written
@@ -1765,6 +1769,11 @@ mcp = MCPServer(
         "\u2022 TEAM MEMORY — workspace_tree/workspace_read/workspace_write: the shared files "
         "meetings write into and the team reads from; workspace_init starts one. When your "
         "person asks 'what did we decide about X', the answer is in here.\n"
+        "\u2022 A WORKSPACE THEY ALREADY KEEP ON GITHUB \u2014 workspace_attach(workspace, repo) "
+        "makes that repository the workspace (whatever was there is parked, not lost), and "
+        "workspace_pull/workspace_push keep the two in step. If it is private you are handed a "
+        "PUBLIC KEY for them to add as a deploy key with write access \u2014 never ask for a token, "
+        "and never accept one in this chat.\n"
         "\u2022 WHAT THE TEAM STANDS BEHIND — propose() files what you research or infer as a "
         "question; a human answers; validate() records their word; company_context() returns "
         "only what a person stood behind; mark_scaffolded() opens post-meeting processing "
