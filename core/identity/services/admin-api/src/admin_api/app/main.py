@@ -952,6 +952,35 @@ def create_app() -> FastAPI:
         await db.commit()
         return {"claimed": True, "admin_exists": True}
 
+    # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---
+    # The post-meeting run mounts the desks of the people who were in the meeting, and it starts
+    # from the invite's ATTENDEE addresses. agent-api therefore has to turn an address into a
+    # subject, and until this route existed it had only two ways to do it, both wrong:
+    #
+    #   * `GET /admin/users/email/{email}`, which is gated by `verify_admin_token` — a credential
+    #     that can also CREATE and PATCH users. Handing agent-api an admin token so it can ask one
+    #     read-only question is a permanent over-grant for a temporary need.
+    #   * guessing the subject from a speaker's display name, which mounts the WRONG HUMAN'S desk.
+    #     Not a risk worth carrying at any price.
+    #
+    # So: the narrowest possible door. Same internal-secret tier the gateway's authz oracle already
+    # uses, and the response is ONLY the id. Never name, never email, never scopes, never `data` —
+    # the caller already knows the address it asked about, and everything else would be a new
+    # disclosure this question does not need. A route that answers exactly one question cannot be
+    # repurposed into a directory.
+    #
+    # 404 for an unknown address is deliberate and safe here: the caller is already inside the
+    # internal tier, so this leaks nothing to anyone who was not trusted with far more. The mount
+    # path treats it as "no subject yet — skip this desk", and the drop step creates it afterwards.
+    @app.get("/internal/users/by-email/{email}", include_in_schema=False)
+    async def internal_user_id_by_email(email: str, request: Request,
+                                        db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id}
+
     @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
     async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
