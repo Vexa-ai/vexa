@@ -505,7 +505,17 @@ def build(reg: Registry, db) -> None:
                     token = mt.mint_transcript_share(ctx.refs["uid"], platform, native, a)
                 except Exception:  # noqa: BLE001 — a mail with a weaker link beats no mail
                     token = None
-            link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"], tshare=token)
+            # Which preset the button composes. `minutes-review-invite` is `minutes-review`
+            # plus the SECOND ASK — the offer that Vexa can be in the meetings this person runs,
+            # and the instruction to ACT on a yes in the same turn (bot_schedule when a url and
+            # time are known, else the one-line forward). The offer is the whole second-invite
+            # funnel: measured at revolution 3 it was never made, in the mail or in the chat, so
+            # nobody could ask for it and it could never happen.
+            # A PARAM so the offer is one value to turn off, and so the founder's wording can
+            # replace the placeholder without touching a step.
+            ask = str((ctx.flow.param("attendee_ask") if ctx.flow else None)
+                      or "minutes-review-invite")
+            link = ui_link(ask=ask, meeting=ctx.refs["meeting_id"], tshare=token)
             body = blocks.get(a) if mode == "personal" else None
             if not body:
                 body = note.strip()
