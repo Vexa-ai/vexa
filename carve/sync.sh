@@ -49,7 +49,12 @@ for C in "${COMMITS[@]}"; do
   for p in "${CARVE_EXCLUDE[@]}"; do rm -rf "$WORK/$p"; done
   "$HERE/_apply_layer.sh" "$WORK"
 
+  # -A honours .gitignore, and the mono force-tracks files its own ignore rules hide
+  # (packages/transcript-rendering/dist — dropped silently on the v0.12.26 train, run
+  # 33668211838). Everything under an INCLUDE path came out of `git archive`, so it is
+  # tracked upstream by construction: force-add those paths after the ordinary add.
   git add -A
+  for p in "${CARVE_INCLUDE[@]}"; do [ -e "$WORK/$p" ] && git add -f -- "$p"; done
   git diff --cached --quiet && continue   # commit touched only non-carved/excluded files
   AUTHOR="$(git -c mailmap.file="$CARVE_MAILMAP" -C "$MONO" show -s --format='%aN <%aE>' --use-mailmap "$C")"
   ADATE="$(git -C "$MONO" show -s --format='%aI' "$C")"
