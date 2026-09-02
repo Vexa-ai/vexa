@@ -377,7 +377,12 @@ function normalise(raw: unknown, now: number): Chat[] {
     if (!r || typeof r.id !== "string" || !r.id) continue;
     out.push({
       id: r.id,
-      label: typeof r.label === "string" && r.label ? r.label : "Chat",
+      // A MEETING-BOUND chat may carry no label of its own, and that is not missing data: railRows
+      // names it from the meeting (`c.label || meetingTitle(m)`), so the row follows the meeting's
+      // title instead of freezing whatever it was called when it was created. Defaulting those to
+      // "Chat" here is what made the empty label a one-render trick — it survived in memory and
+      // was rewritten to "Chat" on the next load. Only a chat with NO meeting needs a fallback.
+      label: typeof r.label === "string" && r.label ? r.label : (typeof r.meeting === "string" && r.meeting ? "" : "Chat"),
       meeting: typeof r.meeting === "string" && r.meeting ? r.meeting : undefined,
       workspaces: Array.isArray(r.workspaces) && r.workspaces.length ? r.workspaces.filter((w) => typeof w === "string") : ["personal", "_global"],
       // tolerant on purpose: an early build stored artifacts as bare path strings, and a stored tab
