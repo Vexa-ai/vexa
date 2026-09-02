@@ -35,6 +35,34 @@
  *  which ask admin-api before any user row can be created. Nothing here is load-bearing for
  *  security; it is load-bearing for not telling ordinary users a lie about what will happen.
  *
+ *  ⚠ A GATE ON THE DOORS IS NOT A GATE (observed live 2026-09-02, 08:48Z). The refusals above live
+ *  in /api/auth/{login,redeem} and the OAuth callback — all three of which a session minted BEFORE
+ *  the gate existed never touches again. On a gated instance a browser holding such a cookie got the
+ *  whole terminal and a personal chat with the ordinary greeting; nothing refused it, because
+ *  nothing ever re-asked. A door check answers "may this person come in"; the question the gate
+ *  actually poses is "may this person BE in", and that has to be answered on every page load.
+ *
+ *  So this component now decides FOUR rows before it renders `children`, and `setupGateVerdict`
+ *  below is that decision as a pure function:
+ *
+ *    | instance             | subject      | screen                                          |
+ *    |----------------------|--------------|-------------------------------------------------|
+ *    | layer written        | anyone       | the terminal, unchanged                         |
+ *    | missing, has admin   | the admin    | the terminal + the setup wizard (SetupGate)     |
+ *    | missing, has admin   | anyone else  | refused — one sentence and a way to sign out    |
+ *    | missing, NO admin    | whoever      | the claim screen                                |
+ *
+ *  Two things about the shape are load-bearing. It gates `children`, not a banner over them: the
+ *  workbench MOUNTS CHATS AND FIRES DISPATCHES on mount, and SetupGate (which starts polling)
+ *  sits inside this component — a refused user must never reach either. And it holds a blank screen
+ *  until both probes have settled, because rendering the workbench "for now" and retracting it a
+ *  moment later is the same defect with a shorter duration.
+ *
+ *  The fail direction does NOT change here: an unreachable probe still reads as "completed" and the
+ *  terminal renders. The closed half is server-side — agent-api refuses chat dispatch and workspace
+ *  writes for non-admin subjects while the gate is up — so a browser that renders on a blip can
+ *  still do nothing.
+ *
  *  A SESSION THAT DIES MID-USE (2026-09-01). The mount probe used to be the only probe there was:
  *  once this gate said "in" it never asked again, so a session revoked server-side left the entire
  *  shell rendered over an app where every request 401'd — and the user's only report of it was a
@@ -71,6 +99,31 @@ const REPROBE_COOLDOWN_MS = 3000;
  *  worded notice on the screen they land back on has been told two things about one state. */
 const SETUP_GATE_NOTICE = "This Vexa is being set up by its administrator.";
 
+/** What a signed-in subject gets while the company-layer gate is up. */
+export type GateVerdict = "pending" | "open" | "claim" | "refused";
+
+/** The four-row decision, as a pure function so the table above is testable without a DOM.
+ *
+ *  `isAdmin` is THREE-VALUED (see /api/auth/me): null means the oracle could not say. Note the
+ *  final line — we refuse only on a positive `false`. Unknown reads as "let them in", matching the
+ *  direction every other fail-safe in this gate takes, and leaving the actual refusal to agent-api,
+ *  which decides with authoritative state and fails closed. */
+export function setupGateVerdict(input: {
+  /** Both probes have settled (either answered or failed). Until then: no screen at all. */
+  probed: boolean;
+  globalSetup: "completed" | "missing";
+  adminExists: boolean;
+  isAdmin: boolean | null;
+}): GateVerdict {
+  if (!input.probed) return "pending";
+  if (input.globalSetup !== "missing") return "open";
+  // No admin yet: this is NOT a refusal. Somebody has to be able to claim the instance, and on an
+  // instance with live pre-gate sessions the signed-in person is the only one who can — the sign-in
+  // doors they would otherwise claim through are behind them.
+  if (!input.adminExists) return "claim";
+  return input.isAdmin === false ? "refused" : "open";
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
   const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
@@ -78,6 +131,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // Fail-safe towards "completed", matching the server's own direction (adminApi.instanceState):
   // an unreachable probe must never present a lockout screen on a healthy instance.
   const [globalSetup, setGlobalSetup] = useState<"completed" | "missing">("completed");
+  // Has the instance probe SETTLED (answered or failed)? Distinct from its values, because "we have
+  // not asked yet" and "we asked and it said the gate is down" must not render the same thing.
+  const [instanceProbed, setInstanceProbed] = useState(false);
+  // Is the validated subject this instance's admin? null = the oracle could not say (see /api/auth/me).
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [subjectEmail, setSubjectEmail] = useState<string | null>(null);
   // The admin's escape hatch while the gate is up — reveals the provider buttons on request.
   const [adminDoor, setAdminDoor] = useState(false);
   const [email, setEmail] = useState("");
@@ -119,8 +178,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    // The session probe also carries the two facts the gate needs about the SUBJECT: whether they
+    // are the admin, and what to call them on a refusal screen.
     fetch("/api/auth/me", { cache: "no-store" })
-      .then((r) => (active ? setStatus(r.ok ? "in" : "out") : undefined))
+      .then(async (r) => {
+        const body = r.ok ? ((await r.json().catch(() => ({}))) as { is_admin?: boolean | null; user?: { email?: string | null } }) : {};
+        if (!active) return;
+        setStatus(r.ok ? "in" : "out");
+        setIsAdmin(typeof body.is_admin === "boolean" ? body.is_admin : null);
+        setSubjectEmail(body.user?.email ?? null);
+      })
       .catch(() => active && setStatus("out"));
     // NextAuth lists configured providers here; absent/failed → just no OAuth buttons.
     fetch("/api/auth/providers", { cache: "no-store" })
@@ -138,8 +205,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         if (!active) return;
         setAdminExists(d.admin_exists !== false);
         setGlobalSetup(d.global_setup === "missing" ? "missing" : "completed");
+        setInstanceProbed(true);
       })
-      .catch(() => undefined);
+      // A probe that could not run has still SETTLED — it settled on the fail-safe values already in
+      // state. Not marking it settled would hold the blank screen forever on an unreachable server,
+      // which is the lockout this whole gate is written to avoid.
+      .catch(() => active && setInstanceProbed(true));
     return () => { active = false; };
   }, []);
 
@@ -169,7 +240,25 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   };
 
-  if (status === "in") return <>{children}</>;
+  /** Sign out and reload — same discipline as the workbench's own profile row: wipe client state so
+   *  the next person does not inherit this one's chats, tabs and pane widths. */
+  const signOut = () => {
+    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+      window.location.reload();
+    });
+  };
+
+  if (status === "in") {
+    // THE GATE, evaluated on every page load — see the four-row table in the header. It is here,
+    // above `children`, because the workbench mounts chats and fires dispatches on mount and
+    // SetupGate (inside it) starts polling: a refused subject must reach neither.
+    const verdict = setupGateVerdict({ probed: instanceProbed, globalSetup, adminExists, isAdmin });
+    if (verdict === "pending") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+    if (verdict === "claim") return <ClaimInstanceCard email={subjectEmail} onSignOut={signOut} />;
+    if (verdict === "refused") return <SetupRefusedCard email={subjectEmail} onSignOut={signOut} />;
+    return <>{children}</>;
+  }
   if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
 
   // The session died under a running app. Say THAT — not a status code, and not a console pointer —
@@ -352,6 +441,127 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** The shell both gate screens sit in — deliberately the same furniture as the sign-in card, so a
+ *  person who lands on one of these recognises where they are. */
+function GateShell({ testId, title, children }: { testId: string; title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", overflowY: "auto" }}>
+      <div
+        data-testid={testId}
+        style={{
+          width: 400, maxWidth: "94vw", background: "var(--panel)", border: "1px solid var(--line2)",
+          borderRadius: 12, padding: 24, display: "flex", flexDirection: "column", gap: 14,
+          boxShadow: "0 8px 32px rgba(0,0,0,.3)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>{title}</div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const gateQuietBtn: React.CSSProperties = {
+  background: "none", border: "none", color: "var(--t3)", fontSize: 11.5,
+  cursor: "pointer", padding: 0, alignSelf: "flex-start", textDecoration: "underline",
+};
+
+/** ROW 4 — the instance has no administrator and this person is signed in.
+ *
+ *  This is NOT a refusal and must not read like one. It is also not a dismissible notice: claiming
+ *  is the single highest-privilege act the product offers, it cannot be undone from inside the
+ *  product (there is no second administrator to reverse it), and the person pressing the button is
+ *  taking on writing the company layer that every agent in the company then carries. So the button
+ *  comes AFTER the sentence that says what it means, not before it. */
+function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const claim = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/claim-admin", { method: "POST" });
+      if (r.ok) {
+        // Reload rather than flip a flag: the claim changes what every probe on this page would
+        // answer, and a fresh load is the only way to be sure nothing is left holding the old answer.
+        window.location.reload();
+        return;
+      }
+      const body = (await r.json().catch(() => ({}))) as { error?: string; reload?: boolean };
+      // Somebody else claimed it first — the screen is stale, not broken. Reloading shows the truth.
+      if (body.reload) { window.location.reload(); return; }
+      setError(body.error || `Could not claim this instance (${r.status})`);
+    } catch (err) {
+      setError((err as Error).message || "Could not claim this instance");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <GateShell testId="claim-instance" title="Set up this Vexa">
+      <div style={{ fontSize: 12.5, color: "var(--t1)", lineHeight: 1.55 }}>
+        This Vexa has no administrator yet.
+      </div>
+      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.6 }}>
+        Claiming it makes {email ? <strong style={{ color: "var(--t2)", fontWeight: 600 }}>{email}</strong> : "you"} this
+        instance&rsquo;s administrator. You will write its company layer &mdash; who this company is, what it
+        stands for, what it is working toward, and who can see what &mdash; and every agent working here
+        carries what you write.
+        Until that exists, this Vexa serves nobody.
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+        There is no second administrator to undo this, so claim it only if the instance is yours to run.
+      </div>
+      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.45 }}>{error}</div>}
+      <button
+        onClick={() => void claim()}
+        disabled={busy}
+        style={{
+          background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
+          padding: "10px 12px", fontSize: 13, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+        }}
+      >
+        {busy ? "Claiming\u2026" : "Claim this instance"}
+      </button>
+      <button onClick={onSignOut} style={gateQuietBtn}>Not you? Sign out</button>
+    </GateShell>
+  );
+}
+
+/** ROW 3 — the instance has an administrator, the gate is up, and this is somebody else.
+ *
+ *  One sentence, the same sentence every other door uses, and a way out. What it deliberately does
+ *  NOT do is imply the person did something wrong or that their account is broken: their session is
+ *  fine, the instance simply is not open yet. */
+function SetupRefusedCard({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+  return (
+    <GateShell testId="setup-refused" title="Setting up this Vexa">
+      <div style={{ fontSize: 12.5, color: "var(--t1)", lineHeight: 1.55 }}>{SETUP_GATE_NOTICE}</div>
+      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.6 }}>
+        {email ? <>You&rsquo;re signed in as <strong style={{ color: "var(--t2)", fontWeight: 600 }}>{email}</strong>. </> : null}
+        Until the administrator has written this instance&rsquo;s company layer, only they can use it.
+        Your account is fine &mdash; reload this page once setup is finished and you&rsquo;ll be let in.
+      </div>
+      <button
+        onClick={() => window.location.reload()}
+        style={{
+          background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", borderRadius: 7,
+          padding: "9px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+        }}
+      >
+        Check again
+      </button>
+      <button onClick={onSignOut} style={gateQuietBtn}>Sign out</button>
+    </GateShell>
   );
 }
 

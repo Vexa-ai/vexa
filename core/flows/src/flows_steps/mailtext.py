@@ -32,6 +32,33 @@ from .common import ws_file
 SERVICE_SENTENCE = ("I sit in meetings you are invited to; afterwards you get what came out of "
                     "them and what they leave on your plate.")
 
+# THE USER-FACING NAME of a person's own workspace. Founder, 2026-09-02: it is a **DESK** — a
+# personal desk, and a group desk for a group. Not a placeholder any more; the word is chosen.
+# Change it HERE and every mail this runtime sends follows. Code paths, slugs and API fields keep
+# saying "workspace" deliberately — renaming those is a migration, and a migration is not what a
+# naming decision should cost.
+#
+# The word carries the meaning the founder attached to it, and it is the reason "private" was the
+# wrong word: a desk is COMPANY KNOWLEDGE HELD BY ONE PERSON. The company's agents may read it for a
+# meeting that person is in. `_system` — chats, sessions, settings — stays private and is not a desk.
+#
+# The terminal has the same constant on its side (clients/terminal/src/minutes/vocabulary.ts) and
+# fills `{{workspace}}` in the presets from it; the two runtimes cannot share a literal, so they
+# name each other. Those two lines are the whole rename.
+#
+# Note what does NOT use it: the visibility sentence below says "workspaces", the ordinary English
+# word, not the product's name for one — it is describing where things are kept, not naming a
+# surface, and a stranger reading their first mail should not have to learn a product noun to
+# understand who can see their notes.
+WORKSPACE_WORD = "desk"
+
+# WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
+# have decided whether to keep anything here, because that is the only moment at which telling them
+# is a choice they still have. Not a disclaimer and not a legal line: three facts.
+VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "
+                       "keep in your workspaces is visible to the company's agents; recordings and "
+                       "transcripts stay here.")
+
 # The company half's fallback. If this string ever reaches a recipient it is a BUG in the gate --
 # no mail should send at all while the company layer is missing -- so it is written to be
 # recognisable in an inbox rather than to read smoothly.
@@ -83,7 +110,9 @@ DEFAULTS: dict[str, str] = {
     "minutes-head": (
         "subject: Minutes: {{title}}\n"
         "---\n"
-        "{{title}} — {{when}}.\n"
+        "{{title}} — {{when}}. This is now on your {{workspace}}.\n"
+        "\n"
+        "{{visibility}}\n"
     ),
 }
 
@@ -134,7 +163,8 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)
-    fill = {"company": company_name(uid), "service": SERVICE_SENTENCE, **(values or {})}
+    fill = {"company": company_name(uid), "service": SERVICE_SENTENCE,
+            "visibility": VISIBILITY_SENTENCE, "workspace": WORKSPACE_WORD, **(values or {})}
     for key, val in fill.items():
         token = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")
         subject = token.sub(str(val), subject)

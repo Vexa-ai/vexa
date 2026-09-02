@@ -26,7 +26,7 @@ link that a template could write is a link anyone who can edit a file can point 
 | file | who reads it | when |
 |---|---|---|
 | `prepare.md` | the ORGANISER, and people who are already users | before the meeting |
-| `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the agent's own per-person section |
+| `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
 | `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
 
 **`prepare.md` never goes to a stranger and never claims a workspace was started.** Founder,
@@ -34,6 +34,18 @@ link that a template could write is a link anyone who can edit a file can point 
 Nothing is built for a person who has not clicked, and a mail before the meeting has nothing yet to
 justify itself with. The stranger's first contact is `attendee-head.md`, after a meeting they were
 actually in, which is why that one carries the whole introduction and the other two do not.
+
+## One mail, the same for everyone
+
+Founder simplification, 2026-09-02: the post-meeting mail is **the head, the shared report of the
+meeting, and one button** — identical for every recipient. No template carries a per-person section
+and no template should grow one.
+
+Personalisation happens **after the click**, in the chat, where the agent can read the person's own
+workspace and answer for them. That is the trade: a mail that is the same for fifty people is a mail
+that cannot be wrong about any of them, and the button is where "what does this leave on MY plate"
+gets answered by something that actually knows. It is also why the head has to earn the click on its
+own — it is the whole mail besides the report.
 
 ## Substitutions
 
@@ -52,6 +64,8 @@ customer.
 | `{{when}}` | when it is, or was, in the reader's own clock |
 | `{{organizer}}` | who had Vexa in the room |
 
+`prepare.md` and `minutes-head.md` also get `{{visibility}}` and `{{workspace}}` — see below.
+
 `attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
 
 | token | becomes |
@@ -60,6 +74,38 @@ customer.
 | `{{organizer}}` | who had Vexa in the room |
 | `{{meeting}}` | the meeting's title |
 | `{{date}}` | the day it happened, in the organiser's zone |
+
+**`attendee-head.md` carries the visibility sentence as literal text**, not as `{{visibility}}`, for
+the same reason it carries the service sentence literally: its renderer fills four tokens and would
+mail the braces. If that sentence changes it changes in three files at once — this one,
+`mailtext.VISIBILITY_SENTENCE`, and `asks/setup-global.md`, which tells the admin the same thing.
+
+## Who can see what
+
+Founder decision 21, 2026-09-02: **a person's own workspace is not private from the company.** The
+attendee head and the minutes head both say so, in his words:
+
+> Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
+> is visible to the company's agents; recordings and transcripts stay here.
+
+It is in the first mail a stranger ever gets from us, because that is the only moment at which
+telling them is still a choice they can act on. The `_global` setup chat tells the administrator the
+same thing and records their own answer in `STRUCTURE.md`.
+
+Note the wording: "your workspaces", the ordinary English word — not the product's NAME for a
+person's own space, which is a **desk** (founder, 2026-09-02: a personal desk, and a group desk for
+a group). The name lives behind one constant per runtime, `mailtext.WORKSPACE_WORD` and
+`clients/terminal/src/minutes/vocabulary.ts`; templates and presets write `{{workspace}}` rather than
+the word. Code paths, slugs and API fields keep saying "workspace" on purpose — a naming decision
+should not cost a migration.
+
+The word carries the meaning, which is why "private" was the wrong word: **a desk is company
+knowledge held by one person**, and the company's agents may read it for a meeting that person is
+in. What stays genuinely private is `_system` — chats, sessions, settings — which is not a desk.
+
+After a meeting the shared artefact goes to every attendee's desk as well as by mail, so the mail
+may say so; `attendee-head.md` says it as literal text for the same reason it carries the service
+sentence literally — its renderer fills four tokens and would mail `{{workspace}}` verbatim.
 
 **`attendee-head.md` carries the service sentence as LITERAL TEXT, not as `{{service}}`** — its
 renderer fills four tokens and would mail `{{service}}` verbatim. If that sentence is ever changed it

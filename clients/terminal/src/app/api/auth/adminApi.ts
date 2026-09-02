@@ -265,16 +265,45 @@ export async function signinAllowed(email: string): Promise<SigninVerdict> {
   };
 }
 
+export type ClaimResult =
+  | { ok: true; claimed: boolean }
+  | { ok: false; status: number; error: string };
+
+/** Ask admin-api to make this user the instance's administrator.
+ *
+ *  ⚠ WHY THIS IS EXPORTED, AND WHAT WENT WRONG WITHOUT IT (observed live 2026-09-02, 08:48Z).
+ *  The claim used to exist ONLY inside `findOrCreateUserToken`, i.e. only on the path a sign-in
+ *  takes. That is fine on a fresh instance, where the first sign-in is imminent — and a dead end on
+ *  an instance that already has live sessions predating the gate. The founder's own browser held a
+ *  session minted before any of this existed: `admin_exists` was false, his cookie was valid, and
+ *  his cookie will never traverse a sign-in door again. So the screen said "not set up" forever and
+ *  there was nothing anywhere that could set it up. A role that can only be claimed by an event that
+ *  can no longer happen is not a role, it is a deadlock.
+ *
+ *  Hence a claim reachable by an ALREADY-SIGNED-IN subject (POST /api/auth/claim-admin). Two
+ *  properties that route depends on and that live here rather than there:
+ *    • admin-api serialises concurrent claims under an advisory lock, so two racing tabs are safe
+ *      and the loser simply learns an admin now exists;
+ *    • it is a no-op once an admin exists, so this can never TRANSFER the role.
+ *
+ *  Unlike `bootstrapAdminClaim` below, this REPORTS its outcome — a user who pressed a button that
+ *  says "claim this instance" is owed the answer, where a background step on a sign-in was not. */
+export async function claimAdminRole(userId: string | number): Promise<ClaimResult> {
+  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
+  return { ok: true, claimed: res.data?.claimed === true };
+}
+
 /** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"
  *  step, called on every successful login (admin-api makes it a no-op once an admin exists).
  *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
 async function bootstrapAdminClaim(userId: string | number): Promise<void> {
   if (allowlistConfigured()) return; // allowlist-run instance → role claims stay off
-  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId }),
-  });
-  if (res.ok && res.data?.claimed) {
+  const res = await claimAdminRole(userId);
+  if (res.ok && res.claimed) {
     console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
   } else if (!res.ok) {
     console.warn(`[terminal-auth] bootstrap-admin claim failed (sign-in continues): ${res.error}`);

@@ -19,7 +19,18 @@
  *  actually does something validates independently and fails closed on its own. Ejecting the user
  *  because admin-api blinked would be a worse failure than the one this fixes.
  *
- *  The `vexa-user-info` cookie remains display-only. When the oracle answers, ITS email wins. */
+ *  The `vexa-user-info` cookie remains display-only. When the oracle answers, ITS email wins.
+ *
+ *  `is_admin` (added 2026-09-02) rides along because the company-layer gate has to be decided on
+ *  EVERY page load, not once at a sign-in door, and deciding it needs one fact this route already
+ *  has in hand: whether the validated subject is this instance's administrator. It comes from the
+ *  oracle, never from the info cookie.
+ *
+ *  ⚠ IT IS THREE-VALUED ON PURPOSE: true, false, or NULL when the oracle could not be reached
+ *  (the `degraded` branch below). A degraded probe knows nothing about who this is, and collapsing
+ *  that to `false` would show the admin a "you are not the administrator" refusal because admin-api
+ *  blinked — the exact class of failure the fail-direction comment above exists to prevent. The
+ *  consumer refuses only on a positive `false`. */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, validateAuthToken } from "../adminApi";
@@ -52,7 +63,12 @@ export async function GET() {
 
   if (validated.ok) {
     return NextResponse.json(
-      { authenticated: true, user: { email: validated.email ?? email ?? null, name: name ?? null } },
+      {
+        authenticated: true,
+        // From the oracle, not the cookie — see the header note on why this is three-valued.
+        is_admin: validated.isAdmin,
+        user: { email: validated.email ?? email ?? null, name: name ?? null },
+      },
       { headers: NO_STORE },
     );
   }
@@ -67,7 +83,9 @@ export async function GET() {
   // on an infrastructure blip — say so instead, and let the real routes fail closed if they must.
   console.warn(`[terminal-auth] /api/auth/me could not validate the session (${validated.status}): ${validated.error}`);
   return NextResponse.json(
-    { authenticated: true, degraded: true, user: { email: email ?? null, name: name ?? null } },
+    // is_admin: null — "unknown", NOT "no". A consumer that reads this as a denial turns an
+    // admin-api blip into a lockout screen for the administrator.
+    { authenticated: true, degraded: true, is_admin: null, user: { email: email ?? null, name: name ?? null } },
     { headers: NO_STORE },
   );
 }
