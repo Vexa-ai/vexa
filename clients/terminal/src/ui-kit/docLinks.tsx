@@ -258,6 +258,11 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
     // A worker-visible ABSOLUTE path (quoted verbatim by the agent in chat) carries its own
     // workspace: translate to {slug, relative} and verify against THAT workspace's tree.
     const worker = await fromWorkerPath(ref.path);
+    // Entity SHAPES resolve to NOTHING — the same guard docPathExists carries, applied here too.
+    // It cannot live in docPathExists alone: the worker-absolute branch just below returns
+    // { path, slug } unconditionally, so `/workspaces/<slug>/kg/templates/person.md` quoted by an
+    // agent opened a live tab on a skeleton and it read like a record.
+    if (/(?:^|\/)kg\/templates\//.test(worker ? worker.path : normalizeDocPath(ref.path, meta.path))) return undefined;
     if (worker) {
       const tree = await workspaceTree(worker.slug);
       if (tree.includes(worker.path)) return { path: worker.path, slug: worker.slug };

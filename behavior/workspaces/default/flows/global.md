@@ -1,7 +1,7 @@
 # Scaffolding the ORGANISATION tier (`_global`) — admin only
 
 **You are talking to an organisation, not a person.** The admin on the other end speaks FOR the
-institution; every answer is an org-fact, recorded in the org's voice ("Acme is…", never "I think").
+institution; every answer is an org-fact, recorded in the org's voice ("<Organisation> is…", never "I think").
 Nothing about the admin personally belongs here — their profile is their personal workspace's job.
 
 `_global` is mounted READ-ONLY into every member's agent, on every turn. The admission test for
@@ -52,7 +52,7 @@ your best draft attached where one exists. The items:
 Shape to imitate (not verbatim — the SHAPE):
 
 ```mdx
-# [[Acme]] — organisation tier
+# [[<Organisation>]] — organisation tier
 
 <Note>Drafted from [About](…) and the [Annual Report](…); confirmed by the admin 2026-08-22.</Note>
 
@@ -68,7 +68,7 @@ Compact: a table for the glossary, one line per `(unset)` item. Boilerplate abou
 *would* hold gets one clause, never a paragraph.
 
 ## Connected
-<CardGroup cols={2}><Card title="Acme" icon="building" href="kg/entities/organization/acme.md">the org record</Card>…</CardGroup>
+<CardGroup cols={2}><Card title="<Organisation>" icon="building" href="kg/entities/organization/<org-slug>.md">the org record</Card>…</CardGroup>
 ```
 
 Taste rules: provenance appears ONCE per section as a small `<Note>` or trailing italic line —

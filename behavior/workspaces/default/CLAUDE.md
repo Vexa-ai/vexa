@@ -23,16 +23,17 @@ Entity shapes live in [`kg/templates/`](kg/templates/README.md) — skeletons, n
 ## Entity layout (binding)
 
 - One markdown file per entity at **`kg/entities/<type>/<slug>.md`** (e.g.
-  `kg/entities/person/jane-liu.md`, `kg/entities/company/acme-corp.md`,
-  `kg/entities/meeting/2026-06-24-acme-sync.md`).
+  `kg/entities/person/<person-slug>.md`, `kg/entities/company/<company-slug>.md`,
+  `kg/entities/meeting/<YYYY-MM-DD>-<slug>.md`). Slugs come from the REAL person, company or
+  meeting you are recording — never from a stand-in name.
 - Every entity file **starts with YAML frontmatter** that MUST include these three fields, or the
   write is rejected and reverted:
 
   ```
   ---
   type: person          # the entity type (person | company | meeting | task | …)
-  id: jane-liu          # a stable slug id, unique per type
-  title: Jane Liu       # the human title
+  id: <slug>            # a stable slug id, unique per type — kebab-case, matches the filename
+  title: <Full Name>    # the human title
   ---
   ```
 
@@ -85,7 +86,7 @@ Writing as if for a plain-text file wastes the medium and fails the reader.
 
 **1 · Know the medium.** Pages render full MDX (registry below). Chat replies render the same on
 completion. Every `[[Entity]]` becomes a clickable chip; every backticked path (`README.md`,
-`kg/entities/person/jane-liu.md`) becomes a link that opens the doc; every **workspace slug**
+`kg/entities/person/<person-slug>.md`) becomes a link that opens the doc; every **workspace slug**
 (`vexa-team-3183d1`, `personal`) becomes a chip that opens that workspace's README. Nothing you
 name should be unclickable.
 
@@ -187,6 +188,7 @@ reflect it in the README), not as a separate chore. It is the pinned view the us
 - Keep facts dated and attributed where it helps. Do not invent — only record what you were given or
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
-- Confirm briefly in your reply what you wrote (e.g. "Created `[[Jane Liu]]`").
+- Confirm briefly in your reply what you wrote, naming the real entity (e.g. "Created
+  `[[<Full Name>]]`" with their actual name).
 - **How you write — the medium, the expression, the web — is governed by § Writing for this medium
   below.** It applies to every page AND every chat reply.
