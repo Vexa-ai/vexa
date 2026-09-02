@@ -423,8 +423,12 @@ def build(reg: Registry, db) -> None:
             first = f"You were in {title}{when}. {organizer} had Vexa in the room, so these are the notes."
         else:
             first = f"You had Vexa in {title}{when}."
-        second = (f"{who} These notes are visible to the people who were in the meeting. "
-                  "Reply 'no minutes' and I will stop sending you them.")
+        # The opt-out sentence that used to close this line is GONE. Measured: it lifted opening
+        # 61.9% -> 84.1% and quadrupled explicit opt-out, 6.3% -> 27.0%, while action stayed
+        # inside noise — it converted silent ignoring into deliberate leaving. Whether to put an
+        # unsubscribe in every mail is a founder call, and the evidence does not support this
+        # wording. Opt-out lives in the chat and in settings instead.
+        second = f"{who} These notes are visible to the people who were in the meeting."
         return first + "\n" + second + "\n\n"
 
     # ── the attendee follow-up — the loop that spreads (PRD §16.1/§16.2) ─────────────────────
@@ -485,10 +489,23 @@ def build(reg: Registry, db) -> None:
             for chunk in (raw or "").split("## ")[1:]:
                 head, _, rest = chunk.partition("\n")
                 blocks[head.strip().lower()] = rest.strip()
-        link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"])
         subject = f"{ctx.refs['title']} — what it means for you"
+        # The meeting belongs to the ORGANISER. Without a capability the attendee's link resolves
+        # to "no such meeting" and the agent greets them as a new user instead of telling them
+        # what the meeting held — every attendee click landed on the wrong chat. One restricted
+        # grant per attendee, redeemed by the terminal on arrival.
+        row = mt.meeting_row(ctx.refs["uid"], ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+        platform = (row or {}).get("platform") or ctx.refs.get("platform") or "unknown"
+        native = (row or {}).get("native_meeting_id") or ctx.refs.get("native") or ""
         sent = []
         for a in who:
+            token = None
+            if native:
+                try:
+                    token = mt.mint_transcript_share(ctx.refs["uid"], platform, native, a)
+                except Exception:  # noqa: BLE001 — a mail with a weaker link beats no mail
+                    token = None
+            link = ui_link(ask="minutes-review", meeting=ctx.refs["meeting_id"], tshare=token)
             body = blocks.get(a) if mode == "personal" else None
             if not body:
                 body = note.strip()

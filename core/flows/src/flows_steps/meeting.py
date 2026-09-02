@@ -44,6 +44,52 @@ def meeting_ref(uid: str, url: str) -> str:
     return str(max(ids)) if ids else native
 
 
+def meeting_row(uid: str, meeting_id, native: str | None = None):
+    """This user's meeting row from the gateway, or None. One read, several callers."""
+    try:
+        _st, body = http("GET", f"{GATEWAY}/meetings", {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return None
+    rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+    found = None
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        if meeting_id is not None and str(m.get("id")) == str(meeting_id):
+            return m
+        if native and m.get("native_meeting_id") == native:
+            found = m
+    return found
+
+
+def mint_transcript_share(uid: str, platform: str, native: str, email: str,
+                          expires_in_sec: int = 30 * 86400):
+    """A RESTRICTED transcript share grant for ONE attendee — the capability that makes the
+    meeting visible to them.
+
+    The whole mechanism already existed and nothing used it from the mail path:
+    ``POST /meetings/{platform}/{native}/share`` mints ``data.share_grants[]``,
+    ``POST /transcripts/share/accept`` redeems it into ``data.transcript_viewers[]``, the
+    meetings list and the single-meeting read already carry a transcript-share access branch
+    (``collector/adapters.py:438``), the GIN index for the containment probe already exists, and
+    the terminal already redeems ``?tshare=`` silently after sign-in and cleans the URL
+    (``clients/terminal/src/app/App.tsx``). The attendee's follow-up link simply never carried
+    a token, so every attendee clicked into a chat that could not see the meeting the mail was
+    about, and the agent fell back to its new-user greeting.
+
+    ``restricted`` + this attendee's own address, never ``open``: the mail can be forwarded, and
+    a forwarded link must grant its new reader nothing. That is the same rule as the fan-out's
+    domain allow-list, one layer down.
+    """
+    st, body = http("POST", f"{GATEWAY}/meetings/{platform}/{native}/share",
+                    {"X-API-Key": user_api_key(str(uid))},
+                    {"mode": "restricted", "allowed_emails": [email],
+                     "expires_in_sec": int(expires_in_sec)})
+    if isinstance(body, dict) and body.get("token"):
+        return body["token"]
+    return None
+
+
 def meeting_start(uid: str, meeting_id, native: str | None = None):
     """The meeting row's OWN start epoch, or None.
 
