@@ -62,11 +62,11 @@ function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock
 function latestCaption(segments: { text: string; completed?: boolean }[]): string | undefined {
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (seg.text.trim() && seg.completed === false) return cleanTranscriptText(seg.text);
+    if (seg.text.trim() && seg.completed === false) return seg.text;
   }
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (seg.text.trim()) return cleanTranscriptText(seg.text);
+    if (seg.text.trim()) return seg.text;
   }
   return undefined;
 }
@@ -130,7 +130,7 @@ function normalizeSegments(segments: TranscriptSegment[] | null | undefined): Tr
     .map((segment) => ({
       id: segment.id,
       speaker: textOf(segment.speaker, "Speaker"),
-      text: cleanTranscriptText(textOf(segment.text)),
+      text: textOf(segment.text),
       ts: segment.ts,
       tsMs: segment.tsMs,
       completed: segment.completed,
@@ -186,7 +186,7 @@ function firstQuoteFor(name: string, segments: TranscriptSegment[]): string | un
     const text = textOf(segment.text);
     const speaker = textOf(segment.speaker);
     const haystack = normalizeSearchText(`${speaker} ${text}`);
-    if (haystack.includes(needle) || haystack.replace(/\s+/g, "").includes(compactNeedle)) return cleanTranscriptText(text);
+    if (haystack.includes(needle) || haystack.replace(/\s+/g, "").includes(compactNeedle)) return text;
   }
   return undefined;
 }
@@ -330,9 +330,19 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       insights: safeArray(selected.insights),
       docs: safeArray(selected.docs),
     };
-    const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
+    // THE TRANSCRIPT IS RENDERED AS IT WAS SAID. These three mappers — live, durable and
+    // fallback — each ran every line through `cleanTranscriptText`, whose `DOMAIN_CORRECTIONS`
+    // table silently rewrote words: `Entropic`->`Anthropic`, `Cloud Code`->`Claude Code`,
+    // `Yalna Kunz`->`Yann LeCun`. That is the deleted in-product inference pipeline still
+    // editing the record (decision 34 removed it; decision 12 makes the transcript the live
+    // canvas), with no indication, in the artefact a pilot treats as what was said.
+    //
+    // It was also breaking decision 35 mechanically: `splitTextIntoSpans` matches published
+    // terms against the text it is drawing, so a term the agent extracted from the RAW
+    // transcript could never match its own chip in the REWRITTEN one.
+    const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: s.text, ts: s.t, tsMs: s.tsMs, completed: s.completed }));
+    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const diagnostics = {
       liveConnected: live.connected,
