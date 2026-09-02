@@ -35,11 +35,12 @@ import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 
 const LINE = { speaker: "Jane", text: "so um we agreed to ship friday", t: 1 };
 
-function meetingRow(live: boolean) {
+function meetingRow(live: boolean, liveStatus?: string) {
   return {
     id: "abc-defg-hij", native_id: "abc-defg-hij",
     session_uid: live ? "abc-defg-hij" : undefined,
     title: "Google Meet · abc-defg-hij", when: "", status: live ? "live" : "past",
+    live_status: liveStatus,
     platform: "Google Meet", participants: [], mentioned: [], actions: [], transcript: [], insights: [],
   };
 }
@@ -124,5 +125,30 @@ describe("minutes live view — the raw transcript, and nothing else (PRD decisi
     await renderCanvas();
     expect(container.textContent).not.toContain("Model inference error");
     expect(container.textContent).not.toContain("VEXA_LLM_BASE_URL");
+  });
+
+  it("the state card names the BOT, never the product's work", async () => {
+    // At the door: the bot is on its way in and nothing has been heard. This window used to render
+    // nothing at all, and the one after it read "Waiting for transcript — no new lines for 24s".
+    meetingsState = [meetingRow(true, "joining")];
+    liveState = { connected: true };
+    await renderCanvas();
+
+    expect(container.textContent).toContain("Bot at the door");
+    expect(container.textContent).not.toContain("Waiting for transcript");
+    expect(container.textContent).not.toContain("Processing");
+  });
+
+  it("a quiet admitted bot says so, with the silence measured", async () => {
+    meetingsState = [meetingRow(true, "active")];
+    liveState = {
+      connected: true,
+      transcript: [{ id: "s1", speaker: "Jane", text: "hello", t: 1, completed: true }],
+      lastTranscriptAt: Date.now() - 24_000,
+    };
+    await renderCanvas();
+
+    expect(container.textContent).toMatch(/Bot admitted · no words for \d+s/);
+    expect(container.textContent).not.toContain("Waiting for transcript");
   });
 });
