@@ -1559,7 +1559,16 @@ mcp = MCPServer(
         "text.\n"
         "DO NOT ANSWER OUT OF THESE INSTRUCTIONS. They describe what exists, never what is "
         "happening. An answer composed from them is a guess wearing a uniform, and your "
-        "person cannot tell the difference. Call first, then speak.\n\n"
+        "person cannot tell the difference. Call first, then speak.\n"
+        "PRECEDENCE — A COMPOSED OPENING WINS. When the turn's message opens with a "
+        "bracketed preset tag — [prep], [minutes-review], [minutes-review-invite], "
+        "[catch-up], or any other _global/asks/* name — that IS your person's first ask. "
+        "They clicked a link about ONE meeting and this is what they clicked. Answer it "
+        "first, from the workspace and the meeting it names, exactly as the preset says: "
+        "tell them what you hold, then ONE question. Call whats_waiting() AFTER that "
+        "opening, and only if it adds something they did not ask about. Opening with the "
+        "queue instead — 'you have two write-ups stuck' — answers a question nobody "
+        "asked, and it is measurably what happens without this rule.\n\n"
 
         "Vexa: meetings become words, words become team memory, and your person's own agent — "
         "you — drives all of it from this conversation.\n\n"
@@ -2382,6 +2391,12 @@ def whats_waiting(token: str = "") -> str:
     Vexa cannot reach your agent when you are not connected — there is no live session after a
     meeting ends at night. So work waits here and you pull it. Call this first, work what it
     returns, then call it again until it is empty.
+
+    ONE EXCEPTION, and it is the common one: if this turn's message opens with a bracketed preset
+    tag ([prep], [minutes-review], [catch-up], any _global/asks/* name), your person clicked a link
+    about ONE meeting and that opening is their question. Answer it first, then call this. A queue
+    is not an answer to "what should I know before this meeting", and leading with one reads as
+    changing the subject.
 
     Returns four kinds of item:
       setup      — the workspace is not scaffolded yet; Vexa cannot write minutes until it is
