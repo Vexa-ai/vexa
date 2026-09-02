@@ -3414,6 +3414,9 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
     # earlier cut resolved it inline and left the reply reading the raw empty parameter —
     # "the bot is at the door as ''".
     bot_name = bot_name or _settings(uid).get("bot_name") or "Vexa"
+    # What the sentence CALLS the meeting. The url is the only name we reliably have here, and it
+    # is the one the person just handed us — so it reads back as theirs rather than as an id.
+    title_for_say = (meeting_url or "").strip() or f"{platform}/{mid}"
     st, r = _gw_http(uid, "POST", "/bots",
                      {"platform": platform, "native_meeting_id": mid,
                       "meeting_url": meeting_url.strip(), "bot_name": bot_name})
@@ -3434,11 +3437,17 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
     # answer; it blocked the server, broke the client's HTTP/2 stream with INTERNAL_ERROR and
     # killed the MCP session — reporting a failed send on a join that had actually succeeded.
     # A bot needs ~30s to be admitted anyway, so the wait bought almost nothing.
-    state, detail = "knocking", ""
+    # THE ROW ID, resolved here because this is the only place that has it cheaply. The create
+    # response carries it; the status listing carries it again. Everything downstream that wants to
+    # ADDRESS this meeting needs the row and not the native id — a personal room's native id spans
+    # many meetings, so it names a series, not an occurrence. The harness emits the panel artifact
+    # against `meeting_row`, and it cannot invent one (F73).
+    state, detail, row = "knocking", "", (r or {}).get("id")
     stc, rc = _gw_http(uid, "GET", "/bots/status")
     if stc == 200:
         for b in (rc or {}).get("running_bots", []) or (rc or {}).get("running", []):
             if str(b.get("native_meeting_id")) == str(mid):
+                row = row or b.get("id") or b.get("meeting_id")
                 sv = str(b.get("status", "")).lower()
                 if sv in ("active", "in_call", "recording"):
                     state, detail = "in_call", sv
@@ -3446,16 +3455,25 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
                     state, detail = "failed", sv
                 break
 
+    # STATE SENTENCES, AND NOT ONE LINK IN THEM (F73). This result used to carry `ui_url` and a
+    # `tell_your_person` line ending in it, so the agent did the obvious thing and handed the
+    # person a URL into the product they were already looking at. That is not a manners problem to
+    # be fixed with an instruction — the tool was offering the link, labelled for exactly that use.
+    # The panel is moved by the harness on this result; the sentence says what is about to happen.
     say = {
-        "in_call": f"The bot is in the call as '{bot_name}' — I can read along from here.",
-        "knocking": f"The bot is at the door as '{bot_name}'. Someone in the meeting has to "
-                    f"let it in, same as any guest — once they do, the words start reaching me.",
+        "in_call": f"The bot is in the call as '{bot_name}' — the transcript is beside this chat.",
+        "knocking": f"The bot is at the door of {title_for_say} as '{bot_name}'. Someone in the "
+                    f"meeting has to let it in, same as any guest; the transcript opens beside "
+                    f"this chat when it is admitted.",
         "failed": "The bot could not stay in the call. That is ours, not yours — I have "
                   "reported it.",
     }[state]
 
+    # NO `ui_url`. The person is inside the app; a link into it is the one thing that cannot help
+    # them, and a field named `ui_url` sitting in a tool result is an invitation to paste it.
+    # `meeting_row` replaces it — the same meeting, addressed the way the panel addresses it.
     return json.dumps({
-        "ui_url": _ui_meeting_url(platform, mid), "sent": True, "platform": platform, "meeting": mid,
+        "sent": True, "platform": platform, "meeting": mid, "meeting_row": row,
         "status": (r or {}).get("status"),
         "bot_state": state, "detail": detail,
         "tell_your_person": say,
@@ -3464,7 +3482,6 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
         "next_options": [
             "Read along live — I can tell you what is being said as it happens",
             "Have the bot say something into the room (bot_say)",
-            "Open the live view in the terminal (the ui_url above)",
             "Pull the bot back out (bot_stop)",
         ],
     })

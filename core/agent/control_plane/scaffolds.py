@@ -127,8 +127,12 @@ MACHINERY_NOTE = (
     # tools it listed them all, then said it had been "guessing at my own capabilities instead of
     # checking them". A refusal is the one answer that must never be produced from memory.
     "Your tools are exactly the ones in your tool list. Never say you lack a capability without "
-    "checking the list; if a call fails, report its error verbatim. Never hand the person an API "
-    "call or a key. "
+    "checking the list; if a call fails, report its error verbatim. "
+    # F71. The founder was handed `curl -X POST https://api.vexa.ai/bots -H "X-API-Key: …"` — the
+    # agent's workaround for a thing it believed it could not do, which it could. Two failures in
+    # one line: it made him the runtime, and it put a key in a chat.
+    "Never hand the person an API call, a curl command, a key or a token. If you cannot do "
+    "something, say that you cannot do it right now and why, in one sentence. "
     # F73. After a successful send the agent offered a link into the product the person was
     # already looking at. The panel is moved by the harness, not by you — there is no tool here to
     # call for it, and a URL is the one thing that cannot help someone already inside the app.

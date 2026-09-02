@@ -131,6 +131,52 @@ def _kind_for(tool: str, summary: str) -> str:
     return "error"
 
 
+# THE REFUSAL SHAPE. Narrow on purpose: it matches a claim about the SESSION'S CAPABILITY, not
+# any sentence with "cannot" in it. "I cannot reach the API right now" is a report of a failure and
+# must pass; "I don't have a bot-dispatch tool in this session" is a claim about the tool list, and
+# the tool list is a fact the process can check.
+_DISBELIEF = re.compile(
+    r"(?:don'?t|do not|can'?t|cannot)\s+(?:have|trigger|dispatch|access|see)"
+    r"[^.]{0,60}?(?:tool|from here|in this session|this session)", re.I)
+
+# VERB -> the tool that does it. Small and closed: a map that guesses would re-run turns on a
+# coincidence, and a re-run is not free. Ordered longest-phrase-first is unnecessary — every key is
+# a whole word and the request is matched word-wise.
+_VERB_TOOL: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("send", "drop", "put", "join", "admit", "dispatch"), "bot_send"),
+    (("schedule", "book"), "bot_schedule"),
+    (("stop", "remove", "pull"), "bot_stop"),
+    (("transcript", "transcribe", "read along"), "meeting_transcript"),
+    (("say", "speak"), "bot_say"),
+)
+
+
+def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
+    """The tool this turn REFUSED while holding it, or None (F70).
+
+    On 2026-09-02 the founder asked for a bot and was told "I don't have a bot-dispatch tool in this
+    session". `bot_send` was in the list; the CLI logged `hasTools: true`; the model never attempted
+    a call. Asked afterwards to enumerate its tools it listed them all and said it had been "guessing
+    at my own capabilities instead of checking them".
+
+    Three conditions, all required, because each alone is common and harmless:
+      1. the reply claims a missing capability (`_DISBELIEF`),
+      2. the request names a verb we have a tool for,
+      3. THAT TOOL IS IN THE SESSION'S LIST.
+    Condition 3 is the one that makes this safe to act on: with the tool absent the refusal is true
+    and the turn was right."""
+    if not prompt or not reply or not tools:
+        return None
+    if not _DISBELIEF.search(reply):
+        return None
+    words = set(re.findall(r"[a-z]+", prompt.lower()))
+    have = {str(t).rsplit("__", 1)[-1] for t in tools}
+    for verbs, tool in _VERB_TOOL:
+        if tool in have and words.intersection(verbs):
+            return tool
+    return None
+
+
 def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
               workspace: str = "") -> list[dict]:
     """The records a finished turn's event stream earned, if any.

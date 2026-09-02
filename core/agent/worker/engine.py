@@ -50,7 +50,8 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 # and one surface with two writers is the failure `graph/sg/Operating-Loops.md` names in a line.
 # Whoever composes that block appends what this returns.
 from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for the turn prompt
-from worker.friction import friction_preamble, report as report_friction, scan_turn, spawn_gap
+from worker.friction import (disbelieved_capability, friction_preamble,
+                             report as report_friction, scan_turn, spawn_gap)
 
 log = logging.getLogger("agent_api.worker")
 
@@ -1170,7 +1171,8 @@ def start_prompt(start: dict) -> str | None:
 # ── the harness loop (redis + the turn injected) ─────────────────────────────────────────────────
 
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
-          harness: HarnessPort | None = None, writeback: TurnFn | None = None) -> None:
+          harness: HarnessPort | None = None, writeback: TurnFn | None = None,
+          tools: "list[str] | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -1247,6 +1249,35 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # THE PRE-PASS RUNS FIRST AND IS FREE. Only a turn that touched a name no desk has a page
         # for reaches a model at all; every other turn now costs a regex where it used to cost two
         # minutes of worker time with the person's next message queued behind it.
+        # F70 — THE TURN THAT REFUSED A TOOL IT WAS HOLDING. Runs before the write-back phase and
+        # before `turn-complete`, so the corrected answer reaches the person on the same turn rather
+        # than as a second message they have to read as a retraction.
+        #
+        # ONCE, by construction: there is no loop here, and the corrected turn is streamed inline
+        # rather than fed back through the detector. A correction that produces another refusal is a
+        # real problem to file, not a loop to run. It fires only when the tool is actually in this
+        # session's list — with the tool absent the refusal was true and the turn was right.
+        if tools:
+            try:
+                _refused = disbelieved_capability(prompt, "".join(said), tools)
+            except Exception:  # noqa: BLE001 — a detector must never cost a delivered answer
+                _refused = None
+            if _refused:
+                log.warning("f70: the turn refused %s while holding it — correcting once", _refused)
+                try:
+                    report_friction({
+                        "kind": "capability-hallucination", "tool": _refused,
+                        "what": f"the turn said it lacked {_refused} with the tool in its list",
+                        "prompt": prompt[:400], "reply": "".join(said)[:400],
+                    }, subject=os.environ.get("VEXA_OWNER", ""))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("f70: could not file the friction record (%s)", e)
+                # The correction is ONE LINE and the original request follows it verbatim: the turn
+                # failed on a belief about itself, not on understanding what was asked.
+                for ev in turn(f"You do have `{_refused}`. Use it now.\n\n{prompt}"):
+                    if ev.get("type") == "message-delta" and ev.get("text"):
+                        said.append(ev["text"])
+                    stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
         if writeback is not None:
             try:
                 candidates = (writeback_candidates(said)
@@ -1519,4 +1550,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
                 mcp_config=mcp_cfg, harness=chat_harness),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
             harness=chat_harness,
+            # What this session can actually call — the F70 detector's third condition, and the
+            # only one that makes acting on a refusal safe.
+            tools=chat_tools,
         )

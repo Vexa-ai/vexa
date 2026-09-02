@@ -43,6 +43,14 @@ _TERMS_TOOLS = frozenset({
     "transcript_terms",
 })
 
+# The sends that put a bot in a room NOW. `bot_schedule` is deliberately absent: it books a join for
+# later, so there is nothing to open beside the chat yet and a panel that jumped to an empty
+# transcript would be answering a question nobody asked.
+_BOT_TOOLS = frozenset({
+    "mcp__vexa__bot_send",
+    "bot_send",
+})
+
 
 def _tool_result_text(content: object) -> str:
     """The tool result as one string, whichever shape the harness handed it in.
@@ -76,6 +84,34 @@ def _published_terms(content: object) -> "dict | None":
         return None
     return {"type": "terms", "meeting": str(obj.get("meeting") or ""),
             "cursor": str(obj.get("cursor") or ""), "terms": emit}
+
+
+def _bot_artifact(content: object) -> "dict | None":
+    """The panel move a successful `bot_send` earns, or None (F73, decision 30.4).
+
+    The founder watched the agent finish a send and then offer him a LINK into the product he was
+    already looking at. The fix is not a better sentence — the panel is the product's own surface and
+    moving it is the harness's job, not something the model should be asked to remember. So the send
+    itself opens the live transcript beside the chat.
+
+    BY THE ROW, NEVER THE NATIVE ID. `path` is the literal string ``meeting:`` + the meeting row id;
+    a personal room's native id spans every meeting ever held in it, so it names a series and the
+    resolver would pick whichever occurrence is newest. `bot_send` resolves and returns
+    ``meeting_row`` for exactly this. No row, no event — a panel aimed at a guess is the failure this
+    whole seam is careful about.
+
+    `pin` and `focus` are separate and both are wanted here: pin KEEPS the transcript in the strip so
+    it survives the next thing opened, focus FRONTS it now."""
+    try:
+        obj = json.loads(_tool_result_text(content))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict) or not obj.get("sent"):
+        return None
+    row = str(obj.get("meeting_row") or "").strip()
+    if not row:
+        return None
+    return {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
 
 
 def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":
@@ -127,6 +163,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     # popped-on-result discipline as `pending_writes`, so one turn's result can never be
     # matched to another call's id.
     pending_terms: set[str] = set()
+    # callIds of in-flight `bot_send` calls — same per-stream, popped-on-result discipline.
+    pending_bots: set[str] = set()
     for raw in lines:
         raw = raw.strip()
         if not raw:
@@ -165,6 +203,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             pending_writes[call_id] = target
                     elif tool_name in _TERMS_TOOLS:
                         pending_terms.add(call_id)
+                    elif tool_name in _BOT_TOOLS:
+                        pending_bots.add(call_id)
                     yield {
                         "type": "tool-call",
                         "tool": tool_name,
@@ -192,6 +232,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     pending_terms.discard(call_id)
                     if was_terms and ok:
                         ev = _published_terms(block.get("content"))
+                        if ev:
+                            yield ev
+                    # THE BOT IS IN THE ROOM — open its transcript. Success-only, like the two
+                    # above: a send that failed must not front a transcript that will stay empty.
+                    was_bot = call_id in pending_bots
+                    pending_bots.discard(call_id)
+                    if was_bot and ok:
+                        ev = _bot_artifact(block.get("content"))
                         if ev:
                             yield ev
                     target = pending_writes.pop(call_id, None)
