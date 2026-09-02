@@ -44,6 +44,7 @@ import {
   COMPANY_LAYER_FILES, getGlobalSetting, getGlobalState, setGlobalSetting, testModels, testTranscription,
   type GlobalSetting, type GlobalState,
 } from "../surfaces/settingsApi";
+import { setCompanyLayerHint } from "../minutes/chats";
 
 /** Show the setup surface at all? null = not an admin (probe 404s); completed set = already ran.
  *  Note what does NOT appear here: the company layer's own state. `setup.completed` is written by
@@ -222,6 +223,12 @@ function useGlobalState(stop: boolean): Poll {
   const read = useCallback(async () => {
     try {
       const state = await getGlobalState();
+      // The rail decides what rows exist during a SYNCHRONOUS first render (`loadChats` reads
+      // localStorage), so it cannot await this probe. Cache the server's answer for it here — this
+      // poll is the ONE writer, `chats.ts` only ever reads, and it fails open when the value is
+      // absent. Being wrong costs a row in a list and nothing else: the server refuses every gated
+      // request on its own, so this is presentation, never permission.
+      setCompanyLayerHint(state.global_setup === "completed" ? "completed" : "missing");
       if (alive.current) setPoll({ state, error: null });
     } catch (e: unknown) {
       if (alive.current) setPoll((prev) => ({ state: prev.state, error: e instanceof Error ? e.message : String(e) }));

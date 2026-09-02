@@ -353,17 +353,49 @@ function dedupe(chats: Chat[]): Chat[] {
   return out;
 }
 
+/** THE COMPANY-LAYER HINT — a render-time cache, never the authority.
+ *
+ *  `loadChats` is synchronous (it reads localStorage during the first render) and the gate lives on
+ *  the server, so the rail cannot await a probe before deciding what rows exist. SetupGate — which
+ *  polls `/api/global/state` anyway — writes the answer here, and this reads it.
+ *
+ *  It is a HINT and the distinction is load-bearing: the server refuses every gated request on its
+ *  own (agent-api 403s a non-admin on a gated instance, the flows engine parks, the operator verbs
+ *  refuse), so being wrong here costs a row in a list, never access to anything. It therefore FAILS
+ *  OPEN — an unwritten or unreadable hint seeds the normal rail, because the cost of guessing
+ *  "missing" wrongly is hiding a real user's own chat from them. */
+const LAYER_HINT_KEY = "vexa.companyLayer.v1";
+
+export function setCompanyLayerHint(state: "missing" | "completed"): void {
+  try { localStorage.setItem(LAYER_HINT_KEY, state); } catch { /* locked-down storage */ }
+}
+
+export function companyLayerMissing(): boolean {
+  try { return localStorage.getItem(LAYER_HINT_KEY) === "missing"; } catch { return false; }
+}
+
 /** The two rows that must always be reachable: your own chat, and the `_global` admin setup — which
  *  after the flattening is just another chat row. Both are structural, never spam, so both count as
- *  touched (an untouched org-setup row would hide behind the filter and take admin with it). */
+ *  touched (an untouched org-setup row would hide behind the filter and take admin with it).
+ *
+ *  ── EXCEPT BEFORE THE INSTANCE IS SET UP (founder ruling 2026-09-02) ──────────────────────────
+ *  On a fresh instance the admin is the only person who can be here, and the only thing that can
+ *  usefully happen is writing the company layer. The founder clicked through his own first claim
+ *  and got a "Personal" row seeded on the generic greeting — "paste a meeting link" — beside a
+ *  second "Organisation setup" row, on an instance that could not join a meeting or send a mail:
+ *  "this is what I get from the first admin click — it should want to setup global here."
+ *  So while the layer is missing there are NO seed rows. The setup conversation the preset opens is
+ *  the only chat, and it is the whole screen. They come back the moment the instance opens — these
+ *  rows are derived, not stored, so nothing has to be un-hidden later. */
 export function seedChats(now = Date.now()): Chat[] {
+  if (companyLayerMissing()) return [];
   return [
     { id: PERSONAL_CHAT_ID, label: "Personal", workspaces: ["personal", "_global"], artifacts: [], touched: true, createdAt: now, lastActivityAt: now },
     { id: ORG_CHAT_ID, label: ORG_CHAT_LABEL, workspaces: ["_global"], artifacts: [], touched: true, createdAt: now - 1, lastActivityAt: now - 1 },
   ];
 }
 
-/** Whatever we load, these two exist. */
+/** Whatever we load, these two exist — unless the instance has not been set up yet. */
 export function ensureSeeds(chats: Chat[], now = Date.now()): Chat[] {
   const out = [...chats];
   for (const s of seedChats(now)) if (!out.some((c) => c.id === s.id)) out.push(s);

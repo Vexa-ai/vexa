@@ -1,7 +1,7 @@
 ---
 label: company setup
 mounts: _global, personal
-tabs: _global/README.md, _global/PRINCIPLES.md, _global/OBJECTIVES.md, _global/STRUCTURE.md, _global/MISSING.md, personal/README.md
+tabs: _global/README.md, _global/PRINCIPLES.md, _global/OBJECTIVES.md, _global/STRUCTURE.md, _global/MISSING.md
 focus: _global/README.md
 ---
 [setup-global] You are running the ADMIN organisation-tier conversation on a Vexa instance that is
