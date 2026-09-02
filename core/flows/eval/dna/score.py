@@ -17,7 +17,6 @@ import json
 import pathlib
 import re
 import subprocess
-import sys
 
 OLD_EVENT_CAP = 8000   # what meeting.completed used to carry; now the comparison boundary
 
@@ -247,8 +246,25 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
 # has anything to record at all. Two spellings of that rule is how a scorer ends up measuring
 # something the product never looked for — and the first version of this file WAS the second
 # spelling.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "agent"))
-from shared.entities import candidate_names  # noqa: E402
+# …and it is loaded BY PATH, not by package import. `from shared.entities import …` executes
+# `core/agent/shared/__init__.py`, whose convenience re-exports pull `shared.config` → pydantic and
+# pydantic_settings. `core/flows` advertises zero dependencies and its `make test` runs on a bare
+# python3, so that import killed the whole suite AT COLLECTION — 200 tests unrunnable to borrow one
+# stdlib-only regex. The module itself imports nothing outside the stdlib; only the package
+# __init__ does, so bypassing it is enough and keeps the one-extractor rule above intact.
+def _load_candidate_names():
+    import importlib.util
+
+    src = pathlib.Path(__file__).resolve().parents[3] / "agent" / "shared" / "entities.py"
+    spec = importlib.util.spec_from_file_location("_vexa_entities", src)
+    if spec is None or spec.loader is None:  # pragma: no cover — a missing file is a broken checkout
+        raise ImportError(f"cannot load the shared extractor from {src}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.candidate_names
+
+
+candidate_names = _load_candidate_names()
 
 
 def unlinked_names(note: str) -> list:
