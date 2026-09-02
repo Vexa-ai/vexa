@@ -98,6 +98,17 @@ def _tier_label(m: dict) -> str:
     if role == "system":
         return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md`, your"
                 " chats/sessions, settings, routines; private, never shared)")
+    if role == "room":
+        # The post-meeting MEETING ROOM: another attendee's own desk, mounted read-only for this one
+        # meeting. Declared explicitly (rather than falling through to the generic line below)
+        # because the model must know whose notes these are and that they are not its own: the mount
+        # is bound :ro, so a write attempt fails at the filesystem, but a mount described vaguely
+        # invites the attempt in the first place.
+        who = (m.get("room") or {}).get("subject") or "another attendee"
+        mtg = (m.get("room") or {}).get("meeting_id") or "this meeting"
+        return (f"MEETING ROOM — READ-ONLY: {who}'s own workspace, mounted for meeting {mtg} only. "
+                f"Read it to ground the shared write-up; NEVER write here, and never copy anything "
+                f"out of it that the meeting itself did not cover.")
     if m.get("primary"):
         return "your PRIVATE baseline (durable personal memory) — read-write"
     writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"

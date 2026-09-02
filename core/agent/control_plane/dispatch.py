@@ -23,6 +23,7 @@ from control_plane.workspace_attach import active_workspaces, shared_active_moun
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import global_layer
+from control_plane.meeting_room import room_mounts
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation
@@ -127,7 +128,8 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
     ]
 
 
-def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
+def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None,
+                    room: Optional[dict] = None) -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
@@ -137,9 +139,22 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
       3. ``_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Create-if-absent (thin
                       template). Chats migrate here in a later WP.
 
-    Order: ``[_global, *active, _system]``. The normal active workspaces sit between the system tiers.
-    ``_global`` fails CLOSED because organisation context is a hard invariant; ``_system`` remains
-    fail-soft so a private-memory storage fault cannot suppress the user's turn."""
+    Order: ``[_global, *active, *room, _system]``. The normal active workspaces sit between the system
+    tiers. ``_global`` fails CLOSED because organisation context is a hard invariant; ``_system``
+    remains fail-soft so a private-memory storage fault cannot suppress the user's turn.
+
+    ── THE ROOM (tier 2b, additive) ────────────────────────────────────────────────────────────────
+    ``room`` (``{"meeting_id", "subjects": [...]}``) is the post-meeting MEETING ROOM: the OTHER
+    attendees of one meeting, whose own workspaces this turn may READ. It is resolved SERVER-SIDE by
+    the caller of this function (``api._resolve_room`` — meeting entitlement + owner check + the
+    meeting's reader roster) and is NEVER anything a request body asserted; see
+    ``control_plane/meeting_room.py`` for the three gates.
+
+    Room entries are appended AFTER the subject's own active set and BEFORE ``_system``, so the
+    existing order/semantics are untouched: with ``room=None`` (every dispatch that names no meeting)
+    the stack is byte-identical to before. They are always ``write: False`` (the runtime binds them
+    ``:ro``) and ``primary: False``, they can never shadow or duplicate a path the subject's own set
+    already holds, and no other subject's ``_system`` is reachable through them."""
     active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
@@ -157,6 +172,27 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 
     # Tier 2 — the NORMAL active set (private baseline + activated extras).
     stack.extend(active)
+
+    # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
+    # upstream). Fails SOFT: a room that cannot be materialized degrades the post-meeting turn's
+    # context, and must never be the reason the turn does not happen.
+    if room:
+        try:
+            taken = {m["path"] for m in stack if m.get("path")}
+            extra = room_mounts(settings.workspaces_dir, room.get("subjects") or [],
+                                meeting_id=str(room.get("meeting_id") or ""), taken_paths=taken)
+            stack.extend(extra)
+            # OBSERVABILITY (never widen what an agent may read quietly): say which meeting, which
+            # subjects were asked for, which mounts actually landed, and how membership was derived.
+            logger.info(
+                "dispatch ROOM MOUNTS subject=%s meeting=%s source=%s asked=%s mounted=%s read_only=%s",
+                subject, room.get("meeting_id"), room.get("source") or "meeting-api:transcript_viewers",
+                list(room.get("subjects") or []), [m["slug"] for m in extra],
+                all(m.get("write") is False for m in extra),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("room mount resolution failed for subject=%s meeting=%s — running without "
+                           "the room", subject, (room or {}).get("meeting_id"), exc_info=True)
 
     # Tier 3 — PRIVATE SYSTEM (read-write), always present (create-if-absent). A failure here degrades the
     # user's durable private-system memory — log loudly but never abort the dispatch.
@@ -267,7 +303,8 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
 
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
                    memberships: Optional[list[dict]] = None,
-                   model_config: Optional[dict] = None) -> dict[str, str]:
+                   model_config: Optional[dict] = None,
+                   room: Optional[dict] = None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -278,7 +315,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
-    mounts = build_mount_set(settings, subject, memberships)
+    mounts = build_mount_set(settings, subject, memberships, room=room)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -328,6 +365,16 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         scope_ws = "*" if regime == "human" else [
             str(w.get("id")) for w in (invocation.get("workspaces") or []) if w.get("id")
         ]
+        # THE ROOM IS DELIBERATELY ABSENT FROM THIS SCOPE, and that is the security answer, not an
+        # omission. The delegation scope is a CEILING ON THE ACCOUNT (`delegation.scope_allows_workspace`:
+        # `"*"` "allows everything the ACCOUNT already allows … the rig still applies its own per-uid
+        # ownership checks underneath"), so naming another attendee's workspace here would be asking the
+        # control MCP to hand THIS uid a workspace it does not own — inert if the rig is correct, and a
+        # genuine widening of the person's account reach if it ever is not. The room is a MOUNT-level read
+        # grant made by the dispatcher and enforced by the container's mount table (`write: False` → a
+        # `:ro` bind), which is a narrower mechanism than a credential and needs no credential change.
+        # Net effect on the token: identical bytes to a room-less dispatch — same `sub`, same `regime`,
+        # same `workspaces` — asserted by tests/test_meeting_room.py.
         try:
             env["VEXA_MCP_URL"] = settings.mcp_url
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
@@ -498,8 +545,15 @@ class Dispatcher:
             logger.warning("model-config lookup failed for subject=%s — treating as env defaults", subject)
             return None
 
-    def dispatch(self, invocation: dict) -> str:
+    def dispatch(self, invocation: dict, *, room: Optional[dict] = None) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
+
+        ``room`` is the post-meeting MEETING ROOM — ``{meeting_id, subjects[], source}`` — already
+        RESOLVED AND AUTHORISED by the caller (``api._resolve_room``). It is a dispatcher argument
+        rather than a field of the invocation on purpose: ``unit.v1`` is a sealed wire contract
+        (``additionalProperties: false``), and more importantly the room must never be able to
+        arrive from anywhere a request body can reach. ``None`` (every other trigger and every
+        chat that names no meeting) leaves the dispatch byte-identical to before.
 
         ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
         published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
@@ -527,7 +581,7 @@ class Dispatcher:
         # credential-less failure mode is the clean rewritten done frame (llm/errors taxonomy).
         model_config = self.resolve_model_config(identity["subject"])
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
-                             model_config=model_config)
+                             model_config=model_config, room=room)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
@@ -548,8 +602,9 @@ class Dispatcher:
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         logger.info(
-            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s",
+            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s room=%s",
             acked, invocation["trigger"], identity["subject"], identity["launcher"], delivery is not None,
+            (room or {}).get("meeting_id") or "-",
         )
         return acked
 

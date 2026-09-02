@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
+from control_plane import meeting_room
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
@@ -303,6 +304,23 @@ class ChatBody(BaseModel):
     # so it can't send Last-Event-ID) from a genuinely new turn with identical text ("yes" twice):
     # a matching nonce re-attaches from the turn's recorded start — no second dispatch, no lost events.
     turn_id: Optional[str] = None
+    # THE MEETING ROOM (post-meeting run). The caller may name ONLY THE MEETING — a meetings-domain
+    # ROW id — and the server resolves who was in it (control_plane/meeting_room.py). There is
+    # deliberately NO field here that names a workspace or a subject: a caller able to say "mount
+    # u_bob" could read any user's desk by naming it, which is the exact hole this shape exists to
+    # close. Accepting it additionally requires the internal-tier secret (see ``_resolve_room``), so
+    # the general end-user chat surface cannot open a room at all.
+    room_meeting_id: Optional[str] = None
+    # PROPOSE-AND-VERIFY. flows holds the transcript, so it is the only party that knows who actually
+    # SPOKE and in what order of speaking time — but it is still a caller, so this list is used for
+    # INTERSECTION AND ORDER ONLY: the server resolves the meeting's own roster and mounts the
+    # intersection. A proposal can therefore only ever NARROW the room, never widen it. Omit it and
+    # the room is the whole verified roster, still capped.
+    room_subjects: Optional[list[str]] = None
+    # The flow's ``room_read_max`` (founder bound: "should only fetch workspaces of those who
+    # actually spoke … will not die if it has 200 folders"). Default 12, clamped server-side to
+    # ``meeting_room.MAX_ROOM_READ`` — a caller may lower it, never raise it.
+    room_read_max: Optional[int] = None
 
 
 class ResetBody(BaseModel):
@@ -315,6 +333,7 @@ class ResetBody(BaseModel):
     prompt: Optional[str] = None
     active: Optional[dict] = None
     context: Optional[ChatContextBody] = None  # accepted-and-ignored, same rationale
+    room_meeting_id: Optional[str] = None      # accepted-and-ignored (reset mounts nothing)
 
 
 class RoutineCreate(BaseModel):
@@ -879,6 +898,11 @@ def _context_grounding(
 # record's `native_meeting_id` also lets us confirm the requested `session_uid` belongs to the SAME owned
 # meeting, so B can't pair its own row with A's native to sniff A's copilot out-stream. Returns the owned
 # meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
+# How room membership was derived, stamped on every room dispatch + log line so an audit can tell
+# WHICH server-side source named the subjects (never the request body).
+_ROOM_SOURCE = "meeting-api:transcript_viewers"
+
+
 def _http_meeting_owner_lookup(meeting_api_url: str):
     """Build the default owner-lookup: GET {meeting_api_url}/meetings/{id} with the caller's X-User-Id.
     Returns a callable ``(user_id: str, meeting_id: str) -> dict | None`` (the owned meeting record, or
@@ -1027,6 +1051,76 @@ def create_app(
         if fallback:
             return fallback
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
+
+    def _resolve_room(request: Request, subject: str, meeting_id: str,
+                      proposed: "Optional[list[str]]" = None,
+                      read_max: Optional[int] = None) -> dict:
+        """Turn a caller-named MEETING into the SERVER-DERIVED room this turn may read.
+
+        The room is the post-meeting mount widening (founder ruling: a person's `personal`/desk
+        workspace is company knowledge, not private, and the post-meeting agent reads every
+        attendee's desk to write ONE shared write-up; only `_system` stays private). The dangerous
+        version of this feature is one where the CALLER names the workspaces — that hands any
+        signed-in user a read of any other user's desk. So the caller names only the meeting, and
+        every subject comes from meeting-api.
+
+        THREE GATES, all fail-CLOSED, in this order:
+
+        0. CALLER TIER — the internal-tier shared secret (`X-Internal-Secret` == `VEXA_INTERNAL_API_SECRET`,
+           the same edge `/api/admin/overview` and the admin-api mirror already use). The room is a
+           FLOWS/OPERATOR capability, not an end-user one: the post-meeting run is dispatched by
+           `core/flows` talking to agent-api directly, while browser clients reach `/api/chat` through
+           the gateway and hold no internal secret. Gating here keeps the blast radius at "services
+           that already hold the deployment's internal secret" instead of "every signed-in user".
+           An UNCONFIGURED secret means nobody gets a room (403), exactly like the admin panel.
+        1. ENTITLEMENT — `_meeting_owner_lookup`, the EXISTING meeting access check (meeting-api
+           `GET /meetings/{id}`, which evaluates its own access union in SQL and 404s a row the
+           caller may not read). No second authorisation rule is invented for the room.
+        2. OWNERSHIP + MEMBERSHIP — `meeting_room.verified_subjects` (see that module): the row must
+           be the caller's OWN meeting, and the room's CEILING is `data.transcript_viewers` as
+           meeting-api maintains it. Those are already SUBJECT ids, so nothing here guesses a person
+           from a name or an email — a wrong guess would mount the wrong human's notes.
+        3. NARROWING — `meeting_room.select_room`: the caller MAY propose a subject list (flows holds
+           the transcript, so only flows knows who SPOKE and in what order of speaking time). The
+           proposal is intersected with the verified ceiling and supplies ORDER ONLY, then the
+           `room_read_max` cap is applied under the server's own ceiling. A caller can narrow the
+           room; it can never widen it, and a proposed-but-unverified id is LOGGED, never silently
+           dropped — a caller naming somebody who was not in the meeting is a finding.
+
+        KNOWN NARROWNESS (stated, not papered over): the calendar attendee list
+        (`GET /meetings/{platform}/{native}/participants`) carries EMAILS, and agent-api has no
+        email→subject resolver on any edge it can reach — admin-api's `/admin/users/email/{email}`
+        sits behind the ADMIN token, which agent-api does not hold, and the internal tier exposes no
+        such lookup. Until one exists, an attendee who has not redeemed their share link is not in
+        the room. The seam to widen is `room_subjects`, not this gate.
+        """
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        if not secret or not hmac.compare_digest(provided, secret):
+            logger.warning("room REFUSED subject=%s meeting=%s reason=not-internal-caller",
+                           subject, meeting_id)
+            raise HTTPException(status_code=403,
+                                detail="the meeting room is an internal-tier capability")
+        owned = _meeting_owner_lookup(subject, meeting_id)
+        try:
+            verified = meeting_room.verified_subjects(owned, requester=subject)
+        except meeting_room.RoomRefused as e:
+            logger.warning("room REFUSED subject=%s meeting=%s reason=%s", subject, meeting_id, e.reason)
+            raise HTTPException(status_code=403, detail=e.reason)
+        subjects, rejected = meeting_room.select_room(verified, proposed=proposed, cap=read_max)
+        if rejected:
+            # A caller naming subjects the meeting's own roster does not contain is either a bug or
+            # an attempt. It is refused by construction (they are simply not in the intersection),
+            # but it is never silent.
+            logger.warning("room PROPOSAL NARROWED subject=%s meeting=%s rejected=%s (not in the "
+                           "meeting's verified roster)", subject, meeting_id, rejected)
+        # A silent widening of what an agent may read is the thing that must never happen: say who
+        # asked, for which meeting, how membership was derived, and exactly which subjects it named.
+        logger.info("room RESOLVED subject=%s meeting=%s source=%s verified=%s proposed=%s "
+                    "selected=%s cap=%s", subject, meeting_id, _ROOM_SOURCE, verified,
+                    proposed if proposed is not None else "-", subjects,
+                    meeting_room.DEFAULT_ROOM_READ_MAX if read_max is None else read_max)
+        return {"meeting_id": str(meeting_id), "subjects": subjects, "source": _ROOM_SOURCE}
 
     @app.get("/health")
     def health():
@@ -1244,6 +1338,14 @@ def create_app(
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
+        # THE MEETING ROOM (post-meeting run). Resolved and AUTHORISED here, before anything else
+        # happens on this request — a refusal must cost the caller a 403, never a partially-run turn.
+        # ``room`` never comes from the body: the body names a MEETING (and may PROPOSE a narrowing);
+        # every subject in the returned room came from meeting-api. See ``_resolve_room``.
+        room = None
+        if body.room_meeting_id:
+            room = _resolve_room(request, subject, body.room_meeting_id,
+                                 proposed=body.room_subjects, read_max=body.room_read_max)
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None
@@ -1313,7 +1415,12 @@ def create_app(
                 is_new = not any(r["session"] == session for r in sess.list(subject))
                 sess.upsert(subject, session,
                             title=_truncate_title(body.prompt) if is_new else None)
-                unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+                # ``room`` applies AT SPAWN: the mount table is fixed when the container is created,
+                # so a WARM unit (this thread already has a live worker) keeps the stack it booted
+                # with and a room named on a later turn of the same thread does not retro-mount. The
+                # post-meeting run uses its own per-meeting session, so it spawns cold and gets the
+                # room; a turn that needs a different room needs a different session.
+                unit_id = dispatcher.dispatch(inv, room=room)  # spawn-or-touch the thread's warm chat unit
                 if body.turn_id and start is not None:
                     _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
                 resume = start
