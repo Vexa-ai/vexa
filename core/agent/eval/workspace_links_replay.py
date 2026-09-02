@@ -1,0 +1,226 @@
+#!/usr/bin/env python
+"""Offline replay: do links between a desk and a group survive the group being RENAMED?
+
+PRD decision 26's proof obligation — *"the DNA replay across three meetings with links between the
+desk and the group holding after a rename"*. This is that replay with the cost taken out of it: no
+stack, no docker, no mailpit, no model. Two real DNA fixtures, two scratch workspaces, the same
+`shared/entities.upsert_entity` the agent calls and the same `control_plane/link_resolver` the panel
+calls. It runs in under a second and it can run in CI.
+
+WHAT IT PROVES, and why the shape is what it is:
+
+  1. A desk and a group both exist, both get ids at creation, and the desk's notes link into the
+     group's people — written by `entity_upsert`, in the `ws:` form, without the agent being asked.
+  2. Between the two meetings the group is RENAMED *and its directory is moved* — the harder half.
+     A rename alone only tests the display name; moving the tree is what breaks a link written
+     against a slug, which is what links were written against before this decision.
+  3. Every link written before the rename still resolves after it, to the same canonical URL.
+  4. A reader who is not in the group gets `not-yours` for exactly those links — with a title, no
+     error, and no way to open the page. *"If a workspace is not available, it's okay — by design."*
+  5. The desk README's `## Workspaces` link to the group resolves after the rename too.
+
+Usage:  python core/agent/eval/workspace_links_replay.py --fixtures ~/dna-fixtures
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = pathlib.Path(__file__).resolve()
+sys.path.insert(0, str(HERE.parents[1]))          # core/agent — the same path pytest uses
+
+from control_plane import link_resolver, workspace_ids as ids  # noqa: E402
+from shared import desk_readme  # noqa: E402
+from shared.entities import upsert_entity  # noqa: E402
+from shared.links import cross_workspace_refs  # noqa: E402
+
+DESK = "126"                              # the shape the live instance actually has
+GROUP = "aswf-dna-project-b7b2ee"
+OUTSIDER = "999"                          # somebody with no membership anywhere here
+
+_PAREN = re.compile(r"\s*\(([^)]*)\)\s*$")
+_LIST = re.compile(r'^present:\s*\[(.*)\]\s*$', re.M)
+_DATE = re.compile(r"^date:\s*(\S+)\s*$", re.M)
+_BULLET = re.compile(r'^\s+-\s+"(.*)"\s*$', re.M)
+_SECTION = re.compile(r"^(decided|committed|open):\s*$", re.M)
+
+
+def read_truth(path: pathlib.Path) -> dict:
+    """The fixture's own sidecar, read with a regex rather than PyYAML.
+
+    Deliberate: `core/agent` declares no yaml dependency for its tests, and a proof that needs a new
+    dependency to run is a proof that stops being run."""
+    raw = path.read_text(encoding="utf-8")
+    people, orgs = [], []
+    m = _LIST.search(raw)
+    if m:
+        for item in re.findall(r'"([^"]+)"', m.group(1)):
+            name = _PAREN.sub("", item).strip()
+            org = (_PAREN.search(item).group(1).strip() if _PAREN.search(item) else "")
+            if name:
+                people.append(name)
+            if org and org not in orgs:
+                orgs.append(org)
+    sections: dict[str, list[str]] = {}
+    marks = [(mm.group(1), mm.start(), mm.end()) for mm in _SECTION.finditer(raw)]
+    for i, (name, _s, e) in enumerate(marks):
+        end = marks[i + 1][1] if i + 1 < len(marks) else len(raw)
+        sections[name] = [b for b in _BULLET.findall(raw[e:end])]
+    date = _DATE.search(raw).group(1) if _DATE.search(raw) else path.stem
+    return {"date": date, "people": people, "orgs": orgs, **sections}
+
+
+def git(ws: pathlib.Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(ws), *args], check=True, capture_output=True)
+
+
+def make_workspace(root: pathlib.Path, slug: str, *, members: list[str] | None = None) -> pathlib.Path:
+    ws = root / slug
+    (ws / "kg" / "entities").mkdir(parents=True)
+    if members is not None:
+        (ws / "policy").mkdir(parents=True)
+        (ws / "policy" / "members.json").write_text(json.dumps(
+            [{"subject": s, "role": "owner" if i == 0 else "contributor"}
+             for i, s in enumerate(members)]))
+    git(ws, "init", "-q")
+    git(ws, "config", "user.email", "t@t")
+    git(ws, "config", "user.name", "t")
+    git(ws, "add", "-A")
+    git(ws, "commit", "-q", "-m", "seed", "--allow-empty")
+    return ws
+
+
+def member_check(root, slug, subject):
+    """The authoritative roster read, exactly as the API injects it."""
+    try:
+        rows = json.loads((pathlib.Path(root) / slug / "policy" / "members.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return next((r.get("role") for r in rows if r.get("subject") == subject), None)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fixtures", default="~/dna-fixtures")
+    ap.add_argument("--json", action="store_true", help="machine-readable output only")
+    args = ap.parse_args()
+
+    fx = pathlib.Path(args.fixtures).expanduser()
+    truths = sorted(fx.glob("*.truth.yaml"))[:2]
+    if len(truths) < 2:
+        print(f"need 2 fixtures in {fx}; found {len(truths)}", file=sys.stderr)
+        return 2
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="wsids-replay-"))
+    report: dict = {"fixtures": [t.name for t in truths], "root": str(root), "steps": []}
+    try:
+        desk = make_workspace(root, DESK)
+        group = make_workspace(root, GROUP, members=[DESK])
+        registry = ids.WorkspaceRegistry()
+        migrated = ids.migrate(root, registry)
+        ids.rename(registry, registry.by_slug(GROUP)["id"], "ASWF DNA Project")
+        group_id = registry.by_slug(GROUP)["id"]
+        desk_id = registry.by_slug(DESK)["id"]
+        report["ids"] = {"desk": desk_id, "group": group_id,
+                         "minted_at_migration": len(migrated["minted"])}
+
+        mounts = [{"path": str(desk)}, {"path": str(group)}]
+        written = 0
+
+        def play(truth: dict) -> None:
+            """One meeting, the way decision 22 says a group meeting lands: the PEOPLE and the
+            COMPANIES go on the GROUP desk (the run actively maintains it), and the person's own
+            desk gets the meeting entity — whose links therefore point across."""
+            nonlocal written
+            for person in truth["people"]:
+                upsert_entity(group, "person", person,
+                              [f"Attended the DNA TSC meeting on {truth['date']}."],
+                              f"the {truth['date']} transcript", today=truth["date"])
+            for org in truth["orgs"]:
+                upsert_entity(group, "company", org,
+                              [f"Represented at the DNA TSC on {truth['date']}."],
+                              f"the {truth['date']} transcript", today=truth["date"])
+            facts = [f"Present: " + ", ".join(f"[[{p}]]" for p in truth["people"]) + "."]
+            facts += [f"Decided: {d}" for d in truth.get("decided", [])[:3]]
+            out = upsert_entity(desk, "meeting", f"DNA TSC {truth['date']}", facts,
+                                f"the {truth['date']} transcript", today=truth["date"],
+                                mounts=mounts)
+            written += len(out.get("links_rewritten") or [])
+            report["steps"].append({"meeting": truth["date"], "page": out["path"],
+                                    "links_rewritten": len(out.get("links_rewritten") or [])})
+
+        first, second = read_truth(truths[0]), read_truth(truths[1])
+        play(first)
+
+        # ── THE RENAME, and the move with it ────────────────────────────────────────────────────
+        renamed_slug = "digital-naming-authority"
+        shutil.move(str(group), str(root / renamed_slug))
+        group = root / renamed_slug
+        mounts = [{"path": str(desk)}, {"path": str(group)}]
+        ids.sync_workspace(root, renamed_slug, registry=registry)
+        ids.rename(registry, group_id, "Digital Naming Authority")
+        report["rename"] = {"from": GROUP, "to": renamed_slug,
+                            "id_unchanged": registry.by_slug(renamed_slug)["id"] == group_id}
+
+        play(second)
+
+        # ── the desk README, which is the desk (decision 26.4) ──────────────────────────────────
+        desk_readme.update_readme(desk, workspaces=[{"id": group_id, "name": "Digital Naming Authority"}],
+                                  today=second["date"])
+        readme = (desk / desk_readme.README).read_text()
+
+        # ── RESOLVE EVERYTHING THE DESK NOW HOLDS, as both readers ──────────────────────────────
+        refs: list[str] = []
+        for page in sorted((desk / "kg").rglob("*.md")) + [desk / desk_readme.README]:
+            refs += [r.raw for r in cross_workspace_refs(page.read_text(encoding="utf-8"))]
+        refs = list(dict.fromkeys(refs))
+
+        def tally(subject: str) -> dict:
+            out = link_resolver.resolve_many(refs, subject=subject, root=root, registry=registry,
+                                             here=registry.by_slug(DESK), is_member=member_check)
+            counts = {"readable": 0, "not-yours": 0, "gone": 0}
+            for r in out:
+                counts[r["access"]] += 1
+            return {"counts": counts, "sample": out[:2]}
+
+        owner, outsider = tally(DESK), tally(OUTSIDER)
+        report["links"] = {"written_in_id_form": written, "distinct_refs": len(refs),
+                           "as_the_desk_owner": owner["counts"],
+                           "as_a_non_member": outsider["counts"]}
+        report["readme_links_to_the_group"] = f"[[ws:{group_id}/README.md]]" in readme
+
+        # ── the assertions this replay exists to make ───────────────────────────────────────────
+        checks = {
+            "the group kept its id across the rename and the move": report["rename"]["id_unchanged"],
+            "the desk wrote cross-workspace links without being asked": written > 0,
+            "every link still resolves for the owner after the rename":
+                owner["counts"]["readable"] == len(refs) and len(refs) > 0,
+            "no link is broken (`gone`) for anybody": owner["counts"]["gone"] == 0
+                                                      and outsider["counts"]["gone"] == 0,
+            "a non-member gets not-yours for every one of them, and never an error":
+                outsider["counts"]["not-yours"] == len(refs),
+            "the desk README links to the group by id": report["readme_links_to_the_group"],
+        }
+        report["checks"] = checks
+        report["ok"] = all(checks.values())
+
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print(json.dumps(report, indent=2))
+            print()
+            for name, ok in checks.items():
+                print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+        return 0 if report["ok"] else 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

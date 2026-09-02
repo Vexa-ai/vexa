@@ -148,6 +148,16 @@ describe("safeNext — the open-redirect guard", () => {
     expect(safeNext("/minutes#section")).toBe("/minutes#section");
   });
 
+  it("keeps the CANONICAL WORKSPACE URL a mail carries (PRD decision 26.2)", () => {
+    // `/w/<workspace-id>/<path>` is the one link that works in mail, in chat and inside another
+    // workspace's document — so it has to survive the sign-in redeem, which is where a link that
+    // authenticates AND composes would otherwise lose its destination.
+    expect(safeNext("/w/k4m5x2q7bd/kg/entities/person/olga-avramenko.md"))
+      .toBe("/w/k4m5x2q7bd/kg/entities/person/olga-avramenko.md");
+    expect(safeNext("/w/k4m5x2q7bd")).toBe("/w/k4m5x2q7bd");
+    expect(safeNext("/w/k4m5x2q7bd/kg/a%20b.md")).toBe("/w/k4m5x2q7bd/kg/a%20b.md");
+  });
+
   it("refuses anything that could leave this origin", () => {
     for (const hostile of [
       "https://evil.example/steal",
