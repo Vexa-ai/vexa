@@ -616,7 +616,17 @@ def build(reg: Registry, db) -> None:
             if not body:
                 body = note.strip()
             body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + body
-            body += "\n\n—\n" + _mailbox_line() + "Open it and ask anything about the meeting:"
+            # PLACEMENT, not prose. The mailbox line existed and was still not landing: at
+            # n=48 the top fixable blocker among people who CAN add the bot was `unclear_how` —
+            # "nobody told me how to set this up in my dailies or who does it, and I don't have
+            # time to figure it out before tomorrow" — from coordinators who had been sent the
+            # instruction. It sat below the whole note, past the separator, where somebody with
+            # two minutes between dailies never reaches. It now runs directly under the two
+            # provenance lines, above the note. Same sentence, same placeholder wording; only
+            # where it sits changed, and where it sits is mechanics.
+            body = _provenance(ctx, ctx.refs["uid"], to_attendee=True) + _mailbox_line().lstrip("\n") \
+                + "\n" + body[len(_provenance(ctx, ctx.refs["uid"], to_attendee=True)):]
+            body += "\n\n—\nOpen it and ask anything about the meeting:"
             try:
                 mid = notify(a, subject, body, link=link)
                 sent.append(a)

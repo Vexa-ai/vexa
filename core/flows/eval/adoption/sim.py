@@ -81,6 +81,8 @@ class State:
     became_active_day: dict = field(default_factory=dict)
     churn_reasons: dict = field(default_factory=dict)
     mails_today: dict = field(default_factory=dict)
+    exposed: set = field(default_factory=set)     # saw the bot in a participant list (H2)
+    seed_size: int = 0
 
 
 def _touches_for(meeting, org_state, is_seeded, attendee_followup: str):
@@ -101,9 +103,27 @@ def _touches_for(meeting, org_state, is_seeded, attendee_followup: str):
     return out
 
 
+SEED_STRATEGIES = {
+    # (i) the pilot as it stands — Cottalango's "3-5 coordinators and production managers
+    #     using it as their main tool", picked without regard to WHAT they organize.
+    "pilot_random": "3-5 coordinators/PMs, chosen at random",
+    # (ii) structure: one coordinator per SHOW. A show's dailies are organized by its
+    #      production coordinator, and one coordinator organizes many recurring meetings, so
+    #      touching one touches that show every day.
+    "one_coordinator_per_show": "the dailies coordinator of every show",
+    # (iii) the whole production office.
+    "all_coordinators_and_pms": "every coordinator + production manager",
+    # (iv) admin-driven, stage 1 of the alpha: the mailbox is on every recurring dailies from
+    #      day 0, so no organizer has to be converted first for the dailies to be covered.
+    "admin_all_dailies": "admin puts the mailbox on every recurring dailies",
+}
+
+
 def run(org, rates: Rates, days: int = 120, seed: int = 3,
         attendee_followup: str = "off", seeds_n: int = 3, seed_role=None,
-        full_threshold: float = FULL_THRESHOLD) -> dict:
+        full_threshold: float = FULL_THRESHOLD,
+        seed_strategy: str = "pilot_random",
+        presence_lift: float = 0.0) -> dict:
     """One simulated adoption run. `attendee_followup` is the lever under test:
        off       the product as it stands on the line (organizer only) — THE NULL
        shared    one follow-up body to every inside-domain attendee (variant A)
@@ -113,18 +133,44 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
     st = State()
     people = {p.pid: p for p in org.people}
 
-    # the pilot: SPI's own shape — 3-5 coordinators/production managers "using it as their main
-    # tool" (Cottalango, 2026-08-18). They are the only seeded identities on day 0.
-    pool = [p.pid for p in org.people
-            if p.role in (seed_role or ("coordinator", "production_manager"))]
-    if not pool:
-        pool = [m.organizer for m in org.meetings]
-    seeded = set(rng.sample(pool, min(seeds_n, len(pool))))
+    # WHO IS SEEDED ON DAY 0 — the reach bottleneck. Every size and cohort measured so far lost
+    # 89-100% of its population here: not to a bad touch, but because nobody ever received one.
+    # The seed is a PILOT-DESIGN choice, not a property of the product, so it is a parameter.
+    people_by_pid = {p.pid: p for p in org.people}
+    roles = seed_role or ("coordinator", "production_manager")
+    if seed_strategy == "one_coordinator_per_show":
+        # one per show, and specifically one who ORGANIZES that show's dailies
+        by_show: dict = {}
+        for m in org.meetings:
+            if m.kind != "dailies":
+                continue
+            p = people_by_pid.get(m.organizer)
+            if p is None:
+                continue
+            by_show.setdefault(p.dept, set()).add(m.organizer)
+        seeded = {sorted(v)[0] for v in by_show.values() if v}
+    elif seed_strategy == "all_coordinators_and_pms":
+        seeded = {p.pid for p in org.people if p.role in ("coordinator", "production_manager")}
+    elif seed_strategy == "admin_all_dailies":
+        # the admin puts the mailbox on the MEETINGS, so every dailies is covered from day 0
+        # whether or not its organizer has ever done anything. The organizers are marked invited
+        # because the mailbox is on their meeting; they are not marked ACTIVE, because an admin
+        # action is not their action — that is the whole distinction `active` exists to make.
+        seeded = {m.organizer for m in org.meetings if m.kind == "dailies"}
+    else:
+        pool = [p.pid for p in org.people if p.role in roles]
+        if not pool:
+            pool = [m.organizer for m in org.meetings]
+        seeded = set(rng.sample(pool, min(seeds_n, len(pool))))
+
     for pid in seeded:
-        st.ever_active.add(pid)
-        st.last_action_day[pid] = 0
-        st.became_active_day[pid] = 0
         st.invited.add(pid)
+        if seed_strategy != "admin_all_dailies":
+            # a person who chose to use it starts active; a person whose admin acted does not
+            st.ever_active.add(pid)
+            st.last_action_day[pid] = 0
+            st.became_active_day[pid] = 0
+    st.seed_size = len(seeded)
 
     # who could EVER be reached: anyone in a non-external meeting. Nobody else has a path.
     reachable = {a for m in org.meetings if not m.external for a in m.attendees}
@@ -139,6 +185,8 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
         firing = [m for m in org.meetings if rng.random() < min(1.0, m.per_week / 5.0)]
         touches = []
         for m in firing:
+            if not m.external and m.organizer in st.invited:
+                st.exposed.update(m.attendees)      # they saw the bot in the room today
             touches += _touches_for(m, st, st.invited, attendee_followup)
         rng.shuffle(touches)
 
@@ -150,6 +198,12 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
             st.mails_today[pid] = n_today + 1
             o, a, inv, fwd = rates.get(p.persona, kind,
                                        bucket(st.consec_ignored.get(pid, 0)))
+            # H2 — PRESENCE. The bot sits in the participant list of that show's dailies every
+            # day, so the name is familiar before any mail arrives. Modelled as a multiplier on
+            # the decision, never as a channel of its own: presence exposes, it does not deliver.
+            if presence_lift and pid in st.exposed:
+                o = min(1.0, o * (1.0 + presence_lift))
+                a = min(1.0, a * (1.0 + presence_lift))
             if n_today >= MAIL_FATIGUE:
                 o *= rates.fatigue_penalty ** (n_today - MAIL_FATIGUE + 1)
             per_touch_counts[kind] = per_touch_counts.get(kind, 0) + 1
@@ -205,6 +259,11 @@ def run(org, rates: Rates, days: int = 120, seed: int = 3,
     steady = round(sum(c["active_share"] for c in tail) / len(tail), 4)
     return {
         "lever": attendee_followup,
+        "seed_strategy": seed_strategy,
+        "seed_size": st.seed_size,
+        "seed_share": round(st.seed_size / max(1, len(org.people)), 5),
+        "presence_lift": presence_lift,
+        "exposed": len(st.exposed),
         "headcount": len(org.people),
         "reachable": len(reachable),
         "days": days,
