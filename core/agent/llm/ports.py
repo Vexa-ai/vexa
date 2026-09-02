@@ -58,8 +58,27 @@ def harness_subprocess_env() -> dict[str, str]:
     """The env for launching an UNTRUSTED model-driven harness subprocess: ``scrubbed_git_env()`` further
     stripped of the host data-plane secrets in ``_HARNESS_SUBPROCESS_DENY_VARS``. Use this — never a raw
     ``os.environ`` / ``scrubbed_git_env`` — to spawn a harness CLI: its Bash tool would otherwise inherit
-    the worker's own ``REDIS_URL`` and cross the data-plane tenancy boundary the mounts enforce on disk."""
-    return {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
+    the worker's own ``REDIS_URL`` and cross the data-plane tenancy boundary the mounts enforce on disk.
+
+    It also pins ``ENABLE_TOOL_SEARCH``, which decides whether the harness hands MCP tools to the
+    model DIRECTLY or as DEFERRED ones the model must find and load before it can call them. The
+    deferred round trip is where this product loses turns: measured on Haiku, 1 dispatch in 8 never
+    completes it and writes a confident note with nothing from the meeting in it, and others end
+    with the model explaining that "the tool appears in the deferred MCP tools list, but I don't
+    have a direct function invocation" and writing nothing at all.
+
+    The threshold is a share of the CONTEXT, not a count of tools — which is why it bites here and
+    not in a small test: a worker carries the mount preamble, a long post-meeting prompt and 53
+    tool schemas from the rig, on the smallest model. ``auto:100`` sets that share to 100%, so the
+    tools are always present. (Naming them in ``--allowedTools`` does NOT do this — that is a
+    permission gate and cannot reach the harness's context management. Measured, and corrected in
+    ``worker/engine.py``.)
+
+    Deliberately overridable: a deployment that wants the harness's own judgement sets the variable
+    itself and this leaves it alone."""
+    env = {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
+    env.setdefault("ENABLE_TOOL_SEARCH", "auto:100")
+    return env
 
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI

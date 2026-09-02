@@ -196,7 +196,7 @@ def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
 
     (Narrowing on the native id would be worse still: a recurring series shares ONE across every
     occurrence — all ten DNA fixtures are Zoom 96088138284 — so it matches the whole library.)"""
-    best = {}
+    best, GRACE = {}, 30
 
     def probe():
         for c in (workspace_git(uid).get("commits") or []):
@@ -207,11 +207,19 @@ def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
                     continue
                 if stamp and stamp in f:
                     return (c["sha"], f, True)
-                best.setdefault("any", (c["sha"], f, False))
+                if "any" not in best:
+                    best["any"], best["at"] = (c["sha"], f, False), time.time()
+        # A PREFERENCE THAT ONLY YIELDS AT THE DEADLINE IS NOT A PREFERENCE, IT IS THE DEADLINE.
+        # The first version returned the fallback after `wait_for` gave up, so on the normal path —
+        # the agent naming the file itself, which it always does — every fixture paid the full
+        # twenty minutes to reach a note that had been committed in the first two. That is the
+        # exact defect this harness was built to catch, written into the harness. Take the
+        # preferred name if it appears within a short grace, then take what is there.
+        if "any" in best and time.time() - best["at"] > GRACE:
+            return best["any"]
         return None
 
-    hit = wait_for(probe, budget_s)
-    return hit or best.get("any")
+    return wait_for(probe, budget_s) or best.get("any")
 
 
 def workspace_git(uid: str) -> dict:
