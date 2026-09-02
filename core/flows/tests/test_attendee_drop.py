@@ -1,25 +1,24 @@
-"""THE DROP: one meeting entity into each attendee's OWN workspace, written by plain code.
+"""THE DROP: the meeting's artefact onto every desk in the room, written by plain code.
 
-`drop_to_attendees` is the step that makes the follow-up mail land somewhere durable. It runs
-after `email_attendees`, over the people that step ACTUALLY mailed, and for each of them it
-ensures a platform user and a workspace, writes ONE pointer entity, and adds ONE line to their
-meeting index. No agent turn, no LLM.
+Founder decision 22, 2026-09-02. `process_meeting` writes into NO desk — not the organiser's
+either — and the note's canonical home is the meeting row and its transcript store. So this step
+is where a meeting lands on a person: it copies the one artefact, byte-for-byte, to everybody who
+was in the room, organiser included, nobody special. No agent turn, no LLM.
 
-Five properties this file exists to hold:
+Six properties this file exists to hold:
 
-  1. THE ENTITY IS A POINTER, NEVER A COPY. It carries the meeting's title, date and organiser and
-     says where the canonical note lives — the organiser's workspace path plus the
-     `?meeting=<row>` link with this person's own share token. One meeting, one note.
-  2. EVERYBODY GETS THE SAME ENTITY (founder, 2026-09-02). No personal line. The only thing that
-     differs between two attendees' files is the token inside their own link.
-  3. THE INDEX IS CREATED, THEN APPENDED — once. A re-run adds no second line.
-  4. IDEMPOTENT ACROSS RUNS, not merely within one. Scratch skips people already done inside a
-     run, and every write is a content-compare, which is what survives a worker restart that
-     loses scratch entirely.
-  5. ONE FAILURE NEVER COSTS THE OTHERS THEIRS. The step only fails when EVERY drop failed.
+  1. THE ENTITY IS THE ARTEFACT, not a pointer to somebody else's copy of it. There is no longer a
+     copy elsewhere to point at.
+  2. THE SAME BYTES FOR EVERYONE except the last line — the `?meeting=` link, which carries that
+     person's own share token because a forwarded link must grant its new reader nothing.
+  3. THE ORGANISER IS IN THE ROOM. Their copy is the same entity, with the token-free link
+     `email_minutes` already built.
+  4. THE INDEX is created, then appended — once. A re-run adds no second line.
+  5. IDEMPOTENT ACROSS RUNS, not merely within one.
+  6. ONE FAILURE NEVER COSTS THE OTHERS THEIRS. The step fails only when EVERY drop failed.
 
 No network: `ensure_platform_user`, `workspace_init`, `workspace_write` and `ws_file` are replaced
-by a fake workspace store that records exactly what would have been written.
+by a fake desk store that records exactly what would have been written.
 """
 from __future__ import annotations
 
@@ -42,11 +41,11 @@ REFS = {"uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync", "meeti
 DAY = "2023-11-14"
 ENTITY = f"kg/entities/meeting/{DAY}-pilot-sync.md"
 INDEX = "kg/entities/meeting/index.md"
-NOTE = "## Decided\n- ship it\n- and the whole note nobody may copy\n"
+REPORT = "## Decided\n- ship it on the 21st\n\n## Committed\n- Ben — the migration doc"
 
 PRIOR = {
-    "process_meeting": {"note_path": f"kg/entities/meeting/{DAY}-abc.md", "summary": "s",
-                        "sha": "abc123"},
+    "process_meeting": {"report": REPORT, "group": "", "room_read": []},
+    "email_minutes": {"message_id": "<m@x>", "link": "http://ui/?ask=minutes-review&meeting=97"},
     "email_attendees": {"sent": 2, "meeting_id": 97, "to": ["ben@bank.test", "cara@bank.test"],
                         "drops": [
                             {"to": "ben@bank.test",
@@ -54,14 +53,15 @@ PRIOR = {
                             {"to": "cara@bank.test",
                              "link": "http://ui/?ask=minutes-review-invite&meeting=97&tshare=t-cara"}]},
 }
+EVERYONE = ["anna@bank.test", "ben@bank.test", "cara@bank.test"]
 
 
 class Store:
-    """Every attendee's workspace, as a dict, plus a log of every effect the step caused.
+    """Every person's desk, as a dict, plus a log of every effect the step caused.
 
-    `writes` is the ledger the idempotence tests read: a step that rewrites an identical file
-    still produces a commit in somebody's history, so "did it write" is the question, not "what
-    does the file say now"."""
+    `writes` is the ledger the idempotence tests read: a step that rewrites an identical file still
+    produces a commit in somebody's history, so "did it write" is the question, not "what does the
+    file say now"."""
 
     def __init__(self, fail_for=None):
         self.files: dict[tuple[str, str], str] = {}
@@ -84,11 +84,13 @@ class Store:
         self.files[(uid, path)] = content
 
     def read(self, uid, path, slug=None):
+        # The step may read EXACTLY the two paths it authors, and only so a re-run writes nothing.
+        # Anything else is the defect this fake exists to catch.
         if slug == "_global":
             return None
-        if (uid, path) in self.files:
-            return self.files[(uid, path)]
-        return NOTE if path.startswith("kg/entities/meeting/") and path.endswith("-abc.md") else None
+        if not (path == INDEX or path.startswith("kg/entities/meeting/")):
+            raise AssertionError(f"the drop read a desk file it does not author: {path!r}")
+        return self.files.get((uid, path))
 
     def of(self, email, path=ENTITY):
         return self.files.get(("uid-" + email.split("@")[0], path))
@@ -105,13 +107,13 @@ def _rig(monkeypatch, store):
     return reg
 
 
-# ── 1 · the entity's content ─────────────────────────────────────────────────────────────────
-def test_the_entity_carries_title_date_organiser_and_a_pointer(monkeypatch):
+# ── 1 · the entity IS the artefact ───────────────────────────────────────────────────────────
+def test_the_entity_carries_the_report_itself_not_a_pointer_to_it(monkeypatch):
     store = Store()
     reg = _rig(monkeypatch, store)
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
 
-    assert isinstance(out, Done) and out.result["dropped"] == 2
+    assert isinstance(out, Done) and out.result["dropped"] == 3
     doc = store.of("ben@bank.test")
     assert doc is not None, f"nothing written; wrote {store.writes}"
     # a real entity, in the shape kg/templates/meeting.md defines
@@ -120,39 +122,117 @@ def test_the_entity_carries_title_date_organiser_and_a_pointer(monkeypatch):
     assert 'title: "Pilot sync"' in doc
     assert f"date: {DAY}" in doc
     assert 'organizer: "anna@bank.test"' in doc
+    assert '"anna@bank.test", "ben@bank.test", "cara@bank.test"' in doc   # the meeting's roster
     assert "# Pilot sync" in doc
     assert "14 November 2023 — anna@bank.test had Vexa in the room." in doc
-    # the POINTER: the organiser's path AND this person's own link
-    assert f"It lives in anna@bank.test's workspace at `kg/entities/meeting/{DAY}-abc.md`." in doc
+    # THE REPORT, in full, in their own desk
+    assert REPORT in doc
+    # ...and no sentence sending them somewhere else for it
+    assert "pointer" not in doc
+    assert "It lives in" not in doc
     assert "Open the meeting: http://ui/?ask=minutes-review-invite&meeting=97&tshare=t-ben" in doc
 
 
-def test_the_full_note_is_never_copied_into_anybodys_workspace(monkeypatch):
-    """One meeting has one note. A copy in every attendee's workspace is five versions of one
-    truth the moment the organiser corrects theirs — and the pointer is what makes that
-    unnecessary."""
+def test_the_report_is_rendered_readably_not_as_a_raw_workspace_note(monkeypatch):
+    """`_readable` is what strips frontmatter and flattens wikilinks. A drop that skipped it would
+    put `type: meeting / id: ...` in the middle of the entity's own body."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    raw = "---\ntype: meeting\nid: x\n---\n\n## Decided\n- [[Ben]] ships it\n"
+    reg.steps["drop_to_attendees"](
+        _ctx(dict(REFS), dict(PRIOR, process_meeting={"report": raw, "group": ""})))
+
+    doc = store.of("ben@bank.test")
+    assert doc.count("type: meeting") == 1          # the entity's own frontmatter, not the note's
+    assert "[[Ben]]" not in doc and "Ben ships it" in doc
+
+
+# ── 2 · the same bytes for everyone, except their own link ──────────────────────────────────
+def test_every_desk_gets_byte_identical_content_apart_from_the_link(monkeypatch):
     store = Store()
     reg = _rig(monkeypatch, store)
     reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
 
-    for email in ("ben@bank.test", "cara@bank.test"):
-        doc = store.of(email)
-        assert "and the whole note nobody may copy" not in doc
-        assert "## Decided" not in doc
-    # and nothing was READ out of anybody's workspace except the two files the step authors
-    assert {p for _uid, p in store.writes} == {ENTITY, INDEX}
+    docs = [store.of(a) for a in EVERYONE]
+    assert all(d is not None for d in docs)
+    heads = {d.rsplit("Open the meeting:", 1)[0] for d in docs}
+    assert len(heads) == 1, "the entity differs between people above the link"
+    tails = {d.rsplit("Open the meeting:", 1)[1].strip() for d in docs}
+    assert tails == {"http://ui/?ask=minutes-review&meeting=97",
+                     "http://ui/?ask=minutes-review-invite&meeting=97&tshare=t-ben",
+                     "http://ui/?ask=minutes-review-invite&meeting=97&tshare=t-cara"}
 
 
-def test_everybody_gets_the_same_entity_apart_from_their_own_token(monkeypatch):
-    """No personal line: the two files differ in exactly one place, and it is the share token,
-    which must differ because a forwarded link may grant its new reader nothing."""
+def test_no_copy_is_personalised_to_its_owner(monkeypatch):
+    """The frontmatter says who was in the MEETING, not who this copy is for. So each address
+    appears the SAME number of times in everybody's copy — the roster mentions ben exactly as often
+    in anna's entity as in his own, which is what makes the bytes equal in the first place."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    for named in EVERYONE:
+        counts = {store.of(owner).rsplit("Open the meeting:", 1)[0].count(named)
+                  for owner in EVERYONE}
+        assert len(counts) == 1, f"{named} appears a different number of times in different copies"
+
+
+# ── 3 · the organiser is in the room ─────────────────────────────────────────────────────────
+def test_the_organiser_gets_the_same_entity_with_their_own_token_free_link(monkeypatch):
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+
+    assert out.result["to"][0] == "anna@bank.test"      # first, because the room starts with them
+    doc = store.of("anna@bank.test")
+    assert REPORT in doc
+    assert "tshare" not in doc                          # the meeting is theirs; no capability
+    assert "Open the meeting: http://ui/?ask=minutes-review&meeting=97" in doc
+
+
+def test_the_organiser_is_dropped_on_even_when_their_minutes_mail_was_off(monkeypatch):
+    """`mail_minutes` is a preference about MAIL. It is not a preference about what lands on their
+    own desk, and reading it as one would silently deny the organiser their own meeting."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    prior = dict(PRIOR, email_minutes={"skipped": "mail_minutes is off for this person"})
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
+
+    assert "anna@bank.test" in out.result["to"]
+    assert "Open the meeting: http://localhost:18300/?ask=minutes-review&meeting=97" in \
+        store.of("anna@bank.test")
+
+
+def test_the_organiser_is_dropped_on_even_when_the_fan_out_mailed_nobody(monkeypatch):
+    """A meeting with no inside-domain attendee still happened to its organiser."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    prior = dict(PRIOR, email_attendees={"sent": 0, "drops": [], "skipped": "opted out"})
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
+
+    assert out.result["to"] == ["anna@bank.test"]
+    assert store.of("ben@bank.test") is None
+
+
+def test_no_report_means_no_drop_at_all(monkeypatch):
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    prior = dict(PRIOR, process_meeting={"report": "", "group": ""})
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
+    assert out.result["dropped"] == 0 and store.writes == []
+    assert "no report" in out.result["skipped"]
+
+
+# ── the person and their desk are ensured, and nothing else is built ────────────────────────
+def test_each_person_gets_a_platform_user_and_a_desk_and_no_more(monkeypatch):
     store = Store()
     reg = _rig(monkeypatch, store)
     reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
 
-    ben = store.of("ben@bank.test").replace("t-ben", "TOKEN")
-    cara = store.of("cara@bank.test").replace("t-cara", "TOKEN")
-    assert ben.replace("ben@bank.test", "X") == cara.replace("cara@bank.test", "X")
+    assert store.users == EVERYONE
+    assert store.inits == ["uid-anna", "uid-ben", "uid-cara"]   # POST /api/workspace/init as THEM
+    # no chat, no session, no scaffolding: two files each and nothing else
+    assert sorted(store.writes) == sorted(
+        [(f"uid-{n}", p) for n in ("anna", "ben", "cara") for p in (ENTITY, INDEX)])
 
 
 @pytest.mark.parametrize("title,expect", [
@@ -178,41 +258,7 @@ def test_a_title_with_yaml_in_it_cannot_break_the_frontmatter(monkeypatch):
     assert 'title: "Q3: \\"roadmap\\" [draft]"' in doc
 
 
-# ── 2 · the person and their workspace are ensured, and nothing else is built ────────────────
-def test_each_attendee_gets_a_platform_user_and_a_workspace_and_no_more(monkeypatch):
-    store = Store()
-    reg = _rig(monkeypatch, store)
-    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
-
-    assert store.users == ["ben@bank.test", "cara@bank.test"]
-    assert store.inits == ["uid-ben", "uid-cara"]        # POST /api/workspace/init as THEM
-    # no chat, no session, no scaffolding: two files each and nothing else
-    assert sorted(store.writes) == [
-        ("uid-ben", ENTITY), ("uid-ben", INDEX),
-        ("uid-cara", ENTITY), ("uid-cara", INDEX)]
-
-
-def test_nobody_is_dropped_on_who_was_not_mailed(monkeypatch):
-    """The step's input is who the mail ACTUALLY reached, not who was in the room."""
-    store = Store()
-    reg = _rig(monkeypatch, store)
-    prior = dict(PRIOR, email_attendees=dict(PRIOR["email_attendees"],
-                                             drops=[PRIOR["email_attendees"]["drops"][0]]))
-    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
-    assert out.result["to"] == ["ben@bank.test"]
-    assert store.of("cara@bank.test") is None
-
-
-def test_a_fan_out_that_mailed_nobody_drops_nobody(monkeypatch):
-    store = Store()
-    reg = _rig(monkeypatch, store)
-    prior = dict(PRIOR, email_attendees={"sent": 0, "drops": []})
-    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
-    assert out.result["dropped"] == 0 and store.writes == []
-    assert "nothing to drop" in out.result["skipped"]
-
-
-# ── 3 · the index ────────────────────────────────────────────────────────────────────────────
+# ── 4 · the index ────────────────────────────────────────────────────────────────────────────
 def test_the_index_is_created_when_it_is_absent(monkeypatch):
     store = Store()
     reg = _rig(monkeypatch, store)
@@ -224,8 +270,8 @@ def test_the_index_is_created_when_it_is_absent(monkeypatch):
 
 
 def test_the_index_is_appended_to_when_it_exists(monkeypatch):
-    """...and the seed's own "no entities yet" placeholder is replaced, not left standing above
-    the first real row: it is the index saying it is empty, and it stops being true here."""
+    """...and the seed's own "no entities yet" placeholder is replaced, not left standing above the
+    first real row: it is the index saying it is empty, and it stops being true here."""
     store = Store()
     store.files[("uid-ben", INDEX)] = (
         "# meeting\n\nMeetings — one file per meeting at `meeting/<yyyy-mm-dd-slug>.md`.\n\n"
@@ -250,7 +296,7 @@ def test_an_existing_index_row_is_kept_and_the_new_one_added_below(monkeypatch):
     assert idx.endswith(f"- [Pilot sync]({DAY}-pilot-sync.md) — {DAY}\n")
 
 
-# ── 4 · idempotence ──────────────────────────────────────────────────────────────────────────
+# ── 5 · idempotence ──────────────────────────────────────────────────────────────────────────
 def test_a_second_run_writes_nothing_even_with_a_fresh_scratch(monkeypatch):
     """THE ACROSS-RUN HALF. A worker restart loses scratch, so the content-compare is what stops a
     second entity, a second index line and a second commit."""
@@ -262,9 +308,8 @@ def test_a_second_run_writes_nothing_even_with_a_fresh_scratch(monkeypatch):
 
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR, scratch={}))   # scratch gone
     assert store.writes == [], f"a re-run wrote again: {store.writes}"
-    assert out.result["dropped"] == 2
-    assert len(first) == 4
-    # one entity, one index line — not two
+    assert out.result["dropped"] == 3
+    assert len(first) == 6
     assert store.of("ben@bank.test", INDEX).count("pilot-sync.md") == 1
 
 
@@ -273,39 +318,41 @@ def test_scratch_skips_people_already_done_inside_one_run(monkeypatch):
     so he is not even looked up in the admin API again."""
     store = Store()
     reg = _rig(monkeypatch, store)
-    scratch = {"dropped": ["ben@bank.test"]}
+    scratch = {"dropped": ["anna@bank.test", "ben@bank.test"]}
     reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR, scratch=scratch))
 
     assert store.users == ["cara@bank.test"]
     assert store.of("ben@bank.test") is None
-    assert sorted(scratch["dropped"]) == ["ben@bank.test", "cara@bank.test"]
+    assert sorted(scratch["dropped"]) == EVERYONE
 
 
-# ── 5 · failure policy ───────────────────────────────────────────────────────────────────────
-def test_one_attendees_failure_does_not_cost_the_others_theirs(monkeypatch):
+# ── 6 · failure policy ───────────────────────────────────────────────────────────────────────
+def test_one_persons_failure_does_not_cost_the_others_theirs(monkeypatch):
     store = Store(fail_for={"ben@bank.test"})
     reg = _rig(monkeypatch, store)
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
 
-    assert out.result["dropped"] == 1 and out.result["to"] == ["cara@bank.test"]
+    assert out.result["dropped"] == 2
+    assert out.result["to"] == ["anna@bank.test", "cara@bank.test"]
     assert store.of("cara@bank.test") is not None
     assert len(out.result["failed"]) == 1
     assert out.result["failed"][0].startswith("ben@bank.test: RuntimeError")
 
 
 def test_the_step_fails_loudly_only_when_every_drop_failed(monkeypatch):
-    store = Store(fail_for={"ben@bank.test", "cara@bank.test"})
+    store = Store(fail_for=set(EVERYONE))
     reg = _rig(monkeypatch, store)
     with pytest.raises(StepError) as e:
         reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
-    assert "every attendee drop failed" in str(e.value)
-    assert "ben@bank.test" in str(e.value) and "cara@bank.test" in str(e.value)
+    assert "every desk drop failed" in str(e.value)
+    for a in EVERYONE:
+        assert a in str(e.value)
     assert e.value.retryable is True          # every write above is safe to repeat
 
 
 def test_a_retry_after_a_partial_failure_finishes_the_rest(monkeypatch):
-    """The partial state is a fact an operator can act on, and the retry is cheap: the person who
-    succeeded is skipped by scratch, the one who failed is attempted again."""
+    """The partial state is a fact an operator can act on, and the retry is cheap: the people who
+    succeeded are skipped by scratch, the one who failed is attempted again."""
     store = Store(fail_for={"ben@bank.test"})
     reg = _rig(monkeypatch, store)
     scratch: dict = {}
@@ -314,7 +361,7 @@ def test_a_retry_after_a_partial_failure_finishes_the_rest(monkeypatch):
     store.writes.clear()
 
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR, scratch=scratch))
-    assert out.result["dropped"] == 2 and out.result["failed"] == []
+    assert out.result["dropped"] == 3 and out.result["failed"] == []
     assert sorted(store.writes) == [("uid-ben", ENTITY), ("uid-ben", INDEX)]   # only ben's
 
 
@@ -325,3 +372,44 @@ def test_drop_to_attendees_runs_after_email_attendees_in_post_meeting():
     steps = list(reg.flows[("post_meeting", 1)].steps)
     assert steps == ["require_workspace", "process_meeting", "email_minutes",
                      "email_attendees", "drop_to_attendees"]
+
+
+# ── the economics bound: the drop is ENTITY-FREE ─────────────────────────────────────────────
+def test_the_drop_writes_the_report_and_its_index_line_AND_NOTHING_ELSE(monkeypatch):
+    """Founder economics rule (PRD decision 22 addendum): *a desk nobody talks to is a flat pile of
+    reports — complete, and free.*
+
+    Wiring that pile into people, companies and decisions costs a model call per person per
+    meeting, and for somebody who never opens the product it buys nothing. So the drop writes TWO
+    paths and stops. The wiring happens later, in the person's own chat, when they engage, and it
+    is PROPOSED by the agent rather than run on their behalf.
+
+    This test is the boundary. It fails if anybody ever adds a person entity, a company entity, a
+    decision entity, or a README rewrite to this step."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+
+    written = {p for _uid, p in store.writes}
+    assert written == {ENTITY, INDEX}, f"the drop wrote something else: {written - {ENTITY, INDEX}}"
+    for path in written:
+        assert path.startswith("kg/entities/meeting/")
+    assert not any("README" in p for p in written)
+    assert not any("/person/" in p or "/company/" in p or "/decision/" in p for p in written)
+
+
+def test_the_drop_never_runs_an_agent_turn(monkeypatch):
+    """Plain code, no LLM. A dispatch here would be a model call per person per meeting — the exact
+    cost the rule above exists to refuse — and it would also make the step non-deterministic on a
+    retry, which is what the idempotence tests depend on."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+
+    def no_turns(*a, **k):
+        raise AssertionError("drop_to_attendees dispatched an agent turn")
+    monkeypatch.setattr(production.ag, "dispatch_turn", no_turns)
+    monkeypatch.setattr(production.ag, "collect_reply", no_turns)
+    monkeypatch.setattr(production.ag, "collect_outbox", no_turns)
+
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
+    assert out.result["dropped"] == 3

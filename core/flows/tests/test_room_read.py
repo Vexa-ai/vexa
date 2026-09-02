@@ -1,40 +1,46 @@
-"""WHOSE WORKSPACES the post-meeting turn may read: the people who SPOKE, ordered, capped.
+"""THE MEETING ROOM: whose DESKS the post-meeting turn may read, and in what order.
 
-Founder, 2026-09-02, on mounting every attendee's workspace: *"need to make sure agent will not
-die if it has 200 folders in it."* So flows computes the selection — it is where the transcript is
-reachable — and hands it to the dispatch as a PROPOSAL. agent-api verifies it against the
-meeting's real participants and mounts the intersection read-only, so this list can only ever
-NARROW that side's answer; nothing here mounts anything.
+Founder, 2026-09-02, in two halves that must not be confused with each other:
 
-Everybody on the invite still gets the mail and the drop entity. Only the READ mounts are capped.
+  MEMBERSHIP IS THE INVITE. Everybody on it is eligible. Being quiet in a meeting you were in does
+  not remove your desk from the room — the point of reading a desk is to understand what somebody
+  meant, and the quiet ones are exactly the people whose context is not in the transcript.
+  SPEAKING ONLY ORDERS. Matched participants first, by how much they spoke; everyone else after
+  them in invite order; cut at `room_read_max` (default 12).
 
-Four properties:
+Flows PROPOSES; agent-api verifies membership itself, resolves each ADDRESS through admin-api and
+mounts only people who already have a subject and a desk. So this side sends addresses, never
+subject ids, and never creates an account to answer a question about the room.
 
-  1. ORDER IS SPEAKING TIME, descending. The person who said the most is the one whose workspace
-     is most likely to explain what they said.
-  2. THE MATCH IS BY NAME, AND A TIE MATCHES NOBODY. This list decides whose workspace a turn may
-     read, so an ambiguous label must resolve to neither candidate: a missing mount costs the
-     report some context, a wrong one shows one person's workspace to a room.
-  3. THE CAP IS `room_read_max`, DEFAULT 12.
-  4. IT NEVER RAISES AND NEVER MOUNTS. A selection that cannot be computed is an empty list, and
-     an empty list means the turn reads nobody.
+Five properties:
+
+  1. ORDER is speaking time, descending, then invite order.
+  2. THE MATCH IS AGAINST THE INVITE'S OWN `CN=` NAMES, and a tie orders nobody. It can never
+     REMOVE anyone — it only decides who is at the front.
+  3. NEVER ZERO. No transcript, no timings, no names, nothing matching: the answer is still the
+     first `cap` addresses in invite order. An empty room from a matcher that could not do its job
+     is a silent loss of the whole feature and looks exactly like a meeting where nobody spoke.
+  4. THE CAP is `room_read_max`, default 12.
+  5. THE DISPATCH carries `room_meeting_id` (the ROW id), `room_read`, `participant_names` and
+     `room_read_max`, plus `X-Internal-Secret` — and none of them on any other turn.
 """
 from __future__ import annotations
 
 import flows_defs.production as production
+import flows_steps.agent as agent_mod
 import flows_steps.meeting as mt
 import pytest
 from flows import Reaction, Registry, StepCtx
 
-import flows_steps.agent as agent_mod
 from test_link_loop import _StubDB
 
-# Bound at IMPORT time, before any test in any file has run. `dispatch_turn` is rebound at module
-# level by other test files in this suite, so reading it inside a test can hand you somebody
-# else's stub and a green assertion about nothing.
+# Bound at IMPORT time, before any test in any file has run: other test files in this suite rebind
+# `dispatch_turn` at module level, and reading it inside a test can hand you their stub.
 REAL_DISPATCH_TURN = agent_mod.dispatch_turn
 
 ROOM = ["anna.smith@bank.test", "ben@bank.test", "cara.jones@bank.test", "dan.smith@bank.test"]
+NAMES = {"anna.smith@bank.test": "Anna Smith", "ben@bank.test": "Ben",
+         "cara.jones@bank.test": "Cara Jones", "dan.smith@bank.test": "Dan Smith"}
 
 
 def _segs(*rows):
@@ -57,75 +63,129 @@ def _rig(monkeypatch, segs, *, status=200):
     return calls
 
 
-# ── 1 · order is speaking time ───────────────────────────────────────────────────────────────
-def test_the_order_is_speaking_time_descending(monkeypatch):
+# ── 1 · order ────────────────────────────────────────────────────────────────────────────────
+def test_speakers_come_first_in_order_of_speaking_time(monkeypatch):
     _rig(monkeypatch, _segs(("Ben", 5, "a"), ("Anna Smith", 40, "b"), ("Ben", 20, "c"),
                             ("Cara Jones", 12, "d")))
-    assert mt.speaking_order("7", 97, ROOM) == [
-        "anna.smith@bank.test", "ben@bank.test", "cara.jones@bank.test"]
+    assert mt.room_order("7", 97, ROOM, NAMES) == [
+        "anna.smith@bank.test", "ben@bank.test", "cara.jones@bank.test",
+        "dan.smith@bank.test"]                       # dan never spoke — last, not absent
 
 
-def test_somebody_who_never_spoke_is_not_in_the_list(monkeypatch):
+def test_the_quiet_are_still_in_the_room(monkeypatch):
+    """The half that is easiest to get wrong. A person who said nothing is exactly the person whose
+    desk explains what they meant; dropping them would make the room useless for the meetings that
+    need it most."""
     _rig(monkeypatch, _segs(("Anna Smith", 10, "a")))
-    out = mt.speaking_order("7", 97, ROOM)
-    assert out == ["anna.smith@bank.test"]
-    assert "dan.smith@bank.test" not in out          # on the invite, silent in the room
+    out = mt.room_order("7", 97, ROOM, NAMES)
+    assert out[0] == "anna.smith@bank.test"
+    assert set(out) == set(ROOM)
+
+
+def test_the_unmatched_keep_the_invites_own_order(monkeypatch):
+    _rig(monkeypatch, _segs(("Cara Jones", 10, "a")))
+    assert mt.room_order("7", 97, ROOM, NAMES) == [
+        "cara.jones@bank.test",                      # spoke
+        "anna.smith@bank.test", "ben@bank.test", "dan.smith@bank.test"]   # invite order
 
 
 def test_character_count_orders_when_a_producer_gives_no_timings(monkeypatch):
-    """Some producers hand back segments with no usable start/end. The seconds are then unknown,
-    but the ORDER still is not: characters spoken is a proxy for the same thing."""
     monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
     monkeypatch.setattr(mt, "http", lambda *a, **k: (200, {"segments": [
         {"speaker": "Ben", "text": "short"},
         {"speaker": "Anna Smith", "text": "a very much longer contribution indeed"}]}))
-    assert mt.speaking_order("7", 97, ROOM) == ["anna.smith@bank.test", "ben@bank.test"]
+    assert mt.room_order("7", 97, ROOM, NAMES)[:2] == [
+        "anna.smith@bank.test", "ben@bank.test"]
 
 
-# ── 2 · the match, and what it refuses ───────────────────────────────────────────────────────
-@pytest.mark.parametrize("label,expected", [
-    ("Anna Smith", "anna.smith@bank.test"),      # both tokens
+# ── 2 · the match is against the invite's CN= names, and it only orders ─────────────────────
+@pytest.mark.parametrize("label,first", [
+    ("Anna Smith", "anna.smith@bank.test"),
     ("anna smith", "anna.smith@bank.test"),      # case is not a signal
     ("Anna-Maria Smith", "anna.smith@bank.test"),  # an extra token does not break the overlap
-    ("Ben", "ben@bank.test"),                    # a one-token address, matched by its one token
-    ("Cara", "cara.jones@bank.test"),            # unique on one token: nobody else is a Cara
+    ("Ben", "ben@bank.test"),
+    ("Cara", "cara.jones@bank.test"),            # unique on one token
 ])
-def test_labels_that_resolve_to_exactly_one_person(monkeypatch, label, expected):
+def test_labels_that_resolve_put_that_person_first(monkeypatch, label, first):
     _rig(monkeypatch, _segs((label, 10, "x")))
-    assert mt.speaking_order("7", 97, ROOM) == [expected]
+    assert mt.room_order("7", 97, ROOM, NAMES)[0] == first
 
 
 @pytest.mark.parametrize("label", [
-    "Smith",           # anna.smith AND dan.smith — a tie
-    "Speaker 1",       # the label a diarizer gives when it has no name at all
-    "",                # no label
+    "Smith",           # Anna Smith AND Dan Smith — a tie
+    "Speaker 1",       # what a diarizer emits when it has no name
+    "",
     "Zoe",             # nobody on the invite
     "A",               # one character: never enough to carry a match
 ])
-def test_an_ambiguous_or_unknown_label_matches_nobody(monkeypatch, label):
-    """A missing mount costs the report some context. A wrong one shows one person's workspace to
-    a room, which is not a thing that can be taken back."""
+def test_an_ambiguous_or_unknown_label_orders_nobody_and_removes_nobody(monkeypatch, label):
+    """A tie must not pick one of two people — but it must not empty the room either. Everyone is
+    still there, in the invite's own order."""
     _rig(monkeypatch, _segs((label, 30, "x")))
-    assert mt.speaking_order("7", 97, ROOM) == []
+    assert mt.room_order("7", 97, ROOM, NAMES) == ROOM
 
 
-def test_a_tie_removes_both_candidates_not_just_one(monkeypatch):
-    _rig(monkeypatch, _segs(("Smith", 30, "x"), ("Ben", 5, "y")))
-    assert mt.speaking_order("7", 97, ROOM) == ["ben@bank.test"]
+def test_matching_uses_the_invite_names_not_the_email_local_part(monkeypatch):
+    """`participant_names` is why this is a match and not a guess. Deriving "Ben Ashworth" from
+    `b.ash@` is the failure the CN= line exists to prevent, so with no names nothing is ordered."""
+    room = ["b.ash@bank.test", "other@bank.test"]
+    _rig(monkeypatch, _segs(("Ben Ashworth", 30, "x")))
+    assert mt.room_order("7", 97, room, {"b.ash@bank.test": "Ben Ashworth"})[0] == "b.ash@bank.test"
+    assert mt.room_order("7", 97, room, {}) == room          # no names → invite order, not empty
 
 
-# ── 3 · the cap ──────────────────────────────────────────────────────────────────────────────
-def test_the_cap_keeps_the_biggest_talkers(monkeypatch):
-    room = [f"spk{i}@bank.test" for i in range(20)]
-    _rig(monkeypatch, _segs(*[(f"spk{i}", 100 - i, "x") for i in range(20)]))
-    assert mt.speaking_order("7", 97, room, cap=3) == [
-        "spk0@bank.test", "spk1@bank.test", "spk2@bank.test"]
+# ── 3 · never zero ───────────────────────────────────────────────────────────────────────────
+def test_an_unreadable_transcript_degrades_to_invite_order(monkeypatch):
+    from flows import StepError
+
+    def boom(*a, **k):
+        raise StepError("gateway down")
+    monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
+    monkeypatch.setattr(mt, "http", boom)
+    assert mt.room_order("7", 97, ROOM, NAMES) == ROOM
+
+
+def test_a_meeting_where_nobody_spoke_still_has_a_room(monkeypatch):
+    _rig(monkeypatch, [])
+    assert mt.room_order("7", 97, ROOM, NAMES) == ROOM
+
+
+def test_no_participants_is_the_only_empty_room(monkeypatch):
+    """Nothing to order and nobody to mount — and a step with no participants must not reach for
+    the network to learn that."""
+    calls = _rig(monkeypatch, _segs(("Anna Smith", 10, "x")))
+    assert mt.room_order("7", 97, [], NAMES) == []
+    assert calls == []
+
+
+def test_duplicate_addresses_are_collapsed(monkeypatch):
+    _rig(monkeypatch, [])
+    assert mt.room_order("7", 97, ["a@x.test", "A@x.test ", "b@x.test"], {}) == [
+        "a@x.test", "b@x.test"]
+
+
+# ── 4 · the cap ──────────────────────────────────────────────────────────────────────────────
+def test_the_cap_keeps_the_front_of_the_list(monkeypatch):
+    room = [f"p{i}@bank.test" for i in range(20)]
+    names = {f"p{i}@bank.test": f"Speaker{i}" for i in range(20)}
+    _rig(monkeypatch, _segs(*[(f"Speaker{i}", 100 - i, "x") for i in range(20)]))
+    assert mt.room_order("7", 97, room, names, cap=3) == [
+        "p0@bank.test", "p1@bank.test", "p2@bank.test"]
+
+
+def test_the_cap_applies_to_invite_order_too(monkeypatch):
+    _rig(monkeypatch, [])
+    assert mt.room_order("7", 97, ROOM, NAMES, cap=2) == ROOM[:2]
 
 
 def test_the_default_cap_is_twelve(monkeypatch):
     reg = Registry()
     production.build(reg, _StubDB())
     seen = {}
+
+    def note_cap(uid, mid, participants, names, cap=12):
+        seen["cap"] = cap
+        return []
 
     class _Flow:
         def __init__(self, **p):
@@ -134,19 +194,16 @@ def test_the_default_cap_is_twelve(monkeypatch):
         def param(self, k, default=None):
             return self._p.get(k, default)
 
-    def note_cap(uid, mid, participants, cap=12):
-        seen["cap"] = cap
-        return []
-
-    monkeypatch.setattr(production.mt, "speaking_order", note_cap)
+    monkeypatch.setattr(production.mt, "room_order", note_cap)
+    monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 97})
     monkeypatch.setattr(production.ag, "dispatch_turn", lambda *a, **k: 0)
-    monkeypatch.setattr(production.ag, "commit_shas", lambda uid: [])
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
 
     def run(flow):
         r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": 97, "native": "abc",
                                          "organizer": "a@x.test", "title": "T",
-                                         "participants": ROOM, "start": 1_700_003_600.0},
+                                         "participants": ROOM, "participant_names": NAMES,
+                                         "start": 1_700_003_600.0},
                      "f", 1, "step", "running", 1, 0.0, None, None, None)
         seen.clear()
         reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
@@ -160,67 +217,93 @@ def test_the_default_cap_is_twelve(monkeypatch):
     assert run(_Flow(room_read_max=0)) == 12
 
 
-# ── 4 · it never raises, and the dispatch carries it as a proposal ───────────────────────────
-def test_a_transcript_that_cannot_be_read_selects_nobody(monkeypatch):
-    from flows import StepError
-
-    def boom(*a, **k):
-        raise StepError("gateway down")
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
-    monkeypatch.setattr(mt, "http", boom)
-    assert mt.speaking_order("7", 97, ROOM) == []
-
-
-def test_no_participants_means_no_transcript_read_at_all(monkeypatch):
-    """Nothing a label could match, so the read is not worth doing — and a step with no
-    participants in its refs must not reach for the network to learn that."""
-    calls = _rig(monkeypatch, _segs(("Anna Smith", 10, "x")))
-    assert mt.speaking_order("7", 97, []) == []
-    assert calls == []
-
-
-def test_the_proposal_reaches_the_dispatch_and_the_kick_names_it(monkeypatch):
-    reg = Registry()
-    production.build(reg, _StubDB())
+# ── 5 · what actually goes on the wire ───────────────────────────────────────────────────────
+def _chat_post(monkeypatch):
+    """Record the headers and body of the `/api/chat` POST the dispatch makes."""
     seen = {}
-    monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, session, prompt, room_read=None: seen.update(
-                            prompt=prompt, room_read=room_read) or 0)
-    monkeypatch.setattr(production.ag, "commit_shas", lambda uid: [])
-    monkeypatch.setattr(production, "setting", lambda uid, key: "")
-    monkeypatch.setattr(production.mt, "speaking_order",
-                        lambda uid, mid, participants, cap=12: ["anna.smith@bank.test",
-                                                                "ben@bank.test"])
-    r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": 97, "native": "abc",
-                                     "organizer": "a@x.test", "title": "T",
-                                     "participants": ROOM, "start": 1_700_003_600.0},
-                 "f", 1, "step", "running", 1, 0.0, None, None, None)
-    reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
-                                         clock_now=1_700_000_000.0, scratch={}, flow=None))
-
-    assert seen["room_read"] == ["anna.smith@bank.test", "ben@bank.test"]
-    assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
-    assert "READ-ONLY access to the workspaces of the people who spoke" in seen["prompt"]
-    assert ("MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's workspace informs the "
-            "report, it is never quoted into it.") in seen["prompt"]
-
-
-def test_an_empty_proposal_leaves_the_dispatch_body_as_it_always_was(monkeypatch):
-    """`room_read` is omitted, not sent empty: every dispatch that is not a post-meeting turn
-    sends exactly the body it sent before this existed."""
-    posted = {}
 
     def fake_http(method, url, headers, body=None, timeout=20):
         if url.endswith("/api/chat"):
-            posted.update(body or {})
+            seen["headers"] = dict(headers)
+            seen["body"] = dict(body or {})
         return 200, {"turns": []}
     monkeypatch.setattr(agent_mod, "http", fake_http)
+    monkeypatch.setattr(agent_mod, "require_internal_secret", lambda: "s3cr3t")
+    return seen
 
+
+def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(monkeypatch):
+    seen = _chat_post(monkeypatch)
+    REAL_DISPATCH_TURN("7", "meet-97", "hi", room={
+        "meeting_id": 97, "read": ["anna.smith@bank.test"], "names": NAMES, "read_max": 12})
+
+    assert seen["body"] == {
+        "prompt": "hi", "session": "meet-97",
+        "room_meeting_id": "97",                     # the ROW id, as a string
+        "room_read": ["anna.smith@bank.test"],       # ADDRESSES — agent-api resolves identity
+        "participant_names": NAMES,
+        "room_read_max": 12}
+    assert seen["headers"]["X-Internal-Secret"] == "s3cr3t"
+    assert seen["headers"]["X-User-Id"] == "7"
+
+
+def test_no_room_means_the_body_and_headers_this_dispatch_always_sent(monkeypatch):
+    """Every other turn in the system — onboarding, the email conversation, the re-ask — must not
+    grow a header or a field, and must never present the internal secret."""
+    seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "s", "hello")
-    assert posted == {"prompt": "hello", "session": "s"}
-    posted.clear()
-    REAL_DISPATCH_TURN("7", "s", "hello", room_read=[])
-    assert posted == {"prompt": "hello", "session": "s"}
-    posted.clear()
-    REAL_DISPATCH_TURN("7", "s", "hello", room_read=["a@b.test"])
-    assert posted == {"prompt": "hello", "session": "s", "room_read": ["a@b.test"]}
+    assert seen["body"] == {"prompt": "hello", "session": "s"}
+    assert "X-Internal-Secret" not in seen["headers"]
+
+    REAL_DISPATCH_TURN("7", "s", "hello", room={"meeting_id": None, "read": ["a@b.test"]})
+    assert seen["body"] == {"prompt": "hello", "session": "s"}
+    assert "X-Internal-Secret" not in seen["headers"]
+
+
+def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):
+    """The same identity bug that mailed meeting 97's attendees a link with no token: a meeting
+    planned from an unmatched url is `platform='unknown'` with an empty native, so no pair
+    addresses it and only the row id exists. The room gate resolves a meetings-domain ROW."""
+    reg = Registry()
+    production.build(reg, _StubDB())
+    seen = {}
+    monkeypatch.setattr(production.mt, "meeting_row",
+                        lambda uid, m, native=None: {"id": 412})
+    monkeypatch.setattr(production.mt, "room_order",
+                        lambda uid, mid, participants, names, cap=12: list(participants))
+    monkeypatch.setattr(production.ag, "dispatch_turn",
+                        lambda uid, s, p, room=None: seen.update(room=room, prompt=p) or 0)
+    monkeypatch.setattr(production, "setting", lambda uid, key: "")
+    r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": "96088138284", "native": "",
+                                     "organizer": "a@x.test", "title": "T",
+                                     "participants": ROOM, "participant_names": NAMES,
+                                     "start": 1_700_003_600.0},
+                 "f", 1, "step", "running", 1, 0.0, None, None, None)
+    reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
+                                         clock_now=1_700_000_000.0, scratch={}, flow=None))
+    assert seen["room"]["meeting_id"] == 412
+    assert seen["room"]["read"] == ROOM
+    assert seen["room"]["names"] == NAMES
+
+
+def test_the_kick_names_the_desks_it_may_read(monkeypatch):
+    reg = Registry()
+    production.build(reg, _StubDB())
+    seen = {}
+    monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 97})
+    monkeypatch.setattr(production.mt, "room_order",
+                        lambda uid, mid, participants, names, cap=12: ["anna.smith@bank.test",
+                                                                       "ben@bank.test"])
+    monkeypatch.setattr(production.ag, "dispatch_turn",
+                        lambda uid, s, p, room=None: seen.update(prompt=p) or 0)
+    monkeypatch.setattr(production, "setting", lambda uid, key: "")
+    r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": 97, "native": "abc",
+                                     "organizer": "a@x.test", "title": "T",
+                                     "participants": ROOM, "participant_names": NAMES,
+                                     "start": 1_700_003_600.0},
+                 "f", 1, "step", "running", 1, 0.0, None, None, None)
+    reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
+                                         clock_now=1_700_000_000.0, scratch={}, flow=None))
+    assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
+    assert "READ-ONLY access to the desks" in seen["prompt"]
+    assert "never copy a line, a note or a phrase out of one into this report" in seen["prompt"]

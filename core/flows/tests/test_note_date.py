@@ -39,9 +39,9 @@ def _stamp_for(refs, monkeypatch_setting=None):
 
     seen = {}
 
-    def fake_dispatch(uid, session, prompt, room_read=None):
+    def fake_dispatch(uid, session, prompt, room=None):
         seen["prompt"] = prompt
-        seen["room_read"] = room_read
+        seen["room"] = room
         return 0
 
     # These are MODULE-LEVEL rebinds, not monkeypatch, so every one of them has to be put back:
@@ -50,14 +50,14 @@ def _stamp_for(refs, monkeypatch_setting=None):
     # test that passes alone and fails in the suite is the visible half of that; a test that
     # PASSES in the suite because somebody else's stub is still installed is the dangerous half.
     saved = {"setting": common.setting, "dispatch_turn": ag.dispatch_turn,
-             "commit_shas": ag.commit_shas, "meeting_start": mt.meeting_start,
-             "speaking_order": mt.speaking_order}
+             "meeting_start": mt.meeting_start, "room_order": mt.room_order,
+             "meeting_row": mt.meeting_row}
     production.setting = (monkeypatch_setting
                           or (lambda uid, key: ""))   # no timezone -> UTC
     ag.dispatch_turn = fake_dispatch
-    ag.commit_shas = lambda uid: []
     mt.meeting_start = lambda uid, mid, native=None: None
-    mt.speaking_order = lambda uid, mid, participants, cap=12: []   # no gateway read in a unit test
+    mt.room_order = lambda uid, mid, participants, names, cap=12: []  # no gateway read in a unit test
+    mt.meeting_row = lambda uid, mid, native=None: None
 
     reg = Registry()
 
@@ -73,9 +73,9 @@ def _stamp_for(refs, monkeypatch_setting=None):
     finally:
         production.setting = saved["setting"]
         ag.dispatch_turn = saved["dispatch_turn"]
-        ag.commit_shas = saved["commit_shas"]
         mt.meeting_start = saved["meeting_start"]
-        mt.speaking_order = saved["speaking_order"]
+        mt.room_order = saved["room_order"]
+        mt.meeting_row = saved["meeting_row"]
     return seen["prompt"]
 
 

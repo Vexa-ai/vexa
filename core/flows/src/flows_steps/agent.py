@@ -8,7 +8,7 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import AGENT_API, http, scaffolded, ws_file
+from .common import AGENT_API, http, require_internal_secret, scaffolded, ws_file
 
 
 def history(uid: str, session: str) -> list:
@@ -19,22 +19,49 @@ def history(uid: str, session: str) -> list:
     return hist if isinstance(hist, list) else []
 
 
-def dispatch_turn(uid: str, session: str, prompt: str, room_read: list | None = None) -> int:
+def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None) -> int:
     """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
     /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
     the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening).
 
-    ``room_read`` is a PROPOSAL, not an instruction: the ordered, capped list of the meeting's
-    speakers whose workspaces this turn may read. agent-api verifies it against the meeting's real
-    participants and mounts the intersection READ-ONLY, so what is sent here can only ever narrow
-    that side's answer — a caller cannot widen its own access by naming somebody. Omitted entirely
-    when empty, so every existing dispatch sends exactly the body it sent before."""
+    ``room`` opens THE MEETING ROOM: the post-meeting widening in which this turn may read the
+    DESKS of the people who were in the meeting. Four fields go on the post, and the split between
+    them is the whole safety property:
+
+      ``meeting_id``      -> ``room_meeting_id``. The caller names ONLY THE MEETING, never a
+                             workspace — a caller who could name workspaces could read anybody's
+                             desk by naming it. Must be the meetings-domain ROW id.
+      ``read``            -> ``room_read``: the invite's ADDRESSES, in priority order. agent-api
+                             resolves each through admin-api and mounts only those that already
+                             have a subject AND a desk. **Addresses, not subject ids**: this side
+                             deliberately does not resolve identity, so it cannot mint a ghost
+                             account, and a person who is not a user is simply skipped there.
+      ``names``           -> ``participant_names``: address -> the invite's ``CN=`` display name,
+                             so the far side never has to guess a person from an email local part.
+      ``read_max``        -> ``room_read_max``: the flow's cap, clamped to a server ceiling.
+
+    THE INTERNAL-TIER HEADER IS PART OF THE ROOM, NOT AN EXTRA. agent-api refuses a room to any
+    caller that cannot present ``X-Internal-Secret``, so it goes on the same post. Its value comes
+    from the environment (``VEXA_INTERNAL_SECRET``, a mode-600 file the lane's start script
+    exports) and never from this repository; both entrypoints refuse to start without it, so by
+    the time a turn is dispatched it exists.
+
+    Omitted entirely when there is no room, so every other dispatch in this file sends exactly the
+    body it has always sent."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
-    if room_read:
-        body["room_read"] = list(room_read)
+    headers = {"X-User-Id": uid}
+    if room and room.get("meeting_id"):
+        headers["X-Internal-Secret"] = require_internal_secret()
+        body["room_meeting_id"] = str(room["meeting_id"])
+        if room.get("read"):
+            body["room_read"] = [str(x) for x in room["read"]]
+        if room.get("names"):
+            body["participant_names"] = dict(room["names"])
+        if room.get("read_max"):
+            body["room_read_max"] = int(room["read_max"])
     try:
-        http("POST", f"{AGENT_API}/api/chat", {"X-User-Id": uid}, body, timeout=3)
+        http("POST", f"{AGENT_API}/api/chat", headers, body, timeout=3)
     except Exception:  # noqa: BLE001 — stream-open timeout: the turn IS running
         pass
     return base
@@ -103,19 +130,15 @@ def _ok(code) -> bool:
         return False
 
 
-def latest_meeting_note(uid: str, baseline_shas: list[str]):
-    code, git = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid})
-    commits = git.get("commits", []) if isinstance(git, dict) else []
-    for c in commits:
-        if c.get("sha") in baseline_shas:
-            continue
-        files = c.get("files") or []
-        for f in files:
-            if f.startswith("kg/entities/meeting/"):
-                return c["sha"][:9], f
-    return None, None
-
-
-def commit_shas(uid: str) -> list[str]:
-    code, git = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid})
-    return [c["sha"] for c in (git.get("commits", []) if isinstance(git, dict) else [])]
+# GONE WITH THE DESK WRITE THEY WATCHED FOR (founder decision 22, 2026-09-02):
+# `latest_meeting_note(uid, baseline_shas)` and its `commit_shas(uid)` baseline. They detected the
+# post-meeting turn's completion as a NEW COMMIT touching `kg/entities/meeting/` in the ORGANISER'S
+# own repo. That run no longer writes into any desk — the canonical home of the note is the meeting
+# row and its transcript store, and every attendee's desk (the organiser's included) receives the
+# artefact afterwards, from `drop_to_attendees`. The commit will never happen, so a detector
+# waiting for it would wait fifteen minutes and then fail every meeting.
+#
+# Deleted rather than left unused: they encode "the note is a commit in the organiser's desk",
+# which is precisely the thing that stopped being true, and an unused detector is one somebody
+# wires back up. Completion is now the agent's REPLY, grounded in the transcript — see
+# `flows_defs/production.process_meeting`.

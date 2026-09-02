@@ -83,26 +83,32 @@ DEFAULTS: dict[str, str] = {
     ),
     # The ATTENDEE follow-up head -- for most people in a large meeting this is the first time they
     # hear from Vexa at all, so it is the whole introduction: whose Vexa this is, what it does,
-    # which meeting, and who had it in the room. The agent's own per-person section follows it.
+    # which meeting, who had it in the room, where the report now lives, and who can see it.
     #
     # BYTE-FOR-BYTE `deploy/dogfood/mail/attendee-head.md`, and it has to stay that way: the README
     # in that directory says the source and the baked default are the same content or the source
-    # lies. This one HAD drifted -- it substituted {{title}}, {{when}} and {{attendees}}, none of
-    # which `email_attendees` fills, while the file substitutes {{company}} {{organizer}}
-    # {{meeting}} {{date}}. A deployment with no `_global` override would therefore have mailed a
-    # stranger a subject reading `{{title}} — what it means for you` and a body with two standing
-    # tokens in it. The drift was invisible because nothing read both.
+    # lies. It HAS drifted twice already, both times invisibly, because nothing read both -- once
+    # substituting {{title}}/{{when}}/{{attendees}} which no step fills, and once missing the
+    # visibility sentence entirely. `test_the_baked_defaults_match_the_files_in_deploy_dogfood_mail`
+    # now reads both, for every template.
     #
-    # The service sentence is LITERAL here, not `{{service}}`: `render` would fill it, but the file
-    # spells it out, and these two must be identical strings. It is still the same sentence as
-    # SERVICE_SENTENCE above -- change one and you change all three places the README names.
+    # THREE SENTENCES ARE LITERAL HERE, not tokens: the service sentence, "your desk", and the
+    # visibility sentence. `render` would fill {{service}}, {{workspace}} and {{visibility}}, but
+    # the FILE spells them out and these two strings must be equal. The visibility one especially
+    # must not become a token that a deployment could leave unfilled: it is the sentence that tells
+    # a stranger who can see their notes, in the first mail they ever get from us, and a baked
+    # fallback that quietly drops it discloses nothing. Change any of the three and you change
+    # every place the mail README names.
     "attendee-head": (
         "subject: {{meeting}} — what it means for you\n"
         "---\n"
         "I am Vexa, the meeting assistant at {{company}}. I sit in meetings you are invited to; "
         "afterwards you get what came out of them and what they leave on your plate.\n"
         "\n"
-        "{{organizer}} had me in {{meeting}} on {{date}}.\n"
+        "{{organizer}} had me in {{meeting}} on {{date}}. This is now on your desk.\n"
+        "\n"
+        "Vexa runs on this organisation's own servers; what you and your colleagues keep in your "
+        "workspaces is visible to the company's agents; recordings and transcripts stay here.\n"
     ),
     # The MINUTES head -- the same meeting, to someone who already knows what Vexa is. No
     # introduction: repeating it to a returning person is the tell of a machine that does not know

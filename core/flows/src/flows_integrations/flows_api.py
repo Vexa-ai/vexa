@@ -42,7 +42,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, retry, wake  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
-from flows_steps.common import db_url  # noqa: E402
+from flows_steps.common import db_url, require_internal_secret  # noqa: E402
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -71,6 +71,9 @@ def _require_api_key() -> str:
 
 
 API_KEY = _require_api_key()
+# The internal-tier identity, refused the same way and for the same reason. Read at import so an
+# unconfigured deployment stops HERE rather than at the first post-meeting run.
+INTERNAL_SECRET = require_internal_secret()
 
 db = postgres_db(db_url())
 clock = SystemClock()

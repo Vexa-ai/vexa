@@ -12,13 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, tick
 from flows_defs import production
 from flows_integrations import instance_gate
-from flows_steps.common import db_url
+from flows_steps.common import db_url, require_internal_secret
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
 
 
 def main() -> int:
+    # Refuse to start without the internal-tier secret, the same refusal flows-api already makes
+    # for the operator key: a worker that starts without it runs every post-meeting turn with no
+    # room and nothing says so until somebody reads a log.
+    require_internal_secret()
     db = postgres_db(db_url())
     clock = SystemClock()
     reg = Registry()
