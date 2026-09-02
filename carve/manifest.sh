@@ -29,9 +29,10 @@ export CARVE_INCLUDE=(
   turbo.json
   tsconfig.base.json
   README.md
-  SECURITY.md
-  security-insights.yml
-  security
+  # SECURITY.md, security-insights.yml and security/ are GOVERNANCE-OWNED by vexa-core
+  # (ADR-0025 §1: home = vexa-core, changes originate there and back-sync). Replaying the
+  # mono copies clobbered vexa-core-side edits — e.g. the Preeti Gupta maintainer entry in
+  # security-insights.yml (vexa-core#37). Left out of INCLUDE so sync.sh never touches them.
   architecture.calm.json
   calm
   .gitignore
