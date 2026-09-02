@@ -241,3 +241,20 @@ def test_the_rig_tool_description_carries_the_generated_section_list():
     doc = rig.read_text()
     for line in E.tool_sections_text().splitlines():
         assert line in doc, line
+
+
+# ── the fallback writes the same card ────────────────────────────────────────────────────────────
+
+def test_the_no_tool_fallback_describes_the_card_and_not_a_log():
+    """A dispatch with no delegation token has no `entity_upsert` at all, so the phase writes the
+    file itself. That text taught the FLAT page for one build: measured on the offline A/B, every
+    page the fallback produced was a heading, a date and a paragraph, while the tool path rendered
+    cards. A fallback that produces a different shape is a second format nobody asked for."""
+    from worker.engine import entity_file_shape
+    text = entity_file_shape()
+    for kind in E.KINDS:
+        for head in E.CARD_SECTIONS[kind]:
+            assert head in text, f"{kind}/{head}"
+    for tail in E.TAIL_SECTIONS:
+        assert tail in text, tail
+    assert "never a dated log" in text
