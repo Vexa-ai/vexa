@@ -17,3 +17,7 @@ flowchart TB
     minio["minio"]
     transcription["transcription"]
   end
+  subgraph deploy_wl["deploy workloads"]
+    flows_api["flows-api"]
+    flows_worker["flows-worker"]
+  end

@@ -16,6 +16,7 @@ flowchart LR
   unit_in[("unit:{id}:in (stream)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
+  flows_rows[("flows-rows")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -44,3 +45,5 @@ flowchart LR
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
   admin_api -->|write| identity_db
+  flows_worker -->|write| flows_rows
+  flows_api -.->|read| flows_rows
