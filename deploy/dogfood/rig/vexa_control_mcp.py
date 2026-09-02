@@ -10,9 +10,13 @@ is Mailpit, so nothing can reach a real person.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import pathlib
+import re
 import subprocess
 import time
 import urllib.error
@@ -21,14 +25,67 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 
-FL = "/home/dima/dev/vexa-flows1315/core/flows"
+# The flows ENGINE is imported in-process by exactly one tool (fact_emit); every other flows
+# surface here goes over HTTP to FLOWS_API. So the engine's source tree is a deployment input,
+# not a constant. VEXA_FLOWS_SRC names it. The default is the path this rig has always used, so
+# an unconfigured rig behaves exactly as before; when the tree is absent the server still starts
+# and fact_emit alone reports itself unavailable, by name, naming the variable to set.
+FL = os.environ.get("VEXA_FLOWS_SRC", "/home/dima/dev/vexa-flows1315/core/flows")
 GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 AGENT_API = os.environ.get("VEXA_AGENT_API_URL", "http://localhost:18500")
 ADMIN_API = os.environ.get("VEXA_ADMIN_API_URL", "http://localhost:18457")
 FLOWS_API = os.environ.get("VEXA_FLOWS_API_URL", "http://localhost:18200")
-FLOWS_KEY = os.environ.get("VEXA_FLOWS_API_KEY", "changeme")
+def _flows_api_key() -> str:
+    """The flows-api operator key — from the environment, else the lane's mode-600 file.
+
+    It defaulted to the string "changeme", and the variable was never exported on the running
+    deployment (`flows-up.sh` exports VEXA_FLOWS_ADMIN_KEY, which is the admin-api token under a
+    different name flows-api never reads). So this server — which is PUBLIC — forwarded to the
+    intake with a key printed in the source. Gating the operator verbs without replacing that key
+    would have left the door open behind the guard.
+
+    No default any more. The file is the same one the lane's start script exports from, so the
+    key is named once and lives in one place; its value never enters the repo and is never
+    printed."""
+    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
+    if key:
+        return key
+    for cand in ("flows-api-key", "sim-flows-api-key"):
+        f = pathlib.Path.home() / ".storm" / cand
+        try:
+            if f.is_file():
+                v = f.read_text().strip()
+                if v:
+                    return v
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+FLOWS_KEY = _flows_api_key()
 MAILPIT = os.environ.get("MAILPIT_URL", "http://localhost:8025")
+# meeting-api directly — the lifecycle callback the bot posts to is an INTERNAL route on the
+# service, not a gateway one, and the capture double drives the same FSM through it.
+MEETING_API = os.environ.get("VEXA_MEETING_API_URL", "http://localhost:18480")
 HOME = pathlib.Path.home()
+
+
+def _flows_src() -> str | None:
+    """The importable src/ of the flows engine, or None when this host does not carry it."""
+    src = os.path.join(FL, "src")
+    return src if os.path.isdir(src) else None
+
+
+def _flows_unavailable(tool: str, detail: str = "") -> str:
+    """One tool, named, is off — and the server is fine. An agent has to be able to tell those
+    apart: a traceback out of an import reads as "Vexa is broken" when the truth is "this
+    deployment does not carry the flows engine"."""
+    return json.dumps({
+        "unavailable": tool,
+        "reason": detail or f"the flows engine source is not at {FL}/src on this host",
+        "fix": "point VEXA_FLOWS_SRC at the flows checkout's core/flows directory, then restart",
+        "scope": "this tool only — every other tool on this server is unaffected",
+    })
 
 
 def _admin_key() -> str:
@@ -254,6 +311,8 @@ SETTINGS_VOCAB = {
                      "a note each time the notetaker joins a call"),
     "mail_rsvp":    (True, "on/off",
                      "replying yes in the calendar when Vexa is invited to a meeting"),
+    "mail_prep":    (True, "on/off",
+                     "the day-before prepare email for upcoming meetings"),
     "timezone":     ("", "text",
                      "their IANA zone, e.g. Europe/Lisbon — every time is stated in it"),
 }
@@ -512,6 +571,105 @@ def _tokens() -> dict:
         return {}
 
 
+# ── DELEGATED TOKENS ────────────────────────────────────────────────────────────────────────────
+# agent-api mints one of these per dispatch for the worker it spawns, instead of handing the worker a
+# durable user credential out of mcp-tokens.json. We verify it STATELESSLY with a shared HMAC secret:
+# no lookup, no registration, nothing to keep in sync — the token carries its own subject, scope and
+# expiry, and dies on its own. The only shared state is a small denylist for "kill this one NOW".
+#
+# The signing side is core/agent/shared/delegation.py in the minutes-ui repo; the format is frozen
+# between the two and documented there. This is a deliberate duplicate rather than an import: the rig
+# is a single standalone file run from a different repo, and a verifier that cannot be read next to
+# the thing it protects is a verifier nobody audits.
+DELEGATION_SECRET = os.environ.get("VEXA_MCP_DELEGATION_SECRET", "")
+DELEGATION_PREFIX = "vxd_"
+DELEGATION_AUDIENCE = "vexa-mcp"
+REVOKED_FILE = HOME / ".storm/mcp-delegation-revoked.json"
+
+# The authenticated caller's delegation scope for THIS request, or None for every other auth path.
+# Same contextvar discipline as CURRENT/CALL_TOKEN: set once where identity is decided, read where a
+# verb needs it, never threaded through signatures.
+CALL_SCOPE = contextvars.ContextVar("vexa_call_scope", default=None)
+
+
+class _DelegationRefused(Exception):
+    """A delegated token was offered and is not acceptable. ``reason`` is safe to hand a caller."""
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason, self.detail = reason, detail
+
+
+def _is_delegation_token(tok: str) -> bool:
+    return isinstance(tok, str) and tok.startswith(DELEGATION_PREFIX)
+
+
+def _revoked_jtis() -> set:
+    """The denylist — token ids struck off before their exp. Read per call so revoking is immediate
+    (no restart); a missing/among-friends-unparseable file means NOTHING is revoked, which is the
+    correct default: the file's absence must not lock everyone out."""
+    try:
+        data = json.loads(REVOKED_FILE.read_text())
+    except Exception:
+        return set()
+    if isinstance(data, dict):
+        data = data.get("revoked", [])
+    return {str(x) for x in data} if isinstance(data, list) else set()
+
+
+def _verify_delegation(tok: str) -> dict:
+    """Verify a delegated token → its claims. Raises _DelegationRefused naming the failure.
+
+    An UNSET secret refuses everything: a zero-length HMAC key verifies for anyone who knows the
+    format, so "delegation is not configured here" must mean nobody gets in, never everybody."""
+    if not DELEGATION_SECRET:
+        raise _DelegationRefused("delegation_not_configured",
+                                 "this server was not started with a delegation secret")
+    parts = tok[len(DELEGATION_PREFIX):].split(".")
+    if len(parts) != 3:
+        raise _DelegationRefused("malformed", "a delegation token has three parts")
+    body = parts[0] + "." + parts[1]
+    expect = hmac.new(DELEGATION_SECRET.encode(), body.encode("ascii"), hashlib.sha256).digest()
+    def _unb64(t):
+        return base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
+    # SIGNATURE FIRST — until it verifies, the payload is attacker-controlled text, so reading exp or
+    # jti out of it before this point would let a forged token steer its own check.
+    try:
+        got = _unb64(parts[2])
+    except Exception:
+        raise _DelegationRefused("malformed", "signature is not base64url")
+    if not hmac.compare_digest(expect, got):
+        raise _DelegationRefused("bad_signature", "this token was not signed by our agent-api")
+    try:
+        claims = json.loads(_unb64(parts[1]))
+        assert isinstance(claims, dict)
+    except Exception:
+        raise _DelegationRefused("malformed", "payload is not a JSON object")
+    if claims.get("aud") != DELEGATION_AUDIENCE:
+        raise _DelegationRefused("bad_audience", "this token was minted for a different service")
+    if not claims.get("sub"):
+        raise _DelegationRefused("malformed", "token names no subject")
+    exp = claims.get("exp")
+    if not isinstance(exp, int) or time.time() >= exp:
+        raise _DelegationRefused("expired", "this delegation has expired; the dispatch mints a new one")
+    if claims.get("jti") in _revoked_jtis():
+        raise _DelegationRefused("revoked", "this delegation was revoked")
+    return claims
+
+
+def _scope_allows(scope, slug: str) -> bool:
+    """May this delegation touch workspace ``slug``? "*" is the HUMAN regime (a person is in the loop,
+    so the grant is everything already theirs); a list is the AUTONOMOUS isolation set. This is a
+    CEILING on the dispatch, never a grant — the uid's own ownership checks still run underneath.
+    Absent/broken scope fails CLOSED."""
+    if not isinstance(scope, dict):
+        return False
+    ws = scope.get("workspaces")
+    if ws == "*":
+        return True
+    return isinstance(ws, list) and str(slug) in {str(w) for w in ws}
+
+
 def _subject():
     """Who is calling, or None. THE single place identity is decided.
 
@@ -532,7 +690,75 @@ def _subject():
         rec = vexa_oauth.resolve_token(tok, CANONICAL) or _tokens().get(tok)
         if rec:
             return rec["uid"]
+        # A DELEGATED token works as an argument for the same reason a durable one does: it cannot be
+        # guessed. Its scope rides along so the guard can enforce it on this call.
+        if _is_delegation_token(tok):
+            try:
+                claims = _verify_delegation(tok)
+            except _DelegationRefused:
+                return None
+            CALL_SCOPE.set(claims.get("scope"))
+            return str(claims["sub"])
     return None
+
+
+class _NotOperator(Exception):
+    """Raised by _operator_or_refuse. Carries who was refused, so the refusal can say."""
+
+    def __init__(self, verb, who, why):
+        self.verb, self.who, self.why = verb, who, why
+        super().__init__(f"{verb}: operator only")
+
+
+def _admin_key_headers() -> dict:
+    return {"X-Admin-API-Key": _admin_key()}
+
+
+def _is_instance_admin(uid: str) -> bool:
+    """The DB-backed role — `users.data.is_admin`, bootstrap-claimed by the first sign-in on a
+    fresh instance and surfaced by admin-api. The terminal's admin gate reads exactly this."""
+    try:
+        st, u = _http("GET", f"{ADMIN_API}/admin/users/{uid}", _admin_key_headers())
+    except Exception:  # noqa: BLE001 — a down identity service is not an authorisation
+        return False
+    if st != 200 or not isinstance(u, dict):
+        return False
+    data = u.get("data")
+    if isinstance(data, dict) and data.get("is_admin") is True:
+        return True
+    return u.get("is_admin") is True
+
+
+def _operator_or_refuse(verb: str) -> str:
+    """AUTHORITY, not authentication — the gate these verbs never had.
+
+    fact_emit, flows_submit and flow_lifecycle are OPERATOR verbs: they inject facts naming an
+    arbitrary organizer, and they rewrite the flow definitions the whole instance reacts to.
+    They were guarded by `me()` alone, which only asks whether the caller is signed in. Any
+    authenticated user could therefore make the product act on behalf of somebody else, or
+    change what every reaction in the org does. That is an authentication check standing where
+    an authorisation check belongs, and it was found by the adoption loop while measuring what
+    an admin needs to seed an org (biz#449, revolution 6).
+
+    Authority is the INSTANCE ADMIN (`users.data.is_admin`, read through admin-api the way the
+    terminal's setup probe reads it) or the internal service key (server-to-server). Ordinary
+    users are unaffected in what they may do about their OWN meetings: bot_send and bot_schedule
+    take identity from the token and are not fact injection.
+
+    Harnesses do not belong here either. A loop that needs to inject facts uses flows-api's
+    server-side intake — POST /events and /events/batch with the lane's admin key — which is the
+    right door for a producer that is not a person.
+    """
+    tok = (CALL_TOKEN.get() or "").strip()
+    svc = os.environ.get("VEXA_INTERNAL_API_SECRET", "") or os.environ.get("INTERNAL_API_SECRET", "")
+    if svc and tok and tok == svc:
+        return "service"
+    uid = _subject()
+    if not uid:
+        raise _NotOperator(verb, "anonymous", "not signed in")
+    if _is_instance_admin(uid):
+        return uid
+    raise _NotOperator(verb, f"uid {uid}", "not an instance admin")
 
 
 def me() -> str:
@@ -575,6 +801,21 @@ def _anon_guard(fn):
         # mark_scaffolded's nested company_context() came back anonymous and the emptiness was
         # reported as "no validated claims").
         CALL_TOKEN.set((kw.get("token") if RIG_MODE else None) or CALL_TOKEN.get())
+        # SCOPE, enforced once for every workspace-touching verb rather than in each of the twelve.
+        # An EMPTY slug means "their own workspace" and is always in scope — the uid decides it, not
+        # the caller. A NAMED slug on a scoped (autonomous) delegation must be in the isolation set.
+        slug = (kw.get("slug") or "").strip()
+        scope = CALL_SCOPE.get()
+        if slug and scope is not None and not _scope_allows(scope, slug):
+            return json.dumps({
+                "refused": "out_of_scope",
+                "workspace": slug,
+                "why": "this session was dispatched with access to a named set of workspaces and "
+                       "that is not one of them",
+                "tell_your_person": "plainly, that you cannot reach that workspace from here — do "
+                                    "not retry it, and do not describe its contents.",
+                "tool": fn.__name__,
+            })
         try:
             return fn(*a, **kw)
         except _Anonymous:
@@ -629,7 +870,9 @@ THE MAIN VERBS
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
 - deeplink(...) mints links that open the Vexa terminal in a composed state
-  (file beside transcript, lifecycle presets pre/during/post meeting).
+  (file beside transcript, lifecycle presets pre/during/post meeting), and
+  deeplink(target='ask', name=...) opens a fresh chat already holding an admin-written
+  preset — the link names the preset, it never carries the words.
 
 REGISTER — the person is not the operator: never show tokens, endpoints, paths, or tool
 names. A remote path is NEVER text (clients render it as a broken local link) — hand the
@@ -1037,7 +1280,44 @@ working.</p>""", "Connected")
             _tok = _raw[7:].strip() if _raw[:7].lower() == "bearer " else ""
             bridge_subject = (vexa_oauth.resolve_token(_tok, CANONICAL) if _tok else None) \
                 or (_tokens().get(_tok) if _tok else None)
+            # A DELEGATED token is a first-class bearer on this dialect too — same verification, same
+            # scope. Considered only where the two lookups above already came up empty.
+            _bridge_scope = None
+            if not bridge_subject and _tok and _is_delegation_token(_tok):
+                try:
+                    _dc = _verify_delegation(_tok)
+                    bridge_subject = {"uid": str(_dc["sub"]), "email": None}
+                    _bridge_scope = _dc.get("scope")
+                    print(f"[delegated] AUTH ok (do-bridge) uid={_dc['sub']} "
+                          f"regime={(_dc.get('scope') or {}).get('regime')} jti={_dc.get('jti')} "
+                          f"tool={scope['path'][4:].strip('/')}", flush=True)
+                except _DelegationRefused as e:
+                    _bridge_refusal = e
+                    print(f"[delegated] AUTH refused (do-bridge) reason={e.reason} "
+                          f"tool={scope['path'][4:].strip('/')}", flush=True)
+                    # REFUSE, never degrade. A caller holding a dead delegation that gets a 200 back
+                    # cannot tell it has stopped acting as its person: it reads the anonymous body as
+                    # "my person has nothing waiting" and says so, confidently and wrongly.
+                    _b = json.dumps({
+                        "error": "invalid_delegation",
+                        "reason": _bridge_refusal.reason,
+                        "detail": _bridge_refusal.detail,
+                        "remediation": "a delegation token is minted per dispatch and is "
+                                       "short-lived; a new turn gets a fresh one. Do not retry "
+                                       "this token, and do not continue anonymously as if you "
+                                       "were still them.",
+                    }).encode()
+                    await send({"type": "http.response.start", "status": 401, "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"www-authenticate", b'Bearer realm="vexa", error="invalid_token"'),
+                        (b"content-length", str(len(_b)).encode()),
+                    ]})
+                    await send({"type": "http.response.body", "body": _b})
+                    return
             CURRENT.set(bridge_subject["uid"] if bridge_subject else None)
+            # Always SET (never leave stale): contextvars are not guaranteed to be per-request here,
+            # so an unscoped caller must actively clear what a scoped one left behind.
+            CALL_SCOPE.set(_bridge_scope)
             # every tool as a URL, for agents that can only GET. Args come from the query
             # string; values that parse as JSON become numbers/bools/objects, the rest stay
             # strings; a `json` parameter merges in whole structured arguments.
@@ -1140,7 +1420,12 @@ working.</p>""", "Connected")
             _q = dict(_up.parse_qsl((scope.get("query_string") or b"").decode()))
             _c = _q.get("c") or ""
             if _c:
-                if _c in _tokens():
+                if _is_delegation_token(_c):
+                    # The rig's own dialect for clients that cannot set a header. It is verified on
+                    # the delegated branch below like any bearer; it is NOT a setup code and must not
+                    # fall through to the "code we no longer know" refusal.
+                    tok = _c
+                elif _c in _tokens():
                     tok = _c
                 else:
                     _rec = _logins().get(_c)
@@ -1184,6 +1469,41 @@ working.</p>""", "Connected")
         sub = {"uid": oa["uid"], "email": oa.get("email")} if oa else (
             _tokens().get(tok) if tok else None)
 
+        # DELEGATED: a per-dispatch token agent-api minted for a worker it spawned. Considered ONLY
+        # where the code above already concluded the bearer is not one of ours, so no existing path
+        # changes shape. A delegated token that FAILS is refused by NAME rather than falling into the
+        # generic "not recognised" 401 — the caller is a machine that can act on the difference
+        # between "expired, get a fresh dispatch" and "revoked, stop".
+        delegation_refusal = None
+        if tok and not sub and _is_delegation_token(tok):
+            try:
+                _claims = _verify_delegation(tok)
+                sub = {"uid": str(_claims["sub"]), "email": None,
+                       "delegated": True, "scope": _claims.get("scope")}
+                _sc = _claims.get("scope") or {}
+                print(f"[delegated] AUTH ok uid={_claims['sub']} regime={_sc.get('regime')} "
+                      f"workspaces={_sc.get('workspaces')} jti={_claims.get('jti')} "
+                      f"exp_in={int(_claims['exp'] - time.time())}s path={path}", flush=True)
+            except _DelegationRefused as e:
+                delegation_refusal = e
+                print(f"[delegated] AUTH refused reason={e.reason} path={path}", flush=True)
+
+        if delegation_refusal is not None:
+            body = json.dumps({
+                "error": "invalid_delegation",
+                "reason": delegation_refusal.reason,
+                "detail": delegation_refusal.detail,
+                "remediation": "a delegation token is minted per dispatch and is short-lived; a new "
+                               "turn gets a fresh one. Do not retry this token.",
+            }).encode()
+            await send({"type": "http.response.start", "status": 401, "headers": [
+                (b"content-type", b"application/json"),
+                (b"www-authenticate", b'Bearer realm="vexa", error="invalid_token"'),
+                (b"content-length", str(len(body)).encode()),
+            ]})
+            await send({"type": "http.response.body", "body": body})
+            return
+
         if not sub and not public:
             base = CANONICAL.rsplit("/mcp", 1)[0]
             meta = f"{base}/.well-known/oauth-protected-resource"
@@ -1224,6 +1544,9 @@ working.</p>""", "Connected")
         # A bearer token wins; otherwise fall back to an account this very conversation
         # created through start_onboarding.
         CURRENT.set(sub["uid"] if sub else SESSION_BIND.get(sid))
+        # Only a delegated session carries a scope; every other auth path leaves it None, which the
+        # guard reads as "unscoped" and lets through exactly as before.
+        CALL_SCOPE.set((sub or {}).get("scope"))
         return await self.app(scope, receive, send)
 
 
@@ -1233,13 +1556,38 @@ AUTH_MIDDLEWARE = _Auth
 mcp = MCPServer(
     name="vexa-control",
     instructions=(
-        "FIRST ACTION IN EVERY SESSION: call whats_waiting() BEFORE you reply to your person, "
-        "even to a greeting. It returns what is true right now — a meeting happening this "
-        "second, what is queued, what to say first — and none of that is knowable from this "
-        "text.\n"
+        "BEFORE ANYTHING ELSE, LOOK AT YOUR PERSON'S FIRST MESSAGE. If it opens with a "
+        "bracketed tag — any [...] on its first line — the PRECEDENCE rule two paragraphs "
+        "down governs this turn and you do NOT call whats_waiting() first. That fork is the "
+        "whole of it; everything below assumes you took the right branch.\n"
+        "OTHERWISE — FIRST ACTION IN EVERY SESSION: call whats_waiting() BEFORE you reply to "
+        "your person, even to a greeting. It returns what is true right now — a meeting "
+        "happening this second, what is queued, what to say first — and none of that is "
+        "knowable from this text.\n"
         "DO NOT ANSWER OUT OF THESE INSTRUCTIONS. They describe what exists, never what is "
         "happening. An answer composed from them is a guess wearing a uniform, and your "
-        "person cannot tell the difference. Call first, then speak.\n\n"
+        "person cannot tell the difference. Call first, then speak.\n"
+        "PRECEDENCE — A COMPOSED OPENING WINS, AND THE TEST IS THE BRACKETS, NOT THE WORD "
+        "INSIDE THEM. Every preset in _global/asks/ opens with a bracketed tag, and presets "
+        "are added without this text changing — so the rule is mechanical and has no list: "
+        "IF THE TURN'S MESSAGE BEGINS WITH '[', IT IS A PRESET. [prep], "
+        "[minutes-review], [catch-up] are EXAMPLES; a tag you have never seen before is "
+        "still a preset and still your person's first ask. They clicked a link about ONE "
+        "meeting and this is what they clicked.\n"
+        "Answer it FIRST, from the workspace and the meeting it names, exactly as the preset "
+        "says: tell them what you hold, then ONE question. The preset's own words are the "
+        "whole specification of that first reply.\n"
+        "DO NOT CALL whats_waiting() BEFORE THAT ANSWER. Not to get context, not to check, "
+        "not to be safe, and not because a phrase in the preset sounds like the queue — "
+        "'what they missed', 'what they owe someone', 'anything left open' "
+        "are all scoped to the meeting the tag names and are answered from the workspace, "
+        "never from the queue. The queue knows nothing about the meeting they clicked. "
+        "Opening with it instead — 'you have two write-ups stuck' — answers a question "
+        "nobody asked, and it is measurably what happens without this rule: an opening "
+        "carrying a preset tag still spent six calls on the queue before the person's own "
+        "question was touched.\n"
+        "Call whats_waiting() AFTER that opening, and only if it adds something they did "
+        "not ask about.\n\n"
 
         "Vexa: meetings become words, words become team memory, and your person's own agent — "
         "you — drives all of it from this conversation.\n\n"
@@ -1248,17 +1596,23 @@ mcp = MCPServer(
         "stranger: an attendee of a meeting somebody else organised, who clicked one button in "
         "one mail. To them you introduce yourself in ONE sentence, in two halves, and neither "
         "half is yours to invent.\n"
-        "  \u2022 The COMPANY half is read from `_global/README.md` — its first heading is the "
-        "company this Vexa belongs to, written by their own administrator at setup. Read it. "
+        "  \u2022 The COMPANY half is read from `_global/README.md` \u2014 its first heading is "
+        "the company this Vexa belongs to, written by their own administrator at setup. Read it. "
         "Never guess a company name, and never substitute the domain of an email address.\n"
         "  \u2022 The SERVICE half is FIXED PRODUCT TEXT, the same in every deployment and in "
         "every mail this product sends, so a person who reads one and then the other does not "
         "meet two different products. It is: \u201cI sit in meetings you are invited to; "
         "afterwards you get what came out of them and what they leave on your plate.\u201d\n"
-        "PLACEHOLDER WORDING — the founder has not chosen the final phrasing. Say the substance "
-        "plainly and do not embellish it.\n"
+        "PLACEHOLDER WORDING \u2014 the founder has not chosen the final phrasing. Say the "
+        "substance plainly and do not embellish it.\n"
         "Say it ONCE, to somebody who has not heard it. Repeating it to a person who has been "
         "here before is the tell of a machine that does not know who it is talking to.\n\n"
+
+        "WHO CAN SEE WHAT. A person\u2019s own workspace is NOT private from the company. If they "
+        "ask, or if they are about to put something in it that suggests they think otherwise, say "
+        "so plainly: Vexa runs on this organisation\u2019s own servers; what they and their "
+        "colleagues keep in their workspaces is visible to the company\u2019s agents; recordings "
+        "and transcripts stay here.\n\n"
 
         "PROTOCOL: work what whats_waiting returns, call it again until empty. If this person "
         "has never set Vexa up, the `start` prompt walks the whole thing.\n\n"
@@ -1385,6 +1739,55 @@ mcp = MCPServer(
 
 
 # ---------------------------------------------------------------- flows
+
+def _capped(obj, limit: int) -> str:
+    """Serialise ``obj`` as VALID json inside a response budget of ``limit`` characters.
+
+    The one guarantee is validity, not size: if the budget is too small to hold even the
+    "it does not fit" answer, that answer is returned whole rather than cut. Every real
+    budget here is 2,000-12,000 characters, so this matters only to a caller inventing a
+    tiny one.
+
+    Every tool here used to end `json.dumps(...)[:N]`, which slices the STRING — so the moment a
+    payload outgrew its cap the tool returned a JSON document cut mid-key, and every caller saw a
+    parse error or, worse, quietly read nothing. `meetings_list` did exactly that: 24 meetings on
+    the gateway, exactly 10,000 characters returned, ending `"start_tim`, and the agent reading it
+    concluded the person had NO meetings. A truncation that turns 24 into 0 without an error is not
+    a size limit, it is a silent wrong answer.
+
+    So the DATA is trimmed, never the text: the longest list in the payload gives up entries until
+    the whole thing fits, and what was dropped is stated in the result where a reader — human or
+    agent — will see it. If it still does not fit, the caller gets a valid object saying so rather
+    than a broken one saying nothing.
+    """
+    out = json.dumps(obj)
+    if len(out) <= limit:
+        return out
+    if isinstance(obj, dict):
+        obj = json.loads(out)          # a copy; never mutate the caller's structure
+        for _ in range(200):
+            holder, key, longest = None, None, 0
+            for container in (obj, *(v for v in obj.values() if isinstance(v, dict))):
+                for k, v in container.items():
+                    if isinstance(v, list) and len(v) > longest:
+                        holder, key, longest = container, k, len(v)
+            if holder is None or longest == 0:
+                break
+            total = holder.setdefault("_truncated", {}).get(key, {}).get("total", longest)
+            drop = max(1, len(holder[key]) // 8)
+            holder[key] = holder[key][:-drop]
+            holder["_truncated"][key] = {
+                "shown": len(holder[key]), "total": total,
+                "note": "trimmed to fit the tool's response budget — ask again with a "
+                        "narrower filter, or a limit, to see the rest"}
+            out = json.dumps(obj)
+            if len(out) <= limit:
+                return out
+    return json.dumps({"error": "the result does not fit this tool's response budget",
+                       "budget_chars": limit,
+                       "do": "narrow the request (a filter, a limit, or one id) and ask again"})
+
+
 @mcp.tool()
 @_anon_guard
 def flows_list(token: str = "") -> str:
@@ -1395,7 +1798,7 @@ def flows_list(token: str = "") -> str:
     time.\n\n    If you have not called whats_waiting() yet this session, call it first."""
     me()   # account-scoped: this touches shared state
     st, body = _http("GET", f"{FLOWS_API}/flows", _fkey())
-    return json.dumps({"status": st, **(body if isinstance(body, dict) else {"body": body})})[:12000]
+    return _capped({"status": st, **(body if isinstance(body, dict) else {"body": body})}, 12000)
 
 
 @mcp.tool()
@@ -1412,14 +1815,21 @@ def flows_submit(name: str, on_event: str, steps: list[str],
 
     REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet
     say who it works for is a machine configured for nobody."""
-    uid = me()   # account-scoped: this touches shared state
-    gated = _refuse_if_gated("flows_submit", uid)
+    try:
+        _actor = _operator_or_refuse("flows_submit")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
+    gated = _refuse_if_gated("flows_submit", me())
     if gated:
         return gated
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
-    return json.dumps({"status": st, "result": body})[:4000]
+    return _capped({"status": st, "result": body}, 4000)
 
 
 @mcp.tool()
@@ -1431,14 +1841,21 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
     rewrites work already running.
 
     REFUSED while the company layer is missing, for the same reason flows_submit is."""
-    uid = me()   # account-scoped: this touches shared state
-    gated = _refuse_if_gated("flow_lifecycle", uid)
+    try:
+        _actor = _operator_or_refuse("flow_lifecycle")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
+    gated = _refuse_if_gated("flow_lifecycle", me())
     if gated:
         return gated
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
-    return json.dumps({"status": st, "result": body})[:3000]
+    return _capped({"status": st, "result": body}, 3000)
 
 
 @mcp.tool()
@@ -1450,7 +1867,7 @@ def reactions_list(status: str = "", token: str = "") -> str:
     me()   # account-scoped: this touches shared state
     q = f"?status={status}" if status else ""
     st, body = _http("GET", f"{FLOWS_API}/reactions{q}", _fkey())
-    return json.dumps({"status": st, "result": body})[:12000]
+    return _capped({"status": st, "result": body}, 12000)
 
 
 @mcp.tool()
@@ -1466,7 +1883,7 @@ def reaction_signal(reaction_id: str, verb: str, token: str = "") -> str:
              step was waiting on and do not want to wait out its poll interval."""
     me()   # account-scoped: this touches shared state
     st, body = _http("POST", f"{FLOWS_API}/reactions/{reaction_id}/{verb}", _fkey(), {})
-    return json.dumps({"status": st, "result": body})[:3000]
+    return _capped({"status": st, "result": body}, 3000)
 
 
 @mcp.tool()
@@ -1480,14 +1897,35 @@ def fact_emit(event_type: str, source_event_id: str, subject_refs: dict,
     no-op rather than a duplicate.
 
     invite.received wants: organizer, url, start (epoch), ics_uid, title, group|null."""
-    me()   # account-scoped: this touches shared state
+    try:
+        _actor = _operator_or_refuse("fact_emit")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
     import sys
-    sys.path.insert(0, FL + "/src")
-    os.environ.setdefault("VEXA_FLOWS_DB_URL", (HOME / ".storm/dburl").read_text().strip())
-    from flows import Registry, admit
-    from flows.clock import SystemClock
-    from flows.db import postgres_db
-    from flows_defs import production
+    src = _flows_src()
+    if src is None:
+        return _flows_unavailable("fact_emit")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    if not os.environ.get("VEXA_FLOWS_DB_URL"):
+        dburl = HOME / ".storm/dburl"
+        if not dburl.exists():
+            return _flows_unavailable(
+                "fact_emit",
+                "VEXA_FLOWS_DB_URL is unset and there is no ~/.storm/dburl to read it from")
+        os.environ["VEXA_FLOWS_DB_URL"] = dburl.read_text().strip()
+    try:
+        from flows import Registry, admit
+        from flows.clock import SystemClock
+        from flows.db import postgres_db
+        from flows_defs import production
+    except ImportError as e:
+        return _flows_unavailable(
+            "fact_emit", f"the flows engine at {src} did not import: {type(e).__name__}: {e}")
     db = postgres_db(os.environ["VEXA_FLOWS_DB_URL"])
     reg = Registry()
     production.build(reg, db)
@@ -1512,7 +1950,7 @@ def workspace_tree(slug: str = "", token: str = "") -> str:
     uid = me()
     q = f"?slug={slug}" if slug else ""
     st, body = _http("GET", f"{AGENT_API}/api/workspace/tree{q}", {"X-User-Id": uid})
-    return json.dumps({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body})[:8000]
+    return _capped({"for_display": "every file here is reachable at <base>/w/<path>?token=... — but NEVER show a person these paths: they are arguments for workspace_read/write; show names and links", "status": st, "result": body}, 8000)
 
 
 @mcp.tool()
@@ -1731,7 +2169,7 @@ def workspace_init(token: str = "") -> str:
     """Seed a fresh personal workspace for a user (idempotent)."""
     uid = me()
     st, body = _http("POST", f"{AGENT_API}/api/workspace/init", {"X-User-Id": uid}, {})
-    return json.dumps({"status": st, "result": body})[:2000]
+    return _capped({"status": st, "result": body}, 2000)
 
 
 # ---------------------------------------------------------------- meetings / people
@@ -1755,7 +2193,7 @@ def meetings_list(token: str = "") -> str:
     """Every meeting a user can see, through the gateway with that user's own key.\n\n    If you have not called whats_waiting() yet this session, call it first."""
     uid = me()
     st, body = _gw_http(uid, "GET", "/meetings")
-    return json.dumps({"status": st, "result": body})[:10000]
+    return _capped({"status": st, "result": body}, 10000)
 
 
 @mcp.tool()
@@ -1856,52 +2294,167 @@ def zoom_transcript_to_segments(name: str, path: str, token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def meeting_seed(native_id: str, title: str, video_id: str) -> str:
-    """Create a completed meeting for a user and load a real transcript into it.
+def meeting_seed(native_id: str, title: str, video_id: str,
+                 started_at: str = "", occurred_at: str = "") -> str:
+    """Create a COMPLETED, ADDRESSABLE meeting for a user and load a real transcript into it.
 
-    This is the capture double: instead of driving a browser into a live call, it writes the
-    segments a bot would have produced. Everything downstream — the post-meeting flow, the
-    agent turn, the artifacts — then runs on genuinely messy multi-speaker material rather
-    than a hand-written fixture."""
+    This is the capture double: instead of driving a browser into a live call, it imports the
+    words a bot would have produced. Everything downstream — the post-meeting flow, the agent
+    turn, the artifacts — then runs on genuinely messy multi-speaker material rather than a
+    hand-written fixture.
+
+    TWO service calls, and nothing else. `POST /meetings` mints the row; `POST
+    /meetings/{id}/transcript-import` puts the transcript on it and completes it with the
+    occurrence window the recording actually covers. Both through the gateway, on the caller's own
+    key — the product's `import a transcript` feature, used exactly as a person would use it.
+
+    It used to do far more, and none of it was ours to do: read the postgres password out of
+    another container with `docker inspect`, INSERT `meeting_sessions` and `transcriptions` over
+    `docker exec … psql` with speaker names string-interpolated into SQL, climb the bot FSM through
+    a callback meant for a browser, then UPDATE `meetings.start_time/end_time` by hand because no
+    route took a time. Four writers on tables meeting-api owns (the audit's V4/N5), and it still
+    produced rows the product never makes. `started_at` is now the service's input, not a column
+    this tool corrects afterwards.
+
+    `started_at` is WHEN THE MEETING HAPPENED (ISO-8601, or epoch seconds). Pass it. It is the
+    row's `scheduled_at` AND the start of its occurrence window; its LENGTH is the transcript's
+    own — the last segment's `end` — so a 40-minute recording seeds a 40-minute meeting instead of
+    a zero-length one. Without it the default is a call that ended just this second. A double that
+    cannot say when the meeting was is not a double of a meeting: `_meeting_stamp` falls back to
+    today when the row has no time, so several occurrences of one recurring series collapse onto
+    today's date and into a single note file. `occurred_at` is the old name for this argument and
+    still works.
+
+    IDEMPOTENT: the import's identity is (source, meeting row), so re-seeding the same transcript
+    into the same meeting writes nothing and says so. Seeding it into a NEW row imports it again.
+
+    It does NOT return the transcript. The agent reads the words itself with
+    `meeting_transcript(meeting_id=<row>, tail=0)` — all of them, not a copy truncated to fit
+    inside an event."""
     uid = me()
+    import datetime as _dt
+
     segs_path = HOME / ".storm/caps" / f"{video_id}.segments.json"
     if not segs_path.exists():
         return json.dumps({"error": "run captions_to_segments first"})
     segs = json.loads(segs_path.read_text())
-    st, m = _gw_http(uid, "POST", "/meetings", {"title": title, "scheduled_at": None})
+    if not segs:
+        return json.dumps({"error": f"no segments in {segs_path}"})
+    # The run's length is the transcript's own length — segment `end`s are seconds from the start
+    # of the capture, so the last one IS the duration of the meeting the bot sat through.
+    duration = max(float(s["end"]) for s in segs)
+    when_raw = str(started_at or occurred_at or "").strip()
+    if when_raw:
+        try:
+            started = (_dt.datetime.fromtimestamp(float(when_raw), _dt.timezone.utc)
+                       if when_raw.replace(".", "", 1).isdigit()
+                       else _dt.datetime.fromisoformat(when_raw.replace("Z", "+00:00")))
+        except ValueError:
+            # LOUD, not "a bad stamp must not lose the seed". A stamp we silently drop seeds the
+            # meeting at the wrong moment, which is the exact defect this argument exists to fix —
+            # and the caller never learns their stamp was thrown away.
+            return json.dumps({"error": "started_at is neither ISO-8601 nor epoch seconds",
+                               "started_at": when_raw})
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_dt.timezone.utc)
+        started = started.astimezone(_dt.timezone.utc)
+    else:
+        # Default: the call ENDED just now — the state the post-meeting flow meets in the wild.
+        started = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=duration)
+    ended = started + _dt.timedelta(seconds=duration)
+    when = started.isoformat()
+
+    # A seeded row must be ADDRESSABLE the way a real one is. POST /meetings derives
+    # (platform, native_meeting_id) from `meeting_url` and stores ("unknown", NULL) without one —
+    # and several product paths identify a meeting by that pair rather than by row id. A JITSI url
+    # deliberately: meeting-api requires a STRICT abc-defg-hij code for google_meet, which would
+    # force a synthetic native id and break the caller's own identity — the note filename and the
+    # dedup key both ride on it. The jitsi room rule is any path segment, so the native id survives
+    # verbatim as native_meeting_id.
+    url = f"https://meet.jit.si/{native_id}"
+    st, m = _gw_http(uid, "POST", "/meetings",
+                     {"title": title, "scheduled_at": when, "meeting_url": url})
+    if st == 409:
+        # 409 is NOT "the url was rejected". It is `uq_meeting_active_user_platform_native`
+        # saying an ADDRESSABLE non-terminal row for jitsi/<native_id> already exists for this
+        # user. This block used to retry WITHOUT the url, which succeeds — and mints exactly the
+        # ("unknown", NULL) row the paragraph above exists to prevent: no share can be minted
+        # against it, so the attendee mail ships with no token. One 409 cost the founder a click
+        # into a chat that could not see meeting 97.
+        #
+        # We do NOT adopt the existing row. Non-terminal means planned or LIVE, and importing a
+        # transcript onto a row this tool did not create would stack a second capture source on a
+        # real meeting's segments — which is why the import route itself refuses a row with a bot
+        # in flight. So the seed makes the caller's intent explicit instead: it names the row that
+        # is in the way and the two ways out. A seed that reaches `completed` leaves the index (the
+        # constraint is partial on status NOT IN (completed, failed)), so re-seeding a FINISHED
+        # double never lands here; what does is a leftover idle/scheduled row, or a live meeting.
+        gst, gb = _gw_http(uid, "GET", "/meetings?limit=100")
+        rows = (gb or {}).get("meetings", []) if isinstance(gb, dict) else []
+        dup = next((x for x in rows
+                    if x.get("platform") == "jitsi"
+                    and str(x.get("native_meeting_id")) == str(native_id)
+                    and x.get("status") not in ("completed", "failed")), {})
+        return json.dumps({"error": "a non-terminal meeting already holds this native id",
+                           "status": 409, "native_id": native_id, "platform": "jitsi",
+                           "existing_meeting_id": dup.get("id"),
+                           "existing_status": dup.get("status"),
+                           "lookup_status": gst,
+                           "next": "seed under a different native_id, or meeting_delete("
+                                   "meeting_id=<existing>) if that row is a leftover double"})
     if st not in (200, 201):
-        return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300]})
+        # Every other non-2xx, 422 ("unrecognized 'meeting_url'") included. The url-less retry
+        # used to live here as well; it is gone. An unaddressable row IS a defective double, so
+        # trading a loud failure for a silent one bought nothing and lost the share.
+        return json.dumps({"error": "create failed", "status": st, "body": str(m)[:300],
+                           "meeting_url": url})
     mid = m["id"]
-    rows = []
-    for i, s in enumerate(segs):
-        txt = s["text"].replace("'", "''")[:1400]
-        sp = s["speaker"].replace("'", "''")
-        rows.append("INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,"
-                    "language,session_uid,segment_id,created_at) VALUES "
-                    f"({mid},{s['start']:.2f},{s['end']:.2f},'{txt}','{sp}','en',"
-                    f"'yt-{video_id}','yt-{i}',now()) ON CONFLICT DO NOTHING")
-    pw = subprocess.run(
-        ["docker", "inspect", "vexa-dogfood-postgres-1", "--format",
-         "{{range .Config.Env}}{{println .}}{{end}}"], capture_output=True, text=True,
-        check=True).stdout.split("POSTGRES_PASSWORD=")[1].split("\n")[0].strip()
-    chunk, loaded = 400, 0
-    for i in range(0, len(rows), chunk):
-        sql = "; ".join(rows[i:i + chunk])
-        r = subprocess.run(["docker", "exec", "-e", f"PGPASSWORD={pw}",
-                            "vexa-dogfood-postgres-1", "psql", "-U", "postgres", "-d", "vexa",
-                            "-q", "-c", sql], capture_output=True, text=True)
-        if r.returncode == 0:
-            loaded += len(rows[i:i + chunk])
-        else:
-            return json.dumps({"meeting_id": mid, "loaded": loaded,
-                               "error": r.stderr[:300]})
-    # The same rendering run_meeting produces, so a fact emitted straight at
-    # meeting.completed carries what process_meeting reads (refs.transcript). Capped at the
-    # same 8000 chars the real step caps at.
-    transcript = "\n".join(f"{s['speaker']}: {s['text']}" for s in segs)[:8000]
+    # POST-CONDITION, checked rather than assumed: this tool must never report success having
+    # created a row that cannot be addressed. Both fields come back on the create response.
+    if m.get("platform") in (None, "", "unknown") or not m.get("native_meeting_id"):
+        return json.dumps({"error": "seed created an UNADDRESSABLE row — no share can be minted "
+                                    "against it and the attendee link would carry no token",
+                           "meeting_id": mid, "platform": m.get("platform"),
+                           "native_meeting_id": m.get("native_meeting_id"),
+                           "meeting_url": url,
+                           "next": "meeting_delete(meeting_id=%s) and fix the seed url" % mid})
+
+    # The whole rest of the seed, in one call the product exposes. `source: "seed"` is declared,
+    # never inferred — the row records that these words came from a double, so nothing downstream
+    # has to guess whether a meeting was recorded or imported.
+    st, body = _gw_http(uid, "POST", f"/meetings/{mid}/transcript-import", {
+        "segments": [{"start": float(s["start"]), "end": float(s["end"]),
+                      "speaker": s.get("speaker"), "text": s.get("text") or "",
+                      "language": s.get("language") or "en"} for s in segs],
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "ended_at": ended.isoformat().replace("+00:00", "Z"),
+        "source": "seed",
+    })
+    if st != 200:
+        return json.dumps({"meeting_id": mid, "error": "transcript import refused",
+                           "status": st, "body": str(body)[:400],
+                           "next": "meeting_delete(meeting_id=%s) and retry" % mid})
+    if not isinstance(body, dict):
+        return json.dumps({"meeting_id": mid, "error": "import returned no row",
+                           "body": str(body)[:300]})
+
+    # Report what the SERVICE says the row is, not what this tool intended — the same discipline
+    # the psql read-back had, now for free because the route answers with the row it wrote.
     return json.dumps({"meeting_id": mid, "native_id": native_id, "title": title,
-                       "segments_loaded": loaded, "uid": uid,
-                       "transcript": transcript})
+                       "segments_loaded": body.get("segments_imported"),
+                       "segments_captured": body.get("segments_captured"),
+                       "imported": body.get("imported"),
+                       "uid": uid, "session_uid": body.get("session_uid"),
+                       "source": body.get("source"), "imported_at": body.get("imported_at"),
+                       "scheduled_at": when,
+                       "platform": body.get("platform") or m.get("platform"),
+                       "native_meeting_id": body.get("native_meeting_id")
+                       or m.get("native_meeting_id"),
+                       "status": body.get("status"),
+                       "start_time": body.get("start_time"),
+                       "end_time": body.get("end_time"),
+                       "duration_minutes": round(duration / 60, 1),
+                       "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
 @mcp.tool()
@@ -1918,7 +2471,7 @@ def mail_inbox(limit: int = 20, token: str = "") -> str:
                  "to": [t["Address"] for t in m.get("To", [])],
                  "subject": m["Subject"], "id": m["ID"]}
                 for m in body.get("messages", [])]
-        return json.dumps({"total": body.get("total"), "messages": msgs})[:8000]
+        return _capped({"total": body.get("total"), "messages": msgs}, 8000)
     return json.dumps({"status": st, "body": str(body)[:400]})
 
 
@@ -1963,11 +2516,20 @@ def _write_json(uid: str, path: str, obj) -> bool:
 
 @mcp.tool()
 def whats_waiting(token: str = "") -> str:
-    """START HERE on every connection. Everything Vexa needs from this person, in one read.
+    """START HERE on every connection — EXCEPT the one case named below, which is common.
+    Everything Vexa needs from this person, in one read.
 
     Vexa cannot reach your agent when you are not connected — there is no live session after a
     meeting ends at night. So work waits here and you pull it. Call this first, work what it
     returns, then call it again until it is empty.
+
+    THE EXCEPTION, and it is the common one: if this turn's message opens with a BRACKETED TAG —
+    ANY [...] at all, not a fixed list; every _global/asks/* preset starts with one and new presets
+    appear without this text changing — your person clicked a link about ONE meeting and that
+    opening is their question. Answer it FIRST, then call this. A queue is not an answer to "what
+    should I know before this meeting", and leading with one reads as changing the subject. A
+    preset phrase that sounds like the queue ("what they missed", "what they owe someone") is
+    scoped to the meeting the tag names and is answered from the workspace, not from here.
 
     Returns four kinds of item:
       setup      — the workspace is not scaffolded yet; Vexa cannot write minutes until it is
@@ -2195,7 +2757,7 @@ def whats_waiting(token: str = "") -> str:
             "what is waiting, and handle it — it uses your tokens and you can stop it anytime.\" "
             "On a yes, in Claude Code: /loop 15m with a prompt that calls whats_waiting and "
             "works what it returns.")
-    return json.dumps(out)[:12000]
+    return _capped(out, 12000)
 
 
 # ---------------------------------------------------------------- knowledge lifecycle
@@ -2336,7 +2898,7 @@ def _company_layer_state(uid: str) -> dict:
     """What the company layer holds, from the one service that can see the store.
 
     FAIL-CLOSED like every other reader of this gate: if agent-api cannot answer, the layer is
-    missing. A verb that configures the machine must not proceed because a probe timed out."""
+    missing. A verb that reconfigures the machine must not proceed because a probe timed out."""
     st, body = _http("GET", f"{AGENT_API}/api/global/state", {"X-User-Id": uid})
     if st != 200 or not isinstance(body, dict):
         return {"global_setup": "missing", "reasons": [f"agent-api answered {st}"],
@@ -2344,11 +2906,14 @@ def _company_layer_state(uid: str) -> dict:
     return body
 
 
-def _refuse_if_gated(verb: str, uid: str) -> str | None:
+def _refuse_if_gated(verb: str, uid: str):
     """The refusal an operator verb returns while the company layer is missing, or None.
 
-    It NAMES ITSELF. A bare "forbidden" from a tool leaves the agent to guess whether it asked
-    wrongly or asked too early, and the two have opposite fixes."""
+    It NAMES ITSELF. A bare "forbidden" leaves the agent to guess whether it asked wrongly or asked
+    too early, and those two have opposite fixes. Note this is a DIFFERENT refusal from
+    `_operator_or_refuse`: that one says "you are not the operator", this one says "there is not yet
+    an organisation to operate". Both can be true; they are answered separately because the person
+    reading the answer has to know which one to fix."""
     state = _company_layer_state(uid)
     if state.get("global_setup") == "completed":
         return None
@@ -2375,7 +2940,7 @@ def mark_global_ready(token: str = "") -> str:
     It RE-READS the files itself before it accepts anything, commits them to the `_global` git
     history with the administrator as the author, and lifts the instance gate — so other people can
     sign in and the flows engine starts sending. It is a CHECK, not a claim: if the layer is
-    incomplete it refuses and tells you exactly what is missing, so calling it is always safe and
+    incomplete it refuses and tells you exactly what is missing, so calling it is always safe, and
     telling the administrator it is done before this verb has accepted it is always wrong.
 
     Admin only. Everyone else gets a refusal naming that."""
@@ -2521,9 +3086,20 @@ def bot_send(meeting_url: str, bot_name: str = "", token: str = "") -> str:
 
 @mcp.tool()
 @_anon_guard
-def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
-                       token: str = "") -> str:
+def meeting_transcript(meeting_url: str = "", tail: int = 80, since: str = "",
+                       meeting_id: str = "", token: str = "") -> str:
     """The words of a meeting, live while it runs or complete after it ends.
+
+    Address it EITHER by a pasted link (meeting_url) OR by its row id (meeting_id) — the same
+    pair meeting_info / meeting_update / meeting_delete already take, resolved the same way.
+    The row id is the one that matters in practice: every deeplink this product mints speaks row
+    ids (`?meeting=<row>`), the `{{meeting}}` an ask-preset substitutes IS a row id, and a
+    captured meeting with no platform/native pair — a seeded or imported one — had no address
+    at all here. An agent told "you have the meeting" could not read it, because this was the
+    one verb in the family that would not accept what it had been handed.
+
+    TO READ A WHOLE MEETING, pass tail=0: you get every segment. That is what a write-up needs,
+    and the alternative was paging a finished meeting as though it were still running.
 
     TO FOLLOW A LIVE CALL, pass back the `cursor` from your last call as since=<cursor>: you
     get only what has been said since, and the next cursor. Nothing to remember, nothing to
@@ -2534,10 +3110,19 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
     means the room is quiet; an `error` key means your reader failed. They are opposite facts
     and your person needs to know which."""
     uid = me()
-    platform, mid = _meeting_ref(meeting_url)
-    if not platform:
-        return json.dumps({"error": mid})
-    st, r = _gw_http(uid, "GET", f"/transcripts/{platform}/{mid}")
+    platform = None
+    if meeting_id or not meeting_url:
+        row, err = _resolve_meeting(uid, meeting_url, meeting_id)
+        if not row:
+            return json.dumps({"error": err or "give meeting_url=<link> or meeting_id=<row id>"})
+        mid = row
+        # The gateway already serves this shape; it was simply unreachable from a tool.
+        st, r = _gw_http(uid, "GET", f"/transcripts/by-id/{row}")
+    else:
+        platform, mid = _meeting_ref(meeting_url)
+        if not platform:
+            return json.dumps({"error": mid})
+        st, r = _gw_http(uid, "GET", f"/transcripts/{platform}/{mid}")
     if st != 200:
         return json.dumps({"error": "could not read the transcript", "read_ok": False,
                            "status": st,
@@ -2555,6 +3140,8 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
         # everything strictly after the cursor. String compare is right for ISO timestamps and
         # for the float-seconds the gateway also emits, as long as both sides come from _at.
         fresh = [g for g in segs if str(_at(g) or "") > str(since)]
+    elif int(tail) <= 0:
+        fresh = segs                      # tail=0 — the WHOLE meeting, for a write-up
     else:
         fresh = segs[-max(1, min(int(tail), 400)):]
 
@@ -2564,7 +3151,12 @@ def meeting_transcript(meeting_url: str, tail: int = 80, since: str = "",
              for g in fresh if (g.get("text") or "").strip()]
     live = str((r or {}).get("status", "")).lower() in ("active", "requested", "awaiting_admission")
     cursor = str(_at(segs[-1])) if segs else (since or "")
-    return json.dumps({"ui_url": _ui_meeting_url(platform, mid), "meeting": mid,
+    # Addressed by row id there is no platform/native pair to build a UI link from unless the
+    # row carries one — an empty string beats a well-formed link to nothing.
+    _plat = platform or (r or {}).get("platform")
+    _nat = (r or {}).get("native_meeting_id") if platform is None else mid
+    return json.dumps({"ui_url": (_ui_meeting_url(_plat, _nat) if _plat and _nat else ""),
+                       "meeting": mid,
                        "status": (r or {}).get("status"),
                        "read_ok": True,
                        "cursor": cursor,
@@ -2735,7 +3327,7 @@ def meeting_participants(meeting_url: str, token: str = "") -> str:
     st, r = _gw(uid, "GET", f"/meetings/{platform}/{mid}/participants")
     if st != 200:
         return json.dumps({"error": "no participant data for that meeting", "status": st})
-    return json.dumps(r)[:4000]
+    return _capped(r, 4000)
 
 
 @mcp.tool()
@@ -2797,7 +3389,7 @@ def recordings_list(token: str = "") -> str:
     st, r = _gw(uid, "GET", "/recordings")
     if st != 200:
         return json.dumps({"error": "could not list recordings", "status": st})
-    return json.dumps(r)[:4000]
+    return _capped(r, 4000)
 
 
 @mcp.tool()
@@ -2870,22 +3462,77 @@ def auth_claim(handle: str) -> str:
     return json.dumps(out)
 
 
+# A preset NAME and only a name — the narrow, lowercase reading of the same test the terminal
+# applies before it will resolve one, so everything mintable here is openable there. The preset
+# BODY lives in the admin-written _global/asks/<name>.md and never in the URL: a link that could
+# carry prompt text would let anyone who can send a link drive the recipient's agent.
+_ASK_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# A meeting ref on an ask link is substituted into the preset's {{meeting}}, so it lands INSIDE
+# the prompt the reader's agent opens holding. Anything free-form there is prompt text through a
+# second door, which is exactly what the name rule above exists to shut. Two shapes only.
+_ASK_MEETING = re.compile(r"^(?:\d{1,12}|[a-z][a-z0-9_-]{0,31}/[A-Za-z0-9._-]{1,128})$")
+
+
 @mcp.tool()
 @_anon_guard
-def deeplink(target: str, ref: str = "", token: str = "") -> str:
+def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: str = "",
+             token: str = "") -> str:
     """A link that opens the Vexa terminal in a specific state — hand it to your person
     whenever you talk about a thing they might want to SEE.
 
-    target: 'meeting' (ref = a meeting link or platform/native), 'meetings' (the list),
+    WHICH LINK TO HAND
+    - they should DO something in a fresh chat — review the minutes, prep the call, answer a
+      standing question → target='ask', name=<preset>, optionally meeting=<row id> and
+      ws=<workspace slug>. You choose WHICH preset; you never choose what it says.
+    - they should LOOK at one meeting → target='meeting', ref=<row id | link | platform/native>.
+    - they should see two things at once → 'view', or 'pre_meeting'/'during_meeting'/
+      'post_meeting' for the lifecycle shapes.
+    - they should read one file → target='workspace_file', ref=<path>.
+    - the whole list → 'meetings'. The org-level setup conversation → 'setup_global'.
+
+    target: 'ask' (name = a preset in _global/asks/; meeting and ws are refs the preset may
+    substitute), 'meeting' (ref = a meeting link or platform/native), 'meetings' (the list),
     'workspace_file' (ref = path), 'setup_global' (the org-level setup conversation),
     'view' (ref = pane spec 'file:<path>,meeting:<platform/native>,readme' — first pane
     left, the rest split beside it: YOU compose what the person sees), or the lifecycle
     presets 'pre_meeting' / 'during_meeting' / 'post_meeting' (ref = platform/native,
-    optionally 'platform/native|<doc path>' to put a specific file beside the meeting)."""
+    optionally 'platform/native|<doc path>' to put a specific file beside the meeting).
+
+    NEVER put prompt text in a link. name= is a preset NAME; the words behind it are a file
+    only an admin can write, and that is the whole security of the ask link."""
     me()
     import urllib.parse as _up
     em = _caller_email()
     as_q = f"as={_up.quote(em)}" if em else ""
+    if target == "ask":
+        nm = name.strip()
+        if not _ASK_NAME.match(nm):
+            return json.dumps({"error": "ask needs name=<preset>: a NAME only, matching "
+                                        "^[a-z0-9][a-z0-9_-]{0,63}$. The preset's words live in "
+                                        "_global/asks/<name>.md, which only an admin can write — "
+                                        "a link never carries prompt text."})
+        q = {"ask": nm}
+        w = ws.strip()
+        if w:
+            if not _ASK_NAME.match(w):
+                return json.dumps({"error": "ws must be a workspace slug matching "
+                                            "^[a-z0-9][a-z0-9_-]{0,63}$"})
+            q["ws"] = w
+        mr = meeting.strip()
+        if mr:
+            if not _ASK_MEETING.match(mr):
+                return json.dumps({"error": "meeting must be a row id (digits) or platform/native — "
+                                            "it is substituted into the preset's {{meeting}}, "
+                                            "so free text there is prompt text by another door."})
+            q["meeting"] = mr
+        return json.dumps({
+            "url": f"{UI_BASE}/?{_up.urlencode(q)}",
+            "opens": "a fresh chat already holding that preset, over the workspaces the preset "
+                     "names — context and opening prompt arrive together",
+            "the_words_are_not_in_the_link": f"they are in _global/asks/{nm}.md; editing that "
+                                             f"file changes every future click, and nothing is "
+                                             f"rebuilt",
+        })
     if target == "meeting":
         if ref.strip().isdigit():
             return json.dumps({"url": _ui_meeting_url("", "", row_id=ref.strip()),
@@ -2929,7 +3576,7 @@ def deeplink(target: str, ref: str = "", token: str = "") -> str:
         q = f"?setup=global" + (f"&{as_q}" if as_q else "")
         return json.dumps({"url": f"{UI_BASE}/{q}",
                            "opens": "the org-level setup conversation"})
-    return json.dumps({"error": "target must be meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "
+    return json.dumps({"error": "target must be ask | meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "
                                 "setup_global"})
 
 
@@ -3285,7 +3932,7 @@ def friction_so_far(token: str = "") -> str:
             rows.reverse()
         except Exception:  # noqa: BLE001
             rows = []
-    return json.dumps({"count": len(rows), "reports": rows[:40]})[:12000]
+    return _capped({"count": len(rows), "reports": rows[:40]}, 12000)
 
 
 # ---------------------------------------------------------------- visible affordances
