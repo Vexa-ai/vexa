@@ -171,3 +171,33 @@ describe("refusalCopy — every refusal states a state and a next move", () => {
     expect(refusalCopy({ reason: "forbidden", status: 403, detail: "" }).title).toMatch(/someone else/i);
   });
 });
+
+
+/** F27 — a chat says what it IS; the header does not deduce it from mount arithmetic.
+ *
+ *  The flavour read `workspaces.filter(w => w !== "_global").length === 0 ? "chat · admin" : "chat"`.
+ *  That was true only while the company-setup conversation mounted `_global` alone — and the
+ *  two-scaffold ruling (the first chat writes the company layer AND the admin's own desk) made it
+ *  mount both, at which point the instance's most consequential conversation announced itself as an
+ *  ordinary personal chat. The kind travels on the record instead. */
+describe("the scaffold kind reaches the chat", () => {
+  const base = {
+    id: "S1", kind: "admin-setup", who: "a@b.test", meeting: null, phase: null,
+    workspaces: ["_global", "u_admin"], refs: {}, opening_preset: "setup-global",
+    // a record with no opening text is refused by design — it would open an empty chat
+    opening_text: "[setup-global] …", tabs: [], focus: "", redeemed_at: null,
+  };
+
+  it("carries `admin-setup` even though the chat mounts a desk beside _global", () => {
+    const chat = scaffoldToChat(parseScaffold(base)!);
+    expect(chat.scaffoldKind).toBe("admin-setup");
+    // the arithmetic the old rule used would have called this an ordinary chat
+    expect(chat.workspaces.filter((w) => w !== "_global").length).toBeGreaterThan(0);
+  });
+
+  it("carries the kind for every other arrival too, so nothing has to special-case one", () => {
+    for (const kind of ["post-meeting", "prep", "invite-offer", "catch-up", "group-setup"]) {
+      expect(scaffoldToChat(parseScaffold({ ...base, kind })!).scaffoldKind).toBe(kind);
+    }
+  });
+});

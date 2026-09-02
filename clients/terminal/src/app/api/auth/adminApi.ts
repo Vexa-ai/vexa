@@ -216,6 +216,65 @@ export async function instanceState(): Promise<InstanceState> {
   };
 }
 
+/** MINT THE ADMIN-SETUP SCAFFOLD — the record that makes the setup conversation reachable.
+ *
+ *  ⚠ WHAT THIS REPLACES, AND WHY IT WAS A HOLE. The hand-off used to live in `localStorage`: the
+ *  wizard stashed a pending preset, the workbench opened a chat from it, and the whole existence of
+ *  that conversation was one key in one browser. Clear it, or open the instance in a second browser,
+ *  and the admin landed in a Personal chat on the generic greeting — "paste a meeting link" — on an
+ *  instance that served nobody, with the setup marker already saying "handoff" so nothing re-opened
+ *  it. Verified live on 2026-09-02. A conversation the product depends on cannot live in the one
+ *  place a person can clear by accident.
+ *
+ *  The scaffold is that conversation as a SERVER record (PRD §5.5): who it is for, which workspaces
+ *  it mounts, which preset opens it, which tabs it shows. The claim mints it and the client follows
+ *  the returned `url` — so a second browser, a cleared browser, and a reload all arrive at the SAME
+ *  chat, because the id is in the URL and the record is on the server.
+ *
+ *  Minting is INTERNAL-TIER on agent-api (a scaffold names mounts and composes an opening, so a
+ *  caller who could mint one for another address could drive that person's agent). This server
+ *  holds that secret; a browser never does. Failure is REPORTED, never swallowed: the caller
+ *  decides what to do with a claim that succeeded and a conversation that could not be made.
+ */
+export interface MintedScaffold { id: string; url: string }
+
+export async function mintAdminSetupScaffold(
+  email: string,
+  userId: string | number,
+): Promise<AdminResult<MintedScaffold>> {
+  const url = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) {
+    return { ok: false, status: 503, error: "Scaffold minting is not configured (AGENT_API_URL / VEXA_INTERNAL_API_SECRET)" };
+  }
+  try {
+    const res = await fetch(`${url}/internal/scaffolds`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      // `workspaces` is deliberately ABSENT, not `[]`: the server derives `_global` + this admin's
+      // own desk from the address, which is exactly the two-scaffold mount set the setup preset
+      // needs — and deriving it there keeps one rule in one place rather than two that drift.
+      // `tabs`/`focus` likewise come from the preset's own frontmatter.
+      body: JSON.stringify({
+        who: email,
+        kind: "admin-setup",
+        opening: "setup-global",
+        provenance: { flow: "admin-claim", step: "claim-admin", minted_by: String(userId) },
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 500);
+      return { ok: false, status: res.status, error: detail || `agent-api returned ${res.status}` };
+    }
+    return { ok: true, status: res.status, data: (await res.json()) as MintedScaffold };
+  } catch (err) {
+    const e = err as Error;
+    return { ok: false, status: 0, error: e.name === "TimeoutError" ? "scaffold mint timed out" : e.message };
+  }
+}
+
 /** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
  *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.
  *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
