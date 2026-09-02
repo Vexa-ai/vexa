@@ -40,7 +40,7 @@ def arm(label: str, touch: dict) -> dict:
                 jobs.append((who, touch, hist, 10, 1 if hname == "fresh" else 4))
                 keys.append((persona, hname))
     ans = judge.decide_many(jobs, workers=10)
-    n = op = act = 0
+    n = op = act = opt = 0
     whys = []
     for (persona, hname), a in zip(keys, ans):
         if a.get("_error"):
@@ -48,6 +48,7 @@ def arm(label: str, touch: dict) -> dict:
         n += 1
         op += bool(a.get("opened"))
         act += bool(a.get("active_action"))
+        opt += bool(a.get("opted_out"))
         if a.get("why"):
             whys.append({"persona": persona, "history": hname,
                          "opened": a.get("opened"), "acted": a.get("active_action"),
@@ -55,6 +56,7 @@ def arm(label: str, touch: dict) -> dict:
     return {"label": label, "n": n, "chars": len(touch["text"]),
             "open": round(op / n, 4) if n else 0,
             "act_overall": round(act / n, 4) if n else 0,
+            "opted_out": round(opt / n, 4) if n else 0,
             "whys": whys}
 
 
@@ -70,7 +72,8 @@ def main():
     out = [arm("before (no provenance)", before), arm("after (provenance)", after)]
     for r in out:
         print(f"{r['label']:26s} n={r['n']:3d} chars={r['chars']:5d} "
-              f"open={r['open']*100:5.1f}%  acted={r['act_overall']*100:5.1f}%")
+              f"open={r['open']*100:5.1f}%  acted={r['act_overall']*100:5.1f}%"
+              f"  opted-out={r['opted_out']*100:5.1f}%")
     json.dump({"arms": out, "after_text": after["text"][:1200]},
               open(f"{RUN}/ab-mailtext.json", "w"), indent=1)
     print("\n--- two whys per arm ---")
