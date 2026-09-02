@@ -53,12 +53,19 @@ def test_the_dimension_falls_as_names_are_left_dead():
 
 # ── entities touched ─────────────────────────────────────────────────────────────────────────────
 
-def test_one_page_per_turn_scores_one():
-    rec = {"entity_turns": 3, "entity_files": ["kg/entities/person/a.md",
+def test_three_pages_per_turn_scores_one():
+    rec = {"entity_turns": 1, "entity_files": ["kg/entities/person/a.md",
                                                "kg/entities/company/b.md",
                                                "kg/entities/meeting/c.md"]}
     s, ev = S.d_entities_touched(rec)
-    assert s == 1.0 and ev["per_turn"] == 1.0
+    assert s == 1.0 and ev["per_turn"] == 3.0
+
+
+def test_the_meeting_page_a_turn_writes_anyway_does_not_max_the_dimension():
+    """The measured reason the target is not one: at one, the arm that wrote ONLY the meeting note
+    scored the same as the arm that wrote it plus eleven entity pages."""
+    only_the_note = {"entity_turns": 1, "entity_files": ["kg/entities/meeting/c.md"]}
+    assert S.d_entities_touched(only_the_note)[0] < 0.5
 
 
 def test_a_run_that_created_nothing_scores_zero():

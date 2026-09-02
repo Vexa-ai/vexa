@@ -389,6 +389,21 @@ def mounts_preamble(mounts: list[dict]) -> str:
 # be a visible regression in the others.
 MACHINERY_MARK = "[vexa-machinery]"
 
+# ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
+# dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
+# [])`), so a phase whose only instruction names `entity_upsert` would be a wasted model call on
+# every one of those turns. Measured 2026-09-02 on a DNA fixture with the tool absent: the phase
+# ran for 58 seconds and created nothing. The workspace is mounted either way; the file is the
+# floor, the tool is the fast path, and the SHAPE has to be stated because the two paths must
+# produce the same page (`shared/entities.py` is the other spelling of it).
+_ENTITY_FILE_SHAPE = (
+    "If `entity_upsert` is not available to you, write the page yourself — the workspace is "
+    "mounted. `kg/entities/<kind>/<slug>.md`, kind one of person/company/meeting/project/decision, "
+    "slug kebab-case of the name. A new page opens with frontmatter `type`, `id`, `title`, "
+    "`aliases: []`, `created: <today>`, `sources: [<source>]`, then `# <Name>`. New or existing, "
+    "append `## <today>` and one `- <fact> — source: <source>` line per fact. Never rewrite what is "
+    "already on the page.\n\n")
+
 WRITEBACK_PROMPT = (
     MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say here "
     "reaches them. Do not address them, do not summarise the turn, do not ask them anything.\n\n"
@@ -397,6 +412,7 @@ WRITEBACK_PROMPT = (
     "each one with `entity_upsert(kind, name, facts, source)`. One call per entity. A name that came "
     "up and has no page gets one now; a page that exists gets the new facts appended; a fact already "
     "on the page writes nothing, so call it rather than wondering.\n\n"
+    + _ENTITY_FILE_SHAPE +
     "Every fact carries its source. Anything you would have to guess goes to `kg/MISSING.md` as an "
     "open question, never onto a page.\n\n"
     "If this turn learned nothing durable, reply exactly: nothing new")

@@ -299,19 +299,29 @@ def unlinked_names(note: str) -> list:
     return out
 
 
-def d_entities_touched(rec: dict) -> tuple[float, dict]:
-    """Entity pages written per agent turn. One page per turn scores 1.0.
+ENTITY_TARGET_PER_TURN = 3.0
 
-    The target is deliberately modest. Decision 24 is about a floor — a turn that met a name and
-    created nothing — not about volume, and a dimension that rewards volume would be gamed by an
-    agent writing a page per sentence."""
+def d_entities_touched(rec: dict) -> tuple[float, dict]:
+    """Entity pages written per agent turn, against a target of three.
+
+    ⚠ THE TARGET WAS ONE, AND ONE WAS UNMEASURABLE. A post-meeting turn writes the meeting's own
+    page whatever else it does, so at a target of one BOTH arms of the first A/B scored a flat
+    1.000 — including the arm that wrote nothing but that page. The raw counts in the same run were
+    1 page against 12. A dimension both arms max out is not measuring the change; three is the
+    smallest target with headroom over the page a meeting turn writes anyway.
+
+    It is still capped, and for the original reason: decision 24 is about a floor — a turn that met
+    a name and created nothing — never about volume, and an uncapped dimension would be maxed by an
+    agent writing a page per sentence. The raw `pages` count rides in the evidence either way,
+    because that is the number that cannot be tuned."""
     files = rec.get("entity_files")
     if files is None:
         return -1.0, {"why": "this run predates the entity measure — not scored"}
     turns = max(1, int(rec.get("entity_turns") or 1))
     per_turn = len(files) / turns
-    return round(min(1.0, per_turn), 3), {"entity_files": files[:12], "pages": len(files),
-                                          "turns": turns, "per_turn": round(per_turn, 3)}
+    return round(min(1.0, per_turn / ENTITY_TARGET_PER_TURN), 3), {
+        "entity_files": files[:12], "pages": len(files), "turns": turns,
+        "per_turn": round(per_turn, 3), "target_per_turn": ENTITY_TARGET_PER_TURN}
 
 
 def d_names_linked(rec: dict) -> tuple[float, dict]:
