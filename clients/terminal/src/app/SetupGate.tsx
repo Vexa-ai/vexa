@@ -1,48 +1,53 @@
 "use client";
-/** SetupGate — the ADMIN first-run wizard (first-run onboarding design, 2026-07-09). Sits inside
- *  AuthGate: once the bootstrap-claimed admin signs in, this walks the two things a meeting needs
- *  — the agent model and the transcription backend — each SMOKE-TESTED inline against the real
- *  backend (the same /api/{models,transcription}/test edges Settings → Models ships), writing the
- *  GLOBAL platform settings (this is the instance-wide admin flow; per-user overrides stay in
- *  Settings). Durable state lives in the platform-settings "setup" key, so the wizard shows once
- *  per INSTANCE, never per browser. Non-admins (the setup probe 404s → null) fall straight
+/** SetupGate — what the administrator of a fresh Vexa meets, and nothing else.
+ *
+ *  Sits inside AuthGate: once the bootstrap-claimed admin signs in, this decides what the instance
+ *  shows them. Durable state lives in the platform-settings "setup" key, so it is once per
+ *  INSTANCE, never once per browser. Non-admins (the setup probe 404s → null) fall straight
  *  through — they can never see or affect instance setup.
  *
- *  STEPS 1 AND 2 ARE SKIPPABLE (the terminal must never hold the UI hostage); skipped steps are
- *  recorded so Settings can nudge later. STEP 3 IS NOT, and that exception is the whole point of it
- *  — see below.
- *
- *  ── STEP 3: THE COMPANY LAYER (founder ruling 2026-09-02) ──────────────────────────────────────
+ *  ── THE COMPANY LAYER (founder ruling 2026-09-02) ──────────────────────────────────────────────
  *  "global needs to be setup by admin, it just should not let him start the service before that."
  *  A fresh instance serves NOBODY until the admin has written a thin company layer — who the company
  *  is, its principles, objectives, structure, and what is missing — into the platform `_global`
  *  workspace. Until then only the admin can sign in, the flows engine sends nothing, and the
- *  operator verbs refuse. So a skippable step 3 would be a button labelled "leave the instance
- *  broken", and the honest thing is to say on screen that it cannot be skipped rather than to hide
- *  the affordance and let the admin hunt for it.
+ *  operator verbs refuse.
  *
- *  IT IS NOT A FORM. Nothing about a company fits in three text inputs, and a form would collect
- *  fields where the product's actual answer is a conversation. Step 3 is a HAND-OFF: its button
- *  writes localStorage["vexa.setupGlobal"]="1" and drops this component from a full-screen overlay
- *  to a small fixed card in the corner, so the workbench MOUNTS UNDERNEATH and fires the setup
- *  conversation. The wizard then stops being a wizard and becomes a progress readout: the card polls
- *  /api/global/state, names the files still absent, and — only once the server says the layer is
- *  complete — offers the Continue that finally writes setup.completed.
+ *  ── THERE IS NO WIZARD IN FRONT OF IT ANY MORE (founder ruling 2026-09-02, second pass) ─────────
+ *  Watching a real first admin click, the founder said: "this is what I get from the first admin
+ *  click — it should want to setup global here." What stood between the claim and the company-setup
+ *  conversation was a three-step wizard (agent model → transcription → a screen explaining the
+ *  company layer), and what it landed him in was a Personal chat with the ordinary greeting.
  *
- *  Hence the four phases: "checking" | "hidden" | "wizard" | "handoff". In "handoff" the component
- *  renders <>{children}<GateCard/></> — children being the live workbench. The handoff is persisted
- *  into the same platform-settings "setup" key that carries the per-step state, so a reload in the
- *  middle of the conversation resumes AS a handoff instead of throwing the admin back to step 1 and
- *  asking them to configure their model again. */
+ *  So the steps are GONE from this file. Model and transcription are not preconditions for talking
+ *  about the company — they are preconditions for a MEETING, they are configurable in
+ *  Settings → Models at any moment, and both were already skippable, which is the product admitting
+ *  they were never gates. Asking for them first bought nothing and cost the admin the one screen
+ *  that actually had to happen. They now ride on the corner card as one quiet line, probed against
+ *  the same test edges the steps used, and only when something really is unset.
+ *
+ *  What is left is two phases and one card:
+ *
+ *    "opening"  the marker has not been written yet: write it, then NAVIGATE to the setup chat.
+ *               A screen the admin sees for a moment, never a screen they act on — unless the
+ *               write fails, which is the one thing that stops the navigation (see handOff below).
+ *    "card"     the workbench is mounted and running the company-setup conversation; this component
+ *               is a small fixed card in the corner watching /api/global/state for the verdict.
+ *
+ *  The navigation, not a phase flip, is what opens the conversation: App.tsx turns `?setup=global`
+ *  into the pending preset the workbench opens on mount (`_global/asks/setup-global.md`, admin-
+ *  authored and read hot at click time). A phase flip would leave the preset unstashed and the chat
+ *  would never open. The handoff marker is persisted into the same platform-settings "setup" key,
+ *  so a reload mid-conversation resumes AS the card instead of re-running the hand-off. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   COMPANY_LAYER_FILES, getGlobalSetting, getGlobalState, setGlobalSetting, testModels, testTranscription,
-  type ConfigTestResult, type GlobalSetting, type GlobalState,
+  type GlobalSetting, type GlobalState,
 } from "../surfaces/settingsApi";
 
 /** Show the setup surface at all? null = not an admin (probe 404s); completed set = already ran.
  *  Note what does NOT appear here: the company layer's own state. `setup.completed` is written by
- *  exactly one thing — the Continue button on the handoff card, which only appears after the SERVER
+ *  exactly one thing — the "Open this Vexa" button on the card, which only appears after the SERVER
  *  said the layer is complete. Deriving completion here as well would be a second writer on the same
  *  decision, and the two would disagree the first time a poll was in flight during a reload. */
 export function shouldShowSetup(setup: GlobalSetting | null): boolean {
@@ -50,337 +55,153 @@ export function shouldShowSetup(setup: GlobalSetting | null): boolean {
   return setup.completed !== "true";
 }
 
-type Phase = "checking" | "hidden" | "wizard" | "handoff";
-type StepState = "done" | "skipped";
+type Phase = "checking" | "hidden" | "opening" | "card";
 
-/** The value `setup.global` carries once the admin has handed off to the chat. */
+/** The value `setup.global` carries once the admin has been sent to the setup chat. */
 const HANDOFF = "handoff";
 
 /** Where a RELOAD should resume. The admin who reloads mid-conversation is not starting over: they
- *  have already handed off, the workbench is already the place the work is happening, and the only
- *  honest thing to show them is the same corner card they left. */
+ *  have already been handed off, the workbench is already the place the work is happening, and the
+ *  only honest thing to show them is the same corner card they left. */
 export function setupResumePhase(setup: GlobalSetting | null): Exclude<Phase, "checking"> {
   if (!shouldShowSetup(setup)) return "hidden";
-  return setup?.global === HANDOFF ? HANDOFF : "wizard";
+  return setup?.global === HANDOFF ? "card" : "opening";
 }
 
-/** Which wizard step a reload resumes on — the first one that has no recorded outcome. `advance()`
- *  persists each step as it happens precisely so this can be read back. */
-export function setupResumeStep(setup: GlobalSetting | null): 1 | 2 | 3 {
-  if (setup?.transcription) return 3;
-  if (setup?.models) return 2;
-  return 1;
-}
+/** One attempt at the hand-off per browser session.
+ *
+ *  The hand-off is now AUTOMATIC — nobody presses anything — and an automatic navigation that lands
+ *  back where it started is a redirect loop, not a dead button. The exact bug ruling 3 is about
+ *  (admin-api answering 200 while dropping the write) would produce precisely that: navigate, come
+ *  back in "opening" because the marker never persisted, navigate again, forever. So we record that
+ *  we tried; coming back still in "opening" is POSITIVE EVIDENCE that the write did not stick, and
+ *  the admin gets the failure screen instead of another lap. Session-scoped, so closing the tab is
+ *  a clean retry. */
+const HANDOFF_TRIED_KEY = "vexa.setupHandoffAttempted";
+const handoffTried = (): boolean => {
+  try { return sessionStorage.getItem(HANDOFF_TRIED_KEY) === "1"; } catch { return false; }
+};
+const markHandoffTried = (): void => {
+  try { sessionStorage.setItem(HANDOFF_TRIED_KEY, "1"); } catch { /* storage unavailable — worst case, one extra lap */ }
+};
 
-const card: CSSProperties = {
-  border: "1px solid var(--line2)", borderRadius: 10, padding: "13px 15px",
-  display: "flex", flexDirection: "column", gap: 6, cursor: "pointer",
-};
-const cardSel: CSSProperties = { ...card, borderColor: "var(--accent)", background: "var(--panel2)" };
-const field: CSSProperties = {
-  width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "8px 10px", borderRadius: 7,
-  border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--t1)", outline: "none",
-};
 const primaryBtn: CSSProperties = {
   background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
   padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-};
-const quietBtn: CSSProperties = {
-  background: "transparent", color: "var(--t2)", border: "1px solid var(--line2)", borderRadius: 7,
-  padding: "8px 14px", fontSize: 12.5, cursor: "pointer",
 };
 const label: CSSProperties = {
   fontSize: 10.5, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--t3)", fontWeight: 600,
 };
 
-function TestLine({ res, err, busy }: { res: ConfigTestResult | null; err: string | null; busy: boolean }) {
-  if (busy) return <span style={{ fontSize: 11.5, color: "var(--t3)" }}>Testing…</span>;
-  if (err) return <span role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</span>;
-  if (!res) return null;
-  return (
-    <span style={{ fontSize: 11.5, color: res.ok ? "var(--green)" : "var(--danger)", lineHeight: 1.5 }}>
-      {res.ok ? "✓" : "✗"} {res.summary}
-    </span>
-  );
+// ── the company layer, in the company's words ───────────────────────────────────────────────────
+
+/** THE RULE THIS TABLE EXISTS FOR, and it generalises past this screen: a human reads a STATE and
+ *  the next move, never a directory.
+ *
+ *  The card used to render `✓ README.md ✓ PRINCIPLES.md ✓ OBJECTIVES.md ○ STRUCTURE.md ○ MISSING.md`
+ *  and the founder's verdict on it was "this does not seem to me like a clear state". He is right,
+ *  and the reason is not that the list was ugly: five ticks against five filenames tells the reader
+ *  what a directory listing would tell them, and leaves them to work out what any of it means, what
+ *  happens next, and why it matters. It is our data model shown to somebody who never asked for it.
+ *
+ *  So every file gets two words of its own: a `phrase` — what that file ANSWERS, which is what goes
+ *  in the sentences — and a `name`, the one-word handle for the file being written right now. The
+ *  filenames stay out of the card entirely; they are the right panel's tabs, where a filename is
+ *  the correct label because the reader is looking at the file. */
+const LAYER_WORDS: Record<string, { name: string; phrase: string }> = {
+  "README.md": { name: "identity", phrase: "who you are" },
+  "PRINCIPLES.md": { name: "principles", phrase: "how you work" },
+  "OBJECTIVES.md": { name: "objectives", phrase: "what you are working toward" },
+  "STRUCTURE.md": { name: "structure", phrase: "who does what and who can see what" },
+  "MISSING.md": { name: "what is missing", phrase: "what is not yet known" },
+};
+
+/** A file the SERVER counts and this client has no words for. It cannot be dropped — the count
+ *  would then disagree with the server's own gate, which is the one number the admin is watching —
+ *  so it degrades to its stem rather than disappearing. A slightly wrong word beats a silent
+ *  miscount. */
+function words(file: string): { name: string; phrase: string } {
+  const known = LAYER_WORDS[file];
+  if (known) return known;
+  const stem = file.replace(/\.md$/i, "").replace(/[_-]+/g, " ").toLowerCase();
+  return { name: stem, phrase: stem };
 }
 
-/** Step 1 — agent model: Claude subscription on this machine (detect via the real test edge) or a
- *  custom OpenRouter/OpenAI-compatible endpoint. */
-function ModelsStep({ onNext }: { onNext: (state: StepState) => void }) {
-  const [choice, setChoice] = useState<"subscription" | "custom">("subscription");
-  const [detect, setDetect] = useState<ConfigTestResult | null>(null);
-  const [detecting, setDetecting] = useState(true);
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [res, setRes] = useState<ConfigTestResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-  const recheck = () => {
-    setDetecting(true);
-    testModels().then((r) => { setDetect(r); setDetecting(false); })
-      .catch((e: unknown) => { setDetect({ ok: false, summary: e instanceof Error ? e.message : String(e) }); setDetecting(false); });
-  };
-  useEffect(recheck, []);
-
-  const detected = !detecting && detect?.ok === true;
-
-  const saveAndTest = async () => {
-    setBusy(true); setErr(null); setRes(null);
-    try {
-      if (choice === "custom") {
-        await setGlobalSetting("models", {
-          mode: "custom", base_url: baseUrl.trim(), api_key: apiKey.trim(), model: model.trim(),
-        });
-      } else {
-        await setGlobalSetting("models", { mode: "subscription" });
-      }
-      setRes(await testModels());
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const canContinue = (choice === "subscription" && detected) || res?.ok === true;
-
-  return (
-    <>
-      <div style={{ fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>How should the agent think?</div>
-      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-        Pick the model provider for chat, briefs, and meeting notes. You can change this anytime in
-        Settings → Models.
-      </div>
-
-      <div style={choice === "subscription" ? cardSel : card} onClick={() => setChoice("subscription")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>
-          <Radio on={choice === "subscription"} /> Claude subscription on this machine
-          {detecting
-            ? <Badge tone="muted">checking…</Badge>
-            : detected ? <Badge tone="ok">detected</Badge> : <Badge tone="warn">not detected</Badge>}
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, marginLeft: 22 }}>
-          Uses the Claude Code credentials already on this computer. No API key needed.
-        </div>
-        {!detecting && !detected && (
-          <div style={{ marginLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
-            <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.5 }}>
-              No Claude credentials detected in the deployment environment. Set up a model
-              provider via <code style={{ fontSize: 11, fontFamily: "var(--mono)", background: "var(--panel2)", padding: "1px 4px", borderRadius: 3 }}>HOST_CLAUDE_CREDENTIALS</code>{" "}
-              in deployment settings or select the "OpenRouter or custom endpoint" option above
-              — see the <a href="https://docs.vexa.ai/configuration" target="_blank" rel="noreferrer" style={{ color: "var(--t2)", textDecoration: "underline" }}>configuration docs</a>{" "}
-              for all setup options.
-            </div>
-            {detect && !detect.ok && <TestLine res={detect} err={null} busy={false} />}
-            <button style={{ ...quietBtn, alignSelf: "flex-start" }} onClick={(e) => { e.stopPropagation(); recheck(); }}>
-              Re-check
-            </button>
-          </div>
-        )}
-        {detected && choice === "subscription" && (
-          <div style={{ marginLeft: 22 }}><TestLine res={detect} err={null} busy={false} /></div>
-        )}
-      </div>
-
-      <div style={choice === "custom" ? cardSel : card} onClick={() => setChoice("custom")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>
-          <Radio on={choice === "custom"} /> OpenRouter or custom endpoint
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, marginLeft: 22 }}>
-          Any Anthropic/OpenAI-compatible endpoint. Bring your own key.
-        </div>
-        {choice === "custom" && (
-          <div style={{ marginLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
-            <input style={field} placeholder="https://openrouter.ai/api/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-            <input style={field} placeholder="API key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-            <input style={field} placeholder="Model — e.g. anthropic/claude-sonnet-4.5" value={model} onChange={(e) => setModel(e.target.value)} />
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 24 }}>
-        {choice === "custom" && (
-          <button style={{ ...quietBtn, opacity: busy || !baseUrl.trim() ? 0.5 : 1 }} disabled={busy || !baseUrl.trim()}
-            onClick={() => void saveAndTest()}>
-            {busy ? "Testing…" : "Save & test"}
-          </button>
-        )}
-        <TestLine res={res} err={err} busy={false} />
-      </div>
-
-      <Foot
-        onSkip={() => onNext("skipped")}
-        next={
-          <button style={{ ...primaryBtn, opacity: canContinue ? 1 : 0.5 }} disabled={!canContinue}
-            onClick={async () => {
-              // Subscription path: persist the explicit choice so the instance default is declared.
-              if (choice === "subscription" && !res) {
-                try { await setGlobalSetting("models", { mode: "subscription" }); } catch { /* declarative only */ }
-              }
-              onNext("done");
-            }}>
-            Continue
-          </button>
-        }
-      />
-    </>
-  );
+/** Canonical order first (so the sentence does not reshuffle between polls under the admin's eyes),
+ *  then anything the server named that we did not expect, in the order it named it. */
+function ordered(files: string[]): string[] {
+  const set = new Set(files);
+  const out = COMPANY_LAYER_FILES.filter((f) => set.has(f)) as string[];
+  for (const f of files) if (!out.includes(f)) out.push(f);
+  return out;
 }
 
-/** Step 2 — transcription: hosted Vexa token (vexa.ai/account) or any OpenAI-compatible STT. */
-function TranscriptionStep({ onNext }: { onNext: (state: StepState) => void }) {
-  const [choice, setChoice] = useState<"vexa" | "custom">("vexa");
-  const [token, setToken] = useState("");
-  const [url, setUrl] = useState("");
-  const [customToken, setCustomToken] = useState("");
-  const [res, setRes] = useState<ConfigTestResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export type LayerStatus = {
+  /** Sentence 1 — where we are. */
+  where: string;
+  /** Sentence 2 — what is next and why. Empty only while nothing has been read yet. */
+  next: string;
+  written: number;
+  total: number;
+};
 
-  // The deployment env may already carry a working backend (e.g. hosted Vexa baked into .env) —
-  // surface that: a green pre-test means "you can just continue".
-  useEffect(() => {
-    testTranscription().then(setRes).catch(() => undefined);
-  }, []);
+/** The card's two sentences, DERIVED from the server's `present[]` / `missing_files[]`.
+ *
+ *  Nothing here is hardcoded to five: the total is whatever the server counts, so a company layer
+ *  that grows a sixth file changes this screen without anybody editing it. A hardcoded count is a
+ *  second opinion on the gate, and it would be wrong silently — the number would still look right.
+ *
+ *  `accepted` is the VERIFIER's answer (`global_setup === "completed"`), which is not the same fact
+ *  as "every file exists": `mark_global_ready` re-reads the files and commits them, and until it has
+ *  accepted, a complete-looking directory is still a layer nobody has agreed to. */
+export function companyLayerStatus(
+  state: Pick<GlobalState, "present" | "missing_files"> | null,
+  accepted = false,
+): LayerStatus {
+  if (!state) return { where: "Reading this instance…", next: "", written: 0, total: 0 };
 
-  const saveAndTest = async () => {
-    setBusy(true); setErr(null);
-    try {
-      if (choice === "vexa") {
-        await setGlobalSetting("transcription", { url: "https://transcription.vexa.ai", token: token.trim() });
-      } else {
-        await setGlobalSetting("transcription", { url: url.trim(), token: customToken.trim() });
-      }
-      setRes(await testTranscription());
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const present = ordered(state.present);
+  const missing = ordered(state.missing_files);
+  const total = present.length + missing.length;
+  const writtenPhrases = present.map((f) => words(f).phrase);
+  const missingPhrases = missing.map((f) => words(f).phrase);
 
-  const dirty = choice === "vexa" ? !!token.trim() : !!url.trim();
+  const where = total === 0
+    ? "Company layer: nothing to write."
+    : writtenPhrases.length === 0
+      ? `Company layer: 0 of ${total}. Nothing written yet.`
+      : `Company layer: ${writtenPhrases.length} of ${total}. ${cap(writtenPhrases.join(", "))}: written.`;
 
-  return (
-    <>
-      <div style={{ fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>Who turns speech into text?</div>
-      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-        Meeting bots stream audio to a transcription service. Hosted Vexa is the zero-setup path.
-      </div>
+  if (missing.length === 0) {
+    return {
+      where,
+      next: accepted
+        ? "Other people can sign in, and mails start going out."
+        : "Everything is written. The agent checks it itself and opens the instance once you agree it is right.",
+      written: writtenPhrases.length,
+      total,
+    };
+  }
 
-      <div style={choice === "vexa" ? cardSel : card} onClick={() => setChoice("vexa")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>
-          <Radio on={choice === "vexa"} /> Vexa hosted transcription
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, marginLeft: 22 }}>
-          Get your token at{" "}
-          <a href="https://www.vexa.ai/account" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
-            www.vexa.ai/account
-          </a>{" "}
-          — free tier included. Paste it here.
-        </div>
-        {choice === "vexa" && (
-          <input style={{ ...field, marginLeft: 22, width: "calc(100% - 22px)" }} placeholder="Transcription token"
-            type="password" value={token} onChange={(e) => setToken(e.target.value)} />
-        )}
-      </div>
+  const head = words(missing[0]);
+  const rest = missingPhrases.slice(1);
+  // "both" is only true of two, and reading "when both are written" against four remaining files is
+  // the kind of small lie that makes a reader stop trusting the whole card.
+  const when = missing.length === 1 ? "When that is written"
+    : missing.length === 2 ? "When both are written"
+      : "When all of them are written";
+  const next = [
+    `Now: ${head.name} — ${head.phrase}.`,
+    rest.length ? `Then: ${rest.join(", ")}.` : "",
+    `${when} the instance opens: other people can sign in, and mails start going out.`,
+  ].filter(Boolean).join(" ");
 
-      <div style={choice === "custom" ? cardSel : card} onClick={() => setChoice("custom")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>
-          <Radio on={choice === "custom"} /> OpenAI-compatible endpoint
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, marginLeft: 22 }}>
-          Any service speaking the OpenAI transcription API (Whisper-compatible).
-        </div>
-        {choice === "custom" && (
-          <div style={{ marginLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
-            <input style={field} placeholder="https://your-stt.example.com" value={url} onChange={(e) => setUrl(e.target.value)} />
-            <input style={field} placeholder="API key (optional)" type="password" value={customToken} onChange={(e) => setCustomToken(e.target.value)} />
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 24 }}>
-        <button style={{ ...quietBtn, opacity: busy || !dirty ? 0.5 : 1 }} disabled={busy || !dirty}
-          onClick={() => void saveAndTest()}>
-          {busy ? "Testing…" : "Save & test"}
-        </button>
-        <TestLine res={res} err={err} busy={busy} />
-      </div>
-
-      <Foot
-        onSkip={() => onNext("skipped")}
-        next={
-          <button style={{ ...primaryBtn, opacity: res?.ok ? 1 : 0.5 }} disabled={!res?.ok} onClick={() => onNext("done")}>
-            Finish setup
-          </button>
-        }
-      />
-    </>
-  );
+  return { where, next, written: writtenPhrases.length, total };
 }
 
-function Radio({ on }: { on: boolean }) {
-  return (
-    <span style={{
-      width: 13, height: 13, borderRadius: "50%", flex: "none", boxSizing: "border-box",
-      border: on ? "4px solid var(--accent)" : "1.5px solid var(--t3)",
-    }} />
-  );
-}
-
-function Badge({ tone, children }: { tone: "ok" | "warn" | "muted"; children: React.ReactNode }) {
-  const color = tone === "ok" ? "var(--green)" : tone === "warn" ? "var(--warn, #d3ab5f)" : "var(--t3)";
-  return (
-    <span style={{ fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase", fontWeight: 650,
-      color, border: `1px solid ${color}`, borderRadius: 4, padding: "1px 6px", opacity: 0.9 }}>
-      {children}
-    </span>
-  );
-}
-
-function Foot({ onSkip, next }: { onSkip: () => void; next: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-      marginTop: 10, paddingTop: 14, borderTop: "1px dashed var(--line2)" }}>
-      <button onClick={onSkip}
-        style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>
-        Skip for now
-      </button>
-      {next}
-    </div>
-  );
-}
-
-function Steps({ at }: { at: 1 | 2 | 3 }) {
-  const dot = (n: number, label: string) => {
-    const on = at === n, done = at > n;
-    return (
-      <span key={n} style={{ display: "flex", alignItems: "center", gap: 6, color: on ? "var(--t1)" : "var(--t3)", fontSize: 11.5 }}>
-        <span style={{
-          width: 18, height: 18, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 10, fontWeight: 700,
-          background: on ? "var(--accent)" : done ? "var(--panel2)" : "transparent",
-          color: on ? "var(--on-accent)" : done ? "var(--green)" : "var(--t3)",
-          border: on ? "none" : "1px solid var(--line2)",
-        }}>{done ? "✓" : n}</span>
-        {label}
-      </span>
-    );
-  };
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      {dot(1, "Agent model")}
-      <span style={{ width: 24, height: 1, background: "var(--line2)" }} />
-      {dot(2, "Transcription")}
-      <span style={{ width: 24, height: 1, background: "var(--line2)" }} />
-      {dot(3, "Company")}
-    </div>
-  );
-}
-
-// ── the company layer ───────────────────────────────
+// ── polling ─────────────────────────────────────────────────────────────────────────────────────
 
 /** How often the corner card asks the server whether the layer is done. Slow enough to be free,
  *  fast enough that the admin never wonders whether it noticed — the alternative would be pushing
@@ -418,148 +239,138 @@ function useGlobalState(stop: boolean): Poll {
   return poll;
 }
 
-/** The five files, each marked present or absent. `present` comes from the server; the constant only
- *  fixes the ORDER, so the list does not reshuffle between polls under the admin's eyes. */
-function FileList({ present }: { present: string[] }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      {COMPANY_LAYER_FILES.map((f) => {
-        const have = present.includes(f);
-        return (
-          <div key={f} style={{ fontSize: 11.5, fontFamily: "var(--mono)", color: have ? "var(--green)" : "var(--t3)" }}>
-            {have ? "✓" : "○"} {f}
-          </div>
-        );
-      })}
-    </div>
-  );
+/** The two things that used to be steps 1 and 2, reduced to the only question the card has to
+ *  answer about them: is either one actually unset? Probed ONCE (the same /api/{models,
+ *  transcription}/test edges the steps used and Settings → Models still uses), and rendered only
+ *  when the answer is yes — a deployment whose env already carries a working model and a working
+ *  backend must not be told to go and configure them. */
+function useUnconfigured(): string[] {
+  const [gaps, setGaps] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void Promise.all([
+      testModels().then((r) => r.ok).catch(() => true),          // a probe that cannot run is not a gap
+      testTranscription().then((r) => r.ok).catch(() => true),
+    ]).then(([models, stt]) => {
+      if (!live) return;
+      const out: string[] = [];
+      if (!models) out.push("the agent model");
+      if (!stt) out.push("transcription");
+      setGaps(out);
+    });
+    return () => { live = false; };
+  }, []);
+  return gaps;
 }
 
-/** Step 3 — the company layer. NOT A FORM and NOT SKIPPABLE; the file header explains both. Its one
- *  button hands off to the setup CHAT: persist that we are handing off, then navigate to
- *  `/?setup=global`, which App.tsx turns into the pending preset the workbench opens on mount. The
- *  navigation is what keeps the full-screen overlay and the chat from ever coexisting — the page
- *  reloads, the conversation opens, and this component comes back as the corner card. */
-function CompanyLayerStep({ onHandOff }: { onHandOff: () => void }) {
-  const { state, error } = useGlobalState(false);
+// ── the corner card ─────────────────────────────────────────────────────────────────────────────
 
-  return (
-    <>
-      <div style={{ fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>Who is this company?</div>
-      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.55 }}>
-        The company layer is the thin set of files every part of this instance reads: who the company
-        is, what it stands for, what it is working toward, how it is structured, and what is missing.
-        <br />
-        Until it exists this Vexa serves nobody — nothing is sent, and the agent refuses to act.
-      </div>
-
-      <div style={{ ...card, cursor: "default", gap: 9 }}>
-        {/* Deliberately NOT the `desk` word from minutes/vocabulary.ts. That constant names a
-            PERSON's own space; `_global` is the company layer, shared by everyone, and calling it a
-            desk would teach the reader the opposite of the distinction the word exists to draw. The
-            fix for "workspace" here is to name the thing, not to swap one wrong noun for another. */}
-        <span style={label}>This instance&rsquo;s company layer</span>
-        <FileList present={state?.present ?? []} />
-        {error && !state && (
-          <span role="alert" style={{ fontSize: 11.5, color: "var(--t3)" }}>
-            Couldn&rsquo;t read the company layer just now &mdash; still checking.
-          </span>
-        )}
-      </div>
-
-      <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.5 }}>
-        This step can&rsquo;t be skipped &mdash; setup isn&rsquo;t finished until the company layer exists.
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center",
-        marginTop: 10, paddingTop: 14, borderTop: "1px dashed var(--line2)" }}>
-        <button style={primaryBtn} onClick={onHandOff}>Write it with the agent</button>
-      </div>
-      <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4, textAlign: "right" }}>
-        This opens a chat and moves setup to a small card in the corner.
-      </div>
-    </>
-  );
-}
-
-/** The corner card — the wizard after the hand-off, reduced to a progress readout the admin can
- *  ignore while they talk to the agent underneath it.
+/** The card the admin talks past while the conversation underneath it does the work.
  *
- *  It renders the SERVER's `reasons` verbatim rather than composing its own account of what is
- *  missing (settingsApi.GlobalState says why), and it offers Continue only when the server says
- *  `global_setup === "completed"`. Continue is the ONLY writer of `setup.completed`. */
+ *  It says three things and stops: where we are, what is next and why, and — only once the verifier
+ *  is satisfied — the one action, with what it does written beside it. The server's `reasons[]` are
+ *  still rendered, but only where they are an ANSWER: after the admin asked to open the instance and
+ *  the verifier refused. As a permanent block they were a wall of text restating the file list in
+ *  longer form, and a reader learns to skip a paragraph that is always there. */
 function GateCard({ onContinue }: { onContinue: () => void }) {
   const [done, setDone] = useState(false);
   const { state, error } = useGlobalState(done);
+  const gaps = useUnconfigured();
   const complete = state?.global_setup === "completed";
+  const status = companyLayerStatus(state, complete);
+
+  // Set only when the admin ASKED to open and the verifier said no — see the comment above.
+  const [refusal, setRefusal] = useState<string[] | null>(null);
+  const [opening, setOpening] = useState(false);
 
   // Stop polling the moment the answer is yes — the card is now waiting on the human, not the server.
   useEffect(() => { if (complete) setDone(true); }, [complete]);
+
+  /** RE-ASK before opening. The card's Continue used to fire off a stale poll's verdict; between the
+   *  poll and the click the layer can have been edited, and opening an instance on a verdict nobody
+   *  re-checked is the one irreversible thing on this screen. If the server now refuses, its own
+   *  sentences are what the admin reads — we do not paraphrase a refusal we did not author. */
+  const open = async () => {
+    setOpening(true);
+    setRefusal(null);
+    try {
+      const fresh = await getGlobalState();
+      if (fresh.global_setup === "completed") { onContinue(); return; }
+      setRefusal(fresh.reasons.length ? fresh.reasons : [fresh.gate_sentence || "The company layer is not complete yet."]);
+      setDone(false); // it moved back under us — start watching again
+    } catch (e: unknown) {
+      setRefusal([e instanceof Error ? e.message : String(e)]);
+    } finally {
+      setOpening(false);
+    }
+  };
 
   return (
     <div
       data-testid="global-gate-card"
       style={{
-        position: "fixed", right: 16, bottom: 16, width: 300, zIndex: 40,
+        position: "fixed", right: 16, bottom: 16, width: 320, zIndex: 40,
         background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10,
         padding: "14px 15px", display: "flex", flexDirection: "column", gap: 9,
         boxShadow: "0 8px 32px rgba(0,0,0,.34)",
       }}
     >
-      <span style={label}>Company layer</span>
+      <span style={label}>{state?.company && complete ? state.company : "Company layer"}</span>
 
+      {/* 1 — where we are */}
+      <div style={{ fontSize: 12.5, color: "var(--t1)", lineHeight: 1.5 }}>{status.where}</div>
+
+      {/* 2 — what is next, and why it matters */}
+      {status.next && <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.55 }}>{status.next}</div>}
+
+      {/* 3 — the one action, and only once the verifier is satisfied. Until then the card is a
+             readout: it says who is doing the work rather than offering a button that would refuse. */}
       {complete ? (
-        <>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", lineHeight: 1.4 }}>
-            {state?.company ? `${state.company} — set up ✓` : "Company layer written ✓"}
-          </div>
-          <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
-            This instance can serve your team now.
-          </div>
-          <button style={{ ...primaryBtn, padding: "8px 14px" }} onClick={onContinue}>Continue</button>
-        </>
+        <button style={{ ...primaryBtn, padding: "8px 14px", opacity: opening ? 0.6 : 1 }} disabled={opening}
+          onClick={() => void open()}>
+          {opening ? "Opening…" : "Open this Vexa"}
+        </button>
       ) : (
-        <>
-          <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
-            Tell the agent about your company in the chat. This card updates as the files land.
-          </div>
-          <FileList present={state?.present ?? []} />
-          {state?.reasons?.length ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              {state.reasons.map((r) => (
-                <div key={r} style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>{r}</div>
-              ))}
-            </div>
-          ) : null}
-          {error && (
-            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>
-              Couldn&rsquo;t reach the instance just now &mdash; still checking.
-            </div>
-          )}
-        </>
+        <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>the agent is writing this with you</div>
+      )}
+
+      {refusal && (
+        <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          {refusal.map((r) => (
+            <div key={r} style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.45 }}>{r}</div>
+          ))}
+        </div>
+      )}
+
+      {/* What used to be steps 1 and 2. One line, last, and only when something really is unset. */}
+      {gaps.length > 0 && (
+        <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45, borderTop: "1px dashed var(--line2)", paddingTop: 8 }}>
+          Not set yet: {gaps.join(" and ")}. Settings &rarr; Models, whenever you like &mdash; meetings need them, this conversation does not.
+        </div>
+      )}
+
+      {error && !refusal && (
+        <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
+          Couldn&rsquo;t reach the instance just now &mdash; still checking.
+        </div>
       )}
     </div>
   );
 }
 
+// ── the gate itself ─────────────────────────────────────────────────────────────────────────────
+
 export function SetupGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>("checking");
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [states, setStates] = useState<{ models?: StepState; transcription?: StepState }>({});
+  // Set ONLY when the hand-off write failed. Its presence is what replaces the navigation.
+  const [handOffError, setHandOffError] = useState<string | null>(null);
+  const handingOff = useRef(false);
 
   useEffect(() => {
     let on = true;
     getGlobalSetting("setup")
       .then((v) => {
         if (!on) return;
-        // Restore what the platform-settings key remembers, so a reload resumes where the admin
-        // actually is — same phase (wizard vs. handed-off), same step — instead of re-asking for a
-        // model provider they already configured.
-        setStates({
-          models: v?.models as StepState | undefined,
-          transcription: v?.transcription as StepState | undefined,
-        });
-        setStep(setupResumeStep(v));
         setPhase(setupResumePhase(v));
       })
       .catch(() => on && setPhase("hidden")); // fail-safe: never block the workbench on the probe
@@ -568,75 +379,94 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
 
   const finish = () => {
     void setGlobalSetting("setup", { completed: "true" }).catch(() => undefined);
-    // The admin→user onboarding seam: Continue must actually LAND on Meetings. The workbench's
+    // The admin→user seam: opening the instance must actually LAND on Meetings. The workbench's
     // layout store initializes its rail from this persisted key (layout.ts LS_LIST) and it is
     // created only when the workbench mounts, so a plain localStorage write is the whole hand-off.
     //
-    // ONE CAVEAT now that Continue lives on a card floating OVER a live workbench: in the "handoff"
-    // phase the workbench is already mounted, so it has already read this key and the rail may not
-    // move. That is the better behaviour anyway — yanking the view the admin was just working in
-    // would be worse than leaving them in it — and the write still does its job on the next load.
+    // ONE CAVEAT, since the button lives on a card floating OVER a live workbench: the workbench is
+    // already mounted, so it has already read this key and the rail may not move. That is the better
+    // behaviour anyway — yanking the view the admin was just working in would be worse — and the
+    // write still does its job on the next load. The admin's own personal onboarding (which
+    // OnboardingGate holds back while the gate is up) also fires on that next load, for the same
+    // reason: it is a thing to walk into, not a thing to have thrown at you mid-sentence.
     try { localStorage.setItem("vexa.terminal.activeList.v1", "meetings"); } catch { /* noop */ }
     setPhase("hidden");
   };
 
+  /** THE HAND-OFF. Persist that we are handing off, and only then navigate.
+   *
+   *  ⚠ WHAT THIS USED TO DO, AND WHY IT MATTERS (founder ruling 2026-09-02, ruling 3):
+   *      void setGlobalSetting("setup", { global: HANDOFF }).catch(() => undefined)
+   *        .finally(() => window.location.assign("/?setup=global"));
+   *  The `.catch(() => undefined)` hid a live blocker for an hour. admin-api was silently dropping
+   *  the write (the field was not in its allow-list) and answering 200, so the marker never
+   *  persisted, the reload resumed here instead of in the conversation, and the button looked dead.
+   *  The server bug is fixed; the swallow was the more dangerous half, because it is what turned a
+   *  server fault into an unreadable UI.
+   *
+   *  NAVIGATING ANYWAY WAS THE TEMPTING WRONG ANSWER. It looks generous — the conversation is where
+   *  the admin needs to be, so send them there and let the marker catch up. It is not generous: with
+   *  no marker the next load resumes right back here, which is exactly the loop that was just fixed,
+   *  and the admin has no way to see that anything failed. A failure that navigates is a failure
+   *  nobody can report. So: no marker, no navigation — say so, and offer the retry. */
+  const handOff = useCallback(async () => {
+    if (handingOff.current) return;
+    handingOff.current = true;
+    setHandOffError(null);
+    try {
+      await setGlobalSetting("setup", { global: HANDOFF });
+    } catch (e: unknown) {
+      handingOff.current = false;
+      setHandOffError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    markHandoffTried();
+    // App.tsx turns `?setup=global` into the pending preset the workbench opens on mount
+    // (`_global/asks/setup-global.md`) and strips the query itself. A full navigation, not a phase
+    // flip: the flip would never stash the preset, and the conversation would never open.
+    window.location.assign("/?setup=global");
+  }, []);
+
+  /** The admin does not press anything to get here. There is no longer a screen in front of the
+   *  company-setup conversation, so the moment we know the marker is absent we write it and go.
+   *  Guarded twice: `handingOff` against StrictMode's double effect, and the session flag against a
+   *  write that answers OK and does not stick (see HANDOFF_TRIED_KEY). */
+  useEffect(() => {
+    if (phase !== "opening" || handOffError) return;
+    if (handoffTried()) {
+      setHandOffError("This Vexa accepted the write and did not keep it.");
+      return;
+    }
+    void handOff();
+  }, [phase, handOffError, handOff]);
+
   if (phase === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
   if (phase === "hidden") return <>{children}</>;
-  // HANDED OFF: the workbench mounts and runs the setup conversation; the wizard is now a card in
-  // the corner watching the server for the answer.
-  if (phase === "handoff") return <>{children}<GateCard onContinue={finish} /></>;
+  // HANDED OFF: the workbench mounts and runs the setup conversation; this is now a card in the
+  // corner watching the server for the verdict.
+  if (phase === "card") return <>{children}<GateCard onContinue={finish} /></>;
 
-  const advance = (key: "models" | "transcription", state: StepState) => {
-    const next = { ...states, [key]: state };
-    setStates(next);
-    // Persist per-step state as it happens — a mid-wizard reload resumes honestly.
-    void setGlobalSetting("setup", { [key]: state }).catch(() => undefined);
-    if (key === "models") setStep(2);
-    else setStep(3);
-  };
-
-  /** Step 3's hand-off. ORDER MATTERS: persist the phase FIRST, then navigate. The navigation
-   *  destroys this component, so a write started after it may never be sent — and an admin who
-   *  lands in the setup chat with nothing persisted is thrown back to step 1 on their next reload,
-   *  asked to configure a model provider they already configured, with no sign that the
-   *  conversation they were having was the actual work. */
-  const handOff = () => {
-    void setGlobalSetting("setup", { global: HANDOFF })
-      .catch(() => undefined)
-      .finally(() => {
-        // App.tsx turns `?setup=global` into the pending preset the workbench opens on mount
-        // (`_global/asks/setup-global.md`) and strips the query itself. A full navigation, not a
-        // phase flip, so the overlay and the chat never coexist.
-        window.location.assign("/?setup=global");
-      });
-  };
-
+  // "opening" — a moment, unless the write failed.
   return (
-    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", overflowY: "auto" }}>
-      <div style={{ width: 520, maxWidth: "94vw", background: "var(--panel)", border: "1px solid var(--line2)",
-        borderRadius: 12, padding: 26, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={label}>Set up your instance</span>
-          <Steps at={step} />
+    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      {handOffError ? (
+        <div
+          data-testid="handoff-failed"
+          style={{ width: 400, maxWidth: "94vw", background: "var(--panel)", border: "1px solid var(--line2)",
+            borderRadius: 12, padding: 24, display: "flex", flexDirection: "column", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>Couldn&rsquo;t start setting up</div>
+          <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.6 }}>
+            This Vexa could not record that you are setting it up, so the company-setup conversation was
+            not opened. Opening it anyway would have put you straight back on this screen with nothing to
+            show for it.
+          </div>
+          <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.45 }}>{handOffError}</div>
+          <button style={primaryBtn} onClick={() => { setHandOffError(null); void handOff(); }}>Try again</button>
         </div>
-        {step === 1 && <ModelsStep onNext={(s) => advance("models", s)} />}
-        {step === 2 && <TranscriptionStep onNext={(s) => advance("transcription", s)} />}
-        {step === 3 && (
-          <>
-            {/* Steps 1–2 were skippable, so say what actually happened before asking for the one
-                step that is not — the admin should not have to remember what they skipped. */}
-            <div style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.8 }}>
-              <div style={{ color: states.models === "done" ? "var(--green)" : "var(--t3)" }}>
-                {states.models === "done" ? "✓ Agent model configured and tested" : "○ Agent model skipped — finish it in Settings → Models"}
-              </div>
-              <div style={{ color: states.transcription === "done" ? "var(--green)" : "var(--t3)" }}>
-                {states.transcription === "done" ? "✓ Transcription configured and tested" : "○ Transcription skipped — finish it in Settings → Models"}
-              </div>
-            </div>
-            <CompanyLayerStep onHandOff={handOff} />
-          </>
-        )}
-      </div>
+      ) : (
+        <div style={{ fontSize: 12, color: "var(--t3)" }}>Opening the company setup conversation&hellip;</div>
+      )}
     </div>
   );
 }
