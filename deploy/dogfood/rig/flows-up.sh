@@ -39,13 +39,17 @@ export VEXA_FLOWS_ADMIN_KEY="$(docker inspect vexa-dogfood-admin-api-1 \
 # Its own mode-600 file, like the operator key above and for the same reason: the value belongs to
 # the deployment, never to the repo, never to a log, never to an error message. The NAME is
 # documented here; the VALUE lives only in $HOME/.storm/internal-secret.
-# It must equal the agent-api container's VEXA_INTERNAL_API_SECRET — if agent-api is ever recreated
+# It must equal the agent-api container's INTERNAL_API_SECRET — if agent-api is ever recreated
 # with a different one, the room silently stops opening, so re-copy it then.
-export VEXA_INTERNAL_SECRET="$(cat "$HOME/.storm/internal-secret" 2>/dev/null)"
-if [ -z "${VEXA_INTERNAL_SECRET:-}" ]; then
+#
+# The name is INTERNAL_API_SECRET, everywhere (F95). This lane used to export VEXA_INTERNAL_SECRET,
+# a third spelling of one secret, and three spellings meant three refusal lists: the published
+# literal `vexa-internal-secret` was on this one's and on nobody else's.
+export INTERNAL_API_SECRET="$(cat "$HOME/.storm/internal-secret" 2>/dev/null)"
+if [ -z "${INTERNAL_API_SECRET:-}" ]; then
   echo "flows-up: REFUSING to start — no internal-tier secret at $HOME/.storm/internal-secret." >&2
   echo "  Without it agent-api refuses every meeting room and the post-meeting run reads no desks," >&2
-  echo "  silently. Copy agent-api's VEXA_INTERNAL_API_SECRET into that file (chmod 600)." >&2
+  echo "  silently. Copy agent-api's INTERNAL_API_SECRET into that file (chmod 600)." >&2
   exit 1
 fi
 

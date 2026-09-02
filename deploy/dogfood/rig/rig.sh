@@ -23,6 +23,10 @@ set -u
 #                        arrival while looking perfectly well-formed.
 #   VEXA_MCP_DELEGATION_SECRET  the HMAC key agent-api mints delegated tokens with. Read from
 #                        $HOME/.storm/delegation-secret at start; never echoed, never defaulted.
+#   INTERNAL_API_SECRET  the INTERNAL TIER. Read from $HOME/.storm/internal-secret at start; must
+#                        equal agent-api's own. The control server and flows-api both REFUSE TO
+#                        START without it (F95) — deliberately, because without it the rig cannot
+#                        authenticate as a service and nothing about that failure is visible.
 # ONE LINE (2026-09-02): the flows checkout is the LINE worktree. This default is not
 # cosmetic — start_worker passes VEXA_FLOWS_SRC="$FL" into flows-up.sh, which OVERRIDES
 # flows-up.sh's own default, so a later `rig.sh restart` with the old value here would
@@ -71,12 +75,14 @@ start_ctl() {
   tmux new-session -d -s stormctl -c /tmp \
     "VEXA_FLOWS_SRC=\"$FL\" VEXA_PUBLIC_MCP_URL=\"$PUBLIC_MCP_URL\" VEXA_UI_URL=\"$UI_URL\" \
      VEXA_MCP_DELEGATION_SECRET=\"\$(cat \"\$HOME/.storm/delegation-secret\" 2>/dev/null)\" \
+     INTERNAL_API_SECRET=\"\$(cat \"\$HOME/.storm/internal-secret\" 2>/dev/null)\" \
      $V/python -u \"$CTL\" 2>&1 | tee $LOG/control-mcp.log"
 }
 start_api() {
   tmux kill-session -t stormapi 2>/dev/null
   tmux new-session -d -s stormapi -c "$FL" \
     "PYTHONPATH=$FL/src VEXA_FLOWS_DB_URL=$(cat "$HOME/.storm/dburl") \
+     INTERNAL_API_SECRET=\"\$(cat \"\$HOME/.storm/internal-secret\" 2>/dev/null)\" \
      $V/python -m uvicorn flows_integrations.flows_api:app --host 127.0.0.1 --port 18200 \
      2>&1 | tee $LOG/flows-api.log"
 }

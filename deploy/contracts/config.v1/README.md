@@ -31,6 +31,16 @@ exposed by any surface, still declared so the undeclared-read scan stays tight),
 `surface_only` list (keys a surface sets that the service does NOT read — documented drift with a
 `reason`, so the check never silently ignores anything).
 
+Extra fields, continued: **`forbidden_values`** — the published placeholder literals a deploy
+surface once supplied for this key. A boot whose env holds one raises `ConfigError` the same way a
+missing required key does. It exists because `required-explicit` cannot catch the commoner failure:
+`INTERNAL_API_SECRET` was never *unset* on a stock deploy, compose supplied
+`${INTERNAL_API_SECRET:-vexa-internal-secret}` — a literal in a public repository, and the exact
+value the internal tier compared against — so every unconfigured deployment booted green sharing one
+published secret. **A key that looks configured and is not is worse than one that is missing**, and
+only the declaration knows which literals were ever shipped. The refusal names the KEY, never the
+value.
+
 ```json
 {
   "contract": "config.v1",

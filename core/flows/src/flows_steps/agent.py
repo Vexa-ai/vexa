@@ -42,7 +42,7 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
 
     THE INTERNAL-TIER HEADER IS PART OF THE ROOM, NOT AN EXTRA. agent-api refuses a room to any
     caller that cannot present ``X-Internal-Secret``, so it goes on the same post. Its value comes
-    from the environment (``VEXA_INTERNAL_SECRET``, a mode-600 file the lane's start script
+    from the environment (``INTERNAL_API_SECRET``, a mode-600 file the lane's start script
     exports) and never from this repository; both entrypoints refuse to start without it, so by
     the time a turn is dispatched it exists.
 

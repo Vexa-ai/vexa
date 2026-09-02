@@ -3714,10 +3714,24 @@ def _build_production_app() -> FastAPI:
     from control_plane.config_preflight import preflight
     from control_plane.workspace_routines import start_workspace_routine_reconciler
 
-    # config.v1 boot preflight (ADR-0026): agent-api has no required-explicit keys today, so this
-    # logs the capability tri-states (bot_gateway · model_inference) — a deploy that cannot add bots
-    # from URL or whose workers will have NO model credentials says so in the boot log and on
-    # /health, instead of failing at first chat with 'Model inference failed: Not logged in'.
+    # ONE NAME for the internal tier (F95). The canonical key is INTERNAL_API_SECRET — the same
+    # name compose, helm, admin-api, gateway and meeting-api use. VEXA_INTERNAL_API_SECRET still
+    # resolves through the settings alias so an operator mid-upgrade is WARNED rather than silently
+    # dropped into an unauthenticated internal tier; it is removed next release.
+    if not (os.environ.get("INTERNAL_API_SECRET") or "").strip() and \
+            (os.environ.get("VEXA_INTERNAL_API_SECRET") or "").strip():
+        logger.warning(
+            "VEXA_INTERNAL_API_SECRET is DEPRECATED — rename it to INTERNAL_API_SECRET, the one "
+            "name the whole internal tier uses (compose/helm secret key, admin-api, gateway, "
+            "meeting-api). The prefixed spelling is honoured this release and removed in the next."
+        )
+
+    # config.v1 boot preflight (ADR-0026): INTERNAL_API_SECRET is required-explicit and must not
+    # hold a published placeholder, so an internal tier that was never configured refuses to boot
+    # rather than believing a secret printed in this repository (F95). The run also logs the
+    # capability tri-states (bot_gateway · model_inference) — a deploy that cannot add bots from URL
+    # or whose workers will have NO model credentials says so in the boot log and on /health,
+    # instead of failing at first chat with 'Model inference failed: Not logged in'.
     preflight()
 
     settings = load_settings()

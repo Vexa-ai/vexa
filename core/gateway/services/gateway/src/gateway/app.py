@@ -283,6 +283,28 @@ def _required_scopes(request: Request) -> Optional[FrozenSet[str]]:
     return ROUTE_SCOPES.get((request.method.upper(), path))
 
 
+# ── the authority-header strip (F95) ─────────────────────────────────────────────
+# Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
+# the gateway resolved from the api-key, ``x-internal-secret`` is the internal service tier (agent-api
+# ``_internal_caller``, admin-api ``_check_internal`` — the gate the meeting room calls its own trust
+# boundary), ``x-gateway-verified`` is the marker ``VEXA_REQUIRE_GATEWAY_IDENTITY`` looks for, and
+# ``x-admin-api-key`` is admin-api's privileged surface.
+#
+# NONE of them may arrive from a client. The strip used to be an eight-name list of ``x-user-*``
+# spellings, so ``x-internal-secret`` from the public edge reached agent-api and was believed — and
+# with the shipped compose default (a literal in a public repo) that was the internal tier, open to
+# any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
+# which is why this matches by family and why every new internal header must be spelled into one.
+_AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", "x-gateway-verified"})
+
+
+def _is_authority_header(name: str) -> bool:
+    """True for any header a downstream service reads as AUTHORITY — never forwarded from a client."""
+    name = name.lower()
+    return name in _AUTHORITY_HEADER_EXACT or name.startswith(_AUTHORITY_HEADER_PREFIXES)
+
+
 def _insufficient_scope_response() -> Response:
     return Response(
         content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
@@ -430,12 +452,12 @@ def create_app(
         )
 
         # Inject identity headers + forward the SAME trace_id downstream (main.py:322-326, 365).
-        # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
+        # Strip any client-supplied identity/authority headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits", "x-user-workspaces",
-                  "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
-            headers.pop(h, None)
+        for h in list(headers):
+            if _is_authority_header(h):
+                headers.pop(h, None)
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
         # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's

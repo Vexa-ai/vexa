@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import pathlib
+import posixpath
 import re
 import subprocess
 import time
@@ -129,6 +130,104 @@ def _http(method: str, url: str, headers: dict | None = None, body=None, timeout
             return e.code, raw
     except Exception as e:  # noqa: BLE001
         return 0, f"{type(e).__name__}: {e}"
+
+
+# ── the internal tier: ONE name, and no start without it (F95) ───────────────────────────────────
+#: The compose/helm secret key, and the name admin-api, gateway, meeting-api and agent-api read.
+INTERNAL_SECRET_ENV = "INTERNAL_API_SECRET"
+#: Honoured for one release, with a warning. This file quietly accepting two spellings is part of
+#: how the drift survived: a reader that papers over two names for one secret removes the pressure
+#: to pick one, and each name then grows its own refusal list.
+INTERNAL_SECRET_ENV_DEPRECATED = ("VEXA_INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET")
+#: Every literal a stock compose/helm/lite once supplied. All of them are PUBLISHED in the OSS
+#: repository, so a deployment holding one is not configured — it is open, wearing a configured face.
+INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme",
+                                "change-me", "CHANGE-ME", "default", "secret")
+
+
+def _require_internal_secret() -> str:
+    """The internal-tier secret, or this server does not start.
+
+    This process is PUBLIC. It presents the internal tier (`_operator_or_refuse` accepts this value
+    as a service identity) and it forwards to agent-api, whose `_internal_caller` believes the same
+    value — so an unset or placeholder secret here is not a degraded rig, it is a rig that either
+    cannot authenticate at all or authenticates on a string printed in a public repository.
+
+    Refusing at IMPORT is the point: what a weak default produces is silence, and a start-time
+    refusal is how silence becomes a message. The value never enters a log or an error — the
+    messages below name the VARIABLE, never the value."""
+    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
+    if not key:
+        for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
+            key = (os.environ.get(legacy) or "").strip()
+            if key:
+                print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
+                      f"one name the whole internal tier uses. Honoured this release, removed next.",
+                      flush=True)
+                break
+    if not key:
+        f = pathlib.Path.home() / ".storm/internal-secret"
+        try:
+            if f.is_file():
+                key = f.read_text().strip()
+        except Exception:  # noqa: BLE001
+            key = ""
+    if not key:
+        raise RuntimeError(
+            f"{INTERNAL_SECRET_ENV} is unset — the vexa-control MCP refuses to start rather than "
+            "run with no internal-tier identity. Export it with the SAME value agent-api holds "
+            "(the lane's start script reads $HOME/.storm/internal-secret, mode 600); never put the "
+            "value in the repo.")
+    if key in INTERNAL_SECRET_PLACEHOLDERS:
+        raise RuntimeError(
+            f"{INTERNAL_SECRET_ENV} is the placeholder {key!r} — refusing to start. That literal is "
+            "published in this repository, so it authenticates nobody and everybody.")
+    return key
+
+
+INTERNAL_SECRET = _require_internal_secret()
+
+
+class _BadPath(Exception):
+    """A workspace path this server will not pass on. Carries the reason, in the agent's language."""
+
+
+#: Characters with no business in a workspace path and every business in a shell command. The write
+#: path no longer builds a shell command at all — but a validator that only defends against today's
+#: implementation defends against nothing tomorrow, and the refusal reads the same either way.
+_PATH_FORBIDDEN = frozenset(
+    "\x00\n\r\t"                    # control characters
+    ";|&$`<>*?"                     # shell metacharacters
+    + chr(34) + chr(39) + chr(92)   # " ' \ — spelled by codepoint so the set stays readable
+)
+
+
+def _safe_ws_path(path: str) -> str:
+    """A workspace-relative path, or refuse. RELATIVE, inside the workspace, never `.git/`.
+
+    `..` is checked SEGMENT-wise, not by substring: a file legitimately named `..notes.md` is not an
+    escape, and `a/../../etc` is one though it carries no leading dot-dot. `posixpath.normpath` then
+    has the final word — the segment scan is the readable check, normpath is the real one."""
+    raw = (path or "").strip()
+    if not raw:
+        raise _BadPath("empty path")
+    if raw.startswith("/"):
+        raise _BadPath("an absolute path names the container's filesystem, not a workspace — pass "
+                       "a path relative to the workspace root")
+    bad = sorted(set(raw) & _PATH_FORBIDDEN)
+    if bad:
+        raise _BadPath(f"the path contains {bad!r}, which no workspace file needs")
+    if ".." in raw.split("/"):
+        raise _BadPath("`..` climbs out of the workspace")
+    normalized = posixpath.normpath(raw)
+    if normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
+        raise _BadPath("that path resolves outside the workspace")
+    if normalized == ".":
+        raise _BadPath("that path names the workspace itself, not a file in it")
+    if normalized.split("/")[0] == ".git":
+        raise _BadPath("`.git/` is the workspace's own history — writing into it corrupts the "
+                       "record every other tool reads")
+    return normalized
 
 
 def _fkey():
@@ -790,8 +889,9 @@ def _operator_or_refuse(verb: str) -> str:
     right door for a producer that is not a person.
     """
     tok = (CALL_TOKEN.get() or "").strip()
-    svc = os.environ.get("VEXA_INTERNAL_API_SECRET", "") or os.environ.get("INTERNAL_API_SECRET", "")
-    if svc and tok and tok == svc:
+    # ONE name, resolved once at import, and a CONSTANT-TIME compare: `==` on a shared service
+    # secret leaks its prefix to anyone who can time this call, and this server is public (F95).
+    if tok and hmac.compare_digest(tok, INTERNAL_SECRET):
         return "service"
     uid = _subject()
     if not uid:
@@ -2130,9 +2230,19 @@ def workspace_read(path: str, slug: str = "", token: str = "") -> str:
 def workspace_write(path: str, content: str, slug: str = "", token: str = "") -> str:
     """Write a file into a workspace.
 
-    NOTE: agent-api exposes no HTTP write — only an agent turn writes knowledge. This goes
-    in through the container's own view of the volume and is a DEV DOUBLE for that missing
-    endpoint; it is the gap to close before workspaces are genuinely agent-controllable."""
+    Goes through agent-api's own write route (`PUT /api/workspace/file`) on the CALLER'S identity,
+    so a write is authorized by the same rules a read is: a shared workspace needs contributor+,
+    `_global` needs the org-admin allowlist, the path is confined under the workspace root, and the
+    change is committed so the history stays honest.
+
+    It used to `docker exec ... sh -c '... cat > /workspaces/<slug>/<path>'` — the caller's `path`
+    and `slug` interpolated unquoted into a shell, as root, in the container that holds every
+    workspace and the secret store, and with no membership check at all because a volume does not
+    have one. Two failures wearing one shape: the shell (any signed-in user could run a command) and
+    the door (any signed-in user could overwrite anyone's file). One fix answers both — stop
+    reaching around the service that owns the resource. The note that said "agent-api exposes no
+    HTTP write" was true when it was written and has been false since the terminal's page editor
+    shipped, which is the other half of how this survived review (F96)."""
     vocab = CONFIG_VOCAB.get(path.strip("/"))
     if vocab:
         unknown = [k for k in _frontmatter_keys(content) if k not in vocab]
@@ -2148,17 +2258,27 @@ def workspace_write(path: str, content: str, slug: str = "", token: str = "") ->
             })
 
     uid = me()
-    target = f"/workspaces/{slug or uid}/{path}"
     try:
-        r = subprocess.run(
-            ["docker", "exec", "-i", "vexa-dogfood-agent-api-1", "sh", "-c",
-             f'mkdir -p "$(dirname {target})" && cat > {target}'],
-            input=content, capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            return json.dumps({"error": (r.stderr or "write failed")[:300]})
-        return json.dumps({"url": _ws_url(path, token or ""), "paste_this_link": "[" + path.rsplit("/", 1)[-1] + "](" + _ws_url(path, token or "") + ")", "written": target, "bytes": len(content)})
-    except Exception as e:  # noqa: BLE001
-        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+        rel = _safe_ws_path(path)
+    except _BadPath as e:
+        return json.dumps({
+            "refused": "invalid_path", "path": path, "why": str(e),
+            "tell_your_person": "plainly, that the file name is not one a workspace can hold — "
+                                "then offer a path inside it.",
+        })
+    body = {"path": rel, "content": content}
+    if slug:
+        body["slug"] = slug
+    st, resp = _http("PUT", f"{AGENT_API}/api/workspace/file", {"X-User-Id": uid}, body)
+    if st != 200:
+        # A 403 here is a real answer, not a fault: this person is not a contributor on that
+        # workspace. Say so; do not retry, and do not describe what is in it.
+        return json.dumps({"refused": "not_written", "status": st, "path": rel,
+                           "workspace": slug or "your own",
+                           "why": resp if isinstance(resp, (str, dict)) else "write refused"})
+    return json.dumps({"url": _ws_url(rel, token or ""),
+                       "paste_this_link": "[" + rel.rsplit("/", 1)[-1] + "](" + _ws_url(rel, token or "") + ")",
+                       "written": rel, "bytes": len(content)})
 
 
 @mcp.tool()
@@ -2883,12 +3003,18 @@ def _read_json(uid: str, path: str, default):
 
 
 def _write_json(uid: str, path: str, obj) -> bool:
-    target = f"/workspaces/{uid}/{path}"
-    r = subprocess.run(
-        ["docker", "exec", "-i", "vexa-dogfood-agent-api-1", "sh", "-c",
-         f'mkdir -p "$(dirname {target})" && cat > {target}'],
-        input=json.dumps(obj, indent=1), capture_output=True, text=True, timeout=30)
-    return r.returncode == 0
+    """Write one JSON doc into `uid`'s own workspace, through the door that authorizes it.
+
+    Same fix as `workspace_write` and for the same reason (F96): this shelled into the agent-api
+    container as root with an interpolated path. `uid` here is always the resolved subject, so the
+    route's own authorization is exactly what this was always meant to have."""
+    try:
+        rel = _safe_ws_path(path)
+    except _BadPath:
+        return False
+    st, _ = _http("PUT", f"{AGENT_API}/api/workspace/file", {"X-User-Id": uid},
+                  {"path": rel, "content": json.dumps(obj, indent=1)})
+    return st == 200
 
 
 @mcp.tool()

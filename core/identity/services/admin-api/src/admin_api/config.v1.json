@@ -6,7 +6,16 @@
    "key": "INTERNAL_API_SECRET",
    "class": "required-explicit",
    "secret": true,
-   "description": "shared internal secret the /internal/validate endpoint requires (fail-closed guard, main.py). Unset, gateway's validation hop 503s and every API-key check fails — so the boot refuses instead of coming up green and rejecting every call (the 2026-04-23 failure shape, #526)."
+   "description": "shared internal secret the /internal/validate endpoint requires (fail-closed guard, main.py). Unset, gateway's validation hop 503s and every API-key check fails — so the boot refuses instead of coming up green and rejecting every call (the 2026-04-23 failure shape, #526). The same value gates /internal/bootstrap-admin and /internal/users/by-email, so a published placeholder is refused outright (F95).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "ADMIN_API_TOKEN",

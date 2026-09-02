@@ -100,7 +100,7 @@ services:
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
@@ -176,7 +176,7 @@ services:
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
       # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
@@ -268,7 +268,7 @@ services:
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -377,7 +377,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -461,7 +461,7 @@ services:
       # dependency cycle. The forward simply 502s until mcp is up, like any other upstream.
       - MCP_URL=http://mcp:8010
       - REDIS_URL=redis://redis:6379/0
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -594,7 +594,7 @@ services:
       # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
       # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
       - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
-      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # Declared self-hosted Jitsi hostnames — served to the client link parser
       # (/api/meeting/jitsi-hosts) so pasted links on these hosts are recognized in the UI,
       # matching meeting-api's and mcp's parsers (same setting).

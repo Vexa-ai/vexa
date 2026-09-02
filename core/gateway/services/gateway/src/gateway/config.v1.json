@@ -6,7 +6,16 @@
    "key": "INTERNAL_API_SECRET",
    "class": "required-explicit",
    "secret": true,
-   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526)."
+   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526). It is ALSO the internal-tier authority agent-api's _internal_caller and admin-api's _check_internal compare against, which is why a published placeholder is refused outright (F95).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "ADMIN_API_URL",
