@@ -14,7 +14,13 @@
  *    This is where the rail's deleted workspace column went — per chat, where it means something.
  *
  *  `personal` is not removable: a chat over nothing has nowhere to write, and every conversation
- *  writes somewhere. Everything else in the set is one × away. */
+ *  writes somewhere. Everything else in the set is one × away.
+ *
+ *  The + menu's foot carries "Attach existing repo…" for the same reason the menu exists at all: the
+ *  person who opens it is asking "what else can this chat be over?", and one of the true answers is a
+ *  workspace that already exists on GitHub. The empty state above it is UNCHANGED — new workspaces are
+ *  still made in conversation; loading an existing one is a different act, and it is additive beneath
+ *  that sentence rather than a correction of it. */
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Membership } from "../surfaces/workspaceApi";
@@ -35,6 +41,7 @@ export function ContextBar(p: {
   sel: Sel; flavor: string;
   memberships: Membership[];
   onAddWorkspace: (id: string) => void; onRemoveWorkspace: (id: string) => void;
+  onAttachRepo?: (workspaceId?: string) => void;
 }) {
   const [picking, setPicking] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
@@ -79,6 +86,13 @@ export function ContextBar(p: {
                     onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{id}</button>
                 ))}
+            {p.onAttachRepo && (
+              <button role="menuitem" data-ctx="attach"
+                onClick={() => { p.onAttachRepo?.(undefined); setPicking(false); }}
+                style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderTop: "1px solid var(--line)", borderRadius: 0, padding: "7px 8px", marginTop: 5, color: "var(--t2)", cursor: "pointer" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>Attach existing repo…</button>
+            )}
           </div>
         )}
       </div>

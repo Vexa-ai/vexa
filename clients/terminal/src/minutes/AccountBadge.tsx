@@ -9,10 +9,19 @@
  *  the whole time and simply no door to either — this is the door, not a second implementation.
  *
  *  It lives INSIDE the rail, so collapsing the column takes the badge with it and the 22px edge
- *  handle stays a handle. */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+ *  handle stays a handle.
+ *
+ *  Two more doors landed here for the same reason the first two did. Minutes mode mounts NO Workbench
+ *  (App.tsx renders one shell or the other, never both), so the footer-gear settings surface — and the
+ *  GitHub token card inside it — had no route in at all: the tab-kind is registered, but a tab opened
+ *  into a layout nothing displays is not reachability. So the token card is rendered HERE, the existing
+ *  component unchanged, and beside it the one action that needs a credential — loading a repository
+ *  that already exists. */
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../ui-kit";
 import { useTheme } from "../app/theme";
+import { GitHubTokenCard } from "../surfaces/tokens";
+import { AttachRepo } from "./AttachRepo";
 import { surface, type as ty } from "./tokens";
 
 const itemS: CSSProperties = {
@@ -24,9 +33,36 @@ const itemS: CSSProperties = {
 const hi = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = surface.raisedHi; };
 const lo = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = "transparent"; };
 
+/** The account menu opens PANELS, not tabs — this shell has no tab host to open one into. AttachRepo
+ *  carries its own dialog chrome; the token card is a bare component, so it borrows this one. */
+function Overlay({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [onClose]);
+  return (
+    <div data-panel="backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.38)" }}>
+      <div role="dialog" aria-modal="true" aria-label={label}
+        style={{ width: 460, maxWidth: "92vw", maxHeight: "86vh", overflowY: "auto", padding: 14, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ ...ty.title, flex: 1 }}>{label}</span>
+          <button aria-label="Close" onClick={onClose}
+            style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}>
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function AccountBadge() {
   const [user, setUser] = useState<{ email?: string | null; name?: string | null } | null>(null);
   const [open, setOpen] = useState(false);
+  const [panel, setPanel] = useState<"github" | "attach" | null>(null);
   const [theme, toggleTheme] = useTheme();
   const box = useRef<HTMLDivElement | null>(null);
 
@@ -65,9 +101,21 @@ export function AccountBadge() {
 
   return (
     <div ref={box} style={{ position: "relative", flex: "none", borderTop: "1px solid var(--line)" }}>
+      {panel === "github" && (
+        <Overlay label="GitHub token" onClose={() => setPanel(null)}><GitHubTokenCard /></Overlay>
+      )}
+      {panel === "attach" && <AttachRepo onClose={() => setPanel(null)} />}
       {open && (
         <div role="menu" data-acct="menu"
           style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 8, right: 8, zIndex: 30, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          <button role="menuitem" data-acct="github" onClick={() => { setPanel("github"); setOpen(false); }}
+            style={itemS} onMouseEnter={hi} onMouseLeave={lo}>
+            <Icon name="github" size={14} />GitHub token
+          </button>
+          <button role="menuitem" data-acct="attach" onClick={() => { setPanel("attach"); setOpen(false); }}
+            style={itemS} onMouseEnter={hi} onMouseLeave={lo}>
+            <Icon name="git" size={14} />Attach existing repo…
+          </button>
           <button role="menuitem" data-acct="theme" onClick={() => { toggleTheme(); setOpen(false); }}
             style={itemS} onMouseEnter={hi} onMouseLeave={lo}>
             <Icon name={day ? "moon" : "sun"} size={14} />{day ? "Dark mode" : "Day mode"}
