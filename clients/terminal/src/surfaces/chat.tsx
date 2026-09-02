@@ -25,6 +25,9 @@ import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, MACHINERY_MARK, WOR
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
+  // `mcp__vexa__entity_upsert` → `entity_upsert`. The namespace is ours, not the reader's, and the
+  // founder's own words for what he was watching were "entity_upsert".
+  tool = tool.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
   const t = tool.toLowerCase();
   // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
   const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
@@ -38,7 +41,20 @@ function toolOp(tool: string, args?: Record<string, unknown>): Op {
   const file = typeof args?.file_path === "string" ? (args.file_path as string) : undefined;
   const wrote = !!file && /edit|write|append|notebook/.test(t);
   const name = file ? file.split("/").filter(Boolean).pop() : undefined;
-  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "done", file, wrote };
+  // RUNNING, not done (F66). Every op was appended with `status: "done"`, so the step line rendered
+  // a green TICK from the first tool call — an 18-step turn showed a finished-looking line that
+  // never moved. Founder: *"i know it's working now, but it just stays like it's stale."* The op
+  // that just started IS the one in progress; `onTool` marks the previous one done as it arrives,
+  // and the turn's end marks the last one.
+  return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "running", file, wrote };
+}
+
+/** Close any step still marked running — the turn is over, so nothing in it is in progress. Errors
+ *  keep their own status: a step that FAILED did not succeed because the turn ended. */
+function settleOps(ops: Op[]): Op[] {
+  return ops.some((o) => o.status === "running")
+    ? ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o))
+    : ops;
 }
 
 /** the backend history turn shape (GET /api/sessions/:session/history).
@@ -962,7 +978,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             // chip in the reply that names this new file resolves to "not found" — which is the
             // whole reason a turn's own chips were dead on arrival.
             if (op.wrote) invalidateDocLinkCaches();
-            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, op] }));
+            // the step that was running has finished — the arrival of the next one IS its completion
+            patchAgentTurn(key, agentId, (t) => ({
+              ...t, status: null,
+              ops: [...t.ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o)), op],
+            }));
           },
           onCommit: (sha) => {
             invalidateDocLinkCaches();
@@ -992,12 +1012,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             : "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." };
         });
       } else {
-        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // clean end — drop any lingering status line
+        // THE TICK ONLY AT THE END (F66): the last step settles when the turn does, never before.
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
       }
     } catch (e) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
       else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(e).headline }));
     } finally {
+      // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
+      // outlives its turn is the same lie as a tick that precedes it.
+      patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
       updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
     }
   };
@@ -1153,6 +1177,17 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const slash = value.startsWith("/");
   const skills = slash ? commands.querySkills(value) : [];
 
+  // F66 · THE COMPOSER SAYS WHAT IS HAPPENING. The step line lives up in the transcript, which
+  // scrolls away on a long turn — so the state also sits beside the stop button, where the reader's
+  // hand already is: "working · 18 steps · entity_upsert". Cleared the moment the turn completes.
+  const liveOps = busy ? (turns[turns.length - 1] as AgentTurn | undefined)?.ops ?? [] : [];
+  const liveStep = liveOps.length ? liveOps[liveOps.length - 1] : null;
+  const liveLabel = liveStep ? (liveStep.label.split(" · ").pop() ?? liveStep.label) : "";
+  const liveState = busy
+    ? ["working", liveOps.length ? `${liveOps.length} step${liveOps.length === 1 ? "" : "s"}` : "", liveLabel]
+        .filter(Boolean).join(" · ")
+    : "";
+
   const composer = (
     <>
       {slash && skills.length > 0 && (
@@ -1271,7 +1306,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               : <Icon name="mic" size={15} />}
           </button>
           {busy
-            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+            ? <>
+              <span data-live-state title={liveState}
+                style={{ flex: "0 1 auto", minWidth: 0, marginRight: 8, fontFamily: "var(--mono)", fontSize: 11,
+                  color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {liveState}
+              </span>
+              <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+            </>
             : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
         </div>
       </div>
