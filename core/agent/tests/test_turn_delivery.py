@@ -39,7 +39,7 @@ def test_a_failed_delivery_is_reported_not_swallowed():
     d = object.__new__(dispatch_mod.Dispatcher)
     d._redis = lambda: _BoomRedis()
     d._warm_fail = lambda: None
-    assert d._predeliver("u1", _invocation()) is dispatch_mod._DELIVERY_FAILED
+    assert d._predeliver("u1", _invocation(), "u1:1") is dispatch_mod._DELIVERY_FAILED
 
 
 def test_nothing_to_deliver_is_not_a_failure():
@@ -47,7 +47,7 @@ def test_nothing_to_deliver_is_not_a_failure():
     d._redis = lambda: _BoomRedis()
     d._warm_fail = lambda: None
     # a session-only start has no inline prompt; that is None, and None is not the sentinel
-    assert d._predeliver("u1", {"trigger": "message", "start": {}}) is None
+    assert d._predeliver("u1", {"trigger": "message", "start": {}}, "u1:1") is None
 
 
 def test_no_redis_at_all_is_a_topology_not_a_loss():
@@ -55,7 +55,7 @@ def test_no_redis_at_all_is_a_topology_not_a_loss():
     # Raising here would break every deployment that has no warm delivery to begin with.
     d = object.__new__(dispatch_mod.Dispatcher)
     d._redis = lambda: None
-    assert d._predeliver("u1", _invocation()) is None
+    assert d._predeliver("u1", _invocation(), "u1:1") is None
 
 
 def test_the_sentinel_is_not_None_so_the_two_cases_cannot_be_confused():

@@ -389,11 +389,20 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
     return normal["path"] if normal else f"{root}/{subject}"
 
 
+def _start_with_nonce(start: dict, nonce: str) -> dict:
+    """`start`, with the delivery nonce on its entrypoint. A COPY — the caller's dict is untouched."""
+    ep = (start or {}).get("entrypoint")
+    if not nonce or not isinstance(ep, dict):
+        return start
+    return {**start, "entrypoint": {**ep, "nonce": nonce}}
+
+
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
                    memberships: Optional[list[dict]] = None,
                    model_config: Optional[dict] = None,
                    room: Optional[dict] = None,
-                   scaffold_workspaces: Optional[list[str]] = None) -> dict[str, str]:
+                   scaffold_workspaces: Optional[list[str]] = None,
+                   entry_nonce: str = "") -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -416,7 +425,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_UNIT_OUT_TOPIC": output_topic(unit_id),
         "VEXA_UNIT_IN_TOPIC": input_topic(unit_id),
         "VEXA_WORKSPACES": json.dumps(invocation["workspaces"]),  # the granted [{id,mode}] list to mount
-        "VEXA_START": json.dumps(invocation["start"]),            # entrypoint(inline|path) | session(ref)
+        # The entrypoint carries the same nonce as its pre-delivered stream copy, so the worker can
+        # skip exactly that one entry at boot and drain everything else waiting. Copied, never
+        # mutated in place: `invocation` belongs to the caller.
+        "VEXA_START": json.dumps(_start_with_nonce(invocation["start"], entry_nonce)),
         "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
         "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts),  # the worker's cwd — the primary baseline, or (if it's switched off) the first active normal workspace
@@ -684,7 +696,14 @@ class Dispatcher:
         # ungated so async triggers (scheduled/event/transcription) never lose a dispatch; their
         # credential-less failure mode is the clean rewritten done frame (llm/errors taxonomy).
         model_config = self.resolve_model_config(identity["subject"])
+        # ONE NONCE, TWO COPIES. A cold spawn receives this prompt twice — as its entrypoint (in
+        # VEXA_START, serialised into the env right below) and as the pre-delivered stream entry —
+        # and the worker must skip exactly the one it is about to run. Computed HERE because the env
+        # is built before pre-delivery: stamping it inside _predeliver mutated a dict that had
+        # already been serialised, so it reached nobody and leaked across callers.
+        entry_nonce = f"{uid}:{time.time_ns()}"
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
+                             entry_nonce=entry_nonce,
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
@@ -702,7 +721,8 @@ class Dispatcher:
         # exited in the XADD↔idle-exit race window without taking the message.
         # The mount must exist before the runtime is asked to bind it (see the helper).
         _ensure_workspace_exists(self._settings, identity["subject"])
-        delivery = self._predeliver(uid, invocation) if invocation["trigger"] == "message" else None
+        delivery = (self._predeliver(uid, invocation, entry_nonce)
+                    if invocation["trigger"] == "message" else None)
         if delivery is _DELIVERY_FAILED:
             # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
             # entrypoint and nothing is lost; if it is ALIVE the spawn is a touch and the person's
@@ -755,7 +775,7 @@ class Dispatcher:
         self._warm_stream = None
         self._warm_retry_at = time.monotonic() + 60.0
 
-    def _predeliver(self, uid: str, invocation: dict) -> Optional[str]:
+    def _predeliver(self, uid: str, invocation: dict, nonce: str) -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
         out-stream TAIL id the watchdog reads the ack from.
 
@@ -784,7 +804,6 @@ class Dispatcher:
             # the deployment, "the XADD failed" is an accident on a deployment that has one. Only the
             # second can lose a person's words, and only the second raises.
             return None
-        nonce = f"{uid}:{time.time_ns()}"
         try:
             entries = r.xrevrange(output_topic(uid), count=1)
             tail = entries[0][0] if entries else "0-0"

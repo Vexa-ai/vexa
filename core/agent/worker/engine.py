@@ -617,16 +617,41 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 _drain_inject(cursor)
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
 
-    # Anchor the in-topic cursor at the BOOT-TIME tail, before the entrypoint turn runs. The
-    # dispatcher pre-delivers each chat message to the in topic BEFORE asking the runtime to spawn
-    # (warm delivery): on a COLD spawn that same prompt arrives as the entrypoint, so everything
-    # already in the stream at boot must be SKIPPED (no double turn) — while a message that lands
-    # DURING the entrypoint turn (previously invisible to a "$" read, a lost turn) is consumed
-    # right after it. Streams without history anchor at 0-0; a stream object without xrevrange
-    # (older test fakes) keeps the legacy "$" behavior.
+    # SKIP THE ENTRYPOINT'S OWN COPY — AND NOTHING ELSE.
+    #
+    # The dispatcher pre-delivers every chat message to the in topic BEFORE asking the runtime to
+    # spawn, so on a COLD spawn the entrypoint prompt is ALSO sitting in the stream. Exactly one
+    # entry must be skipped: the copy of the turn we are about to run as `t0`.
+    #
+    # ⚠ It used to anchor at the boot-time TAIL, which skips everything present at boot. Correct
+    # when there is one message; silently wrong when there is more than one. Two rapid sends to a
+    # cold session both returned 200, both landed in the stream, and only the entrypoint ran — the
+    # second was discarded by the anchor as if it were the duplicate. Measured 2026-09-02 on a
+    # scratch session: 2 entries in, one `turn-accepted` out.
+    #
+    # The dispatcher now stamps the delivery nonce on BOTH copies, so the duplicate is identifiable
+    # rather than merely recent. Anchor at 0-0, drop the entry whose nonce matches the entrypoint,
+    # and queue the rest to run in arrival order after it. No nonce (a session-only start, an older
+    # dispatcher) falls back to the tail anchor — the previous behaviour, unchanged.
+    entry_nonce = ((start.get("entrypoint") or {}).get("nonce") or "") if start else ""
+    pending: list[str] = []          # boot-time messages that are NOT the entrypoint's copy
     last = "$"
     xrevrange = getattr(stream, "xrevrange", None)
-    if xrevrange is not None:
+    xrange_ = getattr(stream, "xrange", None)
+    if entry_nonce and xrange_ is not None:
+        try:
+            present = xrange_(in_topic) or []
+            for entry_id, fields in present:
+                last = entry_id
+                msg = json.loads(fields.get("turn", "{}"))
+                if msg.get("nonce") == entry_nonce:
+                    continue          # the entrypoint's own copy — it runs as t0 below
+                text = msg.get("prompt", "")
+                if text:
+                    pending.append(text)
+        except Exception:  # noqa: BLE001 — never a boot blocker; fall back below
+            pending, last = [], "$"
+    if last == "$" and xrevrange is not None:
         try:
             tail = xrevrange(in_topic, count=1)
             last = tail[0][0] if tail else "0-0"
@@ -635,10 +660,15 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 
     cursor = [last]  # shared with _drain_inject: mid-turn-consumed entries advance it
     first = start_prompt(start)
+    n = 0
     if first:
         run_message(first, "t0", cursor=cursor)
+    # …then everything that was already waiting, in the order it arrived. These are turns somebody
+    # sent and got a 200 for; the only thing that made them disappear was the anchor.
+    for text in pending:
+        n += 1
+        run_message(text, f"t{n}", cursor=cursor)
 
-    n = 0
     while True:
         resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
