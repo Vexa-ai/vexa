@@ -140,3 +140,51 @@ def test_a_meeting_that_refused_deletion_is_not_counted_as_deleted(catalog, env)
     from rehearse import doors
     src = inspect.getsource(doors.LiveDoors.meetings_delete_for)
     assert "refused" in src and "raise DoorRefused" in src
+
+
+# ── run 4: the filter rejected the mail it then named in its own refusal ─────────────────────────
+
+@pytest.mark.parametrize('created,ok', [
+    ('2026-09-02T18:50:41.503Z', True),
+    ('2026-09-02T18:50:41.5Z', True),        # Go trims trailing zeros — .5Z beside .503Z
+    ('2026-09-02T18:50:41Z', True),
+    ('2026-09-02T18:50:41.503123456Z', True),  # RFC3339Nano, more digits than %f takes
+    ('2026-09-02T18:50:41+02:00', True),
+    ('', False),
+    ('not a timestamp', False),
+])
+def test_mailpit_stamps_parse_and_an_unreadable_one_is_None_not_zero(created, ok):
+    '''NONE IS NOT ZERO. It returned 0.0 on an unparseable stamp and the caller filtered
+    `epoch < since`, so every message read as older than the run — run 4 failed three states
+    while listing, in its own refusal, the mail it had just discarded.'''
+    from rehearse.doors import _mail_epoch
+    got = _mail_epoch({'Created': created})
+    assert (got is not None) is ok
+    if ok:
+        assert got > 1_000_000_000
+
+
+def test_a_message_we_cannot_place_in_time_is_INCLUDED_not_dropped():
+    '''A false accept is a check that needs tightening; a false reject is a touch reported as
+    never sent. The second is the one that wastes a person's afternoon.'''
+    import time as _t
+
+    from rehearse.doors import LiveDoors
+    import rehearse.doors as D
+
+    calls = []
+    def fake_http(method, url, headers=None, body=None, timeout=40):
+        calls.append(url)
+        if '/search' in url:
+            return 200, {'messages': [{'ID': 'm1', 'Subject': 'Prepare: X', 'Created': 'garbage'}]}
+        return 200, {'Subject': 'Prepare: X', 'To': [{'Address': 'a@rehearse.test'}],
+                     'From': {'Address': 'v@sim.test'}, 'MessageID': '<x@y>', 'Text': 'body',
+                     'HTML': ''}
+    old = D._http
+    D._http = fake_http
+    try:
+        d = LiveDoors.__new__(LiveDoors)
+        msg = LiveDoors.await_mail(d, 'a@rehearse.test', 'Prepare', budget_s=5, since=_t.time())
+        assert msg['subject'] == 'Prepare: X'
+    finally:
+        D._http = old

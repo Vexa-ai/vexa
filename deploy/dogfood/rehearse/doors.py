@@ -471,18 +471,29 @@ class LiveDoors(Doors):
             st, body = _http("GET", f"{MAILPIT}/api/v1/search?query={query}&limit=60", None)
             msgs = (body or {}).get("messages", []) if isinstance(body, dict) else []
             last = msgs
+            unplaceable = 0
             for msg in msgs:
                 if subject_contains and subject_contains.lower() not in (msg.get("Subject") or "").lower():
                     continue
-                if since and _mail_epoch(msg) < since - 5:
-                    continue
+                when = _mail_epoch(msg)
+                if since and when is not None and when < since - 5:
+                    continue                        # a previous run's touch, definitely
+                if since and when is None:
+                    # We cannot place it in time. INCLUDE it and say so: a false accept is a check
+                    # that needs tightening, a false reject is a touch reported as never sent.
+                    unplaceable += 1
                 return self._mail(msg["ID"])
             if time.time() >= deadline:
+                # The refusal NAMES what it saw and why each candidate was rejected — the previous
+                # version listed the very mail it had just discarded, which reads as a product
+                # failure and was a reader's.
+                seen = "; ".join(sorted({(m.get("Subject") or "") for m in last})[:6])
                 raise DoorRefused(
                     f"no mail to {to}"
                     + (f" whose subject contains {subject_contains!r}" if subject_contains else "")
-                    + f" arrived within {budget_s}s. {len(last)} message(s) to that address exist: "
-                    + "; ".join(sorted({(m.get('Subject') or '') for m in last})[:6]))
+                    + f" arrived within {budget_s}s (only counting mail newer than "
+                      f"{time.strftime('%H:%M:%SZ', time.gmtime(since))} — this run's start)"
+                    + f". {len(last)} message(s) to that address exist: {seen}")
             time.sleep(3)
 
     def _mail(self, message_id: str) -> dict:
@@ -880,14 +891,43 @@ def _links(text: str) -> list[str]:
     return out
 
 
-def _mail_epoch(msg: dict) -> float:
-    raw = str(msg.get("Created") or "")
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+def _mail_epoch(msg: dict) -> float | None:
+    """When mailpit says this message was created, or None when the stamp cannot be read.
+
+    NONE IS NOT ZERO, and that distinction cost a whole run. This used to return 0.0 on a stamp it
+    could not parse, and the caller's filter was `_mail_epoch(msg) < since`, so an unreadable
+    timestamp meant "older than this run" — every message rejected. Run 4 failed three states with
+    the message *"no mail whose subject contains 'Prepare' arrived within 180s. 2 message(s) to
+    that address exist: Accepted: …; Prepare: …"* — naming, in its own refusal, the mail it had
+    just thrown away.
+
+    It is the same defect as the 422 read as an empty list, one layer down: a parse that fails is
+    not an answer, and code that turns it into one produces a confident wrong result. A stamp we
+    cannot read now means "I cannot place this message in time", and the caller decides — it
+    includes the message rather than dropping it, because a false accept is a check that needs
+    tightening while a false reject is a touch that never happened.
+
+    Parsed with `datetime.fromisoformat`, which takes mailpit's RFC3339 (Go trims trailing zeros
+    from the fraction, so `.5Z` sits next to `.503Z` — the old fixed-width slicing could not).
+    """
+    raw = str(msg.get("Created") or "").strip()
+    if not raw:
+        return None
+    import datetime as _dt
+    text = raw.replace("Z", "+00:00")
+    try:
+        return _dt.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        pass
+    # Pre-3.11 spellings and over-long fractions: trim the fraction to microseconds and retry.
+    m = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$", text)
+    if m:
+        frac = (m.group(2) or "")[:7]
         try:
-            return time.mktime(time.strptime(raw[:26] + raw[-5:], fmt))
-        except (ValueError, OverflowError):
-            continue
-    return 0.0
+            return _dt.datetime.fromisoformat(m.group(1) + frac + (m.group(3) or "")).timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 def _int(s: str) -> int:
