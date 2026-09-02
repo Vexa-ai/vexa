@@ -12,37 +12,59 @@ import { describe, expect, it } from "vitest";
 import { fetchScaffold, localScaffold, parseScaffold, refusalCopy, scaffoldToChat } from "../scaffold";
 
 const WIRE = {
-  id: "sc_abc123",
-  kind: "post-meeting",
-  meeting: 95,
+  id: "OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI",
+  kind: "invite-offer",
+  who: "priya@acme.test",
+  meeting: "97",
+  native: "abc-defg-hij",
   phase: "post",
-  workspaces: ["_global", "personal"],
+  workspaces: ["_global", "u_priya", "grp-showb"],
   refs: {
-    title: "DNA TSC — 3 August",
-    when: "Sep 2, 10:12",
-    organizer: "dmitry@vexa.ai",
-    participants: ["a@x.test", "b@x.test"],
-    participant_names: { "a@x.test": "Ann X", "b@x.test": 7 },
-    state: { desk: "new", group: "warm" },
+    title: "Show B Lighting dailies",
+    when: "14:00 CEST",
+    when_epoch: 1756814400,
+    organizer: "leo@acme.test",
+    participants: ["leo@acme.test", "priya@acme.test"],
+    participant_names: { "priya@acme.test": "Priya N", "leo@acme.test": 7 },
+    state: { desk: "new", group: "new" },
   },
-  opening_preset: "minutes-review",
-  opening_text: "[minutes-review] Someone clicked through …",
+  opening_preset: "minutes-review-invite",
+  opening_label: "minutes",
+  opening_text: "[minutes-review] Someone clicked through about 97 …\n\n[vexa-machinery] composed by the product …",
   tabs: ["meeting:note", "meeting:transcript"],
   focus: "meeting:note",
-  provenance: "post_meeting flow",
-  redeemed_at: null,
+  header: { title: "Show B Lighting dailies", flavor: "meeting · held", when: "14:00 CEST" },
+  provenance: { flow: "post_meeting", step: "email_attendees", reaction_id: "812", minted_by: "u_leo" },
+  provenance_line: "post_meeting · 812 · minted by u_leo · 2026-09-02T10:33:26Z",
+  minted_at: "2026-09-02T10:33:26Z",
+  redeemed_at: "2026-09-02T10:33:26Z",
+  redeemed_by: "u_priya",
 };
 
 describe("parseScaffold", () => {
-  it("reads the record, and coerces the ROW id to a string", () => {
+  it("reads the record — including the two fields the server ships differently than first assumed", () => {
     const s = parseScaffold(WIRE)!;
-    expect(s.id).toBe("sc_abc123");
-    expect(s.meeting).toBe("95");           // number on the wire, string everywhere here
+    expect(s.id).toBe("OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI");
+    expect(s.meeting).toBe("97");
+    // NATIVE is a top-level field of the record. It is NOT the row id, and the client no longer
+    // hunts the meetings list for it — which is what let the `?s=` path drop its wait on that list.
+    expect(s.native).toBe("abc-defg-hij");
+    // PROVENANCE on the wire is the object; the string is `provenance_line`. Reading the object
+    // through a string coercion degraded to "" silently, which is why this is asserted by value.
+    expect(s.provenance).toBe("post_meeting · 812 · minted by u_leo · 2026-09-02T10:33:26Z");
     expect(s.phase).toBe("post");
-    expect(s.workspaces).toEqual(["_global", "personal"]);
-    expect(s.refs.state).toEqual({ desk: "new", group: "warm" });
+    expect(s.workspaces).toEqual(["_global", "u_priya", "grp-showb"]);
+    expect(s.refs.when).toBe("14:00 CEST");
+    expect(s.refs.state).toEqual({ desk: "new", group: "new" });
     // a non-string name is dropped rather than rendered as "7"
-    expect(s.refs.participantNames).toEqual({ "a@x.test": "Ann X" });
+    expect(s.refs.participantNames).toEqual({ "priya@acme.test": "Priya N" });
+    expect(s.redeemedAt).toBe("2026-09-02T10:33:26Z");
+  });
+
+  it("ignores the fields it does not consume rather than choking on them", () => {
+    // who · opening_label · header · minted_at · redeemed_by all ride along; the parse must not
+    // care, so the server can add facts without a client release.
+    expect(parseScaffold(WIRE)).not.toBeNull();
   });
 
   it("refuses a record it cannot open, rather than opening an empty chat", () => {
@@ -70,21 +92,30 @@ describe("parseScaffold", () => {
 
 describe("scaffoldToChat", () => {
   it("a meeting scaffold lands in the MEETING's own chat, with the phase's tab names", () => {
-    const rec = scaffoldToChat(parseScaffold(WIRE)!, { native: "abc-defg-hij" });
-    expect(rec.id).toBe("meet-95");        // not a parallel conversation
+    const rec = scaffoldToChat(parseScaffold(WIRE)!);   // native comes off the RECORD now
+    expect(rec.id).toBe("meet-97");        // not a parallel conversation
     expect(rec.label).toBe("");            // the rail names it from the meeting
-    expect(rec.meeting).toBe("95");
+    expect(rec.meeting).toBe("97");
     expect(rec.artifacts).toEqual([
       { path: "kg/entities/meeting/abc-defg-hij.md", label: "Minutes" },  // post → Minutes
-      { kind: "meeting", path: "95", label: "Transcript" },
+      { kind: "meeting", path: "97", label: "Transcript" },
     ]);
     expect(rec.focus).toBe("|kg/entities/meeting/abc-defg-hij.md");
   });
 
-  it("without the native id the note is DROPPED, not guessed at", () => {
+  it("without a native the note is DROPPED, not guessed at", () => {
     // a tab pointing at a guessed path opens a page that can never load — worse than one fewer tab
-    const rec = scaffoldToChat(parseScaffold(WIRE)!, { native: null });
-    expect(rec.artifacts).toEqual([{ kind: "meeting", path: "95", label: "Transcript" }]);
+    const rec = scaffoldToChat(parseScaffold({ ...WIRE, native: null })!);
+    expect(rec.artifacts).toEqual([{ kind: "meeting", path: "97", label: "Transcript" }]);
+  });
+
+  it("phase null keeps the meeting's own layout and never infers `post`", () => {
+    // null is a REAL answer — "we could not read the row" — not a default. Inferring post would
+    // name an unheld meeting's brief "Minutes".
+    const s = parseScaffold({ ...WIRE, phase: null })!;
+    expect(s.phase).toBeNull();
+    const rec = scaffoldToChat(s);
+    expect(rec.artifacts[0]).toEqual({ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" });
   });
 
   it("a scaffold with no meeting opens its own chat over its declared workspaces", () => {
@@ -94,7 +125,7 @@ describe("scaffoldToChat", () => {
       refs: { ...WIRE.refs, title: "" },
     })!;
     const rec = scaffoldToChat(s);
-    expect(rec.id).toBe("scaffold-sc_abc123");
+    expect(rec.id).toBe("scaffold-OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI");
     expect(rec.label).toBe("setup global");
     expect(rec.meeting).toBeUndefined();
     expect(rec.artifacts.map((a) => a.path)).toEqual(["README.md", "MISSING.md"]);
@@ -110,11 +141,11 @@ describe("scaffoldToChat", () => {
 describe("localScaffold — the hand link composes through the SAME path", () => {
   it("`?ask=&meeting=` produces a record scaffoldToChat renders identically", () => {
     const sc = localScaffold({
-      preset: "prep", openingText: "[prep] …", meeting: "95", phase: "prep",
+      preset: "prep", openingText: "[prep] …", meeting: "95", native: "abc-defg-hij", phase: "prep",
       workspaces: ["_global", "personal"], tabs: ["meeting:note"], focus: "meeting:note",
     });
     expect(sc.kind).toBe("hand-link");
-    const rec = scaffoldToChat(sc, { native: "abc-defg-hij" });
+    const rec = scaffoldToChat(sc);
     expect(rec.id).toBe("meet-95");
     // prep → the same file under the name the reader needs today
     expect(rec.artifacts).toEqual([{ path: "kg/entities/meeting/abc-defg-hij.md", label: "Brief" }]);
@@ -154,8 +185,8 @@ describe("fetchScaffold — a refusal is returned, never thrown", () => {
   });
 
   it("a good one parses", async () => {
-    const r = await fetchScaffold("sc_abc123", async () => res(200, WIRE));
-    expect(r.ok && r.scaffold.id).toBe("sc_abc123");
+    const r = await fetchScaffold(WIRE.id, async () => res(200, WIRE));
+    expect(r.ok && r.scaffold.id).toBe(WIRE.id);
   });
 });
 
@@ -168,6 +199,12 @@ describe("refusalCopy — every refusal states a state and a next move", () => {
       // never a stack trace, never a status code in the reader's face
       expect(c.title + c.body).not.toMatch(/HTTP|undefined|null|\[object/);
     }
-    expect(refusalCopy({ reason: "forbidden", status: 403, detail: "" }).title).toMatch(/someone else/i);
+    // 404 is ALSO the answer for "not yours" — the id is the capability, so a 403 would confirm to
+    // a prober that a scaffold with that id exists. The not-found copy therefore has to cover both
+    // without asserting either, and must not claim the link was used up: reading one redeems it and
+    // it keeps resolving for its recipient.
+    const nf = refusalCopy({ reason: "not-found", status: 404, detail: "" });
+    expect(nf.title + nf.body).toMatch(/different address|meant for/i);
+    expect(nf.title + nf.body).not.toMatch(/already been used/i);
   });
 });

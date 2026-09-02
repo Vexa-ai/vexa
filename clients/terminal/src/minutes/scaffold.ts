@@ -40,6 +40,13 @@ export interface Scaffold {
   kind: string;
   /** the meetings-domain ROW id, or null for a scaffold that is not about a meeting */
   meeting: string | null;
+  /** the meeting's NATIVE id, read off the row by the server.
+   *
+   *  Two identifiers, deliberately both present: the canvas binds to the ROW id, and
+   *  `kg/entities/meeting/<native>.md` is keyed by the native. Carrying it on the record is what
+   *  lets the client stop hunting the meetings list for it — and the list is exactly the thing that
+   *  may not have loaded yet when an emailed link lands. */
+  native: string | null;
   /** resolved SERVER-SIDE at open — never at mint, never inferred here */
   phase: MeetingPhase | null;
   workspaces: string[];
@@ -88,11 +95,13 @@ export function parseScaffold(raw: unknown): Scaffold | null {
 
   const phaseRaw = str(r.phase).trim().toLowerCase() as MeetingPhase;
   const meeting = r.meeting == null || r.meeting === "" ? null : String(r.meeting);
+  const native = str(r.native).trim() || null;
 
   return {
     id,
     kind: str(r.kind) || "unknown",
     meeting,
+    native,
     phase: PHASES.includes(phaseRaw) ? phaseRaw : null,
     // `_global` is always mounted by the server's own rule; we do not add it here, because a
     // client that patches the mount set is a second opinion about context.
@@ -109,7 +118,10 @@ export function parseScaffold(raw: unknown): Scaffold | null {
     openingText,
     tabs: strArr(r.tabs),
     focus: str(r.focus),
-    provenance: str(r.provenance),
+    // `provenance` on the wire is the OBJECT {flow, step, reaction_id, minted_by}; the string is
+    // `provenance_line`. Reading the object through `str()` degraded to "" silently — four facts
+    // cannot be a string, and it is the line we want to show.
+    provenance: str(r.provenance_line),
     redeemedAt: str(r.redeemed_at) || null,
   };
 }
@@ -155,8 +167,12 @@ export async function fetchScaffold(
 export function refusalCopy(r: ScaffoldRefusal): { title: string; body: string } {
   switch (r.reason) {
     case "not-found":
-      return { title: "This link has already been used, or it never existed.",
-               body: "Ask whoever sent it for a fresh one — links are minted per person and are not shared." };
+      // 404 is also the answer for "not yours": the id IS the capability until redeem binds it, so a
+      // 403 would confirm to a prober that a scaffold with that id exists. The copy therefore has to
+      // cover both without asserting either — and must not claim the link was "used up", which it
+      // is not: reading one redeems it and it keeps resolving for its recipient.
+      return { title: "This link isn't open to you.",
+               body: "It may have been meant for a different address, or it may no longer exist. If it was sent to you, sign in with that address; otherwise ask whoever sent it for a fresh one — links are minted per person and are not shared." };
     case "forbidden":
       return { title: "This link belongs to someone else.",
                body: "You are signed in as a different person. Sign in with the address the mail was sent to, and it will open." };
@@ -193,7 +209,9 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
   // one document fewer, which is the honest degradation: a tab pointing at a guessed path would
   // open a page that can never load.
   const ctx = {
-    native: opts.native ?? null,
+    // the record's own native is authoritative; `opts` remains only for a caller that resolved it
+    // some other way (it no longer has to — see Scaffold.native).
+    native: s.native ?? opts.native ?? null,
     meetingId: s.meeting,
     phase: s.phase,
     mounts: s.workspaces,
@@ -220,13 +238,14 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
  *  the server's substitution already done. Either way the text is MACHINERY and is marked as such
  *  by the send path — the human never sees it as their own words. */
 export function localScaffold(input: {
-  preset: string; openingText: string; meeting: string | null; phase: MeetingPhase | null;
-  workspaces: string[]; tabs: string[]; focus: string; title?: string;
+  preset: string; openingText: string; meeting: string | null; native?: string | null;
+  phase: MeetingPhase | null; workspaces: string[]; tabs: string[]; focus: string; title?: string;
 }): Scaffold {
   return {
     id: `local-${input.preset}`,
     kind: "hand-link",
     meeting: input.meeting,
+    native: input.native ?? null,
     phase: input.phase,
     workspaces: input.workspaces,
     refs: { title: input.title, participants: [], participantNames: {}, state: {} },
