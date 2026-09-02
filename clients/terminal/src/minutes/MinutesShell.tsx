@@ -31,7 +31,7 @@ import {
   forgetHistory, orderHistory, stripForRecord, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { resolveDocRef } from "../ui-kit/docLinks";
-import { syncSurface } from "../surfaces/surfaceSync";
+import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
@@ -850,12 +850,19 @@ export function MinutesShell() {
   const flavor = sel.kind === "meeting" ? `meeting · ${selMeeting ? PHASE_WORD[meetingPhase(selMeeting)] : "held"}`
     : selChat?.scaffold?.kind === "admin-setup" ? "chat · admin" : "chat";
 
-  // PRD DECISION 30 — THE SURFACE IS A FACT THE SERVER HOLDS, not something the prompt re-describes.
-  // Every change to what the human is looking at is written to the session record: which chat, which
-  // meeting and phase, the view, the strip's history and pins, the navigator. Debounced and
-  // fire-and-forget inside `syncSurface`; inert until stage-1's route lands, and the prompt keeps
-  // its "Active context" prefix until the same flag flips.
+  // PRD DECISION 30 — THE SURFACE WOULD BE A FACT THE SERVER HOLDS, not something the prompt
+  // re-describes. Every change to what the human is looking at would be written to the session
+  // record: which chat, which meeting and phase, the view, the strip's history and pins, the
+  // navigator. Debounced and fire-and-forget inside `syncSurface`.
+  //
+  // ⚠ DECISION 30 IS NOT SHIPPED — `PUT /api/sessions/<id>/surface` is served by no service in
+  // this repo — so this reads the gate ITSELF and returns before doing the work. It used to
+  // recompute `orderHistory(pages)` and build the whole body on every change of chat, view, strip
+  // or navigator and hand it to a `syncSurface` that dropped it on the floor: the code read as
+  // wired while the agent was told nothing (2026-09-02 review, R-C09). The prompt keeps its
+  // "Active context" prefix off the same flag; one value flips both halves.
   useEffect(() => {
+    if (!SURFACE_RECORD_LIVE) return;
     const ordered = orderHistory(pages as Artifact[]);
     const ref = (a: Artifact) => ({ workspace: a.slug ?? "", path: a.path, title: a.label });
     syncSurface(sel.chatId, {
