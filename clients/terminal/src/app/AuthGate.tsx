@@ -19,6 +19,22 @@
  *  the one-time "Set up your instance" claim screen — the first sign-in becomes the admin —
  *  through whichever door the deploy actually has.
  *
+ *  THE COMPANY-LAYER GATE (founder ruling 2026-09-02: "global needs to be setup by admin, it just
+ *  should not let him start the service before that"). The same probe now also reports
+ *  `global_setup`. Until the admin has written the company layer into the platform `_global`
+ *  workspace, this instance serves NOBODY but that admin — so while the gate is up the card stops
+ *  advertising itself as a way in for ordinary people: the ordinary "Sign in to continue" framing
+ *  and the one-click provider buttons are replaced by one sentence saying what is happening.
+ *
+ *  What is deliberately NOT hidden is a door for the ADMIN. Hiding every provider button outright
+ *  would brick an OAuth-only deploy the moment the admin's session lapsed mid-setup — the gate would
+ *  be locking out the one person it exists to wait for. So the OAuth buttons move behind an explicit
+ *  "I'm the administrator" disclosure: an ordinary visitor sees a setup notice and no doors, the
+ *  admin is one labelled click from theirs. THIS IS PRESENTATION, NOT ENFORCEMENT — the actual
+ *  refusal lives server-side in /api/auth/{login,redeem} and the OAuth signIn callback, all three of
+ *  which ask admin-api before any user row can be created. Nothing here is load-bearing for
+ *  security; it is load-bearing for not telling ordinary users a lie about what will happen.
+ *
  *  A SESSION THAT DIES MID-USE (2026-09-01). The mount probe used to be the only probe there was:
  *  once this gate said "in" it never asked again, so a session revoked server-side left the entire
  *  shell rendered over an app where every request 401'd — and the user's only report of it was a
@@ -46,10 +62,24 @@ function currentPath(): string {
  *  401 at once, and one answer settles all of them. */
 const REPROBE_COOLDOWN_MS = 3000;
 
+/** The company-layer gate's sentence, character-for-character the SETUP_GATE_REFUSAL that
+ *  api/auth/adminApi.ts sends from the login route, the magic-link refusal card and the OAuth
+ *  callback. It is duplicated rather than imported because this is a client component and that
+ *  module is server-only (it reads VEXA_INTERNAL_API_SECRET at call time); importing it would drag
+ *  the internal secret's module graph into the browser bundle. If one of the two ever changes, the
+ *  other must change with it — a visitor who gets refused at the door and then reads a differently
+ *  worded notice on the screen they land back on has been told two things about one state. */
+const SETUP_GATE_NOTICE = "This Vexa is being set up by its administrator.";
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
   const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
   const [adminExists, setAdminExists] = useState(true); // fail-safe: plain sign-in until told otherwise
+  // Fail-safe towards "completed", matching the server's own direction (adminApi.instanceState):
+  // an unreachable probe must never present a lockout screen on a healthy instance.
+  const [globalSetup, setGlobalSetup] = useState<"completed" | "missing">("completed");
+  // The admin's escape hatch while the gate is up — reveals the provider buttons on request.
+  const [adminDoor, setAdminDoor] = useState(false);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
@@ -98,10 +128,17 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       .then((p: Record<string, unknown>) =>
         active && setProviders({ google: !!p.google, microsoft: !!p.microsoft }))
       .catch(() => undefined);
-    // First-run probe — {admin_exists:false} flips the card into the admin-claim variant.
+    // First-run probe — {admin_exists:false} flips the card into the admin-claim variant, and
+    // {global_setup:"missing"} flips it into the setup-in-progress variant. Both default to the
+    // permissive reading on any failure (a bad response, a parse error, an unreachable server), so
+    // a probe that cannot answer never produces a screen that refuses people.
     fetch("/api/auth/instance", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { admin_exists: true }))
-      .then((d: { admin_exists?: boolean }) => active && setAdminExists(d.admin_exists !== false))
+      .then((r) => (r.ok ? r.json() : { admin_exists: true, global_setup: "completed" }))
+      .then((d: { admin_exists?: boolean; global_setup?: string }) => {
+        if (!active) return;
+        setAdminExists(d.admin_exists !== false);
+        setGlobalSetup(d.global_setup === "missing" ? "missing" : "completed");
+      })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -171,9 +208,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
+  // The company layer has not been written yet: this instance serves nobody but its admin. Note the
+  // `!claiming` — on a VIRGIN instance (no admin at all) the gate is not up for anybody, because the
+  // next sign-in is the one that becomes the admin; showing "wait for the administrator" to the
+  // person who is about to BE the administrator is a deadlock with a polite sentence on it.
+  const setupGated = globalSetup === "missing" && !claiming;
   // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
   // an alternative to anything — it is the door. "Or …" would read as if a button were missing.
   const hasOAuth = providers.google || providers.microsoft;
+  // Ordinary visitors get no provider buttons while the gate is up; the admin reveals them.
+  const showProviders = !setupGated || adminDoor;
 
   return (
     <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -187,7 +231,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
           <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>
-            {claiming ? "Set up your instance" : "Vexa Terminal"}
+            {claiming ? "Set up your instance" : setupGated ? "Setting up this Vexa" : "Vexa Terminal"}
           </div>
         </div>
 
@@ -222,16 +266,25 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                   First sign-in = administrator
                 </div>
               </>
+            ) : setupGated ? (
+              <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.55 }} data-testid="setup-gate-notice">
+                {SETUP_GATE_NOTICE}
+                <div style={{ color: "var(--t3)", marginTop: 6 }}>
+                  Until that is finished, only the administrator can sign in.
+                </div>
+              </div>
             ) : (
               <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
             )}
 
-            {providers.google && (
+            {/* While the gate is up the provider buttons are not offered to ordinary visitors — see
+                the header comment. They stay reachable for the admin behind the disclosure below. */}
+            {showProviders && providers.google && (
               <button onClick={() => signIn("google", { callbackUrl: destination() })} style={oauthBtn}>
                 <GoogleMark /> Continue with Google
               </button>
             )}
-            {providers.microsoft && (
+            {showProviders && providers.microsoft && (
               <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} style={oauthBtn}>
                 <MicrosoftMark /> Continue with Microsoft
               </button>
@@ -239,7 +292,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
             <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
-                {hasOAuth ? "Or get a sign-in link by email." : "Enter your email and we\u2019ll send you a sign-in link."}
+                {setupGated
+                  ? "Administrator: enter your email and we\u2019ll send you a sign-in link."
+                  : hasOAuth
+                    ? "Or get a sign-in link by email."
+                    : "Enter your email and we\u2019ll send you a sign-in link."}
               </div>
               <input
                 type="email"
@@ -270,9 +327,27 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           </>
         )}
 
+        {/* The admin's escape hatch. An OAuth-only deploy whose admin session lapses mid-setup would
+            otherwise have NO visible door at all — the gate would lock out the one person it is
+            waiting for. One labelled click, not a button ordinary visitors are invited to press. */}
+        {setupGated && !sent && hasOAuth && !adminDoor && (
+          <button
+            onClick={() => setAdminDoor(true)}
+            style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0, alignSelf: "flex-start", textDecoration: "underline" }}
+          >
+            I&rsquo;m the administrator
+          </button>
+        )}
+
         {claiming && !sent && (
           <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4 }}>
             This claim screen disappears once an admin exists.
+          </div>
+        )}
+
+        {setupGated && !sent && (
+          <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4 }}>
+            This notice disappears as soon as the company layer is written.
           </div>
         )}
       </div>

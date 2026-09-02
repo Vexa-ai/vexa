@@ -8,22 +8,69 @@
  *  per INSTANCE, never per browser. Non-admins (the setup probe 404s → null) fall straight
  *  through — they can never see or affect instance setup.
  *
- *  Every step is skippable (the terminal must never hold the UI hostage); skipped steps are
- *  recorded so Settings can nudge later. */
-import { useEffect, useState, type CSSProperties } from "react";
+ *  STEPS 1 AND 2 ARE SKIPPABLE (the terminal must never hold the UI hostage); skipped steps are
+ *  recorded so Settings can nudge later. STEP 3 IS NOT, and that exception is the whole point of it
+ *  — see below.
+ *
+ *  ── STEP 3: THE COMPANY LAYER (founder ruling 2026-09-02) ──────────────────────────────────────
+ *  "global needs to be setup by admin, it just should not let him start the service before that."
+ *  A fresh instance serves NOBODY until the admin has written a thin company layer — who the company
+ *  is, its principles, objectives, structure, and what is missing — into the platform `_global`
+ *  workspace. Until then only the admin can sign in, the flows engine sends nothing, and the
+ *  operator verbs refuse. So a skippable step 3 would be a button labelled "leave the instance
+ *  broken", and the honest thing is to say on screen that it cannot be skipped rather than to hide
+ *  the affordance and let the admin hunt for it.
+ *
+ *  IT IS NOT A FORM. Nothing about a company fits in three text inputs, and a form would collect
+ *  fields where the product's actual answer is a conversation. Step 3 is a HAND-OFF: its button
+ *  writes localStorage["vexa.setupGlobal"]="1" and drops this component from a full-screen overlay
+ *  to a small fixed card in the corner, so the workbench MOUNTS UNDERNEATH and fires the setup
+ *  conversation. The wizard then stops being a wizard and becomes a progress readout: the card polls
+ *  /api/global/state, names the files still absent, and — only once the server says the layer is
+ *  complete — offers the Continue that finally writes setup.completed.
+ *
+ *  Hence the four phases: "checking" | "hidden" | "wizard" | "handoff". In "handoff" the component
+ *  renders <>{children}<GateCard/></> — children being the live workbench. The handoff is persisted
+ *  into the same platform-settings "setup" key that carries the per-step state, so a reload in the
+ *  middle of the conversation resumes AS a handoff instead of throwing the admin back to step 1 and
+ *  asking them to configure their model again. */
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  getGlobalSetting, setGlobalSetting, testModels, testTranscription,
-  type ConfigTestResult, type GlobalSetting,
+  COMPANY_LAYER_FILES, getGlobalSetting, getGlobalState, setGlobalSetting, testModels, testTranscription,
+  type ConfigTestResult, type GlobalSetting, type GlobalState,
 } from "../surfaces/settingsApi";
 
-/** Show the wizard? null = not an admin (probe 404s); completed set = already ran. */
+/** Show the setup surface at all? null = not an admin (probe 404s); completed set = already ran.
+ *  Note what does NOT appear here: the company layer's own state. `setup.completed` is written by
+ *  exactly one thing — the Continue button on the handoff card, which only appears after the SERVER
+ *  said the layer is complete. Deriving completion here as well would be a second writer on the same
+ *  decision, and the two would disagree the first time a poll was in flight during a reload. */
 export function shouldShowSetup(setup: GlobalSetting | null): boolean {
   if (setup === null) return false;
   return setup.completed !== "true";
 }
 
-type Phase = "checking" | "hidden" | "wizard";
+type Phase = "checking" | "hidden" | "wizard" | "handoff";
 type StepState = "done" | "skipped";
+
+/** The value `setup.global` carries once the admin has handed off to the chat. */
+const HANDOFF = "handoff";
+
+/** Where a RELOAD should resume. The admin who reloads mid-conversation is not starting over: they
+ *  have already handed off, the workbench is already the place the work is happening, and the only
+ *  honest thing to show them is the same corner card they left. */
+export function setupResumePhase(setup: GlobalSetting | null): Exclude<Phase, "checking"> {
+  if (!shouldShowSetup(setup)) return "hidden";
+  return setup?.global === HANDOFF ? HANDOFF : "wizard";
+}
+
+/** Which wizard step a reload resumes on — the first one that has no recorded outcome. `advance()`
+ *  persists each step as it happens precisely so this can be read back. */
+export function setupResumeStep(setup: GlobalSetting | null): 1 | 2 | 3 {
+  if (setup?.transcription) return 3;
+  if (setup?.models) return 2;
+  return 1;
+}
 
 const card: CSSProperties = {
   border: "1px solid var(--line2)", borderRadius: 10, padding: "13px 15px",
@@ -307,7 +354,7 @@ function Foot({ onSkip, next }: { onSkip: () => void; next: React.ReactNode }) {
   );
 }
 
-function Steps({ at }: { at: 1 | 2 }) {
+function Steps({ at }: { at: 1 | 2 | 3 }) {
   const dot = (n: number, label: string) => {
     const on = at === n, done = at > n;
     return (
@@ -327,6 +374,166 @@ function Steps({ at }: { at: 1 | 2 }) {
       {dot(1, "Agent model")}
       <span style={{ width: 24, height: 1, background: "var(--line2)" }} />
       {dot(2, "Transcription")}
+      <span style={{ width: 24, height: 1, background: "var(--line2)" }} />
+      {dot(3, "Company")}
+    </div>
+  );
+}
+
+// ── the company layer ───────────────────────────────
+
+/** How often the corner card asks the server whether the layer is done. Slow enough to be free,
+ *  fast enough that the admin never wonders whether it noticed — the alternative would be pushing
+ *  the gate down a socket, which is real machinery for a screen that opens once in an instance's life. */
+const GLOBAL_POLL_MS = 4000;
+
+type Poll = { state: GlobalState | null; error: string | null };
+
+/** Read /api/global/state now and every GLOBAL_POLL_MS after, until `stop` is true.
+ *
+ *  A read that FAILS keeps the last good state and records the error beside it, rather than clearing
+ *  it: a single dropped poll must not blank a card the admin is reading, and an unreachable server
+ *  must never be rendered as "the layer went away". */
+function useGlobalState(stop: boolean): Poll {
+  const [poll, setPoll] = useState<Poll>({ state: null, error: null });
+  const alive = useRef(true);
+
+  const read = useCallback(async () => {
+    try {
+      const state = await getGlobalState();
+      if (alive.current) setPoll({ state, error: null });
+    } catch (e: unknown) {
+      if (alive.current) setPoll((prev) => ({ state: prev.state, error: e instanceof Error ? e.message : String(e) }));
+    }
+  }, []);
+
+  useEffect(() => {
+    alive.current = true;
+    if (stop) return () => { alive.current = false; };
+    void read();
+    const id = setInterval(() => void read(), GLOBAL_POLL_MS);
+    return () => { alive.current = false; clearInterval(id); };
+  }, [read, stop]);
+
+  return poll;
+}
+
+/** The five files, each marked present or absent. `present` comes from the server; the constant only
+ *  fixes the ORDER, so the list does not reshuffle between polls under the admin's eyes. */
+function FileList({ present }: { present: string[] }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {COMPANY_LAYER_FILES.map((f) => {
+        const have = present.includes(f);
+        return (
+          <div key={f} style={{ fontSize: 11.5, fontFamily: "var(--mono)", color: have ? "var(--green)" : "var(--t3)" }}>
+            {have ? "✓" : "○"} {f}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Step 3 — the company layer. NOT A FORM and NOT SKIPPABLE; the file header explains both. Its one
+ *  button hands off to the setup CHAT: persist that we are handing off, then navigate to
+ *  `/?setup=global`, which App.tsx turns into the pending preset the workbench opens on mount. The
+ *  navigation is what keeps the full-screen overlay and the chat from ever coexisting — the page
+ *  reloads, the conversation opens, and this component comes back as the corner card. */
+function CompanyLayerStep({ onHandOff }: { onHandOff: () => void }) {
+  const { state, error } = useGlobalState(false);
+
+  return (
+    <>
+      <div style={{ fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>Who is this company?</div>
+      <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.55 }}>
+        The company layer is the thin set of files every part of this instance reads: who the company
+        is, what it stands for, what it is working toward, how it is structured, and what is missing.
+        <br />
+        Until it exists this Vexa serves nobody — nothing is sent, and the agent refuses to act.
+      </div>
+
+      <div style={{ ...card, cursor: "default", gap: 9 }}>
+        <span style={label}>In this instance&rsquo;s _global workspace</span>
+        <FileList present={state?.present ?? []} />
+        {error && !state && (
+          <span role="alert" style={{ fontSize: 11.5, color: "var(--t3)" }}>
+            Couldn&rsquo;t read the company layer just now &mdash; still checking.
+          </span>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.5 }}>
+        This step can&rsquo;t be skipped &mdash; setup isn&rsquo;t finished until the company layer exists.
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center",
+        marginTop: 10, paddingTop: 14, borderTop: "1px dashed var(--line2)" }}>
+        <button style={primaryBtn} onClick={onHandOff}>Write it with the agent</button>
+      </div>
+      <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4, textAlign: "right" }}>
+        This opens a chat and moves setup to a small card in the corner.
+      </div>
+    </>
+  );
+}
+
+/** The corner card — the wizard after the hand-off, reduced to a progress readout the admin can
+ *  ignore while they talk to the agent underneath it.
+ *
+ *  It renders the SERVER's `reasons` verbatim rather than composing its own account of what is
+ *  missing (settingsApi.GlobalState says why), and it offers Continue only when the server says
+ *  `global_setup === "completed"`. Continue is the ONLY writer of `setup.completed`. */
+function GateCard({ onContinue }: { onContinue: () => void }) {
+  const [done, setDone] = useState(false);
+  const { state, error } = useGlobalState(done);
+  const complete = state?.global_setup === "completed";
+
+  // Stop polling the moment the answer is yes — the card is now waiting on the human, not the server.
+  useEffect(() => { if (complete) setDone(true); }, [complete]);
+
+  return (
+    <div
+      data-testid="global-gate-card"
+      style={{
+        position: "fixed", right: 16, bottom: 16, width: 300, zIndex: 40,
+        background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10,
+        padding: "14px 15px", display: "flex", flexDirection: "column", gap: 9,
+        boxShadow: "0 8px 32px rgba(0,0,0,.34)",
+      }}
+    >
+      <span style={label}>Company layer</span>
+
+      {complete ? (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", lineHeight: 1.4 }}>
+            {state?.company ? `${state.company} — set up ✓` : "Company layer written ✓"}
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+            This instance can serve your team now.
+          </div>
+          <button style={{ ...primaryBtn, padding: "8px 14px" }} onClick={onContinue}>Continue</button>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
+            Tell the agent about your company in the chat. This card updates as the files land.
+          </div>
+          <FileList present={state?.present ?? []} />
+          {state?.reasons?.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {state.reasons.map((r) => (
+                <div key={r} style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>{r}</div>
+              ))}
+            </div>
+          ) : null}
+          {error && (
+            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>
+              Couldn&rsquo;t reach the instance just now &mdash; still checking.
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -339,13 +546,41 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let on = true;
     getGlobalSetting("setup")
-      .then((v) => on && setPhase(shouldShowSetup(v) ? "wizard" : "hidden"))
+      .then((v) => {
+        if (!on) return;
+        // Restore what the platform-settings key remembers, so a reload resumes where the admin
+        // actually is — same phase (wizard vs. handed-off), same step — instead of re-asking for a
+        // model provider they already configured.
+        setStates({
+          models: v?.models as StepState | undefined,
+          transcription: v?.transcription as StepState | undefined,
+        });
+        setStep(setupResumeStep(v));
+        setPhase(setupResumePhase(v));
+      })
       .catch(() => on && setPhase("hidden")); // fail-safe: never block the workbench on the probe
     return () => { on = false; };
   }, []);
 
+  const finish = () => {
+    void setGlobalSetting("setup", { completed: "true" }).catch(() => undefined);
+    // The admin→user onboarding seam: Continue must actually LAND on Meetings. The workbench's
+    // layout store initializes its rail from this persisted key (layout.ts LS_LIST) and it is
+    // created only when the workbench mounts, so a plain localStorage write is the whole hand-off.
+    //
+    // ONE CAVEAT now that Continue lives on a card floating OVER a live workbench: in the "handoff"
+    // phase the workbench is already mounted, so it has already read this key and the rail may not
+    // move. That is the better behaviour anyway — yanking the view the admin was just working in
+    // would be worse than leaving them in it — and the write still does its job on the next load.
+    try { localStorage.setItem("vexa.terminal.activeList.v1", "meetings"); } catch { /* noop */ }
+    setPhase("hidden");
+  };
+
   if (phase === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
   if (phase === "hidden") return <>{children}</>;
+  // HANDED OFF: the workbench mounts and runs the setup conversation; the wizard is now a card in
+  // the corner watching the server for the answer.
+  if (phase === "handoff") return <>{children}<GateCard onContinue={finish} /></>;
 
   const advance = (key: "models" | "transcription", state: StepState) => {
     const next = { ...states, [key]: state };
@@ -356,14 +591,20 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
     else setStep(3);
   };
 
-  const finish = () => {
-    void setGlobalSetting("setup", { completed: "true" }).catch(() => undefined);
-    // The admin→user onboarding seam: "Go to Meetings" must actually LAND on Meetings. The
-    // workbench's layout store initializes its rail from this persisted key (layout.ts LS_LIST)
-    // and it is created only when the workbench mounts — i.e. after this gate unhides — so a
-    // plain localStorage write is the whole hand-off.
-    try { localStorage.setItem("vexa.terminal.activeList.v1", "meetings"); } catch { /* noop */ }
-    setPhase("hidden");
+  /** Step 3's hand-off. ORDER MATTERS: persist the phase FIRST, then navigate. The navigation
+   *  destroys this component, so a write started after it may never be sent — and an admin who
+   *  lands in the setup chat with nothing persisted is thrown back to step 1 on their next reload,
+   *  asked to configure a model provider they already configured, with no sign that the
+   *  conversation they were having was the actual work. */
+  const handOff = () => {
+    void setGlobalSetting("setup", { global: HANDOFF })
+      .catch(() => undefined)
+      .finally(() => {
+        // App.tsx turns `?setup=global` into the pending preset the workbench opens on mount
+        // (`_global/asks/setup-global.md`) and strips the query itself. A full navigation, not a
+        // phase flip, so the overlay and the chat never coexist.
+        window.location.assign("/?setup=global");
+      });
   };
 
   return (
@@ -372,13 +613,14 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         borderRadius: 12, padding: 26, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={label}>Set up your instance</span>
-          {step < 3 && <Steps at={step as 1 | 2} />}
+          <Steps at={step} />
         </div>
         {step === 1 && <ModelsStep onNext={(s) => advance("models", s)} />}
         {step === 2 && <TranscriptionStep onNext={(s) => advance("transcription", s)} />}
         {step === 3 && (
           <>
-            <div style={{ fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>You&rsquo;re set ✓</div>
+            {/* Steps 1–2 were skippable, so say what actually happened before asking for the one
+                step that is not — the admin should not have to remember what they skipped. */}
             <div style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.8 }}>
               <div style={{ color: states.models === "done" ? "var(--green)" : "var(--t3)" }}>
                 {states.models === "done" ? "✓ Agent model configured and tested" : "○ Agent model skipped — finish it in Settings → Models"}
@@ -387,13 +629,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
                 {states.transcription === "done" ? "✓ Transcription configured and tested" : "○ Transcription skipped — finish it in Settings → Models"}
               </div>
             </div>
-            <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-              Everything a meeting needs is wired up. Next: get a meeting in front of a bot — connect
-              your calendar, plan a meeting, or drop a bot on a running Meet.
-            </div>
-            <div>
-              <button style={primaryBtn} onClick={finish}>Go to Meetings</button>
-            </div>
+            <CompanyLayerStep onHandOff={handOff} />
           </>
         )}
       </div>

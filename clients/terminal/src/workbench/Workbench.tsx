@@ -436,25 +436,6 @@ export function Workbench() {
   //   nothing shared (fresh dock)       → the user's own README-onboarding (or a known live meeting)
   // `fresh` = the dock restored no tabs (a genuine first landing). A returning user with a saved layout
   // gets ONLY the explicit shared-meeting arm (they clicked a share link) — never a surprise re-pin.
-  // MINUTES admin setup: ?setup=global stashed → fire the org-tier conversation. The agent is
-  // PROACTIVE: it reads what _global already holds, infers from the admin's own identity, states
-  // hypotheses, and asks only what it cannot know. Its worker mounts _global rw (admin subjects).
-  useEffect(() => {
-    // Consume the stash ONLY when the dispatch actually fires — strict-mode double-mount runs
-    // this effect twice with a cleanup in between, and an eager consume + timer-clear eats it.
-    let stashed = false;
-    try { stashed = !!localStorage.getItem("vexa.setupGlobal"); } catch { /* ignore */ }
-    if (!stashed || !minutesOnly()) return;
-    const t = setTimeout(() => { try { localStorage.removeItem("vexa.setupGlobal"); } catch { /* ignore */ }
-      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
-      "[global-setup] You are running the ADMIN organisation-tier conversation. Read /workspaces/_global/flows/global.md and follow it exactly, including its opening and research-first rules. " +
-      "Your mount of /workspaces/_global is READ-WRITE — you are its one sanctioned writer; commit your edits there. " +
-      "Be PROACTIVE: read what _global already holds, look at my identity and this deployment for clues, and open by TELLING me " +
-      "what you think this organisation is — then ask the few questions the file names, one at a time, confirm-or-correct. " +
-      "Write the answers into _global/README.md as you learn them, terse and factual." } })); }, 1200);
-    return () => clearTimeout(t);
-  }, []);
-
   const firstViewDone = useRef(false);
   // The meeting id carried by the URL (`/meetings/<id>`), captured at FIRST RENDER — before any effect
   // (including the URL-sync effect below) can rewrite the address bar. This is the durable reference:

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, tick
 from flows_defs import production
+from flows_integrations import instance_gate
 from flows_steps.common import db_url
 
 POLL_S = 1.0
@@ -38,7 +39,12 @@ def main() -> int:
             if fresh:
                 print(f"hot-loaded {fresh} flow version(s) from the DB", flush=True)
         t0 = time.time()
-        worked = tick(db, reg, clock, emit=emit)
+        # The instance gate is injected HERE and nowhere else. `flows/` is the engine core and
+        # `flows_integrations/` the adapters, so the loop must not learn what an instance is —
+        # the process that composes them does. While the gate is up `tick` claims nothing, so
+        # every fact admitted during setup keeps its place and runs, in order, once the admin
+        # commits the company layer.
+        worked = tick(db, reg, clock, emit=emit, gate=instance_gate.company_layer_ready)
         dt = time.time() - t0
         if dt > SLOW_STEP_S:
             print(f"⚠ SLOW STEP {dt:.1f}s — steps must never sleep (no-sleep law)", flush=True)

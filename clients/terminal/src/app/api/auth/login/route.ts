@@ -13,7 +13,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, signinAllowed } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -54,6 +54,20 @@ export async function POST(request: NextRequest) {
   const normalized = email.trim().toLowerCase();
   if (!EMAIL_RE.test(normalized)) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400, headers: NO_STORE });
+  }
+
+  // ── the company-layer setup gate, BEFORE any user row can exist ───────────────────────────────
+  // While the admin is still writing the company layer into `_global`, only the admin may sign in
+  // (founder ruling 2026-09-02). The order here is load-bearing and is the whole reason this block
+  // is above the next line rather than below it: `findOrCreateUserToken()` CREATES the user as a
+  // side effect, so asking admin-api afterwards and then answering 403 would leave a real account
+  // behind for somebody who was never admitted. Refuse first; create nothing.
+  //
+  // The verdict fails towards ALLOWED (see signinAllowed) — the terminal holds the open half of the
+  // gate; the flows engine and the operator verbs hold the closed half.
+  const gate = await signinAllowed(normalized);
+  if (!gate.allowed) {
+    return NextResponse.json({ error: SETUP_GATE_REFUSAL }, { status: 403, headers: NO_STORE });
   }
 
   const result = await findOrCreateUserToken(normalized);

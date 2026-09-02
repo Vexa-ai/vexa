@@ -64,6 +64,7 @@ from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_
 from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
+from control_plane import global_layer
 from control_plane import system_mounts
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
@@ -1519,8 +1520,7 @@ def create_app(
         if rel.startswith("kg/templates/"):
             raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
         if slug == system_mounts.GLOBAL_SLUG:
-            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
-            if str(subject) not in admins:
+            if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may edit _global")
             candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
                           Path(settings.global_system_workspace_path or "/nonexistent")]
@@ -2097,8 +2097,7 @@ def create_app(
         subject = subject_of(request)
         target = str(body.get("target") or "")
         if target == "_global":
-            admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
-            if str(subject) not in admins:
+            if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
             if not settings.global_system_workspace_path:
                 raise HTTPException(status_code=404, detail="no _global configured")
@@ -2122,6 +2121,103 @@ def create_app(
             _sp.run(["git", "-C", str(path), "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
                      "commit", "-m", f"reseed {target}"], check=False, capture_output=True)
         return {"target": target, "reset": True}
+
+    # ── the COMPANY LAYER gate (PRD §9 decision 17; founder 2026-09-02) ──────────────────────────
+    # A fresh instance serves nobody until an admin has written the thin company layer into
+    # `_global`. agent-api is where the verification belongs because agent-api is the only service
+    # that can SEE the store; admin-api holds the resulting value, and every service reads it from
+    # there. Two verbs: look, and accept.
+
+    def _global_store() -> Path:
+        """The WRITABLE `_global` on this host. Two candidates because the deployment mounts the
+        same bytes twice — the workspaces-dir copy (read-write in dev) and the host-path mirror
+        (read-only) — and a writer that picks the wrong one fails at commit time with a permissions
+        error that reads like a bug in git."""
+        candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
+                      Path(settings.global_system_workspace_path or "/nonexistent")]
+        target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+        if target is None:
+            target = next((c for c in candidates if c.is_dir()), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="the organisation tier is not present here")
+        return target
+
+    @app.get("/api/global/state")
+    def global_state(request: Request):
+        """WHAT THE COMPANY LAYER HOLDS — the wizard's poll, and the honest answer to "why is this
+        instance still refusing people".
+
+        Readable by any authenticated subject on purpose: a non-admin who has just been refused at
+        the door deserves to be told the instance is mid-setup rather than that they are broken.
+        The company NAME is only returned once the gate is down — before that it is a half-written
+        answer to a question about somebody's employer."""
+        subject = subject_of(request)
+        gate = global_layer.instance_state(settings)
+        try:
+            st = global_layer.state(_global_store())
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"could not read the organisation tier: {e}")
+        down = gate.get("global_setup") == global_layer.COMPLETED
+        return {
+            "global_setup": gate.get("global_setup", global_layer.MISSING),
+            "company": (gate.get("company") or st["company"]) if down else None,
+            "present": st["present"],
+            "missing_files": st["missing_files"],
+            "reasons": st["reasons"],
+            "is_repo": st["is_repo"],
+            "commits": st["commits"],
+            "ready_to_accept": st["ready"],
+            "you_are_admin": global_layer.is_admin(settings, str(subject)),
+            "gate_sentence": global_layer.GATE_SENTENCE,
+        }
+
+    @app.post("/api/global/ready")
+    def global_ready(request: Request, body: dict = Body(default={})):
+        """ACCEPT the company layer: verify the files, commit them as the admin, lift the gate.
+
+        NOTHING MAY MARK ITSELF READY. The agent that wrote the layer asks for this verb and the
+        verb goes and looks — the five files present and non-empty, and a README that opens with
+        the company's name and one sentence of what it does. That last rule is the founder's:
+        *"the first chat needs to present itself knowing about itself — which company it's from and
+        what's their service."* An agent can only say which company it belongs to if a human wrote
+        the name down, so the gate does not lift on a README that does not carry one.
+
+        Admin-only, idempotent, and it reports WHY it refused rather than just refusing — the caller
+        is an agent mid-conversation with the one person who can fix it."""
+        subject = subject_of(request)
+        if not global_layer.is_admin(settings, str(subject)):
+            raise HTTPException(status_code=403,
+                                detail="only the instance admin may accept the company layer")
+        root = _global_store()
+        st = global_layer.state(root)
+        if not st["ready"]:
+            return JSONResponse(status_code=409, content={
+                "accepted": False,
+                "global_setup": global_layer.MISSING,
+                "missing_files": st["missing_files"],
+                "reasons": st["reasons"],
+                "next": "write the missing files into /workspaces/_global, then call this again",
+            })
+        email = str(body.get("author_email") or "").strip() or f"admin-{subject}@vexa.local"
+        name = str(body.get("author_name") or "").strip() or f"vexa admin {subject}"
+        try:
+            sha = global_layer.commit(root, author_email=email, author_name=name,
+                                      message=f"company layer: {st['company']}")
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"could not commit the company layer: {e}")
+        try:
+            global_layer.mark_ready(settings, company=st["company"])
+        except Exception as e:  # noqa: BLE001
+            # The commit stands and the files are on disk; only the MARKER failed. Say exactly that
+            # — an agent told "failed" would rewrite files that are already correct.
+            raise HTTPException(status_code=502, detail=(
+                f"the company layer is committed ({sha}) but the instance gate could not be "
+                f"recorded: {e}"))
+        return {"accepted": True, "global_setup": global_layer.COMPLETED,
+                "company": st["company"], "service": st["service"], "commit": sha,
+                "files": st["present"]}
 
     @app.post("/api/workspace/{workspace_id}/unshare")
     def ws_unshare(workspace_id: str, request: Request):
@@ -2491,6 +2587,16 @@ def _build_production_app() -> FastAPI:
     # must pass the real meeting owner here (see transcription_watcher.start).
     from control_plane import transcription_watcher
     transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
+
+    # `_global` gets its history BEFORE its first writer, never after. It shipped as a bare
+    # directory that was mounted into every worker and read on every turn, with nothing recording
+    # who changed it or what it said yesterday — and one admin edit changes how every agent in the
+    # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
+    # legitimate deployment shape, and it must not stop the service from booting.
+    try:
+        global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("the organisation tier is not a git repo here and could not be made one: %s", exc)
     return app
 
 

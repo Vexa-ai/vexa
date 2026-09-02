@@ -636,7 +636,24 @@ export function MinutesShell() {
       const row = ref
         ? meetings.find((x) => String(x.id) === ref || (x as { native_id?: string }).native_id === nativeRef)
         : undefined;
+      // `{{state}}` — WHO IS THIS, ROUGHLY, so a preset can branch between a first contact and a
+      // returning one without the agent having to guess from an empty workspace. Two axes, both
+      // read off state the client already holds, both deliberately coarse:
+      //   personal:new   this is their FIRST chat on this Vexa — a stranger who clicked a mail
+      //   personal:warm  they have been here before
+      //   group:absent   the meeting is bound to no shared workspace
+      //   group:new      bound, but no other meeting in the list shares that binding
+      //   group:warm     bound, with history behind it
+      // The preset branches on the STRING, in prose. `_global` is not an axis: once the company
+      // layer's gate holds, it is always present.
+      const wsId = (row as { workspace_id?: string } | undefined)?.workspace_id || "";
+      const groupState = !wsId
+        ? "absent"
+        : meetings.some((x) => (x as { workspace_id?: string }).workspace_id === wsId && String(x.id) !== String(row?.id))
+          ? "warm" : "new";
+      const stateToken = `personal:${chatsRef.current.length ? "warm" : "new"} group:${groupState}`;
       const prompt = text
+        .replace(/\{\{\s*state\s*\}\}/g, stateToken)
         .replace(/\{\{\s*meeting\s*\}\}/g, ref || "the meeting in view")
         .replace(/\{\{\s*title\s*\}\}/g, row?.title || "the meeting in view")
         .replace(/\{\{\s*when\s*\}\}/g, row?.when || "")

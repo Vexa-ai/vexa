@@ -71,6 +71,18 @@ def ensure_platform_user(email: str) -> str:
     return str(u["id"])
 
 
+def platform_user_id(email: str) -> str:
+    """This person's platform id IF THEY ALREADY HAVE ONE, else "". Never creates.
+
+    `ensure_platform_user` was the only door, so a step that merely wanted to know whether somebody
+    is already a user had to mint an account to find out — and an account minted by a mail nobody
+    asked for is a ghost that later reads as an adopted user. Asking is now a different verb from
+    creating.
+    """
+    code, u = http("GET", f"{ADMIN_API}/admin/users/email/{email}", {"X-Admin-API-Key": ADMIN_KEY})
+    return str(u["id"]) if code == 200 and isinstance(u, dict) and u.get("id") is not None else ""
+
+
 def user_api_key(uid: str) -> str:
     """This user's gateway key, or a StepError that says why there isn't one.
 

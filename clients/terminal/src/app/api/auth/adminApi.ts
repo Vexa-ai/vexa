@@ -144,14 +144,125 @@ async function internalRequest<T>(path: string, init: RequestInit = {}): Promise
   }
 }
 
-/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins).
+// ── the company-layer setup gate ─────────────────────────────────────────────────
+//    Founder ruling, 2026-09-02: "global needs to be setup by admin, it just should not let him
+//    start the service before that." A fresh instance serves NOBODY until the admin has written the
+//    thin company layer — who the company is, its principles, objectives, structure, and what is
+//    missing — into the platform `_global` workspace. Until that exists: only the admin may sign in,
+//    the flows engine sends nothing, and the operator verbs refuse.
+//
+//    admin-api owns the truth and answers it over the SAME internal door `internalRequest()` already
+//    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). This module is the terminal's ONE reader of it —
+//    no other file may probe those endpoints, so there is exactly one place where the fail-safe
+//    direction is decided.
+
+/** The refusal sentence. ONE string, spelled exactly this way, used verbatim by every door that
+ *  turns a sign-in away while the gate is up — the JSON login route, the magic-link HTML card, the
+ *  OAuth callback. It is exported rather than retyped because a paraphrase in one door and not
+ *  another teaches the same person two different things about one instance state; the failure that
+ *  prevents is a user who reads "under maintenance" on one screen and "not authorised" on the next
+ *  and concludes their account is broken. Never reword it in a caller. */
+export const SETUP_GATE_REFUSAL = "This Vexa is being set up by its administrator.";
+
+export type GlobalSetupState = "completed" | "missing";
+
+/** What admin-api says about this instance, in one read. */
+export interface InstanceState {
+  admin_exists: boolean;
+  global_setup: GlobalSetupState;
+  /** The company the layer names — null while the gate is up, or when the caller may not see it. */
+  company: string | null;
+}
+
+/** The whole instance state: has an admin been claimed, has the company layer been written, and
+ *  who is the company.
+ *
+ *  ⚠ THE TWO FIELDS FAIL SAFE IN OPPOSITE DIRECTIONS, and each direction prevents a different
+ *  outage. This is the single most confusable thing in this file, so it is spelled out:
+ *
+ *   • `admin_exists` fails towards TRUE — the pre-existing rule, unchanged. A claim screen that
+ *     cannot succeed is a dead end (it invites somebody to become the admin of an instance whose
+ *     bootstrap edge is unreachable), so when the probe cannot answer we show plain sign-in.
+ *
+ *   • `global_setup` fails towards "completed" — that is, towards the gate being DOWN. An
+ *     unreachable admin-api must NOT lock every user out of an instance that is working fine. The
+ *     other direction turns a transient probe failure into a total sign-in outage, on a screen whose
+ *     only content is a sentence the locked-out user can do nothing about.
+ *
+ *  That is not a hole, because THE TERMINAL IS NOT THE CLOSED HALF OF THIS GATE. The fail-CLOSED
+ *  half lives where the irreversible things happen: the flows engine refuses to SEND and agent-api's
+ *  operator verbs refuse to act while `_global` is missing. Those two decide with authoritative
+ *  state in hand and stop on doubt. The terminal's only job here is to not brick sign-in, so on
+ *  doubt it opens the door and lets the enforcing layers say no. */
+export async function instanceState(): Promise<InstanceState> {
+  const res = await internalRequest<{ admin_exists?: boolean; global_setup?: string; company?: string | null }>(
+    "/internal/instance",
+    { method: "GET" },
+  );
+  if (!res.ok || !res.data) {
+    // Unreachable or unconfigured probe → both fields to their fail-safe values (see above).
+    return { admin_exists: true, global_setup: "completed", company: null };
+  }
+  return {
+    // A configured allowlist IS a set of admins, so it answers the admin question on its own
+    // (mirrors instanceHasAdmin below). The probe still runs, because `global_setup` is a separate
+    // fact that no allowlist can imply — an allowlist-run instance can absolutely be missing its
+    // company layer.
+    admin_exists: allowlistConfigured() || res.data.admin_exists === true,
+    // Anything that is not literally "missing" (including an older admin-api that does not know the
+    // field at all) reads as "completed" — the fail-safe direction, again.
+    global_setup: res.data.global_setup === "missing" ? "missing" : "completed",
+    company: typeof res.data.company === "string" && res.data.company.trim() ? res.data.company : null,
+  };
+}
+
+/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
+ *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.
  *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
  *  rather than dangling a claim screen that can't succeed. */
 export async function instanceHasAdmin(): Promise<boolean> {
   if (allowlistConfigured()) return true;
-  const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
-  if (!res.ok || !res.data) return true;
-  return res.data.admin_exists === true;
+  return (await instanceState()).admin_exists;
+}
+
+/** admin-api's verdict on one address while the gate is up. */
+export interface SigninVerdict extends InstanceState {
+  allowed: boolean;
+  reason: string;
+}
+
+/** May THIS address sign in right now?
+ *
+ *  admin-api answers false ONLY when the gate is up AND an admin already exists AND this is not
+ *  that admin. On a virgin instance (no admin claimed yet) the answer is true, because the next
+ *  sign-in is the one that claims admin — refusing it would make a fresh instance unclaimable,
+ *  which is the exact deadlock the ruling is not asking for.
+ *
+ *  FAIL-SAFE towards ALLOWED, for the same reason `global_setup` fails towards "completed": the
+ *  terminal holds the open half of this gate. A probe that cannot answer must not turn a network
+ *  blip into "nobody can log in"; the flows engine and the operator verbs still refuse to act. Note
+ *  the deliberate `!== false` below — a malformed body is a probe that could not answer, not a
+ *  refusal.
+ *
+ *  CALL THIS BEFORE `findOrCreateUserToken()`, never after. That function CREATES the user as a
+ *  side effect, so checking afterwards leaves a real account behind for somebody who was never
+ *  admitted — a ghost row that then looks like a legitimate member of the instance. */
+export async function signinAllowed(email: string): Promise<SigninVerdict> {
+  const res = await internalRequest<{
+    allowed?: boolean; reason?: string; admin_exists?: boolean; global_setup?: string; company?: string | null;
+  }>("/internal/signin-allowed", { method: "POST", body: JSON.stringify({ email }) });
+
+  if (!res.ok || !res.data) {
+    console.warn(`[terminal-auth] setup-gate probe unavailable, sign-in ALLOWED (fail-safe): ${res.error}`);
+    return { allowed: true, reason: "probe-unavailable", admin_exists: true, global_setup: "completed", company: null };
+  }
+  return {
+    allowed: res.data.allowed !== false,
+    reason: typeof res.data.reason === "string" ? res.data.reason : "",
+    admin_exists: res.data.admin_exists === true,
+    global_setup: res.data.global_setup === "missing" ? "missing" : "completed",
+    company: typeof res.data.company === "string" && res.data.company.trim() ? res.data.company : null,
+  };
 }
 
 /** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"

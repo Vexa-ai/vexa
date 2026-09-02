@@ -1244,6 +1244,22 @@ mcp = MCPServer(
         "Vexa: meetings become words, words become team memory, and your person's own agent — "
         "you — drives all of it from this conversation.\n\n"
 
+        "WHO YOU ARE, WHEN SOMEBODY DOES NOT KNOW YET. Most people meet this product as a "
+        "stranger: an attendee of a meeting somebody else organised, who clicked one button in "
+        "one mail. To them you introduce yourself in ONE sentence, in two halves, and neither "
+        "half is yours to invent.\n"
+        "  \u2022 The COMPANY half is read from `_global/README.md` — its first heading is the "
+        "company this Vexa belongs to, written by their own administrator at setup. Read it. "
+        "Never guess a company name, and never substitute the domain of an email address.\n"
+        "  \u2022 The SERVICE half is FIXED PRODUCT TEXT, the same in every deployment and in "
+        "every mail this product sends, so a person who reads one and then the other does not "
+        "meet two different products. It is: \u201cI sit in meetings you are invited to; "
+        "afterwards you get what came out of them and what they leave on your plate.\u201d\n"
+        "PLACEHOLDER WORDING — the founder has not chosen the final phrasing. Say the substance "
+        "plainly and do not embellish it.\n"
+        "Say it ONCE, to somebody who has not heard it. Repeating it to a person who has been "
+        "here before is the tell of a machine that does not know who it is talking to.\n\n"
+
         "PROTOCOL: work what whats_waiting returns, call it again until empty. If this person "
         "has never set Vexa up, the `start` prompt walks the whole thing.\n\n"
 
@@ -1392,8 +1408,14 @@ def flows_submit(name: str, on_event: str, steps: list[str],
 
     steps: ordered step names from flows_list's vocabulary.
     on_event: a trigger name, e.g. invite.received / meeting.completed / mail.reply.
-    params: flow-level tuning read by steps via ctx.flow.param(key)."""
-    me()   # account-scoped: this touches shared state
+    params: flow-level tuning read by steps via ctx.flow.param(key).
+
+    REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet
+    say who it works for is a machine configured for nobody."""
+    uid = me()   # account-scoped: this touches shared state
+    gated = _refuse_if_gated("flows_submit", uid)
+    if gated:
+        return gated
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
@@ -1406,8 +1428,13 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
     """Activate or retire one flow version. verb: activate | retire.
 
     In-flight reactions keep the version stamped at their admission — retiring never
-    rewrites work already running."""
-    me()   # account-scoped: this touches shared state
+    rewrites work already running.
+
+    REFUSED while the company layer is missing, for the same reason flows_submit is."""
+    uid = me()   # account-scoped: this touches shared state
+    gated = _refuse_if_gated("flow_lifecycle", uid)
+    if gated:
+        return gated
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
@@ -2295,6 +2322,76 @@ def company_context(token: str = "") -> str:
         "still_proposed": len(pending),
         "rejected": len([c for c in claims if c.get("state") == "rejected"]),
     })[:9000]
+
+
+# ---------------------------------------------------------------- the company layer
+# A fresh Vexa serves NOBODY until its admin has written the thin company layer into `_global`
+# (founder, 2026-09-02: "global needs to be setup by admin, it just should not let him start the
+# service before that"). agent-api holds the gate value and the verifier; the rig only asks.
+
+SETUP_SENTENCE = "This Vexa is being set up by its administrator."
+
+
+def _company_layer_state(uid: str) -> dict:
+    """What the company layer holds, from the one service that can see the store.
+
+    FAIL-CLOSED like every other reader of this gate: if agent-api cannot answer, the layer is
+    missing. A verb that configures the machine must not proceed because a probe timed out."""
+    st, body = _http("GET", f"{AGENT_API}/api/global/state", {"X-User-Id": uid})
+    if st != 200 or not isinstance(body, dict):
+        return {"global_setup": "missing", "reasons": [f"agent-api answered {st}"],
+                "missing_files": [], "you_are_admin": False}
+    return body
+
+
+def _refuse_if_gated(verb: str, uid: str) -> str | None:
+    """The refusal an operator verb returns while the company layer is missing, or None.
+
+    It NAMES ITSELF. A bare "forbidden" from a tool leaves the agent to guess whether it asked
+    wrongly or asked too early, and the two have opposite fixes."""
+    state = _company_layer_state(uid)
+    if state.get("global_setup") == "completed":
+        return None
+    return json.dumps({
+        "refused": verb,
+        "why": f"{verb} is refused: the company layer is not set up. {SETUP_SENTENCE}",
+        "missing_files": state.get("missing_files", []),
+        "reasons": state.get("reasons", []),
+        "next": ("You are the admin — write the five files into _global and call "
+                 "mark_global_ready." if state.get("you_are_admin") else
+                 "Only the instance admin can lift this."),
+    })
+
+
+@mcp.tool()
+@_anon_guard
+def mark_global_ready(token: str = "") -> str:
+    """ACCEPT the company layer you just wrote into `_global`, and start the service.
+
+    Call this at the END of the company-setup conversation, once the administrator agrees the five
+    files are right: README.md (the company name as its first heading, then ONE sentence of what it
+    does), PRINCIPLES.md, OBJECTIVES.md, STRUCTURE.md, MISSING.md.
+
+    It RE-READS the files itself before it accepts anything, commits them to the `_global` git
+    history with the administrator as the author, and lifts the instance gate — so other people can
+    sign in and the flows engine starts sending. It is a CHECK, not a claim: if the layer is
+    incomplete it refuses and tells you exactly what is missing, so calling it is always safe and
+    telling the administrator it is done before this verb has accepted it is always wrong.
+
+    Admin only. Everyone else gets a refusal naming that."""
+    uid = me()
+    em = _caller_email() or ""
+    st, body = _http("POST", f"{AGENT_API}/api/global/ready", {"X-User-Id": uid},
+                     {"author_email": em, "author_name": em.split("@")[0] if em else ""})
+    if st == 409 and isinstance(body, dict):
+        return json.dumps({"accepted": False, "still_missing": body.get("missing_files", []),
+                           "reasons": body.get("reasons", []),
+                           "next": "write those, then call mark_global_ready again"})
+    if st != 200:
+        return json.dumps({"accepted": False, "status": st, "error": str(body)[:500]})
+    return json.dumps({**body,
+                       "say_this": "The instance is set up. Other people can sign in now and the "
+                                   "flows start sending."})
 
 
 @mcp.tool()
