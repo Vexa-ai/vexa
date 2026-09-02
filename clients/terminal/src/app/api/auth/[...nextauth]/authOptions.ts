@@ -13,7 +13,7 @@ import { type AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken } from "../adminApi";
+import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, signinAllowed } from "../adminApi";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
@@ -66,6 +66,22 @@ export const authOptions: AuthOptions = {
     async signIn({ user, account }) {
       const provider = account?.provider;
       if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
+
+      // The company-layer setup gate — the THIRD door, and it needs the guard for exactly the same
+      // reason the other two do: findOrCreateUserToken() on the next line CREATES the user as a side
+      // effect, so a refusal placed after it would leave a ghost account for somebody who was never
+      // admitted. OAuth is not a weaker door than the magic link, it is a door with a different
+      // proof, and the gate is about WHO may enter, not HOW they proved it.
+      //
+      // NextAuth turns a `false` here into a redirect to `pages.error` ("/"), which is the sign-in
+      // card — and that card reads /api/auth/instance and renders the same refusal sentence. So the
+      // user does see why, even though this callback has no channel of its own to say it in.
+      const gate = await signinAllowed(user.email.toLowerCase());
+      if (!gate.allowed) {
+        // eslint-disable-next-line no-console
+        console.warn(`[terminal-auth] ${provider} sign-in refused for ${user.email}: ${SETUP_GATE_REFUSAL} (reason: ${gate.reason})`);
+        return false;
+      }
 
       const result = await findOrCreateUserToken(user.email.toLowerCase());
       if (!result.ok) {
