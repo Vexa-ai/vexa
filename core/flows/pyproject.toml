@@ -1,0 +1,30 @@
+[project]
+name = "vexa-flows"
+version = "0.12.0"
+description = "The reaction engine — durable product workflows as two Postgres tables and one leased worker loop. A fact enters as a sealed envelope, becomes exactly one reaction row, and every touch of the outside world leaves an effect_receipt."
+requires-python = ">=3.11"
+# The ENGINE (src/flows/) imports stdlib only — that is its isolation law, checked by
+# scripts/check-isolation.js. These are what the steps, the flow definitions and the HTTP
+# integrations need, and they are the same wheels the Dockerfile installs.
+dependencies = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "pydantic>=2,<3",
+    "sqlalchemy>=2,<3",
+    "httpx>=0.27,<1",
+]
+
+[dependency-groups]
+# The offline suite: the whole failure matrix runs on stdlib sqlite with a FakeClock and fake
+# steps, zero domains attached (README). Postgres is the production dialect, never a test one —
+# so this group adds pytest and nothing else.
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/conftest.py puts src/ on sys.path for the ambient interpreter; declaring it here means the
+# gate runner (`uv run pytest -q`, cwd = this dir) resolves the same import path.
+pythonpath = ["src"]
