@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_serializer, model_validator
+from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -250,8 +251,39 @@ _SETUP_FIELDS = ("models", "transcription", "completed")
 # Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
 # default) because _validate_config_fields' one rulebook is string-only.
 _DIAGNOSTICS_FIELDS = ("capture_signal",)
+# "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
+# setup by admin, it just should not let him start the service before that"). `state` is "completed"
+# once an admin has written and committed the thin company layer into `_global`; ABSENT-OR-ANYTHING-
+# ELSE means missing, because this value is read FAIL-CLOSED by everything that can SEND. A fresh
+# instance, a cleared row and a half-written value therefore all mean the same thing: this Vexa
+# serves nobody yet. `company` is the company name the layer opens with -- evidence of WHAT was
+# accepted, never a second source of truth -- and `completed_at` is when. The only writer is
+# agent-api's verifier (POST /api/global/ready), which reads the files and the commit before it
+# flips anything: nothing may mark itself ready.
+_GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS}
+                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
+                "global_setup": _GLOBAL_SETUP_FIELDS}
+
+# One vocabulary for the gate, so no caller invents its own spelling of "not ready".
+GLOBAL_SETUP_COMPLETED = "completed"
+GLOBAL_SETUP_MISSING = "missing"
+
+# The one sentence a refused visitor sees, spelled once. Every service that refuses on this gate
+# quotes THIS wording; a paraphrase in one client is how a person learns to distrust the product.
+GATE_SENTENCE = "This Vexa is being set up by its administrator."
+
+
+def global_setup_state(value: dict) -> str:
+    """Read the gate out of the stored `global_setup` row -- FAIL-CLOSED.
+
+    Anything that is not exactly "completed" is "missing": an absent row, a cleared field, a typo,
+    a value half-written by a crashed run. The expensive direction of this decision is a flow
+    mailing strangers on behalf of a company nobody has described yet; the cheap direction is
+    showing an admin a wizard they have already finished."""
+    if isinstance(value, dict) and str(value.get("state", "")).strip() == GLOBAL_SETUP_COMPLETED:
+        return GLOBAL_SETUP_COMPLETED
+    return GLOBAL_SETUP_MISSING
 
 
 class ModelPrefsUpdate(BaseModel):
@@ -829,10 +861,66 @@ def create_app() -> FastAPI:
         )).first()
         return row is not None
 
+    async def _instance_state(db: AsyncSession) -> dict:
+        """THE INSTANCE GATE, computed in exactly ONE place.
+
+        Every other service (the terminal, agent-api, the flows engine) reads the gate through one
+        of the two doors below -- never by reaching into platform_settings itself. One source of
+        truth, one reader function per service, is the whole design: a surface with two readers of
+        a lifecycle value does not error when they disagree, it just behaves differently in two
+        places and nobody can say which is right."""
+        row = await db.get(PlatformSetting, "global_setup")
+        value = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+        return {
+            "admin_exists": await _admin_exists(db),
+            "global_setup": global_setup_state(value),
+            "company": value.get("company") or None,
+        }
+
     @app.get("/internal/instance", include_in_schema=False)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
-        return {"admin_exists": await _admin_exists(db)}
+        return await _instance_state(db)
+
+    @app.get("/admin/instance", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
+        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
+        no internal secret (see flows_steps/common.py), so without this door it would have to infer
+        the gate from something else -- and a service that infers the gate IS a second source of
+        truth. Same body, same computation, different transport."""
+        return await _instance_state(db)
+
+    @app.post("/internal/signin-allowed", include_in_schema=False)
+    async def signin_allowed(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+        """MAY THIS EMAIL SIGN IN RIGHT NOW? The company-layer gate's admission rule, decided HERE
+        because this service owns both halves of it -- `users.data.is_admin` and platform_settings.
+        The terminal asks one question instead of assembling the answer out of three reads it can
+        get wrong in three different ways.
+
+        While the gate is up the instance serves exactly one person:
+          * no admin yet -> allowed. The next sign-in IS the claim (first sign-in = admin), so
+            refusing here would make a fresh instance unclaimable -- a deadlock, not a gate.
+          * the admin    -> allowed. They are the one who has to finish the setup.
+          * anyone else  -> refused, in one sentence, and the caller must refuse BEFORE creating a
+            user row: an account minted for somebody who was never admitted is a ghost that later
+            reads as an adopted user.
+
+        Once the gate is down this answers True for everyone and is a formality."""
+        _check_internal(request)
+        email = str(payload.get("email") or "").strip().lower()
+        state = await _instance_state(db)
+        if state["global_setup"] == GLOBAL_SETUP_COMPLETED or not state["admin_exists"]:
+            return {"allowed": True, "reason": "", **state}
+        row = None
+        if email:
+            row = (await db.execute(
+                select(User).where(func.lower(User.email) == email).limit(1)
+            )).scalar_one_or_none()
+        data = row.data if row is not None and isinstance(row.data, dict) else {}
+        if data.get("is_admin") is True:
+            return {"allowed": True, "reason": "", **state}
+        return {"allowed": False, "reason": GATE_SENTENCE, **state}
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False)
     async def bootstrap_admin(payload: dict, request: Request,
@@ -860,6 +948,38 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         return {"claimed": True, "admin_exists": True}
+
+    @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
+    async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
+        organisation tier read-write. It exists because the admin is CLAIMED at first sign-in — long
+        after any deployment env was written — so an env allow-list could never have been the
+        definition of who may rewrite how every agent in the company behaves."""
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        data = user.data if isinstance(user.data, dict) else {}
+        return {"user_id": user.id, "email": user.email, "is_admin": data.get("is_admin") is True}
+
+    @app.post("/internal/release-admin", include_in_schema=False)
+    async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+        """RELEASE the admin role from a user so the next sign-in claims it again.
+
+        The counterpart of bootstrap-admin, and it exists for one honest reason: an instance whose
+        admin is a leftover TEST IDENTITY cannot rehearse first-run, and the alternative was hand
+        surgery on a jsonb column by whoever remembered the query. A named route is auditable; a
+        one-off UPDATE in somebody's shell is not. Internal-tier only, and it deliberately does NOT
+        delete the user or anything they own — role, and only role."""
+        from sqlalchemy.orm import attributes
+        _check_internal(request)
+        user = await _load_user(str(payload.get("user_id", "")), db, for_update=True)
+        data = dict(user.data or {})
+        had = data.pop("is_admin", None) is True
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"user_id": user.id, "email": user.email, "released": had,
+                "admin_exists": await _admin_exists(db)}
 
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

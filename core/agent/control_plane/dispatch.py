@@ -22,6 +22,7 @@ import contracts
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
+from control_plane import global_layer
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation
@@ -143,10 +144,14 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     stack: list[dict] = []
 
     # Tier 1 — GLOBAL SYSTEM. Fail before spawn rather than silently run an under-grounded agent.
-    # Admin subjects receive the one sanctioned read-write setup mount.
+    # The INSTANCE ADMIN receives the one sanctioned read-write setup mount: their setup
+    # conversation is the only writer the organisation tier has. The role is `users.data.is_admin`,
+    # claimed at first sign-in and asked of admin-api (global_layer.is_admin, which keeps the env
+    # allow-list as an operator override and fails CLOSED when it cannot resolve the role) — an env
+    # list could never have been the definition, because the admin does not exist yet when the
+    # deployment env is written.
     g = global_mount(settings, settings.workspaces_dir)
-    admins = {a.strip() for a in (settings.global_admin_subjects or "").split(",") if a.strip()}
-    if str(subject) in admins:
+    if global_layer.is_admin(settings, str(subject)):
         g = {**g, "write": True}
     stack.append(g)
 
