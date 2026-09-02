@@ -404,18 +404,36 @@ _ENTITY_FILE_SHAPE = (
     "append `## <today>` and one `- <fact> — source: <source>` line per fact. Never rewrite what is "
     "already on the page.\n\n")
 
+# ⚠ THE FIRST VERSION OF THIS ASKED FOR JUDGEMENT AND GOT HESITATION — the exact thing the founder
+# named. Told to record "what this turn learned about a person, company, meeting, project or
+# decision", the phase answered `nothing new` on a turn that had just written a note naming six
+# people and three organisations, and explained itself: *"further pages for individual TSC members
+# or companies can be added as the project develops and additional facts about them become
+# relevant beyond their participation in this kickoff."* Every clause of that is a reasonable
+# editorial judgement, and every clause is the reason the graph stays empty.
+#
+# So the phase no longer asks whether a name deserves a page. It asks for the LIST first — a
+# mechanical step with no judgement in it — and then makes the list the work. `nothing new` is
+# narrowed to the one case it is true in: no name was touched at all. And the note is explicitly
+# NOT a substitute for a page, because "it is already in the note" was the reasoning that ran.
 WRITEBACK_PROMPT = (
     MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say here "
     "reaches them. Do not address them, do not summarise the turn, do not ask them anything.\n\n"
-    "List what THIS turn learned about a person, company, meeting, project or decision — only what "
-    "was said in the conversation or read from a file, a tool result or a transcript — and record "
-    "each one with `entity_upsert(kind, name, facts, source)`. One call per entity. A name that came "
-    "up and has no page gets one now; a page that exists gets the new facts appended; a fact already "
-    "on the page writes nothing, so call it rather than wondering.\n\n"
+    "FIRST, list every proper name this turn touched: every person who spoke or was named, every "
+    "company or organisation, every meeting, project or decision. Just the names.\n\n"
+    "THEN give each one a page, with `entity_upsert(kind, name, facts, source)` — one call per "
+    "name, in order. A name with no page gets one NOW; a page that exists gets this turn's facts "
+    "appended; a fact already on the page writes nothing, so call it rather than wondering.\n\n"
+    "Do not judge whether a name is important enough, whether it will matter later, or whether it "
+    "is already covered somewhere else. A meeting note is NOT a substitute for a page — it records "
+    "an occasion, a page records a subject, and the whole point is that the next turn can find the "
+    "subject. If a name was touched and you know one true thing about it, it gets a page. One "
+    "sentence of fact is enough to start one.\n\n"
     + _ENTITY_FILE_SHAPE +
-    "Every fact carries its source. Anything you would have to guess goes to `kg/MISSING.md` as an "
-    "open question, never onto a page.\n\n"
-    "If this turn learned nothing durable, reply exactly: nothing new")
+    "Every fact carries its source, and only what was said in this conversation or read from a "
+    "file, a tool result or a transcript counts. Anything you would have to guess goes to "
+    "`kg/MISSING.md` as an open question, never onto a page.\n\n"
+    "Reply exactly `nothing new` ONLY if this turn touched no name at all.")
 
 # Read/Glob/Grep to check what a page already says, Write/Edit for `kg/MISSING.md`, and the entity
 # verb itself. Deliberately NOT the research tools: this phase records what the turn already learned,
