@@ -38,6 +38,7 @@ STORE_DIRNAME = ".attached"
 STATE_FILENAME = "state.json"
 SEED_SLOT = "seed"  # the reserved slug for the original template-seeded workspace
 SEED_BACKUP_SLOT = "seed-prev"  # where 'start fresh' tucks the displaced default so it stays recoverable
+PERSONAL_ALIAS = "personal"    # what the terminal and the MCP call a person's own desk (see workspace_dir_for)
 
 # The subject's PRIVATE baseline — the workspace at ``<root>/<subject>`` that a turn always mounts. Its
 # slug in the active set is whatever ``state.active`` points at (the seed by default). This slug marks
@@ -131,19 +132,27 @@ def _authenticated_url(repo_url: str, token: Optional[str]) -> str:
     return f"{proto}://{token}@{rest}"
 
 
-def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None) -> None:
+def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
+               *, ssh_env: Optional[dict] = None) -> None:
     """Default clone: clone then checkout ``ref`` (kept separate so a non-default branch/tag/sha works
     regardless of the remote's default branch).
 
-    PRIVATE repos: when a ``token`` is given it is embedded in the clone URL for the network op ONLY, then
-    the persisted ``origin`` is reset to the token-free URL so the credential never lands in the cloned
-    ``.git/config`` or the synced workspace (P15 — mirrors ``GitHubVcs.push``). Git is run with prompts
-    disabled so a missing/invalid credential FAILS LOUD instead of hanging on a terminal prompt. Any
-    failure raises ``CloneError`` with the token redacted from the message."""
+    TWO credential shapes, and the URL decides which:
+
+    * ``ssh_env`` (``GIT_SSH_COMMAND`` from ``deploy_keys.ssh_env``) authenticates an ``ssh://`` /
+      ``git@host:`` remote as the workspace's DEPLOY KEY. Nothing is embedded in the URL, so nothing can
+      be persisted; the private key exists on disk only while the context manager that built this env is
+      open. This is the primary path — the person adds our public key, we never hold theirs.
+    * ``token`` (a PAT, the fallback) is embedded in an https clone URL for the network op ONLY, then
+      the persisted ``origin`` is reset to the token-free URL so the credential never lands in the
+      cloned ``.git/config`` or the synced workspace (P15 — mirrors ``GitHubVcs.push``).
+
+    Git is run with prompts disabled so a missing/invalid credential FAILS LOUD instead of hanging on a
+    terminal prompt. Any failure raises ``CloneError`` with the token redacted from the message."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
     # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud.
-    env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0")
+    env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0", **(ssh_env or {}))
     url = _authenticated_url(repo_url, token)
 
     def redact(text: str) -> str:
@@ -263,6 +272,11 @@ def workspace_dir_for(root: str | Path, subject: str, slug: Optional[str]) -> Pa
         return _safe_subject_dir(rootp, subject)
     if target in state.get("slots", {}):
         return _slug_dir(rootp, subject, state, target)
+    if target == PERSONAL_ALIAS:
+        # "personal" is what the TERMINAL's workspace chip and the MCP verbs call a person's own desk;
+        # the store calls it the seed slot. Resolved AFTER the slot lookup so a real slug of that name
+        # would still win, and only here — the store's own vocabulary is unchanged.
+        return _safe_subject_dir(rootp, subject)
     raise KeyError(target)
 
 
@@ -867,3 +881,229 @@ def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[s
         slot.pop("name", None)
     _save_state(store, state)
     return state
+
+
+# ── ATTACHING AN EXISTING REPO TO A *SHARED* WORKSPACE (the group lane) ────────────────────────────
+#
+# Everything above is written against ONE subject's store: the tree at ``<root>/<subject>`` and the
+# parking slots under ``<root>/.attached/<subject>/``. A shared (group) workspace has neither — it is a
+# top-level tree at ``<root>/<workspace_id>`` owned by a member list, not by a subject.
+#
+# So the MECHANIC is lifted out of the subject: ``attach_repo_at(active_dir, store, …)`` parks
+# whatever is live and clones/restores the requested repo, over any pair of paths. ``swap_workspace``
+# keeps its own copy of that dance because it also has to maintain the subject's active-set bookkeeping
+# (which a shared workspace does not have); everything that actually touches disk — ``_build_attached``,
+# ``_park``, ``_reseed``, ``_slug``, the state file — is the same code in both.
+#
+# ONE thing is genuinely different, and it is load-bearing: a shared workspace's MEMBER LIST lives
+# INSIDE its git tree (``policy/members.json``, ``policy/invites.json`` — see workspace_membership).
+# Replacing that tree with somebody's repo would therefore delete everyone's access along with it:
+# ``is_member`` would answer None for every member, the workspace would vanish from every active set,
+# and the only person who could still reach it would be nobody. So the policy directory is CARRIED
+# ACROSS every attach — copied out of the tree being parked, into the tree being activated, and
+# committed. Membership survives a repo swap; the repo never carries our policy home to GitHub as a
+# surprise either, because it arrives as an ordinary commit the group can see.
+
+SHARED_STORE_DIRNAME = ".attached-shared"   # <root>/.attached-shared/<workspace_id>/<slug> (dot ⇒ skipped by every scan)
+POLICY_DIRNAME = "policy"                   # the member list + invites — travels across an attach
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+
+
+def shared_store(root: str | Path, workspace_id: str) -> Path:
+    """Where a shared workspace's parked trees live. Dot-prefixed at the top level, so it is invisible
+    to ``scan_workspace_subjects``, the Workspace tree and the membership listing alike."""
+    return Path(root) / SHARED_STORE_DIRNAME / _safe_workspace_id(workspace_id)
+
+
+def _safe_workspace_id(workspace_id: str) -> str:
+    wid = (workspace_id or "").strip()
+    if not _WORKSPACE_ID_RE.match(wid) or wid in ("seed", SEED_BACKUP_SLOT):
+        raise ValueError("invalid workspace id")
+    return wid
+
+
+def _shared_dir(root: Path, workspace_id: str) -> Path:
+    """``<root>/<workspace_id>``, traversal-guarded (mirrors ``workspace_membership._ws_dir``)."""
+    rootp = Path(root).resolve()
+    ws = (rootp / _safe_workspace_id(workspace_id)).resolve()
+    if ws == rootp or rootp not in ws.parents:
+        raise ValueError("invalid workspace id")
+    return ws
+
+
+def _plain_state(store: Path) -> dict:
+    """A shared workspace's attach state — ``{"active": slug|None, "slots": {slug: {repo, ref, …}}}``.
+    Deliberately NOT ``_load_state``: the active-set/flat-model migration there is about a subject's
+    mount set, and a shared workspace has no mount set of its own (each member mounts it or does not)."""
+    f = store / STATE_FILENAME
+    data: dict = {"active": None, "slots": {}}
+    if f.exists():
+        try:
+            loaded = json.loads(f.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
+    data.setdefault("active", None)
+    if not isinstance(data.get("slots"), dict):
+        data["slots"] = {}
+    return data
+
+
+def carry_policy(src: Path, dest: Path) -> list[str]:
+    """Copy the membership policy (``policy/*.json``) from the tree being parked into the tree being
+    activated. Returns the relative paths carried (empty when there was no policy).
+
+    Without this an attach is an ACCESS WIPE: the member list is a file inside the workspace's own tree,
+    so a clone that replaces the tree replaces the member list with nothing — ``is_member`` would answer
+    None for everyone and the workspace would drop out of every member's active set.
+
+    The carried policy is deliberately left UNTRACKED, and ``policy/`` is added to the clone's
+    ``.git/info/exclude`` (a local-only ignore — their ``.gitignore`` is not touched). Two reasons, both
+    load-bearing:
+
+    * **It is not theirs to receive.** ``members.json`` is our internal subject ids and member emails.
+      Committing it would put it in the next push to somebody else's repository.
+    * **A commit would diverge the workspace on arrival.** An attached clone is level with its remote;
+      one local commit on top means the first ``pull`` after an attach is refused as a divergence — the
+      exact thing a person does immediately after loading an existing workspace.
+
+    Authority is unaffected: ``workspace_membership.read_members`` reads the file from the working tree,
+    not from git history."""
+    carried: list[str] = []
+    src_policy, dest_policy = src / POLICY_DIRNAME, dest / POLICY_DIRNAME
+    if not src_policy.is_dir():
+        return carried
+    for f in sorted(src_policy.glob("*.json")):
+        dest_policy.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dest_policy / f.name)
+        carried.append(f"{POLICY_DIRNAME}/{f.name}")
+    if carried:
+        _exclude_locally(dest, f"/{POLICY_DIRNAME}/")
+    return carried
+
+
+def _exclude_locally(ws: Path, pattern: str) -> None:
+    """Add ``pattern`` to ``.git/info/exclude`` — git's per-clone ignore file. Local to this checkout,
+    never committed, and it does not touch a repository's own ``.gitignore``. Idempotent."""
+    info = ws / ".git" / "info"
+    try:
+        info.mkdir(parents=True, exist_ok=True)
+        f = info / "exclude"
+        existing = f.read_text() if f.exists() else ""
+        if pattern not in existing.splitlines():
+            f.write_text(existing + ("" if existing.endswith("\n") or not existing else "\n")
+                         + f"# vexa: workspace membership lives here and is never pushed\n{pattern}\n")
+    except OSError:
+        log.warning("could not write .git/info/exclude in %s", ws)
+
+
+def attach_repo_at(
+    active_dir: Path,
+    store: Path,
+    repo_url: Optional[str],
+    ref: str = "main",
+    *,
+    slug: Optional[str] = None,
+    token: Optional[str] = None,
+    clone: CloneFn = _git_clone,
+    carry: Optional[Path] = None,
+) -> SwapResult:
+    """THE MECHANIC, over any pair of paths: park what is live at ``active_dir`` into ``store``, then
+    put ``repo_url`` there — restored from a prior park if we have seen it, cloned fresh if not.
+
+    Same two-phase discipline as ``swap_workspace``: phase 1 builds the new tree OUT OF PLACE, so a
+    clone failure (bad ref, private repo, no credential) raises with the live tree untouched; phase 2
+    is local moves only. ``slug`` addresses a parked slot directly (that is how you swap BACK, with no
+    re-clone and every local commit intact); ``repo_url=None`` with no slug means the seed slot.
+
+    ``carry`` names a directory to copy from the parked tree into the new one before it goes live —
+    the shared lane passes ``policy/`` so a repo attach cannot delete the member list."""
+    active_dir = Path(active_dir)
+    store = Path(store)
+    state = _plain_state(store)
+    target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+
+    live = (active_dir / ".git").exists()
+    if state.get("active") == target_slug and live:
+        slot = state["slots"].get(target_slug, {})
+        return SwapResult(active_dir.name, target_slug, slot.get("repo"), slot.get("ref"),
+                          swapped=False, cloned=False, parked_slug=None, nested=bool(slot.get("nested")))
+    if target_slug == SEED_SLOT and state.get("active") is None and live:
+        return SwapResult(active_dir.name, SEED_SLOT, None, None,
+                          swapped=False, cloned=False, parked_slug=None)
+
+    # ── PHASE 1 — build out of place (a failure here leaves everything exactly as it was) ──────────
+    parked_target = store / target_slug
+    cloned = nested = False
+    restore = False
+    if parked_target.exists():
+        staged, restore = parked_target, True
+    elif target_slug == SEED_SLOT:
+        staged = store / ".staging-seed"
+        if staged.exists():
+            shutil.rmtree(staged)
+        _reseed(staged)
+    elif repo_url:
+        staged = store / f".staging-{target_slug}"
+        if staged.exists():
+            shutil.rmtree(staged)
+        cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError
+    else:
+        raise KeyError(target_slug)
+
+    # ── PHASE 2 — commit: park the live tree (kept, never destroyed), then activate the staged one ──
+    parked_slug: Optional[str] = None
+    has_active = live or (active_dir.exists() and any(active_dir.iterdir()))
+    if has_active:
+        parked_slug = state.get("active") or SEED_SLOT
+        _park(store, parked_slug, active_dir)
+        state["slots"].setdefault(parked_slug, {"repo": None, "ref": None})
+    elif active_dir.exists():
+        shutil.rmtree(active_dir)
+
+    active_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(staged), str(active_dir))
+    if has_active and carry is not None:
+        carry_policy(store / parked_slug, active_dir)   # the parked tree is where the live one now is
+
+    if not restore:
+        slot = state["slots"].get(target_slug, {})
+        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+        state["slots"][target_slug] = slot
+    state["active"] = target_slug
+    _save_state(store, state)
+    slot = state["slots"].get(target_slug, {})
+    return SwapResult(active_dir.name, target_slug, slot.get("repo"), slot.get("ref"),
+                      swapped=True, cloned=cloned, parked_slug=parked_slug, nested=bool(slot.get("nested")))
+
+
+def attach_shared_workspace(
+    root: str | Path,
+    workspace_id: str,
+    repo_url: Optional[str],
+    ref: str = "main",
+    *,
+    slug: Optional[str] = None,
+    token: Optional[str] = None,
+    clone: CloneFn = _git_clone,
+) -> SwapResult:
+    """Load an EXISTING git repo into a shared (group) workspace, keeping the group's membership.
+
+    The group's current tree is parked under ``<root>/.attached-shared/<workspace_id>/<slug>`` (kept,
+    swappable-back), the repo is cloned into ``<root>/<workspace_id>``, and ``policy/`` is carried
+    across so nobody loses access. Authorization is the ROUTE's job — this function is the mechanic and
+    trusts its caller, exactly as ``swap_workspace`` trusts ``subject_of(request)``."""
+    rootp = Path(root)
+    ws = _shared_dir(rootp, workspace_id)
+    return attach_repo_at(ws, shared_store(rootp, workspace_id), repo_url, ref,
+                          slug=slug, token=token, clone=clone, carry=Path(POLICY_DIRNAME))
+
+
+def shared_attached_state(root: str | Path, workspace_id: str) -> dict:
+    """A shared workspace's attachment view — the active slug plus the parked slots available to swap
+    back to. Read-only and safe before any attach (a never-attached workspace returns the empty shape)."""
+    rootp = Path(root)
+    _shared_dir(rootp, workspace_id)   # traversal guard, and a 400 for a nonsense id
+    state = _plain_state(shared_store(rootp, workspace_id))
+    return {"workspace_id": workspace_id, "active": state.get("active"), "slots": state.get("slots", {})}

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 
+import functools
 import hashlib
 import hmac
 import json
@@ -46,6 +47,7 @@ from control_plane.workspace_attach import (
     CloneError,
     activate_workspace,
     active_workspaces,
+    attach_shared_workspace,
     attached_workspaces,
     create_shared_workspace_dir,
     create_workspace,
@@ -57,6 +59,7 @@ from control_plane.workspace_attach import (
     set_archived,
     set_shared_active,
     shared_active_mounts,
+    shared_attached_state,
     swap_workspace,
     workspace_dir_for,
 )
@@ -66,6 +69,8 @@ from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
 from control_plane import dispatch as dispatch_mod
+from control_plane import deploy_keys as deploy_keys_mod
+from control_plane import workspace_credentials as wcreds
 from control_plane import global_layer
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
@@ -523,6 +528,20 @@ class SharedNewBody(BaseModel):
     workspace shareable so invites can be minted against it. ``name`` → display + workspace-id base."""
     model_config = {"extra": "forbid"}
     name: str = "Shared workspace"
+
+
+class SharedAttachBody(BaseModel):
+    """LOAD AN EXISTING REPO into a SHARED (group) workspace — the group counterpart of
+    ``POST /api/workspace/swap``. The group's current tree is PARKED (kept, swappable-back), the repo is
+    cloned in, and the member list is carried across so nobody loses access.
+
+    ``token`` is the terminal's optional per-call PAT for an https repo; the MCP path never sends one —
+    an ssh repo authenticates with the workspace's deploy key, resolved server-side."""
+    model_config = {"extra": "forbid"}
+    repo: Optional[str] = None   # git URL (ssh → deploy key; https → PAT). None + ``slug`` = swap back
+    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
+    slug: Optional[str] = None   # a parked slot to restore DIRECTLY (no re-clone), e.g. "seed"
+    token: Optional[str] = None  # https only, used for the clone and never stored (P15)
 
 
 class SharedActiveBody(BaseModel):
@@ -1831,6 +1850,32 @@ def create_app(
             return membership_mod._ws_dir(wsr.root, target)
         raise HTTPException(status_code=404, detail="workspace not found")
 
+    def _require_shared_write(subject: str, slug: Optional[str]) -> None:
+        """A no-op for the caller's OWN workspaces; for a SHARED one, refuse anyone below contributor.
+        (``_manage_dir`` resolves a workspace a viewer may READ — that is the right gate for status and
+        purpose, and the wrong one for anything that rewrites the tree.)"""
+        target = (slug or "").strip()
+        if not target or target == subject:
+            return
+        try:
+            workspace_dir_for(wsr.root, subject, target)
+            return                                   # one of their own slots — their own business
+        except (ValueError, KeyError):
+            pass
+        try:
+            membership_mod.require_role(wsr.root, target, subject, "contributor")
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+
+    def _clone_fn(cred: "wcreds.Credential"):
+        """The clone callable for one credential: the default clone, pre-bound to the deploy key's
+        ``GIT_SSH_COMMAND`` when there is one. Uses ``workspace_attach``'s existing injection seam, so
+        no signature anywhere else has to learn about ssh."""
+        from control_plane.workspace_attach import _git_clone as _default_clone
+        if cred.ssh_env:
+            return functools.partial(_default_clone, ssh_env=cred.ssh_env)
+        return _default_clone
+
     # ── THE SCAFFOLD (PRD 5.5) ──────────────────────────────────────────────────────────────────
     #
     # One record per moment a person arrives at, minted by the flow that creates the touch, read by
@@ -2316,17 +2361,21 @@ def create_app(
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
-        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                    slug=body.slug or None, fresh=body.fresh, token=_tok or None)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                        slug=body.slug or None, fresh=body.fresh, token=cred.token,
+                                        clone=_clone_fn(cred))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
-            # message is already token-redacted (P15); private repo without/with a bad token lands here.
-            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+            # Already token-redacted (P15). A private repo we hold no credential for lands here — and
+            # the answer is the workspace's public key to add, not a prompt for a secret.
+            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
         return {
             "subject": result.subject,
             "active": result.active_slug,
@@ -2374,16 +2423,19 @@ def create_app(
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
         subject = subject_of(request)
-        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        key = deploy_keys_mod.workspace_key(subject=subject)
         try:
-            result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                        slug=body.slug or None, token=_tok or None)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=body.repo or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                            slug=body.slug or None, token=cred.token,
+                                            clone=_clone_fn(cred))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
-            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+            raise _credential_refusal(f"git clone failed: {exc}", subject, None, body.repo or "")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
                 "cloned": result.cloned, "nested": result.nested}
 
@@ -2498,15 +2550,20 @@ def create_app(
         and is never stored; a diverged remote fails loud (pull first). Every error is token-redacted (P15)."""
         subject = subject_of(request)
         ws = _manage_dir(subject, body.slug)
-        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
-        if not token:
-            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token")
+        home = remote_status(ws)
+        key = _workspace_key(subject, body.slug)
         try:
-            r = push_origin(ws, token=token)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=home.url or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                if cred.kind == "none":
+                    raise HTTPException(status_code=400, detail=(
+                        "this workspace has no credential — add its deploy key to the repository "
+                        "(POST /api/workspace/{slug}/deploy-key) or save a reusable GitHub token"))
+                r = push_origin(ws, token=cred.token, ssh_env=cred.ssh_env)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RemoteSyncError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))  # already token-redacted (P15)
+            raise _credential_refusal(str(exc), subject, body.slug, home.url or "")  # token-redacted (P15)
         return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha}
 
     @app.post("/api/workspace/pull")
@@ -2516,13 +2573,19 @@ def create_app(
         public repos) is used for the fetch only and never stored (P15)."""
         subject = subject_of(request)
         ws = _manage_dir(subject, body.slug)
-        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)  # None ⇒ public-repo fetch
+        # A pull REWRITES the tree, so on a shared workspace it is a write: viewers are refused here even
+        # though they may read the same workspace through _manage_dir.
+        _require_shared_write(subject, body.slug)
+        home = remote_status(ws)
+        key = _workspace_key(subject, body.slug)
         try:
-            r = pull_origin(ws, token=token)
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=home.url or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                r = pull_origin(ws, token=cred.token, ssh_env=cred.ssh_env)  # None ⇒ public-repo fetch
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RemoteSyncError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))  # already token-redacted (P15)
+            raise _credential_refusal(str(exc), subject, body.slug, home.url or "")  # token-redacted (P15)
         return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha,
                 "updated": r.updated, "behind_before": r.behind_before}
 
@@ -2744,6 +2807,119 @@ def create_app(
 
     def _member_error(exc: MembershipError):
         return HTTPException(status_code=exc.status, detail=str(exc))
+
+    # ── LOADING AN EXISTING REPO (the "we already have a workspace on GitHub" path) ────────────────
+    #
+    # Two lanes, one mechanic. A person's own desk swaps through ``POST /api/workspace/swap``; a GROUP
+    # workspace swaps through here. The difference that needs a route of its own is authorization: a
+    # desk belongs to its subject, a group belongs to a member list, and replacing a group's tree is a
+    # WRITE — so a viewer is refused, and the member list itself is carried across the swap by
+    # ``attach_shared_workspace`` (it lives inside the tree being replaced).
+
+    def _workspace_key(subject: str, slug: Optional[str]) -> str:
+        """The deploy-key name for a target: a shared workspace keys by its id (the key belongs to the
+        WORKSPACE, so every member's pull uses the same one), a person's desk by subject."""
+        target = (slug or "").strip()
+        if target and target != subject and membership_mod.is_member(wsr.root, target, subject) is not None:
+            return deploy_keys_mod.workspace_key(workspace_id=target)
+        return deploy_keys_mod.workspace_key(subject=subject)
+
+    def _credential_refusal(detail: str, subject: str, slug: Optional[str], repo_url: str):
+        """Turn git's "I do not know you" into the ONE action that fixes it. No box asking for a secret:
+        the person adds OUR public key to THEIR repo, which is the whole point of the deploy-key model."""
+        if not wcreds.is_auth_failure(detail):
+            return HTTPException(status_code=502, detail=detail)
+        try:
+            prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url)
+        except Exception:  # noqa: BLE001 — no ssh-keygen on this host; say the plain failure instead
+            return HTTPException(status_code=502, detail=detail)
+        return HTTPException(status_code=502, detail=f"{detail}\n\n{wcreds.prompt_sentence(prompt)}")
+
+    @app.post("/api/workspace/shared/{workspace_id}/attach")
+    def ws_shared_attach(workspace_id: str, request: Request, body: SharedAttachBody = Body(default=SharedAttachBody())):
+        """Attach an EXISTING git repo as a shared workspace's tree. Contributor or owner only — a
+        viewer may read the group's workspace, never replace it.
+
+        Park-and-clone, exactly as the desk swap: the current tree is kept under the workspace's own
+        store and can be swapped back to by slug with no re-clone, so this is reversible. ``policy/``
+        (the member list) is carried into the new tree, so an attach can never lock the group out."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+        except MembershipError as exc:
+            raise _member_error(exc)
+        repo = (body.repo or "").strip() or None
+        key = deploy_keys_mod.workspace_key(workspace_id=workspace_id)
+        try:
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=repo or "", subject=subject,
+                                      explicit_token=body.token) as cred:
+                clone = _clone_fn(cred)
+                result = attach_shared_workspace(wsr.root, workspace_id, repo, body.ref or "main",
+                                                 slug=body.slug or None, token=cred.token, clone=clone)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid workspace id")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
+        except CloneError as exc:   # message already token-redacted (P15)
+            raise _credential_refusal(f"git clone failed: {exc}", subject, workspace_id, repo or "")
+        return {
+            "workspace_id": workspace_id, "active": result.active_slug, "repo": result.repo,
+            "ref": result.ref, "attached": result.swapped, "cloned": result.cloned,
+            "parked": result.parked_slug, "nested": result.nested,
+            "state": ("cloned" if result.cloned else "restored" if result.swapped else "already attached"),
+        }
+
+    @app.get("/api/workspace/shared/{workspace_id}/attached")
+    def ws_shared_attached(workspace_id: str, request: Request):
+        """A shared workspace's attachment view — the active slug and the parked trees available to swap
+        back to, plus its GitHub home. Any member may read it (it says WHAT is mounted, never a credential)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "viewer")
+        except MembershipError as exc:
+            raise _member_error(exc)
+        try:
+            state = shared_attached_state(wsr.root, workspace_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid workspace id")
+        ws = membership_mod._ws_dir(wsr.root, workspace_id)
+        st = remote_status(ws)
+        key = deploy_keys_mod.workspace_key(workspace_id=workspace_id)
+        state["home"] = {"remote": st.remote, "url": st.url, "branch": st.branch,
+                         "ahead": st.ahead, "behind": st.behind}
+        # A CAPABILITY, not a secret: whether a credential exists and of what kind — never its value.
+        state["credential"] = wcreds.home_capability(wsr.root, key=key, remote=st.remote, url=st.url,
+                                                    subject=subject)
+        return state
+
+    @app.get("/api/workspace/{slug}/deploy-key")
+    def ws_deploy_key_get(slug: str, request: Request):
+        """This workspace's PUBLIC deploy key (null when none has been generated). The private half has
+        no read path at all — it is sealed in the credential store and materialized only for one git op."""
+        subject = subject_of(request)
+        _manage_dir(subject, slug)          # authorization: own slot, or a workspace they belong to
+        key = _workspace_key(subject, slug)
+        pub = deploy_keys_mod.public_key(wsr.root, key)
+        return {"slug": slug, "public_key": pub, "fingerprint": deploy_keys_mod.fingerprint(pub),
+                "add_as": "a deploy key with WRITE access"}
+
+    @app.post("/api/workspace/{slug}/deploy-key")
+    def ws_deploy_key_ensure(slug: str, request: Request, body: dict = Body(default={})):
+        """Generate this workspace's deploy key (idempotent — a second call returns the SAME key, so a
+        key the person already added to their repo is never invalidated) and say where to add it.
+
+        This is the credential model: they add our PUBLIC key to their repository; nothing of theirs
+        ever travels to us, and the private half is sealed at rest and never leaves this server."""
+        subject = subject_of(request)
+        _manage_dir(subject, slug)
+        repo_url = str((body or {}).get("repo") or "")
+        try:
+            prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url)
+        except deploy_keys_mod.DeployKeyError as exc:
+            raise HTTPException(status_code=501, detail=str(exc))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid workspace")
+        return {"slug": slug, **prompt, "message": wcreds.prompt_sentence(prompt)}
 
     @app.post("/api/workspace/shared/{workspace_id}/active")
     def ws_shared_active(workspace_id: str, request: Request, body: SharedActiveBody = Body(...)):

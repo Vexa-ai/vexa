@@ -153,3 +153,59 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     await expect(deactivateWorkspace("seed")).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+/** LOADING AN EXISTING REPO. The group lane is a different ROUTE from the desk swap because it is a
+ *  different authorization, so the URL is the thing worth pinning; and the deploy-key pair is worth
+ *  pinning because GET and POST differ by exactly one property — POST creates-or-returns, GET only
+ *  reads — and getting that backwards would mint a key every time a dialog opened. */
+describe("workspaceApi — attach an existing repo (deploy-key credential model)", () => {
+  it("attachSharedWorkspace POSTs the shared attach route with a full body", async () => {
+    const { attachSharedWorkspace } = await import("../workspaceApi");
+    mock(true, 200, {
+      workspace_id: "deal room", active: "deal room", repo: "git@github.com:acme/kg.git", ref: "main",
+      attached: true, cloned: true, parked: "deal-room-prev", nested: false, state: "cloned",
+    });
+    const r = await attachSharedWorkspace("deal room", { repo: "git@github.com:acme/kg.git", ref: "main" });
+    expect(r.state).toBe("cloned");
+    expect(lastUrl()).toBe("/api/workspace/shared/deal%20room/attach");
+    // Every field is present even when unset — the backend body is total, not partial.
+    expect(lastBody()).toEqual({ repo: "git@github.com:acme/kg.git", ref: "main", slug: null, token: null });
+  });
+
+  it("attachSharedWorkspace carries a one-off token when one is passed", async () => {
+    const { attachSharedWorkspace } = await import("../workspaceApi");
+    mock(true, 200, { workspace_id: "w", active: "w", repo: null, ref: null, attached: false, cloned: false, parked: null, nested: false, state: "already attached" });
+    await attachSharedWorkspace("w", { repo: "https://github.com/acme/kg", token: "ghp_x" });
+    expect(lastBody()).toMatchObject({ token: "ghp_x" });
+  });
+
+  it("FAIL-LOUD: a viewer's 403 throws rather than resolving to a fake 'already attached'", async () => {
+    const { attachSharedWorkspace } = await import("../workspaceApi");
+    mock(false, 403, { detail: "requires contributor" });
+    await expect(attachSharedWorkspace("w", { repo: "r" })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("readSharedAttached GETs the attachment view (capability line, never a secret)", async () => {
+    const { readSharedAttached } = await import("../workspaceApi");
+    mock(true, 200, {
+      workspace_id: "w", active: "w", slots: {}, credential: "origin https://github.com/acme/kg, deploy key set",
+      home: { remote: "origin", url: "https://github.com/acme/kg", branch: "main", ahead: 0, behind: 0 },
+    });
+    expect((await readSharedAttached("w")).credential).toContain("deploy key set");
+    expect(lastUrl()).toBe("/api/workspace/shared/w/attached");
+  });
+
+  it("ensureDeployKey POSTs (create-or-return) and readDeployKey GETs (read-only) the SAME path", async () => {
+    const { ensureDeployKey, readDeployKey } = await import("../workspaceApi");
+    mock(true, 200, { slug: "acme kg", public_key: "ssh-ed25519 AAAA", fingerprint: "SHA256:x", add_at: null, add_as: "a deploy key with WRITE access", then: "say `done` when added", message: "…" });
+    await ensureDeployKey("acme kg", "git@github.com:acme/kg.git");
+    expect(lastUrl()).toBe("/api/workspace/acme%20kg/deploy-key");
+    expect(fetchMock.mock.calls.at(-1)![1]).toMatchObject({ method: "POST" });
+    expect(lastBody()).toEqual({ repo: "git@github.com:acme/kg.git" });
+
+    mock(true, 200, { slug: "acme kg", public_key: null, fingerprint: null, add_as: "a deploy key with WRITE access" });
+    expect((await readDeployKey("acme kg")).public_key).toBeNull();
+    expect(lastUrl()).toBe("/api/workspace/acme%20kg/deploy-key");
+    expect(fetchMock.mock.calls.at(-1)![1]).toBeUndefined();   // a plain GET — no body, nothing minted
+  });
+});

@@ -21,6 +21,7 @@ import {
   readActiveSet, setSharedActive, deactivateWorkspace, readWorkspaceFile,
   listSharedMemberships, listWorkspaceTree, type Membership,
 } from "../surfaces/workspaceApi";
+import { AttachRepo } from "./AttachRepo";
 import { ContextBar } from "./ContextBar";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
@@ -212,6 +213,7 @@ export function MinutesShell() {
   // BOTH side columns fold away, independently, and the choice persists per side (founder,
   // 2026-09-01). Collapse never writes `pagesW`, so reopening the panel restores the width the
   // reader dragged it to — the two controls share a column and no state.
+  const [attachTo, setAttachTo] = useState<{ id?: string } | null>(null);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => loadCollapsed("left"));
   const [pagesCollapsed, setPagesCollapsed] = useState<boolean>(() => loadCollapsed("right"));
   const collapseRail = (v: boolean) => { setRailCollapsed(v); saveCollapsed("left", v); };
@@ -983,7 +985,14 @@ export function MinutesShell() {
             onCollapse={() => collapseRail(true)} />}
       <ContextBar sel={sel} flavor={flavor} memberships={memberships}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
-        onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))} />
+        onRemoveWorkspace={(id) => setWorkspaces((ws) => ws.filter((w) => w !== id))}
+        onAttachRepo={(id) => setAttachTo({ id })} />
+      {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
+          nullable id alone cannot tell "no dialog" from "dialog, aimed at the desk". */}
+      {attachTo && (
+        <AttachRepo workspaceId={attachTo.id} onClose={() => setAttachTo(null)}
+          onAttached={(id) => { if (id) setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id]); }} />
+      )}
       <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
         {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
             on an empty conversation cannot tell a spent invitation from a broken product — and the

@@ -447,6 +447,14 @@
       ]
     },
     {
+      "key": "VEXA_SECRETS_KEY",
+      "class": "defaulted",
+      "default": "(empty \u2014 a 0600 key is generated under the workspaces secrets root on first use)",
+      "secret": true,
+      "description": "server-side key the credential store seals with (saved GitHub PAT + per-workspace deploy-key private halves); set it to hold the key outside the data volume",
+      "targets": []
+    },
+    {
       "key": "VEXA_MCP_DELEGATION_TTL_SEC",
       "class": "defaulted",
       "default": "3600",
