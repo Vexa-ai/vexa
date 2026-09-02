@@ -52,6 +52,8 @@ customer.
 | `{{when}}` | when it is, or was, in the reader's own clock |
 | `{{organizer}}` | who had Vexa in the room |
 
+`prepare.md` and `minutes-head.md` also get `{{visibility}}` and `{{workspace}}` — see below.
+
 `attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
 
 | token | becomes |
@@ -60,6 +62,30 @@ customer.
 | `{{organizer}}` | who had Vexa in the room |
 | `{{meeting}}` | the meeting's title |
 | `{{date}}` | the day it happened, in the organiser's zone |
+
+**`attendee-head.md` carries the visibility sentence as literal text**, not as `{{visibility}}`, for
+the same reason it carries the service sentence literally: its renderer fills four tokens and would
+mail the braces. If that sentence changes it changes in three files at once — this one,
+`mailtext.VISIBILITY_SENTENCE`, and `asks/setup-global.md`, which tells the admin the same thing.
+
+## Who can see what
+
+Founder decision 21, 2026-09-02: **a person's own workspace is not private from the company.** The
+attendee head and the minutes head both say so, in his words:
+
+> Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
+> is visible to the company's agents; recordings and transcripts stay here.
+
+It is in the first mail a stranger ever gets from us, because that is the only moment at which
+telling them is still a choice they can act on. The `_global` setup chat tells the administrator the
+same thing and records their own answer in `STRUCTURE.md`.
+
+Note the wording: "your workspaces", the ordinary English word — not the product's NAME for a
+person's own workspace, which is being renamed (placeholder: **desk**) and lives behind one constant
+per runtime: `mailtext.WORKSPACE_WORD` and `clients/terminal/src/minutes/vocabulary.ts`. Templates
+and presets write `{{workspace}}` rather than the word, so the rename is those two lines. Code paths,
+slugs and API fields keep saying "workspace" on purpose — a naming decision should not cost a
+migration.
 
 **`attendee-head.md` carries the service sentence as LITERAL TEXT, not as `{{service}}`** — its
 renderer fills four tokens and would mail `{{service}}` verbatim. If that sentence is ever changed it

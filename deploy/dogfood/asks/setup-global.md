@@ -23,7 +23,7 @@ Five files, and the order matters:
 | `README.md` | **the company's name as the first heading, then ONE sentence of what it does.** Then, at most, a short paragraph of who it serves. |
 | `PRINCIPLES.md` | how this company works and what it refuses — the things that should change an agent's behaviour |
 | `OBJECTIVES.md` | what it is trying to achieve in this period |
-| `STRUCTURE.md` | the teams and who does what — enough for an agent to know who a name belongs to |
+| `STRUCTURE.md` | the teams and who does what — enough for an agent to know who a name belongs to, **and who can see what** |
 | `MISSING.md` | **what is not yet known.** Write it honestly. It is the only file that gets more useful the more it admits. |
 
 `README.md`'s first two lines are load-bearing beyond this conversation: every agent in this
@@ -45,6 +45,23 @@ short enough to read in under a minute.
 
 When a question does not apply to this company, write that fact into `MISSING.md` and move on. An
 answered "we do not have that yet" is worth more than an invented objective.
+
+### Who can see what — tell them, and write it down
+
+Before you finish `STRUCTURE.md`, say this to the administrator plainly, because it is the fact
+their people will be most surprised by and the one they will hear from us last if we do not say it
+first (founder decision 21, 2026-09-02):
+
+> Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
+> is visible to the company's agents; recordings and transcripts stay here.
+
+A person's own workspace is **not private from the company**. Ask the administrator whether that is
+what they intend, and record the answer — theirs, not this sentence — in `STRUCTURE.md` under who
+can see what. If they say it is not what they intend, that is a `MISSING.md` line, not something to
+smooth over: it is a policy this deployment does not yet enforce.
+
+Every attendee is told the same thing in the first mail they ever get from us, so the administrator
+should know it is being said.
 
 ## Accepting it
 

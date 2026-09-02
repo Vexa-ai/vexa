@@ -12,6 +12,7 @@
  *  from here. Personal onboarding still has its own entry — app/OnboardingGate.tsx fires the seed.
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
+import { WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, ONBOARDING_SEED_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, setPresetInFlight } from "../canvas/actions";
 import { Chat } from "../surfaces/chat";
@@ -653,6 +654,10 @@ export function MinutesShell() {
           ? "warm" : "new";
       const stateToken = `personal:${chatsRef.current.length ? "warm" : "new"} group:${groupState}`;
       const prompt = text
+        // `{{workspace}}` — what a person's own workspace is CALLED to them. One constant
+        // (minutes/vocabulary.ts), so the rename the founder has not made yet is one edit and not a
+        // sweep through every preset.
+        .replace(/\{\{\s*workspace\s*\}\}/g, WORKSPACE_WORD)
         .replace(/\{\{\s*state\s*\}\}/g, stateToken)
         .replace(/\{\{\s*meeting\s*\}\}/g, ref || "the meeting in view")
         .replace(/\{\{\s*title\s*\}\}/g, row?.title || "the meeting in view")
