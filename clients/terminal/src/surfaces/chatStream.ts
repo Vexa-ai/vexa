@@ -39,6 +39,11 @@ export type ChatStreamEvent = {
    *  scaffold-declared pinned tab does. Orthogonal to `focus`: pinning is about what stays,
    *  focusing is about what is in front, and a turn may ask for either, both, or neither. */
   pin?: boolean;
+  /** `terms` events only (PRD decision 35) — the meeting ROW the chips belong to, the cursor the
+   *  next Highlight should send back, and the published terms themselves. */
+  meeting?: string;
+  cursor?: string;
+  terms?: unknown[];
 };
 
 /** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
@@ -97,6 +102,10 @@ export type ChatStreamCallbacks = {
    *  success — a failed write says nothing. Optional so existing callers/tests need not implement
    *  it. */
   onArtifact?: (a: { workspace: string; path: string; focus: boolean; pin: boolean }) => void;
+  /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
+   *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
+   *  `onArtifact`. Optional so existing callers/tests need not implement it. */
+  onTerms?: (t: { meeting: string; cursor: string; terms: unknown[] }) => void;
 };
 
 export type ChatStreamRequest = {
@@ -308,6 +317,19 @@ export async function streamChatTurn(
           // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
           case "artifact":
             if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+            break;
+          // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
+          // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare
+          // look-up emits nothing, so a turn that read the room without choosing anything paints
+          // nothing on the person's screen.
+          //
+          // NOT counted as visible output: a Highlight turn is machinery and produces no prose, and
+          // treating this as "the agent said something" would keep the "starting agent…" affordance
+          // honest for the wrong turn.
+          case "terms":
+            if (ev.meeting && Array.isArray(ev.terms) && ev.terms.length) {
+              cb.onTerms?.({ meeting: ev.meeting, cursor: ev.cursor ?? "", terms: ev.terms });
+            }
             break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);

@@ -20,14 +20,14 @@
  *  sentence — the two say the same thing.
  */
 import { ASK_CHAT_EVENT } from "../canvas/actions";
-import { normalizeIntent, type ChatIntent, type ChatIntentKind } from "../surfaces/chatIntent";
+import { isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
 import { navigateView } from "./roomView";
 
 /** How much of a selection the BUBBLE shows. The intent carries up to 2000 characters; a bubble is
  *  a label, and a paragraph rendered as one is the composed-text failure wearing a quotation mark. */
 export const PREVIEW_MAX = 80;
 
-const VERB: Record<ChatIntentKind, string> = { extend: "Extend", create: "Create" };
+const VERB: Record<ChatIntentKind, string> = { extend: "Extend", create: "Create", explore: "Explore", highlight: "Highlight" };
 
 /** Collapse the whitespace a rendered selection carries — a highlight dragged across a paragraph
  *  break arrives with newlines in it, and they belong in the intent, never in a one-line label. */
@@ -36,6 +36,13 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 /** THE BUBBLE. Compact by construction: a verb, the page, and — when there is one — a short
  *  quotation of what was highlighted. */
 export function compactLabel(intent: ChatIntent): string {
+  // A CHIP CLICKED IN A TRANSCRIPT SHOWS THE WORDS, not the meeting it was said in: the person is
+  // looking at the room already, and "Explore: Kaar Tech (meeting 41, segment …)" spends the whole
+  // label on the two facts they can see.
+  if (intent.kind === "explore") return `Explore: ${intent.term}`;
+  // Highlight is silent (decision 35.2) and never reaches a bubble; the label exists only so a
+  // caller that logs one has something honest to log.
+  if (intent.kind === "highlight") return "Highlight";
   const head = `${VERB[intent.kind]}: ${intent.path}`;
   if (!intent.selection) return head;
   const flat = oneLine(intent.selection);
@@ -47,6 +54,17 @@ export function compactLabel(intent: ChatIntent): string {
  *  not the preview: this is what the agent reads, and truncating it here would lose the half of a
  *  paragraph the person actually cared about. */
 export function fallbackText(intent: ChatIntent): string {
+  if (intent.kind === "explore") {
+    return `Explore \`${intent.term}\` (said in meeting ${intent.meeting}` +
+      (intent.segment ? `, segment ${intent.segment}` : "") +
+      `): find out what it is in the logic of this chat and this meeting — workspace first, ` +
+      `research where it runs out — write its page with sources, then two lines on what it is.`;
+  }
+  if (intent.kind === "highlight") {
+    return `Call transcript_terms(meeting_id="${intent.meeting}", since="${intent.since ?? ""}"), ` +
+      `pick the terms that matter to this person in this meeting, then call it again with ` +
+      `keep="<those terms>" to publish them as chips. Say nothing back — this is machinery.`;
+  }
   const head = `${VERB[intent.kind]}: ${intent.path}`;
   return intent.selection ? `${head} — '${intent.selection}'` : head;
 }
@@ -82,12 +100,25 @@ export const clearPending = (): void => { pending = null; };
 
 /** Post an intent into the OPEN chat. Returns the intent that went, or `null` when there was
  *  nothing honest to send (see `normalizeIntent` — an unnamed page is never guessed at). */
-export function postIntent(raw: Parameters<typeof normalizeIntent>[0]): ChatIntent | null {
+export function postIntent<K extends ChatIntentKind>(raw: Omit<RawIntent, "kind"> & { kind: K }): IntentOf<K> | null;
+export function postIntent(raw: RawIntent): ChatIntent | null;
+export function postIntent(raw: RawIntent): ChatIntent | null {
   const intent = normalizeIntent(raw);
   if (!intent) return null;
-  pending = { workspace: intent.workspace, path: intent.path };
+  // ONLY A PAGE INTENT HAS A LANDING. `explore` writes a page whose path nobody can predict — the
+  // agent picks the kind and the slug — so navigating on its commit would land the panel on a
+  // guess. Its visible result is the chip going solid, which the terms layer does on the same
+  // commit event. `highlight` writes nothing at all.
+  pending = isPageIntent(intent) ? { workspace: intent.workspace, path: intent.path } : null;
   window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
-    detail: { prompt: fallbackText(intent), display: compactLabel(intent), intent },
+    detail: {
+      prompt: fallbackText(intent),
+      display: compactLabel(intent),
+      intent,
+      // `hidden` suppresses the user bubble for a machinery turn. The chat's own MACHINERY_MARK
+      // keeps it hidden on RELOAD too, which is the half `hidden` alone has never covered.
+      ...(isSilent(intent) ? { hidden: true } : {}),
+    },
   }));
   return intent;
 }

@@ -356,3 +356,61 @@ describe("streamChatTurn — turn-accepted liveness ack", () => {
     expect(result.terminal).toBe(true);
   });
 });
+
+/** PRD decision 35 — the `terms` event: what the transcript's chips are made of.
+ *
+ *  It rides the CHAT stream and not the meeting stream on purpose (decision 18: the chips are part
+ *  of the chat's record), and it is forwarded here rather than stored, exactly like `artifact`. */
+describe("streamChatTurn — the transcript's terms", () => {
+  const terms = [{ term: "Kaar Tech", known: null }];
+
+  it("forwards a publish with its meeting and its cursor", async () => {
+    const seen: unknown[] = [];
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0"),
+      ev({ type: "turn-complete" }, "2-0"),
+    ]));
+    await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: (t) => seen.push(t) },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([{ meeting: "41", cursor: "c9", terms }]);
+  });
+
+  it("an empty or unaddressed publish is dropped — an empty event would CLEAR the chips on screen", async () => {
+    const seen: unknown[] = [];
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms: [] }, "1-0"),
+      ev({ type: "terms", cursor: "c9", terms }, "2-0"),
+      ev({ type: "turn-complete" }, "3-0"),
+    ]));
+    await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: (t) => seen.push(t) },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([]);
+  });
+
+  it("is not visible output — a silent Highlight turn produces prose for nobody", async () => {
+    const { cb } = recorder();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse([ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0")]))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "turn-complete" }, "2-0")]));
+    const result = await streamChatTurn({ prompt: "x", session: "s", active: undefined },
+      { ...cb, onTerms: () => {} },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(result.sawVisibleOutput).toBe(false);
+  });
+
+  it("a client with no onTerms handler is not a crash — the callback is optional", async () => {
+    const { cb } = recorder();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "terms", meeting: "41", cursor: "c9", terms }, "1-0"),
+      ev({ type: "turn-complete" }, "2-0"),
+    ]));
+    const result = await streamChatTurn({ prompt: "x", session: "s", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(result.terminal).toBe(true);
+  });
+});
+

@@ -3538,6 +3538,168 @@ def meeting_transcript(meeting_url: str = "", tail: int = 80, since: str = "",
                        "transcript": lines})
 
 
+
+
+# ── the transcript as a clickable surface (PRD decision 35) ───────────────────────────────────────
+#
+# `shared/terms.py` + `shared/entities.py` are PURE and stdlib-only, so the rig imports them from the
+# checkout it is served out of rather than re-implementing the extractor here. Two extractors would
+# drift the first time either was tuned, and the drift would show up as a chip that opens nothing.
+# `VEXA_AGENT_SRC` names the tree, the same way `VEXA_FLOWS_SRC` names the flows engine; the default
+# is this file's own repo, so an unconfigured rig works.
+AGENT_SRC = os.environ.get("VEXA_AGENT_SRC") or str(pathlib.Path(__file__).resolve().parents[3] / "core" / "agent")
+
+
+def _terms_mod():
+    import sys
+    if AGENT_SRC not in sys.path:
+        sys.path.insert(0, AGENT_SRC)
+    from shared import terms as _t  # noqa: PLC0415 — a deployment input, not an import-time dep
+    return _t
+
+
+# The index is several HTTP reads (the active set, then one tree per mount); the terms themselves are
+# a regex pass. Both are cached, separately, because they go stale at completely different rates: a
+# workspace grows a page every few minutes, a live transcript grows a line every few seconds.
+_TERMS_CACHE: dict = {}
+_INDEX_CACHE: dict = {}
+_TERMS_TTL = 5.0
+_INDEX_TTL = 20.0
+
+
+def _cached(store: dict, key, ttl: float):
+    hit = store.get(key)
+    if hit and (time.time() - hit[0]) < ttl:
+        return hit[1]
+    return None
+
+
+def _entity_index(uid: str) -> list:
+    """Every entity page the CALLER can read, desk first, then `_global`, then their groups.
+
+    ORDER IS PRECEDENCE (`match_known` takes the first hit): a name this person has written about on
+    their own desk resolves to THEIR page, never to a namesake in a group they happen to be in."""
+    cached = _cached(_INDEX_CACHE, uid, _INDEX_TTL)
+    if cached is not None:
+        return cached
+    mod = _terms_mod()
+    slugs: list = [""]                      # "" = their own desk (a no-slug read)
+    st, act = _http("GET", f"{AGENT_API}/api/workspace/active", {"X-User-Id": uid})
+    if st == 200:
+        for m in (act or {}).get("active") or []:
+            s = str(m.get("slug") or "").strip()
+            if s and s not in slugs:
+                slugs.append(s)
+    if "_global" not in slugs:
+        slugs.append("_global")             # the company layer is mounted on every dispatch
+    index: list = []
+    for slug in slugs:
+        q = f"?slug={urllib.parse.quote(slug)}" if slug else ""
+        st, body = _http("GET", f"{AGENT_API}/api/workspace/tree{q}", {"X-User-Id": uid})
+        if st != 200:
+            continue                        # a mount this reader cannot list is not an error (decision 26.3)
+        files = (body or {}).get("files") or []
+        wsid = slug
+        ist, ib = _http("GET", f"{AGENT_API}/api/workspaces/by-slug/{urllib.parse.quote(slug or uid)}",
+                        {"X-User-Id": uid})
+        if ist == 200 and isinstance(ib, dict) and ib.get("id"):
+            wsid = str(ib["id"])
+        index += mod.index_entries(wsid, slug, files)
+    _INDEX_CACHE[uid] = (time.time(), index)
+    return index
+
+
+@mcp.tool()
+@_anon_guard
+def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
+                     meeting_url: str = "", token: str = "") -> str:
+    """The things a meeting has NAMED so far — people, companies, projects, products, topics — each
+    with where it was said and whether a page for it already exists.
+
+    THIS IS THE HIGHLIGHT LAYER (PRD decision 35). The transcript view has a Highlight button; it
+    posts a silent turn that calls this, decides which terms matter for THIS person and this chat,
+    and publishes them. The reader then sees them as chips in the transcript: solid where a page
+    exists (clicking opens it), dashed where none does (clicking asks you what it is).
+
+    MECHANICAL — no model runs inside this tool. It is the same name extractor the write-back phase
+    uses, matched against the entity index of the workspaces YOU can read. So a term it calls
+    `known` is a page you can actually open, and one it calls unknown is a page decision 24 says you
+    should be writing.
+
+    TWO CALLS, AND THE SECOND ONE IS THE PUBLISH:
+
+      1. `transcript_terms(meeting_id, since)` — LOOK. Returns every candidate. Nothing is shown to
+         anyone yet. Read the list and pick the ones that matter here: a company in the deal, a
+         person nobody has a page for, a product name that was decided on. Drop the ones that are
+         just capitalised words.
+      2. `transcript_terms(meeting_id, since, keep="Acme, Cottalango Leon")` — PUBLISH. Exactly those
+         become chips in the transcript. `keep="*"` publishes everything, which is right only when
+         everything genuinely matters.
+
+    A first call publishes NOTHING on purpose: chips are on the person's screen, and a list nobody
+    judged is a screen full of every capitalised word in the room.
+
+    `since` is the CURSOR from your last call on this meeting — pass it back and you get only what
+    has been said since, so pressing Highlight again adds new terms instead of re-listing the room.
+    Omit it the first time.
+    """
+    uid = me()
+    row, err = _resolve_meeting(uid, meeting_url, meeting_id)
+    if not row:
+        return json.dumps({"error": err or "give meeting_id=<row id> or meeting_url=<link>"})
+    mod = _terms_mod()
+    st, r = _gw_http(uid, "GET", f"/transcripts/by-id/{row}")
+    if st != 200:
+        return json.dumps({"error": "could not read the transcript", "read_ok": False, "status": st,
+                           "tell_your_person": "Say the READ failed — never that nothing was said.",
+                           "do": "try again in ~20 seconds; if it repeats, report_friction()"})
+    raw = (r or {}).get("segments") or []
+
+    def _at(g):
+        return g.get("absolute_start_time") or g.get("start")
+
+    fresh = [g for g in raw if str(_at(g) or "") > str(since)] if since else raw
+    segments = [{"id": _at(g), "at": _at(g), "text": (g.get("text") or "").strip()}
+                for g in fresh if (g.get("text") or "").strip()]
+    cursor = str(_at(raw[-1])) if raw else (since or "")
+
+    cache_key = (uid, row, str(since), cursor)
+    found = _cached(_TERMS_CACHE, cache_key, _TERMS_TTL)
+    if found is None:
+        found = mod.terms_for(segments, _entity_index(uid))
+        _TERMS_CACHE[cache_key] = (time.time(), found)
+
+    wanted = [w.strip().lower() for w in str(keep or "").split(",") if w.strip()]
+    publish_all = any(w in ("*", "all") for w in wanted)
+    emit = found if publish_all else [t for t in found if str(t.get("term", "")).lower() in wanted] if wanted else []
+    unmatched = [] if publish_all else [w for w in wanted
+                                        if not any(str(t.get("term", "")).lower() == w for t in found)]
+    known = [t for t in found if t.get("known")]
+    return _capped({
+        "meeting": row,
+        "read_ok": True,
+        "cursor": cursor,
+        "since": since or "",
+        "scanned_segments": len(segments),
+        "terms": found,
+        "known_count": len(known),
+        "unknown_count": len(found) - len(known),
+        # THE PUBLISHED SET. Non-empty ⇒ the harness turns this result into the chat's `terms` event
+        # and the transcript paints these, and only these.
+        "emit": emit,
+        "published": len(emit),
+        "keep_not_found": unmatched,
+        "next": ("Nothing is on the person's screen yet. Call me again with keep=\"<the terms that "
+                 "matter here, comma separated>\" to publish them as chips — or keep=\"*\" only if "
+                 "genuinely all of them do."
+                 if not emit else
+                 "Published. Say nothing to your person about it — the chips are the answer. Keep "
+                 f"cursor={cursor} for the next Highlight on this meeting."),
+        "a_term_with_known_null": ("has no page anywhere you can read. That is decision 24's cue, "
+                                   "not a gap to narrate: entity_upsert it when you know what it is."),
+    }, 12000)
+
+
 @mcp.tool()
 @_anon_guard
 def bot_stop(meeting_url: str, token: str = "") -> str:

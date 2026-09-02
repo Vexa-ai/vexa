@@ -34,6 +34,50 @@ _WRITER_TOOLS = frozenset({
 })
 
 
+# THE TRANSCRIPT-TERM PUBLISH (PRD decision 35). `transcript_terms` is the only tool whose SUCCESS
+# is meant to paint something on the meeting view, so it is the only one whose RESULT BODY is read
+# here rather than summarised. A closed vocabulary for the same reason `_WRITER_TOOLS` is one: a
+# prefix match would let any future tool ending in `_terms` drive somebody's transcript.
+_TERMS_TOOLS = frozenset({
+    "mcp__vexa__transcript_terms",
+    "transcript_terms",
+})
+
+
+def _tool_result_text(content: object) -> str:
+    """The tool result as one string, whichever shape the harness handed it in.
+
+    Claude Code emits a tool result either as a bare string or as a list of content blocks; both
+    reach here, and a reader that handles only one of them fails SILENTLY on the other — which for
+    this seam means chips that simply never appear and nothing anywhere saying why."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content
+                       if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def _published_terms(content: object) -> "dict | None":
+    """The `terms` event a `transcript_terms` result asks for, or None.
+
+    ONLY WHEN THE AGENT PUBLISHED. The tool answers a bare look-up call with ``emit: []`` — that
+    call was the agent reading the room, and painting its raw output would put every capitalised
+    word in the meeting on the person's screen. An empty publish is a NON-EVENT rather than an empty
+    event: an empty event would clear the chips the previous Highlight put there."""
+    try:
+        obj = json.loads(_tool_result_text(content))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    emit = obj.get("emit")
+    if not isinstance(emit, list) or not emit:
+        return None
+    return {"type": "terms", "meeting": str(obj.get("meeting") or ""),
+            "cursor": str(obj.get("cursor") or ""), "terms": emit}
+
+
 def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":
     """`(workspace, path)` the call is about to write, or None. Read off the ARGUMENTS, at tool-use
     time, because the result carries only a summary string.
@@ -79,6 +123,10 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     # callId -> (workspace, path) for writes still in flight. Per-stream, so a call id can never
     # collide across turns, and popped on the matching result so nothing accumulates.
     pending_writes: dict[str, tuple[str, str]] = {}
+    # callIds of `transcript_terms` calls still in flight — the same per-stream,
+    # popped-on-result discipline as `pending_writes`, so one turn's result can never be
+    # matched to another call's id.
+    pending_terms: set[str] = set()
     for raw in lines:
         raw = raw.strip()
         if not raw:
@@ -115,6 +163,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         target = _written_artifact(tool_name, block.get("input", {}) or {})
                         if target:
                             pending_writes[call_id] = target
+                    elif tool_name in _TERMS_TOOLS:
+                        pending_terms.add(call_id)
                     yield {
                         "type": "tool-call",
                         "tool": tool_name,
@@ -136,6 +186,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     # and a tab on a path that does not exist is exactly the "page that can never
                     # load" this stream is careful about elsewhere. `pop` either way, so a failed
                     # call cannot leave an entry that a later, unrelated result matches.
+                    # THE CHIPS (decision 35). Same success-only rule as the artifact below:
+                    # a failed read must not paint a transcript.
+                    was_terms = call_id in pending_terms
+                    pending_terms.discard(call_id)
+                    if was_terms and ok:
+                        ev = _published_terms(block.get("content"))
+                        if ev:
+                            yield ev
                     target = pending_writes.pop(call_id, None)
                     if target and ok:
                         workspace, path = target
