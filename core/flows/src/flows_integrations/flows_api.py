@@ -10,6 +10,10 @@
   POST /flows/{name}/{v}/activate   · POST /flows/{name}/{v}/retire
   GET  /reactions[?status=…]        the operator projection
   POST /reactions/{id}/{retry|resume|cancel}    the signal verbs (audited rows)
+  GET  /timeline?subject=…          ONE PERSON'S DAY, in order — facts, receipts and the
+                                    meetings table merged and scoped to them (PRD decision 31).
+                                    Read-only, and it takes the operator key OR the narrower
+                                    VEXA_FLOWS_TIMELINE_KEY (see `_timeline_key`).
 
 Auth: X-Flows-Admin-Key (env VEXA_FLOWS_API_KEY). NEVER accepts code — steps are reviewed Python
 in the image; this API composes them (the n8n line we do not cross).
@@ -42,7 +46,8 @@ from pydantic import BaseModel, Field  # noqa: E402
 from flows import Registry, SystemClock, admit, cancel, postgres_db, resume, retry, wake  # noqa: E402
 from flows_defs import production  # noqa: E402
 from flows_integrations import instance_gate  # noqa: E402
-from flows_steps.common import db_url, require_internal_secret  # noqa: E402
+from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
+from flows_timeline import build_timeline, fetch_meetings, render_preamble, render_text  # noqa: E402
 
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
@@ -71,6 +76,25 @@ def _require_api_key() -> str:
 
 
 API_KEY = _require_api_key()
+
+
+def _timeline_key() -> str:
+    """A SECOND key, for `GET /timeline` alone — or "" when the deployment has not minted one.
+
+    The timeline is read-only and the agent worker asks for it on EVERY dispatch (decision 31 §1),
+    so it needs a credential in every worker container. Handing those containers the OPERATOR key —
+    the one that submits and activates flows — to read a list of times would widen the operator
+    key's blast radius by one container per person per turn, which is the opposite of what the
+    key-hardening above was for. This is a key that can do exactly one thing.
+
+    Unset ⇒ only the operator key opens the route. That is the right default: a deployment that has
+    not thought about this gets the narrower reach (nobody but the operator), never the wider one.
+    """
+    key = (os.environ.get("VEXA_FLOWS_TIMELINE_KEY") or "").strip()
+    return "" if key in ("changeme", "change-me", "default", "secret") else key
+
+
+TIMELINE_KEY = _timeline_key()
 # The internal-tier identity, refused the same way and for the same reason. Read at import so an
 # unconfigured deployment stops HERE rather than at the first post-meeting run.
 INTERNAL_SECRET = require_internal_secret()
@@ -87,6 +111,13 @@ app = FastAPI(title="flows-api", version="0.1.0",
 def auth(x_flows_admin_key: str = Header(default="")) -> None:
     if x_flows_admin_key != API_KEY:
         raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
+
+
+def timeline_auth(x_flows_admin_key: str = Header(default="")) -> None:
+    """The operator key opens everything, including this. The timeline key opens only this."""
+    if x_flows_admin_key == API_KEY or (TIMELINE_KEY and x_flows_admin_key == TIMELINE_KEY):
+        return
+    raise HTTPException(status_code=401, detail="X-Flows-Admin-Key required")
 
 
 def _refuse_if_gated(verb: str) -> None:
@@ -323,6 +354,67 @@ def signal_reaction(reaction_id: str, verb: str, x_actor: str = Header(default="
     if not ok:
         raise HTTPException(status_code=409, detail=f"{verb} not applicable in current status")
     return {verb: True}
+
+
+@app.get("/timeline", dependencies=[Depends(timeline_auth)])
+def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 20,
+             meetings: bool = True, format: str = "json"):
+    """ONE PERSON'S DAY, IN ORDER — PRD decision 31.
+
+    Founder, 2026-09-02: *"does the agent have temporal awareness of the last events and future
+    events? scheduled meetings, the things that actually get logged in the flows data"*. It did
+    not, and the reason was not that the data was missing: every one of those moments is already a
+    reaction row or an effect receipt in this database. What was missing was a read along the axis
+    a person thinks in. This is that read.
+
+    `subject` is a platform uid or an email address, and the route resolves the OTHER one before it
+    scopes, because the invite lineage carries an organizer and no uid while the completed lineage
+    carries a uid and, without the resolution, nothing to match an address on. Scoping on one of
+    them silently returns half a day — see `flows_timeline.model.concerns`.
+
+    `since` / `until` take epoch seconds or ISO-8601; the default window straddles NOW (14 days
+    back, 30 forward) because half of what decision 31 asks for is in the future. `limit` keeps the
+    events NEAREST NOW, not the oldest rows the engine still holds.
+
+    Read-only: it admits nothing, signals nothing and writes nothing. It therefore stays open while
+    the instance gate is up, exactly like `GET /flows` and `GET /reactions` — an admin must be able
+    to see what the machine has done.
+
+    `meetings=false` drops the gateway hop and answers from this database alone — the offline shape,
+    used by the proof and by any caller that cannot reach the gateway.
+
+    `format=text` (a person asking, through the control MCP) and `format=preamble` (the same
+    person's agent, told unasked on every dispatch) add a rendered `text`, in THE SUBJECT'S OWN
+    ZONE — read here, from `setting(uid, "timezone")`, and not by the caller. That is deliberate:
+    two readers rendering the same payload is how a chat and a machinery note end up disagreeing
+    about one meeting, and the zone is a fact about the person, which this service can read and a
+    worker container cannot.
+    """
+    subj = (subject or "").strip()
+    if not subj:
+        raise HTTPException(status_code=400,
+                            detail="subject is required: a platform uid, or an email address")
+    if not (subj.isdigit() or "@" in subj):
+        raise HTTPException(status_code=400, detail={
+            "not_a_subject": subj,
+            "expected": "a platform uid (digits) or an email address"})
+    out = build_timeline(db, subj, since=since or None, until=until or None,
+                         limit=max(1, min(int(limit or 20), 200)),
+                         meetings=fetch_meetings if meetings else None)
+    if out.get("unresolved"):
+        raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
+    shape = (format or "json").strip().lower()
+    if shape in ("text", "preamble"):
+        # A zone we cannot read is UTC, stated as UTC — never the server's local time wearing the
+        # person's name. `setting` never raises; a missing file means defaults.
+        try:
+            tz = str(setting(out.get("uid") or subj, "timezone") or "")
+        except Exception:  # noqa: BLE001 — a preference lookup must not cost the timeline
+            tz = ""
+        out = {**out, "timezone": tz or "UTC",
+               "text": (render_preamble(out, tz) if shape == "preamble"
+                        else render_text(out, tz))}
+    return out
 
 
 def main() -> int:  # pragma: no cover — process entrypoint
