@@ -258,6 +258,12 @@ class StubDoors(Doors):
     def user_find(self, address: str):
         return self.users.get(address)
 
+    def user_email(self, uid: str) -> str:
+        for addr, u in self.users.items():
+            if u == str(uid):
+                return addr
+        raise DoorRefused(f"no user {uid} on this instance (404)")
+
     def meeting_get(self, owner: str, meeting_id) -> dict:
         return self.meetings[str(meeting_id)]
 

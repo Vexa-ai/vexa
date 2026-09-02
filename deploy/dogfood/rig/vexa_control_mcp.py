@@ -4650,11 +4650,17 @@ def rehearse(state: str, subject: str, meeting: str = "2026-03-02", when: str = 
 
 @mcp.tool()
 @_anon_guard
-def subject_reset(address: str, token: str = "") -> str:
-    """WIPE ONE PERSON — user, desk, sessions, pending scaffolds, friction, and their mail.
+def subject_reset(address: str = "", uid: str = "", token: str = "") -> str:
+    """WIPE ONE PERSON — user, meetings, desk, sessions, pending scaffolds, friction, lane rows,
+    and their mail.
 
     So a state can be re-entered from nothing in seconds without blanking the instance. Test
     addresses only (`VEXA_REHEARSE_DOMAIN`); a real address is refused before anything is deleted.
+
+    `uid` instead of `address` is for the ONE account the address guard cannot judge: a subject
+    whose stored email is not an address at all, which is what a mis-parsed invite creates. That
+    path refuses any account whose email IS well-formed — a real person's is, so it can never
+    reach one. It is a narrower rule, never a way around the domain guard.
 
     It reads the emptiness back and reports whatever it could NOT remove under `remaining` — a
     reset that half worked and said "done" is worse than one that refused.
@@ -4665,10 +4671,16 @@ def subject_reset(address: str, token: str = "") -> str:
         return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who, "why": e.why,
                            "what_to_do": "An instance admin can run this — it deletes a person."})
     pkg = _rehearse_pkg()
+    if not (address or uid):
+        return json.dumps({"refused": "name an address, or a uid with `uid=` for an account whose "
+                                      "email is not an address at all"})
     try:
-        return json.dumps(pkg.subject_reset(address, doors=pkg.LiveDoors()), default=str)
+        doors = pkg.LiveDoors()
+        out = (pkg.subject_reset_malformed(uid, doors=doors) if uid
+               else pkg.subject_reset(address, doors=doors))
+        return json.dumps(out, default=str)
     except (pkg.Refused, pkg.DoorRefused) as e:
-        return json.dumps({"refused": str(e), "address": address})
+        return json.dumps({"refused": str(e), "address": address, "uid": uid})
 
 
 @mcp.tool()

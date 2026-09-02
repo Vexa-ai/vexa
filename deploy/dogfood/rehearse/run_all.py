@@ -41,14 +41,22 @@ def file_friction(doors_kind: str, state: str, res, reporter) -> dict:
     repro line is the whole value: a fixing agent must be able to re-enter the state without
     asking anybody how.
     """
+    # A CORRECT REFUSAL IS NOT A DEFECT. `blank-admin` on a claimed instance did not fail — the
+    # stack is not blank, which is a fact about the deployment, not a rough edge. Filing it as a
+    # blocker put a non-problem at the top of the fixer's dump, and a loop whose findings include
+    # things nobody should fix teaches its readers to skim (`fr_af253789b2780003`, mis-filed).
+    refused = bool(getattr(res, "refused", False))
     failed = [v for v in res.verify if not v["ok"]]
     stopped = next((s for s in res.steps if not s.get("ok", True)), None)
     symptom = (res.error or (failed[0]["detail"] if failed
                              else "the state ran but its verify block did not pass"))
+    if refused:
+        symptom = ("PRECONDITION, not a defect — this state cannot be entered on this stack "
+                   "as it stands: " + symptom)
     rec = {
         "tool": "rehearse",
-        "kind": "error" if res.error else "unfulfilled",
-        "severity": "blocker",
+        "kind": "refused" if refused else ("error" if res.error else "unfulfilled"),
+        "severity": "idea" if refused else "blocker",
         "what_i_was_doing": f"entering the state `{state}` as {res.subject} through {doors_kind} "
                             f"doors, so a touch could be rehearsed without a rebuild",
         "what_went_wrong": f"{state}: {symptom}",
@@ -104,13 +112,17 @@ def run(doors: Doors, *, catalog: cat.Catalogue | None = None, only: list | None
             continue
         link = next(iter(res.links.values()), "")
         rows.append({"state": name, "as": subject, "ok": res.ok,
+                     "refused": bool(getattr(res, "refused", False)),
                      "wall_s": round(res.wall_s, 1), "link": link,
                      "checks": [f"{v['check']}={'ok' if v['ok'] else 'FAIL'}" for v in res.verify],
                      **({"why": res.error} if res.error else {})})
         if not res.ok:
             frictions.append(file_friction(type(doors).__name__, name, res, reporter))
     return {"ran": len(rows), "passed": sum(1 for r in rows if r["ok"]),
-            "failed": [r["state"] for r in rows if not r["ok"]],
+            # `failed` is what somebody has to fix. A refused precondition is reported separately
+            # so the count means what a reader assumes it means.
+            "failed": [r["state"] for r in rows if not r["ok"] and not r.get("refused")],
+            "refused": [r["state"] for r in rows if r.get("refused")],
             "wall_s": round(time.time() - t0, 1), "states": rows, "friction": frictions}
 
 
@@ -118,12 +130,14 @@ def render(report: dict) -> str:
     w = max([len(r["state"]) for r in report["states"]] + [5])
     lines = [f"{'state'.ljust(w)}  {'':4}  {'wall':>7}  link / why"]
     for r in report["states"]:
-        mark = "PASS" if r["ok"] else "FAIL"
+        mark = "PASS" if r["ok"] else ("SKIP" if r.get("refused") else "FAIL")
         tail = r["link"] or r.get("why", "")
         lines.append(f"{r['state'].ljust(w)}  {mark}  {r['wall_s']:>6.1f}s  {tail[:96]}")
     lines.append("")
     lines.append(f"{report['passed']}/{report['ran']} states green in {report['wall_s']}s"
-                 + (f" · failed: {', '.join(report['failed'])}" if report["failed"] else ""))
+                 + (f" · failed: {', '.join(report['failed'])}" if report["failed"] else "")
+                 + (f" · refused (precondition, not a defect): "
+                    f"{', '.join(report.get('refused') or [])}" if report.get("refused") else ""))
     if report["friction"]:
         filed = sum(1 for f in report["friction"] if f.get("filed"))
         unfiled = [f for f in report["friction"] if not f.get("filed")]

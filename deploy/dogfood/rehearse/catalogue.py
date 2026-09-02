@@ -43,15 +43,21 @@ class Verb:
     required: tuple[str, ...] = ()
     optional: tuple[str, ...] = ()
     writes: bool = True          # does executing it change the stack?
+    #: A PRECONDITION verb asserts a fact about the world the recipe cannot create. When one
+    #: refuses, the state was not entered and nothing is broken — the stack is simply not in the
+    #: shape this state describes. Declared here rather than guessed from the verb's name, because
+    #: the difference decides how a failure is FILED, and a rough-edges loop that cannot tell a
+    #: correct refusal from a defect trains its readers to skim.
+    precondition: bool = False
     what: str = ""
 
 
 VERBS: dict[str, Verb] = {
     "require_instance_blank": Verb(
-        "admin-api", (), (), writes=False,
+        "admin-api", (), (), writes=False, precondition=True,
         what="assert no admin has claimed the instance and the company layer is missing"),
     "require_subject_absent": Verb(
-        "admin-api", ("address",), (), writes=False,
+        "admin-api", ("address",), (), writes=False, precondition=True,
         what="assert this address has no user — the stranger precondition"),
     "user_ensure": Verb(
         "admin-api", ("address",), ("as",),
