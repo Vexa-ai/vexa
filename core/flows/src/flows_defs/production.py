@@ -1,15 +1,30 @@
 """PRODUCTION flows (founder spec 2026-08-23, evening scope):
 
   1. invite_intake      — info@vexa.ai invited → user ensured → iMIP ACCEPT in the calendar →
-                          ack email (+ finalize-workspace ask if needed) → personal onboarding
-                          spawned · #group:name → group onboarding spawned → bot at start−2min →
-                          meeting → completed fact
-  2. onboard_person     — a REAL agent conversation over email (threaded) until the AGENT
-                          writes `.scaffolded`; silence is chased with nudges
-  3. onboard_group      — same conversation pattern for the #group workspace, chased by email
-  4. post_meeting       — gated on `.scaffolded` → agent processes through the workspace →
-                          summary + action points VERBATIM by email, asking for feedback, AND
-                          one link into the minutes terminal already primed on this meeting
+                          ack email → prepare mail (organizer) → bot at start−2min → meeting →
+                          completed fact. THREE TOUCHES AND NO OTHERS (decision 29).
+  2. post_meeting       — the agent processes the meeting → report VERBATIM by email, asking for
+                          feedback, AND one link into the minutes terminal already primed on this
+                          meeting → the record dropped onto every desk in the room
+
+DECISION 29 (founder, 2026-09-02) RETIRED TWO FLOWS AND ONE GATE. `onboard_person` and
+`onboard_group` — agent conversations conducted over email until the agent wrote `.scaffolded` —
+are gone, and with them `post_meeting`'s readiness gate. The mail that ended them said:
+
+    "The meeting is recorded. Finish the setup conversation and the minutes arrive right after —
+     just reply to that thread."
+
+    → "no we do not want that."
+
+A person's meeting is not a reward for completing our setup. The minutes are the FIRST thing they
+see from us, and holding them hostage to a form inverts the product: it makes the machine's
+readiness the customer's problem, and it does so at the exact moment they are most likely to care.
+So `process_meeting` now runs on whatever desks exist — an unscaffolded desk is simply empty to
+read, which costs the report some context and costs the person nothing — and the drop lands on it
+regardless (decision 22a). `.scaffolded` survives as a harmless marker; it gates nothing.
+
+Group setup moves into the chat behind a `group-setup` scaffold, where a person is present to be
+asked, rather than into an email thread that chases them.
   5. email_chat         — every threaded reply becomes an agent turn (feedback processed, the
                           workspace updated) and the agent's answer goes back by email: the
                           standing conversation
@@ -267,10 +282,21 @@ def build(reg: Registry, db) -> None:
 
     @reg.step
     def spawn_onboardings(ctx: StepCtx):
-        """EMIT onboarding facts when workspaces are missing: onboarding.person.needed for the
-        organizer without `.scaffolded`; onboarding.group.needed when refs.group is set and the
-        group marker is absent. Sub-flow composition: emits facts, never calls flows.
-        Prior: ensure_user · Result: {person?, group?} (reactions created)."""
+        """RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above.
+
+        It emitted `onboarding.person.needed` / `onboarding.group.needed`, which started the email
+        conversations that chased a person until they finished setup. Those flows are gone, so the
+        facts now have no consumer — and a step that emits a fact nothing reacts to is worse than
+        one that does nothing, because it leaves rows in the log implying work that never existed.
+
+        The invite's touches are RSVP accept, the ack mail, and the prepare mail. Three, and no
+        others. Group setup happens in a chat behind a `group-setup` scaffold, where the person is
+        there to be asked. Result: {} — no reactions created, deliberately."""
+        return Done({"retired": "decision 29 — the invite starts no email onboarding"})
+
+    def _spawn_onboardings_retired(ctx: StepCtx):
+        """The pre-decision-29 body, kept only so the diff shows what was removed rather than
+        hiding it behind a rewrite. Unregistered and unreachable."""
         uid = ctx.prior["ensure_user"]["uid"]
         spawned = {}
         # PROVENANCE SURVIVES DERIVATION. The other emits spread `{**ctx.refs, …}` and so carry
@@ -391,21 +417,19 @@ def build(reg: Registry, db) -> None:
     # ── post-meeting, gated ───────────────────────────────────────────────────
     @reg.step
     def require_workspace(ctx: StepCtx):
-        """THE QUEUE GATE: minutes wait for workspace readiness — `.scaffolded` for the owner
-        (+ the group marker when refs.group). Not ready → nudge email on a cadence (params:
-        nudge_every_s) then Wait(60); unbounded on purpose: late, never lost.
-        Reads: refs.{uid,organizer,group?} · Effect: nudge notifications · Result: {ready}."""
-        uid = ctx.refs["uid"]
-        ok = scaffolded(uid) and (not ctx.refs.get("group")
-                                  or ws_file(uid, f".scaffolded-group-{ctx.refs['group']}") is not None)
-        if ok:
-            return Done({"ready": True})
-        if ctx.clock_now - ctx.scratch.get("nudged_at", 0) > NUDGE_EVERY_S:
-            notify(ctx.refs["organizer"], "Your minutes are waiting",
-                   "The meeting is recorded. Finish the setup conversation and the minutes arrive "
-                   "right after — just reply to that thread.")
-            ctx.scratch["nudged_at"] = ctx.clock_now
-        return Wait(seconds=60)
+        """RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, and deliberately not deleted.
+
+        It was the queue gate: minutes waited for `.scaffolded`, and while they waited it mailed
+        "Your minutes are waiting / Finish the setup conversation and the minutes arrive right
+        after". The founder's ruling on reading that mail was "no we do not want that", and the
+        step is out of `post_meeting` from version 4.
+
+        IT STAYS REGISTERED, AND EMPTY, so that any reaction still in flight on an older version —
+        or any DB-authored version that still names it — DRAINS instead of dying on "unknown step",
+        and above all so that the nudge cannot be sent by a code path nobody remembered. Deleting
+        the function would have left the mail reachable from a stale flow row; emptying it makes it
+        unreachable from anywhere. Result: {ready} — the shape the old receipts carry."""
+        return Done({"ready": True, "retired": "decision 29 — minutes are never gated on setup"})
 
     @reg.step
     def process_meeting(ctx: StepCtx):
@@ -1296,18 +1320,26 @@ def build(reg: Registry, db) -> None:
         return Done({"message_id": mid}, provider_ref=mid)
 
     s = reg.steps
-    reg.flow(name="invite_intake", version=1, on=INVITE,
-             steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["spawn_onboardings"],
+    # VERSION 2 — `spawn_onboardings` removed (decision 29). The version bump is the whole
+    # mechanism: `match()` is newest-wins, so a step list is changed by ADDING a version, never by
+    # editing one in place, and a reaction already in flight keeps the version it was admitted on.
+    reg.flow(name="invite_intake", version=2, on=INVITE,
+             steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"],
                     s["emit_prep"],
                     s["await_start"], s["dispatch_bot"], s["run_meeting"], s["emit_completed"]])
-    reg.flow(name="onboard_person", version=1, on=ONB_PERSON,
-             steps=[s["open_person"], s["drive_person"]])
-    reg.flow(name="onboard_group", version=1, on=ONB_GROUP,
-             steps=[s["open_group"], s["drive_group"]])
+    # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
+    # chased a person until they finished setup. They are not declared, so nothing reacts to
+    # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
+    # steps stay in the vocabulary; a flow is retired by not registering it, and `flows_submit`
+    # would refuse to resurrect one anyway without a human writing the row.
     reg.flow(name="meeting_prep", version=1, on=UPCOMING,
              steps=[s["prepare_meeting"]])
-    reg.flow(name="post_meeting", version=1, on=COMPLETED,
-             steps=[s["require_workspace"], s["process_meeting"], s["email_minutes"],
+    # VERSION 4 — `require_workspace` removed (decision 29). Four, not two, because versions 2 and
+    # 3 were authored through the API against this same flow name and `match()` takes the newest
+    # number wherever it came from; a code change that does not clear the highest DB version is
+    # inert, which is exactly the defect `Registry.shadowing_versions` now warns about.
+    reg.flow(name="post_meeting", version=4, on=COMPLETED,
+             steps=[s["process_meeting"], s["email_minutes"],
                     s["email_attendees"], s["drop_to_attendees"]])
     reg.flow(name="email_chat", version=1, on=MAIL_REPLY,
              steps=[s["feedback_turn"], s["email_reply"]])

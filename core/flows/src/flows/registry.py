@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+import logging
+
 from .model import Block, Done, StepCtx, Wait
+
+_log = logging.getLogger(__name__)
 
 StepFn = Callable[[StepCtx], "Done | Wait | Block"]
 
@@ -45,6 +49,10 @@ class Registry:
         self.flows: dict[tuple[str, int], Flow] = {}
         self.steps: dict[str, StepFn] = {}
         self.by_event: dict[str, list[Flow]] = {}
+        # WHICH FLOWS CAME FROM THE DATABASE. Needed only to answer "is a runtime-authored version
+        # shadowing the code's?" — see `shadowing_versions`. Without it the two are
+        # indistinguishable here, which is precisely why the shadow was invisible.
+        self.db_versions: set[tuple[str, int]] = set()
 
     def step(self, fn: StepFn) -> StepFn:
         name = fn.__name__
@@ -76,6 +84,7 @@ class Registry:
         f = Flow(name=name, version=version, on=EventType(on_event), steps=tuple(step_names),
                  params=tuple((k, _j.dumps(v)) for k, v in (params or {}).items()))
         self.flows[(name, version)] = f
+        self.db_versions.add((name, version))
         bucket = self.by_event.setdefault(on_event, [])
         bucket[:] = [x for x in bucket if not (x.name == name and x.version == version)] + [f]
         return f
@@ -100,7 +109,50 @@ class Registry:
                 n += 1
             except ValueError:
                 continue          # a row referencing steps this image lacks stays dormant here
+        for s in self.shadowing_versions():
+            _log.warning(
+                "FLOW SHADOW: %s@%d (authored through the API) is ACTIVE and NEWER than the "
+                "image's %s@%d, and omits %s — %s will never run for a new %s. A code change that "
+                "adds a step to this flow is inert until a higher version including it is "
+                "submitted. DB steps=%s · code steps=%s",
+                s["flow"], s["active_db_version"], s["flow"], s["shadowed_code_version"],
+                ", ".join(s["steps_that_never_run"]), ", ".join(s["steps_that_never_run"]),
+                s["flow"], s["db_steps"], s["code_steps"])
         return n
+
+    def shadowing_versions(self) -> list[dict]:
+        """Runtime-authored flow versions that SHADOW the code's newest version of the same flow
+        with a SMALLER step list — i.e. steps the image defines that will never run.
+
+        This exists because it happened and cost a day. `post_meeting@2` was submitted through the
+        API during a walkthrough with four steps; the image's `post_meeting@1` had five, the fifth
+        being `drop_to_attendees` — the step that puts a meeting's record on every attendee's desk.
+        `match()` is newest-wins, so the four-step version governed every meeting from that moment,
+        the fifth step never ran, and NOTHING SAID SO: no error, no warning, and the code kept
+        reading as though it were live. A code change that adds a step to a flow is silently inert
+        while any higher DB version exists, and there was no way to see it short of diffing the
+        table against the source by hand.
+
+        Reported as a WARNING at every refresh and exposed through `flows_list`, because the shape
+        of this defect is that nobody goes looking."""
+        out: list[dict] = []
+        for name in sorted({n for n, _ in self.flows}):
+            code = [f for (n, v), f in self.flows.items()
+                    if n == name and (n, v) not in self.db_versions]
+            db = [f for (n, v), f in self.flows.items()
+                  if n == name and (n, v) in self.db_versions]
+            if not code or not db:
+                continue
+            top_code = max(code, key=lambda f: f.version)
+            top_db = max(db, key=lambda f: f.version)
+            if top_db.version <= top_code.version:
+                continue
+            missing = [s for s in top_code.steps if s not in top_db.steps]
+            if missing:
+                out.append({"flow": name, "shadowed_code_version": top_code.version,
+                            "active_db_version": top_db.version, "steps_that_never_run": missing,
+                            "code_steps": list(top_code.steps), "db_steps": list(top_db.steps)})
+        return out
 
     def get(self, name: str, version: int) -> Flow:
         return self.flows[(name, version)]

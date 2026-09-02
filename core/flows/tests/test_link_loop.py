@@ -227,8 +227,12 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     """meeting.upcoming has no producer of its own on this deployment: the invite IS the
     meeting-created event, so invite_intake emits the fact before it parks on await_start."""
     reg, _ch = _rig()
-    assert reg.get("invite_intake", 1).steps.index("emit_prep") < \
-        reg.get("invite_intake", 1).steps.index("await_start")
+    assert reg.get("invite_intake", 2).steps.index("emit_prep") < \
+        reg.get("invite_intake", 2).steps.index("await_start")
+    # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
+    steps = reg.get("invite_intake", 2).steps
+    assert "spawn_onboardings" not in steps
+    assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows
     assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
     emitted = []
     ctx = _ctx({"ics_uid": "u-1", "organizer": "a@b.test"},
