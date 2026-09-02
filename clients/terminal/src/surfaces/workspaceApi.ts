@@ -77,6 +77,41 @@ export async function readActiveSet(): Promise<ActiveSet> {
   return getJson(`/api/workspace/active`);
 }
 
+// ── workspace identity + link resolution (PRD decision 26) ──────────────────────────────────────
+/** What a workspace IS, addressed by its immutable id. `access` is this reader's, not a property of
+ *  the workspace: `not-yours` and `gone` come back 200, because they are answers and not errors. */
+export interface WorkspaceIdentity {
+  id: string; name: string | null; kind: string | null; slug?: string | null;
+  access: "readable" | "not-yours" | "gone";
+}
+
+/** Resolve a workspace id → what it is now, for this reader. */
+export async function readWorkspaceById(id: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+/** Resolve a workspace SLUG → its identity, which is where its display NAME lives.
+ *  The whole of F49: the chat header printed `126`, a directory name showing through. */
+export async function readWorkspaceBySlug(slug: string): Promise<WorkspaceIdentity> {
+  return getJson(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`);
+}
+
+export interface ResolvedLinkRow {
+  ref: string; title: string; url: string | null;
+  access: "readable" | "not-yours" | "gone";
+  workspace?: string | null; path?: string; slug?: string; missing?: boolean;
+}
+
+/** A page's worth of link refs → what each points at NOW. One round trip per document: the panel
+ *  renders a doc at once, and a request per link is a burst against the same three directories. */
+export async function resolveLinks(refs: string[], slug?: string): Promise<ResolvedLinkRow[]> {
+  const data = await getJson<{ results?: ResolvedLinkRow[] }>(`/api/links/resolve`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(slug ? { refs, slug } : { refs }),
+  });
+  return data.results ?? [];
+}
+
 // ── sharing (Lane M/Lane A): create a shared workspace, mint/redeem invites ──────────────────────
 export interface Membership { workspace_id: string; role: string; added_at?: string }
 export interface MintedInvite { id: string; token: string; role: string; workspace_id: string; expires_at: string; max_uses: number; mode: string }

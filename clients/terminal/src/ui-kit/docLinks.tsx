@@ -13,33 +13,16 @@
  *      tooltip instead of a click that does nothing.
  */
 "use client";
-import { createContext, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "./index";
+import { isWsRef } from "./wsLinks";
+import { WsLink } from "./WsLink";
+// The link vocabulary both renderers share. Re-exported below so every existing importer of
+// docLinks keeps working — the extraction is about the dependency graph, not about the API.
+import { DocMetaContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, useOpenEntity } from "./docRefs";
 
-// ── contexts ─────────────────────────────────────────────────────────────────────
-/** `slug` (when the key is PRESENT) pins the target workspace — including `undefined`
- *  meaning the home workspace; when the key is absent the doc's own workspace applies. */
-export type DocNavigate = (detail: { path?: string; wikilink?: string; slug?: string }) => void;
-/** Obsidian-style in-place navigation: the hosting doc pane provides a navigate fn so
- *  links replace the pane's content (with its own back/forward history). Outside a doc
- *  pane (chat, demo page) links fall back to opening a workbench tab. */
-export const DocNavContext = createContext<DocNavigate | null>(null);
-/** WHERE the rendering doc lives: its own workspace-relative path (base for relative
- *  links) and its workspace slug (undefined = the user's own workspace). Provided by
- *  the doc pane; empty in chat. */
-export const DocMetaContext = createContext<{ path?: string; slug?: string }>({});
-
-export function useOpenEntity(): DocNavigate {
-  const nav = useContext(DocNavContext);
-  const meta = useContext(DocMetaContext);
-  return nav ?? ((detail) => {
-    if (typeof window !== "undefined") {
-      const slug = "slug" in detail ? detail.slug : meta.slug;
-      window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { ...detail, slug, docPath: meta.path } }));
-    }
-  });
-}
+export { DocNavContext, DocMetaContext, useOpenEntity, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, entityColor } from "./docRefs";
+export type { DocNavigate } from "./docRefs";
 
 // ── path + slug helpers ──────────────────────────────────────────────────────────
 export const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -302,29 +285,25 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
   return undefined;
 }
 
-// ── entity chip styling (mirrors the TYPE map in surfaces/entities.tsx) ───────────
-export const ENTITY_CHIP: Record<string, { icon: string; color: string; bg: string }> = {
-  person: { icon: "user", color: "var(--blue)", bg: "var(--bluebg)" },
-  company: { icon: "building", color: "var(--accent)", bg: "var(--accentbg)" },
-  organization: { icon: "web", color: "var(--violet)", bg: "var(--violetbg)" },
-  project: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
-  meeting: { icon: "cal", color: "var(--violet)", bg: "var(--violetbg)" },
-  task: { icon: "tasks", color: "var(--green)", bg: "var(--greenbg)" },
-  product: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
-};
-export const DEFAULT_ENTITY_CHIP = { icon: "link", color: "var(--blue)", bg: "var(--bluebg)" };
-
-/** The ONE entity-kind → color lookup for the whole client (chips, inline transcript
- *  highlights, entity dots). Returns undefined for unknown kinds so each site picks its
- *  own fallback (chips default blue, transcript text defaults muted). */
-export function entityColor(kind?: string): string | undefined {
-  return kind ? ENTITY_CHIP[kind]?.color : undefined;
+/** Wikilink — the branch point between the TWO link grammars (PRD decision 26.2).
+ *
+ *  `[[Title]]` resolves in-workspace, by searching the mounted trees — unchanged, below.
+ *  `[[ws:<workspace-id>/<target>]]` resolves on the SERVER, because only the server can tell
+ *  "exists and is not yours" from "gone", and the client must render those differently.
+ *
+ *  A branch and not an `if` inside one component, because the two hold different async state and a
+ *  conditional early return above a hook is a rules-of-hooks bug waiting for the day a title
+ *  changes under a mounted chip. */
+export function Wikilink({ title }: { title: string }) {
+  const meta = useContext(DocMetaContext);
+  if (isWsRef(title)) return <WsLink refText={title} slug={meta.slug} />;
+  return <EntityWikilink title={title} />;
 }
 
-/** Rich entity chip for [[wikilinks]] — typed pill (icon + color per entity type).
+/** Rich entity chip for in-workspace [[wikilinks]] — typed pill (icon + color per entity type).
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity
  *  doc renders muted with a "not found" tooltip instead of a dead click. */
-export function Wikilink({ title }: { title: string }) {
+function EntityWikilink({ title }: { title: string }) {
   const [hover, setHover] = useState(false);
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found

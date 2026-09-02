@@ -34,6 +34,7 @@ import { Rail } from "./Rail";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
+import { deskPanelPages } from "./deskPanel";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -280,7 +281,7 @@ export function MinutesShell() {
   const openChat = useCallback(async (c: ChatRec) => {
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
     await mountSet(c.workspaces);
-    const roomPages = (): Page[] => {
+    const roomPages = async (): Promise<Page[]> => {
       if (c.meeting) {
         // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
         // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
@@ -293,19 +294,13 @@ export function MinutesShell() {
         return pagesForPhase(m ? meetingPhase(m) : "post", (m as { native_id?: string } | undefined)?.native_id,
           fake ? null : c.meeting);
       }
-      const shared = c.workspaces.filter((w) => w !== "_global");
-      // The workspace's OWN NAME, never a friendly stand-in. This tab read "The organisation" —
-      // part of the pre-scaffold admin surface the founder called stale code (F37), and a label the
-      // record never said. A tab is named by the scaffold or preset that opened it; a tab the room
-      // fell back to is named by the workspace it is in.
-      if (!shared.length) return [{ path: "README.md", slug: "_global", label: "_global" }];
-      const ps: Page[] = shared.map((w) => w === "personal"
-        ? { path: "README.md", label: "personal" }
-        : { path: "README.md", slug: w, label: w });
-      ps.push({ path: "README.md", slug: "_global", label: "_global" });
-      return ps;
+      // THE DESK IS THE DEFAULT PAGE (PRD decision 26.4). This used to open the ORGANISATION's
+      // README for a chat with no focus — the company's document, the same for everybody, and not
+      // what a person opening a fresh conversation is looking at their screen to find out. And the
+      // tabs are NAMED from the registry rather than by slug: this strip read `126` (F49).
+      return deskPanelPages(c.workspaces);
     };
-    const base: Page[] = c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : roomPages();
+    const base: Page[] = c.artifacts.length ? c.artifacts.map((a) => ({ ...a })) : await roomPages();
     let list = base;
     let focus: Page | null = c.focus ? base.find((pg) => artifactKey(pg) === c.focus) ?? null : null;
     if (!viewSpent.current && pendingView) {

@@ -26,6 +26,7 @@ import type { CSSProperties } from "react";
 import type { Membership } from "../surfaces/workspaceApi";
 import type { Sel } from "./types";
 import { header, surface, type as ty } from "./tokens";
+import { WorkspaceName } from "../ui-kit/WsLink";
 
 /** Always mounted, never chosen — so never shown. */
 export const IMPLICIT_MOUNTS = ["_global", "_system"];
@@ -66,7 +67,10 @@ export function ContextBar(p: {
       <div ref={box} style={{ position: "relative", marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
         {set.map((w) => (
           <span key={w} style={wsChip} title={w === "personal" ? "Your own workspace — always in focus" : `${w} — in this chat's focus`}>
-            {w}
+            {/* F49: this printed the workspace's SLUG — for a desk, the opaque subject id (`126`)
+                the reader has never seen. Names live in the registry precisely because slugs and
+                directories change and names are what a person reads. */}
+            <WorkspaceName slug={w} />
             {w !== "personal" && (
               <button aria-label={`Remove ${w} from this chat`} title={`Remove ${w} from this chat`} style={xBtn}
                 onClick={() => p.onRemoveWorkspace(w)}>×</button>
@@ -84,7 +88,7 @@ export function ContextBar(p: {
                   <button key={id} role="menuitem" onClick={() => { p.onAddWorkspace(id); setPicking(false); }}
                     style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderRadius: 6, padding: "6px 8px", color: "var(--t1)", cursor: "pointer" }}
                     onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{id}</button>
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}><WorkspaceName slug={id} /></button>
                 ))}
             {p.onAttachRepo && (
               <button role="menuitem" data-ctx="attach"
