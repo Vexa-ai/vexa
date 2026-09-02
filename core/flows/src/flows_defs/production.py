@@ -307,6 +307,34 @@ def build(reg: Registry, db) -> None:
         reply = ag.collect_reply(uid, f"meet-{ctx.refs['meeting_id']}", ctx.scratch["baseline"])
         sha, path = ag.latest_meeting_note(uid, ctx.scratch["shas"])
         if reply is not None and sha:
+            # THE GROUNDING GATE. Removing the transcript from the event made the note depend on
+            # the agent CHOOSING to fetch it, and measured on Haiku it chooses to about half the
+            # time — and when it does not, it writes a confident note anyway, from the title and
+            # the prompt. That is strictly worse than the truncated copy it replaced: a shallow
+            # note is visibly shallow, a fabricated one is not.
+            #
+            # An instruction is not a gate. So the step checks: does the note share any six-word
+            # run with the actual transcript? If not, the agent is told exactly that, once, and
+            # asked again. If it still cannot ground it, the reaction FAILS LOUDLY rather than
+            # emailing minutes nobody can trace to the meeting.
+            note = ws_file(uid, path)
+            if not mt.grounded_in(note or reply, mt.transcript_text(uid, ctx.refs["meeting_id"])):
+                if not ctx.scratch.get("regrounded"):
+                    ctx.scratch["regrounded"] = True
+                    ctx.scratch["shas"] = ag.commit_shas(uid)
+                    ctx.scratch["baseline"] = ag.dispatch_turn(
+                        uid, f"meet-{ctx.refs['meeting_id']}",
+                        "STOP. The note you just wrote contains nothing that appears in the "
+                        f"meeting. You did not read it. Call mcp__vexa__meeting_transcript with "
+                        f"meeting_id={ctx.refs['meeting_id']} and tail=0 NOW, read every segment, "
+                        "then rewrite the note from what it returns — quoting one verbatim "
+                        "sentence with its speaker. If you cannot call that tool, say so and "
+                        "write nothing.")
+                    return Wait(seconds=12)
+                raise StepError(
+                    "the note is not grounded in the transcript — the agent did not read the "
+                    "meeting, twice. Refusing to email minutes that cannot be traced to it.",
+                    retryable=False)
             return Done({"sha": sha, "note_path": path, "summary": reply[:6000]})
         if ctx.clock_now - ctx.scratch.get("t0", ctx.scratch.setdefault("t0", ctx.clock_now)) > 900:
             raise StepError("agent produced no note in 15min", retryable=False)

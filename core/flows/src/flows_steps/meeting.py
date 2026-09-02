@@ -131,6 +131,44 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     return None
 
 
+def transcript_text(uid: str, meeting_id) -> str:
+    """The meeting's words, read through the OWNING service's endpoint, for verification only.
+
+    This is deliberately not a return to the copy that was just removed. Nothing here is written
+    into an event, a prompt, or a file — it is read, compared, and dropped. The audit's rule is
+    that a fact has one producer and is reached through its owner's interface; a service calling
+    `GET /transcripts/by-id/{id}` on the gateway is exactly that. What was wrong before was
+    COPYING the words into a fact and truncating them to fit.
+
+    Never raises: verification that cannot run must not fail a meeting."""
+    try:
+        _st, body = http("GET", f"{GATEWAY}/transcripts/by-id/{meeting_id}",
+                         {"X-API-Key": user_api_key(str(uid))})
+    except StepError:
+        return ""
+    segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
+    return "\n".join(str(g.get("text") or "") for g in segs)
+
+
+def _phrases(text: str, n: int = 6) -> set:
+    import re as _re
+    ws = _re.findall(r"[a-z0-9']+", (text or "").lower())
+    return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)
+            if any(len(w) >= 6 for w in ws[i:i + n])}
+
+
+def grounded_in(note: str, transcript: str) -> bool:
+    """Does this note contain words that are actually IN the meeting?
+
+    A six-word run carrying a real content word does not appear in two texts by accident. Short
+    windows do: a four-word test matched "do you want to" and would have passed anything.
+    An empty transcript answers True — absence of evidence is not evidence of fabrication, and a
+    meeting with no captured speech must still be writable."""
+    if not transcript.strip():
+        return True
+    return bool(_phrases(note) & _phrases(transcript))
+
+
 def await_start(ctx: StepCtx):
     """Sleep until start − 2 min — time is a column (Wait until), zero cost while parked.
     Reads: refs.start."""
