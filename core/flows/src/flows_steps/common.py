@@ -50,6 +50,12 @@ UI_URL = os.environ.get("VEXA_UI_URL", "http://localhost:18300").rstrip("/")
 def ui_link(**params) -> str:
     """A composed terminal deeplink: ``ui_link(ask="minutes-review", meeting=41)``.
 
+    NO PRODUCTION TOUCH IS BUILT THIS WAY ANY MORE — every step that creates one mints a SCAFFOLD
+    (`mint_scaffold`, below), because a url carrying a preset name leaves the UI and the agent to
+    compose their own halves and they disagree. This remains the HAND-LINK builder: `?ask=` is
+    still a real entry point in the terminal (it mints a local scaffold client-side), and the eval
+    harnesses address it directly.
+
     The params compose (``?ask=`` primes a chat, ``?meeting=`` opens the room) and they survive
     the sign-in hop, so ONE url is both the door and the destination. Empty values are dropped —
     a link with ``?meeting=`` and nothing after it reads as a bug to the person who hovers it.
@@ -57,6 +63,58 @@ def ui_link(**params) -> str:
     from urllib.parse import urlencode
     q = urlencode({k: v for k, v in params.items() if v not in (None, "", [])})
     return f"{UI_URL}/?{q}" if q else f"{UI_URL}/"
+
+
+def mint_scaffold(kind: str, recipient: str, *, opening: str,
+                  meeting_id=None, refs: Optional[dict] = None,
+                  workspaces: Optional[list] = None,
+                  tabs: Optional[list] = None, focus: Optional[str] = None,
+                  share_token: Optional[str] = None,
+                  provenance: Optional[dict] = None) -> str:
+    """THE LINK, minted as a SCAFFOLD (PRD §5.5). Returns the url, or RAISES.
+
+    This replaces `ui_link` everywhere a step creates a TOUCH. The difference is not cosmetic and
+    it is the whole point of the primitive: `ui_link` built a url out of a preset name and a
+    meeting ref and left both renderers behind it — the terminal panel and the agent's first turn —
+    to compose the rest out of whatever they could find. They disagreed, in every way the alpha
+    ledger records: the chat opened on a Zoom number (F1), the panel opened the reader's own README
+    (F19), the phase greeting beat the preset (F5), the header said UPCOMING about a meeting that
+    had happened (F4). A scaffold is ONE record both of them read.
+
+    A FAILED MINT RAISES, and the caller must not send. That is the share-gate doctrine one layer
+    up, in the same words `email_attendees` already uses for a share it could not mint: *a mail
+    whose only button opens a chat that cannot see the meeting is worse than no mail*. Everything
+    that can be wrong is checked at the mint — the preset exists, the kind is in the catalogue, the
+    terminal has an origin — because the mint is the last moment a step can still choose not to send.
+
+    `share_token` is minted BY THE CALLER (`flows_steps.meeting.mint_transcript_share`) when the
+    meeting is not the recipient's own: the restricted grant is written as the meeting's OWNER, and
+    the owner's gateway key lives here, not in agent-api. agent-api composes the token into the url
+    so the link is still built in exactly one place.
+    """
+    payload = {"who": recipient, "kind": kind, "opening": opening}
+    if meeting_id not in (None, ""):
+        payload["meeting"] = str(meeting_id)
+    for key, value in (("refs", refs), ("workspaces", workspaces), ("tabs", tabs),
+                       ("focus", focus), ("share_token", share_token), ("provenance", provenance)):
+        if value not in (None, "", [], {}):
+            payload[key] = value
+    code, body = http("POST", f"{AGENT_API}/internal/scaffolds",
+                      {"X-Internal-Secret": require_internal_secret()}, payload)
+    url = body.get("url") if isinstance(body, dict) else None
+    if 200 <= int(code or 0) < 300 and url:
+        return str(url)
+    from flows import StepError
+    detail = (body.get("detail") if isinstance(body, dict) else str(body))
+    # 5xx is the platform having a moment; a 4xx is a fact about this preset, this kind or this
+    # deployment and retrying it only delays the mail without changing the answer. Same split as
+    # `mint_transcript_share`, deliberately — one rule for one class of failure.
+    raise StepError(
+        f"no scaffold could be minted for {recipient} ({kind}/{opening}"
+        + (f", meeting {meeting_id}" if meeting_id else "")
+        + f"): HTTP {code} — {str(detail)[:200]}. Not sending: a link that opens onto nothing is "
+          "worse than no mail.",
+        retryable=int(code or 0) >= 500 or int(code or 0) == 429)
 
 
 def db_url() -> str:

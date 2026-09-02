@@ -411,6 +411,15 @@
       ]
     },
     {
+      "key": "VEXA_UI_URL",
+      "class": "defaulted",
+      "default": "(unset — POST /internal/scaffolds refuses to mint)",
+      "description": "where a person's own terminal lives — the origin every scaffold link is built on (PRD §5.5). Deliberately the SAME variable name the flows lane already reads (core/flows/src/flows_steps/common.py UI_URL): one deployment fact, one name, because two spellings of a host is how a link ends up naming somewhere the person cannot reach. Unset, the mint route answers 503 rather than returning a url with no origin — a mint is what a step checks BEFORE it sends, and VEXA_UI_URL being set nowhere is exactly how every deeplink the rig ever minted pointed at a port nothing serves (PRD §3.3)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_MCP_URL",
       "class": "defaulted",
       "default": "(unset \u2014 no MCP is attached to a worker; the pre-delegation behaviour)",

@@ -33,7 +33,15 @@ import flows_steps.notify as notify_mod
 import pytest
 from flows import Done, Reaction, Registry, StepCtx
 
-from test_link_loop import FakeChannel, _StubDB, _params
+from test_link_loop import FakeChannel, FakeScaffolds, _StubDB, _params
+
+
+@pytest.fixture(autouse=True)
+def scaffolds(monkeypatch):
+    """Every production touch mints a scaffold before it sends; this stands in for agent-api."""
+    fake = FakeScaffolds()
+    monkeypatch.setattr(production, "mint_scaffold", fake)
+    return fake
 
 
 class _Flow:
@@ -207,7 +215,7 @@ def test_a_template_with_no_subject_line_falls_back_to_the_meeting_title(monkeyp
 
 
 # ── 3 · one report, the same mail to everyone ────────────────────────────────────────────────
-def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch):
+def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch, scaffolds):
     reg, ch = _rig(monkeypatch, head="HEAD for {{company}}.")
     reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
 
@@ -215,8 +223,12 @@ def test_the_mail_is_exactly_head_blankline_report_then_the_button(monkeypatch):
     assert msg["body"] == "HEAD for Acme Bank.\n\n## Decided\n- ship it"
     # the gap line and the button are the PORT's, not the step's
     assert notify_mod.compose(msg["body"], msg["link"]) == msg["body"] + "\n\n" + msg["link"] + "\n"
-    assert _params(msg["link"]) == {"ask": "minutes-review-invite", "meeting": "97",
-                                    "tshare": "97.tok-ben@bank.test"}
+    # THE BUTTON IS AN ID AND A CAPABILITY — the preset moved into the record (PRD §5.5).
+    assert set(_params(msg["link"])) == {"s", "tshare"}
+    assert _params(msg["link"])["tshare"] == "97.tok-ben@bank.test"
+    rec = scaffolds.for_("ben@bank.test")
+    assert (rec["kind"], rec["opening"], rec["meeting"]) == \
+        ("invite-offer", "minutes-review-invite", "97")
     # the preamble the head replaced is gone — including the mailbox line's double splice
     assert "You were in Pilot sync" not in msg["body"]
     assert "Forward its calendar invite" not in msg["body"]

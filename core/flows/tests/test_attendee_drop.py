@@ -26,7 +26,17 @@ import flows_defs.production as production
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
 
-from test_link_loop import _StubDB
+from test_link_loop import FakeScaffolds, _StubDB
+
+
+@pytest.fixture(autouse=True)
+def scaffolds(monkeypatch):
+    """Every production touch mints a scaffold before it sends; this stands in for agent-api. The
+    organiser's own drop composes one too when their minutes mail was off — a preference about MAIL
+    is not a preference about the link on their own desk."""
+    fake = FakeScaffolds()
+    monkeypatch.setattr(production, "mint_scaffold", fake)
+    return fake
 
 
 def _ctx(refs: dict, prior: dict | None = None, scratch: dict | None = None, flow=None) -> StepCtx:
@@ -189,16 +199,22 @@ def test_the_organiser_gets_the_same_entity_with_their_own_token_free_link(monke
     assert "Open the meeting: http://ui/?ask=minutes-review&meeting=97" in doc
 
 
-def test_the_organiser_is_dropped_on_even_when_their_minutes_mail_was_off(monkeypatch):
+def test_the_organiser_is_dropped_on_even_when_their_minutes_mail_was_off(monkeypatch, scaffolds):
     """`mail_minutes` is a preference about MAIL. It is not a preference about what lands on their
-    own desk, and reading it as one would silently deny the organiser their own meeting."""
+    own desk, and reading it as one would silently deny the organiser their own meeting.
+
+    With no `email_minutes` link to reuse, this step MINTS the organiser's scaffold itself — so the
+    link on their own desk is a record like everybody else's, not a hand-built deeplink."""
     store = Store()
     reg = _rig(monkeypatch, store)
     prior = dict(PRIOR, email_minutes={"skipped": "mail_minutes is off for this person"})
     out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
 
     assert "anna@bank.test" in out.result["to"]
-    assert "Open the meeting: http://localhost:18300/?ask=minutes-review&meeting=97" in \
+    rec = scaffolds.for_("anna@bank.test")
+    assert (rec["kind"], rec["opening"], rec["meeting"]) == ("post-meeting", "minutes-review", "97")
+    assert rec["share_token"] is None                   # the meeting is theirs; no capability
+    assert f"Open the meeting: https://app.example.test/?s=sc{len(scaffolds.minted)}" in \
         store.of("anna@bank.test")
 
 

@@ -300,6 +300,12 @@ services:
       # worker never holds a durable user credential. Both unset ⇒ no MCP is attached (default).
       - VEXA_MCP_URL=${VEXA_MCP_URL:-}
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
+      # one deployment fact, one name. Unset, POST /internal/scaffolds refuses to mint rather than
+      # handing a step a url with no origin — every deeplink the rig ever minted pointed at a port
+      # nothing serves because this variable was set NOWHERE (PRD §3.3), and that failure is only
+      # visible at the click unless the mint refuses.
+      - VEXA_UI_URL=${VEXA_UI_URL:-}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}

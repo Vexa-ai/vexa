@@ -36,6 +36,40 @@ class FakeChannel:
         return f"<fake-{len(self.sent)}@test>"
 
 
+class FakeScaffolds:
+    """agent-api's `POST /internal/scaffolds`, recorded — the record a step mints, and the url it
+    gets back.
+
+    THE URL IT RETURNS IS AN ID AND NOTHING ELSE, which is what the real route returns and what
+    every assertion below now reads. Before the scaffold, a test could read the preset name and the
+    meeting off the query string, because they were IN the link — and so could anyone who received
+    the mail, which is why a link may not carry prompt text and why both renderers behind it were
+    free to compose their own halves. The preset now lives in the RECORD, so the tests assert on
+    the record."""
+
+    def __init__(self, fail=None):
+        self.minted: list[dict] = []
+        self._fail = fail          # (address) -> Exception | None
+
+    def __call__(self, kind, recipient, *, opening, meeting_id=None, refs=None, workspaces=None,
+                 tabs=None, focus=None, share_token=None, provenance=None):
+        if self._fail is not None:
+            err = self._fail(recipient)
+            if err is not None:
+                raise err
+        self.minted.append({"kind": kind, "who": recipient, "opening": opening,
+                            "meeting": None if meeting_id is None else str(meeting_id),
+                            "refs": refs or {}, "share_token": share_token,
+                            "provenance": provenance or {}})
+        url = f"https://app.example.test/?s=sc{len(self.minted)}"
+        if share_token:
+            url += f"&tshare={share_token}"
+        return url
+
+    def for_(self, address: str) -> dict:
+        return next(m for m in self.minted if m["who"] == address)
+
+
 class _StubDB:
     """production.build() only ever calls execute(); nothing here asserts on storage."""
 
@@ -61,6 +95,14 @@ def _ctx(refs: dict, prior: dict | None = None, scratch: dict | None = None) -> 
 
 def _params(link: str) -> dict:
     return {k: v[0] for k, v in parse_qs(urlparse(link).query).items()}
+
+
+@pytest.fixture(autouse=True)
+def scaffolds(monkeypatch):
+    """Every production touch mints a scaffold before it sends; this stands in for agent-api."""
+    fake = FakeScaffolds()
+    monkeypatch.setattr(production, "mint_scaffold", fake)
+    return fake
 
 
 def teardown_function():
@@ -105,7 +147,7 @@ def test_ui_url_comes_from_the_environment():
 
 
 # ── the two meeting mails ────────────────────────────────────────────────────────────────────
-def test_email_minutes_carries_the_composed_review_link(monkeypatch):
+def test_email_minutes_carries_the_composed_review_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting", lambda uid, key: True)
     monkeypatch.setattr(production, "ws_file", lambda uid, path: "## Decided\n- ship it\n")
@@ -116,7 +158,12 @@ def test_email_minutes_carries_the_composed_review_link(monkeypatch):
     assert len(ch.sent) == 1
     msg = ch.sent[0]
     assert msg["to"] == "anna@bank.test"
-    assert _params(msg["link"]) == {"ask": "minutes-review", "meeting": "41"}
+    # THE LINK IS AN ID. The preset and the meeting live in the RECORD, not in the query string.
+    assert set(_params(msg["link"])) == {"s"}
+    rec = scaffolds.for_("anna@bank.test")
+    assert (rec["kind"], rec["opening"], rec["meeting"]) == ("post-meeting", "minutes-review", "41")
+    assert rec["share_token"] is None                     # the organiser owns this meeting
+    assert rec["provenance"]["minted_by"] == "7"          # who can read the row to resolve the phase
     assert "## Decided" in msg["body"]                   # the note still travels VERBATIM
     assert msg["link"] not in msg["body"]                # the channel appends it, not the step
 
@@ -130,7 +177,7 @@ def test_email_minutes_still_obeys_the_person_switch(monkeypatch):
     assert ch.sent == []
 
 
-def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch):
+def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
                         lambda uid, key: True if key == "mail_prep" else "")
@@ -139,7 +186,12 @@ def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch):
          "meeting_id": 41, "start": 1_700_003_600.0}))
     assert isinstance(out, Done)
     msg = ch.sent[0]
-    assert _params(msg["link"]) == {"ask": "prep", "meeting": "41"}
+    assert set(_params(msg["link"])) == {"s"}
+    rec = scaffolds.for_("anna@bank.test")
+    assert (rec["kind"], rec["opening"], rec["meeting"]) == ("prep", "prep", "41")
+    # THE FACTS THE INVITE ALREADY KNEW ride the record — the missing half of the prepare opening
+    # that named a meeting by its Zoom id and then said it held nothing.
+    assert rec["refs"]["title"] == "Pilot sync" and rec["refs"]["when"] == 1_700_003_600.0
     assert msg["subject"] == "Prepare: Pilot sync"
     assert "Pilot sync" in msg["body"]
     # ≤5 lines INCLUDING the link the channel appends — a prepare mail is read in one glance
@@ -156,7 +208,7 @@ def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     assert ch.sent == []
 
 
-def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch):
+def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch, scaffolds):
     """No meeting_id in refs — the step asks the platform which row this url is, because the
     terminal deeplink names a ROW, and an invite carries only the meeting url."""
     reg, ch = _rig()
@@ -166,7 +218,8 @@ def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch):
     reg.steps["prepare_meeting"](_ctx(
         {"uid": "7", "organizer": "a@b.test", "title": "T", "start": 1_700_003_600.0,
          "url": "https://meet.google.com/abc-defg-hij"}))
-    assert _params(ch.sent[0]["link"]) == {"ask": "prep", "meeting": "41"}
+    assert set(_params(ch.sent[0]["link"])) == {"s"}
+    assert scaffolds.for_("a@b.test")["meeting"] == "41"
 
 
 # ── the recipes no longer name a transport ───────────────────────────────────────────────────
@@ -220,7 +273,7 @@ def _attendee_rig(monkeypatch, *, mint, row=None):
     return reg, ch
 
 
-def test_a_minted_share_travels_in_the_link(monkeypatch):
+def test_a_minted_share_travels_in_the_link(monkeypatch, scaffolds):
     """The happy path, asserted on the artifact the attendee actually receives: one token per
     attendee, restricted to them, carried on the button as `tshare`."""
     minted = []
@@ -238,8 +291,12 @@ def test_a_minted_share_travels_in_the_link(monkeypatch):
     assert [m[2] for m in minted] == ["ben@bank.test", "cara@bank.test"]
     for msg in ch.sent:
         params = _params(msg["link"])
-        assert params["meeting"] == "97"
+        assert set(params) == {"s", "tshare"}                    # an id and a capability, nothing else
         assert params["tshare"] == f"97.secret-for-{msg['to']}"   # this attendee's OWN capability
+        rec = scaffolds.for_(msg["to"])
+        assert rec["meeting"] == "97" and rec["share_token"] == params["tshare"]
+        # the attendee mail carries the SECOND ASK, so the record says which kind of touch it is
+        assert (rec["kind"], rec["opening"]) == ("invite-offer", "minutes-review-invite")
 
 
 def test_the_fan_out_is_HELD_when_a_share_cannot_be_minted(monkeypatch):
@@ -297,6 +354,25 @@ def test_a_PARTIAL_fan_out_reports_who_was_mailed_and_does_not_resend(monkeypatc
     assert isinstance(out, Done) and out.result["sent"] == 2
 
 
+def test_the_fan_out_is_HELD_when_a_SCAFFOLD_cannot_be_minted(monkeypatch):
+    """The share gate's twin. There are two ways to send a button that opens onto nothing — no
+    capability, and no record — and both take the same branch: nothing goes out, and the reason
+    names who was mailed and who was not."""
+    fake = FakeScaffolds(fail=lambda who: StepError(
+        f"no scaffold could be minted for {who}: HTTP 400 — preset asks/minutes-review-invite.md "
+        "is empty", retryable=False) if who == "ben@bank.test" else None)
+    monkeypatch.setattr(production, "mint_scaffold", fake)
+    reg, ch = _attendee_rig(monkeypatch,
+                            mint=lambda uid, mid, email, expires_in_sec=30 * 86400: "97.ok")
+    with pytest.raises(StepError) as e:
+        reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR))
+    assert ch.sent == []
+    reason = str(e.value)
+    assert "HELD the attendee fan-out" in reason and "ben@bank.test" in reason
+    assert "Mailed: nobody" in reason and "NOT mailed" in reason
+    assert e.value.retryable is False
+
+
 def test_a_meeting_with_no_row_id_never_reaches_the_mint(monkeypatch):
     """A ref that is a NATIVE id (meeting_ref degrades to one when no row exists) cannot be minted
     against, and the step says so instead of mailing a link to a meeting nobody can open."""
@@ -323,6 +399,62 @@ def test_a_5xx_mint_is_retryable_but_still_sends_nothing(monkeypatch):
     with pytest.raises(StepError) as e:
         reg.steps["email_attendees"](_ctx(dict(ATTENDEE_REFS), ATTENDEE_PRIOR))
     assert ch.sent == [] and e.value.retryable is True
+
+
+# ── mint_scaffold: the wire, and the refusal ─────────────────────────────────────────────────
+def _mint_rig(monkeypatch, status, body):
+    """`common.mint_scaffold` over a recorded HTTP call — no network, no agent-api."""
+    calls = []
+
+    def fake_http(method, url, headers, payload=None, timeout=20):
+        calls.append({"method": method, "url": url, "headers": headers, "body": payload})
+        return status, body
+
+    monkeypatch.setenv("VEXA_INTERNAL_SECRET", "internal-tier-secret-for-tests")
+    monkeypatch.setattr(common, "http", fake_http)
+    return calls
+
+
+def test_mint_scaffold_posts_the_record_and_returns_the_url(monkeypatch):
+    calls = _mint_rig(monkeypatch, 201, {"id": "abc", "url": "https://app.test/?s=abc"})
+    url = common.mint_scaffold("prep", "anna@bank.test", opening="prep", meeting_id=41,
+                               refs={"title": "Pilot sync"},
+                               provenance={"flow": "meeting_prep", "minted_by": "7"})
+    assert url == "https://app.test/?s=abc"
+    call = calls[0]
+    assert call["method"] == "POST" and call["url"].endswith("/internal/scaffolds")
+    # THE INTERNAL TIER. A browser client through the gateway holds no such secret and therefore
+    # cannot mint a scaffold for anybody — the same gate the meeting room uses.
+    assert call["headers"]["X-Internal-Secret"] == "internal-tier-secret-for-tests"
+    assert call["body"] == {"who": "anna@bank.test", "kind": "prep", "opening": "prep",
+                            "meeting": "41", "refs": {"title": "Pilot sync"},
+                            "provenance": {"flow": "meeting_prep", "minted_by": "7"}}
+    # THE RECORD CARRIES A PRESET NAME, NEVER TEXT — the whole reason the URL never carried one.
+    assert "\n" not in call["body"]["opening"] and " " not in call["body"]["opening"]
+
+
+def test_a_4xx_mint_is_a_fact_about_this_touch_and_is_not_retried(monkeypatch):
+    _mint_rig(monkeypatch, 400, {"detail": "preset asks/nope.md is empty"})
+    with pytest.raises(StepError) as e:
+        common.mint_scaffold("prep", "a@b.test", opening="nope", meeting_id=41)
+    assert "nope" in str(e.value) and "a@b.test" in str(e.value)
+    assert "worse than no mail" in str(e.value)
+    assert e.value.retryable is False
+
+
+def test_a_5xx_mint_is_retryable(monkeypatch):
+    _mint_rig(monkeypatch, 503, {"detail": "VEXA_UI_URL is not set on agent-api"})
+    with pytest.raises(StepError) as e:
+        common.mint_scaffold("prep", "a@b.test", opening="prep")
+    assert e.value.retryable is True
+
+
+def test_a_2xx_carrying_no_url_fails_like_any_other_mint(monkeypatch):
+    """The `mint_transcript_share` lesson, applied one layer up: a caller asked for a link and did
+    not get one, and the reason it did not is worth the same noise as a 404."""
+    _mint_rig(monkeypatch, 201, {"id": "abc"})
+    with pytest.raises(StepError):
+        common.mint_scaffold("prep", "a@b.test", opening="prep")
 
 
 # ── the mint itself: no non-2xx is ever swallowed ────────────────────────────────────────────

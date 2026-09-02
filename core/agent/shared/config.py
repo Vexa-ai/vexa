@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     meeting_api_url: str = "http://meeting-api:8080"
     # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
 
+    # ── the scaffold seam (PRD 5.5) — where a person ARRIVES ────────────────
+    # The terminal a scaffold link points at. ONE deployment fact, ONE variable, and deliberately
+    # the SAME name flows already reads (`VEXA_UI_URL`, flows_steps/common.py): a link that names a
+    # host the person cannot reach is worse than no link, and two spellings of the host is how that
+    # happens. Empty means `POST /internal/scaffolds` refuses to mint rather than returning a url
+    # with no origin - the mint is what a step checks before it sends, so it fails LOUDLY here.
+    ui_url: str = ""
+
     # ── vexa-control MCP seam — the authenticated toolbelt a chat worker gets ─
     # The MCP endpoint a spawned worker connects to, carrying a short-lived delegation token minted
     # per dispatch (see shared.delegation). Empty ⇒ no MCP is attached (the pre-delegation behaviour).

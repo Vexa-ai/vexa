@@ -67,6 +67,7 @@ from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
 from control_plane import system_mounts
+from control_plane import scaffolds as scaffolds_mod
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
@@ -74,6 +75,47 @@ from shared.ports import SchedulerPort, StreamReader
 from control_plane.workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
+
+# The phase, in the meeting's own vocabulary — the same three words the terminal's header uses
+# (`minutes/MinutesShell.tsx` PHASE_WORD). One vocabulary, two renderers.
+_PHASE_WORD = {"prep": "upcoming", "live": "live", "post": "held"}
+
+
+def _iso(epoch) -> "str | None":
+    """An epoch as an ISO-8601 UTC string, or None. The wire carries times as STRINGS because the
+    client half pins them that way; the store keeps the float, which is what arithmetic wants."""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(epoch)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _provenance_line(prov: dict, minted_at) -> str:
+    """The record's provenance as ONE readable line — what produced this touch, and when.
+
+    The OBJECT stays on the wire beside it: flow, reaction id, run id and minted_by are four facts,
+    and a string that concatenates four facts is not a record of them. This line exists so a panel
+    can show something without parsing, not so the object can be dropped."""
+    if not isinstance(prov, dict):
+        return ""
+    bits = [str(prov[k]) for k in ("flow", "reaction_id", "run_id") if prov.get(k)]
+    if prov.get("minted_by"):
+        bits.append(f"minted by {prov['minted_by']}")
+    stamp = _iso(minted_at)
+    if stamp:
+        bits.append(stamp)
+    return " · ".join(bits)
+
+
+def _epoch_text(when) -> str:
+    """An epoch as a readable UTC line, or "" — the last-resort rendering of a meeting's time when
+    the caller did not render one in the recipient's own zone. UTC and SAID to be UTC: a bare
+    "14:00" in a zone nobody named is the kind of half-fact that reads as a bug in an inbox."""
+    try:
+        return time.strftime("%a %d %b %H:%M UTC", time.gmtime(float(when)))
+    except (TypeError, ValueError):
+        return ""
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MEETING_STREAM_TRANSCRIPT_REPLAY = 80
 MEETING_STREAM_OUTPUT_REPLAY = 160
@@ -324,6 +366,39 @@ class ChatBody(BaseModel):
     # the transcript, so it does that arithmetic). Unmatched labels are simply ignored.
     room_speakers: Optional[list[str]] = None
     room_read_max: Optional[int] = None
+    # THE SCAFFOLD (PRD 5.5). The terminal sends this on the FIRST turn of a chat a link composed.
+    # It is an ID, never a mount list and never prompt text: the record it names says which
+    # workspaces this turn mounts and what the opening ask is, and the server reads BOTH from the
+    # store. A scaffold that is not this subject's is ignored (never an error) — a stale or
+    # forwarded id must not be able to widen anybody's mounts, and must not break their turn either.
+    scaffold_id: Optional[str] = None
+
+
+class ScaffoldMintBody(BaseModel):
+    """`POST /internal/scaffolds` — what a FLOW says at the moment it creates a touch.
+
+    ``extra="forbid"``: a mint is the thing a step checks before it sends, so a caller that spells a
+    field wrong has to hear about it here rather than mail a link built from a field nobody read.
+
+    There is deliberately NO field carrying prompt text. ``opening`` is a NAME in `_global/asks/`
+    and the server refuses anything that is not one — the URL never carried text (PRD 6) and neither
+    does the record behind it, for the same reason: anyone who can mint a touch would otherwise be
+    able to drive the recipient's agent."""
+    model_config = {"extra": "forbid"}
+    who: str                                   # the RECIPIENT ADDRESS. Not a subject: they may not exist yet.
+    kind: str                                  # one of scaffolds.KINDS
+    opening: str                               # a preset NAME in _global/asks/, never text
+    meeting: Optional[str] = None              # the meetings-domain ROW id, or None. PHASE IS NOT STORED.
+    workspaces: Optional[list[str]] = None     # slugs to mount; None = derived (see the route)
+    refs: Optional[dict] = None                # the facts for the agent: title, when, organizer, participants…
+    tabs: Optional[list[str]] = None           # UI half; None = the preset's own `tabs:`
+    focus: Optional[str] = None                # UI half; None = the preset's own `focus:`
+    # The RESTRICTED transcript share, minted by the caller against the meeting ROW
+    # (`flows_steps/meeting.mint_transcript_share`) when the meeting is not the recipient's own.
+    # Minted THERE and not here because the mint needs the meeting OWNER's gateway key, which flows
+    # holds and agent-api deliberately does not — see the route's docstring.
+    share_token: Optional[str] = None
+    provenance: Optional[dict] = None          # flow, reaction/run id, minted_by (the fact's admitted_by)
 
 
 class ResetBody(BaseModel):
@@ -1030,6 +1105,16 @@ def create_app(
     else:
         sess = _Sessions()
     live = _LiveMeetings()
+    # THE SCAFFOLD STORE (PRD 5.5). Same redis client as the session index and the same in-memory
+    # fallback, for the same reasons — see control_plane/scaffolds.py for why it is redis and not
+    # the workspace volume (it must outlive a wipe of the recipient's desk and exist before the
+    # recipient does).
+    if redis_url:
+        import redis as _redis_for_scaffolds
+
+        scaffolds = scaffolds_mod.ScaffoldStore(_redis_for_scaffolds.from_url(redis_url, decode_responses=True))
+    else:
+        scaffolds = scaffolds_mod.ScaffoldStore()
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
@@ -1435,6 +1520,32 @@ def create_app(
                                  names=body.room_participant_names,
                                  speakers=body.room_speakers,
                                  read_max=body.room_read_max)
+        # THE SCAFFOLD (PRD 5.5). When the turn names one and it is THIS subject's, the record
+        # — not the client — decides two things: which workspaces this chat mounts, and what
+        # the opening ask is. Both used to be composed client-side, and that is precisely why
+        # the panel and the agent disagreed about the same click. A scaffold that is not
+        # this subject's is IGNORED rather than refused: a forwarded or stale id must not be
+        # able to widen anybody's mounts, and must not break their turn either.
+        scaffold_view = None
+        if body.scaffold_id:
+            rec = scaffolds.get(body.scaffold_id)
+            if rec is not None and _scaffold_is_for(rec, request, subject):
+                rec = scaffolds.redeem(body.scaffold_id, subject) or rec
+                try:
+                    scaffold_view = _scaffold_view(rec, subject)
+                except scaffolds_mod.ScaffoldError:
+                    logger.warning("scaffold %s cannot be rendered (its preset is gone) — the "
+                                   "turn runs without it", body.scaffold_id)
+            else:
+                logger.warning("scaffold %s ignored on a turn by subject=%s (unknown or not "
+                               "theirs)", body.scaffold_id, subject)
+        if scaffold_view is not None:
+            # THE OPENING IS THE RECORD'S, SUBSTITUTED HERE. The terminal composes no text —
+            # it sends the id. The facts ride in front of the ask so the agent's first turn
+            # can name the meeting, the time, the room and the person's state without
+            # fetching anything, and the whole block is machinery-marked so the human never
+            # sees it as their own message (ledger F7).
+            body = body.model_copy(update={"prompt": scaffolds_mod.turn_prompt(scaffold_view)})
         # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None
@@ -1502,14 +1613,20 @@ def create_app(
                 # Upsert the durable index on first use of a thread: a new thread is titled by its first
                 # prompt; an existing one just bumps last_active (title preserved).
                 is_new = not any(r["session"] == session for r in sess.list(subject))
-                sess.upsert(subject, session,
-                            title=_truncate_title(body.prompt) if is_new else None)
+                # A SCAFFOLDED chat is titled by its record, never by its opening: the opening
+                # is machinery, and titling a rail row with the first 60 characters of an
+                # instruction block is the same defect as painting it as the person's message.
+                _title = ((scaffold_view["header"]["title"] or scaffold_view["opening_label"])
+                          if scaffold_view is not None else _truncate_title(body.prompt))
+                sess.upsert(subject, session, title=_title if is_new else None)
                 # ``room`` applies AT SPAWN: the mount table is fixed when the container is created,
                 # so a WARM unit (this thread already has a live worker) keeps the stack it booted
                 # with and a room named on a later turn of the same thread does not retro-mount. The
                 # post-meeting run uses its own per-meeting session, so it spawns cold and gets the
                 # room; a turn that needs a different room needs a different session.
-                unit_id = dispatcher.dispatch(inv, room=room)  # spawn-or-touch the thread's warm chat unit
+                unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
+                    inv, room=room,
+                    scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None)
                 if body.turn_id and start is not None:
                     _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
                 resume = start
@@ -1698,6 +1815,290 @@ def create_app(
         if target and membership_mod.is_member(wsr.root, target, subject) is not None:
             return membership_mod._ws_dir(wsr.root, target)
         raise HTTPException(status_code=404, detail="workspace not found")
+
+    # ── THE SCAFFOLD (PRD 5.5) ──────────────────────────────────────────────────────────────────
+    #
+    # One record per moment a person arrives at, minted by the flow that creates the touch, read by
+    # BOTH renderers: the terminal draws its header, tabs and focus from it, and the agent's first
+    # turn is its opening and its refs. Before it existed, each renderer composed its own half out
+    # of whatever it could find, and the two disagreed in every way the alpha ledger records.
+
+    def _global_root() -> Path:
+        """Where `_global` actually is, from agent-api's own filesystem.
+
+        The volume slot FIRST and the configured source second — that order is the 2026-09-02
+        single-store fix (audit N1): `_global` was two disjoint stores, agent-api read one and the
+        admin's setup chat wrote the other, and his README went into a directory nothing reads."""
+        vol = wsr.root / system_mounts.GLOBAL_SLUG
+        if vol.is_dir():
+            return vol
+        return Path((settings.global_system_workspace_path if settings is not None else "") or "/nonexistent")
+
+    def _internal_caller(request: Request) -> bool:
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        return bool(secret) and hmac.compare_digest(provided, secret)
+
+    def _meeting_row_for_scaffold(rec: dict, subject: str) -> "dict | None":
+        """The meeting ROW behind a scaffold, read as whoever can actually see it.
+
+        The recipient FIRST — for their own meeting that is the honest reader. Then the minter
+        (`provenance.minted_by`, the organiser's uid), because an attendee who has not yet redeemed
+        their share cannot read the row at all, and a phase resolved from nobody is how an emailed
+        link ends up telling a person their finished meeting is upcoming (ledger F4). The row is
+        the meeting's own truth either way; only the reader changes."""
+        mid = str(rec.get("meeting") or "")
+        if not mid.isdigit():
+            return None
+        for reader_uid in (str(subject or ""), str((rec.get("provenance") or {}).get("minted_by") or "")):
+            if not reader_uid:
+                continue
+            row = _meeting_owner_lookup(reader_uid, mid)
+            if isinstance(row, dict):
+                return row
+        return None
+
+    def _scaffold_state(rec: dict, subject: str, row: "dict | None") -> dict:
+        """`refs.state`, RE-CHECKED at open. Computed at mint against what the mail was written for
+        and again here against what is true when they click — days apart, and for a stranger who
+        signed in meanwhile it is a different answer. A record that only carried the mint-time
+        state would tell the agent to introduce itself to somebody it has been talking to."""
+        desk = scaffolds_mod.desk_state(wsr.root, subject) if subject else "new"
+        return {"desk": desk, "group": scaffolds_mod.group_state(wsr.root, scaffolds_mod.group_workspace_of(row))}
+
+    def _scaffold_view(rec: dict, subject: str) -> dict:
+        """The record as its reader gets it: the stored fields, the phase resolved from the meeting
+        ROW, the state re-checked, the header derived, and the opening ALREADY SUBSTITUTED.
+
+        The substitution happens here and not in the client because a client that composes text is
+        a second author of the first thing the agent is told — which is the defect this whole record
+        exists to remove. The terminal reads `opening_text` and writes nothing of its own.
+
+        THE WIRE SHAPE IS THE INTERFACE, and it is pinned on the client side in exactly one function
+        (`clients/terminal/src/minutes/scaffold.ts` `parseScaffold`). Field names here follow that
+        function deliberately — flat `opening_preset` / `opening_text`, `refs.when` as RENDERED TEXT,
+        timestamps as ISO strings — because two halves of one contract built the same afternoon is
+        precisely how the `room_read` / `room_participants` mismatch 422'd every dispatch. Where the
+        two must differ, BOTH shapes ship rather than one silently losing:
+          · `provenance` is the record's OBJECT (flow · reaction · run · minted_by — a string cannot
+            carry it); `provenance_line` is the same thing rendered for a panel to show.
+          · `refs.when` is the rendered line and `refs.when_epoch` is the number the record stores.
+        """
+        row = _meeting_row_for_scaffold(rec, subject)
+        phase = scaffolds_mod.phase_of(row)
+        state = _scaffold_state(rec, subject, row)
+        refs = dict(rec.get("refs") or {})
+        refs["state"] = state
+        row_data = (row or {}).get("data") if isinstance((row or {}).get("data"), dict) else {}
+        title = refs.get("title") or (row_data or {}).get("title") or ""
+        # `when` on the record is an EPOCH (the record's own shape). A caller that already rendered
+        # it in the recipient's own zone (flows does, `_their_clock`) passes `when_text` and that
+        # wins — the person's clock beats ours. The wire carries the TEXT under `when`, because that
+        # is what a panel and a preset both need; the number stays available beside it.
+        when_epoch = refs.get("when")
+        when_text = refs.get("when_text") or _epoch_text(when_epoch)
+        refs["when"] = when_text
+        if when_epoch is not None:
+            refs["when_epoch"] = when_epoch
+        refs.pop("when_text", None)
+        # THE NATIVE ID. `meeting:note` resolves to `kg/entities/meeting/<native>.md` while the
+        # canvas binds to the ROW id — two different identifiers, and the client can only hold one
+        # of them from the link. It comes off the row, never off the record: a native id remembered
+        # at mint would be a second copy of a fact the meetings domain owns.
+        native = str((row or {}).get("native_meeting_id") or "") or None
+        fm, body = scaffolds_mod.read_preset(_global_root(), str(rec.get("opening") or ""))
+        mounts = list(rec.get("workspaces") or [])
+        prompt = scaffolds_mod.substitute(body, {
+            "meeting": rec.get("meeting") or "the meeting in view",
+            "title": title or "the meeting in view",
+            "when": when_text,
+            "state": scaffolds_mod.state_token(state["desk"], state["group"]),
+            "ws": next((m for m in mounts if m != system_mounts.GLOBAL_SLUG), ""),
+            "workspace": scaffolds_mod.WORKSPACE_WORD,
+            "today": time.strftime("%Y-%m-%d"),
+        })
+        prov = rec.get("provenance") or {}
+        return {
+            "id": rec.get("id"),
+            "kind": rec.get("kind"),
+            "who": rec.get("who"),
+            "meeting": rec.get("meeting"),
+            "native": native,
+            # RESOLVED, never stored. `null` means the row could not be read — an honest "we do not
+            # know", which the renderer must treat as "keep the meeting's own layout", never as post.
+            "phase": phase,
+            "workspaces": mounts,
+            "refs": refs,
+            "opening_preset": rec.get("opening"),
+            "opening_label": fm.get("label") or str(rec.get("opening") or "").replace("-", " "),
+            # The text the agent is given, machinery-marked. The terminal renders none of it:
+            # "the human sees turns, the agent sees instructions".
+            "opening_text": prompt + scaffolds_mod.MACHINERY_NOTE,
+            "tabs": list(rec.get("tabs") or []),
+            "focus": rec.get("focus") or "",
+            # DERIVED, not stored (the record says so): the phase word comes off the row we just
+            # read, so a link clicked three days late cannot announce "upcoming" about a meeting
+            # that has happened. No phase means the word is simply absent — never a guess.
+            "header": {"title": title or (fm.get("label") or ""),
+                       "flavor": ("meeting · " + _PHASE_WORD[phase]) if phase
+                                 else ("meeting" if rec.get("meeting") else "chat"),
+                       "when": when_text},
+            "provenance": prov,
+            "provenance_line": _provenance_line(prov, rec.get("minted_at")),
+            "minted_at": _iso(rec.get("minted_at")),
+            "redeemed_at": _iso(rec.get("redeemed_at")),
+            "redeemed_by": rec.get("redeemed_by"),
+        }
+
+    def _scaffold_is_for(rec: dict, request: Request, subject: str) -> bool:
+        """May THIS caller read this scaffold? The recipient, the instance admin, or the service key.
+
+        The recipient is matched on the gateway-injected address first (the cheap, exact answer) and
+        on the resolved subject second, because a scaffold minted for a stranger names an ADDRESS
+        and only becomes a subject when they sign in."""
+        who = str(rec.get("who") or "").strip().lower()
+        email = (request.headers.get("x-user-email") or "").strip().lower()
+        if email and who and email == who:
+            return True
+        if rec.get("redeemed_by") and str(rec["redeemed_by"]) == str(subject):
+            return True
+        resolved = _email_subject_lookup(who) if who else None
+        if resolved and str(resolved) == str(subject):
+            return True
+        return bool(global_layer.is_admin(settings, str(subject)))
+
+    @app.post("/internal/scaffolds", status_code=201)
+    def mint_scaffold(body: ScaffoldMintBody, request: Request):
+        """Mint one scaffold and return `{id, url}` — the INTERNAL tier only (flows and the rig).
+
+        Gated on `X-Internal-Secret`, the same edge the meeting room uses, for the same reason: a
+        scaffold names the workspaces a chat will mount and the opening its agent will answer, so a
+        caller who could mint one for somebody else's address could compose that person's first
+        turn. A browser client through the gateway holds no such secret and cannot mint at all.
+
+        EVERYTHING THAT CAN BE WRONG IS WRONG HERE, NOT AT THE CLICK. The preset must exist and be
+        non-empty, the kind must be in the catalogue, the terminal's origin must be configured. A
+        step calls this BEFORE it sends, so a failure here stops the send — which is the share-gate
+        doctrine one layer up (`email_attendees` refuses to mail a link it cannot make work). A
+        record that mints happily and opens onto nothing is the exact failure this route exists to
+        make impossible.
+
+        THE SHARE TOKEN IS MINTED BY THE CALLER, not here, and that is a deliberate boundary. The
+        restricted grant is `POST /meetings/{id}/share` on meeting-api as the meeting's OWNER, which
+        needs that owner's gateway key; flows already holds the credential that can produce one
+        (`flows_steps/meeting.mint_transcript_share`) and agent-api holds no gateway key by design.
+        Giving agent-api one so this route could mint the share would put a key that can act as any
+        user into a service whose whole job is to read workspaces. The caller mints, and passes the
+        token here; this route composes it into the url so the LINK is still built in one place."""
+        if not _internal_caller(request):
+            raise HTTPException(status_code=403, detail="minting a scaffold is an internal-tier capability")
+        who = str(body.who or "").strip()
+        if not who or "@" not in who:
+            raise HTTPException(status_code=400, detail="`who` must be the recipient's address")
+        if body.kind not in scaffolds_mod.KINDS:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown scaffold kind {body.kind!r} — the catalogue is "
+                                       f"{', '.join(scaffolds_mod.KINDS)}")
+        ui = (settings.ui_url if settings is not None else "").rstrip("/")
+        if not ui:
+            raise HTTPException(status_code=503,
+                                detail="VEXA_UI_URL is not set on agent-api — a scaffold url would "
+                                       "have no origin, and a link nobody can open is not a touch")
+        try:
+            fm, _body_text = scaffolds_mod.read_preset(_global_root(), str(body.opening or ""))
+        except scaffolds_mod.ScaffoldError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        subject = _email_subject_lookup(who.lower()) or ""
+        row = None
+        mid = str(body.meeting or "").strip()
+        minted_by = str((body.provenance or {}).get("minted_by") or "")
+        if mid.isdigit():
+            for reader_uid in (subject, minted_by):
+                if reader_uid:
+                    row = _meeting_owner_lookup(reader_uid, mid)
+                    if isinstance(row, dict):
+                        break
+        group = scaffolds_mod.group_workspace_of(row)
+
+        # THE MOUNT SET, STATED. `_global` always (it is the company layer and every worker carries
+        # it), the recipient's own desk when they have one, the group desk when the meeting is bound
+        # to one. A caller may override the whole list; it may not omit `_global`.
+        if body.workspaces is not None:
+            mounts = [w for w in body.workspaces if str(w).strip()]
+        else:
+            mounts = [subject] if subject else []
+            if group and group not in mounts:
+                mounts.append(group)
+        mounts = [system_mounts.GLOBAL_SLUG] + [m for m in mounts if m != system_mounts.GLOBAL_SLUG]
+
+        refs = dict(body.refs or {})
+        refs["state"] = {"desk": scaffolds_mod.desk_state(wsr.root, subject) if subject else "new",
+                         "group": scaffolds_mod.group_state(wsr.root, group)}
+        rec = scaffolds.mint({
+            "who": who,
+            "kind": body.kind,
+            "meeting": mid or None,
+            "workspaces": mounts,
+            "refs": refs,
+            "opening": str(body.opening),
+            "tabs": body.tabs if body.tabs is not None else scaffolds_mod.frontmatter_list(fm, "tabs"),
+            "focus": body.focus if body.focus is not None else (fm.get("focus") or ""),
+            "provenance": dict(body.provenance or {}),
+        })
+        # The link carries the ID and, when the meeting is not the recipient's own, the capability
+        # that makes it visible. NOTHING ELSE: no preset name, no mount list, no prompt text. What a
+        # person forwards is an id bound to their address and a share bound to theirs.
+        url = f"{ui}/?s={rec['id']}"
+        if body.share_token:
+            from urllib.parse import quote as _quote
+
+            url += f"&tshare={_quote(str(body.share_token), safe='')}"
+        logger.info("scaffold MINTED id=%s kind=%s who=%s meeting=%s mounts=%s opening=%s share=%s",
+                    rec["id"], rec["kind"], who, rec.get("meeting"), mounts, rec["opening"],
+                    bool(body.share_token))
+        return {"id": rec["id"], "url": url}
+
+    @app.get("/api/scaffolds/{scaffold_id}")
+    def read_scaffold(scaffold_id: str, request: Request):
+        """The record, as its recipient. Refuses anyone else; marks REDEEMED on first read.
+
+        A 404 for an unknown id AND for one that is not yours — the id is a capability until redeem
+        binds it, so a 403 would tell a prober that a scaffold with that id exists."""
+        subject = subject_of(request)
+        rec = scaffolds.get(scaffold_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such scaffold")
+        if not (_internal_caller(request) or _scaffold_is_for(rec, request, subject)):
+            logger.warning("scaffold REFUSED id=%s subject=%s reason=not-the-recipient", scaffold_id, subject)
+            raise HTTPException(status_code=404, detail="no such scaffold")
+        rec = scaffolds.redeem(scaffold_id, subject) or rec
+        try:
+            return _scaffold_view(rec, subject)
+        except scaffolds_mod.ScaffoldError as e:
+            # The preset was there at mint and is not there now — an admin deleted or emptied it.
+            # Say so; a silent empty opening is the failure that let the phase greeting win (F5).
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    @app.get("/api/scaffolds")
+    def list_scaffolds(request: Request, mine: bool = True, pending: bool = True):
+        """The caller's own scaffolds — what is WAITING for this person behind a link they may never
+        have clicked. Step 6 of the build order (`whats_waiting` returns pending scaffolds so the
+        person's own agent opens the same record) reads exactly this: one record, two renderers."""
+        subject = subject_of(request)
+        email = (request.headers.get("x-user-email") or "").strip().lower()
+        # Indexed by ADDRESS, because that is what a scaffold is minted against — the recipient
+        # usually has no subject yet. With no gateway-injected address there is nothing to look up,
+        # and the honest answer is an empty list, never every scaffold on the instance.
+        rows = scaffolds.for_recipient(email, pending_only=pending) if email else []
+        out = []
+        for r in rows:
+            try:
+                out.append(_scaffold_view(r, subject))
+            except scaffolds_mod.ScaffoldError:
+                # One scaffold whose preset an admin deleted must not empty the whole list.
+                logger.warning("scaffold %s is unrenderable (its preset is gone) — omitted", r.get("id"))
+        return {"scaffolds": out}
 
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):
