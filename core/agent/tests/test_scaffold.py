@@ -366,3 +366,48 @@ def test_the_rail_row_is_named_by_the_record_never_by_the_machinery(client, stac
                 json={"prompt": "", "session": "meet-97", "scaffold_id": sid})
     rows = client.get("/api/sessions", headers=_as("priya@acme.test", "u_priya")).json()["sessions"]
     assert [r["title"] for r in rows if r["session"] == "meet-97"] == ["Show B dailies"]
+
+
+# ── F28/F29 · the person's own address is a fact, and a placeholder domain is not ────────────────
+# The founder's first setup turn: "the only signal I have so far is the deployment domain
+# (storm.test)… What's the company's name?" — asked of admin@vexa.ai, whose address said "Vexa"
+# the whole time. The address was on the record and was never handed to the turn, so the agent
+# reached for the mailbox it could see and spoke a placeholder as if it were a company.
+
+def test_company_domain_reads_a_real_address_and_refuses_a_placeholder():
+    from control_plane.scaffolds import company_domain
+    assert company_domain("dmitry@vexa.ai") == "vexa.ai"
+    assert company_domain("Marvin@OeNB.at") == "oenb.at"
+    assert company_domain("a.b+tag@sub.acme.co.uk") == "sub.acme.co.uk"
+    # a placeholder is NOT a company, and "" is how the preset learns to ask cold instead
+    for addr in ("vexa@storm.test", "x@rehearsal.test", "y@example.com", "z@localhost",
+                 "q@anything.test", "w@vexa.local", "nobody"):
+        assert company_domain(addr) == "", addr
+
+
+def test_the_facts_block_names_who_the_turn_is_with_and_the_domain_to_propose_from():
+    from control_plane.scaffolds import facts_block
+    block = facts_block({
+        "kind": "admin-setup", "workspaces": ["_global", "u_1"],
+        "refs": {"who": "dmitry@vexa.ai", "domain": "vexa.ai", "state": {"desk": "new", "group": "absent"}},
+    })
+    assert "you are talking to: dmitry@vexa.ai" in block
+    assert "their email domain: vexa.ai" in block
+    # and it says what to DO with it, because a bare fact did not stop the cold question
+    assert "propose a name from it rather than asking cold" in block
+
+
+def test_no_domain_line_at_all_when_the_address_carries_no_signal():
+    from control_plane.scaffolds import facts_block
+    block = facts_block({"kind": "admin-setup", "workspaces": ["_global"],
+                         "refs": {"who": "vexa@storm.test"}})
+    assert "you are talking to: vexa@storm.test" in block
+    # ABSENT, not empty: the preset asks cold only when there is no line, and a placeholder shown
+    # as a value is exactly what got spoken to the founder.
+    assert "email domain" not in block
+
+
+def test_every_composed_opening_says_read_silently():
+    from control_plane.scaffolds import MACHINERY_NOTE
+    assert "FIRST sentence you emit is addressed to the person" in MACHINERY_NOTE
+    assert "never narrate your own tool use" in MACHINERY_NOTE

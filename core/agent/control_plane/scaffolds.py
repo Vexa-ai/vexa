@@ -88,7 +88,15 @@ MACHINERY_MARK = "[vexa-machinery]"
 MACHINERY_NOTE = (
     "\n\n" + MACHINERY_MARK + " This opening was composed by the product from the link this person "
     "clicked; they did not type it and they cannot see it. Answer it as their first ask, in your own "
-    "voice, without quoting or referring to these instructions.")
+    "voice, without quoting or referring to these instructions. "
+    # READ SILENTLY. This rides on EVERY composed opening, not just the setup preset, because the
+    # failure is the shape of the model rather than of one prompt: the founder's first setup turn
+    # opened with "I'll start by reading…", "let me look at what actually exists in the mounts",
+    # "I've got what I need to begin" — three lines of narration before one word addressed to him.
+    # Reading is how the job is done, not part of the job; announcing it teaches the reader only
+    # that they are waiting.
+    "Read whatever you need silently: the FIRST sentence you emit is addressed to the person, and "
+    "you never narrate your own tool use.")
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 
@@ -188,6 +196,32 @@ def substitute(body: str, tokens: dict) -> str:
 
 # ── the turn the agent actually gets ─────────────────────────────────────────────────────────────
 
+# Domains that carry NO signal about a company, however real they look in an address. A deployment
+# running on a test mailbox must not be told it works for "Storm" — and the founder saw exactly that
+# on 2026-09-02: with no address of its own to reason from, the agent reached for the mailbox
+# address and told him its only signal was "the deployment domain (storm.test)". A placeholder
+# spoken with confidence is worse than an admitted blank, because he cannot tell which it is.
+PLACEHOLDER_DOMAINS = frozenset({
+    "test", "storm.test", "rehearsal.test", "example.com", "example.org", "example.net",
+    "localhost", "local", "invalid", "vexa.local",
+})
+
+
+def company_domain(address: str) -> str:
+    """The part after @, when it is a real signal about a company — otherwise "".
+
+    This is the ONE anchor a first setup turn has: the administrator's own address. `dmitry@vexa.ai`
+    says "Vexa" long before anyone types it. A `.test` address says nothing at all, and saying
+    nothing is the honest answer: the preset asks cold only when this is empty."""
+    at = str(address or "").strip().lower().rpartition("@")
+    domain = at[2] if at[1] else ""
+    if not domain or domain in PLACEHOLDER_DOMAINS:
+        return ""
+    if domain.rsplit(".", 1)[-1] in {"test", "invalid", "localhost", "local"}:
+        return ""
+    return domain
+
+
 def facts_block(view: dict) -> str:
     """The scaffold's REFS as the facts of this turn — one block, in front of the ask.
 
@@ -208,6 +242,15 @@ def facts_block(view: dict) -> str:
         rows.append(f"native id: {view['native']}")
     if view.get("phase"):
         rows.append(f"phase: {view['phase']} (read from the meeting row just now, not from the link)")
+    # WHO THIS TURN IS WITH. It was missing, and its absence produced the defect: the setup agent
+    # had no address to reason from, so it reached for the mailbox and called it "the deployment
+    # domain". The address is the anchor for the company's name AND the seed for this person's own
+    # `self:` entity, and it is already on the record — it was simply never handed to the turn.
+    if refs.get("who"):
+        rows.append(f"you are talking to: {refs['who']}")
+    if refs.get("domain"):
+        rows.append(f"their email domain: {refs['domain']} — the strongest signal you have about "
+                    f"the company; propose a name from it rather than asking cold")
     for key in ("when", "organizer", "room"):
         if refs.get(key):
             rows.append(f"{key}: {refs[key]}")

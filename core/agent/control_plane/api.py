@@ -2033,6 +2033,16 @@ def create_app(
         mounts = [system_mounts.GLOBAL_SLUG] + [m for m in mounts if m != system_mounts.GLOBAL_SLUG]
 
         refs = dict(body.refs or {})
+        # THE RECIPIENT'S OWN ADDRESS IS A FACT OF THE TURN, and the derived domain is the only
+        # anchor a first setup conversation has. Both are computed HERE, from `who`, rather than
+        # asked of the caller: the mint already knows the address (it is the record's identity), and
+        # a caller that had to pass them could pass a different pair than the one the record is
+        # bound to. `domain` is "" for a placeholder like `.test` — see scaffolds.company_domain —
+        # which the preset reads as "no signal", so it asks cold instead of naming a fake company.
+        refs.setdefault("who", who)
+        domain = scaffolds_mod.company_domain(who)
+        if domain:
+            refs.setdefault("domain", domain)
         refs["state"] = {"desk": scaffolds_mod.desk_state(wsr.root, subject) if subject else "new",
                          "group": scaffolds_mod.group_state(wsr.root, group)}
         rec = scaffolds.mint({
