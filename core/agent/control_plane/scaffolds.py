@@ -107,7 +107,13 @@ MACHINERY_NOTE = (
     # one sentence on every turn rather than a rule in one preset.
     "Anything marked `template: true`, and anything under `kg/templates/`, is a SHAPE and never a "
     "fact: copy it to make a new record, never cite it, never name it to a person, and never treat "
-    "the example inside it as somebody real.")
+    "the example inside it as somebody real. "
+    # Decision 24. A composed opening is the turn most likely to meet a name for the first time
+    # — an attendee clicking a post-meeting link brings a whole room with them — and it is the
+    # turn least likely to stop and write pages, because it is answering an ask.
+    "A name without a page gets one now: whatever this turn learns about a person, company, "
+    "meeting, project or decision goes in through entity_upsert with its source. Facts carry a "
+    "source; gaps go to kg/MISSING.md, never invented.")
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
 

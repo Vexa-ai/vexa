@@ -40,6 +40,7 @@ from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import units
+from shared import entities as entities_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
@@ -2283,6 +2284,56 @@ def create_app(
             _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
                      "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
         return {"path": rel, "written": True}
+
+    @app.post("/api/workspace/entity")
+    def ws_entity_upsert(request: Request, body: dict = Body(...)):
+        """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.
+
+        Creates `kg/entities/<kind>/<slug>.md` with frontmatter and a first dated entry, or appends a
+        dated entry to the page already there; refreshes `kg/INDEX.md`; commits both by pathspec with
+        the F31 subject shape. Authorization is `ws_file_write`'s, because it is the same act — a
+        write into a workspace — and two spellings of one authorization rule is how the second one
+        ends up weaker.
+
+        This endpoint exists so the MCP tool can be a THIN FORWARD (PRD §3.3: every host-reaching rig
+        tool is a missing endpoint in an owning service wearing a shell command). `workspace_write`'s
+        `docker exec` double is the shape this deliberately does not copy.
+        """
+        subject = subject_of(request)
+        kind = str(body.get("kind") or "").strip().lower()
+        name = str(body.get("name") or "").strip()
+        source = str(body.get("source") or "").strip()
+        slug = str(body.get("slug") or "").strip() or None
+        raw_facts = body.get("facts")
+        if isinstance(raw_facts, str):
+            raw_facts = [raw_facts]
+        facts = [str(f) for f in (raw_facts or []) if str(f).strip()]
+
+        if slug == system_mounts.GLOBAL_SLUG:
+            # `_global` is the company layer, admin-written and read-only to every worker. An entity
+            # write is exactly the kind of thing that would drift into it by accident.
+            raise HTTPException(status_code=403, detail="_global is the organisation tier — entities "
+                                                        "belong on a desk, not in it")
+        if slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
+            try:
+                membership_mod.require_role(wsr.root, slug, subject, "contributor")
+            except MembershipError:
+                pass  # not shared — _read_target 403s anything outside the active set
+        target = _read_target(request, slug)
+        try:
+            result = entities_mod.upsert_entity(target, kind, name, facts, source)
+        except entities_mod.EntityRefused as e:
+            # 422, not 400: the request is well-formed and the REFUSAL is the product — the agent is
+            # meant to read the sentence and fix the fact, not to retry the call.
+            raise HTTPException(status_code=422, detail=str(e))
+        index_rel = entities_mod.write_index(target, slug or str(subject))
+        sha = None
+        if result.get("changed"):
+            sha = entities_mod.commit_entity(
+                target, [result["path"], index_rel],
+                subject_path=result["path"], created=bool(result.get("created")),
+                author=(str(subject), f"{subject}@vexa.local"))
+        return {**result, "index": index_rel, "commit": sha}
 
     @app.get("/api/workspace/git")
     def ws_git(request: Request, slug: Optional[str] = None):

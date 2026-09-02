@@ -222,6 +222,27 @@ def wait_note(uid: str, shas_before: list, budget_s: int, stamp: str = ""):
     return wait_for(probe, budget_s) or best.get("any")
 
 
+def entity_files_since(uid: str, shas_before: list) -> list:
+    """Every `kg/entities/**` path this run committed, across every new commit.
+
+    Decision 24's measure needs a denominator the harness already has and a numerator nothing else
+    produces. The commits are the numerator: the post_meeting run and the two primed openings each
+    write through the same workspace, and a commit is the only place a write is visible from
+    outside the container. `kg/INDEX.md` is excluded — it is a rendering of the pages, and counting
+    it would score the same write twice."""
+    seen, out = set(shas_before or []), []
+    for c in (workspace_git(uid).get("commits") or []):
+        if c.get("sha") in seen:
+            continue
+        for f in (c.get("files") or []):
+            if f.startswith("kg/entities/") and f not in out and not f.endswith("/index.md"):
+                out.append(f)
+    return sorted(out)
+
+
+ENTITY_PAGES_SAMPLED = 8       # what the judge is shown; the count is measured over all of them
+
+
 def workspace_git(uid: str) -> dict:
     _, g = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid})
     return g if isinstance(g, dict) else {}
@@ -377,6 +398,10 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
                scheduled_at=seed.get("scheduled_at"),
                transcript_chars_delivered=len(seed.get("transcript") or ""))
 
+    # Decision 24's measure: the entity write-back is scored over the WHOLE fixture — the
+    # post_meeting run plus both primed openings — so the baseline is taken before any of them.
+    entity_base = [c.get("sha") for c in (workspace_git(uid).get("commits") or [])]
+
     mail_mark = time.time()
     up_id = f"dna-r{rev}-prep-{date}"
     rec["emit_upcoming"] = rig.call(
@@ -409,6 +434,15 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
         rec[key] = {"prompt": p,
                     "reply": chat_turn(uid, f"askchat-r{rev}-{name}-{date}", p) if p else None}
         print(f"  {key}={bool(rec[key]['reply'])}", flush=True)
+
+    # THE ENTITY MEASURE (decision 24.4). Three agent turns ran for this fixture: the post_meeting
+    # note and the two primed openings. The meeting note itself is one of the pages, and it is
+    # counted — it always existed, so it is the floor a revolution has to beat, not a free point.
+    ent = entity_files_since(uid, entity_base)
+    rec["entity_files"] = ent
+    rec["entity_turns"] = 3
+    rec["entity_pages"] = {f: (ws_file(uid, f) or "")[:2000] for f in ent[:ENTITY_PAGES_SAMPLED]}
+    print(f"  entities={len(ent)}", flush=True)
     return rec
 
 

@@ -226,6 +226,59 @@ def kg_links_preamble() -> str:
     )
 
 
+# The rule text of PRD decision 24, and the index it is a rule about. One string, because the rule
+# is unreadable without the list and the list is inert without the rule.
+_ENTITY_INDEX_MAX_CHARS = 12_000
+
+
+def entity_index_preamble(mounts: list[dict]) -> str:
+    """The entity index of every mounted workspace, plus the rule that makes it actionable.
+
+    Decision 24 (founder, 2026-09-02): *"how to update the agent so that it updates entities whenever
+    there is a chance for that? so it does not hesitate creating pages"*. Hesitation had two causes
+    and this preamble removes the first: the agent could not see what already existed, so every
+    mention of a name was a choice between a duplicate page and no page, and it reliably chose no
+    page. `entity_upsert` removes the second (one call, create-or-append).
+
+    Ships on EVERY dispatch for the reason `kg_links_preamble` does — a rule that reaches only some
+    turns is a rule about nothing, and the turns most likely to learn a name (a chat the person
+    opened themselves) are exactly the ones no composed opening covers.
+
+    The list is read from the generated `kg/INDEX.md` when it is there (refreshed by every upsert)
+    and rendered live from the directory when it is not, so a first dispatch into a workspace that
+    has never been upserted still sees what it holds instead of being told nothing exists."""
+    from shared.entities import INDEX_PATH, render_index
+
+    blocks: list[str] = []
+    for m in mounts:
+        if not m.get("write", True):
+            continue                     # `_global` is the org tier — entities belong on a desk
+        root = Path(str(m.get("path") or ""))
+        slug = str(m.get("slug") or root.name)
+        try:
+            f = root / INDEX_PATH
+            listing = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+            if not listing.strip():
+                listing = render_index(root, slug)
+        except OSError:
+            continue
+        blocks.append(f"### `{slug}`\n\n{listing.strip()[:_ENTITY_INDEX_MAX_CHARS]}")
+    if not blocks:
+        return ""
+    return (
+        "## Entities you already hold, and the rule about writing them\n\n"
+        "**A name without a page gets one NOW.** The moment this turn learns something durable about "
+        "a person, company, meeting, project or decision, call `entity_upsert(kind, name, facts, "
+        "source)` — it creates the page if it does not exist and appends a dated entry if it does, "
+        "so there is nothing to check first and nothing to merge by hand. Call it on a maybe: a fact "
+        "the page already carries writes nothing.\n"
+        "- **Facts carry a source.** Only what was said in this conversation or read from a file, a "
+        "tool result or a transcript, each with where it came from. A fact with no source is refused.\n"
+        "- **Gaps go to `kg/MISSING.md`, never invented.** What you would have to guess is written "
+        "there as an open question, not onto the page.\n\n"
+        + "\n\n".join(blocks) + "\n\n")
+
+
 _GLOBAL_CONTEXT_FILES = ("CLAUDE.md", "PURPOSE", "README.md")
 _GLOBAL_CONTEXT_MAX_CHARS = 48_000
 
@@ -319,6 +372,113 @@ def mounts_preamble(mounts: list[dict]) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+# ── the write-back phase (PRD decision 24.2) ─────────────────────────────────────────────────────
+#
+# "A gate, not advice." The grounding gate is the precedent and the measurement behind it is the
+# argument: asked in a prompt to read the transcript, Haiku did it about half the time; made to
+# prove it, depth went 0.00 → 0.90. Asking the model to record entities *while* it answers competes
+# with answering, and answering wins. So it is asked afterwards, separately, when nothing else is
+# in flight — and the person's answer is never delayed by it, because their answer has already
+# streamed by the time this runs.
+#
+# THE SAME MARK the composed openings carry (control_plane.scaffolds.MACHINERY_MARK, and the
+# terminal's own copy in clients/terminal/src/canvas/actions.ts). Duplicated rather than shared for
+# the same stated reason: the three sides ship in different images, and a rename in one is meant to
+# be a visible regression in the others.
+MACHINERY_MARK = "[vexa-machinery]"
+
+# ⚠ THE FALLBACK IS NOT A TEST CONVENIENCE — it is the majority case for some deployments. A
+# dispatch with no delegation token gets NO MCP at all (`mcp_delegation_config` returns `(None,
+# [])`), so a phase whose only instruction names `entity_upsert` would be a wasted model call on
+# every one of those turns. Measured 2026-09-02 on a DNA fixture with the tool absent: the phase
+# ran for 58 seconds and created nothing. The workspace is mounted either way; the file is the
+# floor, the tool is the fast path, and the SHAPE has to be stated because the two paths must
+# produce the same page (`shared/entities.py` is the other spelling of it).
+_ENTITY_FILE_SHAPE = (
+    "If `entity_upsert` is not available to you, write the page yourself — the workspace is "
+    "mounted. `kg/entities/<kind>/<slug>.md`, kind one of person/company/meeting/project/decision, "
+    "slug kebab-case of the name. A new page opens with frontmatter `type`, `id`, `title`, "
+    "`aliases: []`, `created: <today>`, `sources: [<source>]`, then `# <Name>`. New or existing, "
+    "append `## <today>` and one `- <fact> — source: <source>` line per fact. Never rewrite what is "
+    "already on the page.\n\n")
+
+# ⚠ THE FIRST VERSION OF THIS ASKED FOR JUDGEMENT AND GOT HESITATION — the exact thing the founder
+# named. Told to record "what this turn learned about a person, company, meeting, project or
+# decision", the phase answered `nothing new` on a turn that had just written a note naming six
+# people and three organisations, and explained itself: *"further pages for individual TSC members
+# or companies can be added as the project develops and additional facts about them become
+# relevant beyond their participation in this kickoff."* Every clause of that is a reasonable
+# editorial judgement, and every clause is the reason the graph stays empty.
+#
+# So the phase no longer asks whether a name deserves a page. It asks for the LIST first — a
+# mechanical step with no judgement in it — and then makes the list the work. `nothing new` is
+# narrowed to the one case it is true in: no name was touched at all. And the note is explicitly
+# NOT a substitute for a page, because "it is already in the note" was the reasoning that ran.
+WRITEBACK_PROMPT = (
+    MACHINERY_MARK + " Write-back phase — not a message from the person, and nothing you say here "
+    "reaches them. Do not address them, do not summarise the turn, do not ask them anything.\n\n"
+    "FIRST, list every proper name this turn touched: every person who spoke or was named, every "
+    "company or organisation, every meeting, project or decision. Just the names.\n\n"
+    "THEN give each one a page, with `entity_upsert(kind, name, facts, source)` — one call per "
+    "name, in order. A name with no page gets one NOW; a page that exists gets this turn's facts "
+    "appended; a fact already on the page writes nothing, so call it rather than wondering.\n\n"
+    "Do not judge whether a name is important enough, whether it will matter later, or whether it "
+    "is already covered somewhere else. A meeting note is NOT a substitute for a page — it records "
+    "an occasion, a page records a subject, and the whole point is that the next turn can find the "
+    "subject. If a name was touched and you know one true thing about it, it gets a page. One "
+    "sentence of fact is enough to start one.\n\n"
+    + _ENTITY_FILE_SHAPE +
+    "Every fact carries its source, and only what was said in this conversation or read from a "
+    "file, a tool result or a transcript counts. Anything you would have to guess goes to "
+    "`kg/MISSING.md` as an open question, never onto a page.\n\n"
+    "Reply exactly `nothing new` ONLY if this turn touched no name at all.")
+
+# Read/Glob/Grep to check what a page already says, Write/Edit for `kg/MISSING.md`, and the entity
+# verb itself. Deliberately NOT the research tools: this phase records what the turn already learned,
+# and a phase that can go and look things up is a second turn wearing a bookkeeping name.
+WRITEBACK_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
+
+
+def writeback_enabled() -> bool:
+    return (os.environ.get("VEXA_WRITEBACK") or "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def writeback_min_tokens() -> int:
+    """The cheap-turn floor, configurable. A bare "thanks" or "yes" with no tool call learned
+    nothing, and a write-back phase on it is a whole model call spent proving that."""
+    try:
+        return int(os.environ.get("VEXA_WRITEBACK_MIN_TOKENS", "40"))
+    except ValueError:
+        return 40
+
+
+def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = None) -> bool:
+    """Skip only a turn that is cheap on BOTH counts: it called no tools AND the person said very
+    little. Either one alone is a turn that can have learned something — a long message carries
+    facts with no tool call, and a short one ("who is Olga?") can pull a whole dossier through a
+    tool. The floor is on the PERSON's words, never on the agent's reply."""
+    if not writeback_enabled():
+        return False
+    if tool_calls > 0:
+        return True
+    floor = writeback_min_tokens() if min_tokens is None else min_tokens
+    return len((prompt or "").split()) >= floor
+
+
+def writeback_events(events: Iterator[dict]) -> Iterator[dict]:
+    """The phase's STEP LINES, never its prose. Tool calls and their results pass through tagged
+    `phase: "writeback"` so the client can show that bookkeeping happened; text, the artifact tab
+    and the terminating `done` are dropped.
+
+    The `artifact` event is dropped for the same reason the text is: it steals the right panel onto
+    an entity page the person did not ask to see, one turn after the document they did."""
+    for ev in events:
+        t = ev.get("type")
+        if t in ("message-delta", "artifact", "done"):
+            continue
+        yield {**ev, "phase": "writeback"}
 
 
 class _Stream(Protocol):
@@ -460,6 +620,10 @@ VEXA_MCP_TOOLS = (
     "workspace_purpose", "mark_scaffolded",
     # the write side, unused only because the volume mount hides it
     "workspace_write",
+    # decision 24: the ONE call that turns something learned into a page. Named here
+    # rather than left to the prefix because the write-back phase is only as reliable
+    # as the tool being present without a search step (see the deferral note above).
+    "entity_upsert",
 )
 
 
@@ -533,7 +697,8 @@ def run_turn_over_workspace(
     author = _principal_author()
     extras = _extra_mount_paths(work)
     turn_prompt = (voice_preamble() + kg_links_preamble() + mounts_preamble(mounts)
-                   + global_context_preamble(mounts) + prompt)
+                   + entity_index_preamble(mounts) + global_context_preamble(mounts)
+                   + prompt)
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
     first = next(gen, None)
@@ -566,7 +731,7 @@ def start_prompt(start: dict) -> str | None:
 # ── the harness loop (redis + the turn injected) ─────────────────────────────────────────────────
 
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
-          harness: HarnessPort | None = None) -> None:
+          harness: HarnessPort | None = None, writeback: TurnFn | None = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
@@ -611,10 +776,23 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         if nonce:
             ack["nonce"] = nonce
         stream.xadd(out_topic, {"event": json.dumps(ack)})
+        tool_calls = 0
         for ev in turn(prompt):
+            if ev.get("type") == "tool-call":
+                tool_calls += 1
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             if cursor is not None:
                 _drain_inject(cursor)
+        # THE WRITE-BACK PHASE (decision 24.2). It runs AFTER the answer has streamed — the person
+        # is already reading — and before `turn-complete`, so its tool calls land as step lines on
+        # the turn they belong to instead of on nothing. A phase that raises must not lose the
+        # turn: the answer is delivered either way, and bookkeeping is not worth a dead session.
+        if writeback is not None and should_write_back(prompt, tool_calls):
+            try:
+                for ev in writeback_events(writeback(prompt)):
+                    stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
+            except Exception as e:  # noqa: BLE001
+                log.warning("write-back phase failed on %s: %s: %s", turn_id, type(e).__name__, e)
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
 
     # SKIP THE ENTRYPOINT'S OWN COPY — AND NOTHING ELSE.
@@ -858,6 +1036,13 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
                                                         allowed_tools=chat_tools, session=session,
                                                         mcp_config=mcp_cfg, harness=chat_harness),
+            # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
+            # session would have to be told the whole conversation to ask one bookkeeping question.
+            # Small budget by TOOLSET rather than by a step cap the harness does not expose.
+            writeback=lambda _prompt: run_turn_over_workspace(
+                work, WRITEBACK_PROMPT, model=model,
+                allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
+                mcp_config=mcp_cfg, harness=chat_harness),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
             harness=chat_harness,
         )

@@ -235,7 +235,19 @@ def test_the_worker_writes_a_bearer_header_config_and_widens_its_allow_set(tmp_p
     assert cfg["headers"]["Authorization"] == f"Bearer {tok}"
     assert "?" not in cfg["url"]
     # attaching the server is not enough; the model must also be ALLOWED to call it
-    assert tools == [f"mcp__{VEXA_MCP_SERVER}"]
+    #
+    # ⚠ THIS ASSERTION WAS STALE AND FAILING ON EVERY RUN of the suite, on `minutes-mcp-viewer`,
+    # since the 21-tool union landed. It said `== [prefix]`, which was true when the allow-set was
+    # the prefix alone; the list grew and this line kept failing, red, in a suite whose other 721
+    # tests are green. Found 2026-09-02 while adding `entity_upsert` to that same list. An anomaly
+    # is a finding: the prefix + the named tools is the shape the code actually returns and the
+    # shape it is meant to return, so the check now says that instead of a number that ages.
+    from worker.engine import VEXA_MCP_TOOLS
+    assert tools[0] == f"mcp__{VEXA_MCP_SERVER}"
+    assert set(tools[1:]) == {f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS}
+    # decision 24: the write-back phase is only as reliable as the tool being NAMED — a tool the
+    # allow-set omits is one the model has to find before it can call it.
+    assert f"mcp__{VEXA_MCP_SERVER}__entity_upsert" in tools
 
 
 def test_the_config_lands_where_the_post_turn_commit_cannot_sweep_it_up(tmp_path, monkeypatch):
