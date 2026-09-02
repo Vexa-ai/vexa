@@ -88,12 +88,25 @@ def _flows_unavailable(tool: str, detail: str = "") -> str:
     })
 
 
+_ADMIN_KEY_CACHE: list[str] = []
+
+
 def _admin_key() -> str:
-    return subprocess.run(
-        ["docker", "inspect", "vexa-dogfood-admin-api-1", "--format",
-         "{{range .Config.Env}}{{println .}}{{end}}"],
-        capture_output=True, text=True, check=True,
-    ).stdout.split("ADMIN_API_TOKEN=")[1].split("\n")[0].strip()
+    """admin-api's token, read once per process.
+
+    It used to shell out to `docker inspect` on EVERY call — a subprocess and a docker-daemon
+    round-trip per use — and the uses are not rare: several tools call it more than once, and the
+    ghost-identity check in `me()` needs it on every guarded call. Adding that check made
+    `whats_waiting` slow enough to hit the gateway's upstream timeout, which is how the cost got
+    noticed. The value cannot change while this process lives (it is baked into the container this
+    reads), so reading it once is not a staleness trade, it is the correct number of reads."""
+    if not _ADMIN_KEY_CACHE:
+        _ADMIN_KEY_CACHE.append(subprocess.run(
+            ["docker", "inspect", "vexa-dogfood-admin-api-1", "--format",
+             "{{range .Config.Env}}{{println .}}{{end}}"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split("ADMIN_API_TOKEN=")[1].split("\n")[0].strip())
+    return _ADMIN_KEY_CACHE[0]
 
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout=40):
@@ -670,8 +683,35 @@ def _scope_allows(scope, slug: str) -> bool:
     return isinstance(ws, list) and str(slug) in {str(w) for w in ws}
 
 
+GHOST_UID = contextvars.ContextVar("vexa_ghost_uid", default=None)
+
+
 def _subject():
-    """Who is calling, or None. THE single place identity is decided.
+    """Who is calling, or None — and the account must still EXIST.
+
+    ⚠ 2026-09-02, twice. First: after the instance was blanked, `whats_waiting()` answered as uid
+    57 — deleted hours earlier — because the rig's own token map still held that number and nothing
+    asked whether it still meant anybody. The check was then put in `me()`, and the SAME call kept
+    answering as the ghost, because `whats_waiting` is not `@_anon_guard`-wrapped and calls this
+    function directly. The docstring below already said every reader goes through here; the check
+    was put somewhere else anyway.
+
+    So it sits HERE, where the docstring always claimed the decision was made. A dead uid resolves
+    to None — callers that only ask "authenticated?" behave correctly with no change — and the uid
+    is recorded in `GHOST_UID` so a caller that wants to say WHICH failure can: "your account no
+    longer exists" and "you are anonymous" have different fixes, and telling a person the second
+    when the first is true sends them off to mint a duplicate account.
+    """
+    GHOST_UID.set(None)
+    uid = _subject_raw()
+    if uid and not _uid_exists(uid):
+        GHOST_UID.set(uid)
+        return None
+    return uid
+
+
+def _subject_raw():
+    """Who is calling, or None. THE single place identity is RESOLVED (see _subject for the check).
 
     Header first, then a token passed as a call argument. The uid itself is never accepted from
     a caller -- it is a small integer, so accepting it would let anyone name any account. A
@@ -761,10 +801,56 @@ def _operator_or_refuse(verb: str) -> str:
     raise _NotOperator(verb, f"uid {uid}", "not an instance admin")
 
 
+# A uid this process resolved that no longer names a real account. Cached so the check costs one
+# admin-api call per identity per minute, not one per tool call.
+_UID_ALIVE: dict[str, tuple[float, bool]] = {}
+_UID_TTL_S = 60.0
+
+
+class _GhostIdentity(Exception):
+    """Raised by me() when the resolved uid names a user that no longer exists."""
+
+    def __init__(self, uid: str):
+        self.uid = uid
+
+
+def _uid_exists(uid: str) -> bool:
+    """Does this uid still name an account? FAIL OPEN on an unreachable admin-api.
+
+    The fail direction is deliberate and is the opposite of the ghost check's purpose: refusing
+    every call because a probe timed out would take the whole rig down over a blip, while letting a
+    stale token through for a minute costs one confused answer. The check exists to catch a uid that
+    is GONE, which is a durable fact, not a transient one."""
+    now = time.time()
+    hit = _UID_ALIVE.get(uid)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        st, _ = _http("GET", f"{ADMIN_API}/admin/users/{uid}", {"X-Admin-API-Key": _admin_key()})
+    except Exception:  # noqa: BLE001
+        return True
+    alive = st == 200
+    _UID_ALIVE[uid] = (now + _UID_TTL_S, alive)
+    return alive
+
+
 def me() -> str:
-    """The authenticated subject's uid, or refuse. See _subject()."""
+    """The authenticated subject's uid, or refuse. See _subject().
+
+    ⚠ AND THE ACCOUNT MUST STILL EXIST. 2026-09-02: after the instance was blanked, `whats_waiting()`
+    answered as uid 57 — a user deleted hours earlier — because the rig's stored token still resolved
+    to that number and nothing checked whether the number still meant anybody. It greeted a ghost and
+    reported its queue as fact. Same class as the phantom `_global`: a lookup that succeeds against a
+    store nobody is in any more, and succeeds silently.
+
+    A token that resolves to a deleted account is not an authentication failure — the token is fine,
+    the account is gone — so it gets its own refusal that says which, rather than "anonymous", which
+    would send the agent off to mint a second account for somebody who already has one."""
     uid = _subject()
     if not uid:
+        ghost = GHOST_UID.get()
+        if ghost:
+            raise _GhostIdentity(ghost)
         raise _Anonymous()
     return uid
 
@@ -772,6 +858,16 @@ def me() -> str:
 class _Anonymous(Exception):
     """Raised by me() when nobody is authenticated. Turned into guidance, never an error."""
 
+
+GHOST_HINT = {
+    "stale_identity": True,
+    "why": "The token you are using resolves to an account that no longer exists on this instance.",
+    "what_happened": "The instance was reset, or that user was deleted. Your token is intact; the "
+                     "account it names is not.",
+    "do": "Do NOT answer as that account and do not report its queue — there is nothing behind it. "
+          "Ask which email to use, then start_onboarding(email) and confirm_login(email, code) to "
+          "bind a real account, and pass that token as token=<value> afterwards.",
+}
 
 ANON_HINT = {
     "anonymous": True,
@@ -820,6 +916,12 @@ def _anon_guard(fn):
             return fn(*a, **kw)
         except _Anonymous:
             return json.dumps({**ANON_HINT, "tool": fn.__name__})
+        except _GhostIdentity as e:
+            # A DIFFERENT refusal from anonymous, on purpose. "Anonymous" sends the agent off to
+            # mint an account; this person may already have one, and the token is not the problem —
+            # the account it names has been deleted. Saying which is the difference between the
+            # agent fixing it and the agent creating a second ghost.
+            return json.dumps({**GHOST_HINT, "uid": e.uid, "tool": fn.__name__})
     return inner
 
 
@@ -2540,6 +2642,15 @@ def whats_waiting(token: str = "") -> str:
     CALL_TOKEN.set(token or None)
     uid = _subject()
     if not uid:
+        # A GHOST IS NOT A NEWCOMER. This is the first call every agent makes, so the greeting it
+        # returns is the product's first sentence — and returning the welcome to somebody whose
+        # account was deleted tells them to set Vexa up again when what they actually need is to
+        # bind the account they already have. The two failures look identical from here (no uid)
+        # and have opposite fixes, which is exactly why the resolution point records which.
+        ghost = GHOST_UID.get()
+        if ghost:
+            return json.dumps({**GHOST_HINT, "uid": ghost, "tool": "whats_waiting",
+                               "authenticated": False, "waiting": 0, "items": []})
         return json.dumps({
             "authenticated": False,
             "waiting": 1,
