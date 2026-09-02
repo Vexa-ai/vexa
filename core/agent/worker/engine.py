@@ -920,6 +920,40 @@ VEXA_MCP_TOOLS = (
 )
 
 
+def _delegation_dir(work: Path) -> "Path | None":
+    """The first writable home for the delegation credential, or None.
+
+    Three candidates, in order, each keeping the two properties that matter — the file must not be
+    committable, and it must be private to this subject:
+
+      1. ``<cwd>/.claude`` — gitignored by the workspace seed. The normal answer.
+      2. the PRIVATE SYSTEM tier's ``.claude`` — read-write by contract (it is where chat
+         continuity already anchors), private, and outside every desk the turn may commit.
+      3. a per-subject directory under the system temp dir — outside every mount, so no `git add`
+         can reach it, and gone when the container is.
+
+    Returning None is the honest floor: a turn with no toolbelt is a turn that will say so when it
+    is asked to read a transcript, and the grounding gate then fails LOUDLY. A turn that never
+    starts says nothing at all."""
+    import tempfile
+    candidates = [work / ".claude", _continuity_root(work) / ".claude",
+                  Path(tempfile.gettempdir()) / f"vexa-{work.name}" / ".claude"]
+    seen: set[Path] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".w"
+            probe.write_text("")          # mkdir succeeds on an existing dir under a ro mount
+            probe.unlink()
+            return cand
+        except OSError as e:
+            log.warning("delegation config dir %s unusable (%s) — trying the next candidate", cand, e)
+    return None
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -936,6 +970,13 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     post-turn ``git add -A`` in ``run_harness_turn`` commits every changed mount, so a credential
     written anywhere else in the workspace would be committed and synced to the workspace store. The
     file is chmod 600 for the same reason the env var is not echoed: it is a bearer credential.
+
+    WHERE it goes has FALLBACKS, because on 2026-09-02 this function killed the process. The cwd was
+    a read-only mount, ``mkdir`` raised ``OSError: [Errno 30] Read-only file system``, nothing caught
+    it, and the worker exited(1) before the model ever ran — while the caller sat polling for a reply
+    that could not come. The mount mode is fixed in ``dispatch.py``; this is the belt, and it is the
+    more important half: **the LOCATION of a credential is never worth a turn.** See
+    ``_delegation_dir``.
     """
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
@@ -944,8 +985,11 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
         "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
     }}}
-    d = work / ".claude"
-    d.mkdir(parents=True, exist_ok=True)
+    d = _delegation_dir(work)
+    if d is None:
+        log.warning("no writable directory for the vexa MCP delegation config — running this turn "
+                    "WITHOUT the toolbelt rather than not at all")
+        return None, []
     path = d / "mcp.json"
     path.write_text(json.dumps(cfg))
     try:
