@@ -48,13 +48,28 @@ print("seed:", json.dumps(seed)[:300])
 if "meeting_id" not in seed:
     raise SystemExit("seed failed")
 
+# meeting_seed stopped handing back the transcript (rig fc1da36ce) — the agent is meant to read
+# it itself through the MCP rather than receive a copy truncated to fit inside an event. The
+# flows step still formats refs["transcript"] into its prompt, so the harness reads it here and
+# passes it; when that step moves to an identity-only event this line goes away with it.
+tx = me.call("meeting_transcript", meeting_id=str(seed["meeting_id"]), tail=0, timeout=300)
+transcript = ""
+if isinstance(tx, dict):
+    body = tx.get("transcript")
+    if isinstance(body, list):           # [{who, said}, ...] — the rig's shape, not a string
+        transcript = "\n".join(f"{seg.get('who', '?')}: {seg.get('said', '')}"
+                                for seg in body)
+    elif isinstance(body, str):
+        transcript = body
+print("transcript chars:", len(transcript))
+
 sid = f"sim-{TAG}-{native}"
 refs = {"organizer": ORG, "url": f"https://meet.google.com/{native}",
         "start": time.time() - 3600, "ics_uid": sid,
         "title": TITLE, "group": None,
         "participants": ATTENDEES + OUTSIDE,
         "meeting_id": seed["meeting_id"], "native": native,
-        "transcript": seed["transcript"], "uid": uid}
+        "transcript": transcript, "uid": uid}
 print("emit:", json.dumps(simlane.emit("meeting.completed", sid, refs))[:300])
 
 r = simlane.wait_reaction(sid, timeout_s=1500)

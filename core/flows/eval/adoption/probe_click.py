@@ -42,6 +42,38 @@ def api(method, url, headers, body=None, timeout=60):
         return e.code, (json.loads(raw) if raw.strip().startswith(("{", "[")) else raw)
 
 
+import subprocess as _sp
+
+
+def _admin_key():
+    out = _sp.run(["docker", "inspect", "vexa-dogfood-admin-api-1", "--format",
+                   "{{range .Config.Env}}{{println .}}{{end}}"],
+                  capture_output=True, text=True).stdout
+    for ln in out.splitlines():
+        if ln.startswith("ADMIN_API_TOKEN="):
+            return ln.split("=", 1)[1].strip()
+    return ""
+
+
+def key_for(u):
+    _st, t = api("POST", f"http://127.0.0.1:18457/admin/users/{u}/tokens",
+                 {"X-Admin-API-Key": _admin_key()}, {"scopes": ["bot", "browser", "tx"]})
+    return (t or {}).get("token") if isinstance(t, dict) else None
+
+
+# Visibility is asked of the PRODUCT's own API (the gateway), not of a rig verb. The first
+# version of this probe called the rig's meetings_list and reported 0 after a redeem that had
+# plainly worked — that verb answers a different question than GET /meetings does, so the harness
+# was reporting the harness. Ask the surface the person's client actually uses.
+def _visible(u):
+    k = key_for(u)
+    if not k:
+        return []
+    _st, b = api("GET", f"{GATEWAY}/meetings", {"X-API-Key": k})
+    rows = b.get("meetings", []) if isinstance(b, dict) else (b if isinstance(b, list) else [])
+    return [r.get("id") for r in rows if isinstance(r, dict)]
+
+
 # 1 ── the real mail
 mail = None
 for m in rig.messages_for(EMAIL):
@@ -63,14 +95,11 @@ meeting_id = mid.group(1)
 # 2 ── first sign-in: the account is created HERE, by clicking
 uid, tok = login(EMAIL)
 print(f"UID    : {uid} (created by the click — this person never onboarded)")
+n_before = len(_visible(uid))
+print(f"VISIBLE BEFORE REDEEM : {n_before} meeting(s)")
 
-# what they can see BEFORE redeeming
-st, before = api("GET", f"{GATEWAY}/meetings", {"X-API-Key": ""})
 me = rig.MCP(tok)
 me.init()
-vis_before = me.call("meetings_list")
-n_before = len((vis_before or {}).get("meetings", []) or [])
-print(f"VISIBLE BEFORE REDEEM : {n_before} meeting(s)")
 
 # 3 ── redeem, the way the terminal does on landing.
 # Through the GATEWAY with this person's own API key, never agent-api with a hand-set X-User-Id:
@@ -78,22 +107,7 @@ print(f"VISIBLE BEFORE REDEEM : {n_before} meeting(s)")
 # one — gateway/app.py:437 and its test). Restricted mode is checked against that resolved
 # address, so this path proves the capability is bound to the attendee and not to whoever holds
 # the link.
-import subprocess as _sp
-
-
-def _admin_key():
-    out = _sp.run(["docker", "inspect", "vexa-dogfood-admin-api-1", "--format",
-                   "{{range .Config.Env}}{{println .}}{{end}}"],
-                  capture_output=True, text=True).stdout
-    for ln in out.splitlines():
-        if ln.startswith("ADMIN_API_TOKEN="):
-            return ln.split("=", 1)[1].strip()
-    return ""
-
-
-_st, _tokres = api("POST", f"http://127.0.0.1:18457/admin/users/{uid}/tokens",
-                   {"X-Admin-API-Key": _admin_key()}, {"scopes": ["bot", "browser", "tx"]})
-api_key = (_tokres or {}).get("token") if isinstance(_tokres, dict) else None
+api_key = key_for(uid)
 
 if tshare and api_key:
     st, body = api("POST", f"{GATEWAY}/transcripts/share/accept",
@@ -103,9 +117,10 @@ elif not tshare:
     print("REDEEM : skipped — no token on the link")
 
 # 4 ── visible now?
-vis_after = me.call("meetings_list")
-rows = (vis_after or {}).get("meetings", []) or []
-print(f"VISIBLE AFTER REDEEM  : {len(rows)} meeting(s) -> {[r.get('id') for r in rows][:5]}")
+rows = _visible(uid)
+_stm, _one = api("GET", f"{GATEWAY}/meetings/{meeting_id}", {"X-API-Key": api_key})
+print(f"VISIBLE AFTER REDEEM  : {len(rows)} meeting(s) -> {rows[:5]}"
+      f"   · GET /meetings/{meeting_id} -> {_stm}")
 
 # 5 ── the chat the button opens
 prompt = ("[minutes-review] The person just opened this chat from the follow-up email about "
@@ -134,5 +149,5 @@ except Exception as e:  # noqa: BLE001
 print("\n=== THE CHAT THE BUTTON OPENS ===")
 print(reply[:1600])
 json.dump({"email": EMAIL, "uid": uid, "link": link, "tshare": bool(tshare),
-           "visible_before": n_before, "visible_after": len(rows), "opening": reply},
+           "visible_before": n_before, "visible_after": len(rows), "visible_ids": rows, "opening": reply},
           open(f"/home/dima/sim-runs/r1/attendee-click-{EMAIL.split('@')[0]}.json", "w"), indent=1)
