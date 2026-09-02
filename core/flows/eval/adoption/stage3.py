@@ -21,7 +21,7 @@ import sys
 import time
 from email.message import EmailMessage
 
-RUN = os.path.expanduser("~/sim-runs/r4")
+RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r4"))
 SMTP = ("127.0.0.1", 1025)
 
 

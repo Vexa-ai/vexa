@@ -36,15 +36,36 @@ from flows_steps.common import db_url
 
 POLL_SECONDS = 12
 
-# A meeting link is Meet or Zoom. Meet stays byte-for-byte the pattern it always was (case
+# A meeting link is Meet, Zoom, Teams or Jitsi — the SAME four platforms the rest of the product
+# accepts (`collector/meeting_link.py`). Meet stays byte-for-byte the pattern it always was (case
 # sensitive, lowercase code); Zoom is the DNA corpus's platform — those invites are zoom.us.
+#
+# Teams and Jitsi were missing, and the way they failed is the point: an invite for a platform
+# this function does not know is not refused, it is IGNORED — `parse_ics` returns None, `route`
+# returns None, and the poller logs "ignored mail from …". Nothing reaches the person who
+# forwarded it and nothing reaches us. It was found on the second-invite path, where forwarding
+# an invite IS the mechanism: a person is told "forward the invite and Vexa joins", they do, and
+# for two of the four supported platforms nothing whatsoever happens. Teams is the one that
+# matters most commercially — it is what a bank or a studio actually runs.
 MEET_URL = re.compile(r"https://meet\.google\.com/[a-z-]+")
 ZOOM_URL = re.compile(r"https://(?:[A-Za-z0-9-]+\.)*zoom\.us/j/\d+(?:\?pwd=[A-Za-z0-9._%~-]+)?")
+TEAMS_URL = re.compile(
+    r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"']+"
+    r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"']+")
+# Jitsi is host-scoped exactly as meeting_link.py scopes it: meet.jit.si always, plus whatever
+# VEXA_JITSI_HOSTS declares. A bare "any host with a path" rule would match half the web.
+_JITSI_HOSTS = [h.strip() for h in
+                ("meet.jit.si," + os.environ.get("VEXA_JITSI_HOSTS", "")).split(",") if h.strip()]
+JITSI_URL = re.compile(
+    r"https://(?:" + "|".join(re.escape(h) for h in _JITSI_HOSTS) + r")/[^\s<>\"'?#]+")
 
 
 def _meeting_url(text: str) -> str | None:
-    m = MEET_URL.search(text) or ZOOM_URL.search(text)
-    return m.group(0) if m else None
+    for pat in (MEET_URL, ZOOM_URL, TEAMS_URL, JITSI_URL):
+        m = pat.search(text)
+        if m:
+            return m.group(0)
+    return None
 
 
 def _unfold(ics: str) -> str:
