@@ -207,7 +207,11 @@ def test_the_qwen_lane_dials_are_declared():
 #: The number gate:config-contract PRINTS. It used to be compared to nothing, so it could move by
 #: any amount — a key silently dropped from the declaration reads as a smaller, equally green line
 #: (F93). Bump this deliberately, in the same commit that adds or removes a key.
-EXPECTED_DECLARED_KEYS = 84
+# 84 on `harness-hardening` (which declared the 22 llm/worker keys), plus the two the line
+# gained while that branch was open: INTERNAL_API_SECRET (the security hotfix, PR #1424) and
+# VEXA_BUILD_SHA (the version bar, PR #1422). The union is duplicate-free and drops nothing
+# from either side.
+EXPECTED_DECLARED_KEYS = 86
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():
