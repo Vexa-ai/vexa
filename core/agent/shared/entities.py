@@ -175,15 +175,77 @@ def _today(today: str | None) -> str:
     return today or _dt.date.today().isoformat()
 
 
+# ── cross-workspace links (PRD decision 26.3) ────────────────────────────────────────────────────
+#
+# The agent mounts several workspaces at once and writes about a person who has a page in one of the
+# others. Written as `[[Olga Avramenko]]` that link resolves by TITLE, in whichever mount the reader
+# searches first, and it dies the moment either workspace is renamed. Written as
+# `[[ws:<workspace-id>/<entity-id>]]` it is two ids, and ids do not move.
+#
+# The agent is TOLD this rule (worker/engine.kg_links_preamble) and it is also DONE here, on the way
+# to disk. Both, deliberately: a rule the model follows most of the time plus a rewrite that is
+# always right beats either alone, and the rewrite is the half that can be tested.
+
+
+def _elsewhere_index(root, mounts) -> dict:
+    """``{entity slug: workspace id}`` for every mounted workspace EXCEPT this one.
+
+    Skips a mount with no identity file rather than raising: a workspace the migration has not
+    reached is one that cannot yet be linked to by id, and a turn must still be able to write."""
+    from shared.links import entity_slug_index
+    from shared.workspace_id import workspace_id_of
+
+    here = Path(root).resolve()
+    out: dict = {}
+    for m in mounts or []:
+        if not isinstance(m, dict):
+            continue
+        raw = str(m.get("path") or "")
+        if not raw:
+            continue
+        p = Path(raw).resolve()
+        if p == here or not p.is_dir():
+            continue
+        wid = m.get("id") or workspace_id_of(p)
+        if not wid:
+            continue
+        for slug, w in entity_slug_index(p, workspace_id=str(wid)).items():
+            out.setdefault(slug, w)
+    return out
+
+
+def _rewrite_links(root, facts, *, name: str, mounts) -> tuple[list, list]:
+    """``(facts, rewrites)`` — the facts with cross-workspace links in id form."""
+    elsewhere = _elsewhere_index(root, mounts)
+    if not elsewhere:
+        return list(facts), []
+    from shared.links import rewrite_cross_workspace
+
+    here = known_slugs(root) | {slugify(name)}   # the page being written counts as HERE, before it exists
+    out, all_rewrites = [], []
+    for f in facts:
+        text, rewrites = rewrite_cross_workspace(f, here=here, elsewhere=elsewhere)
+        out.append(text)
+        all_rewrites += rewrites
+    return out, all_rewrites
+
+
 def upsert_entity(root, kind: str, name: str, facts, source: str, *,
-                  today: str | None = None, aliases=()) -> dict:
+                  today: str | None = None, aliases=(), mounts=None) -> dict:
     """Create ``kg/entities/<kind>/<slug>.md`` with frontmatter and a first dated entry, or append a
     dated entry to the page already there. Returns what happened, in the caller's words.
 
     Idempotent on identical facts: a fact already on the page (by ``_normalise``) is dropped, and a
     call whose every fact is already there writes nothing and reports ``changed: False``. That is
     what makes the forced write-back phase safe to run on EVERY turn — a turn that learned nothing
-    new costs one no-op, not a duplicated paragraph."""
+    new costs one no-op, not a duplicated paragraph.
+
+    ``mounts`` is the turn's mount set (``[{path, id?}]``) and it turns on PRD decision 26.3's write
+    rule: a ``[[Name]]`` in a fact whose page lives in ANOTHER mounted workspace is rewritten to the
+    id form ``[[ws:<workspace-id>/<entity-id>]]`` before it is stored, so the link survives that
+    workspace being renamed. The home workspace always wins — a name with a page HERE is left alone,
+    because the reader's own desk is the page they meant. Omitting ``mounts`` is the single-workspace
+    behaviour, byte-identical to before."""
     root = Path(root)
     src = str(source or "").strip()
     facts = [str(f).strip() for f in (facts or []) if str(f).strip()]
@@ -201,15 +263,26 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
     raw = path.read_text(encoding="utf-8", errors="replace") if existed else ""
     fm, body = split_frontmatter(raw)
 
+    # THE REWRITE HAPPENS BEFORE IDEMPOTENCY IS TESTED, and the order is load-bearing: a fact
+    # re-stated next turn arrives as `[[Olga Avramenko]]` and is already stored as
+    # `[[ws:k4m…/olga-avramenko]]`, so comparing the raw forms would append it a second time. Both
+    # sides are normalised through the SAME rewritten text.
+    linked = wikilinks(facts)                       # the names as the caller wrote them (for the report)
+    facts, rewritten = _rewrite_links(root, facts, name=name, mounts=mounts)
     fresh = [f for f in facts if _normalise(f) not in existing_facts(raw)]
-    linked = wikilinks(facts)
     resolved, unresolved = resolve_links(root, linked)
+    if rewritten:
+        # A name that resolved in ANOTHER mounted workspace is resolved, not missing — reporting it
+        # as missing is what would send the write-back phase off to create a duplicate page here.
+        crossed = {title for title, _ref in rewritten}
+        resolved += [n for n in unresolved if n in crossed]
+        unresolved = [n for n in unresolved if n not in crossed]
     day = _today(today)
 
     if existed and not fresh:
         return {"path": rel, "created": False, "changed": False, "facts_written": 0,
                 "already_recorded": len(facts), "links_resolved": resolved,
-                "links_missing": unresolved, "kind": kind, "name": name}
+                "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind, "name": name}
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
@@ -237,7 +310,8 @@ def upsert_entity(root, kind: str, name: str, facts, source: str, *,
     path.write_text("---\n" + "\n".join(fm) + "\n---\n" + body.lstrip("\n"), encoding="utf-8")
     return {"path": rel, "created": not existed, "changed": True, "facts_written": len(written),
             "already_recorded": len(facts) - len(written), "links_resolved": resolved,
-            "links_missing": unresolved, "kind": kind, "name": name, "date": day}
+            "links_missing": unresolved, "links_rewritten": rewritten, "kind": kind, "name": name,
+            "date": day}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────

@@ -42,6 +42,8 @@ from control_plane.config_preflight import NOT_CONFIGURED, capability_state, mis
 from shared import units
 from shared import entities as entities_mod
 from control_plane import workspace_routines as workspace_routines_mod
+from control_plane import link_resolver as link_resolver_mod
+from control_plane import workspace_ids as ids_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from control_plane.workspace_attach import (
@@ -63,6 +65,7 @@ from control_plane.workspace_attach import (
     shared_attached_state,
     swap_workspace,
     workspace_dir_for,
+    workspace_slot_dir,
 )
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
@@ -1138,6 +1141,30 @@ def create_app(
         scaffolds = scaffolds_mod.ScaffoldStore()
     wsr = reader or WorkspaceReader("/workspaces")
     mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
+    # THE WORKSPACE REGISTRY (PRD decision 26.1) — id → where that workspace is NOW. Same redis
+    # client and the same in-memory fallback as the scaffold store, for the same reason: the unit
+    # tests need no redis and the deployment needs no second store. It is a DERIVED index — every
+    # field but the display name is recomputable by walking the volume — so a redis loss costs the
+    # names and nothing else.
+    if redis_url:
+        import redis as _redis_for_ids
+
+        workspace_registry = ids_mod.WorkspaceRegistry(_redis_for_ids.from_url(redis_url, decode_responses=True))
+    else:
+        workspace_registry = ids_mod.WorkspaceRegistry()
+    # THE MIGRATION, at startup and idempotent. Every workspace already on the volume gets an id
+    # written into it and a row in the registry; parked trees get the id file so it survives the
+    # swap that brings them back. It runs HERE rather than in a script because a workspace with no
+    # id is one nothing can link to, and a link that silently does nothing is the defect being
+    # fixed — a migration nobody remembered to run would reproduce it exactly.
+    try:
+        _migrated = ids_mod.migrate(wsr.root, workspace_registry)
+        if _migrated["minted"] or _migrated["parked_minted"]:
+            logger.info("workspace ids: minted %d live, %d parked; %d indexed",
+                        len(_migrated["minted"]), len(_migrated["parked_minted"]),
+                        len(_migrated["indexed"]))
+    except Exception as exc:  # noqa: BLE001 — a volume that cannot be walked must not stop the boot
+        logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
 
     # ── THE COMPANY-LAYER GATE, ENFORCED PER REQUEST ────────────────────────────────────────────
@@ -1192,6 +1219,9 @@ def create_app(
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
+    # Reachable for the operator seams that rename a workspace and for the tests that prove a
+    # rename moves nothing else.
+    app.state.workspace_registry = workspace_registry
     app.state.live_meetings = live
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
@@ -2285,6 +2315,27 @@ def create_app(
                      "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
         return {"path": rel, "written": True}
 
+    def _entity_mounts(subject: str) -> list:
+        """`[{slug, path}]` for every workspace this subject has mounted — their own actives plus
+        the shared ones their membership grants. Read for ONE purpose: to know which OTHER
+        workspace already holds a page for a name, so the link into it can be written by id.
+
+        Fails soft to an empty list, which is the single-workspace behaviour: an entity write must
+        never fail because the mount table could not be read."""
+        out: list = []
+        try:
+            mounts = active_workspaces(wsr.root, subject)
+        except Exception:  # noqa: BLE001
+            return out
+        try:
+            mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+        except Exception:  # noqa: BLE001
+            pass
+        for m in mounts:
+            if m.path:
+                out.append({"slug": m.slug, "path": m.path})
+        return out
+
     @app.post("/api/workspace/entity")
     def ws_entity_upsert(request: Request, body: dict = Body(...)):
         """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.
@@ -2321,7 +2372,12 @@ def create_app(
                 pass  # not shared — _read_target 403s anything outside the active set
         target = _read_target(request, slug)
         try:
-            result = entities_mod.upsert_entity(target, kind, name, facts, source)
+            # THE MOUNT SET IS HANDED IN so a `[[Name]]` whose page lives in another mounted
+            # workspace is stored as `[[ws:<id>/<entity-id>]]` (PRD decision 26.3). Without it the
+            # link resolves by TITLE in whichever mount the reader searches first, and dies the
+            # moment either workspace is renamed — which is the ordinary case, not the edge.
+            result = entities_mod.upsert_entity(target, kind, name, facts, source,
+                                                mounts=_entity_mounts(subject))
         except entities_mod.EntityRefused as e:
             # 422, not 400: the request is well-formed and the REFUSAL is the product — the agent is
             # meant to read the sentence and fix the fact, not to retry the call.
@@ -2386,8 +2442,82 @@ def create_app(
         # it up front too so identity + chats/settings have a home from the very first turn. Idempotent.
         system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
         system_mounts.ensure_system_workspace(str(wsr.root), subject)
+        # The desk's id + registry row. Named by the address that signed in when the gateway gave
+        # us one: a desk called "Desk 126" is better than `126` and worse than the person's own
+        # address, and this is the one seam that has the address.
+        _ws_sync(str(subject), kind="desk", owner=str(subject), ws_dir=ws,
+                 name=(request.headers.get("x-user-email") or "").strip() or None)
         return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
                 "system_seeded": not system_existed}
+
+    # ── workspace identity + link resolution (PRD decision 26) ──────────────────────────────────
+    #
+    # "Hash ID to every workspace? workspaces interconnected together. If a workspace is not
+    # available, it's okay — by design." (founder, 2026-09-02). Three reads, and the third one is
+    # the product: a reader hands the server the refs in front of them and gets back, per ref, what
+    # it points at NOW and whether they may open it.
+
+    def _ws_is_member(root, slug, subject):
+        """The membership check the access rule injects — the authoritative git roster, never the index."""
+        return membership_mod.is_member(root, slug, subject)
+
+    def _ws_sync(slug: str, **kw):
+        """Re-point the registry at a workspace that just moved. Best-effort by design: a failure
+        here costs a stale row that the next startup migration repairs, and it must never fail the
+        act that moved the workspace."""
+        try:
+            return ids_mod.sync_workspace(wsr.root, slug, registry=workspace_registry, **kw)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("workspace-id sync failed for %s: %s: %s", slug, type(exc).__name__, exc)
+            return None
+
+    def _ws_here(request: Request, slug: Optional[str]):
+        """The reader's CURRENT workspace record — the one an in-workspace `[[Title]]` resolves in.
+
+        A slug the caller may not read resolves to None rather than to that workspace: the ref
+        would otherwise be answered out of somebody else's tree because the READER named it."""
+        subject = subject_of(request)
+        rec = workspace_registry.by_slug(slug) if slug else workspace_registry.by_slug(str(subject))
+        if rec is None and slug:
+            rec = _ws_sync(slug)
+        if rec is None and not slug:
+            rec = _ws_sync(str(subject), kind="desk", owner=str(subject))
+        if rec is None:
+            return None
+        access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
+        return rec if access == ids_mod.ACCESS_READABLE else None
+
+    @app.get("/api/workspaces/by-slug/{slug}")
+    def ws_id_by_slug(slug: str, request: Request):
+        """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
+        put a NAME where it used to print a directory name (F49: the chat header read `126`)."""
+        rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
+        access = ids_mod.access_for(rec, subject_of(request), root=wsr.root, is_member=_ws_is_member)
+        return ids_mod.view(rec, access)
+
+    @app.get("/api/workspaces/{workspace_id}")
+    def ws_id_resolve(workspace_id: str, request: Request):
+        """`{id, name, kind, access}` for one workspace id, from THIS reader's point of view.
+
+        Never 404s and never 403s: `not-yours` and `gone` are ANSWERS (decision 26.3), and a status
+        code would make the client render an error where the design says render a greyed chip."""
+        rec = workspace_registry.get(workspace_id)
+        access = ids_mod.access_for(rec, subject_of(request), root=wsr.root, is_member=_ws_is_member)
+        return ids_mod.view(rec, access, workspace_id=workspace_id)
+
+    @app.post("/api/links/resolve")
+    def links_resolve(request: Request, body: dict = Body(default={})):
+        """A page's refs → what each one points at now, per ref: `{ref, title, url, access}`.
+
+        One round trip for a whole document on purpose. The panel renders a doc at once, and a
+        request per link would be a burst of them against the same three directories."""
+        refs = body.get("refs")
+        if not isinstance(refs, list):
+            raise HTTPException(status_code=400, detail="refs must be a list of link references")
+        slug = str(body.get("slug") or "").strip() or None
+        return {"results": link_resolver_mod.resolve_many(
+            [str(r) for r in refs], subject=subject_of(request), root=wsr.root,
+            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member)}
 
     @app.get("/api/workspace/attached")
     def ws_attached(request: Request):
@@ -3158,6 +3288,11 @@ def create_app(
                 mindex.remove(m.get("subject"), workspace_id)
             except Exception:  # noqa: BLE001
                 pass
+        # The tree moved into the caller's private store and stopped being a group. Its id did NOT
+        # change — un-sharing is an administrative act, not a new workspace — so every link into it
+        # keeps resolving, and for everyone else it now answers `not-yours`, which is the truth.
+        _ws_sync(new_slug, kind="desk", owner=subject,
+                 ws_dir=workspace_slot_dir(wsr.root, subject, new_slug))
         return {"slug": new_slug}
 
     @app.post("/api/workspace/{slug}/share-enable")
@@ -3190,6 +3325,12 @@ def create_app(
             wid = create_shared_workspace_dir(wsr.root, body.name)
             membership_mod.ensure_owner(wsr.root, wid, subject, index=mindex,
                                         email=request.headers.get("x-user-email"), commit_fn=_pc)
+            # The id is minted HERE, at creation, for the same reason it exists at all: this is the
+            # only moment the workspace's human NAME is known. `create_shared_workspace_dir`
+            # slugifies it into a directory and drops it, so without this line "ASWF DNA Project"
+            # never existed anywhere and the group could only ever be called
+            # `aswf-dna-project-b7b2ee`.
+            _ws_sync(wid, kind="group", name=(body.name or "").strip() or None, owner=subject)
         except MembershipError as exc:
             raise _member_error(exc)
         except Exception as exc:  # noqa: BLE001 — surface a clean 500 (dir/seed failure) rather than a stack

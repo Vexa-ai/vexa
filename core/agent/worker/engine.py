@@ -188,7 +188,7 @@ def voice_preamble() -> str:
     )
 
 
-def kg_links_preamble() -> str:
+def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
     """Entity references must be ACTIONABLE in the client. Chat replies and workspace docs render
     ``[[Title]]`` as a clickable entity chip and workspace file paths as links (the terminal resolves
     both across every mounted workspace — clients/terminal/src/ui-kit/docLinks.tsx). A plain-text
@@ -218,6 +218,15 @@ def kg_links_preamble() -> str:
         " not the reader's, and it says nothing they can use.\n"
         "- Put the reference OUTSIDE code fences and never backtick a `[[wikilink]]` — a fenced"
         " block is literal text and renders dead.\n"
+        # PRD decision 26.2. The rule is stated here AND enforced in `shared/entities.py` on the
+        # way to disk. Both, deliberately: a rule the model follows most of the time plus a
+        # rewrite that is always right beats either alone — and the model is the half that can
+        # write the link into a CHAT REPLY, where no writer runs.
+        "- Linking to a page in ANOTHER of your mounted workspaces, write"
+        " `[[ws:<workspace-id>/<entity-id>]]` — the id from the list above, the entity id from that"
+        " page's frontmatter `id`. Never a bare title across workspaces: a title resolves in"
+        " whichever workspace is searched first, and it dies when either one is renamed. For a file"
+        " with no entity id, `[[ws:<workspace-id>/<path>]]`.\n"
         "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
         " 'not found' chips) — create the entity first, or use plain text.\n"
         "- `kg/templates/` and any doc whose frontmatter carries `template: true` are SHAPES, not"
@@ -249,6 +258,7 @@ def entity_index_preamble(mounts: list[dict]) -> str:
     and rendered live from the directory when it is not, so a first dispatch into a workspace that
     has never been upserted still sees what it holds instead of being told nothing exists."""
     from shared.entities import INDEX_PATH, render_index
+    from shared.workspace_id import workspace_id_of
 
     blocks: list[str] = []
     for m in mounts:
@@ -263,7 +273,17 @@ def entity_index_preamble(mounts: list[dict]) -> str:
                 listing = render_index(root, slug)
         except OSError:
             continue
-        blocks.append(f"### `{slug}`\n\n{listing.strip()[:_ENTITY_INDEX_MAX_CHARS]}")
+        # THE ID IS IN THE HEADING because the rule above is unusable without it. An agent told
+        # to write `[[ws:<workspace-id>/…]]` and never shown a workspace id will either invent one
+        # or fall back to a bare title — and a bare title across workspaces is the defect.
+        wid = m.get("id") or workspace_id_of(root) or ""
+        label = str(m.get("name") or "").strip()
+        head = f"### `{slug}`"
+        if wid:
+            head += f" — workspace id `{wid}`"
+        if label and label != slug:
+            head += f" ({label})"
+        blocks.append(f"{head}\n\n{listing.strip()[:_ENTITY_INDEX_MAX_CHARS]}")
     if not blocks:
         return ""
     return (
@@ -455,6 +475,60 @@ WRITEBACK_PROMPT = writeback_prompt(["<the names the pre-pass found>"])
 # verb itself. Deliberately NOT the research tools: this phase records what the turn already learned,
 # and a phase that can go and look things up is a second turn wearing a bookkeeping name.
 WRITEBACK_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
+
+
+def desk_mounts(mounts: "list[dict] | None" = None) -> "tuple[dict | None, list[dict]]":
+    """`(the desk, the group workspaces)` out of a mount set — whose README is maintained, and what
+    the `## Workspaces` section lists.
+
+    The DESK is the writable primary mount: a person's own workspace, the one the panel opens by
+    default. Groups are the other writable non-system mounts. `_global` is neither — it is the
+    organisation tier, read-only, and nobody's desk."""
+    ms = [m for m in (mounts if mounts is not None else active_mounts()) if isinstance(m, dict)]
+    normal = [m for m in ms if m.get("write", True) and m.get("role") not in ("global", "system")
+              and m.get("slug") not in ("_global", "_system")]
+    desk = next((m for m in normal if m.get("primary")), None)
+    groups = [m for m in normal if m is not desk]
+    return desk, groups
+
+
+def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
+    """Regenerate the desk README's generated sections and commit them (PRD decision 26.4).
+
+    Runs at the END of a turn, in the same phase as the entity write-back, because it is the same
+    act one level up: the write-back records what the turn learned, this makes the desk SHOW it.
+    "The view over the files, never a second source of truth" — every section is derived from `kg/`
+    on every run, and nothing outside the markers is touched.
+
+    Fails soft and returns None. A README section is the least important thing a turn produces; a
+    turn that answered the person and then died updating a bulleted list has lost far more than the
+    list is worth."""
+    from shared import desk_readme
+    from shared.entities import commit_entity
+    from shared.workspace_id import workspace_id_of
+
+    desk, groups = desk_mounts(mounts)
+    if not desk or not desk.get("path"):
+        return None
+    root = Path(str(desk["path"]))
+    if not root.is_dir():
+        return None
+    listed = []
+    for g in groups:
+        wid = g.get("id") or workspace_id_of(str(g.get("path") or ""))
+        if wid:
+            listed.append({"id": wid, "name": g.get("name") or g.get("slug")})
+    try:
+        out = desk_readme.update_readme(root, workspaces=listed)
+    except OSError as e:
+        log.warning("desk README refresh failed: %s: %s", type(e).__name__, e)
+        return None
+    if out.get("changed"):
+        # BY PATHSPEC. `git commit` commits the INDEX, so a bare add+commit here would sweep in
+        # whatever the turn's own commit path had staged in the same repo.
+        commit_entity(root, [desk_readme.README], subject_path=desk_readme.README,
+                      created=False, author=_principal_author())
+    return out
 
 
 def writeback_enabled() -> bool:
@@ -799,7 +873,7 @@ def run_turn_over_workspace(
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = (voice_preamble() + kg_links_preamble() + mounts_preamble(mounts)
+    turn_prompt = (voice_preamble() + kg_links_preamble(mounts) + mounts_preamble(mounts)
                    + entity_index_preamble(mounts) + global_context_preamble(mounts)
                    + prompt)
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
@@ -922,6 +996,15 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                         stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             except Exception as e:  # noqa: BLE001
                 log.warning("write-back phase failed on %s: %s: %s", turn_id, type(e).__name__, e)
+        # THE DESK, REFRESHED. Decision 26.4 — the README is the desk, so what the turn just wrote
+        # into `kg/` has to be visible on it before the turn is called complete. It is a directory
+        # listing and a regex, no model call, so it runs on EVERY turn rather than only the ones
+        # the write-back phase fired on: a turn that called `entity_upsert` itself is precisely the
+        # turn whose desk moved, and that is the one the phase's gate 2 skips.
+        try:
+            refresh_desk_readme()
+        except Exception as e:  # noqa: BLE001
+            log.warning("desk README refresh failed on %s: %s: %s", turn_id, type(e).__name__, e)
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
 
     # SKIP THE ENTRYPOINT'S OWN COPY — AND NOTHING ELSE.

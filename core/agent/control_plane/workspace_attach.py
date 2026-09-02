@@ -107,6 +107,19 @@ def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
     return _store(root, subject) / slug
 
 
+def workspace_slot_dir(root: str | Path, subject: str, slug: str) -> Path:
+    """PUBLIC: where one of a subject's OWN workspaces lives on disk, seed slot or store slot alike.
+
+    Added for the workspace-identity sync (PRD decision 26): after an un-share the tree is no longer
+    at ``<root>/<workspace_id>`` and the registry has to be re-pointed at wherever it landed. The
+    caller could compute ``<root>/.attached/<subject>/<slug>`` itself — and that is exactly the
+    problem: the store layout would then be spelled in two modules, and the second spelling is the
+    one nobody updates. This module owns the layout; here is the read of it."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    return _slug_dir(rootp, subject, _load_state(_store(rootp, subject)), slug)
+
+
 def _repo_name(repo_url: str) -> str:
     """The readable tail of a repo URL — used as the ``kg/<name>/`` subdir when a non-compliant clone is
     nested inside a fresh template workspace."""
