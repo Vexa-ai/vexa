@@ -30,6 +30,21 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** How long a socket must stay open before it counts as working and clears the backoff. */
 const STABLE_MS = 10000;
 let stableTimer: ReturnType<typeof setTimeout> | null = null;
+/** The gateway REJECTED our credential (close 4401). Not a transport failure — retrying cannot fix
+ *  it, and retrying is exactly what this module used to do, forever, at one attempt per second.
+ *
+ *  Measured on the founder's live session 2026-09-02: his browser held a `vexa-token` cookie whose
+ *  API token no longer existed (`select count(*) from api_tokens where user_id=57` → 0), the WS
+ *  proxy dutifully presented it on every upgrade, and the gateway correctly answered
+ *  `invalid_api_key` + close 4401. The socket was never being DROPPED — it was being REFUSED, and
+ *  the client would not take no for an answer: ~3 upgrades a second, indefinitely, plus a
+ *  `GET /api/meetings` re-seed per reconnect.
+ *
+ *  4401 says "your key is bad", so we stop and say so. 4503 says "the auth hop is down" and IS
+ *  retryable — the gateway distinguishes them deliberately (app.py: AuthUnavailable → 4503, never
+ *  4401, precisely so a valid key is not told it is invalid), and this must honour that. */
+let authRejected = false;
+const WS_UNAUTHORIZED = 4401;
 const listeners = new Set<Listener>();
 const connListeners = new Set<ConnListener>();
 let connected = false;
@@ -64,6 +79,7 @@ export function parseFrame(data: unknown): MeetingStatusFrame | null {
 function connect() {
   if (typeof window === "undefined" || ws || starting) return;
   if (listeners.size === 0) return;            // only (re)connect when someone is listening
+  if (authRejected) return;                    // a refused key is not retried until it can change
   starting = true;
   try {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -95,11 +111,21 @@ function connect() {
       const f = parseFrame(data);
       if (f) listeners.forEach((fn) => fn(f));
     };
-    sock.onclose = () => {
+    sock.onclose = (e) => {
       if (ws === sock) ws = null;
       // the connection did not last: whatever progress it made toward "stable" does not count
       if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
       setConnected(false);
+      if (e?.code === WS_UNAUTHORIZED) {
+        // A refused credential. Reconnecting re-presents the SAME bad key, so the loop can only
+        // ever hammer. Stop, and say it once — silence here reads as "no meetings are happening".
+        authRejected = true;
+        console.error(
+          "gateway /ws refused this session's credential (close 4401) — live meeting updates are "
+          + "off until you sign in again. Not retrying: the same key would be presented each time.",
+        );
+        return;
+      }
       scheduleReconnect();
     };
     sock.onerror = () => { try { sock.close(); } catch { /* noop */ } };
@@ -132,6 +158,10 @@ export function onMeetingStatus(fn: Listener): () => void {
       clearReconnect();                          // kill any pending reconnect on the last unsubscribe
       if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
       retry = 0;
+      // The latch clears with the last listener, so the next mount — which is what a sign-in
+      // produces — gets one clean attempt with whatever cookie is current. It never clears on a
+      // timer, because nothing about waiting makes a rejected key valid.
+      authRejected = false;
       if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
     }
   };
