@@ -507,7 +507,7 @@ class AdminApiModelConfig:
     ``/internal/users/{id}/model-config``) over the same internal edge as the membership index.
 
     Dispatch-time seam for the Settings → Models surface: the returned
-    ``{mode, model, meeting_model, base_url, api_key}`` (all optional) overlays the deployment env
+    ``{mode, model, base_url, api_key}`` (all optional) overlays the deployment env
     defaults in ``build_unit_env``. Best-effort by contract: the caller catches failures and
     dispatches on env defaults — a down identity service must never block a turn. The ``api_key``
     is a SECRET riding one internal hop into the worker's brokered env; never log the payload."""

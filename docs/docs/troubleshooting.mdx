@@ -185,7 +185,7 @@ agent cannot run…"* — and no turn runs. This is the credential preflight: th
 model credential and your user has no custom endpoint, so a worker could only fail. Fix either side:
 
 - **Deployment-wide** — set ONE of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, `VEXA_LLM_API_KEY` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
+  `ANTHROPIC_AUTH_TOKEN` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
   then `make all` (the frame names exactly the keys it found unset).
 - **Per-user** — add a custom endpoint under **Settings → Models** in the Terminal (a `custom`
   config needs its `base_url`; the API key is optional for keyless local gateways).

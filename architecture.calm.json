@@ -505,18 +505,6 @@
    ]
   },
   {
-   "unique-id": "processed-notes.v1",
-   "node-type": "contract",
-   "name": "processed-notes.v1",
-   "description": "processed-notes.v1 \u2014 sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker \u2192 meeting-api db-writer / agent-api SSE; ADR-0027)",
-   "metadata": [
-    {
-     "path": "core/agent/contracts/processed-notes.v1",
-     "domain": "agent"
-    }
-   ]
-  },
-  {
    "unique-id": "workspace.v1",
    "node-type": "contract",
    "name": "workspace.v1",
@@ -863,41 +851,10 @@
    ]
   },
   {
-   "unique-id": "proc-stream",
-   "node-type": "data-asset",
-   "name": "proc:meeting:{id} (stream)",
-   "description": "cleaned 1:1 processed transcript, keyed by segment_id, + the view_end terminal marker (processed-notes.v1, ADR-0027); agent-worker is the writer; read by meeting-api's db-writer (durable data.processed.views) and agent-api's live SSE",
-   "controls": {
-    "ownership": {
-     "description": "single writer (P23)",
-     "requirements": [
-      {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
-       "config": {
-        "writers": [
-         "agent-worker"
-        ],
-        "match": "proc:meeting:",
-        "op": "xadd"
-       }
-      }
-     ]
-    }
-   },
-   "metadata": [
-    {
-     "contract": "transcript.v1"
-    },
-    {
-     "stage": "cleaned"
-    }
-   ]
-  },
-  {
    "unique-id": "out-stream",
    "node-type": "data-asset",
    "name": "unit:{id}:out (stream)",
-   "description": "worker output stream (cards / agent activity / message deltas \u2014 notes moved to proc-stream per ADR-0027); agent-api relays as SSE",
+   "description": "worker output stream (agent activity / message deltas); agent-api relays as SSE",
    "controls": {
     "ownership": {
      "description": "single writer (P23)",
@@ -1118,7 +1075,7 @@
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
-   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn / meeting copilot; every dispatch mounts the ordered [_global, active workspaces, _system] stack, fails closed without _global, and loads its authoritative entry context into the turn",
+   "description": "spawned isolated workspace-agent worker; selectable Claude Code or Codex app-server harness; one dispatch turn; every dispatch mounts the ordered [_global, active workspaces, _system] stack, fails closed without _global, and loads its authoritative entry context into the turn",
    "metadata": [
     {
      "path": "core/agent/worker"
@@ -1279,12 +1236,10 @@
       "task.v1",
       "tool.v1",
       "unit.v1",
-      "processed-notes.v1",
       "workspace.v1",
       "agent-worker",
       "out-stream",
       "unit-in",
-      "proc-stream",
       "va-chat"
      ]
     }
@@ -1552,24 +1507,6 @@
      },
      "destination": {
       "node": "tc-stream"
-     }
-    }
-   },
-   "metadata": [
-    {
-     "access": "read"
-    }
-   ]
-  },
-  {
-   "unique-id": "terminal-reads-processed",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "terminal"
-     },
-     "destination": {
-      "node": "proc-stream"
      }
     }
    },
@@ -2044,25 +1981,6 @@
    ]
   },
   {
-   "unique-id": "aw-proc",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "agent-worker"
-     },
-     "destination": {
-      "node": "proc-stream"
-     }
-    }
-   },
-   "description": "XADD cleaned 1:1 notes",
-   "metadata": [
-    {
-     "access": "write"
-    }
-   ]
-  },
-  {
    "unique-id": "aw-unitin",
    "relationship-type": {
     "connects": {
@@ -2387,7 +2305,7 @@
   {
    "unique-id": "live-transcript-flow",
    "name": "live transcript",
-   "description": "raw -> durable collector -> native stream -> copilot clean -> render. One render engine; terminal never re-derives.",
+   "description": "raw -> durable collector -> native stream -> render. One render engine; terminal never re-derives.",
    "transitions": [
     {
      "relationship-unique-id": "bot-writes-segments-stream",
@@ -2407,17 +2325,7 @@
     {
      "relationship-unique-id": "aw-tcnative",
      "sequence-number": 4,
-     "description": "copilot tails the native stream"
-    },
-    {
-     "relationship-unique-id": "aw-proc",
-     "sequence-number": 5,
-     "description": "copilot writes cleaned 1:1 transcript"
-    },
-    {
-     "relationship-unique-id": "terminal-reads-processed",
-     "sequence-number": 6,
-     "description": "one engine renders raw|processed; no re-derivation"
+     "description": "the agent reads the native stream for chat grounding"
     }
    ]
   },

@@ -139,70 +139,6 @@ def _remove_doc(docs: list[dict], path: str) -> list[dict]:
     return [d for d in docs if d.get("path") != path]
 
 
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
 # A relative in-meeting offset never approaches this; anything at/above is an absolute epoch.
 _EPOCH_THRESHOLD_S = 1_000_000_000  # ~2001-09-09
 
@@ -1037,47 +973,6 @@ class SqlAlchemyTranscriptStore:
                 "session_uid": session_uid, "source": source,
                 "imported_at": data["transcript_import"]["imported_at"],
             }
-
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
-        — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""
-        from sqlalchemy import select
-
-        from .models import Meeting
-
-        async with self._session_factory() as db:
-            m = (await db.execute(select(Meeting).where(Meeting.id == int(meeting_id)))).scalars().first()
-            if not m or not isinstance(m.data, dict):
-                return None
-            view = _find_processed_view(m.data, view_id)
-            return view.get("source_cursor") if view else None
-
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into the meeting row's ``data['processed']['views']``
-        JSONB (the documented meeting.data home — the same pattern recordings/notes/docs use; NO
-        schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
-        the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
-        by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
-        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
-        from sqlalchemy import select
-        from sqlalchemy.orm.attributes import flag_modified
-
-        from .models import Meeting
-
-        async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
-            meeting = (await db.execute(stmt)).scalars().first()
-            if not meeting:
-                return
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            meeting.data = _upsert_processed_view(
-                data, view_id=view_id, kind=kind, notes=notes,
-                source_cursor=source_cursor, params=params,
-            )
-            flag_modified(meeting, "data")
-            await db.commit()
 
     async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):
         """Owner-scoped atomic read→modify→write of ``meeting.data['docs']`` under ONE

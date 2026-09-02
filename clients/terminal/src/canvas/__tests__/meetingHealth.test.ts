@@ -34,10 +34,10 @@ describe("meetingHealth verdict", () => {
     expect(h.kind).toBe("stalled");
     expect(h.staleForMs).toBeGreaterThanOrEqual(STALE_MS);
   });
-  it("surfaces a model/parse error when otherwise healthy", () => {
-    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: now - 500, issues: [{ kind: "model", message: "boom", at: now }] }, now, true);
+  it("surfaces a feed (parse) error when otherwise healthy", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: now - 500, issues: [{ kind: "parse", message: "boom", at: now }] }, now, true);
     expect(h.kind).toBe("error");
-    expect(h.latestIssue?.kind).toBe("model");
+    expect(h.latestIssue?.kind).toBe("parse");
   });
   it("recorded (not live) meeting is never disconnected/stalled", () => {
     expect(meetingHealth({ liveConnected: false, lastTranscriptAt: now - STALE_MS - 1 }, now, false).kind).toBe("ok");

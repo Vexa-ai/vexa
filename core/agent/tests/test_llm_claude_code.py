@@ -93,7 +93,7 @@ def test_parse_stream_json_rewrites_cli_auth_failure():
     assert done["type"] == "done" and done["ok"] is False
     assert "Not logged in" not in done["reply"] and "/login" not in done["reply"]
     for key in ("HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_LLM_API_KEY"):
+                "CLAUDE_CODE_OAUTH_TOKEN"):
         assert key in done["reply"]
     assert "Settings → Models" in done["reply"]
     assert done["detail"] == "Not logged in · Please run /login"

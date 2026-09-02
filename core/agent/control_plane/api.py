@@ -44,7 +44,6 @@ from shared import entities as entities_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
-from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from control_plane.workspace_attach import (
     CloneError,
@@ -131,11 +130,6 @@ def _epoch_text(when) -> str:
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MEETING_STREAM_TRANSCRIPT_REPLAY = 80
-MEETING_STREAM_OUTPUT_REPLAY = 160
-# How long the SSE keeps draining after session_end when the copilot HAS written notes but its
-# view_end marker hasn't arrived (the final beat is ~10s of LLM; a dead worker never marks) —
-# the bounded cap that replaces the old one-empty-poll guess (ADR 0027).
-MEETING_STREAM_ENDING_CAP_SEC = 45.0
 
 
 def _upload_filename(name: str | None) -> str:
@@ -292,14 +286,8 @@ class _Sessions:
 # guard was papering over.
 LIVE_SILENCE_TTL_SEC = 60.0
 
-# The processing desired-state flag's set-time backstop TTL (the watcher refreshes a rolling TTL per
-# armed batch while segments flow — transcription_watcher.PROC_FLAG_ROLLING_TTL_SEC). Bounds a flag
-# whose meeting never produces a segment; generous because the toggle is only offered on live rows.
-PROC_FLAG_BACKSTOP_TTL_SEC = 4 * 3600
-
-
 class _LiveMeetings:
-    """In-memory registry of meeting copilots — the terminal's 'meetings' feed. Keyed by session_uid (the
+    """In-memory registry of live meetings — the terminal's 'meetings' feed. Keyed by session_uid (the
     native Meet code). A stopped/ended meeting is KEPT (``status='stopped'``) so the terminal can offer to
     send the bot back; ``add`` (re)marks it live. Liveness is EVIDENCE, not a latch: ``add`` stamps
     ``last_seen`` and ``list`` demotes an entry silent past LIVE_SILENCE_TTL_SEC to stopped (P21 —
@@ -597,58 +585,22 @@ class WorkspaceDeactivateBody(BaseModel):
     slug: str
 
 
-class MeetingStart(BaseModel):
-    """Launch a live-meeting copilot for a REAL meeting. The vexa-cloud bridge POSTs this once it has a
-    bot in the meeting; the dispatch then tails ``tc:meeting:{native_id}`` (the stream the bridge feeds)."""
-    model_config = {"extra": "forbid"}
-    platform: str               # google_meet | teams | zoom
-    native_id: str              # the platform meeting id (e.g. a Google Meet code abc-defg-hij)
-    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
-    title: Optional[str] = None
-
-
-class MeetingProcess(BaseModel):
-    """Toggle copilot PROCESSING for a meeting. on=false → no processing (raw transcript only);
-    on=true → process the meeting (full-history backfill the first time, else resume live)."""
-    model_config = {"extra": "forbid"}
-    native_id: str
-    platform: str = "google_meet"
-    on: bool
-    # P0 (cross-tenant leak fix): the meetings-domain ROW id (unique per meeting run). When the terminal
-    # knows it (POST /bots returns it), the copilot's opt-in flag + cursor + processed stream key on it —
-    # so a re-sent bot on the same native link, or a DIFFERENT tenant on the same link, can never
-    # arm/clobber/read another meeting's processing. Falls back to native only when absent (legacy).
-    meeting_id: Optional[str] = None
-    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
-
-
-# The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
-# CARD_PROMPT; this is the envelope's entrypoint (continuity = the session file in the workspace).
-_MEETING_BRIEF = (
-    "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
-    "people, companies, products, and projects worth tagging."
-)
-
-
-def _encode_sse_cursor(last: dict, tkey: str, okey: str, pkey: str | None = None) -> str:
-    """Pack the per-stream redis cursors into ONE SSE event id (the browser echoes it as
+def _encode_sse_cursor(last: dict, tkey: str) -> str:
+    """The transcript stream's redis cursor as the SSE event id (the browser echoes it as
     Last-Event-ID on reconnect → we resume EXACTLY from here, gapless). '-' = not-yet-read.
-    Three parts since ADR 0027 (transcript|output|processed); the third is the proc-stream cursor."""
-    parts = [last.get(tkey, "-"), last.get(okey, "-")]
-    if pkey is not None:
-        parts.append(last.get(pkey, "-"))
-    return "|".join(str(p) for p in parts)
+    ONE part since PRD decision 34: the copilot out-stream and the processed-notes stream that
+    used to occupy the other two are gone, and with them everything they carried."""
+    return str(last.get(tkey, "-"))
 
 
-def _decode_sse_cursor(raw: str | None) -> "tuple[str | None, str | None, str | None]":
-    """Last-Event-ID → (transcript_id, output_id, processed_id). None when absent/malformed (fresh
-    connect). PAD-tolerant: a pre-ADR-0027 two-part id decodes with processed_id None — the caller
-    replays the proc stream from the start (notes upsert by id client-side, so replay is idempotent
-    and never drops the reconnect gap)."""
-    if not raw or "|" not in raw:
-        return (None, None, None)
-    parts = (raw.split("|") + [None, None, None])[:3]
-    return tuple(p if p and p != "-" else None for p in parts)  # type: ignore[return-value]
+def _decode_sse_cursor(raw: str | None) -> "str | None":
+    """Last-Event-ID → the transcript stream id, or None when absent/malformed (fresh connect).
+    Tolerates the retired multi-part form (``transcript|output|processed``) a client reconnecting
+    across the deploy still holds: the first field was always the transcript cursor."""
+    if not raw:
+        return None
+    head = raw.split("|")[0].strip()
+    return head if head and head != "-" else None
 
 
 def _sse(events) -> Iterator[str]:
@@ -686,8 +638,8 @@ MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into 
 
 
 def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
-    """Fold the live transcript Stream ``tc:meeting:{stream_key}`` — the SAME stream the meeting copilot
-    tails (worker/meeting.py) and the terminal renders — into ordered ``speaker: text`` lines for chat
+    """Fold the live transcript Stream ``tc:meeting:{stream_key}`` — the SAME stream the terminal
+    renders — into ordered ``speaker: text`` lines for chat
     grounding. ``stream_key`` is the meetings-domain ROW id (P0 cross-tenant leak fix: the carrier keys
     on the row id, never the native id which collides across tenants/re-sends). Refining live drafts are
     upserted by ``segment_id`` (latest text wins, no duplicate), arrival order preserved, bounded to the
@@ -724,49 +676,6 @@ def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit:
     return "\n".join(lines)
 
 
-def _fold_meeting_processed(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
-    """Fold the PROCESSED-notes Stream ``proc:meeting:{stream_key}`` (processed-notes.v1 — the copilot's
-    cleaned transcript; single writer worker/meeting.py) into ordered ``speaker: text`` lines for
-    post-meeting chat grounding. Notes upsert by id (a refining pass upgrades in place), the ``view_end``
-    terminal marker is skipped, order preserved, bounded to the last ``limit`` notes. Best-effort:
-    returns "" when redis is unwired, the stream is empty, or entries are malformed."""
-    if not redis_url:
-        return ""
-    try:
-        import redis
-
-        r = redis.from_url(redis_url, decode_responses=True)
-        rows = r.xrange(f"proc:meeting:{stream_key}")
-    except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
-        logger.warning("could not read processed notes for %s: %s", stream_key, exc)
-        return ""
-    order: list[str] = []
-    note_by_id: dict[str, dict] = {}
-    for entry_id, fields in rows:
-        if fields.get("type") == "view_end":
-            continue
-        raw = fields.get("note")
-        if not raw:
-            continue
-        try:
-            note = json.loads(raw)
-        except (TypeError, ValueError):
-            continue
-        nid = str(note.get("id") or entry_id)
-        if nid not in note_by_id:
-            order.append(nid)
-        note_by_id[nid] = note
-    lines: list[str] = []
-    for nid in order[-limit:]:
-        note = note_by_id[nid]
-        text = (note.get("text") or "").strip()
-        if not text:
-            continue
-        speaker = (note.get("speaker") or "Speaker").strip()
-        lines.append(f"{speaker}: {text}")
-    return "\n".join(lines)
-
-
 def _meeting_grounding(
     active: "dict | None", session: str, prompt: str, redis_url: "str | None"
 ) -> "tuple[dict, list[str], str]":
@@ -778,13 +687,12 @@ def _meeting_grounding(
                                        naming the bound prep workspace when the client sent one.
       live (default; absent status)  — fold ``tc:meeting:{row}`` fresh on every turn — a legacy
                                        client that sends no status keeps exactly this behavior.
-      post (completed/failed/stopped)— fold the PROCESSED notes ``proc:meeting:{row}``; fall back to
-                                       the raw transcript; if neither exists say so plainly (fail loud,
-                                       never fabricate).
+      post (completed/failed/stopped)— fold the recorded transcript ``tc:meeting:{row}``; if there is
+                                       none say so plainly (fail loud, never fabricate).
 
-    The transcript reaches the agent the SAME way the live copilot gets it: the meeting's redis Stream
-    (the meetings⊥agent seam) — NOT a file, NOT a cross-domain HTTP call, NO token. Returns the plain
-    (none-context, no tools, prompt) when the active tab isn't a meeting."""
+    There is ONE transcript and one fold of it: the "processed notes" the post branch used to prefer
+    were the in-product inference pipeline's output, and PRD decision 34 removed that pipeline.
+    Returns the plain (none-context, no tools, prompt) when the active tab isn't a meeting."""
     a = active or {}
     if a.get("kind") != "meeting":
         return ({"kind": "none", "session": session}, [], prompt)
@@ -828,12 +736,8 @@ def _meeting_grounding(
 
     if phase == "post":
         fields["failed"] = " — the bot FAILED during this meeting" if status == "failed" else ""
-        folded = _fold_meeting_processed(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
-        if folded:
-            fields["source"] = "processed notes (cleaned transcript)"
-        else:
-            folded = _fold_meeting_transcript(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
-            fields["source"] = "raw transcript"
+        folded = _fold_meeting_transcript(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+        fields["source"] = "raw transcript"
         if not folded:
             return (ctx, [], meeting_steering.NO_RECORD_POST.format(**fields) + prompt)
         fields["transcript"] = folded
@@ -1000,7 +904,7 @@ def _context_grounding(
 # The live SSE feed `GET /api/meeting/stream` is keyed on a CALLER-SUPPLIED row id (`meeting_id`) and a
 # `session_uid`. Row ids are sequential ints, so without an ownership check any authenticated user B could
 # `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript +
-# copilot cards — an ACTIVE, enumerable cross-tenant read. We mirror the WS `/ws` pattern (gateway
+# an ACTIVE, enumerable cross-tenant read. We mirror the WS `/ws` pattern (gateway
 # `authorize_subscribe` → `Meeting.user_id == user_id`) and the by-id REST path (`get_transcript_by_id`
 # owner-scopes in SQL): verify the caller OWNS the row BEFORE opening the redis stream. Fail CLOSED.
 #
@@ -1008,7 +912,7 @@ def _context_grounding(
 # gateway-injected `X-User-Id` (meeting-api's `_resolve_user_id` trusts it exactly as its by-id path does)
 # — a row owned by another user (or absent) returns 404 there → we treat it as NOT-OWNED. The returned
 # record's `native_meeting_id` also lets us confirm the requested `session_uid` belongs to the SAME owned
-# meeting, so B can't pair its own row with A's native to sniff A's copilot out-stream. Returns the owned
+# meeting, so B can't pair its own row with A's native to sniff A's feed. Returns the owned
 # meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
 # How room membership was derived, stamped on every room dispatch + log line so an audit can tell
 # WHERE the room came from. Under the participant model it is the invite's addresses, resolved to
@@ -1388,23 +1292,11 @@ def create_app(
 
     @app.get("/api/models")
     def models(request: Request):
-        subject = subject_of(request)
-        streaming_model = settings.meeting_model or default_meeting_model() or "default"
-        try:
-            # A workspace-pinned model (free string) wins; an unpinned workspace ("" — deployment
-            # default) must NOT blank the label out.
-            workspace_model = load_meeting_config(wsr.workspace_dir(subject)).model
-            if workspace_model:
-                streaming_model = workspace_model
-        except ValueError:
-            pass
+        """The ONE model this product runs: the agent's. There is no second, "streaming"/"meeting"
+        model any more — PRD decision 34 removed the in-product inference pipeline that had one."""
+        subject_of(request)  # identity gate (P20)
         chat_model = settings.agent_model or "default"
-        return {
-            "chat_model": chat_model,
-            "agent_model": chat_model,
-            "streaming_model": streaming_model,
-            "meeting_model": streaming_model,
-        }
+        return {"chat_model": chat_model, "agent_model": chat_model}
 
     @app.post("/invocations", status_code=202)
     def invocations(invocation: dict = Body(...)):
@@ -1414,32 +1306,6 @@ def create_app(
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
             raise HTTPException(status_code=400, detail=f"invalid unit.v1 dispatch: {e.message}")
         return {"workload_id": workload_id}
-
-    @app.post("/api/meeting/start", status_code=202)
-    def meeting_start(body: MeetingStart, request: Request):
-        """Launch (or touch) a live-meeting copilot for a real meeting — built through the ONE
-        ``make_dispatch`` like every other trigger. ``meeting_id == session_uid == native_id`` so the
-        transcript wire (``tc:meeting:{id}``), the dispatch (``agent-meet-{id}``), and the terminal all
-        key on the same id. The bridge feeds ``tc:meeting:{native_id}``; the worker tails it."""
-        meeting_ctx = {
-            "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
-        }
-        transcript_start_id = _stream_tail_id(redis_url, f"tc:meeting:{body.native_id}")
-        if transcript_start_id:
-            meeting_ctx["transcript_start_id"] = transcript_start_id
-        inv = units.make_dispatch(
-            subject=subject_of(request), trigger="transcription",
-            start=units.entrypoint(inline=_MEETING_BRIEF),
-            context={"kind": "meeting", "meeting": meeting_ctx},
-        )
-        unit_id = dispatcher.dispatch(inv)
-        meeting = {
-            "meeting_id": body.native_id, "session_uid": body.native_id, "native_id": body.native_id,
-            "platform": body.platform, "title": body.title or f"{body.platform} · {body.native_id}",
-            "unit_id": unit_id,
-        }
-        live.add(meeting)
-        return meeting
 
     @app.get("/api/meeting/relay-health")
     def meeting_relay_health(request: Request):
@@ -1512,67 +1378,6 @@ def create_app(
             workloads = None
         return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),
                                      workloads=workloads)
-
-    @app.post("/api/meeting/process", status_code=202)
-    def meeting_process(body: MeetingProcess, request: Request):
-        """User-controlled copilot PROCESSING for a meeting — DESIRED STATE ONLY (ADR 0027). This
-        endpoint writes the opt-in flag; it never dispatches. The transcription watcher is the ONE
-        dispatch arbiter: it arms (and keeps alive) the copilot while ``proc:meeting:{row}:on`` is
-        set, always resuming from the per-meeting CURSOR (``proc:meeting:{row}:cursor`` = the last
-        raw transcript stream-id already cleaned; absent ⇒ ``'0-0'`` = full history). Two writers
-        used to dispatch here (this handler from the cursor, the watcher from the stream tail) and
-        race — whichever landed second was a touch, so a tail-armed win silently skipped the
-        backfill. OFF just clears the flag — the cursor is FROZEN at the last processed entry so a
-        later re-enable gap-fills from exactly where we left off."""
-        import redis as _redis
-
-        r = _redis.from_url(redis_url, decode_responses=True)
-        # P0 (cross-tenant leak fix): the copilot's opt-in flag / cursor / processed stream ALL key on
-        # the meetings-domain ROW id — the native id is NOT unique (it collides across tenants + a user's
-        # re-sends), so keying processing state by it armed / clobbered / resumed the wrong meeting. Prefer
-        # the row id the terminal passes (POST /bots returns it); else resolve it off the live registry
-        # (the watcher learns it from the segments' numeric meeting_id and stamps native_id on the entry).
-        # Fall back to native only when neither is available (legacy client + not-yet-live) — documented as
-        # a bootstrap-only path that arms once the row id is known.
-        live_entry = next(
-            (m for m in live.list()
-             if m.get("native_id") == body.native_id or m.get("session_uid") == body.native_id),
-            None,
-        )
-        row_id = (
-            body.meeting_id
-            or (str(live_entry["numeric_meeting_id"])
-                if live_entry and live_entry.get("numeric_meeting_id") else None)
-        )
-        key = row_id or body.native_id
-        # The opt-in flag has its OWN key suffix — it must NOT collide with the processed-notes STREAM
-        # ``proc:meeting:{key}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
-        # WRONGTYPE (crashes the watcher's arm loop). ``:cursor`` is likewise a distinct sibling key.
-        flag = f"proc:meeting:{key}:on"
-        cursor_key = f"proc:meeting:{key}:cursor"
-        if not body.on:
-            try:
-                r.delete(flag)  # cursor is intentionally LEFT in place (frozen) for the next re-enable
-            except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
-                pass
-            return {"native_id": body.native_id, "meeting_id": row_id, "processing": False}
-        subject_of(request)  # identity gate (P20) — kept even though nothing dispatches from here
-        cursor: str | None = None
-        try:
-            # TTL'd desired state (P21/P22 — verified on the eyeball: NO session_end frame ever
-            # crosses the wire on the stop path, so the watcher's reap there is belt-only and the
-            # flag used to persist forever). This backstop bounds a flag that never sees a segment;
-            # the watcher REFRESHES a rolling TTL while segments actually flow, so the flag outlives
-            # any real meeting and self-cleans within ~an hour of the flow stopping.
-            r.set(flag, "1", ex=PROC_FLAG_BACKSTOP_TTL_SEC)
-            cursor = r.get(cursor_key)
-        except Exception:  # noqa: BLE001
-            cursor = None
-        # `resumed_from` reports where the watcher's arm WILL resume (the frozen cursor, else the
-        # start of the transcript) — informational for the client; the dispatch itself happens on
-        # the watcher's next segment (≤ one batch), keyed and started from the same cursor.
-        start_id = cursor or "0-0"
-        return {"native_id": body.native_id, "meeting_id": row_id, "processing": True, "resumed_from": start_id}
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):
@@ -1653,7 +1458,7 @@ def create_app(
         # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
         resume = request.headers.get("last-event-id") or None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
-        # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
+        # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the live view renders) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
         ctx, tools, prompt = _context_grounding(
@@ -3011,9 +2816,11 @@ def create_app(
 
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
-        """SSE feed for a LIVE meeting — merges the transcript Stream (`tc:meeting:{id}`) and the
-        copilot's output Stream (`unit:agent-meet-{sid}:out`) into one feed the terminal renders:
-        transcript lines + proactive `card`s + the agent working (`message-delta`/`tool-call`).
+        """SSE feed for a LIVE meeting: the transcript Stream (`tc:meeting:{id}`), and only that.
+        Segments as the bot hears them, `retract` when the collector withdraws a draft, and
+        `meeting-end` when the session closes. It used to MERGE a second stream — the copilot's
+        output (`unit:agent-meet-{sid}:out`: `card`s, `note`s, `model-error`, `message-delta`) —
+        and PRD decision 34 removed the producer of all of it, so the merge went with it.
 
         RESUMABLE: every event carries an SSE ``id:`` = the per-stream redis cursors. On reconnect the
         browser echoes the last one as ``Last-Event-ID``; we resume EXACTLY from there (redis streams are
@@ -3028,7 +2835,7 @@ def create_app(
         # feed BEFORE opening any redis stream. `meeting_id` (row id) + `session_uid` arrive from the
         # caller's query params; row ids are sequential ints, so without this an authenticated user B could
         # `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript
-        # + copilot cards (an ACTIVE, enumerable cross-tenant read). Mirror the WS `/ws` path: derive the
+        # (an ACTIVE, enumerable cross-tenant read). Mirror the WS `/ws` path: derive the
         # caller identity (`subject_of` → 401 on no gateway-injected X-User-Id) and verify the caller OWNS
         # the requested row (meeting-api `GET /meetings/{id}` owner-scopes in SQL: `Meeting.user_id ==
         # user_id` → 404 for a foreign/absent row). Fail CLOSED (403) BEFORE the stream opens.
@@ -3039,41 +2846,37 @@ def create_app(
         if owned is None:
             # Absent row, or a row owned by a DIFFERENT tenant → refuse (404-equivalent, no stream opened).
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
-        # Defense-in-depth on the copilot out-stream: `session_uid` is ALSO caller-supplied and keys
-        # `unit:agent-meet-{session_uid}:out`. The terminal passes the ROW id as `session_uid` for live
-        # rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native id is
-        # accepted for the legacy /api/meeting/start shape (native==row==session). Bind it to the OWNED
-        # row so B can't pair its own row with A's key to sniff A's copilot cards.
+        # `session_uid` is ALSO caller-supplied. The terminal passes the ROW id as `session_uid` for
+        # live rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native
+        # id is accepted for the legacy shape (native==row==session). Bind it to the OWNED row so a
+        # caller cannot pair its own row with someone else's key.
         owned_native = str(owned.get("native_meeting_id") or "")
         if session_uid not in (owned_native, str(meeting_id)):
             raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
 
-        resume_t, resume_o, resume_p = _decode_sse_cursor(request.headers.get("last-event-id"))
+        resume_t = _decode_sse_cursor(request.headers.get("last-event-id"))
 
         def gen():
-            import time as _time
-
             import redis
 
             r = redis.from_url(redis_url, decode_responses=True)
             tkey = f"tc:meeting:{meeting_id}"
-            okey = f"unit:agent-meet-{session_uid}:out"
-            # ADR 0027: the SSE tails the processed-notes stream DIRECTLY (processed-notes.v1) —
-            # baseline cleaned notes reach the view seconds after a segment instead of waiting for
-            # an LLM beat on the out-stream, and the worker's `view_end` marker (not a quiet-poll
-            # guess) tells us processing is complete.
-            pkey = f"proc:meeting:{meeting_id}"
-            # Resume EXACTLY from the client's last-seen cursors when present (gapless reconnect);
-            # otherwise seed then live-tail (fresh connect). A missing proc cursor (old 2-part id)
-            # resumes from 0-0 — a full replay the client's upsert-by-id absorbs, never a gap.
-            last = {tkey: resume_t or "$", okey: resume_o or "$", pkey: resume_p or "0-0"}
+            # Resume EXACTLY from the client's last-seen cursor when present (gapless reconnect);
+            # otherwise seed then live-tail (fresh connect).
+            last = {tkey: resume_t or "$"}
             idle = 0
-            ending = False        # transcript hit session_end — drain notes/cards before meeting-end
-            ending_at = 0.0       # when the drain started (monotonic) — bounds a markerless worker
-            view_end_seen = False  # the worker's completion marker arrived on the proc stream
+            # A meeting row's transcript stream is REUSED across the meeting's sessions, so a
+            # `session_end` is not necessarily the end of the VIEW: a new session can resume on the
+            # same key moments later, and closing on the first marker painted "Meeting ended" over a
+            # live meeting. So an end ARMS a short drain (one poll) and a `session_start` or any real
+            # segment disarms it. This used to be a 45s bounded drain, because the copilot's final
+            # beat ran ~10s after session_end and its notes had to reach the view first; with that
+            # producer gone (PRD decision 34) the only thing that can still arrive is a resumed
+            # session, and one poll is enough to see it.
+            ending = False
 
             def cursor():
-                return _encode_sse_cursor(last, tkey, okey, pkey)
+                return _encode_sse_cursor(last, tkey)
 
             def seg_events(payload):
                 for seg in payload.get("segments", []):
@@ -3090,20 +2893,6 @@ def create_app(
                 if ids:
                     yield ({"type": "retract", "segment_ids": ids}, cursor())
 
-            def note_events(entry_fields):
-                """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
-                (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
-                nonlocal view_end_seen
-                if entry_fields.get("type") == "view_end":
-                    view_end_seen = True
-                    return
-                try:
-                    note = json.loads(entry_fields.get("note") or "null")
-                except (json.JSONDecodeError, ValueError):
-                    return
-                if isinstance(note, dict) and note.get("id") and note.get("text"):
-                    yield ({"type": "note", "note": note}, cursor())
-
             if resume_t is None:   # fresh connect → seed the bounded recent transcript tail
                 seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
                 for entry_id, fields in seed_rows:
@@ -3111,7 +2900,6 @@ def create_app(
                     payload = json.loads(fields.get("payload", "{}"))
                     if payload.get("type") == "session_end":
                         ending = True
-                        ending_at = _time.monotonic()
                         last.pop(tkey, None)
                         continue
                     if payload.get("type") == "retract":
@@ -3119,45 +2907,17 @@ def create_app(
                         continue
                     # A real segment AFTER a session_end in the replay tail means a NEW session resumed
                     # on this reused meeting-row stream (tc:meeting:{id} is shared across a meeting's
-                    # sessions). The prior end must NOT close the current live view — without this reset
-                    # a stale session_end seeds `ending=True` and fires a premature `meeting-end`, so the
-                    # terminal shows "Meeting ended" over a still-live meeting.
+                    # sessions). The prior end must NOT close the current live view.
                     ending = False
                     yield from seg_events(payload)
-            if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
-                output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
-                for entry_id, fields in output_seed_rows:
-                    last[okey] = entry_id
-                    yield (json.loads(fields.get("event", "{}")), cursor())
-            # The proc stream needs no separate seed pass: the 0-0 resume cursor makes the first
-            # xread below deliver its ENTIRE history (bounded by the notes' 1:1 segment cardinality),
-            # so a mid-meeting connect renders the complete processed view.
 
             while True:
-                # once the transcript ends, keep polling briefly — the copilot's FINAL beat is still
-                # running (~10s of LLM); its notes + the view_end marker arrive on the proc stream.
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
                     if ending:
-                        # End when processing is COMPLETE (view_end drained — evidence, P21), when no
-                        # copilot ever wrote (empty proc stream — nothing to wait for), or at the
-                        # bounded cap (a worker that died markerless must not hold the view open).
-                        try:
-                            has_proc = bool(r.exists(pkey))
-                        except Exception:  # noqa: BLE001 — an unreadable stream must not wedge the close
-                            has_proc = False
-                        if (view_end_seen or not has_proc
-                                or _time.monotonic() - ending_at > MEETING_STREAM_ENDING_CAP_SEC):
-                            live.drop(session_uid)  # leaves the terminal's live-meetings feed
-                            yield ({"type": "meeting-end"}, cursor())
-                            return
-                        # The final beat is still writing — keep draining. But this branch polls every
-                        # 1.5s and yields NOTHING, so a drain that waits out the copilot (up to the 45s
-                        # cap) goes silent well past the terminal's 20s SSE watchdog → the browser
-                        # force-reconnects mid-drain ("stream disconnected" banner + a re-replayed
-                        # session_end). Emit a ping so a healthy drain stays visibly alive.
-                        yield ({"type": "ping"}, cursor())
-                        continue
+                        live.drop(session_uid)  # leaves the terminal's live-meetings feed
+                        yield ({"type": "meeting-end"}, cursor())
+                        return
                     idle += 15000
                     if idle >= 600000:
                         return
@@ -3171,29 +2931,19 @@ def create_app(
                             payload = json.loads(fields.get("payload", "{}"))
                             ptype = payload.get("type")
                             if ptype == "session_end":
-                                ending = True            # don't end yet — drain the final beat first
-                                ending_at = _time.monotonic()
+                                ending = True            # a resumed session gets one poll to appear
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
                             if ptype == "retract":
                                 yield from retract_event(payload)
                                 continue
-                            # A NEW session resumed on this REUSED row (tc:meeting:{id} is shared across a
-                            # meeting's sessions): a `session_start` marker — or any real segment — arriving
-                            # after a prior `session_end` means the meeting is LIVE again. Clear a stale
-                            # `ending` so the ≤45s drain never fires a premature `meeting-end` over it (the
-                            # terminal showed "Meeting ended" on a still-live meeting). Mirrors the seed's
-                            # reset at connect; without it the live loop kept `ending=True` because it only
-                            # ever SET the flag, never cleared it.
-                            if ending:
-                                ending = False
+                            # A `session_start` marker — or any real segment — after a prior
+                            # session_end means the meeting is LIVE again on this reused row: clear
+                            # the stale arm so the drain never fires a premature meeting-end.
+                            ending = False
                             if ptype == "session_start":
                                 continue                 # marker only — nothing to render
                             yield from seg_events(payload)
-                        elif stream == pkey:
-                            yield from note_events(fields)
-                        else:
-                            yield (json.loads(fields.get("event", "{}")), cursor())
 
         return StreamingResponse(
             _sse(gen()), media_type="text/event-stream",
@@ -3867,7 +3617,7 @@ def _build_production_app() -> FastAPI:
             handle.stop()
 
     # The in-process meetings Integration (replaces the standalone bridge container): a daemon thread
-    # tails transcription_segments → fans tc:meeting:{uid} + arms the copilot dispatch on activity.
+    # tails transcription_segments → registers the live meeting on activity.
     # NOTE: no `subject=` → the watcher uses its PRE-M2 `u_live` placeholder; live-meeting dispatch (M2)
     # must pass the real meeting owner here (see transcription_watcher.start).
     from control_plane import transcription_watcher

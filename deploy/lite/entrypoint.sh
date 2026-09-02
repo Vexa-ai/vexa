@@ -85,7 +85,6 @@ export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
-export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
 # INSIDE this lite container. Mount the DIRECTORY, not the file — `make up` does
 #   -v ~/.claude:/var/lib/vexa/host-claude:ro

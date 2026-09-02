@@ -277,16 +277,6 @@
    "description": "OAuth/OpenRouter-style bearer credential path, brokered into spawned workers (pairs with ANTHROPIC_BASE_URL)"
   },
   {
-   "key": "VEXA_LLM_API_KEY",
-   "class": "capability",
-   "capability": "model_inference",
-   "secret": true,
-   "description": "provider-agnostic llm-module credential path, brokered into spawned workers (CompletionPort adapters)",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
    "key": "OPENAI_API_KEY",
    "class": "capability",
    "capability": "model_inference",
@@ -336,43 +326,6 @@
    "class": "defaulted",
    "default": "(provider default)",
    "description": "haiku-alias model id brokered into spawned workers"
-  },
-  {
-   "key": "VEXA_LLM_PROVIDER",
-   "class": "defaulted",
-   "default": "(openai-compat)",
-   "description": "llm-module CompletionPort adapter key, brokered into spawned workers",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "VEXA_LLM_BASE_URL",
-   "class": "defaulted",
-   "default": "(adapter default)",
-   "secret": true,
-   "description": "llm-module endpoint, brokered into spawned workers",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "VEXA_LLM_MODEL",
-   "class": "defaulted",
-   "default": "(adapter default)",
-   "description": "llm-module deployment-default model, brokered into spawned workers",
-   "targets": [
-    "compose"
-   ]
-  },
-  {
-   "key": "VEXA_LLM_MAX_TOKENS",
-   "class": "defaulted",
-   "default": "(adapter default)",
-   "description": "llm-module completion cap, brokered into spawned workers",
-   "targets": [
-    "compose"
-   ]
   },
   {
    "key": "VEXA_RUNNER",

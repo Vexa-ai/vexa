@@ -267,7 +267,7 @@ def haiku_proof(uid: str) -> dict:
         env = subprocess.run(["docker", "inspect", w, "--format",
                               "{{range .Config.Env}}{{println .}}{{end}}"],
                              capture_output=True, text=True).stdout
-        proof["env"] = [l for l in env.splitlines() if l.startswith(("VEXA_AGENT_MODEL", "VEXA_LLM_MODEL"))]
+        proof["env"] = [l for l in env.splitlines() if l.startswith("VEXA_AGENT_MODEL")]
         proof["image"] = subprocess.run(["docker", "inspect", w, "--format", "{{.Config.Image}}"],
                                         capture_output=True, text=True).stdout.strip()
         argv = subprocess.run(

@@ -95,8 +95,6 @@ spec:
               value: {{ .Values.agentApi.defaultSubject | default "u_live" | quote }}
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
-            - name: VEXA_MEETING_MODEL
-              value: {{ .Values.models.meetingModel | default "" | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:

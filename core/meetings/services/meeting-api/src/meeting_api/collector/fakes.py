@@ -862,28 +862,6 @@ class InMemoryTranscriptStore:
             "imported_at": data["transcript_import"]["imported_at"],
         }
 
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        from .adapters import _find_processed_view
-
-        m = self._meetings.get(meeting_id)
-        if not m:
-            return None
-        view = _find_processed_view(m["data"], view_id)
-        return view.get("source_cursor") if view else None
-
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into ``data['processed']['views']`` — the SAME pure
-        upsert the SqlAlchemy store commits (the versioned multi-view shape, merged by note id)."""
-        from .adapters import _upsert_processed_view
-
-        m = self._row_or_placeholder(meeting_id)
-        m["data"] = _upsert_processed_view(
-            m["data"], view_id=view_id, kind=kind, notes=notes,
-            source_cursor=source_cursor, params=params,
-        )
-
 
 class FakeRedisBus:
     """A ``RedisBus`` over fakeredis. Wraps a fakeredis async client for stream read/ack/publish,

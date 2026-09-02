@@ -6,7 +6,7 @@ A chat grounded in a meeting behaves differently by the meeting's lifecycle phas
   prep  (intent: idle/scheduled)      — no transcript exists; steer toward preparation
         (agenda, attendee research, a brief written into the bound workspace).
   live  (requested→active→stopping)   — fold the live transcript; answer from it.
-  post  (completed/failed/stopped)    — fold the PROCESSED notes (cleaned transcript);
+  post  (completed/failed/stopped)    — fold the recorded transcript;
         steer toward recap, decisions, action items, follow-ups.
 
 The templates below are the hardcoded FALLBACK. The governed control surface is the

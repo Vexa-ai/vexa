@@ -1,6 +1,6 @@
 "use client";
 import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLiveMeetings, fetchDurableTranscript, mergeNotesById, type DurableTranscript } from "../surfaces/liveMeetings";
+import { useLiveMeetings, fetchDurableTranscript, type DurableTranscript } from "../surfaces/liveMeetings";
 import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
@@ -59,7 +59,7 @@ function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock
   return meetings.find((m) => matchesMeeting(m, meetingId)) ?? unresolvedMeeting(meetingId);
 }
 
-function latestCaption(segments: { text: string; completed?: boolean }[], note: string): string | undefined {
+function latestCaption(segments: { text: string; completed?: boolean }[]): string | undefined {
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
     if (seg.text.trim() && seg.completed === false) return cleanTranscriptText(seg.text);
@@ -68,8 +68,7 @@ function latestCaption(segments: { text: string; completed?: boolean }[], note: 
     const seg = segments[i];
     if (seg.text.trim()) return cleanTranscriptText(seg.text);
   }
-  const cleanNote = cleanTranscriptText(note);
-  return cleanNote || undefined;
+  return undefined;
 }
 
 function cardKindFromText(text: string, fallback = "insight"): string {
@@ -267,13 +266,6 @@ function knownDoc(docs: { path?: string; title?: string; kind?: string; present?
   };
 }
 
-// Durable catch-up budget (ADR-0027): after a stop, the durable `data.processed` completes only
-// once the copilot's final beat lands and the db-writer drains through the `view_end` marker —
-// up to ~2 ticks (≤20s) behind the FSM's terminal flip. Retry the durable fetch, bounded, while
-// it still holds FEWER notes than the live view already showed (never while genuinely empty-live).
-export const DURABLE_REFETCH_ATTEMPTS = 10;
-export const DURABLE_REFETCH_DELAY_MS = 2000;
-
 /** ADR-0027 / P21 — the live-subscription uid, PINNED across the row's terminal flip. The list
  *  row's live flag is INTENT (it clears the moment the FSM stops); the stream's own `meeting-end`
  *  (sent only after the worker's view_end marker) is the EVIDENCE the subscription releases on.
@@ -304,29 +296,15 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   pinRef.current = pinSubscriptionUid(pinRef.current, selected.id, selected.session_uid);
   const live = useMeetingLive(selected.id, pinRef.current.uid);
   const actions = useCanvasActionState();
-  const [durable, setDurable] = useState<DurableTranscript>({ lines: [], notes: [] });
-  // The count of live copilot notes seen this session — read (not depended-on) inside the durable
-  // effect so a finalize-refetch can tell "the meeting HAD notes live" versus being genuinely empty. A ref,
-  // not a dep, so live deltas don't re-fire the durable fetch (they only refresh this counter).
-  const liveNotesCount = safeArray(live.notes).length;
-  const liveNotesRef = useRef(0);
-  liveNotesRef.current = liveNotesCount;
+  const [durable, setDurable] = useState<DurableTranscript>({ lines: [] });
 
-  // Hydrate from the DURABLE store (segments + persisted processed notes). Runs for past AND live
-  // meetings: past → this is the only source (the copilot stream is gone once the bot stops); live →
-  // it seeds notes already persisted before this client connected (page opened mid-meeting), with
-  // live deltas merged over the seed by note id.
-  //
-  // Stop-refetch timing (ADR-0027): this effect re-runs when `session_uid` clears (stop), when the
-  // effective status transitions to TERMINAL, AND when the STREAM itself reports ended (`live.ended`
-  // — the evidence signal, fired only after the worker's view_end marker reached the SSE). The
-  // durable `data.processed` completes ≤ ~2 db-writer ticks after that marker, so on any of those
-  // signals we retry, bounded, while the durable view still trails what the pane already saw live —
-  // the pinned live notes keep rendering meanwhile (mergeNotesById merges live OVER durable), so
-  // the pane never blanks and converges on the complete durable doc.
+  // Hydrate the RECORDED segments from the durable store. For a past meeting this is the only
+  // source; for a live one the live stream wins and this is the seed. (There is no second,
+  // "processed" body to wait for any more — PRD decision 34 removed the producer, so the
+  // bounded catch-up retry that existed to wait out the copilot's final beat went with it.)
   const effStatus = selected.live_status ?? selected.status;
   useEffect(() => {
-    setDurable({ lines: [], notes: [] });
+    setDurable({ lines: [] });
     // P0 (wrong-row hydration fix): hydrate by the meetings-domain ROW id (`selected.id`), so the pane
     // shows EXACTLY this row's durable segments + processed notes — never the newest row sharing the
     // native (the old native-keyed fetch). `native_id` presence still gates a real (resolved) meeting vs
@@ -335,22 +313,10 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const rowId = selected.id;
     const terminal = effStatus === "completed" || effStatus === "failed" || effStatus === "stopped";
     let cancelled = false;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    const load = (attempt: number): void => {
-      void fetchDurableTranscript(rowId).then((next) => {
-        if (cancelled) return;
-        setDurable(next);
-        // Marker-drain latency: after a stop the durable row trails the live view until the
-        // db-writer drains through view_end. Retry (bounded) while durable holds FEWER notes than
-        // live showed — an untouched-by-copilot meeting (0 live notes) never retries.
-        const behind = (next.notes?.length ?? 0) < liveNotesRef.current;
-        if ((terminal || live.ended) && behind && attempt < DURABLE_REFETCH_ATTEMPTS) {
-          retry = setTimeout(() => { if (!cancelled) load(attempt + 1); }, DURABLE_REFETCH_DELAY_MS);
-        }
-      });
-    };
-    load(0);
-    return () => { cancelled = true; if (retry) clearTimeout(retry); };
+    void fetchDurableTranscript(rowId).then((next) => {
+      if (!cancelled) setDurable(next);
+    });
+    return () => { cancelled = true; };
   }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus, live.ended]);
 
   return useMemo(() => {
@@ -368,7 +334,6 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
-    const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     const diagnostics = {
       liveConnected: live.connected,
       ended: live.ended,
@@ -380,16 +345,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
         message: cleanTranscriptText(issue.message),
         status: issue.status,
         at: issue.at,
-        model: issue.model,
-        stage: issue.stage,
       })),
     };
-    // The copilot surfaces ENTITY mentions (people/companies/products/numbers) as cards too. Route
-    // those into the entity groups (they dedup downstream via mergeEntityItems) and keep only real
-    // SIGNAL cards as `cards`, so a person mentioned 4 times doesn't pile up 4× in the Signals column.
-    const isEntityCard = (k: unknown) => /person|people|compan|product|number|num/i.test(textOf(k));
+    // Cards come from the MEETING RECORD only (its insights and proposed actions). The live
+    // copilot that used to push cards onto this feed is gone (PRD decision 34).
     const cards: MeetingState["cards"] = [
-      ...copilotCards.filter((c) => !isEntityCard(c.kind)),
       ...normalizedSelected.insights.map((c, i) => ({ id: `insight-${i}`, kind: cardKindFromText(c.text), title: c.text, ts: c.t })),
       ...normalizedSelected.actions.map((a) => ({ id: a.id, kind: "action", title: a.label, body: a.detail })),
     ];
@@ -397,17 +357,10 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const people = [
       ...present,
       ...participants.map((p) => ({ title: p.name, role: p.role, initials: p.initials })),
-      ...copilotCards.filter((c) => /person|people/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
     ];
-    const companies = [
-      ...detected.filter((e) => e.type === "company"),
-      ...copilotCards.filter((c) => /compan/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
-    ];
-    const products = [
-      ...copilotCards.filter((c) => /product/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
-    ];
-    const textCorpus = [...segments.map((s) => s.text), ...copilotCards.flatMap((c) => [c.title, c.body ?? ""])];
-    const numbers = extractNotableNumbers(textCorpus);
+    const companies = detected.filter((e) => e.type === "company");
+    const products: unknown[] = [];
+    const numbers = extractNotableNumbers(segments.map((s) => s.text));
     return {
       meeting: {
         id: selected.id,
@@ -426,19 +379,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       },
       transcript: {
         segments,
-        liveCaption: selected.session_uid ? latestCaption(live.transcript, live.note) : undefined,
-        // Durable seed (persisted copilot view) with live deltas merged over it by note id — the
-        // same rule the db-writer uses, so a live re-emit updates in place and never duplicates.
-        notes: mergeNotesById(safeArray(durable.notes), safeArray(live.notes)).map((note) => ({
-          id: note.id,
-          speaker: note.speaker,
-          chapter: note.chapter,
-          text: cleanTranscriptText(note.text),
-          ts: note.t,
-          tsMs: note.tsMs,
-          pass: note.pass,
-          frozen: note.frozen,
-        })),
+        liveCaption: selected.session_uid ? latestCaption(live.transcript) : undefined,
       },
       entities: { people, companies, products, numbers },
       cards,
@@ -454,14 +395,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   }, [
     actions.metrics,
     actions.sections,
-    live.cards,
     live.connected,
     live.ended,
     live.issues,
     live.lastEventAt,
     live.lastTranscriptAt,
-    live.note,
-    live.notes,
     live.reconnects,
     live.transcript,
     durable,

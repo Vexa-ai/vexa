@@ -116,7 +116,7 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
                          post: HttpPost = _post, extra_body: str = "") -> dict:
     """A REAL 1-token completion against the configured endpoint. Anthropic-style first
     (``/v1/messages``), OpenAI-compat fallback (``/v1/chat/completions``) on 404/405 — the two
-    dialects the dispatch overlay brokers (ANTHROPIC_* vs VEXA_LLM_*).
+    dialects a custom endpoint may speak.
 
     ``extra_body`` is sent on the openai-compat attempt exactly as a real turn sends it. Testing
     WITHOUT it would be the worst kind of green: a self-hosted Qwen answers 200 to a ping in
@@ -177,15 +177,14 @@ def run_models_test(config: dict, env: Optional[dict] = None,
     if mode == "custom" or (not mode and base_url and api_key):
         out = test_custom_endpoint(
             base_url, api_key, (config.get("model") or "").strip(), post=post,
-            extra_body=(config.get("extra_body") or "").strip() or env.get("VEXA_LLM_EXTRA_BODY", ""),
+            extra_body=(config.get("extra_body") or "").strip(),
         )
         out["mode"] = "custom"
     else:
         out = test_subscription_credentials(creds_path)
         out["mode"] = "subscription"
     # Non-secret provenance so the UI can say WHAT was tested.
-    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "meeting_model",
-                                                              "base_url") and v}
+    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "base_url") and v}
     return out
 
 

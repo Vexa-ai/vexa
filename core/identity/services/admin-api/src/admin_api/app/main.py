@@ -223,7 +223,7 @@ class CalendarPatch(BaseModel):
 
 
 # ── model + transcription config (per-user prefs and the platform-wide defaults) ──
-# One vocabulary everywhere: a MODELS config is {mode, model, meeting_model, base_url, api_key}
+# One vocabulary everywhere: a MODELS config is {mode, model, base_url, api_key}
 # (mode "subscription" = the deployment's brokered credential — the mounted Claude Code
 # subscription or a deployment API key; mode "custom" = a user/operator-supplied
 # Anthropic-/OpenAI-compatible endpoint + key, e.g. a LiteLLM/OpenRouter gateway in front of an
@@ -238,7 +238,7 @@ MODEL_MODES = ("subscription", "custom")
 # via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
 # could only be configured deployment-wide, never through BYOT.
 # effort: the claude-code reasoning-effort pin (low|medium|high|xhigh) — see ModelPrefsUpdate.
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "extra_body", "effort")
+_MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -293,7 +293,6 @@ class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
     mode: Optional[str] = None
     model: Optional[str] = None
-    meeting_model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
@@ -738,7 +737,6 @@ def create_app() -> FastAPI:
         return {
             "mode": prefs.get("mode"),
             "model": prefs.get("model"),
-            "meeting_model": prefs.get("meeting_model"),
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
             "api_key_set": bool(prefs.get("api_key")),

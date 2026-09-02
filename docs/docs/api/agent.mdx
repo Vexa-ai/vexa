@@ -120,20 +120,19 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
 }'   # → {"workload_id":"agent-...","trigger":"event"}
 ```
 
-## Live meeting copilot
+## Live meetings
 
-A live-meeting copilot is itself driven through `make_dispatch`; the id invariant is
-`meeting_id == session_uid == native_id`.
-
-- `POST /api/meeting/start` `{ native_id, platform, title? }` → `202`, returns the live-meeting record.
-- `POST /api/meeting/process` `{ native_id, platform, on }` → toggle opt-in processing. `on:true` resumes
-  from the per-meeting cursor (`{ ..., "processing":true, "resumed_from":"<id>" }`); `on:false` clears the
-  flag and freezes the cursor (`{ ..., "processing":false }`).
+- `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE) → the meeting's live transcript feed,
+  owner-scoped. Resumable: every event carries an SSE `id:`; on reconnect echo it as `Last-Event-ID`
+  to resume gaplessly. Event types: `transcript`, `retract`, `ping`, `meeting-end`.
 - `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
   `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
-- `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE) → the merged transcript + copilot-output feed.
-  Resumable: every event carries an SSE `id:`; on reconnect echo it as `Last-Event-ID` to resume
-  gaplessly. Event types: `transcript`, `card`, `message-delta`, `tool-call`, `ping`, `meeting-end`.
+
+**Removed in 0.12** — `POST /api/meeting/start` and `POST /api/meeting/process` return `404`. They
+launched and switched on an in-product "copilot" that turned the live transcript into cleaned notes
+and cards on a second lane of this same stream. Vexa runs no model calls of its own beside the agent:
+ask about a meeting with `POST /api/chat`, passing
+`active: {"kind":"meeting","meeting":{…}}`. See [Follow a live meeting](/how-to/live-copilot).
 
 ## Workspace
 

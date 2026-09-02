@@ -13,7 +13,7 @@ export interface MeetingHealth {
   /** ms since the last transcript line (when known) — drives the ticking "no new lines for Ns". */
   staleForMs?: number;
   reconnects: number;
-  /** The most recent issue (stream/model/parse), surfaced even when the headline is something else. */
+  /** The most recent feed issue (stream/parse), surfaced even when the headline is something else. */
   latestIssue?: MeetingDiagnosticIssue;
 }
 

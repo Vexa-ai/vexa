@@ -1,8 +1,10 @@
 "use client";
-// Failure-surfacing banner for the live meeting feed. The signals (connected / reconnects /
+// Failure-surfacing banner for the live meeting FEED — the bot's own state as the reader sees it
+// (connecting · admitted and streaming · gone quiet · ended). The signals (connected / reconnects /
 // lastTranscriptAt / issues[]) are already tracked per live meeting and exposed as
-// `meeting.diagnostics`; this is the LOUD surface that makes a broken feed unmissable to an operator
-// instead of silently showing stale lines.
+// `meeting.diagnostics`; this is the surface that makes a broken feed unmissable instead of
+// silently showing stale lines. It reports on the TRANSCRIPT only: there is no model here to fail
+// (PRD decision 34).
 import { useEffect, useState } from "react";
 import { useMeeting } from "./useMeeting";
 import { formatElapsed, meetingHealth, STALE_MS, type MeetingHealthKind } from "./meetingHealth";
@@ -20,10 +22,8 @@ const TONE: Record<Exclude<MeetingHealthKind, "ok">, { color: string; bg: string
   error: { color: "var(--accent)", bg: "var(--accentbg)" },
 };
 
-function issueLabel(kind: "stream" | "model" | "parse"): string {
-  if (kind === "model") return "Model inference error";
-  if (kind === "parse") return "Transcript parse error";
-  return "Stream error";
+function issueLabel(kind: "stream" | "parse"): string {
+  return kind === "parse" ? "Transcript parse error" : "Stream error";
 }
 
 export function MeetingHealthBanner() {

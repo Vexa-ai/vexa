@@ -14,16 +14,12 @@ from llm.errors import (
     provider_host,
 )
 from llm.ports import (
-    CompletionPort,
-    CompletionResult,
     HarnessExec,
     HarnessPort,
     run_harness_turn,
 )
 from llm.registry import (
-    COMPLETION_PROVIDERS,
     HARNESS_RUNNERS,
-    completion_from_env,
     harness_from_env,
 )
 
@@ -36,13 +32,9 @@ __all__ = [
     "model_error_event",
     "preflight_provider_guard",
     "provider_host",
-    "CompletionPort",
-    "CompletionResult",
     "HarnessExec",
     "HarnessPort",
     "run_harness_turn",
-    "COMPLETION_PROVIDERS",
     "HARNESS_RUNNERS",
-    "completion_from_env",
     "harness_from_env",
 ]
