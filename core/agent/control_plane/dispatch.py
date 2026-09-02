@@ -594,6 +594,19 @@ def _without_chat_session(invocation: dict) -> dict:
     return clean
 
 
+# Distinguishes "nothing to deliver" (None) from "the delivery was attempted and failed", which
+# only the caller can turn into a verdict — it depends on whether the worker is warm.
+_DELIVERY_FAILED = object()
+
+
+class WarmDeliveryFailed(RuntimeError):
+    """A chat turn could not be handed to its worker.
+
+    Raised rather than swallowed because for a WARM unit the pre-delivery XADD is the only delivery
+    there is: returning quietly loses the person's words behind a 200. The caller turns this into an
+    error the client can show and the person can retry."""
+
+
 class Dispatcher:
     """Turns a ``unit.v1`` dispatch into a runtime.v1 agent workload — the one path every trigger funnels
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
@@ -690,6 +703,16 @@ class Dispatcher:
         # The mount must exist before the runtime is asked to bind it (see the helper).
         _ensure_workspace_exists(self._settings, identity["subject"])
         delivery = self._predeliver(uid, invocation) if invocation["trigger"] == "message" else None
+        if delivery is _DELIVERY_FAILED:
+            # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
+            # entrypoint and nothing is lost; if it is ALIVE the spawn is a touch and the person's
+            # words reached nobody. Refuse loudly in that case rather than answer 200 and stream the
+            # turn already running — see _predeliver for what that cost.
+            if self._workload_gone(uid):
+                delivery = None
+            else:
+                raise WarmDeliveryFailed(
+                    f"unit {uid} is running and its turn could not be delivered")
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
@@ -734,22 +757,47 @@ class Dispatcher:
 
     def _predeliver(self, uid: str, invocation: dict) -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
-        out-stream TAIL id the watchdog reads the ack from (None = warm path unavailable)."""
+        out-stream TAIL id the watchdog reads the ack from.
+
+        Returns None ONLY when there is nothing to deliver (a session-only start has no inline
+        prompt). A delivery that was attempted and FAILED raises — see below.
+
+        ⚠ WHY THIS RAISES NOW (2026-09-02, the founder's own chat). It used to swallow every failure
+        with "warm delivery must never break a dispatch — relying on the spawn path". That reasoning
+        holds for a COLD unit, where the spawn really does carry the prompt as its entrypoint. It is
+        false for a WARM one: `spawn` on a live unit is a touch, there is no entrypoint, and this
+        XADD is the ONLY delivery the message will ever get. So a swallowed failure meant the words
+        were gone while `POST /api/chat` answered 200 and streamed the turn already running — the
+        person watched a reply appear and reasonably believed it was to what they had just sent.
+
+        He sent "and share it with dmitry@vexa.ai" twice into a busy session. Both returned 200,
+        neither became a turn, and nothing anywhere recorded a loss. A 200 that drops the message is
+        strictly worse than an error: an error he can retry, a silent drop he cannot even see."""
         prompt = ((invocation.get("start") or {}).get("entrypoint") or {}).get("inline")
         if not prompt:
             return None  # session-only starts have no inline prompt to deliver
         r = self._redis()
         if r is None:
+            # NOT a delivery failure — a topology without redis (tests, the process backend) has no
+            # warm path at all, and there the spawn genuinely carries the prompt as its entrypoint.
+            # The distinction is the whole correction: "there is no warm path here" is a property of
+            # the deployment, "the XADD failed" is an accident on a deployment that has one. Only the
+            # second can lose a person's words, and only the second raises.
             return None
         nonce = f"{uid}:{time.time_ns()}"
         try:
             entries = r.xrevrange(output_topic(uid), count=1)
             tail = entries[0][0] if entries else "0-0"
             r.xadd(input_topic(uid), {"turn": json.dumps({"type": "message", "prompt": prompt, "nonce": nonce})})
-        except Exception:  # noqa: BLE001 — warm delivery must never break a dispatch
-            logger.warning("warm pre-delivery failed for unit=%s — relying on the spawn path", uid)
+        except Exception as exc:  # noqa: BLE001
+            # WHETHER THIS LOSES THE TURN DEPENDS ON THE UNIT, so the decision is the caller's.
+            # Cold unit: the spawn carries this same prompt as its entrypoint and nothing is lost —
+            # which is the case in every test topology, where redis is configured but unreachable.
+            # Warm unit: `spawn` is a touch, there is no entrypoint, and this XADD was the only
+            # delivery the message would ever get. `dispatch` knows which, and raises there.
+            logger.warning("warm pre-delivery failed for unit=%s: %s", uid, exc)
             self._warm_fail()
-            return None
+            return _DELIVERY_FAILED
         return tail
 
     def _workload_gone(self, uid: str) -> bool:

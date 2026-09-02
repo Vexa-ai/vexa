@@ -65,6 +65,7 @@ from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_
 from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
+from control_plane import dispatch as dispatch_mod
 from control_plane import global_layer
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
@@ -1624,9 +1625,23 @@ def create_app(
                 # with and a room named on a later turn of the same thread does not retro-mount. The
                 # post-meeting run uses its own per-meeting session, so it spawns cold and gets the
                 # room; a turn that needs a different room needs a different session.
-                unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
-                    inv, room=room,
-                    scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None)
+                try:
+                    unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
+                        inv, room=room,
+                        scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None)
+                except dispatch_mod.WarmDeliveryFailed as exc:
+                    # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
+                    # delivery, so a failure here means the person's words reached nobody. Answering
+                    # 200 and streaming the turn already in flight is what made this invisible: they
+                    # watch a reply appear and reasonably believe it is to what they just sent.
+                    # 503 is deliberate — this is transient by nature (redis blip, a worker in the
+                    # idle-exit race) and the honest instruction is "send it again".
+                    logger.warning("chat turn refused for subject=%s session=%s: %s",
+                                   subject, session, exc)
+                    raise HTTPException(
+                        status_code=503,
+                        detail="That message did not reach your agent — nothing was lost on your "
+                               "side, please send it again.") from exc
                 if body.turn_id and start is not None:
                     _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
                 resume = start
