@@ -23,12 +23,19 @@ HEADER = ("| rev | when | fingerprint | layer | what changed | fixtures | mean |
           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
 
-def fingerprint(fixtures: pathlib.Path, line_sha: str, presets: dict) -> str:
+def fingerprint(fixtures: pathlib.Path, line_sha: str, presets: dict, stack: dict) -> str:
+    """Fixture set + line SHA + preset hashes + THE STACK THAT SERVED IT.
+
+    The stack belongs in here. A hot deployment moves three things independently — the flows
+    engine's checkout, the agent-api image and the per-dispatch worker image — and two revolutions
+    that share a fingerprint while one of those differed are not comparable, which is exactly what
+    the refusal below is meant to prevent."""
     h = hashlib.sha256()
     for f in sorted(fixtures.glob("*.transcript.json")):
         h.update(f.name.encode()); h.update(str(f.stat().st_size).encode())
     h.update(line_sha.encode())
     h.update(json.dumps(presets, sort_keys=True).encode())
+    h.update(json.dumps(stack, sort_keys=True).encode())
     return h.hexdigest()[:12]
 
 
@@ -55,7 +62,8 @@ def main() -> int:
     replay = json.loads((run / "replay.json").read_text())
     board = run.parent / "SCOREBOARD.md"
 
-    fp = fingerprint(pathlib.Path(a.fixtures), line_sha(a.repo), replay.get("preset_hashes", {}))
+    fp = fingerprint(pathlib.Path(a.fixtures), line_sha(a.repo),
+                     replay.get("preset_hashes", {}), replay.get("stack", {}))
     prior = board.read_text() if board.exists() else ""
     if fp in prior and not a.force:
         print(f"refused: fingerprint {fp} is already on the board — nothing under test changed")
@@ -80,6 +88,12 @@ def main() -> int:
                          "from the truth sidecars.\n\n" + HEADER + "\n" + row + "\n")
     else:
         board.write_text(prior.rstrip("\n") + "\n" + row + "\n")
+    st = replay.get("stack", {})
+    if st:
+        board.write_text(board.read_text().rstrip("\n")
+                         + f"\n\n<!-- r{scores.get('rev')} stack: engine {st.get('flows_engine_src','?')}"
+                           f" @ {st.get('flows_engine_sha','?')} · agent-api {st.get('agent_api_image','?')}"
+                           f" · worker {st.get('worker_image_pin','?')} -->\n")
     print(f"wrote {board}\n{row}")
     return 0
 

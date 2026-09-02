@@ -239,10 +239,49 @@ def reset_workspace(rig: Rig, uid: str) -> dict:
     return out
 
 
+def stack_stamp() -> dict:
+    """WHAT THIS RUN ACTUALLY RAN AGAINST, read live and written into the run.
+
+    Three things move independently on a hot stack — the flows engine's checkout, the agent-api
+    image, and the per-dispatch worker image — and a score compared across a change to any of them
+    is comparing two things at once. A revolution that cannot say which stack produced it is not a
+    measurement, and none of this is recoverable after the fact."""
+    def sh(*cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout.strip()
+        except Exception:                                         # noqa: BLE001
+            return ""
+
+    def image(c):
+        return sh("docker", "inspect", c, "--format", "{{.Config.Image}}")
+
+    src = ""
+    for pid in sh("pgrep", "-f", "m flows_worker").split():
+        try:
+            env = pathlib.Path(f"/proc/{pid}/environ").read_text().split("\0")
+        except Exception:                                         # noqa: BLE001
+            continue
+        for e in env:
+            if e.startswith("PYTHONPATH=") and "adoption-sim" not in e:
+                src = e.split("=", 1)[1]
+    repo = src.split("/core/flows")[0] if src else ""
+    return {
+        "flows_engine_src": src,
+        "flows_engine_sha": sh("git", "-C", repo, "rev-parse", "--short", "HEAD") if repo else "",
+        "agent_api_image": image("vexa-dogfood-agent-api-1"),
+        "worker_image_pin": next(
+            (l.split("=", 1)[1] for l in
+             pathlib.Path.home().joinpath("dev/estate/deploy/compose/.env").read_text().splitlines()
+             if l.startswith("AGENT_WORKER_IMAGE=")), "") if
+        pathlib.Path.home().joinpath("dev/estate/deploy/compose/.env").exists() else "",
+        "runtime_image": image("vexa-dogfood-runtime-1"),
+    }
+
+
 # ── one fixture ──────────────────────────────────────────────────────────────────────────────────
 
 def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, run: pathlib.Path,
-               caps: pathlib.Path) -> dict:
+               caps: pathlib.Path, unique_native: bool = False) -> dict:
     date = fx_path.name.split(".")[0]
     fx = json.loads(fx_path.read_text())
     m = fx["meeting"]
@@ -264,6 +303,11 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
     # working one. The native id stays shared, as it is in life, so the fix is actually under test.
     native = m["native_meeting_id"]
     occurred = int(time.mktime(time.strptime(date, "%Y-%m-%d")))
+    if unique_native:
+        # --unique-native: for an engine that does NOT yet carry the note-date fix. It makes the
+        # sweep complete, and it makes the fix untestable — so it is a flag the operator sets on
+        # purpose and the run records, never a default that quietly hides which behaviour was live.
+        native = f"{native}-{date}"
     seed = rig.call("meeting_seed", native_id=native, title=m["title"], video_id=vid)
     if not isinstance(seed, dict) or "meeting_id" not in seed:
         rec["error"] = f"meeting_seed: {str(seed)[:300]}"
@@ -320,6 +364,9 @@ def main() -> int:
     ap.add_argument("--caps", default=str(pathlib.Path.home() / ".storm/caps"))
     ap.add_argument("--token-file", default="")
     ap.add_argument("--limit", type=int, default=0, help="replay only the first N fixtures")
+    ap.add_argument("--unique-native", action="store_true",
+                    help="give each occurrence its own native id — for an engine without the "
+                         "note-date fix; recorded in replay.json because it changes what is tested")
     ap.add_argument("--reset", action="store_true",
                     help="reset the workspace to the seed before replaying (start of a revolution)")
     a = ap.parse_args()
@@ -340,13 +387,15 @@ def main() -> int:
         print("[replay] workspace reset:", json.dumps(setup.get("mark_scaffolded"))[:160], flush=True)
 
     (run / "haiku-proof.json").write_text(json.dumps(haiku_proof(a.uid), indent=1))
-    out = {"rev": a.rev, "reset": bool(a.reset), "uid": a.uid, "fixtures_dir": str(a.fixtures),
+    out = {"rev": a.rev, "reset": bool(a.reset), "unique_native": bool(a.unique_native),
+           "stack": stack_stamp(), "uid": a.uid, "fixtures_dir": str(a.fixtures),
            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "preset_hashes": preset_hashes(rig), "records": []}
     for fx in fixtures:
         print(f"[replay] {fx.name}", flush=True)
         try:
-            rec = replay_one(rig, a.uid, a.organizer, fx, a.rev, run, pathlib.Path(a.caps))
+            rec = replay_one(rig, a.uid, a.organizer, fx, a.rev, run, pathlib.Path(a.caps),
+                             unique_native=a.unique_native)
         except Exception as e:                                    # noqa: BLE001
             import traceback
             rec = {"date": fx.name.split(".")[0], "error": f"{type(e).__name__}: {e}",
