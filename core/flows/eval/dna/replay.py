@@ -41,6 +41,15 @@ def http(method: str, url: str, headers: dict | None = None, body=None, timeout=
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode()
             return r.status, (json.loads(raw) if raw.strip().startswith(("{", "[")) else raw)
+    except urllib.error.HTTPError as e:
+        # A 4xx here CARRIES the answer: POST /events replies 400 with the list of event types a
+        # flow actually reacts to. Collapsing that to code 0 and a class name threw away the one
+        # thing that tells the caller what to send instead.
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            return e.code, json.loads(raw)
+        except Exception:                                         # noqa: BLE001
+            return e.code, {"body": raw[:400]}
     except Exception as e:                                        # noqa: BLE001
         return 0, {"error": f"{type(e).__name__}: {e}"}
 
@@ -110,6 +119,34 @@ def mail_search(to: str, subject: str, since: float) -> dict | None:
         return {"id": m["ID"], "created": m.get("Created", ""), "subject": m.get("Subject", ""),
                 "body": body}
     return None
+
+
+FLOWS_API = os.environ.get("VEXA_DNA_FLOWS_API", "http://127.0.0.1:18200")
+FLOWS_KEY_FILE = pathlib.Path.home() / ".storm/flows-api-key"
+
+
+def emit_fact(event_type: str, source_event_id: str, refs: dict, actor: str) -> dict:
+    """Admit ONE fact through the flows engine's own intake.
+
+    This used to go through the rig's ``fact_emit``, which was guarded by authentication alone —
+    any signed-in user could inject a fact naming any organizer. That verb is operator-only now,
+    so the harness uses the server-side intake directly: the SAME ``admit()``, the same
+    per-(fact, flow) dedup on ``source_event_id``, and a 400 listing the reactable types if the
+    event names none — a better failure than the rig gave, because a fact accepted into silence
+    looks exactly like one that worked.
+
+    The operator key is READ from where ``flows-up.sh`` exports it, never hard-coded and never
+    logged. ``X-Actor`` names this harness so the trail does not read as a person."""
+    key = FLOWS_KEY_FILE.read_text().strip() if FLOWS_KEY_FILE.exists() else ""
+    if not key:
+        return {"_error": f"no operator key at {FLOWS_KEY_FILE} — flows-up.sh exports it there"}
+    code, body = http("POST", f"{FLOWS_API}/events",
+                      {"X-Flows-Admin-Key": key, "X-Actor": actor},
+                      {"event_type": event_type, "source_event_id": source_event_id,
+                       "refs": refs})
+    if code != 202:
+        return {"_error": f"POST /events {code}", "detail": str(body)[:300]}
+    return body if isinstance(body, dict) else {"body": str(body)[:200]}
 
 
 # ── presets ──────────────────────────────────────────────────────────────────────────────────────
@@ -387,19 +424,19 @@ def replay_one(rig: Rig, uid: str, org: str, fx_path: pathlib.Path, rev: int, ru
 
     mail_mark = time.time()
     up_id = f"dna-r{rev}-prep-{date}"
-    rec["emit_upcoming"] = rig.call(
-        "fact_emit", event_type="meeting.upcoming", source_event_id=up_id,
-        subject_refs={"organizer": org, "title": m["title"], "start": int(time.time()) + 300,
-                      "uid": uid, "meeting_id": mid})
+    rec["emit_upcoming"] = emit_fact(
+        "meeting.upcoming", up_id,
+        {"organizer": org, "title": m["title"], "start": int(time.time()) + 300,
+         "uid": uid, "meeting_id": mid}, actor=f"uid {uid}")
     rec["prepare_mail"] = wait_mail(org, "Prepare", m["title"], mail_mark, 300)
     print(f"  prepare_mail={bool(rec['prepare_mail'])}", flush=True)
 
     shas_before = [c.get("sha") for c in (workspace_git(uid).get("commits") or [])]
     done_id = f"dna-r{rev}-done-{date}"
-    rec["emit_completed"] = rig.call(
-        "fact_emit", event_type="meeting.completed", source_event_id=done_id,
-        subject_refs={"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
-                      "native": native, "start": occurred})
+    rec["emit_completed"] = emit_fact(
+        "meeting.completed", done_id,
+        {"organizer": org, "title": m["title"], "uid": uid, "meeting_id": mid,
+         "native": native, "start": occurred}, actor=f"uid {uid}")
     hit = wait_note(uid, shas_before, 1200, stamp=date)
     note_path = None
     if hit:
