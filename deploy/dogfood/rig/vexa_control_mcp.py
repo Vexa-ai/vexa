@@ -35,7 +35,34 @@ GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 AGENT_API = os.environ.get("VEXA_AGENT_API_URL", "http://localhost:18500")
 ADMIN_API = os.environ.get("VEXA_ADMIN_API_URL", "http://localhost:18457")
 FLOWS_API = os.environ.get("VEXA_FLOWS_API_URL", "http://localhost:18200")
-FLOWS_KEY = os.environ.get("VEXA_FLOWS_API_KEY", "changeme")
+def _flows_api_key() -> str:
+    """The flows-api operator key — from the environment, else the lane's mode-600 file.
+
+    It defaulted to the string "changeme", and the variable was never exported on the running
+    deployment (`flows-up.sh` exports VEXA_FLOWS_ADMIN_KEY, which is the admin-api token under a
+    different name flows-api never reads). So this server — which is PUBLIC — forwarded to the
+    intake with a key printed in the source. Gating the operator verbs without replacing that key
+    would have left the door open behind the guard.
+
+    No default any more. The file is the same one the lane's start script exports from, so the
+    key is named once and lives in one place; its value never enters the repo and is never
+    printed."""
+    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
+    if key:
+        return key
+    for cand in ("flows-api-key", "sim-flows-api-key"):
+        f = pathlib.Path.home() / ".storm" / cand
+        try:
+            if f.is_file():
+                v = f.read_text().strip()
+                if v:
+                    return v
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+FLOWS_KEY = _flows_api_key()
 MAILPIT = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 HOME = pathlib.Path.home()
 
@@ -670,6 +697,65 @@ def _subject():
             CALL_SCOPE.set(claims.get("scope"))
             return str(claims["sub"])
     return None
+
+
+class _NotOperator(Exception):
+    """Raised by _operator_or_refuse. Carries who was refused, so the refusal can say."""
+
+    def __init__(self, verb, who, why):
+        self.verb, self.who, self.why = verb, who, why
+        super().__init__(f"{verb}: operator only")
+
+
+def _admin_key_headers() -> dict:
+    return {"X-Admin-API-Key": _admin_key()}
+
+
+def _is_instance_admin(uid: str) -> bool:
+    """The DB-backed role — `users.data.is_admin`, bootstrap-claimed by the first sign-in on a
+    fresh instance and surfaced by admin-api. The terminal's admin gate reads exactly this."""
+    try:
+        st, u = _http("GET", f"{ADMIN_API}/admin/users/{uid}", _admin_key_headers())
+    except Exception:  # noqa: BLE001 — a down identity service is not an authorisation
+        return False
+    if st != 200 or not isinstance(u, dict):
+        return False
+    data = u.get("data")
+    if isinstance(data, dict) and data.get("is_admin") is True:
+        return True
+    return u.get("is_admin") is True
+
+
+def _operator_or_refuse(verb: str) -> str:
+    """AUTHORITY, not authentication — the gate these verbs never had.
+
+    fact_emit, flows_submit and flow_lifecycle are OPERATOR verbs: they inject facts naming an
+    arbitrary organizer, and they rewrite the flow definitions the whole instance reacts to.
+    They were guarded by `me()` alone, which only asks whether the caller is signed in. Any
+    authenticated user could therefore make the product act on behalf of somebody else, or
+    change what every reaction in the org does. That is an authentication check standing where
+    an authorisation check belongs, and it was found by the adoption loop while measuring what
+    an admin needs to seed an org (biz#449, revolution 6).
+
+    Authority is the INSTANCE ADMIN (`users.data.is_admin`, read through admin-api the way the
+    terminal's setup probe reads it) or the internal service key (server-to-server). Ordinary
+    users are unaffected in what they may do about their OWN meetings: bot_send and bot_schedule
+    take identity from the token and are not fact injection.
+
+    Harnesses do not belong here either. A loop that needs to inject facts uses flows-api's
+    server-side intake — POST /events and /events/batch with the lane's admin key — which is the
+    right door for a producer that is not a person.
+    """
+    tok = (CALL_TOKEN.get() or "").strip()
+    svc = os.environ.get("VEXA_INTERNAL_API_SECRET", "") or os.environ.get("INTERNAL_API_SECRET", "")
+    if svc and tok and tok == svc:
+        return "service"
+    uid = _subject()
+    if not uid:
+        raise _NotOperator(verb, "anonymous", "not signed in")
+    if _is_instance_admin(uid):
+        return uid
+    raise _NotOperator(verb, f"uid {uid}", "not an instance admin")
 
 
 def me() -> str:
@@ -1676,7 +1762,14 @@ def flows_submit(name: str, on_event: str, steps: list[str],
     steps: ordered step names from flows_list's vocabulary.
     on_event: a trigger name, e.g. invite.received / meeting.completed / mail.reply.
     params: flow-level tuning read by steps via ctx.flow.param(key)."""
-    me()   # account-scoped: this touches shared state
+    try:
+        _actor = _operator_or_refuse("flows_submit")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
@@ -1690,7 +1783,14 @@ def flow_lifecycle(name: str, version: int, verb: str, token: str = "") -> str:
 
     In-flight reactions keep the version stamped at their admission — retiring never
     rewrites work already running."""
-    me()   # account-scoped: this touches shared state
+    try:
+        _actor = _operator_or_refuse("flow_lifecycle")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
@@ -1736,7 +1836,14 @@ def fact_emit(event_type: str, source_event_id: str, subject_refs: dict,
     no-op rather than a duplicate.
 
     invite.received wants: organizer, url, start (epoch), ics_uid, title, group|null."""
-    me()   # account-scoped: this touches shared state
+    try:
+        _actor = _operator_or_refuse("fact_emit")
+    except _NotOperator as e:
+        return json.dumps({"refused": "operator only", "verb": e.verb, "who": e.who,
+                           "why": e.why,
+                           "what_to_do": "An instance admin can run this. A harness or other "
+                                         "non-person producer should use flows-api POST /events "
+                                         "or /events/batch with the lane's admin key."})
     import sys
     src = _flows_src()
     if src is None:
