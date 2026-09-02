@@ -14,6 +14,7 @@ import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
 import { MinutesShell } from "../minutes/MinutesShell";
 import { minutesOnly } from "./mode";
+import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
@@ -230,6 +231,12 @@ export function App() {
   // InviteGate then shows the consent screen for any ?invite= INSIDE the authed subtree, so its preview /
   // redeem calls carry the user's real API key (the fail-closed gateway rejects anonymous calls).
   return (
+    <>
+      {/* The swap is invisible now (PRD decision 39) — so the tab tells the person when the
+          deployment underneath it moved. OUTSIDE AuthGate on purpose: the tab most likely to be
+          running a stale bundle is one sitting on a sign-in screen, and /api/version needs no
+          session. Renders nothing until it has something to say. */}
+      <VersionBar />
     <AuthGate>
       <InviteGate>
         {/* SetupGate: the bootstrap-claimed admin's first-run wizard (models + transcription,
@@ -243,5 +250,6 @@ export function App() {
         </SetupGate>
       </InviteGate>
     </AuthGate>
+    </>
   );
 }

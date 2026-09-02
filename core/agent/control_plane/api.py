@@ -77,6 +77,7 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
 from shared.git_redaction import redact as redact_secrets
 from control_plane import global_layer
+from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import friction as friction_store_mod
@@ -1136,7 +1137,10 @@ def create_app(
     # unreachable probe so a transient fault cannot brick sign-in on a working instance; it can
     # afford to precisely because this middleware holds, so a browser that renders anyway can still
     # do nothing.
-    _GATE_OPEN_PREFIXES = ("/api/global/",)
+    # `/api/version` joins them (decision 39): the swap script and an open browser tab both poll
+    # it to find out what is serving, and neither has a subject. Gating it would answer 403 to
+    # the one question whose whole purpose is answerable from outside, before anyone signs in.
+    _GATE_OPEN_PREFIXES = ("/api/global/", "/api/version")
 
     @app.middleware("http")
     async def _company_layer_gate(request: Request, call_next):
@@ -1306,6 +1310,21 @@ def create_app(
              "capabilities": capability_health()},
             status_code=200 if ok else 503,
         )
+
+    @app.get("/api/version")
+    def version():
+        """What is serving — unauthenticated, cheap, and polled (PRD decision 39).
+
+        No identity gate on purpose: the blue/green swap probes this from the HOST before any
+        traffic is switched onto the container, and an open browser tab polls it to notice that
+        the service underneath it moved. Both are outside a session. What it discloses is a build
+        stamp and a contract integer — the same facts the running image announces in its tag.
+
+        `api` is the pairing number the swap enforces (F55/F77): a terminal image whose baked
+        `ai.vexa.terminal.agent_api` label is not this number is REFUSED before it can be put in
+        front of a person, because that is the failure where the client leads the server and every
+        click 422s."""
+        return version_mod.version_payload()
 
     @app.get("/api/models")
     def models(request: Request):

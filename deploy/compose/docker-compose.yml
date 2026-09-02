@@ -258,6 +258,12 @@ services:
       # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
+      # What GET /api/version reports, and what the terminal's reload bar compares against. It is a
+      # property of the CONTAINER, not of the source tree — an image knows nothing about the repo it
+      # was built from — so the deployment stamps it. Defaults to the image tag, which is right for a
+      # plain `up -d`; the blue/green deploy sets it explicitly to the tag it is rolling out.
+      # Unset reads as "unknown" and the bar simply never fires (PRD decision 39).
+      - VEXA_BUILD_SHA=${VEXA_BUILD_SHA:-${IMAGE_TAG:-dev}}
       - VEXA_WORKSPACES_DIR=/workspaces
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).

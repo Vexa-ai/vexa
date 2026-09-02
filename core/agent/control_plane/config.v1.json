@@ -15,6 +15,15 @@
       "description": "app log level"
     },
     {
+      "key": "VEXA_BUILD_SHA",
+      "class": "defaulted",
+      "default": "unknown",
+      "description": "the build this CONTAINER is running, stamped by whoever started it and reported verbatim by GET /api/version. Deliberately NOT derived from the source tree: the answer has to be true of the container, and a container knows nothing about the repo it was built from. The blue/green deploy sets it to the tag it is deploying (PRD decision 39); unset reads as \"unknown\", so an unstamped deployment simply never offers the terminal's reload bar",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_RUNTIME_API_URL",
       "class": "defaulted",
       "default": "http://runtime-api:8090",
