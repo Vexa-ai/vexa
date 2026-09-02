@@ -38,8 +38,15 @@ def test_links_between_a_desk_and_a_group_survive_the_group_being_renamed(capsys
     # The numbers this replay exists to report, asserted rather than merely printed.
     assert report["links"]["written_in_id_form"] > 0
     assert report["links"]["as_the_desk_owner"]["readable"] == report["links"]["distinct_refs"]
-    assert report["links"]["as_a_non_member"]["not-yours"] == report["links"]["distinct_refs"]
+    assert report["links"]["as_a_non_member_of_the_group"]["not-yours"] == report["links"]["distinct_refs"]
     assert report["links"]["as_the_desk_owner"]["gone"] == 0
+    # The desk's own access, per the founder ruling of 2026-09-02.
+    assert report["a_link_into_the_desk"]["a_colleague"] == {"access": "readable", "writable": False}
+    assert report["a_link_into_the_desk"]["outside_the_instance"]["access"] == "not-yours"
+    # …and the README is a hub of links, with what the person opened at the top.
+    assert report["readme"]["links_to_group_cards"] > 1
+    assert report["readme"]["most_used_card_is_first"] is True
+    assert report["readme"]["pinned_is_untouched"] is True
 
 
 def test_the_replay_reads_a_truth_sidecar_without_a_yaml_dependency(tmp_path):

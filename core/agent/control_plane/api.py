@@ -1149,9 +1149,15 @@ def create_app(
     if redis_url:
         import redis as _redis_for_ids
 
-        workspace_registry = ids_mod.WorkspaceRegistry(_redis_for_ids.from_url(redis_url, decode_responses=True))
+        _ws_redis = _redis_for_ids.from_url(redis_url, decode_responses=True)
     else:
-        workspace_registry = ids_mod.WorkspaceRegistry()
+        _ws_redis = None
+    workspace_registry = ids_mod.WorkspaceRegistry(_ws_redis)
+    # THE USAGE SIGNAL (founder refinement, 2026-09-02: the desk README is "mostly links to the
+    # other cards in different workspaces"). A list of links is only useful if the ones this person
+    # uses are at the top, and the only place that knows which those are is the panel that opens
+    # them. Same redis, same in-memory fallback.
+    workspace_touches = ids_mod.TouchLog(_ws_redis)
     # THE MIGRATION, at startup and idempotent. Every workspace already on the volume gets an id
     # written into it and a row in the registry; parked trees get the id file so it survives the
     # swap that brings them back. It runs HERE rather than in a script because a workspace with no
@@ -1831,13 +1837,23 @@ def create_app(
         workload_id = dispatcher.dispatch(invocation)
         return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
-    def _read_target(request: Request, slug: Optional[str]) -> Path:
-        """Resolve which workspace dir a READ (tree/file) targets, returning its ABSOLUTE PATH. Default (no
+    def _read_target(request: Request, slug: Optional[str], *, write: bool = False) -> Path:
+        """Resolve which workspace dir a read or write targets, returning its ABSOLUTE PATH. Default (no
         slug) = the caller's primary baseline. A `slug` addresses ANOTHER mount in the caller's active set —
         their own non-primary private workspaces (which live under .attached, NOT <root>/<slug>) OR a SHARED
         workspace they're a member of. Authorization is by construction: the set is built for THIS subject
         (own actives + shared_active_mounts over their memberships), so a slug not in it → 403. This is what
-        lets the KNOWLEDGE panel render one section per active mount without leaking arbitrary workspaces."""
+        lets the KNOWLEDGE panel render one section per active mount without leaking arbitrary workspaces.
+
+        ``write=True`` STOPS THERE, and that asymmetry is the founder's ruling of 2026-09-02: a desk is
+        **readable by any signed-in member of this instance and writable by its owner**. So a read may fall
+        through to another person's desk (below) and a write may never. `write=True` is therefore exactly
+        today's behaviour, unchanged, and the widening is confined to the read path — which is the only way
+        to add it without weakening a write seam by accident.
+
+        The read fall-through is not a convenience: without it the link resolver would answer `readable` for
+        a colleague's desk and the panel would then 403 on the click. A chip that says you may open
+        something and an endpoint that refuses it is worse than either answer alone."""
         subject = subject_of(request)
         target = (slug or "").strip()
         # _system — the caller's OWN private-system workspace (RW, surfaced hidden-by-default in the files
@@ -1863,6 +1879,16 @@ def create_app(
         for m in mounts:
             if m.slug == target:
                 return Path(m.path)
+        # ANOTHER PERSON'S DESK — readable, never writable (the ruling above). The registry is asked
+        # rather than the directory layout, so this can only ever resolve something that IS a desk:
+        # a group the caller does not belong to still 403s here, and `_system` has no registry row
+        # at all, by construction, precisely so nothing can reach it this way.
+        if not write and subject:
+            rec = workspace_registry.by_slug(target)
+            if rec and rec.get("kind") == "desk":
+                d = Path(str(rec.get("dir") or ""))
+                if d.is_dir():
+                    return d
         raise HTTPException(status_code=403, detail="not authorized for this workspace")
 
     def _manage_dir(subject: str, slug: Optional[str]) -> Path:
@@ -2303,7 +2329,7 @@ def create_app(
                     membership_mod.require_role(wsr.root, slug, subject, "contributor")
                 except MembershipError:
                     pass  # not shared — fall through; _read_target 403s anything outside the active set
-            target = _read_target(request, slug)
+            target = _read_target(request, slug, write=True)
         f = (target / rel).resolve()
         if target.resolve() not in f.parents:
             raise HTTPException(status_code=400, detail="invalid path")
@@ -2370,7 +2396,7 @@ def create_app(
                 membership_mod.require_role(wsr.root, slug, subject, "contributor")
             except MembershipError:
                 pass  # not shared — _read_target 403s anything outside the active set
-        target = _read_target(request, slug)
+        target = _read_target(request, slug, write=True)
         try:
             # THE MOUNT SET IS HANDED IN so a `[[Name]]` whose page lives in another mounted
             # workspace is stored as `[[ws:<id>/<entity-id>]]` (PRD decision 26.3). Without it the
@@ -2491,9 +2517,11 @@ def create_app(
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
         put a NAME where it used to print a directory name (F49: the chat header read `126`)."""
+        subject = subject_of(request)
         rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
-        access = ids_mod.access_for(rec, subject_of(request), root=wsr.root, is_member=_ws_is_member)
-        return ids_mod.view(rec, access)
+        access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
+        return ids_mod.view(rec, access, writable=ids_mod.writable_for(
+            rec, subject, root=wsr.root, is_member=_ws_is_member))
 
     @app.get("/api/workspaces/{workspace_id}")
     def ws_id_resolve(workspace_id: str, request: Request):
@@ -2501,9 +2529,71 @@ def create_app(
 
         Never 404s and never 403s: `not-yours` and `gone` are ANSWERS (decision 26.3), and a status
         code would make the client render an error where the design says render a greyed chip."""
+        subject = subject_of(request)
         rec = workspace_registry.get(workspace_id)
-        access = ids_mod.access_for(rec, subject_of(request), root=wsr.root, is_member=_ws_is_member)
-        return ids_mod.view(rec, access, workspace_id=workspace_id)
+        access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
+        return ids_mod.view(rec, access, workspace_id=workspace_id, writable=ids_mod.writable_for(
+            rec, subject, root=wsr.root, is_member=_ws_is_member))
+
+    @app.post("/api/workspaces/{workspace_id}/rename")
+    def ws_id_rename(workspace_id: str, request: Request, body: dict = Body(default={})):
+        """Rename a workspace. The id does not move, and neither does anything pointing at it —
+        that is the single behaviour PRD decision 26 was asked for, and this is the route that
+        exercises it.
+
+        WHO (founder ruling, 2026-09-02): the group's OWNER, and instance admins. Nobody else, and
+        deliberately not a desk's own owner — a desk's name comes from the address that signed in,
+        and renaming one is a question about identity display that has not been asked yet.
+
+        AUDITED: who, old, new, when, kept on the record (capped) and logged. A rename is the one
+        operation whose whole point is that nothing else changes, which means the only way to see
+        that it happened at all is to have written it down."""
+        subject = subject_of(request)
+        try:
+            rec = ids_mod.rename_audited(
+                workspace_registry, workspace_id, str(body.get("name") or ""), by=str(subject),
+                is_admin=bool(global_layer.is_admin(settings, str(subject))),
+                root=wsr.root, is_member=_ws_is_member)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no workspace with that id")
+        except ids_mod.RenameRefused as e:
+            raise HTTPException(status_code=403, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {**ids_mod.view(rec, ids_mod.ACCESS_READABLE, writable=ids_mod.writable_for(
+            rec, subject, root=wsr.root, is_member=_ws_is_member)),
+            "renamed_from": (rec.get("renames") or [{}])[-1].get("from")}
+
+    @app.post("/api/desk/touch", status_code=202)
+    def desk_touch(request: Request, body: dict = Body(default={})):
+        """Record that this person opened one page — the ranking signal behind the desk README.
+
+        202, not 200: it is a report, the caller has nothing to do with the answer, and a panel
+        must never wait on bookkeeping to render a document.
+
+        WHAT IT WILL NOT DO is trust the workspace it is told. The body names a workspace id; the
+        access rule is applied to it exactly as it is for a link, so a touch cannot be used to ask
+        whether a workspace exists, and a page in a workspace this caller cannot read is not
+        recorded. The DESK the touch is filed under is always the CALLER'S OWN — never a parameter,
+        because "whose desk does this belong to" is not a question a client gets to answer."""
+        subject = subject_of(request)
+        wid = str(body.get("workspace") or "").strip()
+        path = str(body.get("path") or "").strip().lstrip("/")
+        if not wid or not path or ".." in path.split("/"):
+            raise HTTPException(status_code=400, detail="a touch names a workspace id and a path")
+        rec = workspace_registry.get(wid)
+        if ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member) != ids_mod.ACCESS_READABLE:
+            return {"recorded": False}          # not readable — nothing to say, and nothing leaked
+        desk = workspace_registry.by_slug(str(subject)) or _ws_sync(str(subject), kind="desk",
+                                                                    owner=str(subject))
+        if not desk:
+            return {"recorded": False}
+        workspace_touches.touch(desk["id"], wid, path)
+        # Mirror it where the WORKER can read it: the README is regenerated at the end of a turn,
+        # in a container that holds the mounts and no redis.
+        ids_mod.mirror_touches(desk.get("dir") or (wsr.root / str(subject)),
+                               workspace_touches.recent(desk["id"]))
+        return {"recorded": True}
 
     @app.post("/api/links/resolve")
     def links_resolve(request: Request, body: dict = Body(default={})):

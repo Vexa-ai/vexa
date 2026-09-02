@@ -35,6 +35,7 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { fetchScaffold, localScaffold, refusalCopy, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { artifactsFromTokens, artifactTabEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
+import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -536,6 +537,10 @@ export function MinutesShell() {
 
   const openPage = useCallback((pg: Page) => {
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
+    // What this person actually opens is the desk README's ordering signal — and the only place
+    // that knows it is here. Fire-and-forget; a usage signal is never worth a millisecond of the
+    // document they asked for. (The seam worker's panel-view-slot lands the same one line.)
+    if (pg.kind !== "meeting") reportOpened(pg.slug, pg.path);
     // A folded-away panel is the other way a link click "does nothing": the tab opens into a 22px
     // column nobody can see. Asking for a document unfolds the column it lands in.
     setPagesCollapsed(false); saveCollapsed("right", false);

@@ -1,21 +1,36 @@
-"""The desk README as the desk: generated sections that are a VIEW over kg/, and never more.
+"""The desk README as a HUB OF LINKS — founder refinement, 2026-09-02:
+*"we want the personal desk readme to be the thing where they have what they generally need —
+mostly links to the other cards in different workspaces."*
 
-PRD decision 26.4. The two claims that matter, and the second one matters more:
+Four claims, and the second matters most:
 
-  1. the sections say what is on the desk, derived from `kg/` on every run;
-  2. **nothing outside the markers is ever touched** — not the header the agent wrote, not a
-     paragraph the person typed, not a section somebody added by hand.
+  1. the sections are links to cards, across every mounted workspace, ordered by USE;
+  2. **`## Pinned` is the person's and is never regenerated** — the marker around it exists to tell
+     the generator where to stop, not to license writing there;
+  3. nothing outside the markers is touched either;
+  4. the caps hold, and a cross-workspace card is linked in `ws:` id form so it survives a rename.
 """
 from __future__ import annotations
 
+import time
+
 from shared import desk_readme
 from shared.entities import upsert_entity
+from shared.workspace_id import write_workspace_json
+
+DESK_ID = "aaaaaaaaaa"
+GROUP_ID = "bbbbbbbbbb"
+
+
+def _ws(tmp_path, name, wid, kind="desk"):
+    d = tmp_path / name
+    (d / "kg" / "entities").mkdir(parents=True)
+    write_workspace_json(d, id=wid, kind=kind, created="2026-09-02")
+    return d
 
 
 def _desk(tmp_path):
-    d = tmp_path / "desk"
-    (d / "kg" / "entities").mkdir(parents=True)
-    return d
+    return _ws(tmp_path, "desk", DESK_ID)
 
 
 def _sections(text: str) -> dict:
@@ -27,99 +42,239 @@ def _sections(text: str) -> dict:
     return out
 
 
-def test_a_desk_with_no_readme_gets_one_with_every_section(tmp_path):
+def _write(d, mounts=(), workspaces=(), touches=None, today="2026-09-02", name=""):
+    return desk_readme.update_readme(d, mounts=mounts or [{"path": str(d), "id": DESK_ID}],
+                                     workspaces=workspaces, touches=touches, home_id=DESK_ID,
+                                     name=name, today=today)
+
+
+# ── the shape ────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_fresh_desk_gets_every_section_in_order(tmp_path):
     d = _desk(tmp_path)
-    out = desk_readme.update_readme(d)
-    assert out["changed"] is True
+    assert _write(d, name="olga@spi.com")["changed"] is True
     text = (d / "README.md").read_text()
     got = _sections(text)
     assert all(got[k] is not None for k, _ in desk_readme.SECTIONS)
-    # empty is SAID, never omitted — an absent section reads as "not looked at"
-    assert "No people on this desk yet" in got["people"]
-    assert "belongs to no group workspace yet" in got["workspaces"]
+    assert [k for k, _ in desk_readme.SECTIONS] == ["pinned", "now", "people", "companies",
+                                                    "projects", "workspaces", "recent"]
+    # …and in that order on the page, not merely present
+    at = [text.index(f"<!-- desk:{k}:start -->") for k, _ in desk_readme.SECTIONS]
+    assert at == sorted(at)
 
 
-def test_sections_list_what_kg_holds(tmp_path):
+def test_the_header_is_two_lines_of_prose_and_is_written_once(tmp_path):
     d = _desk(tmp_path)
-    upsert_entity(d, "person", "Olga Avramenko", ["Attends the TSC."], "the 2026-03-02 meeting")
-    upsert_entity(d, "company", "Sony Pictures Imageworks", ["Olga's employer."], "the meeting")
-    upsert_entity(d, "meeting", "DNA TSC 2026-03-02", ["Kickoff."], "the transcript")
-    desk_readme.update_readme(d)
-    got = _sections((d / "README.md").read_text())
-    assert "- [[Olga Avramenko]]" in got["people"]
-    assert "- [[Sony Pictures Imageworks]]" in got["companies"]
-    assert "- [[DNA TSC 2026-03-02]]" in got["meetings"]
+    _write(d, name="olga@spi.com")
+    head = (d / "README.md").read_text().split("<!-- desk:pinned:start -->")[0].strip()
+    assert head.startswith("# olga@spi.com — desk")
+    assert len([ln for ln in head.splitlines() if ln.strip()]) == 2
+    # a later run does not rewrite it, even if the name changed
+    _write(d, name="somebody.else@spi.com")
+    assert (d / "README.md").read_text().startswith("# olga@spi.com — desk")
 
 
-def test_open_commitments_come_from_the_commitment_headings(tmp_path):
+def test_the_page_is_links_not_prose(tmp_path):
     d = _desk(tmp_path)
-    upsert_entity(d, "meeting", "DNA TSC 2026-03-02", ["Kickoff."], "the transcript")
-    page = d / "kg/entities/meeting/dna-tsc-2026-03-02.md"
-    page.write_text(page.read_text() + "\n## Committed\n\n- Complete SSO onboarding\n- Circulate the charter\n")
-    desk_readme.update_readme(d)
-    got = _sections((d / "README.md").read_text())
-    assert "- Complete SSO onboarding — [[DNA TSC 2026-03-02]]" in got["commitments"]
-    assert "- Circulate the charter — [[DNA TSC 2026-03-02]]" in got["commitments"]
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
+    _write(d)
+    body = "\n".join(_sections((d / "README.md").read_text())["people"].splitlines())
+    rows = [ln for ln in body.splitlines() if ln.strip() and not ln.startswith("##")]
+    assert rows == ["", "- [[Olga Avramenko]]"] or rows == ["- [[Olga Avramenko]]"]
 
 
-def test_next_dates_are_the_future_ones_only(tmp_path):
+# ── Pinned is theirs ─────────────────────────────────────────────────────────────────────────────
+
+def test_pinned_is_seeded_empty_with_a_hint_and_then_never_touched(tmp_path):
     d = _desk(tmp_path)
-    upsert_entity(d, "meeting", "Next TSC", ["Scheduled for 2026-10-01."], "the invite",
-                  today="2026-09-02")
-    upsert_entity(d, "meeting", "Old TSC", ["Held on 2026-01-05."], "the transcript",
-                  today="2026-09-02")
-    desk_readme.update_readme(d, today="2026-09-02")
-    got = _sections((d / "README.md").read_text())
-    assert "2026-10-01" in got["dates"] and "2026-01-05" not in got["dates"]
+    _write(d)
+    text = (d / "README.md").read_text()
+    assert "## Pinned" in _sections(text)["pinned"]
+    assert "Yours." in _sections(text)["pinned"]
 
+    mine = "## Pinned\n\n- [[ws:bbbbbbbbbb/the-charter]]\n- my own note\n"
+    text = text.replace(_sections(text)["pinned"], "\n" + mine)
+    (d / "README.md").write_text(text)
 
-def test_group_workspaces_are_listed_by_id_link(tmp_path):
-    """A rename must not break the door — so the link is an id, never the group's name."""
-    d = _desk(tmp_path)
-    desk_readme.update_readme(d, workspaces=[{"id": "bbbbbbbbbb", "name": "ASWF DNA Project"}])
-    got = _sections((d / "README.md").read_text())
-    assert "- [[ws:bbbbbbbbbb/README.md]]" in got["workspaces"]
-    assert "ASWF DNA Project" not in got["workspaces"]      # the name is resolved at read time
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
+    _write(d)
+    after = _sections((d / "README.md").read_text())
+    assert "- my own note" in after["pinned"] and "[[ws:bbbbbbbbbb/the-charter]]" in after["pinned"]
+    assert "Yours." not in after["pinned"]                  # the hint went when they wrote over it
+    assert "[[Olga Avramenko]]" in after["people"]           # …and the rest still regenerated
 
 
 def test_text_outside_the_markers_is_never_touched(tmp_path):
     d = _desk(tmp_path)
-    header = ("# Olga's desk\n\nWhat I actually care about this quarter is the DNA charter.\n\n"
+    header = ("# Olga's desk\n\nWhat I care about this quarter is the DNA charter.\n\n"
               "## My own section\n\n- something I typed by hand\n\n")
     (d / "README.md").write_text(header)
-    desk_readme.update_readme(d)
-    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting")
-    desk_readme.update_readme(d)
+    _write(d)
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
+    _write(d)
     text = (d / "README.md").read_text()
     assert text.startswith(header.rstrip("\n"))
-    assert "- something I typed by hand" in text
-    assert "[[Olga Avramenko]]" in text
+    assert "- something I typed by hand" in text and "[[Olga Avramenko]]" in text
 
 
 def test_regeneration_replaces_only_between_the_markers(tmp_path):
     d = _desk(tmp_path)
-    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting")
-    desk_readme.update_readme(d)
-    before = (d / "README.md").read_text()
-    upsert_entity(d, "person", "Cottalango Leon", ["Chairs."], "the meeting")
-    desk_readme.update_readme(d)
-    after = (d / "README.md").read_text()
-    assert before.count("<!-- desk:people:start -->") == after.count("<!-- desk:people:start -->") == 1
-    assert "[[Cottalango Leon]]" in after and "[[Olga Avramenko]]" in after
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
+    _write(d)
+    upsert_entity(d, "person", "Cottalango Leon", ["Chairs."], "the meeting", today="2026-09-02")
+    _write(d)
+    text = (d / "README.md").read_text()
+    assert text.count("<!-- desk:people:start -->") == 1
+    assert "[[Cottalango Leon]]" in text and "[[Olga Avramenko]]" in text
 
 
 def test_it_is_idempotent(tmp_path):
     d = _desk(tmp_path)
-    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting")
-    assert desk_readme.update_readme(d, today="2026-09-02")["changed"] is True
-    assert desk_readme.update_readme(d, today="2026-09-02")["changed"] is False
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "the meeting", today="2026-09-02")
+    assert _write(d)["changed"] is True
+    assert _write(d)["changed"] is False
 
 
-def test_a_long_desk_is_capped_and_says_so(tmp_path):
-    d = _desk(tmp_path)
-    for i in range(desk_readme.MAX_ROWS + 7):
-        upsert_entity(d, "person", f"Person Number{i:03d}", ["Attends."], "the meeting")
-    desk_readme.update_readme(d)
+# ── across workspaces ────────────────────────────────────────────────────────────────────────────
+
+def test_a_card_in_another_workspace_is_linked_in_id_form(tmp_path):
+    d, g = _desk(tmp_path), _ws(tmp_path, "grp", GROUP_ID, kind="group")
+    upsert_entity(d, "person", "Olga Avramenko", ["Attends."], "s", today="2026-09-02")
+    upsert_entity(g, "person", "Cottalango Leon", ["Chairs."], "s", today="2026-09-02")
+    upsert_entity(g, "company", "Sony Pictures Imageworks", ["Employer."], "s", today="2026-09-02")
+    _write(d, mounts=[{"path": str(d), "id": DESK_ID}, {"path": str(g), "id": GROUP_ID}])
     got = _sections((d / "README.md").read_text())
-    assert got["people"].count("\n- ") == desk_readme.MAX_ROWS
-    assert "7 more" in got["people"]
+    assert "- [[Olga Avramenko]]" in got["people"]                        # ours — the plain form
+    assert f"- [[ws:{GROUP_ID}/cottalango-leon]]" in got["people"]        # theirs — the id form
+    assert f"- [[ws:{GROUP_ID}/sony-pictures-imageworks]]" in got["companies"]
+
+
+def test_a_mount_with_no_id_contributes_nothing(tmp_path):
+    """A card whose link cannot be written is worse on this page than a card that is absent — a hub
+    of links whose links do not resolve is not a hub."""
+    d = _desk(tmp_path)
+    plain = tmp_path / "unmigrated"
+    (plain / "kg" / "entities").mkdir(parents=True)
+    upsert_entity(plain, "person", "Nobody Yet", ["x"], "s", today="2026-09-02")
+    _write(d, mounts=[{"path": str(d), "id": DESK_ID}, {"path": str(plain), "id": ""}])
+    assert "Nobody Yet" not in (d / "README.md").read_text()
+
+
+def test_workspaces_are_listed_by_id_link(tmp_path):
+    d = _desk(tmp_path)
+    _write(d, workspaces=[{"id": GROUP_ID, "name": "ASWF DNA Project"}])
+    got = _sections((d / "README.md").read_text())
+    assert f"- [[ws:{GROUP_ID}/README.md]]" in got["workspaces"]
+    assert "ASWF DNA Project" not in got["workspaces"]     # the name is resolved at read time
+
+
+# ── Now ──────────────────────────────────────────────────────────────────────────────────────────
+
+def test_now_leads_with_the_next_meetings_soonest_first(tmp_path):
+    d = _desk(tmp_path)
+    for day in ("2026-10-01", "2026-09-15", "2026-01-05"):
+        upsert_entity(d, "meeting", f"DNA TSC {day}", ["Held."], "s", today="2026-09-02")
+    got = _sections(_write(d) and (d / "README.md").read_text())["now"]
+    assert got.index("2026-09-15") < got.index("2026-10-01")
+    assert "2026-01-05" not in got                          # behind us — not "Now"
+
+
+def test_now_carries_dated_commitments_and_names_the_card_they_came_from(tmp_path):
+    d = _desk(tmp_path)
+    upsert_entity(d, "meeting", "DNA TSC kickoff", ["Held."], "s", today="2026-09-02")
+    page = d / "kg/entities/meeting/dna-tsc-kickoff.md"
+    page.write_text(page.read_text() + "\n## Committed\n\n- Circulate the charter by 2026-09-20\n"
+                                       "- Something with no date\n")
+    _write(d)
+    got = _sections((d / "README.md").read_text())["now"]
+    assert "2026-09-20 — Circulate the charter by 2026-09-20 — [[DNA TSC kickoff]]" in got
+    assert "Something with no date" not in got              # "with dates" is the rule
+
+
+def test_the_meeting_cap_holds(tmp_path):
+    d = _desk(tmp_path)
+    for i in range(desk_readme.MEETINGS_MAX + 4):
+        upsert_entity(d, "meeting", f"Sync 2026-10-{i + 1:02d}", ["x"], "s", today="2026-09-02")
+    got = _sections(_write(d) and (d / "README.md").read_text())["now"]
+    assert len([ln for ln in got.splitlines() if ln.startswith("- 2026-10-")]) == desk_readme.MEETINGS_MAX
+
+
+# ── ordering by USE, and the caps ────────────────────────────────────────────────────────────────
+
+def test_cards_are_ordered_by_what_the_person_opened_not_by_what_the_agent_wrote(tmp_path):
+    d = _desk(tmp_path)
+    for who in ("Aaa Person", "Bbb Person", "Ccc Person"):
+        upsert_entity(d, "person", who, ["x"], "s", today="2026-09-02")
+    touches = [{"workspace": DESK_ID, "path": "kg/entities/person/ccc-person.md", "at": time.time()},
+               {"workspace": DESK_ID, "path": "kg/entities/person/aaa-person.md", "at": time.time() - 60}]
+    _write(d, touches=touches)
+    rows = [ln for ln in _sections((d / "README.md").read_text())["people"].splitlines()
+            if ln.startswith("- ")]
+    assert rows[0] == "- [[Ccc Person]]" and rows[1] == "- [[Aaa Person]]"
+
+
+def test_the_card_cap_holds_per_section(tmp_path):
+    d = _desk(tmp_path)
+    for i in range(desk_readme.CARDS_MAX + 6):
+        upsert_entity(d, "person", f"Person Number{i:03d}", ["x"], "s", today="2026-09-02")
+    _write(d)
+    rows = [ln for ln in _sections((d / "README.md").read_text())["people"].splitlines()
+            if ln.startswith("- ")]
+    assert len(rows) == desk_readme.CARDS_MAX
+
+
+# ── Recently opened ──────────────────────────────────────────────────────────────────────────────
+
+def test_recently_opened_names_cards_and_falls_back_to_a_path(tmp_path):
+    d, g = _desk(tmp_path), _ws(tmp_path, "grp", GROUP_ID, kind="group")
+    upsert_entity(g, "person", "Cottalango Leon", ["Chairs."], "s", today="2026-09-02")
+    touches = [{"workspace": GROUP_ID, "path": "kg/entities/person/cottalango-leon.md", "at": 3},
+               {"workspace": GROUP_ID, "path": "notes/2026-03-02.md", "at": 2},
+               {"workspace": DESK_ID, "path": "scratch.md", "at": 1}]
+    _write(d, mounts=[{"path": str(d), "id": DESK_ID}, {"path": str(g), "id": GROUP_ID}],
+           touches=touches)
+    got = _sections((d / "README.md").read_text())["recent"]
+    assert f"- [[ws:{GROUP_ID}/cottalango-leon]]" in got          # a card, named
+    assert f"- [[ws:{GROUP_ID}/notes/2026-03-02.md]]" in got      # no entity id — the path form
+    assert "- `scratch.md`" in got                                 # ours — a plain workspace path
+
+
+def test_the_recent_cap_holds(tmp_path):
+    d = _desk(tmp_path)
+    touches = [{"workspace": DESK_ID, "path": f"n{i}.md", "at": i} for i in range(desk_readme.RECENT_MAX + 5)]
+    _write(d, touches=touches)
+    rows = [ln for ln in _sections((d / "README.md").read_text())["recent"].splitlines()
+            if ln.startswith("- ")]
+    assert len(rows) == desk_readme.RECENT_MAX
+
+
+# ── the shape it replaced ────────────────────────────────────────────────────────────────────────
+
+def test_the_retired_sections_are_removed_on_sight(tmp_path):
+    """A desk generated by the earlier shape converges instead of carrying dead blocks forever.
+    Purpose / Objective / Where-things-stand belong to a GROUP's README — a group has a purpose, a
+    desk is a person."""
+    d = _desk(tmp_path)
+    (d / "README.md").write_text(
+        "# Olga — desk\n\n"
+        "<!-- desk:meetings:start -->\n## Meetings\n\n- [[Old]]\n<!-- desk:meetings:end -->\n\n"
+        "<!-- desk:purpose:start -->\n## Purpose\n\n(unset)\n<!-- desk:purpose:end -->\n")
+    _write(d)
+    text = (d / "README.md").read_text()
+    for key in desk_readme.RETIRED_SECTIONS:
+        assert f"desk:{key}:" not in text
+    assert "## Meetings" not in text and "## Purpose" not in text
+    assert "# Olga — desk" in text and "## Now" in text
+
+
+def test_empty_is_said_never_omitted(tmp_path):
+    """An absent section reads as 'not looked at', and the reader cannot tell that from
+    'nothing there'."""
+    d = _desk(tmp_path)
+    _write(d)
+    got = _sections((d / "README.md").read_text())
+    assert "No people on this desk yet" in got["people"]
+    assert "No projects on this desk yet" in got["projects"]
+    assert "belongs to no group workspace yet" in got["workspaces"]
+    assert "Nothing opened from here yet" in got["recent"]
+    assert "Nothing scheduled or committed" in got["now"]

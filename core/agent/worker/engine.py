@@ -497,15 +497,21 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
 
     Runs at the END of a turn, in the same phase as the entity write-back, because it is the same
     act one level up: the write-back records what the turn learned, this makes the desk SHOW it.
-    "The view over the files, never a second source of truth" — every section is derived from `kg/`
-    on every run, and nothing outside the markers is touched.
+
+    Founder, 2026-09-02: the desk README is *"the thing where they have what they generally need —
+    mostly links to the other cards in different workspaces"*. So the refresh is handed EVERY mount,
+    not just the desk: a card in the group is linked in its `ws:` id form and a card here stays a
+    plain title. And it is handed the usage signal — what the panel reported this person actually
+    opening (`.vexa/touches.json`, mirrored there by agent-api) — because a list of links is only
+    useful if the ones they use are at the top. Ranking by last-modified alone ranks by what the
+    AGENT wrote, which is close to the opposite.
 
     Fails soft and returns None. A README section is the least important thing a turn produces; a
     turn that answered the person and then died updating a bulleted list has lost far more than the
     list is worth."""
     from shared import desk_readme
     from shared.entities import commit_entity
-    from shared.workspace_id import workspace_id_of
+    from shared.workspace_id import read_touches, workspace_id_of
 
     desk, groups = desk_mounts(mounts)
     if not desk or not desk.get("path"):
@@ -513,13 +519,17 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
     root = Path(str(desk["path"]))
     if not root.is_dir():
         return None
-    listed = []
+    home_id = desk.get("id") or workspace_id_of(root) or ""
+    listed, feed = [], [{"path": str(root), "id": home_id}]
     for g in groups:
         wid = g.get("id") or workspace_id_of(str(g.get("path") or ""))
         if wid:
             listed.append({"id": wid, "name": g.get("name") or g.get("slug")})
+            feed.append({"path": str(g.get("path") or ""), "id": wid})
     try:
-        out = desk_readme.update_readme(root, workspaces=listed)
+        out = desk_readme.update_readme(root, mounts=feed, workspaces=listed, home_id=home_id,
+                                        touches=read_touches(root),
+                                        name=str(desk.get("name") or ""))
     except OSError as e:
         log.warning("desk README refresh failed: %s: %s", type(e).__name__, e)
         return None

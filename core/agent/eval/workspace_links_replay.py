@@ -18,6 +18,9 @@ WHAT IT PROVES, and why the shape is what it is:
   4. A reader who is not in the group gets `not-yours` for exactly those links — with a title, no
      error, and no way to open the page. *"If a workspace is not available, it's okay — by design."*
   5. The desk README's `## Workspaces` link to the group resolves after the rename too.
+  6. A DESK, though, is a different answer (founder ruling, 2026-09-02): readable by any signed-in
+     member of this instance, writable only by its owner, and `not-yours` only from outside the
+     instance. Groups gate on membership; desks gate on writing.
 
 Usage:  python core/agent/eval/workspace_links_replay.py --fixtures ~/dna-fixtures
 """
@@ -42,7 +45,8 @@ from shared.links import cross_workspace_refs  # noqa: E402
 
 DESK = "126"                              # the shape the live instance actually has
 GROUP = "aswf-dna-project-b7b2ee"
-OUTSIDER = "999"                          # somebody with no membership anywhere here
+COLLEAGUE = "999"                         # signed in to this instance, in none of its groups
+OUTSIDE = ""                              # no subject at all — outside the instance entirely
 
 _PAREN = re.compile(r"\s*\(([^)]*)\)\s*$")
 _LIST = re.compile(r'^present:\s*\[(.*)\]\s*$', re.M)
@@ -170,10 +174,22 @@ def main() -> int:
 
         play(second)
 
-        # ── the desk README, which is the desk (decision 26.4) ──────────────────────────────────
-        desk_readme.update_readme(desk, workspaces=[{"id": group_id, "name": "Digital Naming Authority"}],
-                                  today=second["date"])
+        # ── the desk README, which is the desk: a HUB OF LINKS (founder refinement 2026-09-02) ──
+        # Fed every mount, so the group's own cards appear on the desk in `ws:` id form — the whole
+        # of "mostly links to the other cards in different workspaces".
+        desk_readme.update_readme(
+            desk, mounts=[{"path": str(desk), "id": desk_id}, {"path": str(group), "id": group_id}],
+            workspaces=[{"id": group_id, "name": "Digital Naming Authority"}],
+            touches=[{"workspace": group_id,
+                      "path": "kg/entities/person/cottalango-leon.md", "at": 9e9}],
+            home_id=desk_id, name="olga@spi.com", today=second["date"])
         readme = (desk / desk_readme.README).read_text()
+        report["readme"] = {
+            "links_to_group_cards": readme.count(f"[[ws:{group_id}/"),
+            "pinned_is_untouched": desk_readme.PINNED_HINT in readme,
+            "most_used_card_is_first": (readme.split("## People")[1].strip().splitlines() or [""])[0]
+                                       == f"- [[ws:{group_id}/cottalango-leon]]",
+        }
 
         # ── RESOLVE EVERYTHING THE DESK NOW HOLDS, as both readers ──────────────────────────────
         refs: list[str] = []
@@ -189,11 +205,23 @@ def main() -> int:
                 counts[r["access"]] += 1
             return {"counts": counts, "sample": out[:2]}
 
-        owner, outsider = tally(DESK), tally(OUTSIDER)
+
+        owner, colleague = tally(DESK), tally(COLLEAGUE)
         report["links"] = {"written_in_id_form": written, "distinct_refs": len(refs),
                            "as_the_desk_owner": owner["counts"],
-                           "as_a_non_member": outsider["counts"]}
+                           "as_a_non_member_of_the_group": colleague["counts"]}
         report["readme_links_to_the_group"] = f"[[ws:{group_id}/README.md]]" in readme
+
+        # ── the DESK, read the other way round: a link INTO it, seen by three readers ───────────
+        desk_ref = f"ws:{desk_id}/kg/entities/meeting/dna-tsc-{first['date']}.md"
+
+        def one(subject: str) -> dict:
+            r = link_resolver.resolve(desk_ref, subject=subject, root=root, registry=registry,
+                                      is_member=member_check)
+            return {"access": r["access"], "writable": r["writable"]}
+
+        report["a_link_into_the_desk"] = {"its_owner": one(DESK), "a_colleague": one(COLLEAGUE),
+                                          "outside_the_instance": one(OUTSIDE)}
 
         # ── the assertions this replay exists to make ───────────────────────────────────────────
         checks = {
@@ -202,10 +230,22 @@ def main() -> int:
             "every link still resolves for the owner after the rename":
                 owner["counts"]["readable"] == len(refs) and len(refs) > 0,
             "no link is broken (`gone`) for anybody": owner["counts"]["gone"] == 0
-                                                      and outsider["counts"]["gone"] == 0,
+                                                      and colleague["counts"]["gone"] == 0,
             "a non-member gets not-yours for every one of them, and never an error":
-                outsider["counts"]["not-yours"] == len(refs),
+                colleague["counts"]["not-yours"] == len(refs),
             "the desk README links to the group by id": report["readme_links_to_the_group"],
+            "the desk README is a hub of links into the group's cards":
+                report["readme"]["links_to_group_cards"] > 1,
+            "the card the person opened is at the top of its section":
+                report["readme"]["most_used_card_is_first"],
+            "Pinned is left to the person": report["readme"]["pinned_is_untouched"],
+            "the desk is readable by its owner, and writable":
+                report["a_link_into_the_desk"]["its_owner"] == {"access": "readable", "writable": True},
+            "the desk is readable by a colleague, and NOT writable":
+                report["a_link_into_the_desk"]["a_colleague"] == {"access": "readable", "writable": False},
+            "the desk is not-yours only from outside the instance":
+                report["a_link_into_the_desk"]["outside_the_instance"] == {"access": "not-yours",
+                                                                          "writable": False},
         }
         report["checks"] = checks
         report["ok"] = all(checks.values())

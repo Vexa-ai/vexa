@@ -102,7 +102,12 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
         access = ids_mod.access_for(rec, subject, root=root, is_member=is_member)
 
     out = {"ref": ref_text, "title": humanize(ref.target), "url": None, "access": access,
-           "workspace": (rec or {}).get("name")}
+           "workspace": (rec or {}).get("name"),
+           # READABLE and WRITABLE are two answers, not one (founder ruling 2026-09-02: a desk is
+           # readable by any signed-in member of this instance and writable only by its owner). A
+           # client that cannot tell them apart either hides an editor a person may use or offers
+           # one that will 403.
+           "writable": ids_mod.writable_for(rec, subject, root=root, is_member=is_member)}
     if access != ids_mod.ACCESS_READABLE or not rec:
         return out
 

@@ -247,6 +247,13 @@ def _member_of(*pairs):
 
 
 def test_access_states(tmp_path):
+    """Founder ruling, 2026-09-02: a desk is READABLE by any signed-in member of this instance and
+    WRITABLE by its owner. `not-yours` applies to a desk only for a caller from outside the instance
+    — which at this layer means no subject at all.
+
+    The narrow reading (owner-only) was built first and ruled wrong: it made a link between
+    colleagues render `not-yours`, which says the page is somebody's secret when decision 21 says a
+    desk is company knowledge held by one person and `_system` is the tier that stays private."""
     reg = ids.WorkspaceRegistry()
     for n in ("_global", "126", "127"):
         _ws(tmp_path, n)
@@ -258,10 +265,128 @@ def test_access_states(tmp_path):
 
     assert ids.access_for(g, "126") == ids.ACCESS_READABLE            # the org tier is everyone's
     assert ids.access_for(desk126, "126") == ids.ACCESS_READABLE      # my own desk
-    assert ids.access_for(desk127, "126") == ids.ACCESS_NOT_YOURS     # somebody else's desk
+    assert ids.access_for(desk127, "126") == ids.ACCESS_READABLE      # a COLLEAGUE's desk
+    assert ids.access_for(desk127, "") == ids.ACCESS_NOT_YOURS        # …from outside the instance
     assert ids.access_for(grp, "126", root=tmp_path, is_member=member) == ids.ACCESS_READABLE
     assert ids.access_for(grp, "127", root=tmp_path, is_member=member) == ids.ACCESS_NOT_YOURS
     assert ids.access_for(None, "126") == ids.ACCESS_GONE
+
+
+def test_a_desk_is_read_by_the_instance_and_written_by_its_owner(tmp_path):
+    """The whole shape of a desk in four assertions: member → readable, owner → writable,
+    colleague → readable but NOT writable, outsider → not-yours."""
+    reg = ids.WorkspaceRegistry()
+    _ws(tmp_path, "126")
+    _ws(tmp_path, "127")
+    ids.migrate(tmp_path, reg)
+    desk = reg.by_slug("126")
+
+    assert ids.access_for(desk, "126") == ids.ACCESS_READABLE
+    assert ids.writable_for(desk, "126") is True                     # the owner writes
+    assert ids.access_for(desk, "127") == ids.ACCESS_READABLE        # a member of the instance reads
+    assert ids.writable_for(desk, "127") is False                    # …and never writes
+    assert ids.access_for(desk, "") == ids.ACCESS_NOT_YOURS          # outside the instance
+    assert ids.writable_for(desk, "") is False
+
+
+def test_a_group_is_written_by_its_members_and_the_org_tier_by_nobody(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    _ws(tmp_path, "_global")
+    _ws(tmp_path, "grp", members=True)
+    ids.migrate(tmp_path, reg)
+    grp, g = reg.by_slug("grp"), reg.by_slug("_global")
+    member = _member_of(("grp", "126"))
+
+    assert ids.writable_for(grp, "126", root=tmp_path, is_member=member) is True
+    assert ids.writable_for(grp, "127", root=tmp_path, is_member=member) is False
+    # `_global` has exactly one sanctioned writer (the admin's setup mount); a second door to it is
+    # the thing the whole tier is careful about, so this path never grants one.
+    assert ids.writable_for(g, "126") is False
+
+
+def test_a_viewer_reads_a_group_and_does_not_write_it(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    _ws(tmp_path, "grp", members=True)
+    ids.migrate(tmp_path, reg)
+    grp = reg.by_slug("grp")
+    viewer = lambda root, slug, subject: "viewer" if slug == "grp" else None  # noqa: E731
+    assert ids.access_for(grp, "126", root=tmp_path, is_member=viewer) == ids.ACCESS_READABLE
+    assert ids.writable_for(grp, "126", root=tmp_path, is_member=viewer) is False
+
+
+# ── rename, audited (founder ruling 2026-09-02) ──────────────────────────────────────────────────
+
+def _group(tmp_path, reg, owner="126"):
+    _ws(tmp_path, "grp", members=True)
+    ids.migrate(tmp_path, reg)
+    return reg.by_slug("grp")
+
+
+def test_a_groups_owner_renames_it_and_the_id_does_not_move(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    rec = _group(tmp_path, reg)
+    owner = _member_of(("grp", "126"))
+    owner_check = lambda root, slug, subject: "owner" if (slug, subject) == ("grp", "126") else None  # noqa: E731
+
+    out = ids.rename_audited(reg, rec["id"], "Digital Naming Authority", by="126",
+                             root=tmp_path, is_member=owner_check)
+    assert out["id"] == rec["id"] and out["slug"] == rec["slug"] and out["dir"] == rec["dir"]
+    assert out["name"] == "Digital Naming Authority"
+    assert owner is not None  # (the plain member check is exercised in the refusal below)
+
+
+def test_the_rename_is_audited_who_old_new(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    rec = _group(tmp_path, reg)
+    owner_check = lambda root, slug, subject: "owner" if subject == "126" else None  # noqa: E731
+    ids.rename_audited(reg, rec["id"], "Round One", by="126", root=tmp_path, is_member=owner_check)
+    out = ids.rename_audited(reg, rec["id"], "Round Two", by="126", root=tmp_path, is_member=owner_check)
+    trail = out["renames"]
+    assert [e["from"] for e in trail] == ["grp", "Round One"]
+    assert [e["to"] for e in trail] == ["Round One", "Round Two"]
+    assert all(e["by"] == "126" and e["at"] for e in trail)
+
+
+def test_the_audit_trail_is_capped(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    rec = _group(tmp_path, reg)
+    check = lambda root, slug, subject: "owner"  # noqa: E731
+    for i in range(ids.RENAME_AUDIT_MAX + 5):
+        out = ids.rename_audited(reg, rec["id"], f"Name {i}", by="126", root=tmp_path, is_member=check)
+    assert len(out["renames"]) == ids.RENAME_AUDIT_MAX
+    assert out["renames"][-1]["to"] == f"Name {ids.RENAME_AUDIT_MAX + 4}"
+
+
+def test_a_mere_member_may_not_rename_a_group(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    rec = _group(tmp_path, reg)
+    contributor = lambda root, slug, subject: "contributor"  # noqa: E731
+    with pytest.raises(ids.RenameRefused):
+        ids.rename_audited(reg, rec["id"], "Nope", by="127", root=tmp_path, is_member=contributor)
+    assert reg.get(rec["id"])["name"] == "grp"
+
+
+def test_a_desk_owner_may_not_rename_their_desk_but_an_admin_may(tmp_path):
+    """The ruling named GROUPS and admins. A desk's name comes from the address that signed in, so
+    renaming one is a question about identity display nobody has asked — refusing is one sentence
+    and widening later is one line."""
+    reg = ids.WorkspaceRegistry()
+    _ws(tmp_path, "126")
+    ids.migrate(tmp_path, reg)
+    desk = reg.by_slug("126")
+    with pytest.raises(ids.RenameRefused):
+        ids.rename_audited(reg, desk["id"], "Olga", by="126", root=tmp_path)
+    out = ids.rename_audited(reg, desk["id"], "Olga", by="admin1", is_admin=True, root=tmp_path)
+    assert out["name"] == "Olga" and out["renames"][-1]["by"] == "admin1"
+
+
+def test_rename_refuses_an_empty_name_and_an_unknown_id(tmp_path):
+    reg = ids.WorkspaceRegistry()
+    rec = _group(tmp_path, reg)
+    with pytest.raises(ValueError):
+        ids.rename_audited(reg, rec["id"], "   ", by="admin1", is_admin=True)
+    with pytest.raises(KeyError):
+        ids.rename_audited(reg, "zzzzzzzzzz", "X", by="admin1", is_admin=True)
 
 
 def test_a_deleted_tree_is_gone_not_not_yours(tmp_path):
@@ -274,6 +399,7 @@ def test_a_deleted_tree_is_gone_not_not_yours(tmp_path):
     assert ids.access_for(reg.get(rec["id"]), "126") == ids.ACCESS_GONE
     # and the LAST KNOWN NAME still comes back, which is what renders in a dead link
     assert ids.view(reg.get(rec["id"]), ids.ACCESS_GONE)["name"] == "Desk 126"
+    assert ids.writable_for(reg.get(rec["id"]), "126") is False
 
 
 def test_a_membership_check_that_raises_is_not_yours_never_a_500(tmp_path):

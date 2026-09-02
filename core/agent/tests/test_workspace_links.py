@@ -176,6 +176,7 @@ def test_readable_gives_the_targets_title_and_a_canonical_url(world):
     assert r["access"] == ids.ACCESS_READABLE
     assert r["title"] == "Cottalango Leon"
     assert r["url"] == f"/w/{gid}/kg/entities/person/cottalango-leon.md"
+    assert r["writable"] is True                # a member of the group writes it
 
 
 def test_not_yours_gives_a_title_and_no_url_and_is_not_an_error(world):
@@ -186,16 +187,35 @@ def test_not_yours_gives_a_title_and_no_url_and_is_not_an_error(world):
     assert r["access"] == ids.ACCESS_NOT_YOURS
     assert r["title"] == "Cottalango Leon"      # derived from the ref, never read out of the tree
     assert r["url"] is None
+    assert r["writable"] is False
     assert r["workspace"] == "grp"              # the name the greyed chip says you don't have
 
 
-def test_somebody_elses_desk_is_not_yours(world):
+def test_a_colleagues_desk_is_readable_and_not_writable(world):
+    """Founder ruling, 2026-09-02: a desk is readable by any signed-in member of this instance and
+    writable by its owner. A link between colleagues must not render `not-yours` — that says the
+    page is somebody's secret, when a desk is company knowledge held by one person."""
     root, reg, member = world
     did = reg.by_slug("126")["id"]
-    assert link_resolver.resolve(f"ws:{did}/olga-avramenko", subject="127", root=root,
-                                 registry=reg, is_member=member)["access"] == ids.ACCESS_NOT_YOURS
-    assert link_resolver.resolve(f"ws:{did}/olga-avramenko", subject="126", root=root,
-                                 registry=reg, is_member=member)["access"] == ids.ACCESS_READABLE
+    colleague = link_resolver.resolve(f"ws:{did}/olga-avramenko", subject="127", root=root,
+                                      registry=reg, is_member=member)
+    assert colleague["access"] == ids.ACCESS_READABLE
+    assert colleague["writable"] is False
+    assert colleague["url"] == f"/w/{did}/kg/entities/person/olga-avramenko.md"
+
+    owner = link_resolver.resolve(f"ws:{did}/olga-avramenko", subject="126", root=root,
+                                  registry=reg, is_member=member)
+    assert owner["access"] == ids.ACCESS_READABLE and owner["writable"] is True
+
+
+def test_a_desk_is_not_yours_from_outside_the_instance(world):
+    """The one case `not-yours` still covers for a desk: no subject at all — an unauthenticated
+    edge, or the company-layer gate closed before a subject was resolved."""
+    root, reg, member = world
+    did = reg.by_slug("126")["id"]
+    out = link_resolver.resolve(f"ws:{did}/olga-avramenko", subject="", root=root,
+                                registry=reg, is_member=member)
+    assert out["access"] == ids.ACCESS_NOT_YOURS and out["url"] is None and out["writable"] is False
 
 
 def test_gone_keeps_the_last_known_title(world):

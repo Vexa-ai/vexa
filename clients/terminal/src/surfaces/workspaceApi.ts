@@ -112,6 +112,17 @@ export async function resolveLinks(refs: string[], slug?: string): Promise<Resol
   return data.results ?? [];
 }
 
+/** Report that this reader OPENED one page — the ranking signal behind the desk README (founder,
+ *  2026-09-02: it is "mostly links to the other cards in different workspaces", and a list of links
+ *  is only useful if the ones they use are at the top). 202: the caller has nothing to do with the
+ *  answer, and a panel must never wait on bookkeeping to render a document. */
+export async function touchDeskPage(workspace: string, path: string): Promise<{ recorded: boolean }> {
+  return getJson(`/api/desk/touch`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace, path }),
+  });
+}
+
 // ── sharing (Lane M/Lane A): create a shared workspace, mint/redeem invites ──────────────────────
 export interface Membership { workspace_id: string; role: string; added_at?: string }
 export interface MintedInvite { id: string; token: string; role: string; workspace_id: string; expires_at: string; max_uses: number; mode: string }

@@ -141,6 +141,25 @@ def workspace_id_of(ws_dir) -> Optional[str]:
     return rec["id"] if rec else None
 
 
+# THE USAGE SIGNAL'S PROJECTION. Redis holds the authoritative touch log per desk id
+# (`control_plane/workspace_ids.TouchLog`); this file is the copy the WORKER can read, because the
+# README is regenerated at the end of a turn in a container that holds the workspace mounts and no
+# redis. It lives here rather than beside the log for the same reason: `shared/` is what both
+# images ship, and an import of `control_plane` from `worker/` is a boundary violation the
+# isolation gate refuses — correctly, since the worker image does not contain that package at all.
+TOUCHES_FILE = f"{VEXA_DIR}/touches.json"
+
+
+def read_touches(desk_dir) -> list:
+    """`[{workspace, path, at}]`, most recently opened first. `[]` for a desk nobody has opened
+    anything from — which is most of them, and is not a failure."""
+    try:
+        rows = json.loads((Path(desk_dir) / TOUCHES_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("workspace") and r.get("path")]
+
+
 def ids_of_mounts(mounts) -> dict:
     """``{slug: id}`` for a dispatch's mount set — the map the agent needs in order to write a
     cross-workspace link at all.
