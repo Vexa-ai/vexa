@@ -54,7 +54,7 @@ function InviteGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (setup !== "global") return;
     try {
-      localStorage.setItem("vexa.pendingPreset", JSON.stringify({ ask: "setup-global", ws: "_global" }));
+      localStorage.setItem("vexa.pendingPreset", JSON.stringify({ ask: "setup-global" }));
     } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);
   }, [setup, invite, tshare]);
@@ -87,7 +87,10 @@ function InviteGate({ children }: { children: ReactNode }) {
     if (!ask) return;
     try {
       localStorage.setItem("vexa.pendingPreset", JSON.stringify({
-        ask, ws: params.get("ws") || "", meeting: params.get("meeting") || "",
+        // `?ws=` IS NOT CARRIED (F97). It used to reach the mount set and the opening's `{{ws}}`
+        // token, so a URL could name the workspaces a chat mounted. The mount set is the server's
+        // to derive from the caller and the meeting; a link states neither.
+        ask, meeting: params.get("meeting") || "",
       }));
     } catch { /* locked-down storage */ }
     if (!invite && !tshare) window.location.replace(window.location.pathname);

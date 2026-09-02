@@ -302,40 +302,14 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
   };
 }
 
-/** A hand link (`?ask=&meeting=`) minted into the SAME record shape, so it renders through the one
- *  composition path above. Not persisted and not a server scaffold — it is the local equivalent,
- *  which is exactly what keeps the two entry points from drifting apart.
+/*  `localScaffold` LIVED HERE AND IS DELETED (F97, decisions 13/18).
  *
- *  `openingText` is the preset body the client substituted; a server-minted scaffold arrives with
- *  the server's substitution already done. Either way the text is MACHINERY and is marked as such
- *  by the send path — the human never sees it as their own words. */
-export function localScaffold(input: {
-  preset: string; openingText: string; meeting: string | null; native?: string | null;
-  phase: MeetingPhase | null; workspaces: string[]; tabs: string[]; focus: string; title?: string;
-  /** WHERE THE MEETING'S RECORD LIVES — the server's answer, passed through when the caller has
-   *  one. A hand link composed in the browser usually does NOT: the path's day is rendered in the
-   *  organiser's timezone and its slug through a server-side allow-list, so neither half is
-   *  derivable here. Without it `meeting:note` drops and the chat opens the transcript alone,
-   *  which is the honest degradation — the alternative was a tab pointing at a guess, and that
-   *  guess was wrong for every meeting (F55). */
-  notePath?: string | null;
-}): Scaffold {
-  return {
-    id: `local-${input.preset}`,
-    kind: "hand-link",
-    meeting: input.meeting,
-    native: input.native ?? null,
-    phase: input.phase,
-    workspaces: input.workspaces,
-    refs: {
-      title: input.title, participants: [], participantNames: {}, state: {},
-      notePath: input.notePath ?? undefined,
-    },
-    openingPreset: input.preset,
-    openingText: input.openingText,
-    tabs: input.tabs.map((t) => ({ token: t, pinned: false })),
-    focus: input.focus,
-    provenance: "hand link (?ask=)",
-    redeemedAt: null,
-  };
-}
+ *  It built a scaffold record in the BROWSER so the `?ask=&meeting=` hand link could render through
+ *  the same composition path as an emailed one. That was the right instinct about the path and the
+ *  wrong place for the record: composing it client-side meant the opening was substituted from the
+ *  URL, so `/?ask=prep&meeting=<payload>` put attacker-chosen text into the agent's first turn.
+ *
+ *  The hand link now mints SERVER-side (`POST /api/scaffolds/hand`) and redirects to `/?s=<id>`, so
+ *  there is still exactly one composition path — it just runs where the facts are. Deleted rather
+ *  than left unused: a constructor that can build a record out of untrusted input is a loaded gun
+ *  once nothing calls it and nobody remembers why. */

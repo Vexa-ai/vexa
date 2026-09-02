@@ -68,7 +68,10 @@ WORKSPACE_WORD = "desk"
 # arrival for them. Before it existed they got the seeded greeting — "paste a meeting link" — which
 # is the wrong sentence for somebody who was INVITED to a meeting and is here because of it.
 KINDS = ("admin-setup", "first-visit", "prep", "post-meeting", "catch-up", "group-setup",
-         "invite-offer")
+         # `hand-link`: somebody was handed or pasted `/?ask=<preset>&meeting=<row>`. Minted by
+         # POST /api/scaffolds/hand FOR THE CALLER, so its opening is composed server-side out
+         # of the record like every other kind, and never out of the address bar.
+         "invite-offer", "hand-link")
 
 # A preset NAME, and only a name — no slashes, no dots, nothing that walks out of `asks/`. The same
 # expression the terminal applies to `?ask=` (MinutesShell.tsx), kept identical on purpose: two

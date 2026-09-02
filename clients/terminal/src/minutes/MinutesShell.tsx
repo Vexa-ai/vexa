@@ -35,7 +35,7 @@ import { syncSurface } from "../surfaces/surfaceSync";
 import { Rail } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
-import { fetchScaffold, localScaffold, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
+import { fetchScaffold, scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { artifactsFromTokens, artifactViewEffect, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -960,132 +960,57 @@ export function MinutesShell() {
     const name = (intent.ask || "").trim();
     // a NAME, and only a name — no slashes, no dots, nothing that walks out of asks/
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) { presetFired.current = true; return; }
-    // (The preset used to CLAIM the opening here, synchronously, so the cached greeting fired at
-    // +600ms would stand down — a brand-new attendee who clicked a minutes link otherwise got "I'm
-    // booked for your meeting" about a meeting that had already happened. F36 deleted the greeting,
-    // so there is nothing left to claim it from.)
-    // A preset ABOUT a meeting waits for the meeting list: substituting before it lands is what
-    // put a Zoom number where the meeting's NAME belongs. A preset with no ref waits for nothing.
-    if (intent.meeting && !meetingsLoaded && !presetWaited) {
-      if (!presetTimer.current) {
-        presetTimer.current = true;
-        window.setTimeout(() => setPresetWaited(true), 8000);
-      }
-      return;
-    }
     presetFired.current = true;
     try { localStorage.removeItem("vexa.pendingPreset"); } catch { /* ignore */ }
     void (async () => {
-      const body = await readWorkspaceFile("asks/" + name + ".md", { slug: "_global" })
-        .catch((e) => { console.error("preset asks/" + name + ".md could not be read:", e); return null; });
-      // An unknown preset opens nothing — but never SILENTLY. A click that produces nothing is
-      // indistinguishable from a broken product, so it is logged and the opening is handed back to
-      // the greeting this preset had suppressed.
-      if (!body || !body.trim()) {
-        console.error("preset asks/" + name + ".md is missing or empty — the emailed link opened nothing");
-        // The opening is handed back to the COMPOSER: there is no cached greeting to fall back to
-        // any more (F36 deleted the seed). An empty composer is what an unresolved link honestly
-        // leaves behind.
+      // THE CLIENT COMPOSES NOTHING (decisions 13/18, F97).
+      //
+      // This effect used to read the preset itself and substitute `?meeting=` and `?ws=` straight
+      // into the opening text — so a crafted `/?ask=prep&meeting=<payload>` put attacker-chosen
+      // words into the agent's first turn. The URL carries NAMES, never prompt text, and the `?s=`
+      // path already obeyed that while this one did not.
+      //
+      // Now the hand link MINTS, server-side, for the signed-in caller: the server reads the
+      // preset, decides the mounts, refuses a meeting this person cannot open, and substitutes at
+      // turn time out of the RECORD. We hand it two names and take back an id.
+      //
+      // `?ws=` is gone entirely rather than forwarded — the mount set is the server's to derive,
+      // and it was the second thing a URL could dictate.
+      let res: Response;
+      try {
+        res = await fetch("/api/scaffolds/hand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preset: name, meeting: (intent.meeting || "").trim() || null }),
+        });
+      } catch (e) {
+        console.error("hand link could not be minted:", e);
+        setScaffoldRefusal({ reason: "unavailable", status: 0, detail: e instanceof Error ? e.message : String(e) });
         return;
       }
-      // Optional frontmatter: `mounts:` and `label:`, plus `tabs:`/`focus:` — the preset's own
-      // statement of WHICH DOCUMENTS its conversation is about, and which one is in front. PRD
-      // decision 18: the link sets the chat's record and the panel renders only from the record, so
-      // this is where a link stops being just an opening sentence and becomes a room.
-      let text = body, mounts: string[] = [], label = name.replace(/[-_]/g, " ");
-      let tabTokens: string[] = [], focusToken = "";
-      const fm = /^---\n([\s\S]*?)\n---\n?/.exec(body);
-      if (fm) {
-        text = body.slice(fm[0].length);
-        const mm = /^mounts:\s*(.+)$/m.exec(fm[1]);
-        if (mm) mounts = mm[1].split(",").map((x) => x.trim()).filter(Boolean);
-        const l = /^label:\s*(.+)$/m.exec(fm[1]);
-        if (l) label = l[1].trim();
-        const tt = /^tabs:\s*(.+)$/m.exec(fm[1]);
-        if (tt) tabTokens = tt[1].split(",").map((x) => x.trim()).filter(Boolean);
-        const ff = /^focus:\s*(.+)$/m.exec(fm[1]);
-        if (ff) focusToken = ff[1].trim();
+      if (!res.ok) {
+        // A link that cannot mint opens NOTHING and says so — the same rule the `?s=` path follows.
+        // Silently falling back to a greeting would leave the reader believing they had arrived.
+        let detail = `HTTP ${res.status}`;
+        try { const b = await res.json() as { detail?: string }; if (b?.detail) detail = b.detail; } catch { /* keep the status */ }
+        console.error("hand link refused:", res.status, detail);
+        setScaffoldRefusal({
+          reason: res.status === 404 ? "not-found" : res.status === 401 || res.status === 403 ? "forbidden" : "unavailable",
+          status: res.status, detail,
+        });
+        return;
       }
-      if (intent.ws) mounts = [intent.ws, ...mounts.filter((x) => x !== intent.ws)];
-      if (!mounts.length) mounts = ["_global", "personal"];
-      // The ROW behind the ref, so a preset can name the meeting instead of reciting its id.
-      const ref = (intent.meeting || "").trim();
-      const nativeRef = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
-      const row = ref
-        ? meetings.find((x) => String(x.id) === ref || (x as { native_id?: string }).native_id === nativeRef)
-        : undefined;
-      // `{{state}}` — WHO IS THIS, ROUGHLY, so a preset can branch between a first contact and a
-      // returning one without the agent having to guess from an empty workspace. Two axes, both
-      // read off state the client already holds, both deliberately coarse:
-      //   personal:new   this is their FIRST chat on this Vexa — a stranger who clicked a mail
-      //   personal:warm  they have been here before
-      //   group:absent   the meeting is bound to no shared workspace
-      //   group:new      bound, but no other meeting in the list shares that binding
-      //   group:warm     bound, with history behind it
-      // The preset branches on the STRING, in prose. `_global` is not an axis: once the company
-      // layer's gate holds, it is always present.
-      const wsId = (row as { workspace_id?: string } | undefined)?.workspace_id || "";
-      const groupState = !wsId
-        ? "absent"
-        : meetings.some((x) => (x as { workspace_id?: string }).workspace_id === wsId && String(x.id) !== String(row?.id))
-          ? "warm" : "new";
-      const stateToken = `personal:${chatsRef.current.length ? "warm" : "new"} group:${groupState}`;
-      const prompt = text
-        // `{{workspace}}` — what a person's own workspace is CALLED to them. One constant
-        // (minutes/vocabulary.ts), so the rename the founder has not made yet is one edit and not a
-        // sweep through every preset.
-        .replace(/\{\{\s*workspace\s*\}\}/g, WORKSPACE_WORD)
-        .replace(/\{\{\s*state\s*\}\}/g, stateToken)
-        .replace(/\{\{\s*meeting\s*\}\}/g, ref || "the meeting in view")
-        .replace(/\{\{\s*title\s*\}\}/g, row?.title || "the meeting in view")
-        .replace(/\{\{\s*when\s*\}\}/g, row?.when || "")
-        .replace(/\{\{\s*ws\s*\}\}/g, mounts[0] || "")
-        .replace(/\{\{\s*today\s*\}\}/g, new Date().toISOString().slice(0, 10))
-        .trim();
-      if (!prompt) return;
-      // ONE consumer for a link that carries BOTH `?ask=` and `?meeting=`. There used to be two:
-      // this effect opened an askchat and selected it, the `?meeting=` effect then opened the
-      // meeting's own chat over the top, and the kick fired 1.2s later into a session no longer
-      // mounted — so an attendee got the meeting room with its cached phase greeting and never the
-      // preset at all. When the ref resolves, the preset speaks INTO the meeting's chat and spends
-      // the meeting ref here, so nothing re-opens it underneath.
-      // THE LINK'S ROOM. Resolve the preset's `tabs:`/`focus:` against the meeting it names, so
-      // `meeting:note` becomes the Brief before the meeting and the Minutes after it, and
-      // `_global/README.md` becomes a real tab on the org tier. A meeting chat with NO declared
-      // tabs keeps the phase layout (openChat's roomPages) — the rule, not the link, decides then.
-      const phase = row ? meetingPhase(row) : null;
-      const tabCtx = {
-        native: (row as { native_id?: string } | undefined)?.native_id ?? null,
-        meetingId: row ? String(row.id) : null,
-        phase,
-        mounts,
-      };
-      const artifacts = artifactsFromTokens(tabTokens, tabCtx);
-      const focusArt = focusToken ? artifactsFromTokens([focusToken], tabCtx)[0] : undefined;
-      const focusKey = focusArt ? artifactKey(focusArt) : undefined;
-
-      // A HAND LINK MINTS A LOCAL SCAFFOLD and renders through the one path (PRD §5.5 step 3).
-      // `?ask=&meeting=` survives only as this fallback: it composes the SAME record an emailed
-      // `?s=` produces, so there is one composer rather than two that drift. Nothing about the URL
-      // carries prompt text — the body still comes from `_global/asks/<name>.md`, admin-authored.
-      if (row) {
-        try { localStorage.removeItem("vexa.openMeetingRef"); } catch { /* ignore */ }
-        meetingRefSpent.current = true;
+      const { id } = await res.json() as { id?: string };
+      if (!id) {
+        setScaffoldRefusal({ reason: "malformed", status: res.status, detail: "the mint returned no id" });
+        return;
       }
-      openFromScaffold(localScaffold({
-        preset: name,
-        openingText: prompt,
-        meeting: row ? String(row.id) : (/^\d+$/.test(ref) ? ref : null),
-        native: tabCtx.native,
-        phase,
-        workspaces: mounts,
-        tabs: tabTokens,
-        focus: focusToken,
-        title: row?.title,
-      }));
-      return;
+      // ONE COMPOSITION PATH, arrived at by redirect: `/?s=<id>` is the path every emailed link
+      // already takes, so the hand link stops being a second way of opening a chat and becomes a
+      // way of MINTING one. Nothing downstream needs to know it was a hand link.
+      window.location.replace(`/?s=${encodeURIComponent(id)}`);
     })();
-  }, [openFromScaffold, meetings, meetingsLoaded, presetWaited]);
+  }, []);
 
   return (
     <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${pagesCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>

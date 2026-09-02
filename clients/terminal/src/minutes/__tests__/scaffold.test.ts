@@ -9,7 +9,7 @@
  *  the real interface differs from the expected one.
  */
 import { describe, expect, it } from "vitest";
-import { fetchScaffold, localScaffold, parseScaffold, refusalCopy, scaffoldToChat } from "../scaffold";
+import { fetchScaffold, parseScaffold, refusalCopy, scaffoldToChat } from "../scaffold";
 
 const WIRE = {
   id: "OU5hWbkhdKt9tI2ulYxn4h1Zh8yy3HFm1S9Vd5NalCI",
@@ -154,40 +154,9 @@ describe("scaffoldToChat", () => {
   });
 });
 
-describe("localScaffold — the hand link composes through the SAME path", () => {
-  it("`?ask=&meeting=` produces a record scaffoldToChat renders identically", () => {
-    const sc = localScaffold({
-      preset: "prep", openingText: "[prep] …", meeting: "95", native: "abc-defg-hij", phase: "prep",
-      workspaces: ["_global", "personal"], tabs: ["meeting:note"], focus: "meeting:note",
-      notePath: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md",
-    });
-    expect(sc.kind).toBe("hand-link");
-    const rec = scaffoldToChat(sc);
-    expect(rec.id).toBe("meet-95");
-    // prep → the same file under the name the reader needs today
-    expect(rec.artifacts.filter((a) => !a.desk))
-      .toMatchObject([{ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Brief" }]);
-  });
-
-  it("a hand link with no note path opens the transcript alone, never a dead Brief tab", () => {
-    // THE KNOWN NARROWING (F55). `?ask=&meeting=` is composed in the browser, and the note's path
-    // is not derivable there: the day is rendered in the ORGANISER's timezone and the slug through
-    // a server-side allow-list. So a hand link carries no `notePath` unless its caller was given
-    // one, and the tab drops rather than pointing at a guess. Emailed `?s=` links are unaffected —
-    // their scaffold carries `refs.note_path` from the step that writes the file.
-    const sc = localScaffold({
-      preset: "prep", openingText: "[prep] …", meeting: "95", native: "abc-defg-hij", phase: "prep",
-      workspaces: ["_global", "personal"], tabs: ["meeting:note", "meeting:transcript"],
-      focus: "meeting:note",
-    });
-    const rec = scaffoldToChat(sc);
-    expect(rec.artifacts.filter((a) => !a.desk))
-      .toMatchObject([{ kind: "meeting", path: "95", label: "Transcript" }]);
-    // focus drops with the token it named — and under decision 28.5 it lands on the chat's HOME
-    // rather than on nothing, because the strip always has a first entry now.
-    expect(rec.focus).toBe("|README.md");
-  });
-});
+/*  The `localScaffold` block lived here and is deleted with the function (F97). It proved a hand
+ *  link composed through the same path as an emailed one — true, and now achieved by minting
+ *  server-side instead, which `noDefaults.test.ts` asserts and the agent-api route tests cover. */
 
 describe("fetchScaffold — a refusal is returned, never thrown", () => {
   const res = (status: number, body: unknown) => ({
