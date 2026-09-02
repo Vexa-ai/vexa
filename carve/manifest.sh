@@ -18,8 +18,11 @@ export CARVE_REMOTE="${CARVE_REMOTE:-https://github.com/Vexa-ai/vexa-core.git}"
 # clients/terminal = the reference workbench UI; docs/docs = Mintlify site.
 export CARVE_INCLUDE=(
   core
-  deploy/compose
-  deploy/transcription
+  # deploy/ whole: compose, helm, lite, transcription, contracts, bin. Founder ruling 2026-09-02:
+  # carving only compose+transcription was a mistake — the chart and the single-container image
+  # are part of the contribution.
+  deploy
+  Makefile
   clients/terminal
   clients/slim
   # packages/transcript-rendering: shared transcript state library (published as
@@ -80,7 +83,6 @@ export CARVE_MAILMAP="$MONO/carve/mailmap.txt"
 # Each line: "<override-file-under-carve/overrides/>  <dest-path-in-carve>"
 export CARVE_OVERRIDES=(
   bot-eval-README.md:core/meetings/services/bot/eval/README.md
-  "Makefile:Makefile"          # compose-only entrypoint (mono's references removed deploy/lite)
   # De-robot the Vexum surface (vexa-platform#239): docs.core.vexa.ai stays up for
   # humans, invisible to robots. These four files + the docs.json seo transform in
   # transform.sh are PROJECTION-ONLY — they must never appear in the mono's docs/docs
