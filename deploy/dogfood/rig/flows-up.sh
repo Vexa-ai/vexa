@@ -24,8 +24,18 @@ export VEXA_MAIL_SMTP_MODE=plain
 
 PY="$FL/.venv/bin/python"
 
-pkill -f 'flows_integrations.flows_api' 2>/dev/null
-pkill -f 'flows_worker' 2>/dev/null
+# Kill only THIS LANE's processes. A bare `pkill -f flows_worker` matches every lane on the host,
+# so bringing one lane up used to kill another lane's worker out from under a running sweep.
+_lane_kill() {
+  local pid src
+  for pid in $(pgrep -f "$1" 2>/dev/null); do
+    [ -r "/proc/$pid/environ" ] || continue   # it exited between pgrep and here
+    src=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^PYTHONPATH=//p' | head -1)
+    case "$src" in "$FL"/src*) kill "$pid" 2>/dev/null ;; esac
+  done
+}
+_lane_kill 'flows_integrations.flows_api'
+_lane_kill 'flows_worker' 
 sleep 1
 
 cd "$FL"
@@ -35,6 +45,14 @@ echo "flows-api pid=$!"
 
 nohup "$PY" -m flows_worker > "$LOG/flows-worker.log" 2>&1 &
 echo "flows-worker pid=$!"
+
+# THE PROVENANCE LINE. "Is the running engine the code I just merged?" was answered for a whole
+# revolution by reading a checkout's HEAD and a process's PYTHONPATH — neither of which says WHEN
+# the process loaded anything, and both of which look identical on a stale process. Print it at
+# startup so the next person reads a log instead of /proc.
+echo "flows-engine loaded @ $(git -C "$FL" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+     "($(git -C "$FL" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?'))" \
+     "from $FL at $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG/flows-worker.log"
 
 sleep 5
 echo "--- flows-api:"

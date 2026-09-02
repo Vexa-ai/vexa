@@ -47,6 +47,25 @@ mkdir -p "$LOG"
 
 up_port() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 
+# Is a process of THIS LANE running? `pgrep -f flows_worker` was the old test, and it matches ANY
+# flows worker on the host — including another lane's, running from a different checkout. With two
+# lanes up, `up` decided this lane's worker was already running, skipped it, and left an
+# eight-minute-stale process serving a merge it had never loaded. A whole revolution of the DNA
+# replay was scored against pre-merge code before anyone noticed, because nothing was down and
+# nothing errored.
+#
+# So a lane is identified by the checkout its processes actually point at: PYTHONPATH in the
+# process's own environ. Same host, two lanes, no ambiguity.
+lane_pids() {  # lane_pids <pattern>
+  local pat="$1" pid src
+  for pid in $(pgrep -f "$pat" 2>/dev/null); do
+    [ -r "/proc/$pid/environ" ] || continue   # it exited between pgrep and here
+    src=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^PYTHONPATH=//p' | head -1)
+    case "$src" in "$FL"/src*) echo "$pid" ;; esac
+  done
+}
+lane_up() { [ -n "$(lane_pids "$1")" ]; }
+
 start_ctl() {
   tmux kill-session -t stormctl 2>/dev/null
   tmux new-session -d -s stormctl -c /tmp \
@@ -76,7 +95,8 @@ status() {
   printf "  %-18s %s\n" "mailpit :8025"  "$(up_port 8025  && echo UP || echo DOWN)"
   printf "  %-18s %s\n" "flows-api :18200" "$(up_port 18200 && echo UP || echo DOWN)"
   printf "  %-18s %s\n" "control-mcp :18310" "$(up_port 18310 && echo UP || echo DOWN)"
-  printf "  %-18s %s\n" "flows-worker"    "$(pgrep -f flows_worker >/dev/null && echo UP || echo DOWN)"
+  printf "  %-18s %s\n" "flows-worker"    "$(lane_up 'flows_worker' && echo "UP ($(lane_pids 'flows_worker' | tr '\n' ' '))" || echo DOWN)"
+  printf "  %-18s %s\n" "lane checkout"   "$FL @ $(git -C "$FL" rev-parse --short HEAD 2>/dev/null || echo '?')"
   printf "  %-18s %s\n" "dogfood gateway" "$(curl -s -m 4 localhost:18456/health >/dev/null && echo UP || echo DOWN)"
   echo "  tmux: $(tmux ls 2>/dev/null | grep -c storm) storm sessions"
 }
@@ -86,8 +106,8 @@ case "${1:-status}" in
   config) echo "flows src:  $FL"; echo "server:     $CTL"; echo "publishes:  $PUBLIC_MCP_URL"; echo "terminal:   $UI_URL" ;;
   up)
     start_mailpit
-    up_port 18200 || start_api
-    pgrep -f flows_worker >/dev/null || start_worker
+    lane_up 'flows_integrations.flows_api' || start_api
+    lane_up 'flows_worker' || start_worker
     up_port 18310 || start_ctl
     sleep 8; echo "storm rig after up:"; status ;;
   restart)
