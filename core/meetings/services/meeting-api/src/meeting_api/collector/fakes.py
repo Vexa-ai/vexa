@@ -803,6 +803,65 @@ class InMemoryTranscriptStore:
             if sid:
                 m["segments"][sid] = dict(seg)
 
+    async def complete_transcript_import(self, user_id, meeting_id, *, segments, started_at,
+                                        ended_at, source, session_uid):
+        """Mirror of the SqlAlchemy store's import — same owner scope, same idempotency on
+        ``session_uid``, same FSM refusal, same row shape afterwards. Most of the suite drives this
+        fake, so the two must agree on every branch a caller can observe."""
+        from datetime import datetime as _now_dt
+        from datetime import timezone
+
+        from .transcript_import import IN_FLIGHT_STATUSES
+
+        def _iso(dt):
+            return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        m = self._meetings.get(mid)
+        if m is None or m.get("user_id") != user_id:
+            return None  # owner-scoped: not-yours is indistinguishable from not-there
+        data = m["data"] if isinstance(m.get("data"), dict) else {}
+        prior = data.get("transcript_import")
+        if isinstance(prior, dict) and prior.get("session_uid") == session_uid:
+            return {
+                "meeting_id": mid, "imported": False, "status": m["status"],
+                "segments_imported": int(prior.get("segments") or 0),
+                "start_time": m["start_time"], "end_time": m["end_time"],
+                "session_uid": session_uid, "source": prior.get("source") or source,
+                "imported_at": prior.get("imported_at"),
+            }
+        if m["status"] in IN_FLIGHT_STATUSES:
+            return {"error": "conflict", "status": m["status"]}
+
+        written = 0
+        for seg in segments:
+            sid = seg.get("segment_id")
+            if not sid:
+                continue
+            m["segments"][sid] = dict(seg)
+            written += 1
+        m["status"] = "completed"
+        m["start_time"] = _iso(started_at)
+        m["end_time"] = _iso(ended_at)
+        data["transcript_import"] = {
+            "source": source, "session_uid": session_uid, "segments": written,
+            "started_at": m["start_time"], "ended_at": m["end_time"],
+            "imported_at": _iso(_now_dt.now(timezone.utc)),
+        }
+        data["segments_captured"] = len(m["segments"])
+        m["data"] = data
+        return {
+            "meeting_id": mid, "imported": True, "status": "completed",
+            "segments_imported": written, "segments_captured": data["segments_captured"],
+            "start_time": m["start_time"], "end_time": m["end_time"],
+            "platform": m["platform"], "native_meeting_id": m["native_meeting_id"],
+            "session_uid": session_uid, "source": source,
+            "imported_at": data["transcript_import"]["imported_at"],
+        }
+
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         from .adapters import _find_processed_view
 
