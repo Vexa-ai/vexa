@@ -40,8 +40,16 @@ export VEXA_MAIL_SMTP_MODE=plain
 
 PY="$VENV"
 
-pkill -f 'flows_integrations.flows_api' 2>/dev/null
-pkill -f 'flows_worker' 2>/dev/null
+# LANE-SCOPED, and it has to be. These patterns used to be bare — 'flows_integrations.flows_api'
+# and 'flows_worker' — which match EVERY lane on the box, not this one. A second lane now exists
+# (the adoption simulator on :18201 with its own database), and restarting this lane silently
+# killed that one: its api runs the same module, and 'flows_worker' is a substring of
+# 'sim_flows_worker'. The other lane did not error, it just stopped, and the next call against it
+# failed with a connection error that pointed nowhere near this file.
+# The port makes the api unambiguous; '-m flows_worker' matches this worker's argv and not a
+# lane that starts its worker any other way.
+pkill -f "flows_integrations.flows_api:app --host 127.0.0.1 --port 18200" 2>/dev/null
+pkill -f -- "-m flows_worker" 2>/dev/null
 sleep 1
 
 cd "$FL"
