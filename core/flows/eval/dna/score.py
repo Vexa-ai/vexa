@@ -20,6 +20,26 @@ import subprocess
 
 OLD_EVENT_CAP = 8000   # what meeting.completed used to carry; now the comparison boundary
 
+def note_belongs_to(rec: dict, fx: dict) -> bool:
+    """Is the note this run collected actually about THIS meeting?
+
+    The replay takes the next new note committed to the workspace, which is right only while it is
+    the sole writer. When it is not — another probe, a trial, a person in the terminal — the fixture
+    in flight adopts a stranger's note and every dimension then scores it as though it were the
+    right one. Nothing about that looks like a failure, which is what makes it worth a check.
+
+    A note about this meeting shares SOME six-word run with this meeting's transcript, anywhere in
+    it. A note about a different meeting shares none. This is not `transcript_depth` — that asks
+    about the part of the transcript beyond the old cap, and a note could pass this while failing
+    that (shallow but genuine) or fail this while passing that (impossible, and if it ever happens
+    the check is broken)."""
+    note = rec.get("note") or ""
+    if not note.strip():
+        return True                      # nothing collected: a separate failure, not a wrong note
+    whole = "\n".join(f"{x.get('speaker','?')}: {x.get('text','')}" for x in fx["segments"])
+    return bool(_phrases(note) & _phrases(whole))
+
+
 MECHANICAL = ["note_shape", "transcript_depth", "prepare_mail", "minutes_mail",
               "opening_prep", "opening_minutes", "compounding"]
 
@@ -308,7 +328,10 @@ def main() -> int:
         dims["compounding"], ev["compounding"] = d_compounding(rec, earlier)
 
         counted = [v for k, v in dims.items() if v >= 0]
+        belongs = note_belongs_to(rec, fx)
         row = {"date": date, "title": rec.get("title"), "dims": dims, "evidence": ev,
+               "note_belongs_to_this_meeting": belongs,
+               "stamp_matched": rec.get("stamp_matched"),
                "score": round(sum(counted) / len(counted), 3) if counted else 0.0,
                "latency_s": rec.get("latency_s"), "note_sha": rec.get("note_sha"),
                "error": rec.get("error")}
@@ -320,11 +343,16 @@ def main() -> int:
         print(f"{date}  score={row['score']:.3f}  " +
               " ".join(f"{k}={v:g}" for k, v in dims.items()), flush=True)
 
-    ok = [r for r in rows if not r.get("error")]
+    contaminated = [r["date"] for r in rows if not r.get("note_belongs_to_this_meeting", True)]
+    if contaminated:
+        print("\nCONTAMINATED — the note collected is not about this meeting; excluded from the "
+              "means: " + ", ".join(contaminated), flush=True)
+    ok = [r for r in rows if not r.get("error")
+          and r.get("note_belongs_to_this_meeting", True)]
     scored = [r["score"] for r in ok]
     out = {"rev": replay.get("rev"), "run": str(run), "rows": rows,
            "mean_score": round(sum(scored) / len(scored), 3) if scored else 0.0,
-           "fixtures_scored": len(scored),
+           "fixtures_scored": len(scored), "contaminated": contaminated,
            "dim_means": {d: round(sum(r["dims"][d] for r in ok if r["dims"][d] >= 0)
                                   / max(1, sum(1 for r in ok if r["dims"][d] >= 0)), 3)
                          for d in MECHANICAL}}
